@@ -17,6 +17,13 @@ export async function run(argv: readonly string[]): Promise<number> {
     process.stdout.write("glosa — writing-first workspace for AI coding agents (CLI pending P5.1)\n");
     return 0;
   }
+  if (cmd === "__daemon") {
+    // The daemon role (A5 §F13) — binds the port, wins the lock CAS, serves, and never
+    // returns normally; every exit happens inside bootDaemon via explicit process.exit().
+    const { bootDaemon } = await import("@glosa/daemon");
+    await bootDaemon();
+    return 0; // unreachable
+  }
   process.stderr.write(`glosa: command not yet implemented: ${cmd}\n`);
   return 2; // usage
 }

@@ -1,0 +1,401 @@
+// P1.2 daemon lifecycle — real fault/concurrency tests (A5 §F13). Every test gets its own tmp
+// GLOSA_HOME + a random high port (via helpers.ts) so parallel runs never collide on port/home,
+// and nothing here ever touches a real `~/.glosa`. The bootDaemon-side cases spawn the actual
+// `glosa __daemon` subprocess — that's the point, per the task brief: these are fault-injection
+// and race scenarios a happy-path unit test can't exercise.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
+import { reclaimStaleLock, writeLockExclusive, type DaemonLock } from "../src/lock.ts";
+import { PROTOCOL_VERSION } from "../src/protocol.ts";
+import { ensureDaemon } from "../src/lifecycle.ts";
+import {
+  cleanupHome,
+  deadPid,
+  freshHome,
+  lockOf,
+  randomPort,
+  spawnDaemon,
+  stopDaemon,
+  waitForHandshake,
+  waitUntil,
+  writeUnparseableLock,
+} from "./helpers.ts";
+
+function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
+  return {
+    instance_id: "gl-fake",
+    pid: process.pid,
+    port: randomPort(),
+    protocol_version: PROTOCOL_VERSION,
+    started_at: new Date().toISOString(),
+    host: "127.0.0.1",
+    bun: Bun.version,
+    ...overrides,
+  };
+}
+
+describe("bootDaemon — subprocess fault/concurrency", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = freshHome();
+  });
+
+  afterEach(() => {
+    cleanupHome(home);
+  });
+
+  test("two concurrent spawns on the same home/port: exactly one live daemon, loser exits 0", async () => {
+    const port = randomPort();
+    const p1 = spawnDaemon(home, port);
+    const p2 = spawnDaemon(home, port);
+    try {
+      const race = await Promise.race([
+        p1.exited.then((code) => ({ code, other: p2 })),
+        p2.exited.then((code) => ({ code, other: p1 })),
+      ]);
+      // The loser exits 0 (benign race per A5 §F13); the winner keeps serving.
+      expect(race.code).toBe(0);
+
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+
+      const lock = lockOf(home);
+      expect(lock).not.toBeNull();
+      expect(lock!.instance_id).toBe(hs!.instance_id);
+
+      await stopDaemon(home, race.other);
+    } finally {
+      try {
+        p1.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+      try {
+        p2.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+    }
+  }, 10000);
+
+  test("second daemon on a different port hits the lock EEXIST/live-peer branch and exits 0, leaving the first daemon's lock intact", async () => {
+    const portA = randomPort();
+    const portB = randomPort();
+
+    const daemonA = spawnDaemon(home, portA);
+    try {
+      const hsA = await waitForHandshake(portA);
+      expect(hsA).not.toBeNull();
+      expect(lockOf(home)?.port).toBe(portA);
+
+      // daemonB binds its OWN port fine (no EADDRINUSE — different port), then hits the lock
+      // file already held by daemonA: EEXIST → reads the existing lock → confirms daemonA is a
+      // live peer via handshake at lock.port → benign race → exits 0 without touching the lock.
+      const daemonB = spawnDaemon(home, portB);
+      try {
+        const codeB = await daemonB.exited;
+        expect(codeB).toBe(0);
+
+        // daemonA's lock is untouched — still points at daemonA, still on portA.
+        const lock = lockOf(home);
+        expect(lock).not.toBeNull();
+        expect(lock!.instance_id).toBe(hsA!.instance_id);
+        expect(lock!.port).toBe(portA);
+
+        // daemonA is still the one actually serving.
+        const hsA2 = await waitForHandshake(portA, 1000);
+        expect(hsA2?.instance_id).toBe(hsA!.instance_id);
+      } finally {
+        try {
+          daemonB.kill("SIGKILL");
+        } catch {
+          // already dead
+        }
+      }
+    } finally {
+      await stopDaemon(home, daemonA);
+    }
+  }, 10000);
+
+  test("stale lock: dead pid is reclaimed and a fresh daemon boots", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    writeLockExclusive(lockPath(home), sampleLock({ pid: await deadPid(), port }));
+
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+      const lock = lockOf(home);
+      expect(lock!.instance_id).not.toBe("gl-fake");
+      expect(lock!.pid).toBe(proc.pid);
+    } finally {
+      await stopDaemon(home, proc);
+    }
+  }, 10000);
+
+  test("stale lock: unparseable lock file is reclaimed and a fresh daemon boots", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    writeUnparseableLock(home);
+
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+      expect(lockOf(home)?.pid).toBe(proc.pid);
+    } finally {
+      await stopDaemon(home, proc);
+    }
+  }, 10000);
+
+  test("SIGTERM: daemon stops accepting and removes its own lock", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+      expect(lockOf(home)).not.toBeNull();
+
+      proc.kill("SIGTERM");
+      const code = await proc.exited;
+      expect(code).toBe(0);
+      expect(lockOf(home)).toBeNull();
+    } finally {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+    }
+  }, 10000);
+
+  test("SIGTERM guard: does not unlink a lock whose instance_id no longer matches", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+
+      // Simulate the lock having been reclaimed by someone else out from under this daemon.
+      reclaimStaleLock(lockPath(home), sampleLock({ instance_id: "gl-someone-else", port }));
+
+      proc.kill("SIGTERM");
+      const code = await proc.exited;
+      expect(code).toBe(0); // still exits cleanly
+
+      const lock = lockOf(home);
+      expect(lock).not.toBeNull();
+      expect(lock!.instance_id).toBe("gl-someone-else"); // untouched
+    } finally {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+    }
+  }, 10000);
+
+  test("ignores SIGINT and SIGHUP: stays alive, lock intact, handshake still 200", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+
+      proc.kill("SIGINT");
+      await Bun.sleep(300);
+      proc.kill("SIGHUP");
+      await Bun.sleep(300);
+
+      const stillAlive = await Promise.race([proc.exited.then(() => false), Bun.sleep(200).then(() => true)]);
+      expect(stillAlive).toBe(true);
+
+      const hs2 = await waitForHandshake(port, 1000);
+      expect(hs2?.instance_id).toBe(hs!.instance_id);
+      expect(lockOf(home)?.instance_id).toBe(hs!.instance_id);
+    } finally {
+      await stopDaemon(home, proc);
+    }
+  }, 10000);
+});
+
+describe("ensureDaemon — client", () => {
+  let home: string;
+  let savedHome: string | undefined;
+  let savedPort: string | undefined;
+
+  beforeEach(() => {
+    home = freshHome();
+    savedHome = process.env.GLOSA_HOME;
+    savedPort = process.env.GLOSA_PORT;
+  });
+
+  afterEach(async () => {
+    if (savedHome === undefined) delete process.env.GLOSA_HOME;
+    else process.env.GLOSA_HOME = savedHome;
+    if (savedPort === undefined) delete process.env.GLOSA_PORT;
+    else process.env.GLOSA_PORT = savedPort;
+    cleanupHome(home);
+  });
+
+  test("port authority: reads lock.port, not GLOSA_PORT, when they differ", async () => {
+    const lockPort = randomPort();
+    const envPort = randomPort();
+    const daemonProc = spawnDaemon(home, lockPort);
+    try {
+      const hs = await waitForHandshake(lockPort);
+      expect(hs).not.toBeNull();
+      expect(lockOf(home)?.port).toBe(lockPort);
+
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(envPort); // deliberately wrong — lock.port must win
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.port).toBe(lockPort);
+        expect(result.instanceId).toBe(hs!.instance_id);
+      }
+    } finally {
+      await stopDaemon(home, daemonProc);
+    }
+  }, 10000);
+
+  test("stale lock: alive-but-foreign-port (nothing listening) is reclaimed on lock.port, ignoring GLOSA_PORT", async () => {
+    ensureHomeDir(home);
+    const staleLockPort = randomPort(); // nothing listening here — genuinely stale
+    const wrongSeedPort = randomPort(); // must be ignored: lock.port is authoritative once a lock exists
+    writeLockExclusive(lockPath(home), sampleLock({ pid: process.pid, port: staleLockPort }));
+
+    process.env.GLOSA_HOME = home;
+    process.env.GLOSA_PORT = String(wrongSeedPort);
+
+    const result = await ensureDaemon();
+    try {
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.port).toBe(staleLockPort);
+        expect(result.port).not.toBe(wrongSeedPort);
+        expect(result.instanceId).not.toBe("gl-fake");
+      }
+    } finally {
+      if (result.ok) {
+        try {
+          process.kill(result.pid, "SIGTERM");
+        } catch {
+          // already dead
+        }
+        await waitUntil(() => lockOf(home) === null);
+      }
+    }
+  }, 12000);
+
+  test("fail-closed: alive pid + port bound by a non-glosa squatter refuses to spawn a duplicate", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    // Something is genuinely listening on lock.port, but it never answers the glosa handshake —
+    // e.g. a hung daemon or an unrelated process. This must NOT be treated the same as a free
+    // port: unlinking the lock and spawning here would leave two live daemons (R1 violation).
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    writeLockExclusive(lockPath(home), sampleLock({ pid: process.pid, port })); // pid alive (it's us)
+
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain(String(port));
+        expect(result.reason.toLowerCase()).toContain("not spawning a duplicate");
+        expect(result.logPath).toBe(logPath(home));
+      }
+
+      // The lock must survive untouched — no reclaim happened.
+      const lock = lockOf(home);
+      expect(lock).not.toBeNull();
+      expect(lock!.instance_id).toBe("gl-fake");
+
+      // And nothing else is now serving a real glosa handshake on this port — the squatter's
+      // stub response is still all that's there.
+      const res = await fetch(`http://127.0.0.1:${port}/api/handshake`);
+      const body = await res.json();
+      expect(body).toEqual({ not: "a glosa handshake" });
+    } finally {
+      squatter.stop();
+    }
+  }, 10000);
+
+  test("proto mismatch: FAILs with an upgrade message instead of using the daemon", async () => {
+    const fakePort = randomPort();
+    const fakeServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: fakePort,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/handshake") {
+          return Response.json({
+            protocol_version: "99.0", // major mismatch vs this client's PROTOCOL_VERSION
+            instance_id: "gl-future",
+            pid: process.pid,
+            started_at: new Date().toISOString(),
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    ensureHomeDir(home);
+    writeLockExclusive(lockPath(home), sampleLock({ pid: process.pid, port: fakePort }));
+
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(fakePort);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason.toLowerCase()).toContain("upgrade");
+        expect(result.reason).toContain("99.0");
+      }
+    } finally {
+      fakeServer.stop();
+    }
+  }, 10000);
+
+  test("handshake-poll timeout: fails referencing the daemon.log path", async () => {
+    const port = randomPort();
+    // Occupy the port with a non-glosa server so the spawned daemon can never bind it, and so
+    // polling never sees a valid handshake shape — this forces the full poll deadline.
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.logPath).toBe(logPath(home));
+        expect(existsSync(result.logPath!)).toBe(true);
+        const log = readFileSync(result.logPath!, "utf8");
+        expect(log.length).toBeGreaterThan(0);
+      }
+    } finally {
+      squatter.stop();
+    }
+  }, 15000);
+});
