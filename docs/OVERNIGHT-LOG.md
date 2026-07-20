@@ -93,10 +93,28 @@ BUILD-PLAN.md at each task pickup since Dawid may edit it again overnight.
 ### D2 — handshake body shape reconciliation (for P1.3)
 P1.2 gave `/api/handshake` an internal readiness body `{protocol_version, instance_id, pid, started_at}`.
 A1 §5.1 mandates the **public** body `{contract_version, daemon_version, paired}`. Same endpoint serves
-both readiness (F13) and contract negotiation (A1). **Decision:** P1.3 reshapes the handshake response to
-A1 §5.1 (`contract_version` == the `PROTOCOL_VERSION` constant), keeps `protocol_version` in the lock file,
-and `ensureDaemon()`'s proto-compat check reads `contract_version` from the handshake JSON (major must
-match). Note this when delegating P1.3.
+both readiness (F13) and contract negotiation (A1). **Decision (as built in P1.3):** the handshake body is
+a **superset** — `{contract_version, daemon_version, paired}` (A1 §5.1, for the SPA) PLUS P1.2's
+`{protocol_version, instance_id, pid, started_at}` (for lifecycle readiness). `contract_version` ==
+`protocol_version` == `PROTOCOL_VERSION` ("1.0") today. **Correction (per P1.3 adversarial review):**
+`ensureDaemon()` intentionally still reads/validates **`protocol_version`** (lifecycle compat), NOT
+`contract_version` — lifecycle-compat and API-contract-compat are kept as two separate concerns that happen
+to share one route (`protocol.ts` vs `contract.ts`). This is more correct than my original note; the two
+version constants may legitimately diverge later. No code change needed — the superset keeps P1.2's client
+working unchanged.
+
+### D3 — Origin allowlist on unmatched routes (P1.3 review, BLOCKER 1)
+A1 §1 ("Origin allowlisted first, 403 regardless of route") vs A3 §4/R5 ("Origin check is route-class-
+scoped"). The original P1.3 returned 404 for unmatched routes before any Origin check → a foreign origin
+could distinguish real routes (403) from fake (404) = a route-enumeration side channel. **Decision:** an
+unmatched route with a present-and-foreign `Origin` → **403 invalid-origin** before the 404; absent/self
+Origin → normal 404. Satisfies A1 §1 without weakening A3 §4's per-class rules on matched routes.
+
+### D4 — malformed `X-Contract-Version` (P1.3 review, SHOULD-FIX 3)
+A1 §3 only blesses leniency for a *missing* header. **Decision:** unparseable/partial versions (`""`, `"1"`,
+`"1.0.0"`, `"abc"`) are treated as "missing → lenient, same major assumed" (A1 §3's stated intent for
+non-SPA clients like a future CLI); only a **well-formed value whose major differs** from PROTOCOL_VERSION →
+409. Documented in a `contract.ts` comment + a `contract.test.ts` matrix.
 
 ---
 
