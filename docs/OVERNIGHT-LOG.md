@@ -44,6 +44,28 @@ Starting the loop at **P1.1**.
   import; idiomatic for no-build-step Bun).
 - **Tests:** 3 pass / 0 fail; typecheck clean. CC: no (no adversarial pass needed).
 
+### P1.2 daemon lifecycle + lock — ✅ (commit a1066c9) — CC, adversarially reviewed
+- **Built (Sonnet subagent):** `packages/daemon/src/{home,lock,protocol,handshake,lifecycle,index}.ts` +
+  `packages/cli/src/{index,main}.ts` wiring `__daemon`. `bootDaemon()` = bind 127.0.0.1:port → O_EXCL
+  lock CAS → ignore SIGHUP/SIGINT, SIGTERM graceful → serve readiness handshake; exit codes 0/3/4 per
+  F13. `ensureDaemon()` = client find-or-spawn (detached, unref, scrubbed env, poll ≤5s). Hermetic via
+  `GLOSA_HOME` env override.
+- **Adversarial pass (kombajn-dev:critic + my own review) found + fixed:**
+  - **CRITICAL (R1 singleton):** original `ensureDaemon` did an unconditional `unlinkSync` + respawn on
+    ambient `GLOSA_PORT` when the lock's pid was alive but the handshake didn't answer — could orphan a
+    live daemon's lock or, when ports differ, run **two daemons**. **Fixed:** added `probePortBound()`
+    (node:net) — reclaim only when the port is provably free (ECONNREFUSED); if bound-but-silent → **fail
+    closed** (no unlink, no spawn); fallback spawn now always targets the authoritative `lock.port`.
+  - **MAJOR:** the `ANTHROPIC_API_KEY` scrub (invariant #5, "the $1,800 footgun") had **zero** test
+    coverage. **Fixed:** extracted pure `buildChildEnv()` + a **real OS round-trip** test that spawns a
+    child and reads back its actual `process.env` (asserts the key is `<<ABSENT>>`).
+  - Minors fixed: poll budget tightened to ≤5s; `shutdown()` async + awaits `server.stop()`;
+    `parseProtocolVersion` hardened (rejects `""`/`"1"`/`"1.2.3"`); added tests for the live-peer EEXIST
+    branch and the new fail-closed path.
+- **Tests:** 33 pass / 0 fail (30 in daemon: real subprocess fault/concurrency — two-spawn race,
+  stale-lock reclaim ×3, port authority, SIGTERM guard, SIGINT/SIGHUP ignore, proto mismatch,
+  fail-closed, scrub round-trip). Typecheck clean. Verified helpers + gate independently before commit.
+
 ---
 
 ## Decisions made
