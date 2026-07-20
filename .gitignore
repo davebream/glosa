@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+.bun/
+
+# build output (glosa has no build step, but tools may emit these)
+dist/
+build/
+*.tsbuildinfo
+
+# glosa runtime state (never commit a user's workspace bus/provenance)
+.glosa/
+~/.glosa/
+
+# logs / os
+*.log
+.DS_Store
+
+# env / secrets
+.env
+.env.*
