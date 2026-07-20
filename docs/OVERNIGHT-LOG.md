@@ -28,6 +28,22 @@ Starting the loop at **P1.1**.
 
 <!-- one entry per task as it lands -->
 
+### P1.1 monorepo scaffold — ✅ (commit 908379e)
+- **Built (self, not delegated — light scaffold config, plan says "extend, don't recreate"):** fleshed
+  out all six `packages/*` `package.json` (description + `exports` map); CLI gets `bin.glosa` + a real
+  `src/main.ts` executable entry (the GLOSA_BIN target, A6 §F26) delegating to `run()` in `index.ts`
+  (stub: `--version`→0, `--help`→0, unknown→exit 2). Root `prepare` script installs the git hook.
+- **Real fix found:** root `workspaces` glob was `["packages/*"]`, which does **not** match the nested
+  `packages/providers/*` and `packages/adapters/*` — those three packages were never symlinked. Fixed
+  the globs; `bun install` now links all six. `test/workspace.test.ts` proves every package resolves by
+  name (this test failed before the glob fix — real, not theater).
+- **Pre-commit gate:** dependency-free `.githooks/pre-commit` (runs `bun run typecheck` + `bun test`),
+  wired via `core.hooksPath=.githooks` (no lefthook binary → honors no-native-deps). Verified it fires
+  and exits 0.
+- **tsconfig:** added `allowImportingTsExtensions: true` (typecheck caught `main.ts`'s `./index.ts`
+  import; idiomatic for no-build-step Bun).
+- **Tests:** 3 pass / 0 fail; typecheck clean. CC: no (no adversarial pass needed).
+
 ---
 
 ## Decisions made
