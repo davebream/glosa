@@ -57,6 +57,17 @@ owns the Host/Origin auth table and is more specific. **Decision:** Host literal
 foreign **Origin** rejection → **403**. Coherent split; satisfies A3's explicit rule and A1's 403 table
 for Origin. Apply in P1.3.
 
+### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
+Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
+adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
+class-F manifest resolution) registered by *external* code at runtime. Prove it with a **neutral in-repo
+fixture adapter only**; **delete the `packages/adapters/jethro` stub**; NO `jethro` identifier anywhere
+under `packages/daemon` or `packages/spa`. Real jethro integration lives in the **jethro repo** (jethro
+CLI + hook + skills) — OUT OF SCOPE here; leave a jethro-side handoff note in this log at P6.1 time.
+Dependency arrow jethro→glosa only. CC: yes. **Action items:** (a) when I reach P4.5, do P6.1 instead;
+(b) at P6.1, drop `packages/adapters/jethro` from the workspace globs + delete the package; (c) re-read
+BUILD-PLAN.md at each task pickup since Dawid may edit it again overnight.
+
 ### D2 — handshake body shape reconciliation (for P1.3)
 P1.2 gave `/api/handshake` an internal readiness body `{protocol_version, instance_id, pid, started_at}`.
 A1 §5.1 mandates the **public** body `{contract_version, daemon_version, paired}`. Same endpoint serves
