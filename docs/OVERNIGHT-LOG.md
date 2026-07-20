@@ -50,6 +50,21 @@ Starting the loop at **P1.1**.
 
 <!-- small autonomous calls + rationale -->
 
+### D1 — Host-mismatch vs Origin-mismatch HTTP status (for P1.3)
+A1 §1/§9 says "Origin/Host not allowlisted → 403"; A3 §4 Rule 1 explicitly says **Host** mismatch →
+**400, close, no body**. Between two appendices with no stated precedence, the security appendix (A3)
+owns the Host/Origin auth table and is more specific. **Decision:** Host literal mismatch → **400**;
+foreign **Origin** rejection → **403**. Coherent split; satisfies A3's explicit rule and A1's 403 table
+for Origin. Apply in P1.3.
+
+### D2 — handshake body shape reconciliation (for P1.3)
+P1.2 gave `/api/handshake` an internal readiness body `{protocol_version, instance_id, pid, started_at}`.
+A1 §5.1 mandates the **public** body `{contract_version, daemon_version, paired}`. Same endpoint serves
+both readiness (F13) and contract negotiation (A1). **Decision:** P1.3 reshapes the handshake response to
+A1 §5.1 (`contract_version` == the `PROTOCOL_VERSION` constant), keeps `protocol_version` in the lock file,
+and `ensureDaemon()`'s proto-compat check reads `contract_version` from the handshake JSON (major must
+match). Note this when delegating P1.3.
+
 ---
 
 ## Blocked — needs Dawid
