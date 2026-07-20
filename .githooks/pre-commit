@@ -1,0 +1,8 @@
+#!/bin/sh
+# glosa pre-commit gate — main must always be green + runnable.
+# Fast-fails the commit if types or the test suite are red. Bypass (rarely) with `git commit --no-verify`.
+set -e
+echo "glosa pre-commit: typecheck…"
+bun run typecheck
+echo "glosa pre-commit: bun test…"
+bun test

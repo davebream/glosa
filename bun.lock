@@ -8,6 +8,10 @@
         "typescript": "^5.6.0",
       },
     },
+    "packages/adapters/jethro": {
+      "name": "@glosa/adapters-jethro",
+      "version": "0.0.0",
+    },
     "packages/cli": {
       "name": "@glosa/cli",
       "version": "0.0.0",
@@ -16,15 +20,29 @@
       "name": "@glosa/daemon",
       "version": "0.0.0",
     },
+    "packages/providers/claude-code": {
+      "name": "@glosa/providers-claude-code",
+      "version": "0.0.0",
+    },
+    "packages/providers/codex": {
+      "name": "@glosa/providers-codex",
+      "version": "0.0.0",
+    },
     "packages/spa": {
       "name": "@glosa/spa",
       "version": "0.0.0",
     },
   },
   "packages": {
+    "@glosa/adapters-jethro": ["@glosa/adapters-jethro@workspace:packages/adapters/jethro"],
+
     "@glosa/cli": ["@glosa/cli@workspace:packages/cli"],
 
     "@glosa/daemon": ["@glosa/daemon@workspace:packages/daemon"],
+
+    "@glosa/providers-claude-code": ["@glosa/providers-claude-code@workspace:packages/providers/claude-code"],
+
+    "@glosa/providers-codex": ["@glosa/providers-codex@workspace:packages/providers/codex"],
 
     "@glosa/spa": ["@glosa/spa@workspace:packages/spa"],
 

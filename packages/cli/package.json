@@ -3,5 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts"
+  "description": "glosa command-line interface (open/init/resolve/apply-begin/request-review/doctor/status).",
+  "main": "src/main.ts",
+  "bin": { "glosa": "src/main.ts" },
+  "exports": { ".": "./src/index.ts" }
 }
