@@ -62,6 +62,14 @@ export class WorkspaceBus {
   private readonly ulidFn: () => string;
   private readonly nowFn: () => Date;
   private readonly reducer: Reducer;
+  // P3.1 review fix: tracks whether THIS INSTANCE has reconciled — deliberately an instance field,
+  // not something a caller tracks externally keyed by root string. A root string survives a
+  // WorkspaceBusRegistry evict()+reopen (WorkspaceIndex hard-remove → onHardRemove → evict → a
+  // later getWorkspaceBus(root) constructs a brand-new WorkspaceBus); an external "have I
+  // reconciled root X" cache would then wrongly believe the NEW instance is already reconciled
+  // and skip its journal replay/self-heal/offline-catchup forever. Living on the instance means a
+  // fresh instance is un-reconciled by construction — no external bookkeeping to keep in sync.
+  private reconciledOnce = false;
 
   constructor(workspaceRoot: string, deps: WorkspaceBusDeps = {}) {
     this.root = workspaceRoot;
@@ -76,6 +84,18 @@ export class WorkspaceBus {
     // `replayJournal`/`reconcileWorkspace` callers (e.g. its own test suite) that never go
     // through a WorkspaceBus at all.
     this.reducer = deps.reducer ?? lifecycleReducer;
+  }
+
+  /** Runs `reconcile()` at most once per instance — a no-op (resolves `undefined`, no mutex taken)
+   * on every call after the first. This is the call callers that just want "make sure this bus's
+   * state reflects the journal before I read/write it" should use instead of bare `reconcile()`;
+   * bare `reconcile()` stays available for a caller that legitimately wants to force a fresh
+   * reconcile pass (e.g. a test). The flag is claimed SYNCHRONOUSLY before the first `await`, so
+   * two calls racing in back-to-back can't both kick off a reconcile. */
+  reconcileOnce(): Promise<ReconcileResult | undefined> {
+    if (this.reconciledOnce) return Promise.resolve(undefined);
+    this.reconciledOnce = true;
+    return this.reconcile();
   }
 
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting

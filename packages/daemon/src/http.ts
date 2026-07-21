@@ -2,18 +2,32 @@
 // host-check → route lookup → authorizeRequest → contract-version gate → body cap → handler for
 // the SPA/API listener, and the minimal host-check-only pipeline for the class-F listener.
 //
-// Route logic beyond the three routes below (artifact/session/inbox/diff/SSE/capability-mint,
-// the class-F doc serve+bridge) is later tasks' scope (see the `// Pxx:` notes at each). This
-// module only has to prove the pipeline itself is correct — that's what the P1.3 attack-suite
-// tests exercise.
-import { readFileSync } from "node:fs";
+// P3.1 fills in the full A1 §5 route catalog on top of the P1.3 pipeline: every `/w/:slug/...`
+// route resolves its slug through `ctx.workspaceIndex` (unknown slug → 404) before touching
+// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Four
+// routes (SSE streams, the class-F capability mint, the attention-response route) are SHELLS —
+// the auth/contract/confinement pipeline runs for real, but the body is a `// Pxx:` placeholder
+// until their owning task lands (see `handleNotImplemented`/`handleCapabilityShell`).
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+import { confinePath } from "./confine-path.ts";
 import { internalErrorResponse, problem } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
+import { resolveMatchedFiles } from "./matcher.ts";
+import { renderMarkdown, sourceSha256 } from "./artifact-render.ts";
+import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
+import type { WorkspaceIndex } from "./registry/workspace-index.ts";
+import type { SessionRegistry } from "./registry/session-registry.ts";
+import type { WorkspaceBus } from "./bus/bus.ts";
+import { journalPath } from "./bus/paths.ts";
+import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
+import { isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
+import type { JournalEvent } from "./bus/journal.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -34,6 +48,12 @@ export interface ApiContext {
   token: string | null;
   instanceId: string;
   startedAt: string;
+  workspaceIndex: WorkspaceIndex;
+  sessionRegistry: SessionRegistry;
+  /** Always resolves to the SAME `WorkspaceBus` instance for a given canonical root (backed by
+   * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
+   * construct their own `WorkspaceBus`. */
+  getWorkspaceBus: (canonicalRoot: string) => WorkspaceBus;
 }
 
 /** The handshake body is a superset of P1.2's `HandshakeResponse` (D2): keeps
@@ -133,6 +153,314 @@ function serveSpaAsset(pathname: string): Response {
   return new Response(body, { headers: { "Content-Type": contentType } });
 }
 
+// -------------------------------------------------------------------------------------------
+// P3.1 — A1 §5's `/w/:slug/...` route catalog. Every handler below resolves `:slug` through
+// `ctx.workspaceIndex.getBySlug` FIRST (unknown slug → 404 not-found) before doing anything else
+// — this is the one gate every workspace-scoped route shares, per the P3.1 task brief ("slug →
+// workspace: routes resolve `:slug`... unknown slug → 404").
+// -------------------------------------------------------------------------------------------
+
+function classify(path: string): "R" | "F" {
+  return path.endsWith(".html") ? "F" : "R";
+}
+
+function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
+  const entry = ctx.workspaceIndex.getBySlug(slug);
+  if (!entry) return { ok: false as const, response: problem(404, "not-found", "unknown workspace", undefined, pathname) };
+  return { ok: true as const, entry };
+}
+
+/** `GET /api/workspaces` (A1 §5.2) — the live, present-only registry. */
+function handleListWorkspaces(ctx: ApiContext): Response {
+  const entries = ctx.workspaceIndex.list({ presentOnly: true });
+  const body = entries.map((e) => ({
+    slug: e.slug,
+    path: e.canonical_path,
+    last_seen: e.last_seen,
+    has_attention: hasOpenAttention(peekJournal(e.canonical_path).state),
+  }));
+  return Response.json(body);
+}
+
+/** A passive, read-only fold over a workspace's journal — deliberately NOT `WorkspaceBus`/
+ * `reconcileWorkspace`: those self-heal and checkpoint (real writes, incl. spawning git), which
+ * would make a plain GET (workspace listing, inbox summary) have write side effects. This just
+ * parses whatever's already durably on disk and folds it with the same production reducer
+ * (`lifecycleReducer`) — a malformed line is silently skipped here rather than quarantined; the
+ * durable quarantine still happens the first time any WRITE path (`resolveBus` below) reconciles
+ * this workspace for real. */
+function peekJournal(root: string): { state: DerivedState; createdAt: Map<string, string> } {
+  const path = journalPath(root);
+  const createdAt = new Map<string, string>();
+  if (!existsSync(path)) return { state: createEmptyState(), createdAt };
+
+  const raw = readFileSync(path, "utf8");
+  const events: JournalEvent[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue; // not this read-only peek's job to quarantine — see docstring above
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const p = parsed as Record<string, unknown>;
+    if (p.v !== 1 || typeof p.event !== "string" || typeof p.event_id !== "string") continue;
+    const event = p as unknown as JournalEvent;
+    events.push(event);
+    if (event.event === "entry_created" && typeof event.entry === "string" && !createdAt.has(event.entry)) {
+      createdAt.set(event.entry, event.at);
+    }
+  }
+  return { state: foldEvents(events, lifecycleReducer), createdAt };
+}
+
+function hasOpenAttention(state: DerivedState): boolean {
+  return Object.values(state.entries).some((e) => e.kind === "attention" && !isTerminal("attention", e.status));
+}
+
+/** Routes that need the LIVE bus (annotations, diff) reconcile the first time they touch a given
+ * `WorkspaceBus` INSTANCE, then reuse its already-reconciled in-memory `bus.state` on every later
+ * request — `WorkspaceBus.reconcileOnce()` owns that "once per instance" gate itself (P3.1 review
+ * fix: an external cache keyed by root string would survive past a `WorkspaceBusRegistry.evict()`
+ * + reopen and wrongly skip reconciling the fresh instance underneath it — see reconcileOnce's own
+ * docstring in bus.ts). */
+async function resolveBus(ctx: ApiContext, root: string): Promise<WorkspaceBus> {
+  const bus = ctx.getWorkspaceBus(root);
+  await bus.reconcileOnce();
+  return bus;
+}
+
+/** `GET /w/:slug/artifacts` (A1 §5.3) — the sidebar listing. */
+function handleListArtifacts(ctx: ApiContext, slug: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+
+  const { tracked } = resolveMatchedFiles(resolved.entry.canonical_path);
+  const body = tracked.map((f) => ({
+    path: f.path,
+    class: classify(f.path),
+    size_bytes: f.sizeBytes,
+    mtime: statSync(f.rawPath).mtime.toISOString(),
+    source_sha256: sourceSha256(readFileSync(f.rawPath)),
+    stale: false, // P6.1: staleness needs derived-from edges, not built yet — always fresh for now
+  }));
+  return Response.json(body);
+}
+
+/** `GET /w/:slug/artifacts/:path` (A1 §5.4). `path` is workspace-relative and must both pass
+ * `confinePath` (A1 §6 — traversal/symlink-escape → 400) AND be a currently tracked artifact
+ * (matcher membership — confined-but-untracked → 404, a different failure class per §6 step 4). */
+function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, req: Request): Response {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  const confineResult = confinePath(root, rawPathParam);
+  if (!confineResult.ok) {
+    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
+  }
+
+  const relNfc = rawPathParam
+    .split("/")
+    .map((segment) => segment.normalize("NFC"))
+    .join("/");
+  const { tracked } = resolveMatchedFiles(root);
+  const match = tracked.find((f) => f.path === relNfc);
+  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
+
+  const raw = readFileSync(match.rawPath);
+  const sourceSha = sourceSha256(raw);
+  const cls = classify(match.path);
+
+  if (cls === "F") {
+    // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
+    // is the class-F capability listener's job (P4.1).
+    return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "F" });
+  }
+
+  const content = raw.toString("utf8");
+  if (url.searchParams.get("render") === "html") {
+    return Response.json({
+      source_path: match.path,
+      source_sha256: sourceSha,
+      class: "R",
+      content,
+      rendered_html: renderMarkdown(content),
+    });
+  }
+  return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "R", content });
+}
+
+const ANNOTATION_INTENTS = new Set(["content", "classification", "style"]);
+
+function validateAnnotationBody(body: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, reason: "body must be a JSON object" };
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.body !== "string" || b.body.length === 0) return { ok: false, reason: "body.body is required" };
+  if (typeof b.intent !== "string" || !ANNOTATION_INTENTS.has(b.intent)) {
+    return { ok: false, reason: "body.intent must be one of content|classification|style" };
+  }
+  const target = b.target;
+  if (typeof target !== "object" || target === null || Array.isArray(target)) {
+    return { ok: false, reason: "body.target is required" };
+  }
+  const quote = (target as Record<string, unknown>).quote;
+  if (typeof quote !== "object" || quote === null || typeof (quote as Record<string, unknown>).exact !== "string") {
+    return { ok: false, reason: "body.target.quote.exact is required" };
+  }
+  return { ok: true, value: b };
+}
+
+/** Matches the A1 §5.6 example id shape (`inb-1721470000-a1c2`) — epoch seconds + 4 hex chars.
+ * Not a `ulid()` (that's reserved for journal `event_id`s, A4 §F04) — an inbox entry's own id has
+ * no ordering/dedup contract of its own beyond "write-once", so a shorter, spec-matching id is
+ * fine here. */
+function generateAnnotationId(): string {
+  return `inb-${Math.floor(Date.now() / 1000)}-${randomBytes(2).toString("hex")}`;
+}
+
+/** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
+ * `WorkspaceBus.createEntry` — honest provenance only: this route creates the entry, it does NOT
+ * resolve its anchor (that's P3.4's job, A5 §F10/§F11). */
+async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const validated = validateAnnotationBody(body);
+  if (!validated.ok) return problem(400, "validation-failed", validated.reason, undefined, url.pathname);
+
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const id = generateAnnotationId();
+  // Explicitly picked fields ONLY — never spread the raw parsed body. `kind` in particular must
+  // stay a server-assigned constant: a client-supplied `kind` (e.g. "attention_request") spread
+  // in after this literal would silently clobber it, forging an attention-tray entry through the
+  // annotations endpoint.
+  await bus.createEntry(id, {
+    kind: "annotation",
+    body: validated.value.body,
+    intent: validated.value.intent,
+    target: validated.value.target,
+  });
+
+  return new Response(JSON.stringify({ id, status: "pending" }), {
+    status: 201,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** `GET /w/:slug/diff` (A1 §5.7). v1 only implements the `from`/`to` checkpoint-id form — `since`
+ * (`last-annotation`|`yesterday`) needs the full checkpoint-history resolution P3.5 owns, so any
+ * `since` value 400s for now rather than half-implementing named-token resolution here. */
+async function handleDiff(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  if (url.searchParams.get("since") !== null) {
+    // P3.5: `since=last-annotation|yesterday` resolution belongs to the full checkpoint-query UI.
+    return problem(400, "validation-failed", "since= is not yet supported — use from=/to=", undefined, url.pathname);
+  }
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  if (!from || !to) {
+    return problem(400, "validation-failed", "from and to query params are required", undefined, url.pathname);
+  }
+
+  await resolveBus(ctx, root); // ensures the shadow repo exists (if there's anything to check out) before we ask git about it
+
+  const [fromOk, toOk] = await Promise.all([commitExists(root, from), commitExists(root, to)]);
+  if (!fromOk || !toOk) {
+    return problem(400, "validation-failed", "from/to is not a known checkpoint", undefined, url.pathname);
+  }
+
+  const hunks = await buildDiffHunks(root, from, to);
+  return Response.json({ from, to, hunks });
+}
+
+/** `GET /w/:slug/inbox` (A1 §5.9) — sidebar badge + attention tray summary. `attention[]` lists
+ * only attention-kind entries (per A5 §F23's two-axis split — common entries like annotations
+ * aren't "attention"); the exact item shape is F12's to finalize, per A1 §5.9. */
+function handleInbox(ctx: ApiContext, slug: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+
+  const { state, createdAt } = peekJournal(resolved.entry.canonical_path);
+  const attention = Object.entries(state.entries)
+    .filter(([, e]) => e.kind === "attention" && !isTerminal("attention", e.status))
+    .map(([id, e]) => ({ id, created_at: createdAt.get(id) ?? "", status: e.status }))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  return Response.json({ pending_count: attention.length, attention });
+}
+
+/** `POST /w/:slug/session-binding` (A1 §5.11) — the explicit user pick from the session picker
+ * (R2). There's no separate "rebind" mutation on `SessionRegistry`; `register()` already
+ * documents that a repeat call for a known `session_id` replaces its record, so binding is
+ * "re-register this session with an explicit `workspace_binding`", carrying every other field
+ * of its existing record forward unchanged. */
+async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const sessionId = (body as Record<string, unknown> | null)?.session_id;
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return problem(400, "validation-failed", "session_id is required", undefined, url.pathname);
+  }
+
+  const existing = ctx.sessionRegistry.get(sessionId);
+  if (!existing || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown or not-live session", undefined, url.pathname);
+  }
+
+  await ctx.sessionRegistry.register({ ...existing, workspace_binding: resolved.entry.canonical_path });
+  return Response.json({ bound: true, session_id: sessionId });
+}
+
+/** Shared body for three of the four route SHELLS (A1 §5.5/§5.8/§5.10) — their real backends land
+ * in later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
+ * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes.
+ * `capability/:artifactPath` (§5.12) has its own variant below — it's the one shell with a
+ * `:path`-shaped param, so it confines that param too rather than skipping straight to 501. */
+function handleNotImplemented(ctx: ApiContext, slug: string, pathname: string, note: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  return problem(501, "not-implemented", note, undefined, pathname);
+}
+
+/** `GET /w/:slug/capability/:artifactPath` shell (A1 §5.12) — P4.1 owns the real token mint, but
+ * `artifactPath` is confined here now (traversal/symlink-escape → 400) so P4.1 builds on a real
+ * gate instead of a bare stub, and so the confinement attack suite already covers this route. */
+function handleCapabilityShell(ctx: ApiContext, slug: string, artifactPath: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+
+  const confineResult = confinePath(resolved.entry.canonical_path, artifactPath);
+  if (!confineResult.ok) {
+    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, pathname);
+  }
+  return problem(501, "not-implemented", "class-F capability mint — P4.1", undefined, pathname);
+}
+
 function matchApiRoute(ctx: ApiContext, method: string, pathname: string): RouteMatch | null {
   if (method === "GET" && pathname === "/api/handshake") {
     return { routeClass: "tokenless-handshake", handle: handleHandshake(ctx) };
@@ -143,18 +471,68 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "GET" && pathname.startsWith("/app/")) {
     return { routeClass: "navigation", handle: () => serveSpaAsset(pathname) };
   }
-  // P2.4: the live registry. Empty until then.
   if (method === "GET" && pathname === "/api/workspaces") {
-    return { routeClass: "authed-read", handle: () => Response.json([]) };
+    return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
   }
-  // P2.4 (registry) + P3.x (binding logic) own the real behavior; wired here only so the auth
-  // pipeline has a real state-changing route to exercise end-to-end.
-  if (method === "POST" && /^\/w\/[^/]+\/session-binding$/.test(pathname)) {
+
+  let m: RegExpMatchArray | null;
+
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleListArtifacts(ctx, slug, pathname) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts\/(.+)$/))) {
+    const slug = m[1] as string;
+    const path = m[2] as string;
+    return { routeClass: "authed-read", handle: (req) => handleGetArtifact(ctx, slug, path, req) };
+  }
+  // P3.2: artifact/journal SSE stream.
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
+    const slug = m[1] as string;
     return {
-      routeClass: "state-changing",
-      handle: (req) => problem(404, "not-found", "unknown workspace", undefined, new URL(req.url).pathname),
+      routeClass: "authed-read",
+      handle: () => handleNotImplemented(ctx, slug, pathname, "artifact/journal SSE stream — P3.2"),
     };
   }
+  // P4.2: conversation-mirror SSE stream.
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/stream$/))) {
+    const slug = m[1] as string;
+    return {
+      routeClass: "authed-read",
+      handle: () => handleNotImplemented(ctx, slug, pathname, "transcript mirror SSE stream — P4.2"),
+    };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleCreateAnnotation(ctx, slug, req) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/diff$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: (req) => handleDiff(ctx, slug, req) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/inbox$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleInbox(ctx, slug, pathname) };
+  }
+  // F12: human response to an attention_request.
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/[^/]+\/response$/))) {
+    const slug = m[1] as string;
+    return {
+      routeClass: "state-changing",
+      handle: () => handleNotImplemented(ctx, slug, pathname, "attention_request response — F12"),
+    };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/session-binding$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSessionBinding(ctx, slug, req) };
+  }
+  // P4.1: class-F capability-URL mint (A1 §7).
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/capability\/(.+)$/))) {
+    const slug = m[1] as string;
+    const artifactPath = m[2] as string;
+    return { routeClass: "state-changing", handle: () => handleCapabilityShell(ctx, slug, artifactPath, pathname) };
+  }
+
   return null;
 }
 

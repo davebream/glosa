@@ -20,6 +20,9 @@ import { createApiFetch, createClassFFetch } from "./http.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { internalErrorResponse } from "./problem.ts";
 import { loadToken } from "./token.ts";
+import { WorkspaceIndex } from "./registry/workspace-index.ts";
+import { SessionRegistry } from "./registry/session-registry.ts";
+import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -31,6 +34,41 @@ function log(home: string, line: string): void {
   } catch {
     // logging is best-effort; never let it crash boot or shutdown
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// P3.1: the daemon's single backend instance — one WorkspaceIndex, one SessionRegistry (sharing
+// that index), one WorkspaceBusRegistry, wired together per session-registry.ts's own "production
+// wiring is three lines" docstring and workspace-bus-registry.ts's `setOnHardRemove` docstring.
+// Pulled out of bootDaemon so it's unit-testable on its own (a real WorkspaceIndex/SessionRegistry
+// pair, no port binds, no subprocess) — see test/backend-wiring.test.ts.
+// ---------------------------------------------------------------------------------------------
+export interface DaemonBackend {
+  workspaceIndex: WorkspaceIndex;
+  sessionRegistry: SessionRegistry;
+  busRegistry: WorkspaceBusRegistry;
+}
+
+export interface BuildBackendOptions {
+  /** Test-only overrides for WorkspaceIndex's GC timers — production always uses the real
+   * defaults (A5 §F19: grace ~24h, throttle ~60s). */
+  gcGraceMs?: number;
+  gcThrottleMs?: number;
+}
+
+export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
+  const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
+  const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
+  const busRegistry = new WorkspaceBusRegistry();
+
+  // Live-session predicate: a workspace under a live session is never GC-hard-removed no matter
+  // how long its path has been missing (WorkspaceIndex's own conservative default otherwise).
+  workspaceIndex.setLiveSessionPredicate((canonicalPath) => sessionRegistry.forWorkspace(canonicalPath).length > 0);
+  // Hard-remove eviction: a workspace GC actually removes from the index must also drop its open
+  // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
+  workspaceIndex.setOnHardRemove((canonicalPath) => busRegistry.evict(canonicalPath));
+
+  return { workspaceIndex, sessionRegistry, busRegistry };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -46,8 +84,18 @@ export async function bootDaemon(): Promise<never> {
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
   const token = loadToken(home);
+  const backend = buildBackend(home);
 
-  const apiFetch = createApiFetch({ port, classFPort, token, instanceId, startedAt });
+  const apiFetch = createApiFetch({
+    port,
+    classFPort,
+    token,
+    instanceId,
+    startedAt,
+    workspaceIndex: backend.workspaceIndex,
+    sessionRegistry: backend.sessionRegistry,
+    getWorkspaceBus: (root) => backend.busRegistry.get(root),
+  });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —

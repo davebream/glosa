@@ -346,4 +346,53 @@ describe("daemon HTTP pipeline — real subprocess", () => {
       expect(res.status).toBe(404);
     }
   });
+
+  // --- P3.1: the A3 §5 attack suite still holds through the NEW route catalog (real subprocess,
+  // empty registry — schema-level coverage for these routes lives in http-routes.test.ts) ---
+
+  test("GET /w/:slug/artifacts (authed-read) with Host mismatch → 400, no body [A3 §5 #7]", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/artifacts"), { headers: { Host: "evil.com" } });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("");
+  });
+
+  test("GET /w/:slug/diff with no Bearer → 401, never reaches the unknown-slug 404", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/diff?from=a&to=b"));
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /w/:slug/artifacts with foreign Origin but valid Bearer → 403 (reads reject foreign)", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/artifacts"), {
+      headers: { Authorization: `Bearer ${TOKEN}`, Origin: "http://evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("POST /w/:slug/annotations with valid Bearer + self Origin → passes auth, then 404 (empty registry)", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/annotations"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: `http://127.0.0.1:${port}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body: "x", intent: "content", target: { quote: { exact: "x" } } }),
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()).type).toContain("not-found");
+  });
+
+  test("POST /w/:slug/annotations with valid Bearer but missing Origin → 403 (state-changing)", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/annotations"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "x", intent: "content", target: { quote: { exact: "x" } } }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("GET /w/:slug/stream (route SHELL) with no Bearer → 401 — the pipeline runs for shells too", async () => {
+    const res = await fetch(apiUrl("/w/some-slug/stream"));
+    expect(res.status).toBe(401);
+  });
 });

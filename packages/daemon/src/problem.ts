@@ -10,7 +10,11 @@ export type ProblemSlug =
   | "payload-too-large"
   | "validation-failed"
   | "capability-expired"
-  | "internal";
+  | "internal"
+  // Not one of A1 §1's fixed slugs — used only by P3.1's route SHELLS (A1 §5.5/§5.8/§5.10/§5.12,
+  // whose real bodies land in P3.2/P4.1/P4.2/F12) so the auth/contract/confinement pipeline can be
+  // exercised end-to-end against those routes today without pretending a real backend exists.
+  | "not-implemented";
 
 export function problem(
   status: number,
