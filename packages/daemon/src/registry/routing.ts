@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — R2's routing decision. Pure orchestration over a `SessionRegistry`: given a
 // workspace an entry is destined for, decide which live session (if any) should receive it.
 // Never guesses (R2: "never guess") — two live sessions with no `sessionHint` naming either one

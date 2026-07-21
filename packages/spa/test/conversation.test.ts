@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.2 — conversation.js: the pure `groupEvents` fold (subagent grouping / meta hidden) and a DOM
 // integration test against a fake data-access object (no real daemon, no real fetch, no real SSE
 // — same harness shape as viewer.test.ts's `mountApp` suite). Fail-soft is asserted explicitly:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.2 — pure wire-format tests for sse.ts (A1 §8.1). No I/O, no Bun.serve: `encodeSseFrame`
 // and `parseSseStream` are exercised directly against ReadableStreams built by hand, including
 // deliberately splitting a single frame across an arbitrary chunk boundary — the whole reason

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Shared test-only helpers for the P5.1 command surface's test files.
 export function captureStdout(fn: () => void): string {
   const orig = process.stdout.write.bind(process.stdout);

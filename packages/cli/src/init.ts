@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa init` (A6 §F26): the transactional merge of glosa's Claude Code hooks +
 // MCP entry into a workspace's `.claude/settings.json` / `.mcp.json`, with an ownership manifest
 // (`.claude/.glosa-init.json`) as the authoritative record of what glosa put there. Three

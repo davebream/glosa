@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-codex — the Codex hook JSON shapes glosa reads, pinned against real Codex CLI
 // source (`docs/research/codex-contract.md`, T2a) rather than the Plannotator-era guess. Every
 // `*CommandInput` struct in `codex-rs/hooks/src/schema.rs` carries `session_id`/`cwd` under those

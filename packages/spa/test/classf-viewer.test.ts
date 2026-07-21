@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.1 — classf-viewer.js: the parent-side trust boundary for the class-F iframe (A3 §1/§2). Pure
 // functions (checkEventSource/checkNonce/isTrustedInitEvent/validateBridgeMessage/
 // createTokenBucket/createMessageRouter) are unit-tested directly, no DOM needed — this is the

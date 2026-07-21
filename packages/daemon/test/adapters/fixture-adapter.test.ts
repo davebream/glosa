@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P6.1 acceptance: the neutral fixture adapter (test/fixtures/adapter/fixture-adapter.ts)
 // registers PURELY through the public ContentAdapter protocol and proves every generic behavior
 // R7 promises: data-path recognition, the derived-from edge (Edit-on-class-F source + staleness),

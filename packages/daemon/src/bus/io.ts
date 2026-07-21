@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — tiny fs helpers shared by journal.ts and inbox.ts: an offset-advancing write
 // loop that tolerates a short writeSync (A4 §F04 — "writeSync may write fewer bytes"), and a
 // directory-fsync helper for the "fsync the containing dir once at file creation" rule.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Twelve enumerated checks — A6's own
 // command-surface table names exactly 12 (platform, bun, git, claude-code, browser, daemon+proto,
 // token/pairing, workspace, hooks, mcp, channel-registered, transcript-root), even though one

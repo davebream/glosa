@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-codex — the Codex AgentProvider (R7). Implements the R4 delivery ladder MINUS
 // channels — Codex has no async-push-into-idle equivalent (docs/research/codex-contract.md §7:
 // "push: false").

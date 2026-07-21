@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The named "Polish combining chars / NFC-vs-NFD" hard case (A5 §F10, T8 anchor corpus): an
 // annotation's quote captured/typed in NFD (a base letter + a trailing combining mark, as some
 // editors/IMEs produce) against source text that is NFC (precomposed) — or vice versa. The

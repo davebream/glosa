@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — inbox entries: immutable, write-once `.glosa/inbox/<id>.json` (A4 §F04). Temp
 // file in the same dir -> fsyncSync -> hardlink to the final path -> fsync the directory; writing
 // an id that already exists is rejected, never overwritten. Callers serialize through the

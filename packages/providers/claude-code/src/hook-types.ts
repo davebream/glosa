@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-claude-code — the hook JSON shapes glosa actually reads (A2 §F08 "Cross-Cutting
 // Minimum Hook JSON Schemas"). Deliberately minimal: Claude Code's hook payloads carry more fields
 // than these (model, permission_mode, etc.) that glosa has no use for — these types only name what

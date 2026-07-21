@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Single-writer proof: N concurrent calls into the same WorkspaceBus (i.e. the same workspace's
 // mutex slot) must never interleave or tear a journal record, no matter how they're scheduled.
 import { describe, expect, test } from "bun:test";

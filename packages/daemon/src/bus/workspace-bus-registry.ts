@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — process-wide WorkspaceBus registry (P2.4). Closes the gap `WorkspaceBusDeps`
 // documents at the top of bus.ts: nothing in `WorkspaceBus` itself stops two instances from being
 // opened for the same canonical root, each with its own fd/state/KeyedMutex — this is what

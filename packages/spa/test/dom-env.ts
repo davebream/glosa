@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 test-only helper: installs a happy-dom `Window`'s DOM globals onto the real `globalThis`
 // for the duration of one test file (pure-JS happy-dom, no native addon — matches the repo's
 // "no compiled addons" invariant). Copies every non-undefined property happy-dom's `Window`

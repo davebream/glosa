@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — P5.1: the broader daemon-facing client the non-hook CLI surface (open/resolve/
 // apply-begin/request-review/status) calls into. Same shape convention as daemon-client.ts's
 // `DaemonHookClient` (an interface + one real HTTP-backed implementation) — every command handler

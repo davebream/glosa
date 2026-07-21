@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — class-R artifact content helpers for A1 §5.4: the canonical `source_sha256`
 // formula (A5 §F10 — SHA256 of the raw bytes after `\r\n`→`\n` only, no markdown processing) and
 // the markdown-it render pipeline that stamps `data-line` attributes onto every block-level token

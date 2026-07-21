@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the anchoring resolver (A5 §F10/§F11, R6). Maps a W3C-shaped annotation record
 // (built by @glosa/spa's annotate.js, or the class-F bridge) back onto either a verified source
 // range, a typed pipeline-feedback entry, or an honest "couldn't map it" — TOTAL: this module

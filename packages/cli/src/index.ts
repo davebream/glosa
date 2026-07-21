@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
 import completion from "@gunshi/plugin-completion";
 import {

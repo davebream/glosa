@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.4 — scrubToken/selectScreen are the security-load-bearing pure functions in bootstrap.js
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.

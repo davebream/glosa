@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — GET /w/:slug/checkpoints support (A6 §F31): resolves the `since` token
 // (`yesterday`|`today`|ISO|<checkpoint-id>) and lists the shadow-git history as rows the UI can
 // render in DOCUMENT-NATIVE language (checkpoint_id is an opaque short sha, never surfaced to the

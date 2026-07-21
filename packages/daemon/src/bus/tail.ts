@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — journal "tail" reads for the SSE stream (P3.2, A1 §8). Pure file reads, no
 // mutation, and deliberately separate from replay.ts's `replayJournal`: that one quarantines and
 // folds into `DerivedState`, which is a different job from what the SSE cursor space needs — the

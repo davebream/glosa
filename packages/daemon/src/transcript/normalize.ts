@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P4.2: the vendored `TranscriptEvent` normalizer (A2 §F16). The ONLY module in
 // this codebase allowed to look at a raw Claude Code transcript JSONL line — everything else (the
 // tailer in transcript/stream.ts, the SPA's conversation.js) only ever sees the normalized shape

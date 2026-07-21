@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — the `/api/sessions/...` surface `glosa hook <event>` calls into (A2 §F08/R2): register,
 // heartbeat, deregister, drain. Same harness style as http-routes.test.ts — a real `createApiFetch`
 // pipeline in-process against real `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the glosa bridge injected into a class-F document's own HTML (A3 §1/§2). This
 // is UNTRUSTED-origin code by construction: it runs inside the opaque-origin, sandboxed iframe,
 // alongside whatever the document's own `<script>`s do. It carries no ambient authority of its

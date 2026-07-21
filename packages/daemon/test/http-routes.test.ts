@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.1 — per-route schema + error-path coverage for the A1 §5 route catalog. Runs the real
 // `createApiFetch` pipeline IN-PROCESS (no subprocess) against a hand-built `ApiContext` backed by
 // real `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry` instances over real tmp

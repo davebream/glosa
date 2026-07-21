@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 — structural check for R6's "ONE data-access module" invariant: no SPA component talks
 // to the daemon except through data-access.js. Source-text based (not a runtime mock-count), on
 // purpose — it catches a FUTURE stray `fetch(` call anywhere in these files even before a test

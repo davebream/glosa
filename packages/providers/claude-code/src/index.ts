@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-claude-code — see docs/requirements.md R4/R7 + docs/appendices/A2-claude-code-integration.md
 export { ClaudeCodeProvider } from "./provider.ts";
 export type { ChannelSender, ClaudeCodeProviderDeps, RewakeSignal, SessionLivenessSource } from "./provider.ts";

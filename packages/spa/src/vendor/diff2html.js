@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Vendored from `diff2html@3.4.56`'s `bundles/js/diff2html.min.js` (the `diff2html` npm
 // dependency in the repo root `package.json` pins the version this is a copy of). Vendored, not
 // imported by bare specifier, for the same "no build step" reason idiomorph.js is (see that

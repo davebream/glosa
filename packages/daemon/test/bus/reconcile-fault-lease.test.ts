@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 storage/fault). `reconcile-fault.test.ts`'s own headline sweep proves the GENERIC
 // journal-recovery mechanism (torn-tail truncate + interior quarantine) is content-agnostic — but
 // its reference journal only ever contains entry_created/transition_committed events, never a

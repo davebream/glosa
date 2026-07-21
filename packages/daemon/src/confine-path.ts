@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — confinePath: the ONE shared path-confinement utility (A1 §6, A3 §3/§5 #4-5,
 // F24). Every workspace-relative path arriving through the HTTP layer must funnel through this
 // before it ever touches the filesystem. Reused as-is by the class-F mint/serve path (A1 §7),

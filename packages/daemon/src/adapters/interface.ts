@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — R7's content-adapter interface + the registry the daemon holds (the generic/
 // domain boundary, CLAUDE.md invariant #1: generic core, domain in adapters). Mirrors
 // providers/interface.ts's own framing verbatim: this is the seam EXTERNAL code (a package living

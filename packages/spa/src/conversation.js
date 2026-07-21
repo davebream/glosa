@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — P4.2: the conversation viewer (R6/F32) — a READ-ONLY mirror of the registered
 // session's transcript, rendered from the daemon's normalized `TranscriptEvent`s (never raw
 // transcript JSON — that isolation is normalize.ts's whole point, A2 §F16), plus an out-of-band

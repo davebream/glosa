@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the session registry (A2 §F08, R2). In-memory only: sessions re-register on
 // every SessionStart, so a daemon restart simply rebuilds this from scratch as live agent
 // sessions fire their next hook — no durability requirement here (unlike the journal or the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers for the P2.1 file-bus suites. Every test gets its own tmp workspace dir
 // (never a real repo `.glosa/`) and a deterministic ulid/clock pair so ordering assertions don't
 // depend on wall-clock timing.

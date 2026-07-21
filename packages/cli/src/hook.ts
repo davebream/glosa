@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa hook <event>` (A6 §F26's hook entries + A2's per-event roles). Every
 // handler here is deliberately thin: parse the hook JSON on stdin, call the injected
 // `DaemonHookClient`/`RewakeCoordinator`, print the right hook JSON on stdout, return the right

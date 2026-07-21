@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — glosa home dir resolution. Everything the daemon owns (lock, log, later the
 // journal/inbox/shadow-git) roots here. `GLOSA_HOME` is honored everywhere so tests are hermetic
 // and never touch a real `~/.glosa` (see docs/appendices/A5-daemon-architecture.md §F13).

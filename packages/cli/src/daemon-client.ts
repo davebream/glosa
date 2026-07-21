@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — the daemon-facing API `glosa hook <event>` calls into (A2 §F08/R2: "providers
 // register live agent sessions via hooks → daemon API (never direct file writes)"). A thin
 // interface + one real HTTP-backed implementation, so every hook handler in hook.ts depends on

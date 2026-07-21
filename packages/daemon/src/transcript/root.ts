@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P4.2: confinement for a session's `transcript_path` (A2 §F16, A6 §F30's doctor
 // check "transcript-root(under allowed CLAUDE_CONFIG_DIR)"). A `transcript_path` arrives from the
 // SessionRegistry — ultimately sourced from a Claude Code hook's stdin JSON (A2 §F08) — and a hook

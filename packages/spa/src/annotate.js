@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the W3C-style annotation record builder (A1 §5.6's body shape; A5 §F10/§F11's
 // normalization inputs). This module PRODUCES a record from a browser selection — it does NOT
 // resolve it back to a source range; that's the anchoring resolver, P3.4's job (A5 §F10). Talks

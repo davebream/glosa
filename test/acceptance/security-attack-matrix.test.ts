@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 release gate — "browser security: the A3 §5 attacks"). docs/appendices/A3-security.md
 // §5 names 8 specific attacks with named defenses; each already has scattered per-mechanism unit
 // tests across packages/daemon/test/{auth,csp,confine-path,classf-bridge,classf-serve,token,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.1 — `glosa status [dir] --json` (A6 §F26): must NEVER fail just because the daemon is down.
 import { describe, expect, test } from "bun:test";
 import type { GlosaApiClient } from "../src/api-client.ts";

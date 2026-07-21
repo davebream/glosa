@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // F11: Class R has no declared transform, so it can NEVER return `pipeline_feedback` — regardless
 // of `intent`. A miss is `orphaned` or `block_range` guidance, never routed to a producer that
 // doesn't exist for this artifact class.

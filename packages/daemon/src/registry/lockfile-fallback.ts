@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the O_EXCL lockfile fallback (A4 "Registry-write serialization"). Used ONLY
 // when a hook needs to mutate registry state (`workspaces.json`, or a per-workspace
 // `.glosa/.registry.lock`-guarded file) and the daemon is unreachable — the primary path is

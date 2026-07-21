@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.1 — `glosa open [dir]` (A6 §F26).
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

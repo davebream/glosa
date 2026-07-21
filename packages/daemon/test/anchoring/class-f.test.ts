@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The Class F cascade (A5 §F10/§F11): chunk manifest lookup → staleness → verbatim-search-or-
 // orphaned (transformed:false) vs. typed pipeline_feedback (transformed:true), with the F11
 // honesty invariant that `intent` never authorizes the feedback path — only `transformed:true` does.

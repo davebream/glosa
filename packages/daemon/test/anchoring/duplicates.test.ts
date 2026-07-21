@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The named "duplicate quotes" hard case (A5 §F10): uniqueness is ALWAYS required — 0 or ≥2
 // matches never auto-apply. A quote duplicated across the document but unique WITHIN its own
 // stamped block still resolves there (scoping narrows before uniqueness is checked); duplicated

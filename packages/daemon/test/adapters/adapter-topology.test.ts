@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 release gate — "adapter-topology", per docs/OVERNIGHT-LOG.md's D10 reinterpretation:
 // the real-world domain adapter this generalizes from is out of this repo as of P6.1, so this
 // proves the SAME class of topology generically — "Claude cwd != the adapter's own data path;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.1 — the class-F listener over a REAL bound socket (A1 §7, A3 §1/§2/§5). Mints a capability
 // through the in-process `createApiFetch` pipeline (same harness as http-routes.test.ts — no real
 // bind needed for the mint side, since there's no `glosa open` CLI wiring yet to register a

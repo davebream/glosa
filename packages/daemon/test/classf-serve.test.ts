@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.1 — serveClassFDocument: the class-F origin's real serve logic (A1 §7, A3 §1/§5). Function-
 // level coverage against a real tmp directory (no HTTP layer — http.test.ts covers the same
 // attack surface end-to-end over a real subprocess, this file is the fast, no-socket harness for

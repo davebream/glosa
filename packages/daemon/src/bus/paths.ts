@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — per-workspace `.glosa/` path resolution for the file bus (journal, inbox,
 // quarantine). Mirrors home.ts's GLOSA_HOME pattern, but rooted at a WORKSPACE directory, not
 // the daemon's own home (A4 §F04). A workspace is any directory the caller designates; callers

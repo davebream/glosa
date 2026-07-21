@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # glosa pre-commit gate — main must always be green + runnable.
 # Fast-fails the commit if types or the test suite are red. Bypass (rarely) with `git commit --no-verify`.
 set -e

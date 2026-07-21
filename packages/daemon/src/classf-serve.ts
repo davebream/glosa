@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — GET /doc/:token/<path...> (A1 §7, A3 §1): the class-F origin's ONLY route.
 // Resolves a capability token to its minted directory, re-confines the requested sibling path
 // against that directory on EVERY request (confinePath, A1 §6 — "each request re-confined... a

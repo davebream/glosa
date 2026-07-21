@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.3 — shadow-git mechanics (A4 §F21): deterministic init, argv-safety (A3 §5 attack #5 at the
 // git layer), config isolation, checkpoint idempotency, index.lock reclaim, delete/rename
 // staging. Every test drives real system `git` against a hermetic tmp workspace — nothing here is

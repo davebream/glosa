@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.3 review item 3 — full matrix for checkContractVersion's leniency decision (D4 in
 // docs/OVERNIGHT-LOG.md): missing AND unparseable/partial headers are both "ok" (lenient, same
 // major assumed); only a well-formed value with a differing major is a proven mismatch.

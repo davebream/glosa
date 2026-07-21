@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Review follow-up (P4.1 adversarial review) — csp.ts's own docstring claims "one module owns
 // both exact strings", but only the class-F CSP had an exact-string assertion anywhere in the
 // suite (http.test.ts, over a real subprocess); the SPA/API CSP was only ever `.toContain`-spot-

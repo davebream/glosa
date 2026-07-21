@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — shadow-git mechanics (A4 §F21). The daemon is the SOLE git operator for a
 // workspace's `.glosa/shadow.git`, serialized by the same per-workspace mutex the journal uses
 // (bus.ts wraps every call here in `KeyedMutex.runExclusive` — this module itself holds no lock,

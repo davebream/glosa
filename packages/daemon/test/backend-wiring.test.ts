@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.1 — proves `lifecycle.ts`'s `buildBackend` actually wires the daemon's ONE
 // WorkspaceIndex/SessionRegistry/WorkspaceBusRegistry together per P2.4's deferred notes: a live
 // session blocks GC hard-remove, and a real hard-remove evicts the workspace's open WorkspaceBus.

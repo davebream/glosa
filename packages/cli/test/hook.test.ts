@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — `glosa hook <event>` handlers. Every test injects a FAKE `DaemonHookClient` (an
 // in-memory recorder — no live daemon, no HTTP) alongside a REAL `RewakeCoordinator`/
 // `RewakeLeaseStore` (tmp dir), per the task brief: "each calls the daemon API (mock/ensureDaemon),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-claude-code — the Claude Code AgentProvider (R7). Implements the R4 delivery
 // ladder for Claude specifically:
 //   rung 1  channel      MCP `notifications/claude/channel` — pushes into an idle session (A2 §F06)

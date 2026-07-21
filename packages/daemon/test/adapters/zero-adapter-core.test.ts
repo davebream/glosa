@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P6.1 acceptance: "the core runs with ZERO adapters" — a plain directory -> ordered file list,
 // every viewer/annotation/editor route works, class-F HTML is opaque (Preview+Annotate, no Edit
 // affordance), no derived-from edge -> no staleness. Same route-schema-level harness as

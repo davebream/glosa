@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — directory pruning. The walk must NOT descend into a subtree that an exclude of the form
 // `P/**` swallows whole (node_modules, .glosa, dotdirs). Proven behaviorally: a symlink placed
 // INSIDE a pruned dir is never discovered (it would show up in skippedSymlinks if we descended),

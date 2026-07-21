@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — symlink handling (the security-relevant conformance, A4 §F20 / closes F24). Symlinks are
 // lstat'd (never followed): neither matched as files nor descended into as directories, and their
 // target is never touched — proved below with broken/unreadable targets that would throw if the

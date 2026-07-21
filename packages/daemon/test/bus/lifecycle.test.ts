@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.5 — real edge coverage for the guarded inbox/attention lifecycle (A5 §F23), built on P2.1's
 // replay engine. Every test folds hand-built event arrays through `lifecycleReducer` directly
 // (via `foldEvents`) rather than going through a WorkspaceBus — the transition table is a pure

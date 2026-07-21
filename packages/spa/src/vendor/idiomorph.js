@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: 0BSD
 // Vendored verbatim from `idiomorph@0.7.4`'s `dist/idiomorph.esm.js` (the `idiomorph` npm
 // dependency in the repo root `package.json` pins the version this is a copy of). Vendored,
 // not imported by bare specifier, because glosa's SPA has no build step (repo CLAUDE.md) — a

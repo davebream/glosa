@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the one confirm dialog (native <dialog>, app.css-styled): a titled question, a
 // plain-sentence body, Cancel, and one clearly-named action. Replaces window.confirm so
 // destructive choices read like the rest of the workbench instead of a browser alert.

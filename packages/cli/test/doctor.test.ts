@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 12 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are

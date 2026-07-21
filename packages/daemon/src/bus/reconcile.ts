@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — startup reconciliation, the ordered sequence from A4 §F04:
 //   1. torn-tail truncate   2. replay -> derived state   3. inbox<->journal self-heal
 //   4. apply-lease reconcile (P2.3 stub)   5. offline catch-up (P2.3 stub)

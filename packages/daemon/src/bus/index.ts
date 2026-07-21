@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — file bus barrel (A4 §F04: journal-as-truth). See docs/appendices/A4-filebus-concurrency.md.
 export { AsyncMutex, KeyedMutex } from "./mutex.ts";
 export { createUlidGenerator, ulid } from "./ulid.ts";
