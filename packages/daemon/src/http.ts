@@ -944,6 +944,259 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   return Response.json({ drained, count: drained.length });
 }
 
+// -------------------------------------------------------------------------------------------
+// P5.1 additions — the CLI-facing `/api/workspaces/...` surface (A6 §F26's `open`/`resolve`/
+// `apply-begin`/`request-review`/`status` command surface). Not in A1 §5 (same footing as every
+// other `// PX.Y:` addition in this file): every `/w/:slug/...` route above resolves an ALREADY-
+// REGISTERED workspace's slug, but `open`/`resolve`/`apply-begin`/`request-review` are called
+// from a bare directory the CLI was invoked in — often BEFORE that directory has ever been
+// registered as a workspace at all (that's exactly what `open` is for). These routes take a raw
+// `path` instead of a `:slug` and canonicalize it themselves (mirrors `handleSessionRegister`'s
+// own `canonicalOrNull` use), then hand off to `ctx.getWorkspaceBus(canonicalRoot)` — which needs
+// no slug lookup, only the canonical root string — for everything past that point.
+// -------------------------------------------------------------------------------------------
+
+/** `POST /api/workspaces/open` — `glosa open`'s daemon-side half (A6 §F26's "ensure `.glosa/`
+ * baseline exists"). Upserts the workspace into the global index (source `glosa-open` — a
+ * `WorkspaceSource` literal `workspace-index.ts` already reserves for exactly this caller) and
+ * reconciles its `WorkspaceBus` once, which is what actually performs the "first-touch scaffold"
+ * (`.glosa/` dir, `initShadowRepo`'s baseline commit) via `reconcileWorkspace`'s own step 4/5 —
+ * the SAME mechanism a session registration's first `resolveBus` call already triggers elsewhere
+ * in this file. `open` deliberately does NOT duplicate that scaffold logic itself; it just
+ * triggers the real thing through this one daemon-side call. */
+async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const rawPath = (body as Record<string, unknown> | null)?.path;
+  if (typeof rawPath !== "string" || rawPath.length === 0) {
+    return problem(400, "validation-failed", "path is required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
+  await resolveBus(ctx, root); // triggers the real first-touch .glosa/ + shadow-git baseline scaffold
+  return Response.json({ slug: entry.slug, path: root });
+}
+
+const RESOLVE_TERMINAL_OUTCOMES = new Set(["applied", "rejected", "stale"]);
+
+/** `POST /api/workspaces/resolve` — `glosa resolve <id> <applied|rejected|deferred|stale>`'s
+ * daemon-side half (A6 §F26). `applied`/`rejected`/`stale` go through `WorkspaceBus.resolveEntry`
+ * — the SAME "proven pre..post diff" lease-close mechanism `apply-begin` opens (A4 §F05): this
+ * REQUIRES an active apply-begin lease for `entry` held by `session`, since that lease is what
+ * proves the attribution `resolveEntry` records. An unknown entry, or a resolve attempted with no
+ * matching open lease, surfaces as `NO_ACTIVE_LEASE`/`LEASE_SESSION_MISMATCH` — mapped to 409
+ * here, which the CLI maps to exit 8 (`entry_error`).
+ *
+ * `deferred` is deliberately NOT routed through `resolveEntry` — see `commitTransition`'s own
+ * docstring in bus.ts for why `deferred` is folded as a legal-but-inert `transition_committed`
+ * event (no lease touched, no status change) rather than a lease-closing terminal outcome. */
+async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const rawPath = typeof b?.path === "string" ? b.path : null;
+  const entry = typeof b?.entry === "string" ? b.entry : null;
+  const outcome = typeof b?.outcome === "string" ? b.outcome : null;
+  const session = typeof b?.session === "string" ? b.session : null;
+  const note = typeof b?.note === "string" ? b.note : undefined;
+  if (!rawPath || !entry || !outcome || !session) {
+    return problem(400, "validation-failed", "path, entry, outcome, and session are required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const bus = await resolveBus(ctx, root);
+
+  if (outcome === "deferred") {
+    const entryState = bus.state.entries[entry];
+    if (!entryState) {
+      return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
+    }
+    // `deferred` is a legal-but-inert no-op on the lifecycle reducer (absent from both guard
+    // tables) — firing it on an entry that's ALREADY terminal would otherwise still return 200
+    // `{to: "deferred"}`, which a client reading only `to` could misread as a successful
+    // transition. Guard it the same way `resolveEntry`'s illegal-transition cases are guarded
+    // below (409 `conflict`) rather than silently accepting it — first-terminal-wins, and this
+    // endpoint always tells the truth about what happened.
+    const kind = entryState.kind === "attention" ? "attention" : "common";
+    if (isTerminal(kind, entryState.status)) {
+      return problem(
+        409,
+        "conflict",
+        `entry is already ${entryState.status}; deferred is a no-op on a terminal entry`,
+        undefined,
+        url.pathname,
+      );
+    }
+    await bus.commitTransition(entry, "deferred", { by: `session:${session}`, note });
+    return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "deferred" });
+  }
+
+  if (!RESOLVE_TERMINAL_OUTCOMES.has(outcome)) {
+    return problem(400, "validation-failed", "outcome must be one of applied|rejected|deferred|stale", undefined, url.pathname);
+  }
+
+  try {
+    const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, { note });
+    return Response.json({ entry, status: outcome, to: outcome, lease_id: result.leaseId, post_sha: result.postSha });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "NO_ACTIVE_LEASE" || code === "LEASE_SESSION_MISMATCH") {
+      return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
+    }
+    throw err;
+  }
+}
+
+/** `POST /api/workspaces/apply-begin` — `glosa apply-begin <id> --session <sid>`'s daemon-side
+ * half (A4 §F05). A second apply-begin already active for this workspace surfaces as
+ * `LEASE_HELD` — mapped to 409 `lease-conflict`, which the CLI maps to exit 12. */
+async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const rawPath = typeof b?.path === "string" ? b.path : null;
+  const entry = typeof b?.entry === "string" ? b.entry : null;
+  const session = typeof b?.session === "string" ? b.session : null;
+  if (!rawPath || !entry || !session) {
+    return problem(400, "validation-failed", "path, entry, and session are required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const bus = await resolveBus(ctx, root);
+  try {
+    const { leaseId, preSha } = await bus.applyBegin(entry, session);
+    return new Response(JSON.stringify({ entry, lease_id: leaseId, pre_sha: preSha }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === "LEASE_HELD") {
+      return problem(409, "lease-conflict", "an apply-lease is already active for this workspace", undefined, url.pathname);
+    }
+    throw err;
+  }
+}
+
+/** `POST /api/workspaces/attention-request` — `glosa request-review <path> [--message] [--action]`'s
+ * daemon-side half (A5 §F23's attention axis: `open -> delivered -> seen -> {done|expired|stale}`).
+ * `path` here is the WORKSPACE root (same convention as `open`/`resolve`/`apply-begin` — the CLI
+ * runs from the workspace directory); `target_path`, if given, is the artifact the review concerns,
+ * carried as informational payload only (no anchoring — that's `POST /w/:slug/annotations`'s job,
+ * a different entry kind). */
+async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const rawPath = typeof b?.path === "string" ? b.path : null;
+  if (!rawPath) return problem(400, "validation-failed", "path is required", undefined, url.pathname);
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const message = typeof b?.message === "string" ? b.message : undefined;
+  const action = typeof b?.action === "string" ? b.action : undefined;
+  const targetPath = typeof b?.target_path === "string" ? b.target_path : undefined;
+
+  const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
+  const bus = await resolveBus(ctx, root);
+  const id = generateAnnotationId();
+  await bus.createEntry(id, {
+    kind: "attention_request",
+    ...(message !== undefined ? { message } : {}),
+    ...(action !== undefined ? { action } : {}),
+    ...(targetPath !== undefined ? { path: targetPath } : {}),
+  });
+  return new Response(JSON.stringify({ id, slug: entry.slug, status: "open" }), {
+    status: 201,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** `GET /api/workspaces/entry-status?path=&entry=` — `glosa request-review --wait`'s poll target.
+ * Peeks the LIVE (reconciled) bus state for one entry's current status/detail — a resolved
+ * (terminal) attention entry no longer appears in `GET /w/:slug/inbox` (that route only lists
+ * NON-terminal attention entries, by design — A1 §5.9), so `--wait` needs a way to see the
+ * TERMINAL outcome, verdict included, once one lands. */
+async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const rawPath = url.searchParams.get("path");
+  const entry = url.searchParams.get("entry");
+  if (!rawPath || !entry) {
+    return problem(400, "validation-failed", "path and entry query params are required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const bus = await resolveBus(ctx, root);
+  const state = bus.state.entries[entry];
+  if (!state) return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
+  return Response.json({ id: entry, kind: state.kind, status: state.status, detail: state.detail ?? null });
+}
+
+/** `GET /api/status` — `glosa status`'s aggregate (A6 §F26: "daemon+workspaces+sessions+pending").
+ * One route rather than several client-side calls: `status` is meant to answer "what's going on"
+ * in a single round trip, and every piece it needs (`workspaceIndex`, `sessionRegistry`, each
+ * workspace's own journal) already lives on `ctx` — there's nothing a second daemon endpoint would
+ * add except more network round trips for the CLI to fail independently on. */
+function handleStatusAggregate(ctx: ApiContext): Response {
+  const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
+    const { state } = peekJournal(e.canonical_path);
+    const pendingCount = Object.values(state.entries).filter((entry) => {
+      const kind = entry.kind === "attention" ? "attention" : "common";
+      return !isTerminal(kind, entry.status);
+    }).length;
+    return {
+      slug: e.slug,
+      path: e.canonical_path,
+      last_seen: e.last_seen,
+      pending_count: pendingCount,
+      has_attention: hasOpenAttention(state),
+    };
+  });
+  const sessions = ctx.sessionRegistry.list().map((s) => ({
+    session_id: s.session_id,
+    provider: s.provider,
+    cwd: s.cwd,
+    workspace_binding: s.workspace_binding ?? null,
+    last_active_at: s.last_active_at,
+    liveness: ctx.sessionRegistry.liveness(s.session_id),
+  }));
+  return Response.json({
+    daemon: {
+      instance_id: ctx.instanceId,
+      pid: process.pid,
+      started_at: ctx.startedAt,
+      protocol_version: PROTOCOL_VERSION,
+      contract_version: CONTRACT_VERSION,
+    },
+    workspaces,
+    sessions,
+  });
+}
+
 /** Shared body for the two remaining route SHELLS (A1 §5.8/§5.10) — their real backends land in
  * later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
  * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes. */
@@ -1091,6 +1344,26 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   // the handlers' own header comment above.
   if (method === "POST" && pathname === "/api/sessions/register") {
     return { routeClass: "state-changing", handle: (req) => handleSessionRegister(ctx, req) };
+  }
+  // P5.1: the CLI-facing path-based workspace surface — see the handlers' own header comment
+  // above (`open`/`resolve`/`apply-begin`/`request-review`/`status`).
+  if (method === "POST" && pathname === "/api/workspaces/open") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceOpen(ctx, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/resolve") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceResolve(ctx, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/apply-begin") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceApplyBegin(ctx, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/attention-request") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceAttentionRequest(ctx, req) };
+  }
+  if (method === "GET" && pathname === "/api/workspaces/entry-status") {
+    return { routeClass: "authed-read", handle: (req) => handleWorkspaceEntryStatus(ctx, req) };
+  }
+  if (method === "GET" && pathname === "/api/status") {
+    return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
 
   let m: RegExpMatchArray | null;

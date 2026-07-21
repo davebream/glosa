@@ -1,0 +1,98 @@
+// P5.1 — `glosa open [dir]` (A6 §F26).
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { GlosaApiClient } from "../src/api-client.ts";
+import { printOpenResult, runOpen, type OpenDeps } from "../src/open.ts";
+import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
+import { captureStdout } from "./test-utils.ts";
+
+let dirs: string[] = [];
+function freshDir(): string {
+  const d = mkdtempSync(join(tmpdir(), "glosa-open-test-"));
+  dirs.push(d);
+  return d;
+}
+afterEach(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  dirs = [];
+});
+
+function makeDeps(overrides: Partial<OpenDeps> = {}): { deps: OpenDeps; client: FakeGlosaApiClient; browserCalls: string[] } {
+  const client = new FakeGlosaApiClient();
+  const browserCalls: string[] = [];
+  const deps: OpenDeps = {
+    createClient: async () => client as unknown as GlosaApiClient,
+    ensureToken: () => "test-token-abc",
+    glosaHome: () => "/tmp/fake-glosa-home",
+    openBrowser: (url) => browserCalls.push(url),
+    platform: () => "darwin",
+    dirExists: () => true,
+    ...overrides,
+  };
+  return { deps, client, browserCalls };
+}
+
+describe("glosa open", () => {
+  test("non-darwin platform -> exit 5, never touches the daemon", async () => {
+    let daemonTouched = false;
+    const { deps } = makeDeps({
+      platform: () => "linux",
+      createClient: async () => {
+        daemonTouched = true;
+        throw daemonUnreachable();
+      },
+    });
+    const result = await runOpen("/tmp/x", deps);
+    expect(result.exitCode).toBe(5);
+    expect(result.ok).toBe(false);
+    expect(result.error?.kind).toBe("platform_unsupported");
+    expect(daemonTouched).toBe(false);
+  });
+
+  test("directory does not exist -> exit 2 (usage)", async () => {
+    const { deps } = makeDeps({ dirExists: () => false });
+    const result = await runOpen("/no/such/dir/at/all", deps);
+    expect(result.exitCode).toBe(2);
+    expect(result.ok).toBe(false);
+  });
+
+  test("daemon unreachable -> exit 3", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable("spawn failed");
+      },
+    });
+    const result = await runOpen(dir, deps);
+    expect(result.exitCode).toBe(3);
+    expect(result.error?.kind).toBe("daemon_unreachable");
+  });
+
+  test("success: registers the workspace, mints/reuses the token, opens the browser at #t=<token>", async () => {
+    const dir = freshDir();
+    const { deps, client, browserCalls } = makeDeps();
+    client.openWorkspaceResult = { slug: "abc123", path: dir };
+
+    const result = await runOpen(dir, deps);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.data.slug).toBe("abc123");
+    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
+    expect(browserCalls).toHaveLength(1);
+    expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#t=test-token-abc");
+  });
+
+  test("--json envelope has exactly the documented top-level keys", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps();
+    const result = await runOpen(dir, deps);
+
+    const out = captureStdout(() => printOpenResult(result, true));
+    const parsed = JSON.parse(out);
+    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "open", exit_code: 0 });
+  });
+});

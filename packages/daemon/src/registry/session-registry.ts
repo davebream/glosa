@@ -142,6 +142,13 @@ export class SessionRegistry {
     return this.sessions.get(sessionId) ?? null;
   }
 
+  /** P5.1 — every currently-registered session record, for `glosa status`'s aggregate view.
+   * Read-only snapshot (a fresh array each call); liveness isn't included here — call
+   * `liveness(session_id)` per record, same as every other consumer of this registry. */
+  list(): SessionRecord[] {
+    return [...this.sessions.values()];
+  }
+
   deregister(sessionId: string): Promise<void> {
     return this.mutex.runExclusive(() => {
       this.sessions.delete(sessionId);

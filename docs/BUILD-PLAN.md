@@ -37,7 +37,7 @@ get a mandatory adversarial-review + fault-test pass before commit.
 - ⬜ **P4.5 jethro adapter** — **(SUPERSEDED by P6.1 — do NOT build a jethro-specific package inside glosa; when you reach this task, build the generic fixture-protocol version described in P6.1 instead.)** recognize plugin-data path, session binding from `session_history`, stage ordering, derived-from edge, class-F manifest resolution. _Appendix: requirements R7 · Accept: against fixture copies of the real session + a synthetic post-#314 state + speech-notes fixture · CC: no_
 
 ## Phase 5 — CLI, release gate
-- ⬜ **P5.1 CLI surface** — `open/init/resolve/apply-begin/request-review/doctor(12 checks)/status` + `--json` + stable exit codes. _Appendix: A6 · Accept: per-command exit-code + `--json` envelope tests · CC: no_
+- ✅ **P5.1 CLI surface** — `open/init/resolve/apply-begin/request-review/doctor(12 checks)/status` + `--json` + stable exit codes. _Appendix: A6 · Accept: per-command exit-code + `--json` envelope tests · CC: no_
 - ⬜ **P5.2 deterministic acceptance suites (the real release gate)** — fault, concurrency, security (A3 §5), anchor corpus, transcript, actual-jethro-topology. _Appendix: requirements §5 T8 · Accept: all suites green · CC: **yes**_
 - ⛔ **P5.3 format-sermon companion diffs (HITL)** — BLOCKED-NEEDS-DAWID by construction (touches `~/.claude/skills/format-sermon/` outside the repo, needs human approval). Log it; do NOT edit that skill unattended. Prepare the proposed diffs as a doc for Dawid to review.
 - ⛔ **P5.4 manual rehearsal (T8)** — BLOCKED-NEEDS-DAWID (needs a real Claude session + Dawid's eyes). Leave for morning.

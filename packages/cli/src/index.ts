@@ -1,15 +1,24 @@
 // @glosa/cli — programmatic entry. See docs/requirements.md R8 + docs/appendices/A6.
-// The rest of the command surface (open/resolve/apply-begin/request-review/doctor/status), plus
-// the real `hook <event>`/`mcp` internal entry points, is implemented in P5.1/P4.3's remaining
-// scope. `init` (A6 §F26) lands here now — the transactional hook/MCP merge doesn't depend on
-// anything else in that surface.
+// `init`/`hook <event>`/`__daemon` (P4.3/P1.2) and the P5.1 command surface
+// (open/resolve/apply-begin/request-review/doctor/status) all dispatch from here. `mcp` stays a
+// stub (P5.4's scope); `checkpoints`/`diff`/`restore` (A6 §F31) are deliberately NOT dispatched —
+// they fall through to the generic "not yet implemented" message below, same footing as `mcp`
+// before this task, since BUILD-PLAN.md's P5.1 line doesn't list them among this task's
+// deliverables.
 import { glosaHome } from "@glosa/daemon";
 import { RewakeCoordinator, RewakeLeaseStore } from "@glosa/providers-claude-code";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHttpGlosaClient } from "./api-client.ts";
 import { createHttpDaemonClient } from "./daemon-client.ts";
+import { printDoctorResult, realDoctorDeps, runDoctor } from "./doctor.ts";
 import { runHook, type HookDeps } from "./hook.ts";
 import { CLI_VERSION, runInit, runUninstall, type InitResult, type UninstallResult } from "./init.ts";
+import { printOpenResult, realOpenDeps, runOpen } from "./open.ts";
+import { printRequestReviewResult, realRequestReviewDeps, runRequestReview } from "./request-review.ts";
+import { parseDurationMs } from "./envelope.ts";
+import { printApplyBeginResult, printResolveResult, runApplyBegin, runResolve } from "./resolve.ts";
+import { printStatusResult, runStatus } from "./status.ts";
 
 interface ParsedInitArgs {
   dir: string;
@@ -76,6 +85,88 @@ function printUninstallResult(result: UninstallResult, json: boolean): void {
   }
   for (const w of result.warnings) process.stderr.write(`glosa init --uninstall: ${w.message}\n`);
   process.stdout.write(result.removed.length > 0 ? `glosa init --uninstall: removed ${result.removed.length} node(s)\n` : "glosa init --uninstall: nothing to remove\n");
+}
+
+// ---------------------------------------------------------------------------------------------
+// P5.1 — global flags (A6 §F26: "--json --quiet --verbose --port/GLOSA_PORT --help --version")
+// and the per-command argument parsers for open/resolve/apply-begin/request-review/doctor/status.
+// `--version`/`--help` were already handled above (position-0 only, pre-existing); `--port`,
+// `--quiet`, and `--verbose` are extracted HERE, before any subcommand ever sees `argv`, because
+// none of the per-command parsers below recognize them — left in place, `--port 4650` would be
+// silently misread as a positional arg (e.g. `dir`) by a parser that just checks
+// `!arg.startsWith("-")`. `--json` is deliberately NOT extracted globally: every parser already
+// checks for it itself (mirrors `parseInitArgs`'s existing convention), so a command's own parser
+// stays the single place that decides its `json` flag.
+// ---------------------------------------------------------------------------------------------
+
+interface GlobalFlags {
+  rest: string[];
+  quiet: boolean;
+  verbose: boolean;
+}
+
+function extractGlobalFlags(argv: readonly string[]): GlobalFlags {
+  const rest: string[] = [];
+  let quiet = false;
+  let verbose = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === "--port") {
+      const value = argv[i + 1];
+      if (value !== undefined) {
+        Bun.env.GLOSA_PORT = value;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--port=")) {
+      Bun.env.GLOSA_PORT = arg.slice("--port=".length);
+      continue;
+    }
+    if (arg === "--quiet") {
+      quiet = true;
+      continue;
+    }
+    if (arg === "--verbose") {
+      verbose = true;
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { rest, quiet, verbose };
+}
+
+/** A tiny generic flag parser shared by resolve/apply-begin/request-review: `--flag value` or
+ * `--flag=value` for anything in `valueFlags`, `--json` recognized unconditionally, everything
+ * else that doesn't start with `-` is positional (in argv order). */
+function parseFlags(argv: readonly string[], valueFlags: readonly string[]): { positional: string[]; values: Record<string, string>; json: boolean } {
+  const positional: string[] = [];
+  const values: Record<string, string> = {};
+  let json = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    let matched = false;
+    for (const flag of valueFlags) {
+      if (arg === `--${flag}`) {
+        values[flag] = argv[i + 1] ?? "";
+        i++;
+        matched = true;
+        break;
+      }
+      if (arg.startsWith(`--${flag}=`)) {
+        values[flag] = arg.slice(flag.length + 3);
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+    if (!arg.startsWith("-")) positional.push(arg);
+  }
+  return { positional, values, json };
 }
 
 async function readStdin(): Promise<string> {
@@ -149,13 +240,18 @@ let lastKnownCwd: string | undefined;
  * Run the glosa CLI. Returns a process exit code (A6 §F26 stable codes).
  */
 export async function run(argv: readonly string[]): Promise<number> {
-  const cmd = argv[0];
+  // Global flags (A6 §F26) — extracted BEFORE any subcommand parser ever sees the remaining argv,
+  // per this section's own header comment above `extractGlobalFlags`.
+  const { rest, quiet } = extractGlobalFlags(argv);
+  const cmd = rest[0];
+  const cmdArgs = rest.slice(1);
+
   if (cmd === "--version" || cmd === "-v") {
     process.stdout.write(`glosa ${CLI_VERSION}\n`);
     return 0;
   }
   if (cmd === undefined || cmd === "--help" || cmd === "-h") {
-    process.stdout.write("glosa — writing-first workspace for AI coding agents (CLI pending P5.1)\n");
+    process.stdout.write("glosa — writing-first workspace for AI coding agents\n");
     return 0;
   }
   if (cmd === "__daemon") {
@@ -166,7 +262,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0; // unreachable
   }
   if (cmd === "init") {
-    const parsed = parseInitArgs(argv.slice(1));
+    const parsed = parseInitArgs(cmdArgs);
     if (parsed.uninstall) {
       const result = await runUninstall({ dir: parsed.dir });
       printUninstallResult(result, parsed.json);
@@ -177,7 +273,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     return result.exitCode;
   }
   if (cmd === "hook") {
-    const event = argv[1];
+    const event = cmdArgs[0];
     if (event === undefined) {
       process.stderr.write("glosa hook: missing <event>\n");
       return 2;
@@ -206,6 +302,77 @@ export async function run(argv: readonly string[]): Promise<number> {
     process.stderr.write("glosa mcp: stdio MCP server not yet implemented (P5.4)\n");
     return 70;
   }
+  if (cmd === "open") {
+    const parsed = parseFlags(cmdArgs, []);
+    const dir = parsed.positional[0] ?? process.cwd();
+    const result = await runOpen(dir, realOpenDeps(createHttpGlosaClient));
+    printOpenResult(result, parsed.json, quiet);
+    return result.exitCode;
+  }
+  if (cmd === "resolve") {
+    const parsed = parseFlags(cmdArgs, ["session", "note"]);
+    const result = await runResolve(
+      {
+        dir: process.cwd(),
+        id: parsed.positional[0],
+        outcome: parsed.positional[1],
+        session: parsed.values.session,
+        note: parsed.values.note,
+      },
+      { createClient: createHttpGlosaClient },
+    );
+    printResolveResult(result, parsed.json);
+    return result.exitCode;
+  }
+  if (cmd === "apply-begin") {
+    const parsed = parseFlags(cmdArgs, ["session"]);
+    const result = await runApplyBegin(
+      { dir: process.cwd(), id: parsed.positional[0], session: parsed.values.session },
+      { createClient: createHttpGlosaClient },
+    );
+    printApplyBeginResult(result, parsed.json);
+    return result.exitCode;
+  }
+  if (cmd === "request-review") {
+    const parsed = parseFlags(cmdArgs, ["message", "action", "wait"]);
+    let waitMs: number | undefined;
+    if (parsed.values.wait !== undefined) {
+      const parsedMs = parseDurationMs(parsed.values.wait);
+      if (parsedMs === null) {
+        process.stderr.write(`glosa request-review: --wait value '${parsed.values.wait}' is not a valid duration\n`);
+        return 2;
+      }
+      waitMs = parsedMs;
+    }
+    const result = await runRequestReview(
+      {
+        dir: process.cwd(),
+        path: parsed.positional[0],
+        message: parsed.values.message,
+        action: parsed.values.action,
+        waitMs,
+      },
+      realRequestReviewDeps(createHttpGlosaClient),
+    );
+    printRequestReviewResult(result, parsed.json);
+    return result.exitCode;
+  }
+  if (cmd === "doctor") {
+    const parsed = parseFlags(cmdArgs, []);
+    const dir = parsed.positional[0] ?? process.cwd();
+    const result = await runDoctor(dir, realDoctorDeps(createHttpGlosaClient, glosaHome));
+    printDoctorResult(result, parsed.json);
+    return result.exitCode;
+  }
+  if (cmd === "status") {
+    const parsed = parseFlags(cmdArgs, []);
+    const dir = parsed.positional[0] ?? process.cwd();
+    const result = await runStatus(dir, { createClient: createHttpGlosaClient });
+    printStatusResult(result, parsed.json);
+    return result.exitCode;
+  }
+  // `checkpoints`/`diff`/`restore` (A6 §F31) are documented but out of THIS task's scope (see this
+  // file's header comment) — they fall through to here, same as any genuinely unknown command.
   process.stderr.write(`glosa: command not yet implemented: ${cmd}\n`);
   return 2; // usage
 }

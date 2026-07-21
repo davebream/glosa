@@ -765,6 +765,52 @@ async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResu
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// checkManifestDrift — P5.1's `glosa doctor` "hooks manifest hash match/drift" check (A6 §F30).
+// Read-only: reuses the EXACT same hash-compare `runUninstallLocked`/`uninstallFile` already do
+// before removing anything, just without ever touching disk — so doctor's drift verdict can never
+// silently disagree with what an actual `glosa init --uninstall` would do.
+// ---------------------------------------------------------------------------------------------
+
+export interface ManifestDriftResult {
+  manifest: OwnershipManifest | null;
+  /** Human-readable `<path><pointer>` (or `<path> (reason)`) strings for every recorded node that
+   * no longer matches what glosa wrote — empty when the manifest is `null` (nothing to check) or
+   * everything still matches. */
+  drifted: string[];
+}
+
+export function checkManifestDrift(dir: string): ManifestDriftResult {
+  const { settingsPath, mcpPath, manifestPath } = paths(dir);
+  const manifest = readManifest(manifestPath);
+  if (!manifest) return { manifest: null, drifted: [] };
+
+  const drifted: string[] = [];
+  for (const [path, fileManifest] of [
+    [settingsPath, manifest.files.settings],
+    [mcpPath, manifest.files.mcp],
+  ] as const) {
+    if (!existsSync(path)) {
+      if (fileManifest.inserted.length > 0) drifted.push(...fileManifest.inserted.map((n) => `${path}${n.pointer} (file missing)`));
+      continue;
+    }
+    let obj: Json;
+    try {
+      obj = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      drifted.push(`${path} (invalid JSON)`);
+      continue;
+    }
+    for (const node of fileManifest.inserted) {
+      const resolved = resolvePointer(obj, node.pointer);
+      if (!resolved.found || sha256Of(resolved.value) !== node.sha256) {
+        drifted.push(`${path}${node.pointer}`);
+      }
+    }
+  }
+  return { manifest, drifted };
+}
+
 function safeUnlink(path: string): void {
   try {
     unlinkSync(path);

@@ -10,7 +10,7 @@ import { WorkspaceBus } from "../../src/bus/bus.ts";
 import { inboxDir } from "../../src/bus/paths.ts";
 import { journalPath, quarantinePath, workspaceBusDir } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
-import { foldEvents } from "../../src/bus/replay.ts";
+import { foldEvents, type Reducer } from "../../src/bus/replay.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { writeInboxEntryOnce } from "../../src/bus/inbox.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
@@ -137,6 +137,45 @@ describe("reconcile — inbox <-> journal crash scenarios", () => {
     const lines = readFileSync(journalPath(root), "utf8").split("\n").filter((l) => l.length > 0);
     expect(lines.filter((l) => l.includes('"entry_created"')).length).toBe(1); // not duplicated
 
+    cleanupWorkspace(root);
+  });
+});
+
+describe("WorkspaceBus.reconcileOnce — a thrown reconcile() must not poison the instance forever", () => {
+  test("second reconcileOnce() after a throwing first one actually retries, not silently no-ops", async () => {
+    const root = freshWorkspace();
+    // An orphan inbox entry with no paired entry_created gives step 3 (selfHealInbox) something
+    // to fold via the reducer, so the injected throw-once reducer is guaranteed to run.
+    writeInboxEntryOnce(root, "e1", { kind: "human_edit" });
+
+    let calls = 0;
+    const throwOnceReducer: Reducer = (state, event) => {
+      calls++;
+      if (calls === 1) throw new Error("simulated reduce failure (e.g. initShadowRepo fault)");
+      lifecycleReducer(state, event);
+    };
+
+    const bus = new WorkspaceBus(root, {
+      reducer: throwOnceReducer,
+      ulid: deterministicUlid(),
+      now: deterministicClock(),
+    });
+
+    // First call: reconcile() throws — reconcileOnce must propagate the rejection, not swallow it.
+    await expect(bus.reconcileOnce()).rejects.toThrow("simulated reduce failure");
+
+    // Second call: MUST actually attempt reconciliation again (not silently return `undefined` as
+    // if already reconciled, which is what the poisoned-forever bug would do). The first attempt's
+    // `appendEvent` already landed the synthesized `entry_created` on disk before its `applyEvent`
+    // threw, so this retry replays it from the journal (self-heal itself is correctly idempotent
+    // and does NOT re-heal e1) — the observable proof of a genuine retry is that the reducer runs
+    // again (`calls` advances) and the entry actually ends up folded into live state.
+    const result = await bus.reconcileOnce();
+    expect(result).toBeDefined();
+    expect(bus.state.entries.e1?.status).toBe("pending");
+    expect(calls).toBeGreaterThan(1); // the reducer really did run again, not a no-op
+
+    await bus.close();
     cleanupWorkspace(root);
   });
 });

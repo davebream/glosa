@@ -109,11 +109,17 @@ export class WorkspaceBus {
    * state reflects the journal before I read/write it" should use instead of bare `reconcile()`;
    * bare `reconcile()` stays available for a caller that legitimately wants to force a fresh
    * reconcile pass (e.g. a test). The flag is claimed SYNCHRONOUSLY before the first `await`, so
-   * two calls racing in back-to-back can't both kick off a reconcile. */
+   * two calls racing in back-to-back can't both kick off a reconcile. If the underlying
+   * `reconcile()` throws (e.g. `initShadowRepo` hits a permission error or disk full), the flag is
+   * reset so the NEXT `reconcileOnce()` call gets a genuine retry instead of silently believing
+   * this instance already reconciled and serving un-reconciled state forever. */
   reconcileOnce(): Promise<ReconcileResult | undefined> {
     if (this.reconciledOnce) return Promise.resolve(undefined);
     this.reconciledOnce = true;
-    return this.reconcile();
+    return this.reconcile().catch((err) => {
+      this.reconciledOnce = false;
+      throw err;
+    });
   }
 
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting
@@ -232,8 +238,19 @@ export class WorkspaceBus {
   }
 
   /** Appends a `transition_committed{to}` event. Passing the same `idem` across retried calls
-   * makes a repeat a no-op on replay — see replay.ts. */
-  commitTransition(entryId: string, to: string, opts: { by?: EventBy; idem?: string } = {}): Promise<void> {
+   * makes a repeat a no-op on replay — see replay.ts.
+   *
+   * `opts.note` (P5.1, CLI `resolve --note`) rides along in `detail` purely as an inspectable
+   * audit string — it is NEVER consulted by `applyGuardedTransition`'s guard table, so it has no
+   * effect on whether the transition is legal. This is also how the CLI's `resolve <id> deferred`
+   * is implemented: `deferred` is not a recognized `to` value in EITHER guard table in
+   * lifecycle.ts (verified, not assumed — there is no COMMON_GUARDS/ATTENTION_GUARDS entry for
+   * it), so `applyGuardedTransition` folds this event as a no-op on `status` — the entry's
+   * derived state genuinely doesn't move, which is exactly A6 §F26's "deferred = re-surface, not
+   * terminal." The event still lands durably in the journal as an honest audit record ("session X
+   * explicitly deferred a decision on this entry at time T"), without requiring a new terminal
+   * value or lease-closing side effect neither this task nor A5 §F23 specifies. */
+  commitTransition(entryId: string, to: string, opts: { by?: EventBy; idem?: string; note?: string } = {}): Promise<void> {
     return this.mutex.runExclusive(this.root, () => {
       const event: JournalEvent = {
         v: 1,
@@ -243,7 +260,7 @@ export class WorkspaceBus {
         event: "transition_committed",
         by: opts.by ?? "daemon",
         ...(opts.idem !== undefined ? { idem: opts.idem } : {}),
-        detail: { to },
+        detail: { to, ...(opts.note !== undefined ? { note: opts.note } : {}) },
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
@@ -387,6 +404,7 @@ export class WorkspaceBus {
     entry: string,
     outcome: "applied" | "rejected" | "stale",
     sessionId: string,
+    opts: { note?: string } = {},
   ): Promise<{ leaseId: string; postSha: string }> {
     return this.mutex.runExclusive(this.root, async () => {
       reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
@@ -429,7 +447,7 @@ export class WorkspaceBus {
         entry,
         event: "transition_committed",
         by: `session:${attributedSession}`,
-        detail: { to, outcome },
+        detail: { to, outcome, ...(opts.note !== undefined ? { note: opts.note } : {}) },
       };
       appendEvent(this.writer, transitionEvent);
       applyEvent(this.state, transitionEvent, this.reducer);

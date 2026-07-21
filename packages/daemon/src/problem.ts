@@ -25,7 +25,10 @@ export type ProblemSlug =
   // would-be-lost diff as an extra RFC 9457 body member, which `problem()`'s fixed shape has no
   // slot for — the slug is still named here so the vocabulary of possible `type` values is
   // documented in one place regardless of which helper builds the response.
-  | "restore-conflict";
+  | "restore-conflict"
+  // P5.1 addition — `POST /api/workspaces/apply-begin` (A4 §F05 / A6 §F26 exit 12
+  // `lease_conflict`): a second apply-begin while one is already active for this workspace.
+  | "lease-conflict";
 
 export function problem(
   status: number,

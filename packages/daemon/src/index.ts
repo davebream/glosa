@@ -19,6 +19,11 @@ export { authorizeRequest, isForeignOrigin } from "./auth.ts";
 export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./auth.ts";
 export { confinePath } from "./confine-path.ts";
 export type { ConfineResult } from "./confine-path.ts";
+// P5.1 — `glosa doctor`'s "transcript-root" check (A6 §F30) needs the SAME `$CLAUDE_CONFIG_DIR`
+// resolution the daemon uses to confine a live session's transcript_path (A2 §F16) — never a
+// second, independently-hardcoded `~/.claude` guess.
+export { claudeConfigDir, confineTranscriptPath } from "./transcript/root.ts";
+export type { ConfineTranscriptResult } from "./transcript/root.ts";
 export { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
 export type { ContractCheck } from "./contract.ts";
 export { classFCspHeaders, spaCspHeaders } from "./csp.ts";
@@ -26,8 +31,13 @@ export { createApiFetch, createClassFFetch } from "./http.ts";
 export type { ApiContext, HandshakeBody } from "./http.ts";
 export { internalErrorResponse, problem } from "./problem.ts";
 export type { ProblemSlug } from "./problem.ts";
-export { loadToken, tokenMatches, tokenPath } from "./token.ts";
+export { ensureToken, loadToken, mintToken, tokenMatches, tokenPath } from "./token.ts";
 export * from "./bus/index.ts";
+// P5.1 — the CLI's `doctor` needs the SAME matcher the daemon uses for its "workspace" check
+// (non-empty tracked set), rather than reimplementing a second, driftable copy of the include/
+// exclude glob logic (A4 §F20: "no consumer is allowed to hold its own glob").
+export { DEFAULT_MATCHER_CONFIG, loadMatcherConfig, resolveMatchedFiles } from "./matcher.ts";
+export type { MatchedFile, MatcherArtifactsConfig, MatcherConfig, ResolveMatchedFilesResult } from "./matcher.ts";
 // NOTE: `DeliveryOutcome`/`DeliveryVia`/`DeliveryReason` are NOT re-listed here even though
 // `providers/interface.ts` also re-exports them — they already flow through from
 // `bus/index.ts`'s star-export above (the canonical definition lives in `bus/lifecycle.ts`);

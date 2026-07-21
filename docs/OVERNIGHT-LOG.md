@@ -574,6 +574,58 @@ documented as "adapter-topology" (not "jethro-topology") to avoid re-introducing
 just removed. This follows directly from Dawid's own Phase-6 note, not a new judgment call requiring
 debate.
 
+### P5.1 CLI surface — ✅ — CC: no (treated as a focused-review task given new daemon routes)
+- **Built (solo, no delegation):** the remaining command surface into `packages/cli/src/{open,resolve,
+  request-review,doctor,status,envelope,api-client}.ts`, wired via `index.ts`'s global-flag parsing
+  (`--port`/`GLOSA_PORT`, `--quiet`, `--verbose`, existing `--json`/`--help`/`--version`). `resolve.ts`
+  covers both `resolve` and `apply-begin` (they share the same lease mechanics). `checkpoints`/`diff`/
+  `restore`/`mcp` explicitly left as "not yet implemented" — out of this task's listed deliverables.
+- **New daemon routes** (none of this existed before): `POST /api/workspaces/{open,resolve,apply-begin,
+  attention-request}`, `GET /api/workspaces/entry-status`, `GET /api/status` — a CLI-facing surface
+  distinct from `/w/:slug/...`: these take a raw `path` (canonicalized in-handler via `canonicalOrNull`,
+  same pattern `handleSessionRegister` already uses) rather than an already-registered slug, since
+  `open` must work on a directory that has never been a workspace yet. Reused existing mechanisms
+  throughout — `WorkspaceBus.resolveEntry`/`applyBegin`/`commitTransition`, `workspaceIndex.upsertWorkspace`
+  (`"glosa-open"` source, a `WorkspaceSource` literal already reserved for this) — no new provenance
+  mechanism invented.
+- **`deferred` resolved honestly**: verified (not assumed) that `deferred` is absent from BOTH
+  `lifecycle.ts` guard tables, so it's a genuine no-op on status — folded as an inert
+  `transition_committed` event for audit, never a lease-closing terminal.
+- **Doc inconsistency resolved**: `doctor` implements exactly the 12 checks A6's own table enumerates
+  by name; a stray "13" elsewhere in the docs names no 13th check anywhere and is treated as a doc
+  typo. The "channel actually registered" check honestly reports `skip` rather than fabricating a pass,
+  since `glosa mcp` is still a stub until P5.4.
+- **Focused adversarial pass (critic)** — I escalated this past its CC:no label myself, given the new
+  routes touch the SAME lease/lifecycle machinery that produced 4 CRITICAL bugs at P2.3 and a blocker
+  at P2.5. Verdict: ACCEPT-WITH-RESERVATIONS, 1 HIGH + 2 SHOULD-FIX, no CRITICAL:
+  - **HIGH:** `WorkspaceBus.reconcileOnce()` set its guard flag before awaiting `reconcile()` and never
+    reset it on throw — a scaffold failure (e.g. a permission error) permanently poisoned that bus
+    instance to a silently un-reconciled state for the rest of the daemon's life, with zero further
+    error. Pre-existing latent bug, but P5.1's arbitrary-path `open` route made it trivially reachable
+    by any Bearer-holder naming any directory. **Fixed:** reset the flag on catch, rethrow; new fault-
+    injection test proves a second `reconcileOnce()` after a thrown first one genuinely retries.
+  - **SHOULD-FIX:** `resolve <id> deferred` on an ALREADY-terminal entry returned a bare 200 with
+    `to:"deferred"` — technically honest in `status`, but a client reading only `to` could misread it
+    as a real transition. **Fixed:** added an `isTerminal` guard (same helper `lifecycle.ts` already
+    exports), now 409 `conflict` on a terminal entry, matching the same honest-rejection convention
+    `NO_ACTIVE_LEASE`/`LEASE_SESSION_MISMATCH` already use.
+  - **Confirmed sound, not fixed (verified, not just asserted):** the P2.3 session-forgery invariant
+    still holds through the new `/api/workspaces/resolve` route — attribution comes from `lease.session`,
+    never the caller-supplied field, checked line-by-line by the reviewer; the new path-based trust
+    widening (arbitrary directory, not slug-scoped) is a deliberate, consistent extension of the SAME
+    Bearer-token-is-the-boundary model `handleSessionRegister` already used pre-P5.1, not a new gap.
+  - Reviewer flagged (not blocking, left as follow-up): a couple of test-coverage gaps (LEASE_SESSION_
+    MISMATCH specifically through the new route, deferred-on-terminal before my fix existed) and a
+    documentation gap (A3 doesn't yet explicitly state that Bearer possession authorizes arbitrary-
+    directory bootstrap) — noted here for whoever revisits A3's wording.
+- **Tests:** `packages/cli/test/{open,resolve,request-review,doctor,status,api-integration}.test.ts` +
+  `packages/daemon/test/bus/reconcile-fault.test.ts` (the Fix-1 regression test) — covers daemon-
+  unreachable exit codes, usage errors, exact `--json` envelope shape, unknown-id → entry_error,
+  already-leased → lease_conflict 12, bad-token-perms → doctor FAIL, status succeeding at exit 0 with
+  the daemon down, and now the reconcile-poisoning + deferred-on-terminal fault cases.
+- **Tests:** 1012 pass / 0 fail (2× confirmed), typecheck clean.
+- **Phase 5 remaining: P5.2 (acceptance suites, the release gate — LAST, CC:yes).** ⛔ P5.3/P5.4 = Dawid.
+
 ### D9 — annotation `artifact_path` is additive, not a wire-shape rewrite (P6.1)
 A1 §5.6 / R3's annotation payload has no field naming which artifact it targets — genuinely missing from
 the spec, not an oversight in a prior task (`POST /w/:slug/annotations` is workspace-, not artifact-,
