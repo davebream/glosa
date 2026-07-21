@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>glosa</title>
+    <script type="module" src="/app/bootstrap.js"></script>
+  </head>
+  <body>
+    <!-- P1.4: the empty shell. Real viewers (artifact list, diff pane, transcript mirror) are
+         Phase 3 — bootstrap.js only ever picks one of these four containers to show. -->
+    <div id="app">
+      <div data-screen="down" hidden></div>
+      <div data-screen="unpaired" hidden></div>
+      <div data-screen="mismatch" hidden></div>
+      <div data-screen="ready" hidden></div>
+    </div>
+  </body>
+</html>

@@ -1,11 +1,40 @@
-// @glosa/daemon — pairing token load + constant-time Bearer compare (A1 §2, A3 §4). Minting,
-// rotation, and revocation are P1.4's job; this module only ever reads what's already on disk.
-import { existsSync, readFileSync } from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+// @glosa/daemon — pairing token load/mint + constant-time Bearer compare (A1 §2, A3 §3-4).
+// Rotation and revocation are P5.1's job; this module mints once and otherwise only ever reads
+// what's already on disk.
+import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 
 export function tokenPath(home: string): string {
   return join(home, "token");
+}
+
+/** Mints a fresh 128-bit token (32 hex chars) and writes it to `<home>/token`, atomically: a
+ * temp file in the same dir → fsync → rename over the destination (A3 §3 "atomic temp+rename
+ * 0600") so a reader can never observe a partial file. Perms are set on the temp file AND
+ * re-asserted with an explicit chmod after the rename, since a rename can inherit the
+ * destination's prior mode on some filesystems. Unconditional — callers that want
+ * "mint only if absent" use `ensureToken`. */
+export function mintToken(home: string): string {
+  const token = randomBytes(16).toString("hex"); // 128-bit
+  const dest = tokenPath(home);
+  const tmp = `${dest}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  writeFileSync(tmp, token, { mode: 0o600 });
+  const fd = openSync(tmp, "r+");
+  fsyncSync(fd);
+  closeSync(fd);
+  renameSync(tmp, dest);
+  chmodSync(dest, 0o600);
+  return token;
+}
+
+/** Idempotent pairing-token bootstrap: returns the existing `<home>/token` if one is already on
+ * disk, else mints one via `mintToken`. Never overwrites an existing token — rotation is a
+ * separate, explicit operation (P5.1/A3 §3), not something a routine boot can trigger. */
+export function ensureToken(home: string): string {
+  const existing = loadToken(home);
+  if (existing !== null) return existing;
+  return mintToken(home);
 }
 
 /** Reads `<home>/token` (0600, written by P1.4) into memory. `null` — never a throw — when the

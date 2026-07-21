@@ -290,4 +290,60 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(classFUrl("/doc/whatever"));
     expect(res.status).toBe(404);
   });
+
+  // --- SPA shell + static assets (P1.4) ---
+
+  test("GET / serves the SPA shell: 200, text/html, no Bearer required (navigation)", async () => {
+    const res = await fetch(apiUrl("/"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("<div id=\"app\">");
+  });
+
+  test("GET / carries the SPA CSP (script-src 'self', frame-ancestors 'none') + nosniff", async () => {
+    const res = await fetch(apiUrl("/"));
+    const csp = res.headers.get("Content-Security-Policy");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  test("GET / is served even with a foreign Origin — non-sensitive nav route (A3 §4)", async () => {
+    const res = await fetch(apiUrl("/"), { headers: { Origin: "http://evil.example.com" } });
+    expect(res.status).toBe(200);
+  });
+
+  test("GET /app/bootstrap.js: 200, text/javascript, SPA CSP, no Bearer required", async () => {
+    const res = await fetch(apiUrl("/app/bootstrap.js"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
+    expect(res.headers.get("Content-Security-Policy")).toContain("script-src 'self'");
+    const body = await res.text();
+    expect(body).toContain("export function scrubToken");
+  });
+
+  test("GET /app/<unknown file> → 404, not a filesystem read", async () => {
+    const res = await fetch(apiUrl("/app/does-not-exist.js"));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /app/../secret (literal traversal, collapsed by the URL parser) → 404, not the daemon's own secrets", async () => {
+    const res = await fetch(apiUrl("/app/../secret"));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /app/..%2f.. (encoded traversal, allowlist rejects it) → 404", async () => {
+    const res = await fetch(apiUrl("/app/..%2f.."));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /app/__proto__ (prototype key) → 404, not a 500 — own-keys-only lookup", async () => {
+    // A bare `SPA_ASSETS[name]` lookup would resolve `__proto__`/`constructor` to a truthy
+    // inherited value, slip past the undefined guard, and hit readFileSync → 500. Must be 404.
+    for (const name of ["__proto__", "constructor", "hasOwnProperty"]) {
+      const res = await fetch(apiUrl(`/app/${name}`));
+      expect(res.status).toBe(404);
+    }
+  });
 });

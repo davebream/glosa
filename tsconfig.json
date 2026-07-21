@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "types": ["bun-types"],
     "strict": true,
     "noUncheckedIndexedAccess": true,

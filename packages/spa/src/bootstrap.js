@@ -1,0 +1,81 @@
+// @glosa/spa — bootstrap module, served byte-for-byte as `/app/bootstrap.js` (packages/daemon/src/
+// http.ts's static allowlist). Hand-written plain JS, deliberately — glosa's "no build step"
+// invariant (docs/requirements.md) means no bundle/transpile step exists between this file and
+// what the browser executes, so it can't be TypeScript. `scrubToken`/`selectScreen` are pure and
+// take their environment as parameters, so `bun test` exercises them directly by importing this
+// file — no browser, no fakes-vs-reality gap between test and prod.
+//
+// Kept in lockstep with the daemon's CONTRACT_VERSION (packages/daemon/src/contract.ts) — bump
+// alongside a real wire-contract change, not on every daemon restart.
+export const CONTRACT_VERSION = "1.0";
+
+const MESSAGES = {
+  down: "glosa daemon isn't running — run `glosa open`.",
+  unpaired: "not paired — run `glosa open` to open this workspace.",
+  mismatch: "contract mismatch — reload the page.",
+};
+
+/**
+ * The FIRST thing bootstrap does (A3 §3/F24): read the pairing token out of the `#t=<token>` URL
+ * fragment (D5), stash it in sessionStorage — never localStorage, it's bounded to the tab's
+ * lifetime — and strip the fragment from the address bar via `history.replaceState` before
+ * anything else (render, error handling) runs. Takes `location`/`storage`/`history` as params so
+ * a test can pass fakes instead of touching a real browser. No `#t=` present → returns whatever
+ * token is already stored, or null; never throws.
+ */
+export function scrubToken(loc, storage, history) {
+  const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
+  const token = new URLSearchParams(hash).get("t");
+  if (token) {
+    storage.setItem("glosa_token", token);
+    history.replaceState(null, "", loc.pathname + loc.search);
+    return token;
+  }
+  return storage.getItem("glosa_token");
+}
+
+/**
+ * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
+ * or null if the fetch failed/threw. `token` is whatever `scrubToken` returned.
+ */
+export function selectScreen(handshake, token) {
+  if (!handshake) return "down";
+  const daemonMajor = String(handshake.contract_version).split(".")[0];
+  const spaMajor = CONTRACT_VERSION.split(".")[0];
+  if (daemonMajor !== spaMajor) return "mismatch";
+  if (!token || handshake.paired === false) return "unpaired";
+  return "ready";
+}
+
+function render(screen) {
+  const app = document.getElementById("app");
+  for (const el of app.querySelectorAll("[data-screen]")) {
+    const isMatch = el.dataset.screen === screen;
+    el.hidden = !isMatch;
+    if (isMatch && MESSAGES[screen]) el.textContent = MESSAGES[screen]; // textContent — never innerHTML
+  }
+}
+
+async function main() {
+  const token = scrubToken(window.location, window.sessionStorage, window.history);
+
+  let handshake = null;
+  try {
+    const res = await fetch("/api/handshake");
+    if (res.ok) handshake = await res.json();
+  } catch {
+    handshake = null; // daemon unreachable → "down" screen
+  }
+
+  const screen = selectScreen(handshake, token);
+  render(screen);
+  if (screen === "mismatch") {
+    // R5's third failure screen reloads to fetch the fresh shell + bootstrap the daemon
+    // just advertised (A1 §3).
+    setTimeout(() => window.location.reload(), 2000);
+  }
+}
+
+// Guarded so importing this module (bun test, importing scrubToken/selectScreen directly) never
+// tries to touch a real window/document — only an actual browser load runs main().
+if (typeof window !== "undefined") main();

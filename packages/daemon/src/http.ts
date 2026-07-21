@@ -6,6 +6,9 @@
 // the class-F doc serve+bridge) is later tasks' scope (see the `// Pxx:` notes at each). This
 // module only has to prove the pipeline itself is correct — that's what the P1.3 attack-suite
 // tests exercise.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
@@ -13,6 +16,17 @@ import { internalErrorResponse, problem } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
+
+// The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
+// `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
+const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
+
+// Fixed allowlist of files servable under `GET /app/<file>` (D5/A3 §3: no path traversal — a
+// basename check alone isn't enough, so every servable file is named here explicitly; anything
+// not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
+const SPA_ASSETS: Record<string, string> = {
+  "bootstrap.js": "text/javascript; charset=utf-8",
+};
 
 export interface ApiContext {
   port: number;
@@ -96,9 +110,38 @@ function handleHandshake(ctx: ApiContext): () => Response {
   };
 }
 
+/** `GET /` — the SPA shell (P1.4). Navigation route class: the SPA hasn't read the pairing
+ * fragment yet at this point, so this response carries no Bearer and must be non-sensitive
+ * (A3 §4's navigation row) — it's static HTML, the token arrives client-side via `#t=` (D5). */
+function serveShell(): Response {
+  const html = readFileSync(join(SPA_SRC_DIR, "shell.html"), "utf8");
+  return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
+/** `GET /app/<file>` — the SPA's static ES modules (P1.4). `name` is checked against the fixed
+ * allowlist, not just sanitized, so a request can never read anything else under SPA_SRC_DIR. */
+function serveSpaAsset(pathname: string): Response {
+  const name = pathname.slice("/app/".length);
+  // Object.hasOwn, not a bare `SPA_ASSETS[name]` lookup: a prototype key like `__proto__` or
+  // `constructor` would otherwise resolve to a truthy inherited value, slip past the `undefined`
+  // guard, and fall through to readFileSync (→ 500 instead of a clean 404). Own-keys only.
+  const contentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
+  if (contentType === undefined) {
+    return problem(404, "not-found", "no such static asset", undefined, pathname);
+  }
+  const body = readFileSync(join(SPA_SRC_DIR, name), "utf8");
+  return new Response(body, { headers: { "Content-Type": contentType } });
+}
+
 function matchApiRoute(ctx: ApiContext, method: string, pathname: string): RouteMatch | null {
   if (method === "GET" && pathname === "/api/handshake") {
     return { routeClass: "tokenless-handshake", handle: handleHandshake(ctx) };
+  }
+  if (method === "GET" && pathname === "/") {
+    return { routeClass: "navigation", handle: () => serveShell() };
+  }
+  if (method === "GET" && pathname.startsWith("/app/")) {
+    return { routeClass: "navigation", handle: () => serveSpaAsset(pathname) };
   }
   // P2.4: the live registry. Empty until then.
   if (method === "GET" && pathname === "/api/workspaces") {
