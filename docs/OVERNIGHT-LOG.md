@@ -169,6 +169,40 @@ for Origin. Apply in P1.3.
   hardcoded security invariant per F20.
 - **Tests:** 199 pass / 0 fail (40 matcher); typecheck clean.
 
+### P2.3 shadow-git + apply-lease — ✅ (commit cd6e6a1) — CC, the provenance core, doubly adversarially reviewed
+- **Built (Sonnet subagent):** `packages/daemon/src/git/shadow.ts` (argv-safe `runGit` — never a shell,
+  `--git-dir/--work-tree` injected, isolated env; `safePathspec` + `--` for argv safety; deterministic
+  init → `refs/heads/glosa` + baseline; `checkpoint` idempotent via `diff --cached --quiet`; trailers
+  Glosa-Attribution/Kind/Entry/Lease; constant `glosa <glosa@localhost>` identity; `reclaimIndexLock`) +
+  `bus/lease.ts` (TTL, typed errors) + `WorkspaceBus.applyBegin/resolveEntry` (pre/post checkpoints →
+  proven `pre..post` = `session:<id>`) + reconcile steps 4–5 (`reconcileApplyLeases`, `offlineCatchUp`).
+- **Two parallel adversarial reviews (concurrency-expert + critic), all probe-verified — 4 CRITICAL
+  false-attribution/provenance bugs + 2 should-fix, all fixed:**
+  - **C1 forgery:** `resolveEntry` never checked the caller's session against the lease holder → any
+    caller could resolve another session's lease and be credited. Fixed: `LEASE_SESSION_MISMATCH` guard +
+    attribute via **`lease.session`**, never the caller arg.
+  - **C2 overwrite:** `offlineCatchUp` checkpointed even during an open lease → committed the in-flight
+    edit as `unknown`, so the durable git trailer contradicted the journal. Fixed: skip when `applyLease`
+    is present (active).
+  - **C3 self-staging:** `checkpoint`'s empty-union `else git add -A` recursively staged `.glosa/shadow.git`'s
+    own object store + the journal. Fixed: empty union → return HEAD, no add.
+  - **C4 DoS:** `trackedUnion`'s non-`-z` `ls-tree` split bricked `checkpoint` forever for a filename with a
+    tab/newline (git C-quotes those regardless of `quotepath`). Fixed: `ls-tree -r -z` + split `\0`.
+  - **S5 trailer forgery:** unescaped trailer values let a `\n` forge a `Glosa-Attribution: human` line.
+    Fixed: reject control chars in trailer values (`TRAILER_INJECTION`).
+  - **S6 env config injection:** ambient `GIT_CONFIG_COUNT/KEY/VALUE` outranked `GIT_CONFIG_GLOBAL=/dev/null`.
+    Fixed as part of the isolation fix below.
+- **Bug the pre-commit hook itself caught (mine to fix):** the first commit attempt FAILED — the hook runs
+  `bun test` WHILE git has `GIT_DIR`/`GIT_INDEX_FILE`/`GIT_WORK_TREE` set, and those leaked into the
+  shadow-git subprocesses (33 failures), hijacking them onto the main repo's index. Real isolation bug, not
+  a test artifact. **Fixed:** `isolatedEnv` now strips the **entire `GIT_` namespace** (shadow ops pass
+  `--git-dir/--work-tree` on argv, so they need zero inherited git vars), then re-pins only what it wants.
+  Added a regression test that runs init+checkpoint under leaked `GIT_DIR/INDEX_FILE/WORK_TREE` and proves
+  the op hits the shadow repo. **Lesson for the handoff:** any git-subprocess code must strip `GIT_*`.
+- **Tests:** 235 pass / 0 fail (incl. the full suite green UNDER the simulated hook env); typecheck clean.
+- **Deferred → P2.4:** single-WorkspaceBus-per-root registry (both reviewers: the single-writer guarantee
+  is convention-only; wire reconcile + the live bus to share one mutex/instance at P2.4).
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
