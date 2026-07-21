@@ -270,6 +270,30 @@ for Origin. Apply in P1.3.
     `reconciledOnce` onto the `WorkspaceBus` instance. + capability shell now confinePath-checks (P4.1 prep).
 - **Tests:** 392 pass / 0 fail (incl. full suite green UNDER the git-hook env); typecheck clean.
 
+### P3.2 streaming SSE — ✅ (commit 652a739) — CC, doubly adversarially reviewed
+- **Built (Sonnet subagent):** `src/sse.ts` (frame encode + client fetch-streaming parser, NOT EventSource),
+  `src/bus/tail.ts` (journal-line count + `readJournalEventsSince`), `src/stream.ts` (`GET /w/:slug/stream`:
+  first-connect snapshot at the current cursor, reconnect resume from a journal-line cursor via
+  `Last-Event-ID`/`?since`, live push via a new in-process `WorkspaceBus.subscribe` notifier, chokidar v4
+  artifact watch, 15s heartbeat + `server.timeout(req,0)` scoped to the response). Cursor = physical journal
+  line offset, recomputed from disk so it's stable across restart. Added `chokidar` dep.
+- **Reviews (concurrency-expert + critic) — core no-loss/no-dup/restart invariant CONFIRMED sound** (Bun runs
+  `ReadableStream.start()` synchronously → subscribe→cursor-read is atomic; append+notify is one sync unit
+  under the bus mutex). **2 HIGH bugs found + fixed:**
+  - a numeric-but-out-of-range cursor (`≤ -2`) crashed the reconnect (500) + leaked a listener → guard
+    `sinceSeq >= -1` (else first-connect) + clamp in `readJournalEventsSince`.
+  - `notify()` had no per-listener isolation → a throwing listener rejected the write (500-ing a client whose
+    data saved) AND skipped later listeners (event loss for other SSE clients) → try/catch per listener.
+  - + defensive teardown-on-throw in `start()`.
+- **Tests:** 431 pass / 0 fail (verified 4× incl. git-hook env). **⚠ FLAKE watch:** the subagent saw one
+  transient artifact in the idle-timeout-override test ("bogus multi-billion-ms duration in Bun's reporter")
+  on one run — did NOT reproduce in my 4 runs; treated as a Bun runner/timing artifact, not a logic bug.
+  If the pre-commit hook ever flakes there, it's this real-timer test under parallel load.
+- **Follow-ups noted in-code (`// P3.3:`/`// follow-up:`):** (a) one chokidar watcher per SSE connection →
+  share per-root later; (b) no `desiredSize` backpressure (stalled-but-connected client grows memory);
+  (c) **P3.3 must re-fetch `GET /w/:slug/artifacts` after every SSE reconnect** — artifact frames aren't
+  journaled, so a file change missed during a disconnect isn't replayed (spec-faithful, A1 §8.2 case 3).
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,

@@ -24,7 +24,7 @@ get a mandatory adversarial-review + fault-test pass before commit.
 
 ## Phase 3 — API surface & SPA viewers
 - ✅ **P3.1 full HTTP route catalog** — the eleven `/w/<slug>/…` routes, status codes, 1MiB cap, contract-version behavior. _Appendix: A1 · Accept: per-route schema tests + version mismatch → 409 · CC: no_
-- ⬜ **P3.2 streaming SSE** — fetch-streaming (not EventSource), journal-offset cursor, `Last-Event-ID` reconnect replay, 15s heartbeat + `idleTimeout:0`. _Appendix: A1 §F17 · Accept: reconnect across daemon restart loses no events · CC: **yes**_
+- ✅ **P3.2 streaming SSE** — fetch-streaming (not EventSource), journal-offset cursor, `Last-Event-ID` reconnect replay, 15s heartbeat + `idleTimeout:0`. _Appendix: A1 §F17 · Accept: reconnect across daemon restart loses no events · CC: **yes**_
 - ⬜ **P3.3 class-R viewer + 3 modes** — markdown-it + `data-line`; Preview/Annotate/Edit; idiomorph morph; annotation → W3C record → POST; edit-in-glosa attributed `human`. _Appendix: A5 §F10 + A6 · Accept: E2E annotate live-updating md (anchors correct, morph preserves scroll); edit attributed human · CC: no_
 - ⬜ **P3.4 anchoring resolver** — total `resolve()→source_range|pipeline_feedback|orphaned`; fixed normalization; class-R quote-in-stamped-range else block_range else orphaned (never pipeline_feedback). _Appendix: A5 §F10/§F11 · Accept: anchor corpus (Polish combining, md markup, duplicate quotes, stale hashes) · CC: **yes**_
 - ⬜ **P3.5 diff pane + full history** — diff2html; compare any two checkpoints; `restore` with dirty guard (new by:human checkpoint). _Appendix: A6 §F31(3.B) · Accept: DST day-boundary, dirty refusal, restore-then-diff-clean · CC: no_
