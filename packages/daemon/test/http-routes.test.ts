@@ -437,21 +437,29 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(404);
   });
 
-  // --- Route SHELLS (5.5, 5.8, 5.10, 5.12) ---
+  // --- GET /w/:slug/stream (5.5) — schema/auth-pipeline level only; the real SSE mechanics
+  // (snapshot/reconnect/heartbeat/live-push/teardown, P3.2) are covered in stream.test.ts against
+  // a real bound Bun.serve, which is what a streaming response actually needs to be tested
+  // realistically. This file's `fetchFn` calls the pipeline directly with no `server` arg, which
+  // `handleStream`/stream.ts tolerate (the idle-timeout override is skipped, harmlessly) — exactly
+  // what makes it safe to keep this route's auth/404 coverage in the fast, no-socket harness.
 
-  test("GET /w/:slug/stream → 501 not-implemented (P3.2), auth pipeline still runs", async () => {
+  test("GET /w/:slug/stream → 200 text/event-stream, auth pipeline runs (P3.2 — full SSE mechanics in stream.test.ts)", async () => {
     const res = await fetchFn(req(`/w/${slug}/stream`));
-    expect(res.status).toBe(501);
-    expect((await res.json()).type).toContain("not-implemented");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/event-stream");
+    await res.body?.cancel(); // never actually read — just proving the pipeline reaches the route
   });
-  test("GET /w/:slug/stream with no Bearer → 401 (pipeline runs even for a shell)", async () => {
+  test("GET /w/:slug/stream with no Bearer → 401 (pipeline runs even for the real route)", async () => {
     const res = await fetchFn(new Request(`http://127.0.0.1:${PORT}/w/${slug}/stream`, { headers: { Host: `127.0.0.1:${PORT}` } }));
     expect(res.status).toBe(401);
   });
-  test("GET /w/:slug/stream on an unknown slug → 404, not 501", async () => {
+  test("GET /w/:slug/stream on an unknown slug → 404, not 200", async () => {
     const res = await fetchFn(req("/w/does-not-exist/stream"));
     expect(res.status).toBe(404);
   });
+
+  // --- Remaining route SHELLS (5.8, 5.10, 5.12) ---
 
   test("GET /w/:slug/transcript/stream → 501 not-implemented (P4.2)", async () => {
     const res = await fetchFn(req(`/w/${slug}/transcript/stream`));

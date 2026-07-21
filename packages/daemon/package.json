@@ -5,8 +5,11 @@
   "type": "module",
   "description": "glosa singleton daemon — file bus (inbox/journal/shadow-git), HTTP API, session registry, provider delivery.",
   "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
+    "chokidar": "^4",
     "markdown-it": "^14.3.0",
     "picomatch": "^4.0.5"
   }

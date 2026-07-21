@@ -12,6 +12,7 @@ import { journalPath, workspaceBusDir } from "./paths.ts";
 import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { lifecycleReducer } from "./lifecycle.ts";
 import { reconcileWorkspace, type ReconcileResult } from "./reconcile.ts";
+import { countJournalLines } from "./tail.ts";
 import { KeyedMutex } from "./mutex.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import {
@@ -71,6 +72,16 @@ export class WorkspaceBus {
   // fresh instance is un-reconciled by construction — no external bookkeeping to keep in sync.
   private reconciledOnce = false;
 
+  // P3.2 — the SSE cursor space (A1 §8.1): `nextSequence` is the physical journal-line offset
+  // this bus's NEXT append will claim. Seeded from `countJournalLines` at the end of every
+  // `reconcile()` (never incrementally carried across reconciles) — that's what keeps a
+  // restarted daemon's sequence numbers identical to the crashed one's, since both derive purely
+  // from the same on-disk bytes (A1 §8.2 case 4). `listeners` is the in-process pub/sub the
+  // `/w/:slug/stream` route subscribes to for live push — safe with no file-watching because a
+  // WorkspaceBus is the SOLE writer for its root (P2.4's registry invariant).
+  private nextSequence = 0;
+  private readonly listeners = new Set<(payload: { cursor: number; event: JournalEvent }) => void>();
+
   constructor(workspaceRoot: string, deps: WorkspaceBusDeps = {}) {
     this.root = workspaceRoot;
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
@@ -104,8 +115,77 @@ export class WorkspaceBus {
     return this.mutex.runExclusive(this.root, async () => {
       const result = await reconcileWorkspace(this.root, { ulid: this.ulidFn, now: this.nowFn, reducer: this.reducer });
       this.state = result.state;
+      // Re-derived from the file, not incremented — reconcile's own writer may have just
+      // appended fresh `line_quarantined`/self-heal events, so only a fresh physical count is
+      // guaranteed to match reality (see the field docstring above).
+      this.nextSequence = countJournalLines(this.root);
       return result;
     });
+  }
+
+  /** Registers a listener for every event THIS bus appends from now on (P3.2), delivered
+   * synchronously — same call stack as the appending write, inside that write's mutex critical
+   * section — with the exact physical journal-line sequence number the append just claimed.
+   * Returns an unsubscribe function.
+   *
+   * Callers that need "current cursor, then subscribe from here forward, miss nothing" MUST read
+   * `currentCursor()` and call `subscribe()` back-to-back with NO `await` between them: both are
+   * synchronous, and JS's single-threaded execution means no write's continuation (even one
+   * already "in flight" awaiting e.g. `checkpoint()`) can run in that gap — see stream.ts's
+   * `createJournalStreamResponse` for the call site this protects. */
+  subscribe(listener: (payload: { cursor: number; event: JournalEvent }) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** The sequence number of the last physical journal line that exists right now, or `-1` if the
+   * journal is empty ("nothing to catch up on, everything from here forward is live"). Doubles as
+   * the A1 §8.2 first-connect snapshot's `id`, and as `readJournalEventsSince`'s `sinceSeq`
+   * sentinel for "return everything" when passed straight through. */
+  currentCursor(): number {
+    return this.nextSequence - 1;
+  }
+
+  /** Test/diagnostic-only: how many live subscribers this bus currently has. Lets a test prove a
+   * disconnected SSE client's `unsubscribe()` actually ran (no lingering listener) without this
+   * class exposing its `listeners` set directly. */
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+
+  /** Notifies every subscriber with the sequence number `event` just claimed. Re-derives
+   * `nextSequence` from the file on EVERY call rather than incrementing in memory — deliberately,
+   * not just defensively: `applyBegin`/`resolveEntry` call into git/shadow.ts helpers
+   * (`initShadowRepo`'s `baseline_checkpoint`, `reclaimIndexLock`'s `git_index_lock_reclaimed`)
+   * that append journal lines through this SAME `this.writer` WITHOUT going through this class's
+   * own `applyEvent`/`notify` at all (by design — those events aren't part of the entry lifecycle
+   * this class otherwise fully owns). An incrementally-tracked counter would silently fall behind
+   * the true physical line count the moment one of those fires, corrupting every cursor after it.
+   * A fresh recount right before computing `event`'s own cursor is what keeps this correct
+   * regardless of what else touched the file since the last notify — the extra `readFileSync` is
+   * paid on the write path, which is already doing real fsync'd disk I/O, so it isn't the cost
+   * that matters here; correctness is. */
+  private notify(event: JournalEvent): void {
+    this.nextSequence = countJournalLines(this.root);
+    const cursor = this.nextSequence - 1; // the physical line `event` itself just became
+    // Each listener runs in its own try/catch (review fix): the append + state mutation this
+    // notify() follows has ALREADY durably succeeded by this point, so a throwing listener must
+    // never propagate out of here — unguarded, it would (a) reject the WRITE CALLER's own promise
+    // for an event that was actually persisted fine (e.g. an SSE stream's dead controller would
+    // 500 `POST .../annotations` even though the annotation was saved), and (b) since `for...of`
+    // over a `Set` stops at the first throw, silently skip notifying every listener registered
+    // AFTER the failing one — real event loss for other live SSE connections on this workspace,
+    // not just the one that misbehaved. Log-and-continue keeps every write's own promise clean
+    // and every sibling listener isolated from one bad one.
+    for (const listener of this.listeners) {
+      try {
+        listener({ cursor, event });
+      } catch (err) {
+        console.error(`WorkspaceBus(${this.root}): a stream listener threw on notify — continuing`, err);
+      }
+    }
   }
 
   /** Inbox file atomically first, then `entry_created` — the load-bearing order from A4 §F04.
@@ -140,6 +220,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
+      this.notify(event);
     });
   }
 
@@ -159,6 +240,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
+      this.notify(event);
     });
   }
 
@@ -192,6 +274,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, event, { fsync: false });
       applyEvent(this.state, event, this.reducer);
+      this.notify(event);
     });
   }
 
@@ -225,6 +308,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
+      this.notify(event);
       return { leaseId, preSha };
     });
   }
@@ -276,6 +360,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, endEvent);
       applyEvent(this.state, endEvent, this.reducer);
+      this.notify(endEvent);
 
       const to = outcome; // A5 §F23 conformance: common terminals are literally applied|rejected|stale
       const transitionEvent: JournalEvent = {
@@ -289,6 +374,7 @@ export class WorkspaceBus {
       };
       appendEvent(this.writer, transitionEvent);
       applyEvent(this.state, transitionEvent, this.reducer);
+      this.notify(transitionEvent);
 
       return { leaseId: lease.leaseId, postSha };
     });

@@ -36,3 +36,10 @@ renderer.use(dataLineStamp);
 export function renderMarkdown(source: string): string {
   return renderer.render(source);
 }
+
+/** The class-R/class-F split (A1 §5.3/§5.4/§7) by extension. One place so `GET /w/:slug/artifacts`
+ * (P3.1), `GET /w/:slug/artifacts/:path` (P3.1), and the SSE snapshot/artifact-change push (P3.2)
+ * never independently redefine what "class F" means. */
+export function classifyArtifactPath(path: string): "R" | "F" {
+  return path.endsWith(".html") ? "F" : "R";
+}

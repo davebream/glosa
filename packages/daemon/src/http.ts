@@ -4,10 +4,12 @@
 //
 // P3.1 fills in the full A1 §5 route catalog on top of the P1.3 pipeline: every `/w/:slug/...`
 // route resolves its slug through `ctx.workspaceIndex` (unknown slug → 404) before touching
-// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Four
-// routes (SSE streams, the class-F capability mint, the attention-response route) are SHELLS —
-// the auth/contract/confinement pipeline runs for real, but the body is a `// Pxx:` placeholder
-// until their owning task lands (see `handleNotImplemented`/`handleCapabilityShell`).
+// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Three
+// routes (the transcript SSE stream, the class-F capability mint, the attention-response route)
+// are still SHELLS — the auth/contract/confinement pipeline runs for real, but the body is a
+// `// Pxx:` placeholder until their owning task lands (see `handleNotImplemented`/
+// `handleCapabilityShell`). P3.2 replaced the fourth shell, the artifact/journal SSE stream
+// (§5.5), with the real thing — see `handleStream`/stream.ts.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -19,8 +21,9 @@ import { confinePath } from "./confine-path.ts";
 import { internalErrorResponse, problem } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
 import { resolveMatchedFiles } from "./matcher.ts";
-import { renderMarkdown, sourceSha256 } from "./artifact-render.ts";
+import { classifyArtifactPath, renderMarkdown, sourceSha256 } from "./artifact-render.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
+import { createJournalStreamResponse } from "./stream.ts";
 import type { WorkspaceIndex } from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
@@ -30,6 +33,14 @@ import { isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
 import type { JournalEvent } from "./bus/journal.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
+
+/** Bun's `fetch` handler is always invoked with `(req, server)` — this is that `server`'s type,
+ * aliased here (rather than importing a `bun` global type name) to match the existing
+ * `ReturnType<typeof Bun.serve>` convention already used in lifecycle.ts. Optional everywhere it
+ * appears below so route-schema-level tests that call `createApiFetch(ctx)`'s returned function
+ * directly (no real bound `Bun.serve`, e.g. http-routes.test.ts) don't have to fabricate one —
+ * only the stream route (P3.2) actually needs it, for `server.timeout(req, 0)` (A1 §8.3). */
+export type BunServer = ReturnType<typeof Bun.serve>;
 
 // The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
 // `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
@@ -112,7 +123,7 @@ async function readBodyCapped(req: Request): Promise<{ ok: true; body: Uint8Arra
 
 interface RouteMatch {
   routeClass: RouteClass;
-  handle: (req: Request) => Response | Promise<Response>;
+  handle: (req: Request, server?: BunServer) => Response | Promise<Response>;
 }
 
 function handleHandshake(ctx: ApiContext): () => Response {
@@ -159,10 +170,6 @@ function serveSpaAsset(pathname: string): Response {
 // — this is the one gate every workspace-scoped route shares, per the P3.1 task brief ("slug →
 // workspace: routes resolve `:slug`... unknown slug → 404").
 // -------------------------------------------------------------------------------------------
-
-function classify(path: string): "R" | "F" {
-  return path.endsWith(".html") ? "F" : "R";
-}
 
 function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   const entry = ctx.workspaceIndex.getBySlug(slug);
@@ -240,7 +247,7 @@ function handleListArtifacts(ctx: ApiContext, slug: string, pathname: string): R
   const { tracked } = resolveMatchedFiles(resolved.entry.canonical_path);
   const body = tracked.map((f) => ({
     path: f.path,
-    class: classify(f.path),
+    class: classifyArtifactPath(f.path),
     size_bytes: f.sizeBytes,
     mtime: statSync(f.rawPath).mtime.toISOString(),
     source_sha256: sourceSha256(readFileSync(f.rawPath)),
@@ -273,7 +280,7 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
 
   const raw = readFileSync(match.rawPath);
   const sourceSha = sourceSha256(raw);
-  const cls = classify(match.path);
+  const cls = classifyArtifactPath(match.path);
 
   if (cls === "F") {
     // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
@@ -447,6 +454,19 @@ function handleNotImplemented(ctx: ApiContext, slug: string, pathname: string, n
   return problem(501, "not-implemented", note, undefined, pathname);
 }
 
+/** `GET /w/:slug/stream` (A1 §5.5/§8, P3.2) — resolves the slug, ensures the bus is reconciled
+ * (so `bus.currentCursor()`/`bus.state` reflect the journal before anything subscribes to it),
+ * then hands off to stream.ts, which owns the actual SSE mechanics. Kept a thin wrapper here so
+ * stream.ts never has to know about `ApiContext`/slug resolution (avoids an http.ts <-> stream.ts
+ * import cycle — see stream.ts's own header comment). */
+async function handleStream(ctx: ApiContext, slug: string, req: Request, server: BunServer | undefined): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server);
+}
+
 /** `GET /w/:slug/capability/:artifactPath` shell (A1 §5.12) — P4.1 owns the real token mint, but
  * `artifactPath` is confined here now (traversal/symlink-escape → 400) so P4.1 builds on a real
  * gate instead of a bare stub, and so the confinement attack suite already covers this route. */
@@ -486,13 +506,10 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const path = m[2] as string;
     return { routeClass: "authed-read", handle: (req) => handleGetArtifact(ctx, slug, path, req) };
   }
-  // P3.2: artifact/journal SSE stream.
+  // P3.2: artifact/journal SSE stream (A1 §5.5, full protocol §8).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
     const slug = m[1] as string;
-    return {
-      routeClass: "authed-read",
-      handle: () => handleNotImplemented(ctx, slug, pathname, "artifact/journal SSE stream — P3.2"),
-    };
+    return { routeClass: "authed-read", handle: (req, server) => handleStream(ctx, slug, req, server) };
   }
   // P4.2: conversation-mirror SSE stream.
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/stream$/))) {
@@ -536,10 +553,10 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   return null;
 }
 
-export function createApiFetch(ctx: ApiContext): (req: Request) => Promise<Response> {
+export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServer) => Promise<Response> {
   const csp = spaCspHeaders(ctx.classFPort);
 
-  return async (req) => {
+  return async (req, server) => {
     try {
       const url = new URL(req.url);
 
@@ -596,7 +613,7 @@ export function createApiFetch(ctx: ApiContext): (req: Request) => Promise<Respo
         });
       }
 
-      const res = await route.handle(effectiveReq);
+      const res = await route.handle(effectiveReq, server);
       const withCsp = withHeaders(res, csp);
       if (contractWarning) withCsp.headers.set("X-Contract-Warning", "stale-minor");
       return withCsp;
