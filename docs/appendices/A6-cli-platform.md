@@ -44,6 +44,32 @@
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
+| `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
 - `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery).
 - `open --url` performs the same token, daemon, registration, and optional file deep-link work without invoking the macOS browser launcher. Plain success output is exactly the URL plus a newline; `--json` retains the F26 envelope with `data:{slug,path,url,focus?}`.
 - doctor 12 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, **channel actually registered** (from registry evidence, not just .mcp.json), transcript-root(under allowed CLAUDE_CONFIG_DIR).
+
+### Shell completion setup
+
+`complete` is a fixed text/protocol utility, not one of the seven domain commands covered by the
+F26 JSON envelope. Install the generated script once for the user's shell:
+
+```bash
+# Bash
+mkdir -p ~/.local/share/bash-completion/completions
+glosa complete bash > ~/.local/share/bash-completion/completions/glosa
+
+# Zsh
+mkdir -p ~/.zsh/completions
+glosa complete zsh > ~/.zsh/completions/_glosa
+# Add `fpath=(~/.zsh/completions $fpath)` and `autoload -Uz compinit && compinit` to ~/.zshrc.
+
+# Fish
+mkdir -p ~/.config/fish/completions
+glosa complete fish > ~/.config/fish/completions/glosa.fish
+```
+
+```powershell
+# PowerShell: add the generated registration script to the current user's profile.
+glosa complete powershell >> $PROFILE
+```
