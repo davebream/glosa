@@ -66,11 +66,11 @@ describe("createDataAccess — request shape", () => {
     };
     const da = createDataAccess({ fetchFn, storage: fakeStorage() });
 
-    const result = await da.mintClassFCapability("ws", "output/sermon/speech notes.html");
+    const result = await da.mintClassFCapability("ws", "output/docs/speech notes.html");
 
     // encodePathSegments encodes each path segment separately (preserving the `/` separators) —
     // only the segment containing a space gets percent-encoded.
-    expect(calls[0]).toBe("/w/ws/capability/output/sermon/speech%20notes.html");
+    expect(calls[0]).toBe("/w/ws/capability/output/docs/speech%20notes.html");
     expect(result.url).toBe("http://127.0.0.1:4647/doc/tok/notes.html");
     expect(result.nonce).toBe("n");
   });

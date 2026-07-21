@@ -1,6 +1,7 @@
 // @glosa/daemon — `~/.glosa/daemon.lock` read/write. See docs/appendices/A5-daemon-architecture.md
 // §F13. Write is `openSync(path, "wx")` (O_EXCL) so bind-then-lock is the CAS that guarantees
-// exactly one daemon wins a concurrent boot race; reclaim mirrors jethro's own state/lock.ts.
+// exactly one daemon wins a concurrent boot race; reclaim follows the same reclaim-stale-lock
+// pattern as prior art this design draws on.
 import { closeSync, fsyncSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 
 export interface DaemonLock {

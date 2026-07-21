@@ -2,9 +2,9 @@
 // when a hook needs to mutate registry state (`workspaces.json`, or a per-workspace
 // `.glosa/.registry.lock`-guarded file) and the daemon is unreachable — the primary path is
 // always "serialize through the daemon"; this is the pre-daemon escape hatch, never a
-// substitute. EXACT `withSessionLease` semantics from jethro's mcp-server/src/state/lock.ts,
-// generalized to an arbitrary lock file path (this isn't guarding a jethro session dir, it's
-// guarding glosa's own registry files):
+// substitute. EXACT `withSessionLease` semantics from a known prior-art O_EXCL lease
+// implementation, generalized to an arbitrary lock file path (this isn't guarding any external
+// tool's own session dir, it's guarding glosa's own registry files):
 //   - openSync(lockPath, "wx") IS the CAS.
 //   - Lock record: {token, pid, hostname, acquiredAt, expiresAt}.
 //   - EEXIST -> inspect the holder: unparseable/empty -> treat as live/unknown, retry (never
@@ -50,7 +50,7 @@ function leaseContendedError(lockPath: string, detail: string): FallbackLeaseCon
 }
 
 // lockPath -> token this process currently holds. Presence means a nested call for the SAME
-// lockPath runs fn directly, no re-acquire/release — mirrors jethro's heldLeases map exactly.
+// lockPath runs fn directly, no re-acquire/release — mirrors the same prior art's held-leases map.
 const heldLeases = new Map<string, string>();
 
 function sleepSync(ms: number): void {

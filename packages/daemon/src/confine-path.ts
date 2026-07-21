@@ -14,11 +14,23 @@ export type ConfineResult = { ok: true; realPath: string } | { ok: false };
 // ASCII control chars (incl. NUL and \n) — A3 §5 attack #5.
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 
+// P6.1 review fix: cheap ceilings rejected BEFORE any filesystem work. Without these, a
+// pathological (but traversal-clean — no ".." components, so the check above doesn't catch it)
+// value like "a/a/a/.../a" with hundreds of thousands of segments drives that many synchronous
+// realpathSync/dirname calls in `realpathNearestAncestor` below, blocking the whole single-
+// threaded daemon for the duration of one request. Both limits are generous for any real
+// workspace-relative artifact path; a legitimate path will never come close.
+const MAX_SEGMENTS = 64;
+const MAX_PATH_LENGTH = 4096;
+
 export function confinePath(workspaceRoot: string, relPath: string): ConfineResult {
   if (relPath.length === 0) return { ok: false };
+  if (relPath.length > MAX_PATH_LENGTH) return { ok: false };
   if (relPath.startsWith("/")) return { ok: false }; // must be workspace-relative
   if (CONTROL_CHAR_RE.test(relPath)) return { ok: false };
-  if (relPath.split("/").some((segment) => segment === "..")) return { ok: false };
+  const segments = relPath.split("/");
+  if (segments.length > MAX_SEGMENTS) return { ok: false };
+  if (segments.some((segment) => segment === "..")) return { ok: false };
 
   const resolved = resolve(workspaceRoot, relPath);
 

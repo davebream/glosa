@@ -1,9 +1,0 @@
-{
-  "name": "@glosa/adapters-jethro",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "glosa jethro content adapter — sermon-workspace recognition, session binding, stage ordering, derived-from edges.",
-  "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" }
-}

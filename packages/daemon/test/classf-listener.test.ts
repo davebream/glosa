@@ -134,11 +134,11 @@ describe("class-F listener — real socket", () => {
 
   test("directory-scoped + multi-request: ONE mint serves the document AND a sibling asset", async () => {
     writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
-    writeFileSync(join(root, "sermon-notes.css"), "p { color: green; }");
+    writeFileSync(join(root, "side-notes.css"), "p { color: green; }");
     const { url } = await mint("speech-notes.html");
     const docRes = await fetch(url);
     expect(docRes.status).toBe(200);
-    const cssUrl = url.replace(/speech-notes\.html$/, "sermon-notes.css");
+    const cssUrl = url.replace(/speech-notes\.html$/, "side-notes.css");
     const cssRes = await fetch(cssUrl);
     expect(cssRes.status).toBe(200);
     expect(await cssRes.text()).toBe("p { color: green; }");
@@ -146,12 +146,12 @@ describe("class-F listener — real socket", () => {
 
   test("bridge injection: the document carries the bridge before </body>; the sibling CSS does not", async () => {
     writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hello</p></body></html>");
-    writeFileSync(join(root, "sermon-notes.css"), "p{}");
+    writeFileSync(join(root, "side-notes.css"), "p{}");
     const { url, nonce } = await mint("speech-notes.html");
     const docBody = await (await fetch(url)).text();
     expect(docBody).toContain("<p>hello</p>");
     expect(docBody).toContain(JSON.stringify(nonce));
-    const cssBody = await (await fetch(url.replace(/speech-notes\.html$/, "sermon-notes.css"))).text();
+    const cssBody = await (await fetch(url.replace(/speech-notes\.html$/, "side-notes.css"))).text();
     expect(cssBody).toBe("p{}");
   });
 

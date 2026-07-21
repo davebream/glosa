@@ -7,7 +7,7 @@ import { CAPABILITY_TTL_MS, CapabilityStore } from "../src/capability.ts";
 function input(overrides: Partial<{ slug: string; artifactDirRealPath: string; artifactBasename: string }> = {}) {
   return {
     slug: "ws-1",
-    artifactDirRealPath: "/tmp/glosa-ws/output/sermon",
+    artifactDirRealPath: "/tmp/glosa-ws/output/docs",
     artifactBasename: "speech-notes.html",
     ...overrides,
   };
@@ -41,9 +41,9 @@ describe("CapabilityStore.mint", () => {
 describe("CapabilityStore.lookup", () => {
   test("a freshly minted token resolves to the record it was minted with", () => {
     const store = new CapabilityStore();
-    const { token } = store.mint(input({ slug: "sermon-ws" }));
+    const { token } = store.mint(input({ slug: "example-ws" }));
     const record = store.lookup(token);
-    expect(record?.slug).toBe("sermon-ws");
+    expect(record?.slug).toBe("example-ws");
     expect(record?.artifactBasename).toBe("speech-notes.html");
   });
 

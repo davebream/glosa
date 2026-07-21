@@ -23,6 +23,17 @@ import { internalErrorResponse, problem, restoreConflictResponse } from "./probl
 import { PROTOCOL_VERSION } from "./protocol.ts";
 import { resolveMatchedFiles } from "./matcher.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
+import {
+  AdapterRegistry,
+  classifyWithAdapter,
+  derivedFromSourcePath,
+  isArtifactStale,
+  orderWithAdapter,
+  resolveManifest,
+  type AdapterSessionHint,
+  type ContentAdapter,
+} from "./adapters/interface.ts";
+import { resolve as resolveAnchor, type ClassFArtifact, type ClassRArtifact, type Resolution, type ResolveCtx } from "./anchoring.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { listCheckpoints } from "./checkpoints.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
@@ -92,6 +103,11 @@ export interface ApiContext {
    * here (`GET /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
   capabilityStore: CapabilityStore;
+  /** P6.1 — the daemon's one `AdapterRegistry` (R7). OPTIONAL and defaulted to "no adapter" by
+   * every call site below (`ctx.adapterRegistry?.forWorkspace(root)`) rather than required, so
+   * every existing test's hand-built `ApiContext` literal keeps compiling unchanged — an absent
+   * registry IS the zero-adapter core, not a gap to fill in. */
+  adapterRegistry?: AdapterRegistry;
 }
 
 /** The handshake body is a superset of P1.2's `HandshakeResponse` (D2): keeps
@@ -266,20 +282,33 @@ async function resolveBus(ctx: ApiContext, root: string): Promise<WorkspaceBus> 
   return bus;
 }
 
-/** `GET /w/:slug/artifacts` (A1 §5.3) — the sidebar listing. */
+/** `GET /w/:slug/artifacts` (A1 §5.3) — the sidebar listing. P6.1: `class`/ordering/`stale` are
+ * all generic-core behavior driven by whatever adapter (if any) recognizes this workspace —
+ * `ctx.adapterRegistry` absent, or present but not recognizing `root`, degrades every one of
+ * these to its pre-P6.1 answer (extension-based class, on-disk-sorted order, never stale). */
 function handleListArtifacts(ctx: ApiContext, slug: string, pathname: string): Response {
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+  const adapter = ctx.adapterRegistry?.forWorkspace(root);
 
-  const { tracked } = resolveMatchedFiles(resolved.entry.canonical_path);
-  const body = tracked.map((f) => ({
-    path: f.path,
-    class: classifyArtifactPath(f.path),
-    size_bytes: f.sizeBytes,
-    mtime: statSync(f.rawPath).mtime.toISOString(),
-    source_sha256: sourceSha256(readFileSync(f.rawPath)),
-    stale: false, // P6.1: staleness needs derived-from edges, not built yet — always fresh for now
-  }));
+  const { tracked } = resolveMatchedFiles(root);
+  const byPath = new Map(tracked.map((f) => [f.path, f]));
+  const mtimeMs = new Map(tracked.map((f) => [f.path, statSync(f.rawPath).mtime.getTime()]));
+  const resolveSourceMtimeMs = (p: string): number | null => mtimeMs.get(p) ?? null;
+
+  const orderedPaths = orderWithAdapter(adapter, root, tracked.map((f) => f.path));
+  const body = orderedPaths.map((path) => {
+    const f = byPath.get(path)!;
+    return {
+      path: f.path,
+      class: classifyWithAdapter(adapter, root, f.path, classifyArtifactPath(f.path)),
+      size_bytes: f.sizeBytes,
+      mtime: new Date(mtimeMs.get(f.path)!).toISOString(),
+      source_sha256: sourceSha256(readFileSync(f.rawPath)),
+      stale: isArtifactStale(adapter, root, f.path, mtimeMs.get(f.path)!, resolveSourceMtimeMs),
+    };
+  });
   return Response.json(body);
 }
 
@@ -307,18 +336,25 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
 
   const raw = readFileSync(match.rawPath);
   const sourceSha = sourceSha256(raw);
-  const cls = classifyArtifactPath(match.path);
+  const adapter = ctx.adapterRegistry?.forWorkspace(root);
+  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path));
 
   if (cls === "F") {
     // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
     // is the class-F capability listener's job (P4.1).
-    // P6.1: A1 §5.4's `manifest_path` field is intentionally omitted for now — the chunk manifest
-    // (`chunks-<ts>/manifest.json`) is domain provenance supplied by a CONTENT ADAPTER, and the
-    // core ships with zero adapters (invariant #1). When the adapter-registration protocol (P6.1)
-    // lands, the adapter resolves `manifest_path` here and the anchoring resolver (`anchoring.ts`,
-    // A5 §F11) gets wired into the annotation lifecycle (see handleCreateAnnotation below). The
-    // response test uses `objectContaining` so adding the field then is non-breaking.
-    return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "F" });
+    // P6.1: `derived_from` (R6/R7's generic Edit-on-class-F affordance, already consumed by
+    // viewer.js's `canEdit`/`setMode`) and `manifest_path` (A1 §5.4's own example response) are
+    // both domain provenance a CONTENT ADAPTER supplies — the core ships with zero adapters
+    // (invariant #1), so both are simply absent when none is registered/recognizes this workspace.
+    const derivedFrom = derivedFromSourcePath(adapter, root, match.path);
+    const manifestResolution = resolveManifest(root, adapter, match.path);
+    return Response.json({
+      source_path: match.path,
+      source_sha256: sourceSha,
+      class: "F",
+      ...(derivedFrom !== undefined ? { derived_from: derivedFrom } : {}),
+      ...(manifestResolution?.manifestPath !== undefined ? { manifest_path: manifestResolution.manifestPath } : {}),
+    });
   }
 
   const content = raw.toString("utf8");
@@ -366,7 +402,8 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
 
-  if (classifyArtifactPath(match.path) === "F") {
+  const putAdapter = ctx.adapterRegistry?.forWorkspace(root);
+  if (classifyWithAdapter(putAdapter, root, match.path, classifyArtifactPath(match.path)) === "F") {
     return problem(400, "validation-failed", "class-F artifacts are not editable through this route", undefined, url.pathname);
   }
 
@@ -453,18 +490,72 @@ function generateAnnotationId(): string {
   return `inb-${Math.floor(Date.now() / 1000)}-${randomBytes(2).toString("hex")}`;
 }
 
+/** P6.1 — builds the `AnchoringArtifact` + `ResolveCtx` `anchoring.ts`'s `resolve()` needs for
+ * `artifactPath`, from real on-disk content (class R) or the adapter's manifest + derived-from
+ * source (class F). Returns `null` when `artifactPath` isn't a currently-tracked artifact — the
+ * same "can't prove anything" posture as every other not-found case in this file, never a guess.
+ * Class F with no manifest still returns an artifact (empty `source`, no `manifest`) rather than
+ * `null` — `resolveClassF` already turns that into the honest `orphaned{no_source_map}` on its
+ * own, so this function doesn't need to special-case "no adapter" itself. */
+function buildAnchoringContext(
+  ctx: ApiContext,
+  root: string,
+  artifactPath: string,
+): { artifact: ClassRArtifact | ClassFArtifact; resolveCtx: ResolveCtx } | null {
+  const confineResult = confinePath(root, artifactPath);
+  if (!confineResult.ok) return null;
+  const relNfc = artifactPath
+    .split("/")
+    .map((segment) => segment.normalize("NFC"))
+    .join("/");
+  const { tracked } = resolveMatchedFiles(root);
+  const match = tracked.find((f) => f.path === relNfc);
+  if (!match) return null;
+
+  const adapter = ctx.adapterRegistry?.forWorkspace(root);
+  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path));
+
+  if (cls === "R") {
+    const source = readFileSync(match.rawPath, "utf8");
+    const artifact: ClassRArtifact = { class: "R", path: match.path, source, renderedHtml: renderMarkdown(source) };
+    return { artifact, resolveCtx: {} };
+  }
+
+  const manifestResolution = resolveManifest(root, adapter, match.path);
+  let source = "";
+  if (manifestResolution) {
+    const srcMatch = tracked.find((f) => f.path === manifestResolution.manifest.source_path);
+    if (srcMatch) source = readFileSync(srcMatch.rawPath, "utf8");
+  }
+  const artifact: ClassFArtifact = {
+    class: "F",
+    path: match.path,
+    source,
+    ...(manifestResolution ? { manifest: manifestResolution.manifest } : {}),
+  };
+  const resolveCtx: ResolveCtx =
+    manifestResolution && adapter ? { pipelineFeedback: { adapter: adapter.id, component: manifestResolution.component } } : {};
+  return { artifact, resolveCtx };
+}
+
 /** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
  * `WorkspaceBus.createEntry` — honest provenance only: this route creates the entry, it does NOT
- * resolve its anchor (the resolver is `anchoring.ts` / P3.4, A5 §F10/§F11).
- * OWED (P6.1 / a dedicated wiring step): `anchoring.ts`'s `resolve()` is BUILT + unit-tested but not
- * yet CALLED by any live route — annotations are persisted un-anchored. Wiring it in needs the
- * artifact context: class-R needs the rendered HTML + captured hash (available now); class-F needs
- * the chunk manifest from a content adapter (P6.1). The end-to-end resolution (annotate → resolve →
- * source_range/pipeline_feedback/orphaned → route) is exercised by the T8 manual rehearsal (P5.4). */
+ * decide what the entry means, `resolve()` does.
+ *
+ * P6.1 wires the OWED anchoring resolution (`anchoring.ts` was BUILT + unit-tested since P3.4 but
+ * never called by a live route): an optional `artifact_path` field on the request body — additive
+ * to A1 §5.6's documented shape, which has no way to name which artifact an annotation targets at
+ * all — tells this route which artifact to resolve against; when present, the 201 response also
+ * carries the `Resolution` (`source_range`/`pipeline_feedback`/`orphaned`) inline. Omitting
+ * `artifact_path` (today's SPA does) reproduces the exact pre-P6.1 behavior: the entry is created,
+ * un-anchored, `resolution` is absent from the response. A likewise-additive `captured_rendered_sha256`
+ * field threads through to `ResolveCtx.capturedRenderedSha256` once the SPA starts sending one;
+ * absent, Class R's position-trust cascade already degrades to whole-document search (A5 §F10). */
 async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
 
   let body: unknown;
   try {
@@ -475,7 +566,7 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
   const validated = validateAnnotationBody(body);
   if (!validated.ok) return problem(400, "validation-failed", validated.reason, undefined, url.pathname);
 
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, root);
   const id = generateAnnotationId();
   // Explicitly picked fields ONLY — never spread the raw parsed body. `kind` in particular must
   // stay a server-assigned constant: a client-supplied `kind` (e.g. "attention_request") spread
@@ -488,7 +579,25 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
     target: validated.value.target,
   });
 
-  return new Response(JSON.stringify({ id, status: "pending" }), {
+  let resolution: Resolution | undefined;
+  const artifactPathRaw = (body as Record<string, unknown>).artifact_path;
+  if (typeof artifactPathRaw === "string" && artifactPathRaw.length > 0) {
+    const built = buildAnchoringContext(ctx, root, artifactPathRaw);
+    if (built) {
+      const capturedRenderedSha256 = (body as Record<string, unknown>).captured_rendered_sha256;
+      const resolveCtx: ResolveCtx = {
+        ...built.resolveCtx,
+        ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
+      };
+      resolution = resolveAnchor(
+        { body: validated.value.body, intent: validated.value.intent, target: validated.value.target },
+        built.artifact,
+        resolveCtx,
+      );
+    }
+  }
+
+  return new Response(JSON.stringify({ id, status: "pending", ...(resolution ? { resolution } : {}) }), {
     status: 201,
     headers: { "Content-Type": "application/json" },
   });
@@ -747,6 +856,16 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
       return problem(400, "invalid-path", "workspace_binding does not resolve to a real directory", undefined, url.pathname);
     }
     workspaceBinding = canonicalBinding;
+  } else if (ctx.adapterRegistry) {
+    // P6.1 — R2's authoritative routing input, from adapter-specific state, only consulted when
+    // the caller didn't already supply an explicit binding (an explicit body field is the more
+    // direct signal and wins outright). The core has no idea WHY the adapter picked what it did.
+    const hint: AdapterSessionHint = { session_id: sessionId, provider, cwd: canonicalCwd, source };
+    const adapterBinding = ctx.adapterRegistry.resolveSessionBinding(hint);
+    if (adapterBinding !== null) {
+      const canonicalAdapterBinding = canonicalOrNull(adapterBinding);
+      if (canonicalAdapterBinding) workspaceBinding = canonicalAdapterBinding;
+    }
   }
 
   const transcriptPath = typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
@@ -933,7 +1052,8 @@ function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: strin
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, pathname);
 
-  if (classifyArtifactPath(match.path) !== "F") {
+  const mintAdapter = ctx.adapterRegistry?.forWorkspace(root);
+  if (classifyWithAdapter(mintAdapter, root, match.path, classifyArtifactPath(match.path)) !== "F") {
     return problem(400, "invalid-path", "capability minting is only for class-F artifacts", undefined, pathname);
   }
 

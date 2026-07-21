@@ -447,6 +447,124 @@ Dependency arrow jethro→glosa only. CC: yes. **Action items:** (a) when I reac
 (b) at P6.1, drop `packages/adapters/jethro` from the workspace globs + delete the package; (c) re-read
 BUILD-PLAN.md at each task pickup since Dawid may edit it again overnight.
 
+### P6.1 generic adapter-registration protocol — ✅ — CC: yes
+- **Built (solo, no delegation):** `packages/daemon/src/adapters/interface.ts` — the `ContentAdapter`
+  interface (R7) + `AdapterRegistry` the daemon holds. Every method past `id`/`recognizes` is OPTIONAL;
+  `workspaceRoot` is threaded through EVERY per-artifact method (not just `recognizes`) — a deliberate
+  extension past the brief's terser `derivedFrom(artifactPath)` shorthand, since a single adapter instance
+  can legitimately serve many concurrent workspaces and an artifact path alone is only unambiguous within
+  one. `AdapterRegistry.forWorkspace()` = first-registered-match; `resolveSessionBinding()` asks every
+  adapter for an opinion (R2's authoritative routing input) since "which workspace" is exactly the unknown
+  at that call site, so it can't gate through `forWorkspace` first.
+- **Generic behaviors wired into the CORE** (`http.ts`), each degrading to its pre-P6.1 answer when no
+  adapter recognizes the workspace: `classifyWithAdapter` (R/F override, used consistently across
+  GET/PUT/mint-capability so the four routes can't disagree on one artifact's class), `orderWithAdapter`
+  (sidebar order — reconciled against the REAL tracked set so a misbehaving adapter can reorder but never
+  hide/inject an artifact), `isArtifactStale` (derived-from source mtime > artifact mtime; "can't resolve
+  the source" fails open to `false`, never guesses), `derivedFromSourcePath` (→ `artifacts/:path`'s
+  `derived_from` field — confirmed this matches viewer.js's ALREADY-WRITTEN expectation: a plain source
+  path string fed straight into `openArtifact()`, not an object — P3.3 apparently anticipated this exact
+  P6.1 contract), `resolveManifest` (→ `manifest_path` in the class-F response; reads an adapter-named path
+  through `confinePath`, same trust level as any other workspace-relative input).
+- **OWED anchoring wiring closed**: `anchoring.ts`'s `resolve()` was built+tested since P3.4 but never
+  called by a live route. Found the real gap: neither A1 §5.6 nor R3's own annotation payload shape names
+  WHICH artifact an annotation targets — `POST .../annotations` is workspace-scoped, not artifact-scoped,
+  with no `artifact_path` field anywhere in the documented wire shape. **Decision (see D9 below):** added
+  an optional, additive `artifact_path` (+ `captured_rendered_sha256`) field; when present, resolves
+  immediately and returns `resolution` inline in the 201. Omitting it (today's SPA does) reproduces the
+  exact pre-P6.1 behavior byte-for-byte. Class R needs no adapter at all; class F builds the derived-from
+  source + adapter manifest and sets `ctx.pipelineFeedback = {adapter: adapter.id, component}`.
+- **Fixture adapter** (`packages/daemon/test/fixtures/adapter/fixture-adapter.ts`) — a domain-neutral
+  "docs + rendered preview" adapter registering PURELY through the public protocol: marker-file recognition,
+  a `rendered.html → source.md` derived-from edge, an optional `manifest.json`, "preview sorts last" sidebar
+  order. Proves staleness, `derived_from`/`manifest_path` surfacing, and BOTH class-F resolution branches
+  (verbatim search-in-chunk vs. `transformed:true` → `pipeline_feedback`) end-to-end over real HTTP routes.
+- **Deleted `packages/adapters/jethro`** (the stub — one `src/index.ts` with a header comment, no real
+  code) + dropped `packages/adapters/*` from the root workspace globs + `bun install` (lockfile updated,
+  "1 package removed"). `test/workspace.test.ts`'s package-resolution list updated to match.
+- **Invariant #1, grep-enforced** (`test/adapters/invariants.test.ts`): zero `jethro`/`sermon`/
+  `format-sermon` matches (case-insensitive) anywhere under `packages/daemon/{src,test}` or
+  `packages/spa/src`. This caught real PRE-EXISTING mentions from earlier phases — `anchoring.ts`'s own
+  header comment illustrating the invariant by NAME, `lock.ts`/`lockfile-fallback.ts`'s design-provenance
+  comments ("mirrors jethro's own state/lock.ts"), and incidental test fixture strings
+  (`"sermon-notes.css"`, `"My Sermon (2026)!"`, a Polish test sentence). **All reworded to generic
+  equivalents** (see D9) rather than narrowing the test's scope — the acceptance is meant to be literal, and
+  every one of those mentions was freely reword-able without losing information.
+- **Tests:** `test/adapters/{interface,zero-adapter-core,fixture-adapter,invariants}.test.ts` — 56 new
+  tests. Full suite: **958 pass / 0 fail** (confirmed 2× plain + 1× with `GIT_DIR`/`GIT_INDEX_FILE`/
+  `GIT_WORK_TREE` hook env set, per the standing convention). Typecheck clean. One `lifecycle.test.ts`
+  subprocess-timing test failed once mid-session (stale-lock reclaim race) and passed clean on immediate
+  rerun ×2 — pre-existing flake class already noted at P4.4, not a P6.1 regression (untouched code path).
+
+- **Handoff note:** this task was built by a subagent under a session that then handed off — a SEPARATE
+  fresh session was independently started around the same time (a real coordination gap in the handoff
+  protocol: the outgoing session's `/goal` Stop-hook kept it alive after spawning its successor). The
+  outgoing session caught its own duplication risk, yielded (`/goal clear`), and left this task
+  mid-build in its own subagent; the incoming fresh session confirmed no other writes had landed,
+  waited for that subagent to finish, then ran the review below. Logged so a future reader isn't
+  confused by two sessions' fingerprints on one task. No file corruption occurred — verified via
+  `git status` before and after.
+
+- **Two-reviewer adversarial pass (critic + security-auditor, parallel, independent) — no CRITICALs;
+  2 HIGH + 2 MEDIUM + 1 LOW, all fixed except the LOW (tracked) and one pre-existing non-blocking note:**
+  - **HIGH (critic):** none of the six adapter-method call sites in `interface.ts`
+    (`recognizes`/`sessionBinding`/`classifyArtifact`/`sidebarOrder`/`derivedFrom`/`manifestFor`) caught
+    an exception from the adapter — a single buggy (not malicious) adapter method throwing 500'd every
+    route touching that workspace, contradicting the file's own "never a throw, always degrade" premise.
+    **Fixed:** a `safeAdapterCall` wrapper around every call site, degrading to each function's existing
+    "adapter doesn't implement this" fallback + a `console.error` naming the adapter id/method. New tests
+    prove a throwing `recognizes()` doesn't stop the registry checking later adapters, and each of the
+    other five degrades correctly instead of propagating.
+  - **MEDIUM (security-auditor) → became a design correction, not just a patch:** `resolveManifest`'s
+    adapter-named `manifestPath` went through `confinePath` only, not the tracked-artifact membership
+    every OTHER workspace path gets — a buggy adapter naming `.glosa/config.json` would get it read. The
+    FIRST fix applied the full `resolveMatchedFiles` tracked-membership check (include+exclude), which
+    passed review but was WRONG: it silently breaks the real manifest convention (A1 §5.4's own example,
+    `chunks-<ts>/manifest.json`, is a `.json` file that will never match the sidebar's `include` glob —
+    `md`/`html`/`txt` only — by design, since a chunk manifest is metadata, not a sidebar artifact).
+    Caught this myself before committing by cross-checking A3 §3's literal contract ("confinePath ... at
+    every path entry point ... adapter manifest" — no mention of also requiring include-glob membership).
+    **Corrected fix:** an EXCLUDE-only gate (`picomatch(config.artifacts.exclude)`, mirroring `matcher.ts`'s
+    own `isExcluded`) — rejects a manifestPath resolving into `.glosa/**`/`node_modules/**`/dotdirs, but
+    no longer requires positive extension-based inclusion. Added a regression test proving a real
+    `chunks-2026/manifest.json`-shaped path resolves successfully (this is exactly the case the
+    first, over-strict fix would have silently broken) alongside the `.glosa/**`-rejection test.
+  - **MEDIUM (security-auditor):** the new client-facing `artifact_path` field on `POST
+    /w/:slug/annotations` is the first caller to feed `confinePath` a JSON-body-sized (up to 1 MiB)
+    string rather than a URL-path-length one; `confinePath`'s ancestor-walk had no segment/length cap,
+    so a traversal-clean-but-pathological value (e.g. hundreds of thousands of `a/` segments) could drive
+    that many synchronous `realpathSync` calls, blocking the single-threaded daemon for one authenticated
+    request. **Fixed:** `MAX_SEGMENTS = 64` / `MAX_PATH_LENGTH = 4096` ceilings in `confinePath`, rejected
+    before any filesystem work. Tests prove fast rejection (both a direct `confinePath` unit test and a
+    route-level test that a pathological `artifact_path` on the annotations route still 201s in <1s with
+    no resolution, never a 500).
+  - **LOW (both reviewers, independently — good convergence signal):** the invariant grep-guard
+    (`test/adapters/invariants.test.ts`) didn't scan `packages/spa/test`, which still had 4 literal
+    `"sermon"` path strings in `classf-viewer.test.ts`/`data-access.test.ts` fixture data (test-only,
+    never a runtime leak, but the log's own "zero mentions" claim was narrower than stated). **Fixed:**
+    widened the guard to scan `packages/spa/test` too; reworded the 4 strings to "docs".
+  - **Not fixed, tracked as a follow-up (critic, SHOULD-FIX, pre-existing):** `confine-path.ts`'s
+    `realPath` field is the pre-realpath joined path, not the actual realpath computed for validation —
+    a TOCTOU window if a path component becomes a symlink between check and read. Pre-existing (already
+    true at `http.ts`'s transcript-stream call site before P6.1); P6.1 made `resolveManifest` a second
+    consumer of the same field. Not blocking — file as a follow-up against `confine-path.ts` itself.
+  - Both reviewers independently confirmed clean: zero-adapter core behavior, honest anchoring
+    provenance (never upgrades an unproven match), no new information-disclosure oracle on
+    `artifact_path` (every non-match case — absent/missing/untracked/unconfineable — replies identically,
+    201 with `resolution` simply omitted), sidebar tamper-proofing holds both directions, zero telemetry.
+- **Tests after fixes:** 970 pass / 0 fail (2× confirmed), typecheck clean. Committed straight to main
+  per direct-to-main policy.
+
+### D9 — annotation `artifact_path` is additive, not a wire-shape rewrite (P6.1)
+A1 §5.6 / R3's annotation payload has no field naming which artifact it targets — genuinely missing from
+the spec, not an oversight in a prior task (`POST /w/:slug/annotations` is workspace-, not artifact-,
+scoped). Two options: (a) redesign the route to be artifact-scoped (`POST /w/:slug/artifacts/:path/
+annotations`), touching the SPA's `data-access.js`/`viewer.js` call sites too; (b) add an optional field,
+additive, so every existing caller (today's SPA) is byte-for-byte unaffected. **Chose (b)** — P6.1's brief
+was the adapter protocol + wiring anchoring reachability, not an API redesign; a future task can migrate
+the SPA to send `artifact_path` (and eventually `captured_rendered_sha256`, once the client tracks a
+rendered-hash) without another wire-shape change, since the field is already there and optional.
+
 ### D7 — lifecycle event representation (P2.5)
 A5 §F23 lists distinct event names (created/delivered/seen/resolved/done/staled/expired). P2.1 reserved +
 P2.3 already emits the generic `transition_committed{to}` / `attention_committed{to}`. **Decision:** the
@@ -486,6 +604,42 @@ A1 §3 only blesses leniency for a *missing* header. **Decision:** unparseable/p
 `"1.0.0"`, `"abc"`) are treated as "missing → lenient, same major assumed" (A1 §3's stated intent for
 non-SPA clients like a future CLI); only a **well-formed value whose major differs** from PROTOCOL_VERSION →
 409. Documented in a `contract.ts` comment + a `contract.test.ts` matrix.
+
+---
+
+## HANDOFF — jethro-side content adapter (file as a jethro-repo issue)
+
+**Not glosa's scope.** P6.1 deleted the `packages/adapters/jethro` stub and proved the generic
+adapter-registration protocol against a domain-neutral fixture only (invariant #1: the glosa core carries
+zero domain knowledge). The REAL jethro integration is now entirely jethro's own responsibility, built in
+the **jethro repo**, depending on glosa's published protocol (`packages/daemon/src/adapters/interface.ts`'s
+`ContentAdapter` shape) — **dependency arrow jethro → glosa, never the reverse.** File a jethro issue
+covering:
+
+1. **Recognition** — `recognizes(workspaceRoot)` returns true for `~/.claude/plugins/data/jethro-jethro/
+   sermon-sessions/<id>/` (the fixed plugin-data path jethro already owns).
+2. **Session binding** — `sessionBinding(hint)` reads jethro's own `state.json` `session_history` to map a
+   live session to its sermon-session workspace, supplying R2's authoritative routing input from
+   jethro-specific state the glosa core never has to parse.
+3. **Sidebar ordering** — `sidebarOrder(workspaceRoot, artifacts)` orders numbered stage files by their
+   pipeline stage; marks the canonical manuscript (`canonical_manuscript` pointer when present, else the
+   `07b`→`07` fallback per requirements.md R7 — verified as the common case in an earlier phase's research).
+4. **Derived-from edge** — `derivedFrom(workspaceRoot, artifactPath)` declares the speech-notes-HTML →
+   manuscript edge (`output/<slug>/speech-notes-*.html` derived FROM the numbered manuscript stage, via
+   process `"format-sermon"`), which is what the glosa core needs to enable class-F Edit + staleness with
+   zero further domain knowledge.
+5. **Class-F manifest** — `manifestFor(workspaceRoot, artifactPath)` resolves `chunks-<ts>/manifest.json`
+   for the speech-notes HTML artifact, feeding the (already-generic, already-tested-here) `anchoring.ts`
+   class-F cascade + `pipelineFeedback` target.
+6. **Registration** — jethro's own CLI/hook/skill wiring constructs the adapter and registers it with a
+   running glosa daemon at startup (the exact registration entry point — an MCP tool call, a hook, a
+   `glosa`-side plugin-load convention — is a jethro-repo design decision; glosa's `AdapterRegistry` only
+   needs `register(adapter: ContentAdapter)` called once per process, from wherever jethro's own runtime
+   lives).
+
+Schema authority for jethro's own state shapes remains the TypeScript types in
+`~/code/jethro/mcp-server/src/state/` (per requirements.md R7) — glosa's protocol says nothing about
+jethro's internals, only the shape jethro must hand back.
 
 ---
 

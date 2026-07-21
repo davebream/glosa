@@ -17,10 +17,6 @@
         "typescript": "^5.6.0",
       },
     },
-    "packages/adapters/jethro": {
-      "name": "@glosa/adapters-jethro",
-      "version": "0.0.0",
-    },
     "packages/cli": {
       "name": "@glosa/cli",
       "version": "0.0.0",
@@ -29,6 +25,7 @@
       },
       "dependencies": {
         "@glosa/daemon": "workspace:*",
+        "@glosa/providers-claude-code": "workspace:*",
       },
     },
     "packages/daemon": {
@@ -43,10 +40,16 @@
     "packages/providers/claude-code": {
       "name": "@glosa/providers-claude-code",
       "version": "0.0.0",
+      "dependencies": {
+        "@glosa/daemon": "workspace:*",
+      },
     },
     "packages/providers/codex": {
       "name": "@glosa/providers-codex",
       "version": "0.0.0",
+      "dependencies": {
+        "@glosa/daemon": "workspace:*",
+      },
     },
     "packages/spa": {
       "name": "@glosa/spa",
@@ -54,8 +57,6 @@
     },
   },
   "packages": {
-    "@glosa/adapters-jethro": ["@glosa/adapters-jethro@workspace:packages/adapters/jethro"],
-
     "@glosa/cli": ["@glosa/cli@workspace:packages/cli"],
 
     "@glosa/daemon": ["@glosa/daemon@workspace:packages/daemon"],

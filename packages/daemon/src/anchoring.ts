@@ -10,10 +10,10 @@
 // normalized substring search; Class F anchors via a chunk manifest supplied by the caller (the
 // real manifest wiring is P4.1 — this module only implements the resolution LOGIC given one).
 //
-// Generic-core invariant (CLAUDE.md #1): this module knows nothing about jethro or format-sermon.
-// A5's worked pipeline_feedback example literally writes `adapter:jethro, component:format-sermon`
-// — that's illustrative, not a mandate to hardcode a domain adapter's identity into the daemon
-// core. Callers that DO know (the jethro content-adapter, or the route composing this resolver)
+// Generic-core invariant (CLAUDE.md #1): this module knows nothing about any specific pipeline or
+// producer. A5's worked pipeline_feedback example uses a concrete `{adapter, component}` pair
+// purely for illustration — that's not a mandate to hardcode a domain adapter's identity into the
+// daemon core. Callers that DO know (a content adapter, or the route composing this resolver)
 // pass `ctx.pipelineFeedback`; absent, we fall back to "unknown" rather than invent a real name.
 import { createHash } from "node:crypto";
 import { sourceSha256 } from "./artifact-render.ts";
@@ -84,7 +84,8 @@ export interface ResolveCtx {
    * still matches" — no proof of a match is the same as no match). */
   capturedRenderedSha256?: string;
   /** Domain identity for a `pipeline_feedback` target — supplied by the content-adapter layer,
-   * which is the only layer allowed to know it's jethro/format-sermon (see file header). */
+   * which is the only layer allowed to know which real producer/pipeline this is (see file
+   * header). */
   pipelineFeedback?: { adapter: string; component: string };
 }
 

@@ -12,7 +12,7 @@ const MANUSCRIPT = `# Kazanie
 
 Boża łaska jest wystarczająca dla każdego grzesznika.
 
-Ten fragment został sparafrazowany przez format-sermon i już nie brzmi jak oryginał.
+Ten fragment został sparafrazowany automatycznie i już nie brzmi jak oryginał.
 `;
 
 function manuscriptSha(text = MANUSCRIPT): string {
@@ -25,7 +25,7 @@ function chunkSliceSha(text: string, l0: number, l1: number): string {
 }
 
 function buildFArtifact(manifest?: ChunkManifest): ClassFArtifact {
-  return { class: "F", path: "output/sermon/speech-notes.html", source: MANUSCRIPT, ...(manifest ? { manifest } : {}) };
+  return { class: "F", path: "output/docs/speech-notes.html", source: MANUSCRIPT, ...(manifest ? { manifest } : {}) };
 }
 
 function freshManifest(chunks: ChunkManifest["chunks"]): ChunkManifest {
@@ -79,7 +79,7 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
 
   test("the quote occurs TWICE within a verbatim chunk → orphaned{ambiguous}, NOT quote_absent_not_transformed — the quote IS present, just not unique", () => {
     const manuscript = "# Kazanie\n\nAmen, amen, powiadam wam: amen.\n";
-    const artifact: ClassFArtifact = { class: "F", path: "output/sermon/speech-notes.html", source: manuscript };
+    const artifact: ClassFArtifact = { class: "F", path: "output/docs/speech-notes.html", source: manuscript };
     const manifest: ChunkManifest = {
       manifest_version: 1,
       source_path: "07_manuscript.md",
@@ -134,7 +134,7 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
       source_sha256: "0".repeat(64), // stale against the WHOLE current manuscript
       chunks: [{ chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2), transformed: false }],
     };
-    const res = resolve(annotation({ quoteExact: "sparafrazowany przez format-sermon", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
+    const res = resolve(annotation({ quoteExact: "sparafrazowany automatycznie", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
     expect(res.kind).toBe("source_range");
     if (res.kind !== "source_range") throw new Error("unreachable");
     expect(res.start_line).toBe(4);
@@ -147,14 +147,14 @@ describe("Class F — transformed:true (paraphrased chunk)", () => {
       { chunk_id: "chunk-002", source_start_line: 4, source_end_line: 4, source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4), transformed: true },
     ]);
     const res = resolve(
-      annotation({ quoteExact: "sparafrazowany przez format-sermon", chunkId: "chunk-002", intent: "classification", body: "wrong split" }),
+      annotation({ quoteExact: "sparafrazowany automatycznie", chunkId: "chunk-002", intent: "classification", body: "wrong split" }),
       buildFArtifact(manifest),
-      { pipelineFeedback: { adapter: "jethro", component: "format-sermon" } },
+      { pipelineFeedback: { adapter: "producer-x", component: "paraphraser" } },
     );
 
     expect(res).toEqual({
       kind: "pipeline_feedback",
-      target: { adapter: "jethro", component: "format-sermon", chunk_id: "chunk-002", source_line_range: [4, 4] },
+      target: { adapter: "producer-x", component: "paraphraser", chunk_id: "chunk-002", source_line_range: [4, 4] },
       intent: "classification",
       body: "wrong split",
     });

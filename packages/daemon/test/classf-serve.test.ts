@@ -13,7 +13,7 @@ import { serveClassFDocument } from "../src/classf-serve.ts";
 describe("serveClassFDocument", () => {
   function freshWorkspace() {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-classf-")));
-    const artifactDir = join(root, "output", "sermon");
+    const artifactDir = join(root, "output", "docs");
     mkdirSync(artifactDir, { recursive: true });
     return { root, artifactDir };
   }
@@ -81,11 +81,11 @@ describe("serveClassFDocument", () => {
   test("a sibling asset (CSS) in the SAME directory is served with its own content-type and NO bridge", () => {
     const { artifactDir } = freshWorkspace();
     writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
-    writeFileSync(join(artifactDir, "sermon-notes.css"), "body { color: red; }");
+    writeFileSync(join(artifactDir, "notes-style.css"), "body { color: red; }");
     const store = new CapabilityStore();
     const { token } = mintFor(store, artifactDir, "speech-notes.html");
 
-    const res = serveClassFDocument(store, token, "sermon-notes.css");
+    const res = serveClassFDocument(store, token, "notes-style.css");
     expect(res).not.toBeNull();
     expect(res!.headers.get("Content-Type")).toBe("text/css; charset=utf-8");
     return res!.text().then((body) => {

@@ -59,8 +59,8 @@ describe("assignSlug", () => {
   });
 
   test("sanitizes a basename with non-alphanumeric characters and never leaves it empty", () => {
-    const { slug } = assignSlug("/Users/alice/My Sermon (2026)!", []);
-    expect(slug).toMatch(/^my-sermon-2026-[0-9a-f]{6}$/);
+    const { slug } = assignSlug("/Users/alice/My Report (2026)!", []);
+    expect(slug).toMatch(/^my-report-2026-[0-9a-f]{6}$/);
 
     const rootSlug = assignSlug("/", []);
     expect(rootSlug.slug.startsWith("workspace-")).toBe(true);

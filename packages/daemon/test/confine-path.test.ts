@@ -77,4 +77,24 @@ describe("confinePath", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.realPath.startsWith(workspace + sep)).toBe(true);
   });
+
+  // Fix 3 (P6.1 review): an absurdly deep/long relative path has no ".." components (so the
+  // cheap traversal pre-check above doesn't catch it) — without a segment/length ceiling this
+  // would drive hundreds of thousands of synchronous realpathSync/dirname calls in
+  // realpathNearestAncestor, blocking the single-threaded daemon for the request's duration.
+  test("pathological deep path (thousands of segments, no ..) → reject fast, never touches the filesystem walk", () => {
+    const start = performance.now();
+    const result = confinePath(workspace, "a/".repeat(5000) + "leaf.md");
+    const elapsedMs = performance.now() - start;
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  test("pathological long single-segment-free path (huge total length) → reject fast", () => {
+    const start = performance.now();
+    const result = confinePath(workspace, "a".repeat(10_000) + ".md");
+    const elapsedMs = performance.now() - start;
+    expect(result.ok).toBe(false);
+    expect(elapsedMs).toBeLessThan(500);
+  });
 });

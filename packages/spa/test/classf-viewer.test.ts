@@ -249,7 +249,7 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
     dom.document.body.append(container);
     const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
 
-    mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "output/sermon/notes.html" });
+    mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "output/docs/notes.html" });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -257,7 +257,7 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
     expect(iframe).not.toBeNull();
     expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(iframe!.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(da.mintCalls).toEqual([["ws-1", "output/sermon/notes.html"]]);
+    expect(da.mintCalls).toEqual([["ws-1", "output/docs/notes.html"]]);
     // A3 §2: `src`, not `srcdoc` — srcdoc would give the document the PARENT's origin as its
     // base, defeating the whole "opaque origin from src, not same-origin from srcdoc" design.
     expect(iframe!.src).toBe("http://127.0.0.1:4647/doc/tok/notes.html");
