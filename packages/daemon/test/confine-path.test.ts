@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.3 — confinePath unit coverage (A1 §6, A3 §3/§5 #4-5, F24). Hermetic: builds a real tmp
 // workspace dir per test (symlink escape needs a real filesystem — no way to fake realpath()).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

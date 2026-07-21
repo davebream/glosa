@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Totality (A5 §F10: "total, never throws, never guesses") — resolve() must survive garbage
 // input of every shape and always return a member of the Resolution union. Plus a focused
 // uniqueness-gate check: 0 matches and ≥2 matches must NEVER produce an auto-applied exact/

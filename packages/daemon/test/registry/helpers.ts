@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers for the P2.4 registry suites. Every test gets its own tmp GLOSA_HOME and/or
 // tmp workspace dir — never a real `~/.glosa` — plus a deterministic clock so lease/GC timing
 // assertions don't depend on wall-clock jitter.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.4 — the Codex AgentProvider's interface conformance + the R4 delivery ladder MINUS channels
 // (docs/research/codex-contract.md, T2a). Mirrors
 // packages/providers/claude-code/test/provider.test.ts's structure deliberately — same assertions,

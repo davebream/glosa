@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.4 — pairing token minting (A1 §2, A3 §3). loadToken/tokenMatches are P1.2/P1.3's coverage
 // (auth.test.ts); this file covers the new mint/ensure primitives: format, perms, idempotency,
 // and atomicity. Hermetic tmp GLOSA_HOME per test, never touches a real `~/.glosa`.

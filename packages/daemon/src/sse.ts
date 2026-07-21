@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the SSE wire format (P3.2, A1 §8.1). One tiny module, two directions:
 //   - `encodeSseFrame`: server-side, used by stream.ts to write `id:`/`event:`/`data:` frames.
 //   - `parseSseStream`: client-side, hand-parsed fetch-streaming (NOT `EventSource` — A1 §2:

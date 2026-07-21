@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.1 — the bridge's nonce-gated handshake (A3 §2). `bridgeShouldAcceptInit` is the pure mirror
 // of the injected script's own gate (classf-bridge.ts's own header explains why the real logic
 // has to live in a plain-JS string, not a TS import, and why this pure twin exists to keep the

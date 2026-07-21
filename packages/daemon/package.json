@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "license": "Apache-2.0",
   "description": "glosa singleton daemon — file bus (inbox/journal/shadow-git), HTTP API, session registry, provider delivery.",
   "main": "src/index.ts",
   "exports": {

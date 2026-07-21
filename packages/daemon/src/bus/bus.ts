@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — WorkspaceBus: the live, in-process facade over one workspace's file bus. Ties
 // together the pieces the other modules in this directory keep deliberately separate:
 //   - a long-lived JournalWriter (one fd held for the life of the bus, A4 §F04)

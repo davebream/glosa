@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in glosa.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste manuscripts, transcripts, tokens, or other sensitive data. Use synthetic examples and redact local paths.
+  - type: input
+    id: version
+    attributes:
+      label: glosa version
+      placeholder: 0.1.0-alpha.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and architecture
+      placeholder: macOS 15.5, arm64
+    validations:
+      required: true
+  - type: input
+    id: bun
+    attributes:
+      label: Bun version
+      placeholder: 1.2.7
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a minimal workspace with synthetic content.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed secrets, tokens, private documents, transcripts, and identifying local paths.
+          required: true

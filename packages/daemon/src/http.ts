@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the two listeners' fetch pipelines (A1 §1/§3/§4, A3 §4). Wires together
 // host-check → route lookup → authorizeRequest → contract-version gate → body cap → handler for
 // the SPA/API listener, and the minimal host-check-only pipeline for the class-F listener.

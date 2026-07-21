@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
 import type { AgentProvider, SessionBinding } from "@glosa/daemon";
 import { ClaudeCodeProvider } from "@glosa/providers-claude-code";

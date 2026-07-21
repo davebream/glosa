@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.3 — exhaustive unit coverage for authorizeRequest (A3 §4's resolved table). Pure/hermetic:
 // no I/O, no Bun.serve, just Request objects. This is where most of A3 §5's attack-table
 // coverage lives — the integration suite (http.test.ts) only has to prove the pipeline wires

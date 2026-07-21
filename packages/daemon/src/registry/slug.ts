@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — canonical workspace identity + slug assignment (A4 §F25). The canonical path
 // (realpath -> NFC -> strip trailing slash) is the IDENTITY; a slug is just a route label
 // derived from it. Two different canonical paths never share a slug — collision-lengthening

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — pairing token load/mint + constant-time Bearer compare (A1 §2, A3 §3-4).
 // Rotation and revocation are P5.1's job; this module mints once and otherwise only ever reads
 // what's already on disk.

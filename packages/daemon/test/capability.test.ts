@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.1 — CapabilityStore unit coverage (A1 §7): mint shape, TTL expiry, and the "unknown vs.
 // expired collapse to the same lookup result" invariant the class-F serve route depends on to
 // never leak which failure occurred (A1 §7: "no daemon-origin details").

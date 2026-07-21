@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the class-R viewer (R6): renders the daemon's server-rendered markdown
 // (`data-line`-stamped HTML), the Preview/Annotate/Edit mode toggle, the annotation-record flow
 // (annotate.js builds the record, this module posts it), and the SSE-driven idiomorph morph that

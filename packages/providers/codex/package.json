@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "license": "Apache-2.0",
   "description": "glosa Codex agent provider — hook gate, turn-boundary drain, MCP pull (no channels-equivalent push).",
   "main": "src/index.ts",
   "exports": { ".": "./src/index.ts" },

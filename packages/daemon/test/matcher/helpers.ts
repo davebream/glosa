@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers for the P2.2 matcher suites. Every test gets its own hermetic tmp workspace
 // dir (never a real repo) — mirrors test/bus/helpers.ts's freshWorkspace/cleanupWorkspace pattern.
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

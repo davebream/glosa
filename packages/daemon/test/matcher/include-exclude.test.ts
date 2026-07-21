@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — include/exclude conformance (A4 §F20). Exclude beats include; dot-dirs, node_modules,
 // and .glosa itself are never tracked even when the file inside them would otherwise match.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

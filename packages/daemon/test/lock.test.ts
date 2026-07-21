@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PROTOCOL_VERSION } from "../src/protocol.ts";
 import { BUILD_ID } from "../src/build-id.ts";

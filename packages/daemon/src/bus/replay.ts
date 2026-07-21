@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — replay: the pure left-fold that turns the journal into current status (A4
 // §F04). "The journal is the single source of truth" means status is NEVER stored anywhere else
 // — every read of "what state is entry X in" is (conceptually) this fold over the file, memoized

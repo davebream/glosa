@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 — pure logic tests for data-access.js (R6's ONE data-access module). No DOM: `fetchFn`/
 // `storage` are hand-rolled fakes, exactly the injection points data-access.js exists to expose.
 import { describe, expect, test } from "bun:test";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — loadMatcherConfig: missing file → defaults; override deep-merges (arrays union, scalars
 // replace); invalid JSON → throws (A4 §F20 explicitly: "invalid JSON → fail loud, don't silently
 // use defaults").

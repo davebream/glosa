@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A domain-NEUTRAL "docs + rendered preview" fixture `ContentAdapter` (P6.1's acceptance fixture)
 // — proves the generic adapter-registration protocol (src/adapters/interface.ts) end-to-end using
 // generic vocabulary only. No pipeline/domain-specific terms anywhere in this file — the

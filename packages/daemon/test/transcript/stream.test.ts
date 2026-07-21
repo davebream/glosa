@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.2 — `GET /w/:slug/transcript/stream` + `POST /w/:slug/transcript/compose` (A1 §5.8/§8, A2
 // §F16) against a REAL bound `Bun.serve` — same rationale as the top-level stream.test.ts: a
 // streaming response needs real sockets for `server.timeout(req,0)`, chunk-boundary framing, and

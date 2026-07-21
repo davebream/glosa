@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
 import { route } from "../../src/registry/routing.ts";
 import { SessionRegistry } from "../../src/registry/session-registry.ts";

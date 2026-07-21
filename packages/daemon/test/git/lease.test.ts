@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.3 — apply-lease orchestration (A4 §F05): the honest-provenance crux. A `pre_sha..post_sha`
 // interval bracketed by a real apply-lease is the ONLY thing ever attributed to a session;
 // anything else (pre-existing drift, an expired lease, a change made with no lease at all) is

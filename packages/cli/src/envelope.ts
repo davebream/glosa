@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — the shared `--json` envelope shape + stable exit codes (A6 §F26). Every P5.1
 // command builds a `CommandEnvelope<T>` and hands it to `printJsonEnvelope`/its own human-mode
 // printer, so every command's `--json` output is byte-for-byte the same shape `init` already

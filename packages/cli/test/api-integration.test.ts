@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.1 — ONE real end-to-end pass against a genuinely spawned daemon (not a fake), proving
 // http.ts's new `/api/workspaces/*` + `/api/status` routes actually work over real HTTP, and that
 // `createHttpGlosaClient()`'s `ensureDaemon`-backed lazy spawn (the exact mechanism `glosa open`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.3 — reconcile steps 4-5 wired to real shadow-git (A4 §F04 startup sequence, §F21 mechanics),
 // exercised through the actual `reconcileWorkspace` entry point (not WorkspaceBus) — this is what
 // runs at daemon startup. Covers the offline-catch-up story end to end, and proves steps 4-5 stay

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Applies the persisted appearance before CSS loads, so explicit light/dark overrides never
 // flash through the system theme while the SPA modules are still being fetched.
 (function preloadAppearance() {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — a small, dependency-free ULID generator (Crockford base32, 48-bit ms
 // timestamp + 80-bit randomness, monotonic within the same millisecond by incrementing the
 // random component — see https://github.com/ulid/spec). Used as the journal `event_id` (A4

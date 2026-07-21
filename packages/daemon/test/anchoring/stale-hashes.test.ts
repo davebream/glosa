@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The named "stale hashes" hard case (A5 §F10): `rendered_sha256` no longer matches (the artifact
 // was re-rendered since the annotation's `position` was captured) → `position` is NOT trusted,
 // even though it's syntactically present — falls straight to whole-doc scope, same as never

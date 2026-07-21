@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 — the W3C-style annotation record builder. `buildAnnotationTarget` is pure (no DOM);
 // `buildAnnotationRecordFromSelection` is the DOM-facing half, tested against a real happy-dom
 // Selection/Range (see dom-env.ts for why happy-dom rather than jsdom/native).

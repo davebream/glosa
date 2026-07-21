@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P4.2: `GET /w/:slug/transcript/stream` (A1 §5.8, full protocol A1 §8; A2 §F16).
 // The conversation-mirror tailer + SSE response builder — the daemon-side half of the "read-only
 // transcript view" (R6/F32). Mirrors stream.ts's (journal) shape deliberately (heartbeat, idle-

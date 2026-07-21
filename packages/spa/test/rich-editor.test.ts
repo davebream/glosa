@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — rich-editor markdown fidelity: the vendored prosemirror-markdown parse→serialize
 // pipeline is what the rich face persists through, so its round-trip behavior IS the save
 // contract. These tests are DOM-free (parser/serializer/state never touch a document); the

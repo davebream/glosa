@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // @glosa/spa vendor — ProseMirror, prebundled ESM (same vendoring pattern as diff2html.js:
 // a one-off build committed as a single file so glosa keeps its no-build-step invariant).
 //

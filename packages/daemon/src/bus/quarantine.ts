@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — appends a raw bad line to `.glosa/journal.quarantine.ndjson` (A4 §F04). The
 // journal itself is never rewritten (append-only, even to excise bad lines); this is where the
 // excluded raw bytes go instead, so nothing is silently lost.

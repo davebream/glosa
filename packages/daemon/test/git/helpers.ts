@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers for the P2.3 shadow-git + apply-lease suites. Mirrors test/bus/helpers.ts's
 // freshWorkspace/cleanupWorkspace/deterministic-clock pattern (every test gets its own hermetic
 // tmp workspace, never a real repo) plus a `writeFile` borrowed from test/matcher/helpers.ts's

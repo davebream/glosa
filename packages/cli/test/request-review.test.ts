@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.1 — `glosa request-review <path> [--message] [--action] [--wait <duration>]` (A5 §F23, A6 §F26).
 import { describe, expect, test } from "bun:test";
 import type { GlosaApiClient } from "../src/api-client.ts";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The named "whitespace-fold" hard case (A5 §F10): NBSP / multiple spaces / newlines in the quote
 // vs. the source collapse to a single space (all Unicode whitespace, NBSP included) before the
 // NORMALIZED comparison — never at the EXACT stage.

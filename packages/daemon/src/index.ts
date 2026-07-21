@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — see docs/requirements.md + docs/appendices
 export { bootDaemon, buildChildEnv, ensureDaemon } from "./lifecycle.ts";
 export type { DaemonConnection, EnsureDaemonResult } from "./lifecycle.ts";

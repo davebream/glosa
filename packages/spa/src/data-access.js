@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — R6's ONE data-access module: the SPA reaches the daemon through this file and
 // NOTHING else does (no other module calls `fetch` — see test/import-boundary.test.ts, which
 // checks that structurally). This is the L0→L3 swappable-data-layer invariant: a future hosted

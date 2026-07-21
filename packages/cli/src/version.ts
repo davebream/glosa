@@ -1,1 +1,4 @@
-export const CLI_VERSION = "0.0.0";
+// SPDX-License-Identifier: Apache-2.0
+import packageMetadata from "../../../package.json" with { type: "json" };
+
+export const CLI_VERSION = packageMetadata.version;

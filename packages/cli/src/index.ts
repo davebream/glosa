@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
 import completion from "@gunshi/plugin-completion";
 import {
@@ -157,8 +158,8 @@ async function hookDeps(): Promise<HookDeps> {
   if (cachedHookDeps) return cachedHookDeps;
   const [{ createHttpDaemonClient }, { glosaHome }, provider] = await Promise.all([
     import("./daemon-client.ts"),
-    import("@glosa/daemon"),
-    import("@glosa/providers-claude-code"),
+    import("../../daemon/src/index.ts"),
+    import("../../providers/claude-code/src/index.ts"),
   ]);
   const daemonClient = await createHttpDaemonClient();
   const leases = new provider.RewakeLeaseStore({ dir: join(glosaHome(), ".sessions") });
@@ -367,7 +368,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
       const values = withGlobals(context);
       const [{ createHttpGlosaClient }, { glosaHome }, doctorModule] = await Promise.all([
         import("./api-client.ts"),
-        import("@glosa/daemon"),
+        import("../../daemon/src/index.ts"),
         import("./doctor.ts"),
       ]);
       const result = await doctorModule.runDoctor(
@@ -449,7 +450,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
   const daemon = lazyHandler(
     { name: "__daemon", description: "Detached daemon process", internal: true },
     async () => {
-      const { bootDaemon } = await import("@glosa/daemon");
+      const { bootDaemon } = await import("../../daemon/src/index.ts");
       await bootDaemon();
     },
   );

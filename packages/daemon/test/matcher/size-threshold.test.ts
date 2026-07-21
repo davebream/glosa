@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — size-threshold boundary (A4 §F20): strictly-over maxFileBytes is oversize; exactly-at is
 // still tracked.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

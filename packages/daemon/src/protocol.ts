@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — wire protocol version. See docs/appendices/A5-daemon-architecture.md §F13.
 //
 // This is the daemon *lifecycle* handshake version (protocol_version in the lock file and

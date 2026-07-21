@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.5 — history.js: the pure kind/attribution/timestamp label mappers (R1 — document-native
 // language, never "commit"/"SHA"), the selection reducer, a diff2html render smoke test, and a
 // DOM mount integration test against a fake data-access object (no real daemon).

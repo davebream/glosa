@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-codex — the Codex AgentProvider (R7). Implements the R4 delivery ladder MINUS
 // channels — Codex has no async-push-into-idle equivalent (docs/research/codex-contract.md §7:
 // "push: false").
@@ -17,7 +18,14 @@
 // with no core special-casing, and the easiest way to prove that is to keep their internal shape as
 // similar as the underlying mechanics allow. The real difference from Claude's provider is entirely
 // SUBTRACTIVE: no ChannelSender, no RewakeSignal, no rungs 1-2.
-import type { AgentProvider, DeliverableEntry, DeliveryResult, Liveness, ProviderCapabilities, SessionBinding } from "@glosa/daemon";
+import type {
+  AgentProvider,
+  DeliverableEntry,
+  DeliveryResult,
+  Liveness,
+  ProviderCapabilities,
+  SessionBinding,
+} from "../../../daemon/src/index.ts";
 import { looksLikeCodexHookInput } from "./hook-types.ts";
 
 /** The subset of `SessionRegistry` `liveness()` needs — a structural interface, not an import of

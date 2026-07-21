@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.2 — `GET /w/:slug/stream` (A1 §5.5, full protocol A1 §8) against a REAL bound `Bun.serve`
 // (not the direct-pipeline-call harness http-routes.test.ts uses) — a streaming response needs
 // real sockets to test realistically: `server.timeout(req, 0)`'s idle-timeout override, chunk-

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — apply-lease pure helpers (A4 §F05). The orchestration itself (append
 // apply_begin/apply_end under the workspace's git+journal mutex, drive a shadow-git checkpoint)
 // lives on WorkspaceBus (bus.ts), which already holds the mutex/writer/ulid/clock this needs —

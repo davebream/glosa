@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the class-F (foreign HTML) viewer's parent-side trust boundary (A3 §1/§2, R6).
 // Mints a capability, embeds the document in a sandboxed iframe on the SEPARATE class-F origin,
 // and completes the nonce-gated MessageChannel handshake — then trusts NOTHING arriving except

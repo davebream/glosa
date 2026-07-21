@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.3 — integration coverage for the real daemon HTTP pipeline (A1, A3 §4-5). Spawns the actual
 // `glosa __daemon` subprocess (P1.2's spawnDaemon helper) against a hermetic tmp GLOSA_HOME and
 // random ports, then hits both listeners over real HTTP — this is where the A3 §5 attack items

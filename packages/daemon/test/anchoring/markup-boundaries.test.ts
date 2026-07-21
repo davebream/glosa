@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The named "markdown markup" hard case (A5 §F10): a rendered selection spanning **bold**/
 // [link](url)/`code` boundaries. Its literal (rendered, markup-stripped) text never substring-
 // matches the source, which still has the `**`/`[...]`/`` ` `` syntax interspersed — so it falls

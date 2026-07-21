@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-claude-code — A2 §F07's asyncRewake rearm protocol. The asyncRewake hook
 // (`glosa hook rewake-watch`, launched by Claude Code's SessionStart hook config) is ONE-SHOT: it
 // exits the first time it signals a rewake (exit code 2), and Claude Code never re-spawns it for

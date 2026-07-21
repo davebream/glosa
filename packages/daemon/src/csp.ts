@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — CSP header sets for glosa's two origins (A3 §1 class-F, A3 §3 SPA/API). One
 // module owns both exact strings so a header value can never drift between the routes that
 // attach it — grep here, not in every handler, when the policy needs to change.

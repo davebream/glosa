@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.3 review item 2 — unit coverage for internalErrorResponse, the last-resort 500 an unhandled
 // throw in the HTTP pipeline falls back to. The point of this response is what it does NOT say —
 // no error message, no stack, nothing an exception could have been carrying.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — bootstrap module, served byte-for-byte as `/app/bootstrap.js` (packages/daemon/src/
 // http.ts's static allowlist). Hand-written plain JS, deliberately — glosa's "no build step"
 // invariant (docs/requirements.md) means no bundle/transpile step exists between this file and

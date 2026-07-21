@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 release gate — concurrency). The existing concurrency suites
 // (bus/concurrency.test.ts, bus/mutex.test.ts, registry/lockfile-fallback.test.ts,
 // sessions-routes.test.ts's "two concurrent drain calls") all prove correctness under concurrent

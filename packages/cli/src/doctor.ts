@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Twelve enumerated checks — A6's own
 // command-surface table names exactly 12 (platform, bun, git, claude-code, browser, daemon+proto,
 // token/pairing, workspace, hooks, mcp, channel-registered, transcript-root), even though one
@@ -5,7 +6,13 @@
 // named anywhere in the spec — that's a doc inconsistency, not a real check this file is missing,
 // so this implements exactly the 12 the table lists.
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { claudeConfigDir, protocolCompatible, PROTOCOL_VERSION, resolveMatchedFiles, tokenPath } from "@glosa/daemon";
+import {
+  claudeConfigDir,
+  protocolCompatible,
+  PROTOCOL_VERSION,
+  resolveMatchedFiles,
+  tokenPath,
+} from "../../daemon/src/index.ts";
 import { join } from "node:path";
 import { checkManifestDrift } from "./init.ts";
 import type { GlosaApiClient } from "./api-client.ts";

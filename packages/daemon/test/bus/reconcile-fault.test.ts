@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The acceptance bar for P2.1 (A4 §F04): kill the process at every possible write boundary and
 // prove reconcile always recovers exactly ONE legal state — the event either fully applied or
 // fully absent, never a half-applied/corrupt state — with a clean trailing newline and the torn
