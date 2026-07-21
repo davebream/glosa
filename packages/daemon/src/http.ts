@@ -77,6 +77,7 @@ const SPA_ASSETS: Record<string, string> = {
   // bare-specifier import).
   "data-access.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
+  "artifact-tree.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
   "vendor/idiomorph.js": "text/javascript; charset=utf-8",
   // P3.5 additions — the checkpoint/diff timeline pane and its ONE vendored rendering dependency.

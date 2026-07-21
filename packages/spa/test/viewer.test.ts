@@ -189,10 +189,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // without awaiting it internally — flush the microtask queue a few times before asserting.
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const artifactButtons = Array.from(root.querySelectorAll(".glosa-artifact-list button")) as any[];
-    expect(artifactButtons.map((b) => b.textContent)).toEqual(["notes.md"]);
+    const artifactRows = Array.from(root.querySelectorAll(".glosa-artifact-list .glosa-tree-row")) as any[];
+    expect(artifactRows.map((row) => row.querySelector(".glosa-tree-label")?.textContent)).toEqual(["notes.md"]);
 
-    artifactButtons[0]!.click();
+    artifactRows[0]!.click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     const content = root.querySelector(".glosa-content")!;
@@ -206,7 +206,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    (root.querySelector(".glosa-artifact-list button") as any).click();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     (root.querySelector('[data-mode="edit"]') as any).click();
@@ -235,7 +235,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    (root.querySelector(".glosa-artifact-list button") as any).click();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     (root.querySelector('[data-mode="annotate"]') as any).click();
