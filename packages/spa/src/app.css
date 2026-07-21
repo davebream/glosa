@@ -310,6 +310,59 @@ button {
   margin-bottom: var(--space-6);
 }
 
+.glosa-workspace-list {
+  margin-bottom: var(--space-6) !important;
+}
+
+.glosa-sidebar-heading {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.glosa-sidebar-heading h2 {
+  margin-bottom: 0;
+}
+
+.glosa-tree-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.glosa-tree-tool {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--muted);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-tree-tool:hover {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+
+.glosa-tree-tool:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.glosa-tree-tool svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .glosa-sidebar ul {
   list-style: none;
   margin: 0;
@@ -341,6 +394,102 @@ button {
   background: var(--surface-sunken);
   color: var(--primary);
   font-weight: 600;
+}
+
+.glosa-artifact-list {
+  margin-bottom: var(--space-6) !important;
+}
+
+.glosa-artifact-list [role="group"] {
+  padding-left: 16px;
+}
+
+.glosa-artifact-list [role="treeitem"] {
+  min-width: 0;
+  outline: none;
+}
+
+.glosa-tree-row {
+  height: 28px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px 0 2px;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: default;
+  user-select: none;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-tree-row:hover {
+  background: var(--surface-sunken);
+}
+
+.glosa-artifact-list [role="treeitem"]:focus-visible > .glosa-tree-row {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.glosa-artifact-list [role="treeitem"][aria-current="page"] > .glosa-tree-row {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.glosa-tree-disclosure,
+.glosa-tree-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.glosa-tree-disclosure {
+  transition: transform 160ms var(--ease-out);
+}
+
+.glosa-artifact-list [role="treeitem"][data-expanded="true"] > .glosa-tree-row > .glosa-tree-disclosure {
+  transform: rotate(90deg);
+}
+
+.glosa-tree-disclosure svg {
+  width: 13px;
+  height: 13px;
+}
+
+.glosa-tree-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.glosa-tree-disclosure svg,
+.glosa-tree-icon svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-tree-stale {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 .glosa-sidebar-empty {
@@ -1438,6 +1587,9 @@ button {
   .glosa-sidebar,
   .glosa-modebar button,
   .glosa-sidebar li button,
+  .glosa-tree-tool,
+  .glosa-tree-row,
+  .glosa-tree-disclosure,
   .glosa-composer-intents button,
   .glosa-history-toggle,
   .glosa-conversation-toggle,

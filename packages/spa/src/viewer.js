@@ -17,6 +17,7 @@ import { mountClassFViewer } from "./classf-viewer.js";
 import { mountConversationPane } from "./conversation.js";
 import { mountRichEditor } from "./rich-editor.js";
 import { confirmDialog } from "./dialog.js";
+import { createArtifactTreeNavigator } from "./artifact-tree.js";
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -128,6 +129,32 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // --- navigator ---
   const sidebarList = el("ul", { className: "glosa-workspace-list" });
   const artifactList = el("ul", { className: "glosa-artifact-list" });
+  let artifactNavigator = null;
+  const expandArtifacts = el("button", {
+    className: "glosa-tree-tool",
+    type: "button",
+    title: "Expand all folders",
+    "aria-label": "Expand all folders",
+    innerHTML:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>',
+    onClick: () => artifactNavigator?.expandAll(),
+  });
+  const collapseArtifacts = el("button", {
+    className: "glosa-tree-tool",
+    type: "button",
+    title: "Collapse all folders",
+    "aria-label": "Collapse all folders",
+    innerHTML:
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>',
+    onClick: () => artifactNavigator?.collapseAll(),
+  });
+  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
+    el("h2", { textContent: "Artifacts" }),
+    el("div", { className: "glosa-tree-tools", role: "group", "aria-label": "Artifact tree" }, [
+      expandArtifacts,
+      collapseArtifacts,
+    ]),
+  ]);
   const artifactListEmpty = el("p", {
     className: "glosa-sidebar-empty",
     textContent: "Markdown, HTML, and text files in this workspace appear here.",
@@ -194,13 +221,17 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     el("nav", { className: "glosa-sidebar" }, [
       el("h2", { textContent: "Workspaces" }),
       sidebarList,
-      el("h2", { textContent: "Artifacts" }),
+      artifactHeading,
       artifactList,
       artifactListEmpty,
     ]),
     backdrop,
     mainEl,
   );
+
+  artifactNavigator = createArtifactTreeNavigator(artifactList, {
+    onOpen: (path) => void openArtifact(path),
+  });
 
   let modeState = initialModeState();
   // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
@@ -923,6 +954,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     } catch (err) {
       loading = false;
       currentArtifact = null;
+      artifactNavigator.setCurrent(null, { reveal: false });
       setEmpty(
         "This artifact couldn't be opened.",
         el("p", { className: "glosa-empty-hint", textContent: err?.message ?? "Try again, or pick another artifact." }),
@@ -934,7 +966,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     loading = false;
     setNavOpen(false); // compact: picking an artifact closes the drawer and returns to reading
     contentEl.removeAttribute("data-path");
-    markCurrent(artifactList, path);
+    artifactNavigator.setCurrent(path);
     renderModeBar();
     renderContent();
     renderHistory(); // the open pane, if any, should reflect the newly opened artifact
@@ -942,16 +974,9 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   async function refreshArtifactList() {
     const artifacts = await dataAccess.getArtifacts(currentSlug);
-    artifactList.textContent = "";
     artifactListEmpty.hidden = artifacts.length > 0;
-    for (const a of artifacts) {
-      artifactList.append(
-        el("li", {}, [
-          el("button", { type: "button", textContent: a.path, "data-key": a.path, onClick: () => openArtifact(a.path) }),
-        ]),
-      );
-    }
-    markCurrent(artifactList, currentArtifact?.source_path ?? null);
+    artifactNavigator.setArtifacts(artifacts);
+    artifactNavigator.setCurrent(currentArtifact?.source_path ?? null, { reveal: false });
     return artifacts;
   }
 
@@ -1000,6 +1025,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   async function selectWorkspace(slug) {
     currentSlug = slug;
     currentArtifact = null;
+    artifactNavigator.setWorkspace(slug);
     composer = null;
     emptyEl.textContent = ""; // drop any stale per-artifact error so the default teaching state returns
     stopClassFViewer?.();
@@ -1063,5 +1089,6 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     stopStream?.();
     stopClassFViewer?.();
     stopConversation?.();
+    artifactNavigator.destroy();
   };
 }
