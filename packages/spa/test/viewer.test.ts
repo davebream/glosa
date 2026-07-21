@@ -154,6 +154,16 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       getDiff: async () => ({ from: "a", to: "b", hunks: [] }),
       restore: async () => ({ path: "notes.md", restored_to: "a", checkpoint_id: "a", source_sha256: "sha-1" }),
       openStream: () => () => {}, // returns a no-op stop()
+      // P4.1 — the class-F viewer's data-access surface. Not exercised by this file's own tests
+      // (none of them open a class-F artifact); stubbed only so mountApp's `dataAccess` shape,
+      // inferred from the real createDataAccess() default, is satisfied.
+      mintClassFCapability: async () => ({ url: "http://127.0.0.1:4647/doc/tok/x.html", nonce: "n", expires_in_s: 600 }),
+      // P4.2 — the conversation pane's data-access surface. Not exercised by every test in this
+      // file (only the "Conversation" toggle test below opens it); stubbed here so mountApp's
+      // `dataAccess` shape, inferred from the real createDataAccess() default, is satisfied
+      // whenever the toggle IS clicked.
+      openTranscriptStream: () => () => {}, // returns a no-op stop()
+      sendComposerMessage: async () => ({ accepted: true, delivered: false }),
       ...overrides,
     };
   }
@@ -234,5 +244,33 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(record.body).toBe("tighten this");
     expect(record.intent).toBe("content");
     expect(record.target.quote.exact).toBe("Title");
+  });
+
+  test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const openedForSlugs: string[] = [];
+    const da = fakeDataAccess({
+      openTranscriptStream: (slug: string) => {
+        openedForSlugs.push(slug);
+        return () => {};
+      },
+    });
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const toggle = root.querySelector(".glosa-conversation-toggle") as any;
+    const pane = root.querySelector(".glosa-conversation") as any;
+    expect(pane.hidden).toBe(true);
+
+    toggle.click();
+    expect(pane.hidden).toBe(false);
+    expect(openedForSlugs).toEqual(["ws-1"]);
+    // conversation.js's own mount renders its composer/status scaffolding into the pane.
+    expect(pane.querySelector(".glosa-conv-composer-input")).not.toBeNull();
+
+    toggle.click();
+    expect(pane.hidden).toBe(true);
   });
 });

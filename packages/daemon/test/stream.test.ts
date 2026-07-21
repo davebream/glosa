@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiFetch, type ApiContext } from "../src/http.ts";
+import { CapabilityStore } from "../src/capability.ts";
 import { createJournalStreamResponse } from "../src/stream.ts";
 import { WorkspaceBus } from "../src/bus/bus.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
@@ -59,6 +60,7 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
     workspaceIndex,
     sessionRegistry,
     getWorkspaceBus: (r) => busRegistry.get(r),
+    capabilityStore: new CapabilityStore(),
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: createApiFetch(ctx), idleTimeout: 2 });
   return { home, root, port, server, busRegistry, slug: entry.slug };

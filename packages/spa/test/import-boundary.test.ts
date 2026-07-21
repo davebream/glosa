@@ -30,6 +30,8 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
     ["../src/viewer.js", read("../src/viewer.js")],
     ["../src/annotate.js", read("../src/annotate.js")],
     ["../src/history.js", read("../src/history.js")],
+    ["../src/classf-viewer.js", read("../src/classf-viewer.js")],
+    ["../src/conversation.js", read("../src/conversation.js")],
   ])("%s has no direct fetch(...) call", (_name, source) => {
     // Strip comments first so a docstring that merely MENTIONS "fetch(" (there are several,
     // explaining the invariant this test enforces) can't produce a false positive.
@@ -42,15 +44,29 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
       .replace(/\/\/.*$/gm, "")
       .replace(/\/\*[\s\S]*?\*\//g, "");
     expect(FETCH_REFERENCE_RE.test(withoutComments)).toBe(true);
-    for (const src of [read("../src/viewer.js"), read("../src/annotate.js"), read("../src/history.js")]) {
+    for (const src of [
+      read("../src/viewer.js"),
+      read("../src/annotate.js"),
+      read("../src/history.js"),
+      read("../src/classf-viewer.js"),
+      read("../src/conversation.js"),
+    ]) {
       const stripped = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
       expect(FETCH_REFERENCE_RE.test(stripped)).toBe(false);
     }
   });
 });
 
-describe("viewer.js/annotate.js/history.js import only from data-access.js, annotate.js, history.js, and vendor/ — never a raw daemon URL helper", () => {
-  const ALLOWED_RELATIVE_IMPORTS = new Set(["./data-access.js", "./annotate.js", "./history.js", "./vendor/idiomorph.js", "./vendor/diff2html.js"]);
+describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js import only from data-access.js and each other's sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
+  const ALLOWED_RELATIVE_IMPORTS = new Set([
+    "./data-access.js",
+    "./annotate.js",
+    "./history.js",
+    "./classf-viewer.js",
+    "./conversation.js",
+    "./vendor/idiomorph.js",
+    "./vendor/diff2html.js",
+  ]);
 
   test("viewer.js's local imports are exactly the sanctioned set", () => {
     const source = read("../src/viewer.js");
@@ -70,5 +86,18 @@ describe("viewer.js/annotate.js/history.js import only from data-access.js, anno
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
     const relative = specifiers.filter((s) => s.startsWith("./") || s.startsWith("../"));
     for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
+  });
+
+  test("classf-viewer.js's local imports are exactly the sanctioned set (data-access.js only)", () => {
+    const source = read("../src/classf-viewer.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    const relative = specifiers.filter((s) => s.startsWith("./") || s.startsWith("../"));
+    for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
+  });
+
+  test("conversation.js imports nothing (self-contained — no daemon access of its own; dataAccess is caller-injected)", () => {
+    const source = read("../src/conversation.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
+    expect(specifiers).toHaveLength(0);
   });
 });

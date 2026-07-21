@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiFetch, type ApiContext } from "../src/http.ts";
+import { CapabilityStore } from "../src/capability.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
@@ -53,6 +54,7 @@ describe("A1 §5 route catalog", () => {
       workspaceIndex,
       sessionRegistry,
       getWorkspaceBus: (r) => busRegistry.get(r),
+      capabilityStore: new CapabilityStore(),
     };
     fetchFn = createApiFetch(ctx);
   });
@@ -152,7 +154,10 @@ describe("A1 §5 route catalog", () => {
     writeFileSync(join(root, "page.html"), "<p>hi</p>");
     const res = await fetchFn(req(`/w/${slug}/artifacts/page.html`));
     const body = await res.json();
-    expect(body).toEqual({ source_path: "page.html", source_sha256: expect.any(String), class: "F" });
+    // objectContaining, not toEqual: this pins the fields the route guarantees TODAY without
+    // locking the shape as final — a future `manifest_path` addition (P6.1, A1 §5.4's own example
+    // response includes it) must not fail this test.
+    expect(body).toEqual(expect.objectContaining({ source_path: "page.html", source_sha256: expect.any(String), class: "F" }));
     expect(body.content).toBeUndefined();
   });
 
@@ -883,28 +888,35 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(404);
   });
 
-  // --- Remaining route SHELLS (5.8, 5.10, 5.12) ---
-
-  test("GET /w/:slug/transcript/stream → 501 not-implemented (P4.2)", async () => {
+  // P4.2 replaced this route's shell with the real thing (transcript/stream.ts) — full mechanics
+  // (auth pipeline, confinement, normalized events, resync, fail-soft) live in the dedicated
+  // packages/daemon/test/transcript/stream.test.ts; this file only proves the shared pipeline
+  // still reaches the route and that "no session registered" is a 404, not a 501.
+  test("GET /w/:slug/transcript/stream on a workspace with no registered session → 404 (P4.2 — no longer a 501 shell)", async () => {
     const res = await fetchFn(req(`/w/${slug}/transcript/stream`));
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(404);
   });
+
+  // --- Remaining route SHELLS (5.10) ---
 
   test("POST /w/:slug/inbox/:id/response → 501 not-implemented (F12)", async () => {
     const res = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-1/response`, { method: "POST" }));
     expect(res.status).toBe(501);
   });
 
-  test("GET /w/:slug/capability/:artifactPath → 501 not-implemented (P4.1)", async () => {
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`));
-    expect(res.status).toBe(501);
-  });
+  // --- GET /w/:slug/capability/:artifactPath (5.12/§7, P4.1) — the class-F capability mint ---
+
   test("GET /w/:slug/capability/:artifactPath with missing Origin → 403 (state-changing route class)", async () => {
-    const res = await fetchFn(req(`/w/${slug}/capability/notes.md`));
+    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`));
     expect(res.status).toBe(403);
   });
 
-  test("GET /w/:slug/capability/:artifactPath via a symlink escape → 400 invalid-path, never reaches the 501 stub (review fix #3)", async () => {
+  test("GET /w/:slug/capability/:artifactPath with a FOREIGN Origin → 403 — the mint shares the pipeline, not pinned per-route", async () => {
+    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`, { headers: { Origin: "http://evil.example.com" } }));
+    expect(res.status).toBe(403);
+  });
+
+  test("GET /w/:slug/capability/:artifactPath via a symlink escape → 400 invalid-path, never reaches the mint (review fix #3)", async () => {
     const outside = mkdtempSync(join(tmpdir(), "glosa-routes-outside-"));
     writeFileSync(join(outside, "secret.html"), "<p>nope</p>");
     symlinkSync(join(outside, "secret.html"), join(root, "cap-escape.html"));
@@ -912,6 +924,39 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).type).toContain("invalid-path");
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  test("GET /w/:slug/capability/:artifactPath on a class-R (.md) artifact → 400 invalid-path — class R never goes through this listener (A1 §7)", async () => {
+    writeFileSync(join(root, "notes.md"), "# hello\n");
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`));
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("invalid-path");
+  });
+
+  test("GET /w/:slug/capability/:artifactPath on a confined-but-untracked path → 404, not 400 (§6 step 4)", async () => {
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/does-not-exist.html`));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /w/:slug/capability/:artifactPath on a tracked class-F artifact → 200 with {url, nonce, expires_in_s}", async () => {
+    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.url.startsWith(`http://127.0.0.1:${ctx.classFPort}/doc/`)).toBe(true);
+    expect(body.url).toMatch(/\/doc\/[0-9a-f]{64}\/speech-notes\.html$/);
+    expect(typeof body.nonce).toBe("string");
+    expect(body.nonce).toMatch(/^[0-9a-f]{64}$/); // 256-bit hex
+    expect(body.expires_in_s).toBe(600);
+  });
+
+  test("GET /w/:slug/capability/:artifactPath mints a FRESH token+nonce on every call — never reused across mints", async () => {
+    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
+    const res1 = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
+    const res2 = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
+    const [body1, body2] = await Promise.all([res1.json(), res2.json()]);
+    expect(body1.url).not.toBe(body2.url);
+    expect(body1.nonce).not.toBe(body2.nonce);
   });
 
   // --- Pipeline gates (A1 §1/§3/§4) still hold through the NEW routes ---

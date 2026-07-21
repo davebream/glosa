@@ -58,6 +58,23 @@ describe("createDataAccess — request shape", () => {
     expect(calls[0]).toBe("/w/ws/artifacts/a.md");
   });
 
+  test("mintClassFCapability GETs /w/:slug/capability/:artifactPath and URL-encodes the path", async () => {
+    const calls: string[] = [];
+    const fetchFn = async (path: string) => {
+      calls.push(path);
+      return jsonResponse(200, { url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n", expires_in_s: 600 });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage() });
+
+    const result = await da.mintClassFCapability("ws", "output/sermon/speech notes.html");
+
+    // encodePathSegments encodes each path segment separately (preserving the `/` separators) —
+    // only the segment containing a space gets percent-encoded.
+    expect(calls[0]).toBe("/w/ws/capability/output/sermon/speech%20notes.html");
+    expect(result.url).toBe("http://127.0.0.1:4647/doc/tok/notes.html");
+    expect(result.nonce).toBe("n");
+  });
+
   test("postAnnotation POSTs JSON to /w/:slug/annotations", async () => {
     let captured: { path: string; init: RequestInit } | null = null;
     const fetchFn = async (path: string, init: RequestInit) => {

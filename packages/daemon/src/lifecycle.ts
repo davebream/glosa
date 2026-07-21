@@ -20,6 +20,7 @@ import { createApiFetch, createClassFFetch } from "./http.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { internalErrorResponse } from "./problem.ts";
 import { loadToken } from "./token.ts";
+import { CapabilityStore } from "./capability.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
@@ -85,6 +86,11 @@ export async function bootDaemon(): Promise<never> {
   const startedAt = new Date().toISOString();
   const token = loadToken(home);
   const backend = buildBackend(home);
+  // ONE store, shared by both listeners (P4.1, A1 §7): a token minted on the SPA/API origin
+  // (createApiFetch) must be lookup-able by the class-F origin (createClassFFetch) — two
+  // independent stores would mean every capability 404s on the very listener that's supposed to
+  // serve it.
+  const capabilityStore = new CapabilityStore();
 
   const apiFetch = createApiFetch({
     port,
@@ -95,6 +101,7 @@ export async function bootDaemon(): Promise<never> {
     workspaceIndex: backend.workspaceIndex,
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (root) => backend.busRegistry.get(root),
+    capabilityStore,
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 
@@ -119,7 +126,7 @@ export async function bootDaemon(): Promise<never> {
   };
   await acquireLockOrExit(home, lockFile, record, server);
 
-  const classFFetch = createClassFFetch({ port: classFPort, spaPort: port });
+  const classFFetch = createClassFFetch({ port: classFPort, spaPort: port, capabilityStore });
   const classFServer = await bindClassFOrExit(
     home,
     classFPort,

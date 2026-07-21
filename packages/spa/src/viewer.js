@@ -8,6 +8,8 @@ import { createDataAccess } from "./data-access.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { mountHistoryPane } from "./history.js";
+import { mountClassFViewer } from "./classf-viewer.js";
+import { mountConversationPane } from "./conversation.js";
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -80,11 +82,20 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
   const editArea = el("textarea", { className: "glosa-edit-area", hidden: true });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
   const marginEl = el("aside", { className: "glosa-margin" });
+  // P4.1: the class-F (foreign HTML) viewer's mount point — a sandboxed iframe lives inside this,
+  // never `innerHTML`-set with anything artifact-derived (classf-viewer.js owns everything under
+  // it). Hidden/shown opposite `contentEl` depending on the open artifact's class.
+  const classFEl = el("div", { className: "glosa-classf" });
   // P3.5: the checkpoint/diff history pane (A6 §F31) — hidden until the human opens it, and
   // (re)mounted by history.js's own `mountHistoryPane` whenever it's open and the artifact
   // changes, rather than this module reaching into checkpoints/diff state itself.
   const historyToggle = el("button", { className: "glosa-history-toggle", type: "button", textContent: "History" });
   const historyEl = el("div", { className: "glosa-history", hidden: true });
+  // P4.2: the conversation-mirror pane (R6/F32) — workspace-scoped (not artifact-scoped, unlike
+  // history), hidden until the human opens it. Mounted/remounted by conversation.js's own
+  // `mountConversationPane` on open and on every workspace switch, same DI shape as history.js.
+  const conversationToggle = el("button", { className: "glosa-conversation-toggle", type: "button", textContent: "Conversation" });
+  const conversationEl = el("div", { className: "glosa-conversation", hidden: true });
 
   root.append(
     el("nav", { className: "glosa-sidebar" }, [
@@ -93,14 +104,33 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
       el("h2", { textContent: "Artifacts" }),
       artifactList,
     ]),
-    el("main", { className: "glosa-main" }, [modeBar, historyToggle, contentEl, editArea, saveButton, marginEl, historyEl]),
+    el("main", { className: "glosa-main" }, [
+      modeBar,
+      historyToggle,
+      conversationToggle,
+      contentEl,
+      classFEl,
+      editArea,
+      saveButton,
+      marginEl,
+      historyEl,
+      conversationEl,
+    ]),
   );
 
   let modeState = initialModeState();
   let currentSlug = initialSlug ?? null;
-  let currentArtifact = null; // {path, content, rendered_html, source_sha256}
+  let currentArtifact = null; // {path, content, rendered_html, source_sha256, class, derived_from?}
   const annotationsByPath = new Map(); // client-remembered per-session (no GET-annotations route yet)
   let stopStream = null;
+  let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
+
+  // R6/A5 §F11: class-F Edit follows the generic derived-from edge — enabled only when the
+  // artifact metadata carries a `derived_from` path (supplied by a future content adapter, P6.1;
+  // the core itself never invents one). With no edge, class F is opaque: Preview + Annotate only.
+  function canEdit(artifact) {
+    return !artifact || artifact.class !== "F" || Boolean(artifact.derived_from);
+  }
 
   function renderModeBar() {
     modeBar.textContent = "";
@@ -112,19 +142,34 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
         onClick: () => setMode(mode),
       });
       btn.setAttribute("aria-pressed", String(mode === modeState.mode));
+      if (mode === "edit" && !canEdit(currentArtifact)) btn.disabled = true;
       modeBar.append(btn);
     }
   }
 
   function renderContent() {
-    const isEdit = modeState.mode === "edit";
+    const isClassF = currentArtifact?.class === "F";
+    const isEdit = modeState.mode === "edit" && !isClassF;
     editArea.hidden = !isEdit;
     saveButton.hidden = !isEdit;
-    contentEl.hidden = isEdit;
+    contentEl.hidden = isEdit || isClassF;
+    classFEl.hidden = !isClassF;
 
     if (!currentArtifact) {
       contentEl.textContent = "select an artifact";
       return;
+    }
+    if (isClassF) {
+      mountClassFArtifact();
+      renderMargin();
+      return;
+    }
+    // Leaving class F (a different artifact was opened) tears down any still-mounted iframe — it
+    // must not keep running invisibly behind `classFEl.hidden`.
+    if (stopClassFViewer) {
+      stopClassFViewer();
+      stopClassFViewer = null;
+      classFEl.removeAttribute("data-path");
     }
     if (isEdit) {
       editArea.value = currentArtifact.content ?? "";
@@ -139,6 +184,37 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
     renderMargin();
   }
 
+  /** Mounts (or re-mounts, on a path change) the class-F viewer — P4.1. A fresh capability is
+   * minted on every mount, per A1 §7's "fresh mint per iframe open/reload": `force` (used by
+   * refreshCurrentArtifact when SSE reports the source changed) re-mints even for the SAME path,
+   * discarding the old iframe rather than trying to reuse it. */
+  function mountClassFArtifact(force = false) {
+    if (!force && classFEl.getAttribute("data-path") === currentArtifact.source_path && stopClassFViewer) return;
+    stopClassFViewer?.();
+    classFEl.setAttribute("data-path", currentArtifact.source_path);
+    stopClassFViewer = mountClassFViewer(classFEl, {
+      dataAccess,
+      slug: currentSlug,
+      artifactPath: currentArtifact.source_path,
+      onSelection: (target) => {
+        if (modeState.mode !== "annotate") return;
+        void postClassFAnnotation(target);
+      },
+    });
+  }
+
+  async function postClassFAnnotation(target) {
+    if (!currentSlug || !currentArtifact) return;
+    const body = typeof window !== "undefined" && window.prompt ? window.prompt("Annotation:", "") : "";
+    if (!body) return;
+    const record = { body, intent: "content", target };
+    await dataAccess.postAnnotation(currentSlug, record);
+    const list = annotationsByPath.get(currentArtifact.source_path) ?? [];
+    list.push(record);
+    annotationsByPath.set(currentArtifact.source_path, list);
+    renderMargin();
+  }
+
   function renderMargin() {
     marginEl.textContent = "";
     if (modeState.mode !== "annotate" || !currentArtifact) return;
@@ -147,6 +223,14 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
   }
 
   function setMode(mode) {
+    // Class-F Edit follows the derived-from edge (R6/R7) rather than switching THIS artifact into
+    // edit mode: with an edge, open the source (class-R) artifact and edit that; with none, Edit
+    // is disabled (renderModeBar already grays the button out) — a stray click is a no-op.
+    if (mode === "edit" && currentArtifact?.class === "F") {
+      if (currentArtifact.derived_from) void openArtifact(currentArtifact.derived_from).then(() => setMode("edit"));
+      return;
+    }
+
     let next = modeReducer(modeState, { type: "set_mode", mode });
     if (next.blocked) {
       const discard = typeof window !== "undefined" && window.confirm ? window.confirm("Discard unsaved edits?") : true;
@@ -210,6 +294,25 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
     renderHistory();
   });
 
+  // P4.2 — workspace-scoped (not artifact-scoped, unlike history): re-mounted on open and on every
+  // workspace switch (renderConversation is called from selectWorkspace below), never per-artifact.
+  let conversationVisible = false;
+  let stopConversation = null;
+
+  function renderConversation() {
+    stopConversation?.();
+    stopConversation = null;
+    if (!conversationVisible || !currentSlug) return;
+    stopConversation = mountConversationPane(conversationEl, { dataAccess, slug: currentSlug });
+  }
+
+  conversationToggle.addEventListener("click", () => {
+    conversationVisible = !conversationVisible;
+    conversationEl.hidden = !conversationVisible;
+    conversationToggle.setAttribute("aria-pressed", String(conversationVisible));
+    renderConversation();
+  });
+
   async function openArtifact(path) {
     currentArtifact = await dataAccess.getArtifact(currentSlug, path, { render: "html" });
     contentEl.removeAttribute("data-path");
@@ -232,6 +335,12 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(currentSlug, currentArtifact.source_path, { render: "html" });
     currentArtifact = fresh;
+    if (fresh.class === "F") {
+      // A1 §7: "fresh mint per iframe open/reload" — an SSE-driven re-render discards the old
+      // iframe and mints a brand new capability rather than trying to reuse the expiring one.
+      mountClassFArtifact(true);
+      return;
+    }
     if (modeState.mode !== "edit") morphArtifactContent(contentEl, fresh.rendered_html ?? "");
     contentEl.setAttribute("data-path", currentArtifact.source_path);
   }
@@ -254,9 +363,13 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
   async function selectWorkspace(slug) {
     currentSlug = slug;
     currentArtifact = null;
+    stopClassFViewer?.();
+    stopClassFViewer = null;
+    classFEl.removeAttribute("data-path");
     await refreshArtifactList();
     renderContent();
     startStream();
+    renderConversation(); // the open pane, if any, should follow the newly selected workspace
   }
 
   async function refreshWorkspaces() {
@@ -281,5 +394,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
 
   return () => {
     stopStream?.();
+    stopClassFViewer?.();
+    stopConversation?.();
   };
 }

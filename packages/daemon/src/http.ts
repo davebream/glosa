@@ -4,15 +4,16 @@
 //
 // P3.1 fills in the full A1 §5 route catalog on top of the P1.3 pipeline: every `/w/:slug/...`
 // route resolves its slug through `ctx.workspaceIndex` (unknown slug → 404) before touching
-// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Three
-// routes (the transcript SSE stream, the class-F capability mint, the attention-response route)
-// are still SHELLS — the auth/contract/confinement pipeline runs for real, but the body is a
-// `// Pxx:` placeholder until their owning task lands (see `handleNotImplemented`/
-// `handleCapabilityShell`). P3.2 replaced the fourth shell, the artifact/journal SSE stream
-// (§5.5), with the real thing — see `handleStream`/stream.ts.
-import { existsSync, readFileSync, statSync } from "node:fs";
+// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Two
+// routes (the transcript SSE stream, the attention-response route) are still SHELLS — the
+// auth/contract/confinement pipeline runs for real, but the body is a `// Pxx:` placeholder until
+// their owning task lands (see `handleNotImplemented`). P3.2 replaced one shell, the artifact/
+// journal SSE stream (§5.5), with the real thing (`handleStream`/stream.ts); P4.1 replaced
+// another, the class-F capability mint (`handleMintCapability`) plus the class-F listener's own
+// serve route (`createClassFFetch`/classf-serve.ts).
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
@@ -26,6 +27,10 @@ import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { listCheckpoints } from "./checkpoints.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { createJournalStreamResponse } from "./stream.ts";
+import { CAPABILITY_TTL_MS, CapabilityStore } from "./capability.ts";
+import { serveClassFDocument } from "./classf-serve.ts";
+import { confineTranscriptPath } from "./transcript/root.ts";
+import { createTranscriptStreamResponse } from "./transcript/stream.ts";
 import type { WorkspaceIndex } from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
@@ -64,6 +69,10 @@ const SPA_ASSETS: Record<string, string> = {
   "history.js": "text/javascript; charset=utf-8",
   "vendor/diff2html.js": "text/javascript; charset=utf-8",
   "vendor/diff2html.min.css": "text/css; charset=utf-8",
+  // P4.1 addition — the class-F viewer's iframe/handshake/message-validation logic.
+  "classf-viewer.js": "text/javascript; charset=utf-8",
+  // P4.2 addition — the read-only conversation mirror + out-of-band composer (R6/F32).
+  "conversation.js": "text/javascript; charset=utf-8",
 };
 
 export interface ApiContext {
@@ -78,6 +87,10 @@ export interface ApiContext {
    * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
    * construct their own `WorkspaceBus`. */
   getWorkspaceBus: (canonicalRoot: string) => WorkspaceBus;
+  /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
+   * here (`GET /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
+   * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
+  capabilityStore: CapabilityStore;
 }
 
 /** The handshake body is a superset of P1.2's `HandshakeResponse` (D2): keeps
@@ -298,6 +311,12 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
   if (cls === "F") {
     // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
     // is the class-F capability listener's job (P4.1).
+    // P6.1: A1 §5.4's `manifest_path` field is intentionally omitted for now — the chunk manifest
+    // (`chunks-<ts>/manifest.json`) is domain provenance supplied by a CONTENT ADAPTER, and the
+    // core ships with zero adapters (invariant #1). When the adapter-registration protocol (P6.1)
+    // lands, the adapter resolves `manifest_path` here and the anchoring resolver (`anchoring.ts`,
+    // A5 §F11) gets wired into the annotation lifecycle (see handleCreateAnnotation below). The
+    // response test uses `objectContaining` so adding the field then is non-breaking.
     return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "F" });
   }
 
@@ -435,7 +454,12 @@ function generateAnnotationId(): string {
 
 /** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
  * `WorkspaceBus.createEntry` — honest provenance only: this route creates the entry, it does NOT
- * resolve its anchor (that's P3.4's job, A5 §F10/§F11). */
+ * resolve its anchor (the resolver is `anchoring.ts` / P3.4, A5 §F10/§F11).
+ * OWED (P6.1 / a dedicated wiring step): `anchoring.ts`'s `resolve()` is BUILT + unit-tested but not
+ * yet CALLED by any live route — annotations are persisted un-anchored. Wiring it in needs the
+ * artifact context: class-R needs the rendered HTML + captured hash (available now); class-F needs
+ * the chunk manifest from a content adapter (P6.1). The end-to-end resolution (annotate → resolve →
+ * source_range/pipeline_feedback/orphaned → route) is exercised by the T8 manual rehearsal (P5.4). */
 async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -661,11 +685,9 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
   return Response.json({ bound: true, session_id: sessionId });
 }
 
-/** Shared body for three of the four route SHELLS (A1 §5.5/§5.8/§5.10) — their real backends land
- * in later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
- * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes.
- * `capability/:artifactPath` (§5.12) has its own variant below — it's the one shell with a
- * `:path`-shaped param, so it confines that param too rather than skipping straight to 501. */
+/** Shared body for the two remaining route SHELLS (A1 §5.8/§5.10) — their real backends land in
+ * later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
+ * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes. */
 function handleNotImplemented(ctx: ApiContext, slug: string, pathname: string, note: string): Response {
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
@@ -685,18 +707,111 @@ async function handleStream(ctx: ApiContext, slug: string, req: Request, server:
   return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server);
 }
 
-/** `GET /w/:slug/capability/:artifactPath` shell (A1 §5.12) — P4.1 owns the real token mint, but
- * `artifactPath` is confined here now (traversal/symlink-escape → 400) so P4.1 builds on a real
- * gate instead of a bare stub, and so the confinement attack suite already covers this route. */
-function handleCapabilityShell(ctx: ApiContext, slug: string, artifactPath: string, pathname: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+/** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — resolves the slug, then the LIVE
+ * session bound to it via the registry (never a cwd->slug guess, per A2 §F16's "Source
+ * (Authoritative)"); no session at all, or none with a known `transcript_path`, is 404 "no
+ * session registered" (A1 §5.8: "the SPA shows 'no session registered' rather than treating this
+ * as a stream error"). Several live sessions with equal routing precedence (`forWorkspace`'s own
+ * "never guess" contract) aren't disambiguated here — v1 has no session-picker wiring for the
+ * conversation mirror, so this just takes the first; a future picker is additive. `transcript_
+ * path` is confined under `$CLAUDE_CONFIG_DIR` (A2 §F16/A6 §F30's doctor check) BEFORE this route
+ * ever opens it — outside that root is refused (400), never tailed. */
+function handleTranscriptStream(ctx: ApiContext, slug: string, req: Request, server: BunServer | undefined): Response {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
 
-  const confineResult = confinePath(resolved.entry.canonical_path, artifactPath);
+  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).filter((s) => s.transcript_path);
+  if (sessions.length === 0) {
+    return problem(404, "not-found", "no session registered", undefined, url.pathname);
+  }
+  const transcriptPath = sessions[0]!.transcript_path as string;
+
+  const confined = confineTranscriptPath(transcriptPath);
+  if (!confined.ok) {
+    return problem(400, "invalid-path", "transcript path is outside the allowed CLAUDE_CONFIG_DIR root", undefined, url.pathname);
+  }
+
+  return createTranscriptStreamResponse(confined.realPath, req, server);
+}
+
+/** `POST /w/:slug/transcript/compose` — P4.2 addition, not in A1 §5 (same footing as P3.3's `PUT
+ * /w/:slug/artifacts/:path`): the conversation viewer's out-of-band composer (F32/R6). Sends a
+ * NEW user message to the session bound to this workspace WITHOUT ever touching the transcript
+ * file — the normalizer above is read-only by construction, and writing the JSONL transcript
+ * directly here would both violate that and race Claude Code's own writer. Real delivery is an
+ * `AgentProvider` concern (R7's `deliver(session, entry)`, e.g. a Channel/asyncRewake/Stop-cap
+ * send per A2) that doesn't exist yet — P4.3/P4.4's scope — so this route accepts the message and
+ * reports `delivered: false` rather than fabricating success. */
+async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const text = (body as Record<string, unknown> | null)?.text;
+  if (typeof text !== "string" || text.length === 0) {
+    return problem(400, "validation-failed", "text is required", undefined, url.pathname);
+  }
+
+  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path);
+  if (sessions.length === 0) {
+    return problem(404, "not-found", "no session registered", undefined, url.pathname);
+  }
+
+  // P4.3: real delivery routes `text` through the resolved session's AgentProvider — this is the
+  // seam that fills in once that interface lands. Until then: accepted, not delivered.
+  return Response.json({ accepted: true, delivered: false }, { status: 202 });
+}
+
+/** `GET /w/:slug/capability/:artifactPath` (A1 §5.12/§7, P4.1) — mints a fresh, directory-scoped
+ * capability for a class-F artifact. Runs the identical slug/confinePath/tracked-membership
+ * pipeline handleGetArtifact does (A1 §6) so a mint request is held to the same bar before it's
+ * ever allowed to hand one out; a confined-but-untracked path is 404, same failure class as every
+ * other route (§6 step 4). A capability request for a class-R path is refused — A1 §7 is explicit
+ * that "class R is served in-band via §5.4, never through this listener". */
+function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  const confineResult = confinePath(root, artifactPath);
   if (!confineResult.ok) {
     return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, pathname);
   }
-  return problem(501, "not-implemented", "class-F capability mint — P4.1", undefined, pathname);
+
+  const relNfc = artifactPath
+    .split("/")
+    .map((segment) => segment.normalize("NFC"))
+    .join("/");
+  const { tracked } = resolveMatchedFiles(root);
+  const match = tracked.find((f) => f.path === relNfc);
+  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, pathname);
+
+  if (classifyArtifactPath(match.path) !== "F") {
+    return problem(400, "invalid-path", "capability minting is only for class-F artifacts", undefined, pathname);
+  }
+
+  // realpath'd at MINT time, not at every serve — classf-serve.ts's confinePath call re-resolves
+  // the requested sibling against this fixed real directory on every single request (A1 §7).
+  const artifactDirRealPath = dirname(realpathSync(match.rawPath));
+  const artifactBasename = basename(match.rawPath);
+  const minted = ctx.capabilityStore.mint({ slug, artifactDirRealPath, artifactBasename });
+
+  return Response.json({
+    url: `http://127.0.0.1:${ctx.classFPort}/doc/${minted.token}/${artifactBasename}`,
+    // Not one of A1 §5.12's two documented example fields — required by A3 §2's MessageChannel
+    // handshake (the bridge validates the parent's `glosa:init` message against this exact
+    // value). A1 itself defers the nonce/postMessage schema to F03/F18 (its own "out of scope"
+    // footer), so this reconciles the two: A1's route/field names, A3's nonce requirement.
+    nonce: minted.nonce,
+    expires_in_s: CAPABILITY_TTL_MS / 1000,
+  });
 }
 
 function matchApiRoute(ctx: ApiContext, method: string, pathname: string): RouteMatch | null {
@@ -736,13 +851,16 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: (req, server) => handleStream(ctx, slug, req, server) };
   }
-  // P4.2: conversation-mirror SSE stream.
+  // P4.2: conversation-mirror SSE stream (A1 §5.8/§8, A2 §F16).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/stream$/))) {
     const slug = m[1] as string;
-    return {
-      routeClass: "authed-read",
-      handle: () => handleNotImplemented(ctx, slug, pathname, "transcript mirror SSE stream — P4.2"),
-    };
+    return { routeClass: "authed-read", handle: (req, server) => handleTranscriptStream(ctx, slug, req, server) };
+  }
+  // P4.2: the conversation viewer's out-of-band composer (F32/R6) — not in A1 §5, see
+  // handleComposerSend's own docstring.
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/compose$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleComposerSend(ctx, slug, req) };
   }
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
     const slug = m[1] as string;
@@ -782,7 +900,7 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/capability\/(.+)$/))) {
     const slug = m[1] as string;
     const artifactPath = m[2] as string;
-    return { routeClass: "state-changing", handle: () => handleCapabilityShell(ctx, slug, artifactPath, pathname) };
+    return { routeClass: "state-changing", handle: () => handleMintCapability(ctx, slug, artifactPath, pathname) };
   }
 
   return null;
@@ -863,15 +981,32 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
   };
 }
 
-export function createClassFFetch(ctx: { port: number; spaPort: number }): (req: Request) => Promise<Response> {
+/** The class-F listener's ONLY route: `GET /doc/:token/<path...>`. Never accepts a Bearer — the
+ * capability token IS the auth (A1 §7, A3 §1) — so this pipeline is deliberately just Host-check
+ * → route parse → `serveClassFDocument`, none of the SPA/API listener's Origin/Bearer/contract
+ * machinery. `capabilityStore` is the SAME instance `ApiContext.capabilityStore` mints into
+ * (lifecycle.ts wires both fetch handlers from one store) — a token minted on the SPA origin must
+ * be resolvable here. */
+export function createClassFFetch(ctx: {
+  port: number;
+  spaPort: number;
+  capabilityStore: CapabilityStore;
+}): (req: Request) => Promise<Response> {
   const csp = classFCspHeaders(ctx.spaPort);
 
   return async (req) => {
     try {
       if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
-      // P4.1: capability lookup + realpath-confined sibling serving + bridge injection. Every
-      // path 404s until then — the pipeline (Host check + CSP) is what this task proves.
-      return withHeaders(new Response("not found", { status: 404 }), csp);
+
+      const url = new URL(req.url);
+      const routeMatch = url.pathname.match(/^\/doc\/([^/]+)\/(.+)$/);
+      if (!routeMatch) return withHeaders(new Response("not found", { status: 404 }), csp);
+      const token = routeMatch[1] as string;
+      const path = routeMatch[2] as string;
+
+      const res = serveClassFDocument(ctx.capabilityStore, token, path);
+      if (!res) return withHeaders(new Response("not found", { status: 404 }), csp);
+      return withHeaders(res, csp);
     } catch {
       return internalErrorResponse(csp);
     }

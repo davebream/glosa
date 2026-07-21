@@ -84,19 +84,19 @@ export function computeBackoffMs(attempt, rand = Math.random) {
   return Math.max(0, Math.round(raw + jitter));
 }
 
-/** Opens `GET /w/:slug/stream` and keeps it open, reconnecting with backoff on any drop.
- * `Last-Event-ID` carries the last cursor seen so a reconnect resumes (§8.2 case 2/3) instead of
- * re-snapshotting. `onEvent({event, data, id})` fires for every non-heartbeat frame (`data` is
- * JSON-parsed when present). `onReconnect()` fires once a DROPPED connection is successfully
- * re-established — never on the very first connect. Artifact-change pushes aren't journaled
- * (P3.2's own review note), so a caller's `onReconnect` MUST re-fetch whatever state might have
- * changed while disconnected (the artifact list, the open artifact) rather than trust that live
- * events alone will catch it up. Returns a `stop()` function; deps are all injectable for testing
+/** Shared reconnect-loop core behind `openStream`/`openTranscriptStream` (A1 §8.2's algorithm is
+ * identical for both cursor spaces — "same wire mechanics" — the only thing that differs between
+ * the two callers is which path they open). Opens `GET <path>` and keeps it open, reconnecting
+ * with backoff on any drop. `Last-Event-ID` carries the last cursor seen so a reconnect resumes
+ * (§8.2 case 2/3) instead of re-snapshotting. `onEvent({event, data, id})` fires for every non-
+ * heartbeat frame (`data` is JSON-parsed when present) — deliberately generic over `event` type,
+ * so a caller-specific event name (`journal` vs `transcript`, `mirror_unavailable`) never has to be
+ * known here. `onReconnect()` fires once a DROPPED connection is successfully re-established —
+ * never on the very first connect. Returns a `stop()` function; deps are all injectable for testing
  * (`sleepFn`/`randFn` in particular — a test never wants a real backoff timer running). */
-export function openStream({
+function openEventStream(path, {
   fetchFn,
   storage,
-  slug,
   onEvent,
   onReconnect,
   backoffFn = computeBackoffMs,
@@ -114,7 +114,7 @@ export function openStream({
     if (token) headers.Authorization = `Bearer ${token}`;
     if (lastEventId !== null) headers["Last-Event-ID"] = lastEventId;
 
-    const res = await fetchFn(`/w/${encodeURIComponent(slug)}/stream`, { headers });
+    const res = await fetchFn(path, { headers });
     if (!res.ok || !res.body) throw new Error(`stream connect failed: ${res.status}`);
 
     attempt = 0; // any successful connect resets backoff, even before a frame arrives
@@ -160,6 +160,46 @@ export function openStream({
     stopped = true;
     cancelReader?.();
   };
+}
+
+/** Opens `GET /w/:slug/stream` (the artifact/journal cursor space) — see `openEventStream`'s own
+ * docstring for the reconnect algorithm. Artifact-change pushes aren't journaled (P3.2's own
+ * review note), so a caller's `onReconnect` MUST re-fetch whatever state might have changed while
+ * disconnected (the artifact list, the open artifact) rather than trust that live events alone
+ * will catch it up. */
+export function openStream({
+  fetchFn,
+  storage,
+  slug,
+  onEvent,
+  onReconnect,
+  backoffFn = computeBackoffMs,
+  sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  randFn = Math.random,
+}) {
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, backoffFn, sleepFn, randFn });
+}
+
+/** Opens `GET /w/:slug/transcript/stream` (P4.2, A1 §5.8/§8, A2 §F16) — the conversation mirror's
+ * OWN cursor space, same wire mechanics/reconnect algorithm as `openStream` (`openEventStream`
+ * above is the shared core). `onEvent` sees three frame kinds a caller cares about: `event:
+ * "transcript"` (a normalized `TranscriptEvent`, `data` already JSON-parsed), `event:
+ * "mirror_unavailable"` (fail-soft — conversation.js's cue to show "mirror unavailable — use the
+ * terminal" without tearing down anything else), and `resync_required` (already handled generically
+ * by `openEventStream` — the connection ends and the next reconnect is a fresh first-connect). */
+export function openTranscriptStream(
+  slug,
+  {
+    fetchFn,
+    storage,
+    onEvent,
+    onReconnect,
+    backoffFn = computeBackoffMs,
+    sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    randFn = Math.random,
+  } = {},
+) {
+  return openEventStream(`/w/${encodeURIComponent(slug)}/transcript/stream`, { fetchFn, storage, onEvent, onReconnect, backoffFn, sleepFn, randFn });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -255,6 +295,30 @@ export function createDataAccess(deps = {}) {
     },
     openStream(slug, { onEvent, onReconnect } = {}) {
       return openStream({ fetchFn, storage, slug, onEvent, onReconnect });
+    },
+    /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
+     * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */
+    openTranscriptStream(slug, { onEvent, onReconnect } = {}) {
+      return openTranscriptStream(slug, { fetchFn, storage, onEvent, onReconnect });
+    },
+    /** `POST /w/:slug/transcript/compose` (P4.2, F32/R6) — the conversation viewer's out-of-band
+     * composer: sends a NEW user message to whichever session is bound to this workspace, without
+     * ever touching the transcript file (http.ts's `handleComposerSend` is explicit about this).
+     * Real delivery is a `// P4.3:` seam on the daemon side — the response's `delivered` field
+     * tells the caller whether to treat the send as more than "accepted". */
+    sendComposerMessage(slug, text) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/transcript/compose`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
+    /** `GET /w/:slug/capability/:artifactPath` (A1 §5.12/§7, P4.1) — mints a fresh, directory-
+     * scoped capability for a class-F artifact. classf-viewer.js calls this once per iframe
+     * open/reload; the response `{url, nonce, expires_in_s}` is exactly what it needs to embed
+     * the iframe and complete the nonce-gated MessageChannel handshake (A3 §2). */
+    mintClassFCapability(slug, artifactPath) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/capability/${encodePathSegments(artifactPath)}`);
     },
   };
 }
