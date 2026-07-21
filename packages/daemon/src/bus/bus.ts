@@ -33,12 +33,14 @@ import { mkdirSync } from "node:fs";
 // LEASE_HELD check, and both run `checkpoint()` concurrently against the SAME shadow-git repo —
 // a real `index.lock` race, not the reclaim-a-stale-lock case `reclaimIndexLock` is built for
 // (that assumes exactly one live operator; two live operators is the situation it can't recover
-// from). Enforcing "one WorkspaceBus per canonical root, one shared mutex" needs a process-wide
-// registry, which isn't reachable until the HTTP/lifecycle layer (later task) decides where
-// workspace roots get resolved and cached. Not implemented here — **every caller of this module,
-// including reconcile-at-startup and any future request handler, MUST route through the same
-// WorkspaceBus instance (or explicitly share its `mutex`) for a given root.** Opening the same
-// root twice without sharing the mutex is a correctness bug, not a supported configuration.
+// from). **P2.4 closes this**: `./workspace-bus-registry.ts` provides the process-wide
+// `WorkspaceBusRegistry` (+ its default-instance `getWorkspaceBus(root)`) that guarantees "one
+// WorkspaceBus per canonical root, one shared mutex" by construction — every caller, including
+// reconcile-at-startup and any future request handler, MUST go through it (or otherwise share the
+// same instance/mutex) for a given root. Constructing `new WorkspaceBus(root, ...)` directly
+// outside that registry for a root that might already be open elsewhere in the process is still
+// the correctness bug described above; the registry is what makes "elsewhere in the process"
+// impossible instead of just documented.
 export interface WorkspaceBusDeps {
   /** Shared across every WorkspaceBus in the daemon process so different workspaces never share
    * a mutex slot, but the same workspace (opened twice) does. Defaults to a private one, which is
