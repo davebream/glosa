@@ -2,7 +2,8 @@
 // (auth.test.ts); this file covers the new mint/ensure primitives: format, perms, idempotency,
 // and atomicity. Hermetic tmp GLOSA_HOME per test, never touches a real `~/.glosa`.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { ensureToken, loadToken, mintToken, tokenPath } from "../src/token.ts";
 import { cleanupHome, freshHome } from "./helpers.ts";
 
@@ -17,6 +18,24 @@ describe("mintToken", () => {
       expect(loadToken(home)).toBe(token);
     } finally {
       cleanupHome(home);
+    }
+  });
+
+  test("mints correctly when `home` itself doesn't exist yet (real first-ever `glosa open`)", () => {
+    // The CLI's `open` command calls ensureToken/mintToken BEFORE the daemon's own boot ever runs
+    // (so the token exists on disk before a first-spawn daemon reads it) — on a genuinely fresh
+    // GLOSA_HOME, nothing else has created this directory yet. Every OTHER test in this file uses
+    // freshHome(), which is mkdtempSync-backed and therefore always pre-creates the directory,
+    // which is exactly why this gap was invisible until a real first-run reproduced it.
+    const parent = freshHome();
+    const home = join(parent, "not-yet-created", "glosa-home");
+    try {
+      expect(existsSync(home)).toBe(false);
+      const token = mintToken(home);
+      expect(token).toMatch(/^[0-9a-f]{32}$/);
+      expect(loadToken(home)).toBe(token);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 

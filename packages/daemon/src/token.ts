@@ -1,7 +1,7 @@
 // @glosa/daemon — pairing token load/mint + constant-time Bearer compare (A1 §2, A3 §3-4).
 // Rotation and revocation are P5.1's job; this module mints once and otherwise only ever reads
 // what's already on disk.
-import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 
@@ -19,6 +19,10 @@ export function mintToken(home: string): string {
   const token = randomBytes(16).toString("hex"); // 128-bit
   const dest = tokenPath(home);
   const tmp = `${dest}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  // `open`'s CLI-side ensureToken() call runs BEFORE the daemon's own boot (which is what
+  // normally creates `home` via ensureHomeDir) — on a genuinely fresh GLOSA_HOME (first-ever
+  // `glosa open`), nothing else has created this directory yet.
+  mkdirSync(home, { recursive: true });
   writeFileSync(tmp, token, { mode: 0o600 });
   const fd = openSync(tmp, "r+");
   fsyncSync(fd);
