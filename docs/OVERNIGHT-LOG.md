@@ -203,6 +203,27 @@ for Origin. Apply in P1.3.
 - **Deferred → P2.4:** single-WorkspaceBus-per-root registry (both reviewers: the single-writer guarantee
   is convention-only; wire reconcile + the live bus to share one mutex/instance at P2.4).
 
+### P2.4 registry + workspace index + routing — ✅ (commit 32f89d5) — CC, doubly adversarially reviewed
+- **Built (Sonnet subagent):** `packages/daemon/src/registry/` — `slug.ts` (canonicalize + F25 collision-
+  lengthening), `workspace-index.ts` (`<GLOSA_HOME>/workspaces.json`, AsyncMutex-serialized, atomic
+  temp→fsync→rename, GC with grace + `hasLiveSession` predicate), `session-registry.ts` (in-memory, liveness
+  = lease/heartbeat, **never** `kill(pid,0)`), `routing.ts` (explicit-binding > cwd-ancestor, park/drain,
+  picker-not-guess), `lockfile-fallback.ts` (jethro's `withSessionLease` ported — O_EXCL CAS + stale reclaim,
+  proven with a 5-process×8-increment cross-process test). `bus/workspace-bus-registry.ts` (the deferred
+  single-WorkspaceBus-per-root registry — closes P2.3's convention-only single-writer gap).
+- **Two parallel adversarial reviews (concurrency-expert + critic) — NO blockers; 6 should-fix hardening
+  items applied:** (1) `WorkspaceBusRegistry` bus leak on GC hard-remove → `onHardRemove` hook + `evict()`;
+  (2) cwd-ancestor fallback now scopes to the **nearest (deepest) ancestor** (A2 §F08) instead of surfacing
+  a needless picker; (3) `register()` rolls back the in-memory session if the index upsert throws (no
+  routable-but-unindexed session); (4) corrupt `workspaces.json` is now **quarantined** (`.corrupt.<ts>` +
+  warn) instead of silently discarded (matches the journal convention); (5) an **unwired GC** (predicate not
+  set) now soft-deletes only, never hard-removes a possibly-live workspace; (6) sync-invariant comments on
+  the mutex-bypassing park set. Reviewers verified adversarially: routing precedence both directions, park/
+  drain keying, slug determinism/termination, GC AND-logic + grace boundary, fallback CAS, liveness boundary.
+- **Deferred (`// P4.3:` notes in-code):** daemon-side index writes must share the O_EXCL fallback lease with
+  the hook-side writer once that caller exists (not reachable yet); slug 64-hex-cap duplicate (negligible).
+- **Tests:** 309 pass / 0 fail (incl. full suite green UNDER the git-hook env → pre-commit safe); typecheck clean.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
