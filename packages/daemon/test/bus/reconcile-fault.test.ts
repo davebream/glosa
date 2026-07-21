@@ -63,7 +63,7 @@ describe("reconcile — kill at every write boundary (headline fault suite)", ()
         mkdirSync(workspaceBusDir(root), { recursive: true });
         writeFileSync(journalPath(root), fullBytes.subarray(0, offset));
 
-        const result = reconcileWorkspace(root, {
+        const result = await reconcileWorkspace(root, {
           ulid: deterministicUlid(9_000_000_000_000 + offset),
           now: deterministicClock(9_000_000_000_000 + offset),
         });
@@ -96,12 +96,12 @@ describe("reconcile — kill at every write boundary (headline fault suite)", ()
 });
 
 describe("reconcile — inbox <-> journal crash scenarios", () => {
-  test("crash before rename: an orphan temp file leaves no phantom entry and gets swept", () => {
+  test("crash before rename: an orphan temp file leaves no phantom entry and gets swept", async () => {
     const root = freshWorkspace();
     mkdirSync(inboxDir(root), { recursive: true });
     writeFileSync(join(inboxDir(root), ".e1.crash.tmp"), JSON.stringify({ kind: "human_edit" }));
 
-    const result = reconcileWorkspace(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    const result = await reconcileWorkspace(root, { ulid: deterministicUlid(), now: deterministicClock() });
 
     expect(result.state.entries.e1).toBeUndefined();
     expect(result.healedEntryIds).toEqual([]);
@@ -109,12 +109,12 @@ describe("reconcile — inbox <-> journal crash scenarios", () => {
     cleanupWorkspace(root);
   });
 
-  test("crash after rename, before entry_created: reconcile self-heals by synthesizing entry_created", () => {
+  test("crash after rename, before entry_created: reconcile self-heals by synthesizing entry_created", async () => {
     const root = freshWorkspace();
     writeInboxEntryOnce(root, "e1", { kind: "human_edit" }); // rename happened...
     // ...but the daemon crashed before the paired journal append, so no journal exists at all.
 
-    const result = reconcileWorkspace(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    const result = await reconcileWorkspace(root, { ulid: deterministicUlid(), now: deterministicClock() });
 
     expect(result.healedEntryIds).toEqual(["e1"]);
     expect(result.state.entries.e1?.status).toBe("pending");
@@ -124,7 +124,7 @@ describe("reconcile — inbox <-> journal crash scenarios", () => {
     expect(journalText).toContain("inbox_self_heal");
 
     // Reconciling again must not double-heal (idempotent startup).
-    const again = reconcileWorkspace(root, {
+    const again = await reconcileWorkspace(root, {
       ulid: deterministicUlid(500_000_000_000),
       now: deterministicClock(500_000_000_000),
     });

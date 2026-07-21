@@ -152,6 +152,23 @@ for Origin. Apply in P1.3.
 - **Tests:** 159 pass / 0 fail (34 in bus/), 2× stable, typecheck clean. The fault suite was independently
   judged genuinely rigorous (real strict two-state invariant, all offsets), not theater.
 
+### P2.2 picomatch matcher — ✅ (commit 4df10cc) — CC: no
+- **Built (Sonnet subagent):** `packages/daemon/src/matcher.ts` — the ONE canonical file LIST (A4 §F20).
+  `resolveMatchedFiles(root) → {tracked, oversize, skippedSymlinks}`; `lstat`-only walk (symlinks neither
+  followed nor matched — closes F24 escape); NFC comparison key (`path`) + raw on-disk `rawPath` for fs ops
+  (APFS NFD gotcha); picomatch include-minus-exclude, `nocase:false`; strict-over-2MiB → oversize;
+  deterministic `Buffer.compare` byte-sort; `diffSnapshots` emits file_tracked/file_untracked{oversize|
+  deleted} crossing descriptors; `loadMatcherConfig` deep-merges `.glosa/config.json` (throws on bad JSON).
+  Added `picomatch` dep (A4 sanctions it — pure JS). Strong edge tests: NFC/NFD, symlink safety, size
+  boundary, byte-sort-vs-locale, config override.
+- **My review + fix (myself):** the walk didn't prune — it `lstat`'d into `node_modules`/`.glosa` and only
+  filtered per-file, a predictable perf cliff once P2.3 fills `.glosa/shadow.git`. **Fixed:** derive
+  directory-prune patterns from the SAME exclude list (`P/**` → prune dirs matching `P`) — single source of
+  truth, no second glob. Added a behavioral test (symlink inside a pruned subtree is never discovered).
+- **Deferred (noted):** `followSymlinks` config field is carried but intentionally NOT wired — no-follow is a
+  hardcoded security invariant per F20.
+- **Tests:** 199 pass / 0 fail (40 matcher); typecheck clean.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,

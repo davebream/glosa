@@ -30,7 +30,8 @@ export type EventType =
   | "apply_expired"
   | "journal_tail_truncated"
   | "line_quarantined"
-  | "offline_catchup";
+  | "offline_catchup"
+  | "git_index_lock_reclaimed";
 
 export interface JournalEvent {
   v: 1;

@@ -7,10 +7,12 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, truncateSync } from "node:fs";
 import { appendEvent, JournalWriter, type JournalEvent } from "./journal.ts";
 import { cleanupOrphanInboxTempFiles, listInboxEntryIds } from "./inbox.ts";
-import { journalPath, quarantinePath, workspaceBusDir } from "./paths.ts";
+import { journalPath, quarantinePath, shadowGitDir, workspaceBusDir } from "./paths.ts";
 import { quarantineRawBytes } from "./quarantine.ts";
 import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./replay.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
+import { checkpoint, headSha, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
+import { resolveMatchedFiles } from "../matcher.ts";
 
 export interface TailTruncateResult {
   truncated: boolean;
@@ -109,27 +111,98 @@ export function selfHealInbox(deps: {
   return healed;
 }
 
-// P2.3: apply-lease reconcile (step 4). Scan the journal for an `apply_begin` with no matching
-// `apply_end`; for any whose `expires_at` has passed, append `apply_expired` and diff
-// `pre_sha`..worktree via shadow-git, attributing the interval `unknown`. Not implemented here —
-// shadow-git (A4 §F21) doesn't exist yet. Typed so P2.3 only has to fill in the body.
+// Step 4: apply-lease reconcile (A4 §F05/F04). `state.applyLease` already carries the one
+// outstanding lease, if any (replay.ts's reducer derives it) — this never has to re-scan raw
+// journal lines itself. A lease whose `expires_at` is still in the future is left alone (still
+// legitimately active, e.g. a session that's mid-edit right now); only a genuinely dangling one
+// gets closed out, and closing it out NEVER attributes it to a session — the interval just goes
+// unrecorded as anything more than "unknown" (no checkpoint here either; step 5 immediately after
+// this one is what captures whatever the worktree looks like now, as `unknown`).
 export interface ApplyLeaseReconcileDeps {
   workspaceRoot: string;
   state: DerivedState;
+  writer: JournalWriter;
+  ulid: () => string;
+  now?: () => Date;
+  reducer?: Reducer;
 }
-export function reconcileApplyLeases(_deps: ApplyLeaseReconcileDeps): void {
-  // P2.3: implement once shadow-git lands.
+export function reconcileApplyLeases(deps: ApplyLeaseReconcileDeps): string[] {
+  const lease = deps.state.applyLease;
+  if (!lease) return [];
+  const now = deps.now?.() ?? new Date();
+  if (new Date(lease.expiresAt).getTime() > now.getTime()) return []; // still active, not our concern
+
+  const event: JournalEvent = {
+    v: 1,
+    event_id: deps.ulid(),
+    at: now.toISOString(),
+    entry: lease.entry,
+    event: "apply_expired",
+    by: "daemon",
+    detail: { lease_id: lease.leaseId },
+  };
+  appendEvent(deps.writer, event);
+  applyEvent(deps.state, event, deps.reducer);
+  return [lease.leaseId];
 }
 
-// P2.3: offline catch-up (step 5). Diff shadow-git HEAD against the current worktree; any drift
-// not covered by a proven apply-lease interval becomes an `auto_checkpoint` attributed `unknown`
-// plus an `offline_catchup` event. Not implemented here — shadow-git (A4 §F21) doesn't exist yet.
+// Step 5: offline catch-up (A4 §F04/F21). While the daemon was down, a human (or anything else)
+// may have edited a tracked file directly — there's no lease to prove who, so any drift gets
+// captured as a checkpoint attributed `unknown`, never guessed at. True no-op (no git touched at
+// all) when there's nothing tracked AND no shadow repo yet — this is what keeps P2.1's
+// fault-injection sweep (hundreds of reconcile() calls over a workspace with no artifact files)
+// from paying for a git spawn on every iteration; the first real tracked file is what triggers
+// `initShadowRepo`'s baseline, which already captures "whatever's on disk at first-ever-init" on
+// its own, so this only needs to fire again for drift AFTER that baseline exists.
+export interface OfflineCatchUpResult {
+  occurred: boolean;
+  preSha?: string;
+  postSha?: string;
+}
 export interface OfflineCatchUpDeps {
   workspaceRoot: string;
   state: DerivedState;
+  writer: JournalWriter;
+  ulid: () => string;
+  now?: () => Date;
+  reducer?: Reducer;
 }
-export function offlineCatchUp(_deps: OfflineCatchUpDeps): void {
-  // P2.3: implement once shadow-git lands.
+export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineCatchUpResult> {
+  // A lease still on record here means step 4 (which runs first, in the same reconcile pass)
+  // looked at it and did NOT find it expired — i.e. it's legitimately active right now. That
+  // interval belongs to the lease's own eventual `resolveEntry`, not to us: checkpointing it here
+  // would durably commit the in-flight edit as `Glosa-Attribution: unknown` — and since
+  // `checkpoint()` is idempotent (nothing left to stage once we've already committed it),
+  // `resolveEntry`'s own later checkpoint would then find nothing new, return that SAME sha, and
+  // the journal would say `session:<id>` for a commit whose trailer says `unknown`. Skip
+  // entirely — no git spawned, nothing captured — and let the lease's own checkpoint at
+  // `applyBegin` (pre-existing drift) / `resolveEntry` (the proven interval) be the only two
+  // checkpoints that ever touch this window.
+  if (deps.state.applyLease) return { occurred: false };
+
+  const hasTrackedFiles = resolveMatchedFiles(deps.workspaceRoot).tracked.length > 0;
+  const shadowExists = existsSync(shadowGitDir(deps.workspaceRoot));
+  if (!hasTrackedFiles && !shadowExists) return { occurred: false };
+
+  reclaimIndexLock(deps.workspaceRoot, { writer: deps.writer, ulid: deps.ulid, now: deps.now });
+  await initShadowRepo(deps.workspaceRoot, { writer: deps.writer, ulid: deps.ulid, now: deps.now });
+
+  const preSha = await headSha(deps.workspaceRoot);
+  const postSha = await checkpoint(deps.workspaceRoot, { attribution: "unknown", kind: "auto_checkpoint" });
+  if (postSha === preSha) return { occurred: false }; // baseline (just created, or already current) covers it
+
+  const now = deps.now?.() ?? new Date();
+  const event: JournalEvent = {
+    v: 1,
+    event_id: deps.ulid(),
+    at: now.toISOString(),
+    event: "offline_catchup",
+    by: "daemon",
+    detail: { pre_sha: preSha, post_sha: postSha },
+  };
+  appendEvent(deps.writer, event);
+  applyEvent(deps.state, event, deps.reducer);
+  return { occurred: true, preSha, postSha };
 }
 
 export interface ReconcileOptions {
@@ -145,13 +218,18 @@ export interface ReconcileResult {
   state: DerivedState;
   healedEntryIds: string[];
   quarantineCount: number;
+  expiredLeaseIds: string[];
+  offlineCatchup: OfflineCatchUpResult;
 }
 
-/** Runs the full ordered sequence (1 -> 2 -> 3, then no-op stubs 4 -> 5) for one workspace. Opens
- * its own `JournalWriter` for the repair appends it may need to make and closes it before
- * returning — a long-lived writer for serving subsequent live appends is a separate concern
- * (owned by whatever's driving the daemon's request handling, not by reconcile itself). */
-export function reconcileWorkspace(workspaceRoot: string, opts: ReconcileOptions = {}): ReconcileResult {
+/** Runs the full ordered sequence (1 -> 2 -> 3 -> 4 -> 5) for one workspace. Opens its own
+ * `JournalWriter` for the repair appends it may need to make and closes it before returning — a
+ * long-lived writer for serving subsequent live appends is a separate concern (owned by whatever's
+ * driving the daemon's request handling, not by reconcile itself). Async because steps 4-5 may
+ * touch shadow-git (A4 §F21); both are true no-ops when there's nothing for them to do (no
+ * dangling lease / no tracked files and no shadow repo yet), so a workspace that never uses either
+ * feature pays no git-spawn cost here. */
+export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileOptions = {}): Promise<ReconcileResult> {
   const jPath = journalPath(workspaceRoot);
   const qPath = quarantinePath(workspaceRoot);
   mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
@@ -179,8 +257,22 @@ export function reconcileWorkspace(workspaceRoot: string, opts: ReconcileOptions
       reducer: opts.reducer,
     });
 
-    reconcileApplyLeases({ workspaceRoot, state });
-    offlineCatchUp({ workspaceRoot, state });
+    const expiredLeaseIds = reconcileApplyLeases({
+      workspaceRoot,
+      state,
+      writer,
+      ulid: ulidFn,
+      now: opts.now,
+      reducer: opts.reducer,
+    });
+    const offlineCatchup = await offlineCatchUp({
+      workspaceRoot,
+      state,
+      writer,
+      ulid: ulidFn,
+      now: opts.now,
+      reducer: opts.reducer,
+    });
 
     return {
       workspaceRoot,
@@ -189,6 +281,8 @@ export function reconcileWorkspace(workspaceRoot: string, opts: ReconcileOptions
       state,
       healedEntryIds,
       quarantineCount,
+      expiredLeaseIds,
+      offlineCatchup,
     };
   } finally {
     writer.close();

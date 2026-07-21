@@ -23,3 +23,11 @@ export function inboxDir(workspaceRoot: string): string {
 export function inboxEntryPath(workspaceRoot: string, id: string): string {
   return join(inboxDir(workspaceRoot), `${id}.json`);
 }
+
+/** The shadow-git repo's `--git-dir` (A4 §F21) — separate from the worktree it shadows
+ * (`workspaceRoot` itself is `--work-tree`). Lives under `.glosa/`, which the matcher's default
+ * `.glosa/**` exclude already prunes from every walk, so shadow-git's own objects/refs are never
+ * mistaken for tracked artifacts. */
+export function shadowGitDir(workspaceRoot: string): string {
+  return join(workspaceBusDir(workspaceRoot), "shadow.git");
+}

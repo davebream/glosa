@@ -32,15 +32,33 @@ export interface DerivedEntryState {
   [key: string]: unknown;
 }
 
+/** The one active apply-lease for a workspace, derived from the last unmatched `apply_begin`
+ * (A4 §F05 — "exactly ONE active apply-lease/workspace"). `null` means no lease is outstanding.
+ * `apply_end`/`apply_expired` for this `leaseId` clear it back to `null`. */
+export interface ApplyLeaseState {
+  leaseId: string;
+  entry: string;
+  session: string;
+  preSha: string;
+  expiresAt: string;
+}
+
 export interface DerivedState {
   entries: Record<string, DerivedEntryState>;
+  applyLease: ApplyLeaseState | null;
   appliedEventIds: Set<string>;
   appliedIdemKeys: Set<string>;
   quarantineCount: number;
 }
 
 export function createEmptyState(): DerivedState {
-  return { entries: {}, appliedEventIds: new Set(), appliedIdemKeys: new Set(), quarantineCount: 0 };
+  return {
+    entries: {},
+    applyLease: null,
+    appliedEventIds: new Set(),
+    appliedIdemKeys: new Set(),
+    quarantineCount: 0,
+  };
 }
 
 export type Reducer = (state: DerivedState, event: JournalEvent) => void;
@@ -63,6 +81,30 @@ export const defaultReducer: Reducer = (state, event) => {
       const existing = state.entries[event.entry];
       if (existing) existing.status = to;
       else state.entries[event.entry] = { status: to };
+      return;
+    }
+    // P2.3 §F05: tracks the single outstanding apply-lease so `applyBegin` can reject a 2nd
+    // concurrent lease (LEASE_HELD) and reconcile step 4 can find a dangling one to expire —
+    // without either having to re-scan the raw journal themselves.
+    case "apply_begin": {
+      const d = event.detail;
+      if (!d || typeof d.lease_id !== "string") return;
+      state.applyLease = {
+        leaseId: d.lease_id,
+        entry: event.entry ?? "",
+        session: typeof d.session === "string" ? d.session : "",
+        preSha: typeof d.pre_sha === "string" ? d.pre_sha : "",
+        expiresAt: typeof d.expires_at === "string" ? d.expires_at : "",
+      };
+      return;
+    }
+    case "apply_end":
+    case "apply_expired": {
+      const d = event.detail;
+      const leaseId = d?.lease_id;
+      if (state.applyLease && typeof leaseId === "string" && state.applyLease.leaseId === leaseId) {
+        state.applyLease = null;
+      }
       return;
     }
     default:

@@ -131,7 +131,7 @@ describe("replayJournal — corruption quarantine", () => {
 });
 
 describe("reconcile — quarantine is idempotent across restarts", () => {
-  test("reconciling twice over a journal with one bad interior line does not re-grow the journal or the count", () => {
+  test("reconciling twice over a journal with one bad interior line does not re-grow the journal or the count", async () => {
     const root = freshWorkspace();
     const jPath = journalPath(root);
     mkdirSync(dirname(jPath), { recursive: true });
@@ -140,13 +140,13 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
     const good2 = JSON.stringify(mkEvent("transition_committed", "e1", { detail: { to: "resolved" } })) + "\n";
     writeFileSync(jPath, good1 + bad + good2);
 
-    const first = reconcileWorkspace(root, { ulid: deterministicUlid(1_000), now: deterministicClock(1_000) });
+    const first = await reconcileWorkspace(root, { ulid: deterministicUlid(1_000), now: deterministicClock(1_000) });
     expect(first.quarantineCount).toBe(1);
     const linesAfterFirst = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
     const quarantinedAfterFirst = linesAfterFirst.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterFirst).toBe(1);
 
-    const second = reconcileWorkspace(root, { ulid: deterministicUlid(2_000), now: deterministicClock(2_000) });
+    const second = await reconcileWorkspace(root, { ulid: deterministicUlid(2_000), now: deterministicClock(2_000) });
     expect(second.quarantineCount).toBe(1); // still "1 distinct bad line present", not accumulating
     const linesAfterSecond = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
     expect(linesAfterSecond.length).toBe(linesAfterFirst.length); // journal didn't grow
