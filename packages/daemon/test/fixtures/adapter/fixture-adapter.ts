@@ -15,7 +15,7 @@
 // Fix 2's corrected form).
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { ContentAdapter, DerivedFromEdge, ManifestSource } from "../../../src/adapters/interface.ts";
+import type { AdapterSessionHint, ContentAdapter, DerivedFromEdge, ManifestSource } from "../../../src/adapters/interface.ts";
 
 /** Presence of this marker file at a workspace's root is the fixture's whole "data-path
  * recognition" rule (R7) — deliberately trivial (a real adapter's own rule, e.g. a fixed path
@@ -30,17 +30,32 @@ export interface FixtureAdapterOptions {
    * workspaces a given test created. `interface.ts`'s own header explains why every method below
    * still takes `workspaceRoot` rather than assuming "whichever root `recognizes` last saw." */
   roots: string[];
+  /** P5.2 (T8 adapter-topology): an OPTIONAL `session_id -> workspace root` map standing in for a
+   * real adapter's own out-of-band session-history state (e.g. a provider plugin's own
+   * `session_history` file keyed by session id, tracking the "actual data root" independent of
+   * whatever `cwd` the hook happened to report). Omitted entirely by every existing fixture-
+   * adapter test (preserving their behavior unchanged — no `sessionBinding` method at all, same
+   * as "no opinion"); only tests that pass this exercise the session-binding routing path. */
+  sessionBindingFor?: Record<string, string>;
 }
 
 export function createFixtureAdapter(opts: FixtureAdapterOptions): ContentAdapter {
   const roots = new Set(opts.roots);
   const id = opts.id ?? "fixture";
+  const sessionBindingFor = opts.sessionBindingFor;
 
   return {
     id,
     recognizes(workspaceRoot) {
       return roots.has(workspaceRoot) && existsSync(join(workspaceRoot, FIXTURE_MARKER_FILE));
     },
+    ...(sessionBindingFor
+      ? {
+          sessionBinding(hint: AdapterSessionHint): string | null {
+            return sessionBindingFor[hint.session_id] ?? null;
+          },
+        }
+      : {}),
     derivedFrom(_workspaceRoot, artifactPath): DerivedFromEdge | null {
       if (artifactPath !== "rendered.html") return null;
       return { sourcePath: "source.md", process: "fixture-render" };

