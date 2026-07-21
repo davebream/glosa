@@ -279,11 +279,15 @@ describe("GET /w/:slug/stream — SSE protocol (A1 §8)", () => {
 
     const bus = h.busRegistry.get(h.root);
     await bus.createEntry("still-alive", { kind: "annotation" });
-    const ev = await readEvent(reader, 3000);
+    // Generous wait for the live push: under heavy parallel test load (many real daemons on random
+    // ports) the createEntry→notify→SSE-frame path can arrive a little late — this was an
+    // intermittent commit-gate flake, so the margin here (and the test budget below) is deliberately
+    // wide. Correctness doesn't depend on the exact latency, only that the push eventually arrives.
+    const ev = await readEvent(reader, 8000);
     expect(ev.event).toBe("journal");
     expect(JSON.parse(ev.data).entry).toBe("still-alive");
     await disconnect();
-  }, 10_000);
+  }, 20_000);
 
   test("teardown/no-leak: client disconnect unsubscribes the WorkspaceBus listener", async () => {
     const bus = h.busRegistry.get(h.root);

@@ -419,6 +419,23 @@ for Origin. Apply in P1.3.
   failed rung (the drain endpoint is not a retry queue). Phase 4: **P4.4 (provider iface + Codex, T2a research)
   + P4.5→P6.1 remain.**
 
+### P4.4 provider interface + Codex provider — ✅ (commit 653b9fc) — CC: no
+- **Built (Sonnet subagent, solo):** **T2a research** → `docs/research/codex-contract.md` (verified 2026-07-21
+  against REAL `openai/codex` GitHub source — `hooks/src/schema.rs`, event structs — not blog paraphrase):
+  CONFIRMED the hook events, snake_case stdin fields (session_id/turn_id/cwd/transcript_path/hook_event_name/
+  source), the Stop-hook `decision:block`+non-empty-`reason` blocking contract, MCP client-only. Honest gaps
+  documented: no Notification-equivalent (Codex attention degrades), rollout JSONL line schema unverified
+  (path confirmed). `packages/providers/codex/src/{provider,hook-types}.ts` — `capabilities={push:false,
+  gate:true, boundaryDrain:true, mcpPull:true}`; ladder = gate (Codex Stop hook, the only sync mechanism) →
+  mcp_pull; A5 §F23 delivery vocab; liveness never PID. Mirrors ClaudeCodeProvider, purely subtractive.
+- **Verify (targeted, CC:no):** research doc honest (verified vs unconfirmed), a shared root-level
+  `test/agent-provider-conformance.test.ts` runs BOTH providers through identical R7 assertions + asserts the
+  push-true-vs-false split, liveness-no-PID grep-guard. Tests: 902 pass / 0 fail (confirmed green 3× + hook env).
+- **⚠ FLAKE now BLOCKS commits:** the intermittent idle-timeout-timer test (stream.test.ts, first noted P3.2)
+  failed the pre-commit hook once (901/1) → committed on retry. **Hardening it next** so the commit gate is
+  reliable for the remaining tasks. **Phase 4 done except P4.5→P6.1.** Remaining: P5.1 CLI, P5.2 acceptance
+  suites (CC), P6.1 generic adapter (CC). ⛔ P5.3/P5.4 = Dawid.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
