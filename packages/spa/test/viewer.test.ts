@@ -213,11 +213,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(da.put).toEqual([{ path: "notes.md", content: "# Title\n\nEdited.\n" }]);
   });
 
-  test("Annotate mode: a text selection + a confirmed prompt posts a well-formed annotation record", async () => {
+  test("Annotate mode: a text selection opens the composer; submitting it posts a well-formed annotation record", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
-    (dom.window as unknown as { prompt: () => string }).prompt = () => "tighten this";
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -239,11 +238,24 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
+    // The selection opens the margin composer (no post yet) with the quoted passage.
+    expect(da.posted).toHaveLength(0);
+    const composerInput = root.querySelector(".glosa-composer-input") as any;
+    expect(composerInput).not.toBeNull();
+    composerInput.value = "tighten this";
+    (root.querySelector(".glosa-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
     expect(da.posted).toHaveLength(1);
     const record = da.posted[0] as { body: string; intent: string; target: { quote: { exact: string } } };
     expect(record.body).toBe("tighten this");
     expect(record.intent).toBe("content");
     expect(record.target.quote.exact).toBe("Title");
+
+    // The submitted annotation renders as a margin card with its honest delivery state.
+    const card = root.querySelector(".glosa-annotation") as any;
+    expect(card).not.toBeNull();
+    expect(card.querySelector(".glosa-annotation-body")!.textContent).toBe("tighten this");
   });
 
   test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {

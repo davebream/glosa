@@ -22,5 +22,7 @@ build/
 # session handoff (pause/restore) — never commit
 .claude/session.md
 
-# tool scratch (serena etc.)
+# local agent/tool state (serena, impeccable etc.)
 .serena/
+.impeccable/config.local.json
+.impeccable/hook.cache.json

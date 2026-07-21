@@ -1,0 +1,1156 @@
+/* @glosa/spa — the visual system (design brief: docs/design/2026-07-21-workspace-review-surface-brief.md).
+   Served as /app/app.css (allowlisted in packages/daemon/src/http.ts). Plain CSS, no build step.
+
+   The register: light-first editorial workbench. The manuscript is white paper in the center;
+   chrome is a quiet sage-tinted desk around it. One functional accent (deep olive), never a wash.
+   Serif = rendered writing only. Sans = every control. Mono = paths and technical metadata only. */
+
+/* ---------- 1. Tokens ---------- */
+
+:root {
+  /* Palette (OKLCH; hue 110 = editorial sage/olive; brief §5). */
+  --bg: oklch(1 0 0);                       /* reading surface — pure white paper */
+  --surface: oklch(0.972 0.004 110);        /* control surface — topbar, navigator, panels */
+  --surface-sunken: oklch(0.945 0.006 110); /* segmented-control track, hover beds */
+  --ink: oklch(0.24 0.01 110);              /* primary text — ~16:1 on bg */
+  --muted: oklch(0.46 0.012 110);           /* secondary text — ~7:1 on bg */
+  --faint: oklch(0.62 0.01 110);            /* disabled/tertiary, large glyphs only */
+  --border: oklch(0.9 0.005 110);
+  --border-strong: oklch(0.82 0.008 110);
+  --primary: oklch(0.5 0.1 110);            /* workbench accent — actions, selection, focus */
+  --primary-hover: oklch(0.44 0.1 110);
+  --anchor-wash: oklch(0.95 0.045 108);     /* annotation anchor highlight on the manuscript */
+  --danger: oklch(0.5 0.16 25);
+  --warn: oklch(0.55 0.12 75);
+  --ok: oklch(0.52 0.1 150);
+
+  /* Typography (macOS-only v1 → system stacks, zero webfonts; brief §4). */
+  --font-serif: ui-serif, "Iowan Old Style", Georgia, serif;
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Fixed rem scale, ratio ~1.125 (product register). */
+  --text-xs: 0.75rem;    /* 12 — state labels, timestamps */
+  --text-sm: 0.8125rem;  /* 13 — chrome default, annotations */
+  --text-base: 0.9375rem;/* 15 — panel body */
+  --text-md: 1.0625rem;  /* 17 — manuscript body (serif) */
+  --text-lg: 1.1875rem;  /* 19 — panel titles */
+  --text-xl: 1.375rem;   /* 22 — screen headlines */
+
+  /* Spacing, 4pt base. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  /* Semantic z scale. */
+  --z-sticky: 10;
+  --z-drawer: 20;
+  --z-tray: 30;
+  --z-backdrop: 40;
+  --z-dialog: 50;
+  --z-tooltip: 60;
+
+  /* Motion (product: 150–250ms, ease-out; brief §9). */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+
+  /* Layout. */
+  --nav-width: 260px;
+  --margin-width: 320px;
+  --topbar-height: 3rem;
+  --measure: 68ch;
+}
+
+/* ---------- 2. Base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The `hidden` attribute always wins — class display rules (grid/flex) must never resurrect a
+   panel the viewer state machine hid. */
+[hidden] {
+  display: none !important;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app,
+#app > [data-screen] {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: var(--anchor-wash);
+}
+
+/* ---------- 3. Boot screens (down / unpaired / mismatch) ---------- */
+
+.glosa-screen {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-8);
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
+.glosa-screen h1 {
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.glosa-screen p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+  text-wrap: pretty;
+}
+
+.glosa-screen code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--ink);
+}
+
+/* ---------- 4. App topology ---------- */
+
+.glosa-app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+  grid-template-columns: var(--nav-width) minmax(0, 1fr) 0;
+  grid-template-areas:
+    "topbar topbar topbar"
+    "nav    main   margin";
+  transition: grid-template-columns var(--dur-base) var(--ease-out);
+}
+
+/* The contextual margin exists only while annotating, and only where it fits (brief §7.2). */
+@media (min-width: 1280px) {
+  .glosa-app[data-mode="annotate"] {
+    grid-template-columns: var(--nav-width) minmax(0, 1fr) var(--margin-width);
+  }
+}
+
+/* ---------- 5. Top bar ---------- */
+
+.glosa-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.glosa-nav-toggle {
+  display: none; /* compact only */
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.glosa-topbar-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.glosa-artifact-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.glosa-artifact-dir {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* truncate the middle-left, keep the tail (filename side) visible */
+  text-align: left;
+}
+
+.glosa-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Mode control: one stable segmented control, active state never color-alone (weight + bg). */
+.glosa-modebar {
+  display: flex;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.glosa-modebar button {
+  padding: var(--space-1) var(--space-3);
+  border-radius: 6px;
+  color: var(--muted);
+  text-transform: capitalize;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-modebar button:hover {
+  color: var(--ink);
+}
+
+.glosa-modebar button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  margin: -1px; /* keep the segmented track height stable when the active border appears */
+}
+
+.glosa-modebar button:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.glosa-history-toggle,
+.glosa-conversation-toggle {
+  padding: var(--space-1) var(--space-3);
+  border-radius: 6px;
+  color: var(--muted);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-history-toggle:hover,
+.glosa-conversation-toggle:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-history-toggle[aria-pressed="true"],
+.glosa-conversation-toggle[aria-pressed="true"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ---------- 6. Navigator ---------- */
+
+.glosa-sidebar {
+  grid-area: nav;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: var(--space-4) var(--space-3) var(--space-8);
+}
+
+.glosa-sidebar h2 {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--space-2) var(--space-2);
+}
+
+.glosa-sidebar h2 + ul {
+  margin-bottom: var(--space-6);
+}
+
+.glosa-sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.glosa-sidebar li + li {
+  margin-top: 1px;
+}
+
+.glosa-sidebar li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-sidebar li button:hover {
+  background: var(--surface-sunken);
+}
+
+.glosa-sidebar li button[aria-current="true"] {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.glosa-sidebar-empty {
+  color: var(--muted);
+  padding: 0 var(--space-2);
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+/* ---------- 7. Manuscript ---------- */
+
+.glosa-main {
+  grid-area: main;
+  overflow-y: auto;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.glosa-content {
+  flex: 1;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--space-8));
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-8) var(--space-12);
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+/* Rendered-markdown element vocabulary. Quiet, book-like; no line numbers in Preview/Annotate
+   (brief §7.6 — the manuscript must never read as an editor buffer). */
+.glosa-content h1,
+.glosa-content h2,
+.glosa-content h3 {
+  line-height: 1.25;
+  text-wrap: balance;
+  font-weight: 600;
+}
+
+.glosa-content h1 {
+  font-size: 1.75rem;
+  margin: 0 0 var(--space-6);
+}
+
+.glosa-content h2 {
+  font-size: 1.375rem;
+  margin: var(--space-8) 0 var(--space-3);
+}
+
+.glosa-content h3 {
+  font-size: 1.125rem;
+  margin: var(--space-6) 0 var(--space-2);
+}
+
+.glosa-content p {
+  margin: 0 0 var(--space-4);
+}
+
+.glosa-content blockquote {
+  margin: var(--space-6) 0;
+  padding: 0 var(--space-6);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.glosa-content ul,
+.glosa-content ol {
+  padding-left: var(--space-6);
+  margin: 0 0 var(--space-4);
+}
+
+.glosa-content li {
+  margin-bottom: var(--space-1);
+}
+
+.glosa-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: var(--space-8) auto;
+  width: 40%;
+}
+
+.glosa-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.glosa-content pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-4);
+  overflow-x: auto;
+  margin: 0 0 var(--space-4);
+}
+
+.glosa-content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.glosa-content table {
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  margin: 0 0 var(--space-4);
+}
+
+.glosa-content th,
+.glosa-content td {
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.glosa-content th {
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.glosa-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.glosa-content a {
+  color: var(--primary);
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+/* Class-F iframe fills the main area edge to edge. */
+.glosa-classf {
+  flex: 1;
+  display: flex;
+}
+
+.glosa-classf iframe {
+  flex: 1;
+  border: none;
+  width: 100%;
+}
+
+/* Empty / loading states (brief §8). */
+.glosa-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-8);
+  max-width: 32rem;
+  margin: 0 auto;
+}
+
+.glosa-empty-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.glosa-empty-hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.glosa-skeleton {
+  flex: 1;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--space-8));
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-8);
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.glosa-skeleton > i {
+  display: block;
+  height: 1em;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  animation: glosa-pulse 1.6s var(--ease-out) infinite;
+}
+
+.glosa-skeleton > i:nth-child(1) { width: 55%; height: 1.6em; margin-bottom: var(--space-4); }
+.glosa-skeleton > i:nth-child(4) { width: 82%; }
+.glosa-skeleton > i:nth-child(7) { width: 64%; }
+
+@keyframes glosa-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ---------- 8. Editor ---------- */
+
+.glosa-edit-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--space-8));
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-8) var(--space-8);
+  gap: var(--space-3);
+}
+
+.glosa-edit-area {
+  flex: 1;
+  width: 100%;
+  min-height: 16rem;
+  resize: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-4);
+}
+
+.glosa-edit-area:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+.glosa-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ---------- 9. Buttons ---------- */
+
+.glosa-btn,
+.glosa-save,
+.glosa-composer-send {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 500;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-btn:hover,
+.glosa-save:hover,
+.glosa-composer-send:hover {
+  background: var(--surface);
+}
+
+.glosa-save,
+.glosa-composer-send {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: oklch(0.99 0 0); /* white text on a saturated mid-tone fill */
+}
+
+.glosa-save:hover,
+.glosa-composer-send:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.glosa-save:disabled,
+.glosa-composer-send:disabled {
+  background: var(--surface-sunken);
+  border-color: var(--border);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.glosa-btn-ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+
+.glosa-btn-ghost:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+/* ---------- 10. Margin: annotations + composer ---------- */
+
+.glosa-margin {
+  grid-area: margin;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  padding: var(--space-4) var(--space-3) var(--space-8);
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Never let intrinsic content width (textarea, nowrap labels) force the margin to scroll
+   sideways — every card constrains to the column. */
+.glosa-margin > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (min-width: 1280px) {
+  .glosa-app[data-mode="annotate"] .glosa-margin {
+    display: flex;
+  }
+}
+
+.glosa-margin-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--space-1) var(--space-1);
+}
+
+.glosa-margin-empty {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin: 0 var(--space-1);
+  text-wrap: pretty;
+}
+
+/* One annotation card. Quiet, sans; the quote excerpt is the serif thread back to the text. */
+.glosa-annotation {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.glosa-annotation-quote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* The wash hugs the quoted words (inline span), continuing across wraps. */
+.glosa-annotation-quote > span,
+.glosa-composer-quote > span {
+  background: linear-gradient(transparent 55%, var(--anchor-wash) 55%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.glosa-annotation-body {
+  margin: 0;
+  color: var(--ink);
+}
+
+.glosa-annotation-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Status needs shape: the dot is reinforcement, the label is the channel (brief §7.5). */
+.glosa-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  background: transparent; /* hollow = waiting */
+}
+
+.glosa-annotation[data-state="delivered"] .glosa-state-dot {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.glosa-annotation[data-state="delivered"] .glosa-annotation-state {
+  color: var(--primary);
+}
+
+/* Intent chip: text, never color-alone. */
+.glosa-annotation-intent {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+}
+
+/* Composer: in the margin at full width, a fixed bottom tray in compact (brief §7.3). */
+.glosa-composer {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+  box-shadow: 0 1px 3px oklch(0.24 0.01 110 / 0.06);
+}
+
+.glosa-composer-quote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.glosa-composer-intents {
+  display: flex;
+  flex-wrap: wrap; /* three writer-length labels won't fit one 300px row — wrap, never clip */
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.glosa-composer-intents button {
+  flex: 1 1 auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-composer-intents button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  margin: -1px;
+}
+
+.glosa-composer-input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-2);
+  min-height: 3.5rem;
+  resize: vertical;
+  width: 100%;
+  min-width: 0; /* a textarea's intrinsic cols-width must not widen the composer */
+}
+
+.glosa-composer-input::placeholder {
+  color: var(--muted); /* ≥4.5:1 — never default placeholder gray */
+}
+
+.glosa-composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ---------- 11. History pane ---------- */
+
+.glosa-history {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: var(--space-4) var(--space-6) var(--space-8);
+}
+
+.glosa-history h3 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+}
+
+.glosa-history-status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin: 0 0 var(--space-2);
+  min-height: 1em;
+}
+
+.glosa-history-compare-current {
+  margin-bottom: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  font-weight: 500;
+}
+
+.glosa-history-compare-current:hover {
+  background: var(--surface-sunken);
+}
+
+.glosa-history-list {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.glosa-history-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.glosa-history-row + .glosa-history-row {
+  border-top: 1px solid var(--border);
+}
+
+.glosa-history-row time {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.glosa-history-row > button {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.glosa-history-row > button:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+/* Provenance chips: plain words, honest shapes (brief §7.5). */
+.glosa-history-attribution {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.glosa-history-attribution[data-by="human"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
+}
+
+.glosa-history-attribution[data-by="session"] {
+  background: color-mix(in oklch, var(--primary) 12%, var(--bg));
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.glosa-history-attribution[data-by="unknown"] {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.glosa-history-kind {
+  color: var(--ink);
+}
+
+.glosa-diff-pane {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: auto;
+  font-size: var(--text-xs);
+}
+
+.glosa-diff-pane:empty {
+  display: none;
+}
+
+/* ---------- 12. Conversation pane ---------- */
+
+.glosa-conversation {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: var(--space-4) var(--space-6) var(--space-8);
+}
+
+.glosa-conv-status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin: 0 0 var(--space-2);
+}
+
+.glosa-conv-list {
+  display: grid;
+  gap: var(--space-3);
+  max-width: var(--measure);
+}
+
+.glosa-conv-prose {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-3) var(--space-4);
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  text-wrap: pretty;
+  white-space: pre-wrap;
+}
+
+.glosa-conv-tool-use,
+.glosa-conv-tool-result-wrap,
+.glosa-conv-unknown {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.glosa-conv-tool-use summary,
+.glosa-conv-subagent-group summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.glosa-conv-tool-input,
+.glosa-conv-tool-result {
+  background: var(--surface-sunken);
+  border-radius: 6px;
+  padding: var(--space-2);
+  overflow-x: auto;
+  margin: var(--space-1) 0 0;
+}
+
+.glosa-conv-attention {
+  color: var(--warn);
+  font-weight: 600;
+  font-size: var(--text-xs);
+}
+
+.glosa-conv-composer {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  max-width: var(--measure);
+}
+
+.glosa-conv-composer-input {
+  flex: 1;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-2);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.glosa-conv-composer-send {
+  padding: var(--space-1) var(--space-3);
+  border-radius: 6px;
+  background: var(--primary);
+  color: oklch(0.99 0 0);
+  font-weight: 500;
+}
+
+.glosa-conv-composer-send:hover {
+  background: var(--primary-hover);
+}
+
+/* ---------- 13. Compact (< 1024px): split-screen beside a terminal (brief §7.2/§7.3) ---------- */
+
+@media (max-width: 1023px) {
+  .glosa-app,
+  .glosa-app[data-mode="annotate"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "topbar"
+      "main";
+  }
+
+  .glosa-nav-toggle {
+    display: inline-flex;
+  }
+
+  /* Navigator becomes a left drawer over a backdrop. */
+  .glosa-sidebar {
+    position: fixed;
+    inset: var(--topbar-height) auto 0 0;
+    width: min(var(--nav-width), 85vw);
+    z-index: var(--z-drawer);
+    transform: translateX(-100%);
+    transition: transform var(--dur-base) var(--ease-out);
+    box-shadow: 2px 0 12px oklch(0.24 0.01 110 / 0.1);
+  }
+
+  .glosa-app[data-nav-open="true"] .glosa-sidebar {
+    transform: translateX(0);
+  }
+
+  .glosa-backdrop {
+    display: none;
+  }
+
+  .glosa-app[data-nav-open="true"] .glosa-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--topbar-height) 0 0 0;
+    z-index: calc(var(--z-drawer) - 1);
+    background: oklch(0.24 0.01 110 / 0.25);
+  }
+
+  /* Saved annotations flow below the manuscript instead of a side margin. */
+  .glosa-app[data-mode="annotate"] .glosa-margin {
+    display: flex;
+    grid-area: main;
+    align-self: end;
+    position: static;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .glosa-app[data-mode="annotate"] .glosa-main {
+    grid-area: main;
+  }
+
+  /* The composer leaves the margin and becomes a short bottom tray; the manuscript keeps its
+     full reading measure (brief Q11 decision). */
+  .glosa-composer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-tray);
+    border-radius: 12px 12px 0 0;
+    border-bottom: none;
+    box-shadow: 0 -4px 16px oklch(0.24 0.01 110 / 0.12);
+    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+    animation: glosa-tray-up var(--dur-base) var(--ease-out);
+  }
+}
+
+@keyframes glosa-tray-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* In-between band (1024–1279): navigator stays, margin doesn't fit — annotations flow below. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .glosa-app[data-mode="annotate"] .glosa-margin {
+    display: flex;
+    grid-area: main;
+    align-self: end;
+    position: static;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* ---------- 14. Reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .glosa-app,
+  .glosa-sidebar,
+  .glosa-modebar button,
+  .glosa-sidebar li button,
+  .glosa-composer-intents button,
+  .glosa-history-toggle,
+  .glosa-conversation-toggle,
+  .glosa-btn,
+  .glosa-save,
+  .glosa-composer-send {
+    transition: none;
+  }
+
+  .glosa-composer {
+    animation: none;
+  }
+
+  .glosa-skeleton > i {
+    animation: none;
+    opacity: 0.7;
+  }
+}

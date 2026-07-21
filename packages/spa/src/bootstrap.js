@@ -60,7 +60,12 @@ function render(screen) {
   for (const el of app.querySelectorAll("[data-screen]")) {
     const isMatch = el.dataset.screen === screen;
     el.hidden = !isMatch;
-    if (isMatch && MESSAGES[screen]) el.textContent = MESSAGES[screen]; // textContent — never innerHTML
+    if (isMatch && MESSAGES[screen]) {
+      // The failure screens carry static teaching markup in shell.html; the dynamic status line
+      // goes into their [data-message] slot (textContent — never innerHTML).
+      const slot = el.querySelector("[data-message]") ?? el;
+      slot.textContent = MESSAGES[screen];
+    }
   }
 }
 

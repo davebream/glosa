@@ -149,7 +149,13 @@ export function mountHistoryPane(container, { dataAccess, slug, path }) {
       list.append(
         el("li", { className: "glosa-history-row" }, [
           checkbox,
-          el("span", { className: "glosa-history-attribution", textContent: describeAttribution(row.by) }),
+          el("span", {
+            className: "glosa-history-attribution",
+            textContent: describeAttribution(row.by),
+            // Provenance chip styling hook (app.css): honest three-way shape — solid "You",
+            // accent-tinted session, dashed unknown — never color alone (brief §7.5).
+            "data-by": row.by === "human" ? "human" : typeof row.by === "string" && row.by.startsWith("session:") ? "session" : "unknown",
+          }),
           el("span", { className: "glosa-history-kind", textContent: describeCheckpointKind(row.summary) }),
           el("time", { textContent: formatTimestamp(row.at) }),
           restoreBtn,
