@@ -576,8 +576,7 @@ describe("ensureDaemon — client", () => {
       expect(await waitForHandshake(port)).not.toBeNull();
       const raw = JSON.parse(readFileSync(lockPath(home), "utf8"));
       raw.build_id = 42;
-      Bun.write(lockPath(home), JSON.stringify(raw));
-      await Bun.sleep(20);
+      await Bun.write(lockPath(home), JSON.stringify(raw));
       process.env.GLOSA_HOME = home;
       process.env.GLOSA_PORT = String(port);
 

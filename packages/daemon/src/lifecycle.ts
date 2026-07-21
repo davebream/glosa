@@ -31,7 +31,28 @@ const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
 const RESTART_LOCK_WAIT_MS = 5000;
 const ENSURE_MAX_PASSES = 8;
-const SHUTDOWN_DRAIN_MS = 3000;
+export const SHUTDOWN_DRAIN_MS = 3000;
+
+interface DrainableServer {
+  stop(closeActiveConnections?: boolean): Promise<void>;
+}
+
+export async function drainDaemonServers(
+  servers: readonly DrainableServer[],
+  afterStopAccepting: () => void,
+  closeWorkspaceBuses: () => Promise<void>,
+  timeoutMs = SHUTDOWN_DRAIN_MS,
+): Promise<boolean> {
+  const activeHandlers = servers.map((server) => server.stop(false));
+  afterStopAccepting();
+  const gracefulDrain = Promise.all(activeHandlers).then(closeWorkspaceBuses);
+  const drained = await Promise.race([
+    gracefulDrain.then(() => true),
+    Bun.sleep(timeoutMs).then(() => false),
+  ]);
+  if (!drained) await Promise.allSettled(servers.map((server) => server.stop(true)));
+  return drained;
+}
 
 function log(home: string, line: string): void {
   try {
@@ -151,21 +172,13 @@ export async function bootDaemon(): Promise<never> {
     // Calling stop(false) synchronously closes the listeners to new work while allowing active
     // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
     // long-lived responses from holding the drain open forever.
-    const mainStop = server.stop(false);
-    const classFStop = classFServer.stop(false);
-    shutdownController.abort();
-
-    const gracefulDrain = (async () => {
-      await Promise.all([mainStop, classFStop]);
-      await backend.busRegistry.closeAll();
-    })();
-    const drained = await Promise.race([
-      gracefulDrain.then(() => true),
-      Bun.sleep(SHUTDOWN_DRAIN_MS).then(() => false),
-    ]);
+    const drained = await drainDaemonServers(
+      [server, classFServer],
+      () => shutdownController.abort(),
+      () => backend.busRegistry.closeAll(),
+    );
     if (!drained) {
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
-      await Promise.allSettled([server.stop(true), classFServer.stop(true)]);
     }
     removeLockIfOwned(lockFile, instanceId);
     log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
@@ -343,7 +356,7 @@ export function decideDaemonBuild(
   return { action: "use" };
 }
 
-function peerMismatchReason(lock: DaemonLock, hs: HandshakeResponse): string | null {
+export function daemonPeerMismatchReason(lock: DaemonLock, hs: HandshakeResponse): string | null {
   if (lock.instance_id !== hs.instance_id || lock.pid !== hs.pid) {
     return "daemon lock and handshake identify different processes";
   }
@@ -412,7 +425,7 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
     if (isPidAlive(lock.pid)) {
       const hs = await pollHandshake(lock.port, HANDSHAKE_POLL_MS);
       if (hs) {
-        const mismatch = peerMismatchReason(lock, hs);
+        const mismatch = daemonPeerMismatchReason(lock, hs);
         if (mismatch) return { ok: false, reason: mismatch, logPath: logPath(home) };
 
         const decision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);

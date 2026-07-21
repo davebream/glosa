@@ -80,6 +80,24 @@ describe("WorkspaceBusRegistry", () => {
     await second.close();
     cleanupWorkspace(root);
   });
+
+  test("closeAll waits for and terminally closes every open workspace bus", async () => {
+    const registry = new WorkspaceBusRegistry();
+    const rootA = freshWorkspace();
+    const rootB = freshWorkspace();
+    const busA = registry.get(rootA);
+    const busB = registry.get(rootB);
+    await Promise.all([busA.createEntry("a", {}), busB.createEntry("b", {})]);
+
+    await registry.closeAll();
+
+    expect(registry.has(rootA)).toBe(false);
+    expect(registry.has(rootB)).toBe(false);
+    await expect(busA.createEntry("after-close", {})).rejects.toThrow("closed");
+    await expect(busB.createEntry("after-close", {})).rejects.toThrow("closed");
+    cleanupWorkspace(rootA);
+    cleanupWorkspace(rootB);
+  });
 });
 
 describe("getWorkspaceBus — process-wide default registry", () => {
