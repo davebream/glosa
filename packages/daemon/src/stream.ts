@@ -65,6 +65,7 @@ export interface StreamOptions {
   /** Test-only escape hatch to skip standing up a chokidar watcher per connection when a test
    * only cares about journal/cursor mechanics. Defaults to on. */
   watchArtifacts?: boolean;
+  shutdownSignal?: AbortSignal;
 }
 
 /** Builds the `GET /w/:slug/stream` response. `server` is used only to disable Bun's idle
@@ -97,6 +98,7 @@ export function createJournalStreamResponse(
   let unsubscribe: (() => void) | null = null;
   let watcher: FSWatcher | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let shutdownListener: (() => void) | null = null;
 
   const teardown = (): void => {
     if (closed) return;
@@ -104,6 +106,7 @@ export function createJournalStreamResponse(
     unsubscribe?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (watcher) void watcher.close();
+    if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
   };
 
   const stream = new ReadableStream<Uint8Array>({
@@ -118,6 +121,19 @@ export function createJournalStreamResponse(
           // harmless (no frame is silently "half sent" — SSE frames are written whole).
         }
       };
+
+      shutdownListener = () => {
+        send(encodeSseFrame({ event: "bye" }));
+        teardown();
+        try {
+          controller.close();
+        } catch {
+          // already closed by the peer
+        }
+      };
+      opts.shutdownSignal?.addEventListener("abort", shutdownListener, { once: true });
+      if (opts.shutdownSignal?.aborted) shutdownListener();
+      if (closed) return;
 
       // LOAD-BEARING ORDERING: subscribe to live events BEFORE reading `currentCursor()` (first
       // connect) or replaying the tail (reconnect) — and with NO `await` anywhere in this

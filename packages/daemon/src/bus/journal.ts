@@ -97,6 +97,7 @@ export class JournalWriter {
   close(): void {
     this.closed = true;
     if (this.fdValue !== null) {
+      fsyncSync(this.fdValue);
       closeSync(this.fdValue);
       this.fdValue = null;
     }

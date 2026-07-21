@@ -5,9 +5,11 @@
 // and race scenarios a happy-path unit test can't exercise.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
 import { reclaimStaleLock, writeLockExclusive, type DaemonLock } from "../src/lock.ts";
 import { PROTOCOL_VERSION } from "../src/protocol.ts";
+import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
 import { ensureDaemon } from "../src/lifecycle.ts";
 import {
   cleanupHome,
@@ -28,11 +30,33 @@ function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
     pid: process.pid,
     port: randomPort(),
     protocol_version: PROTOCOL_VERSION,
+    build_id: BUILD_ID,
     started_at: new Date().toISOString(),
     host: "127.0.0.1",
     bun: Bun.version,
     ...overrides,
   };
+}
+
+const VERSIONED_DAEMON_FIXTURE = fileURLToPath(new URL("./fixtures/versioned-daemon.ts", import.meta.url));
+
+function spawnVersionedDaemon(
+  home: string,
+  port: number,
+  buildId?: string,
+): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+  return Bun.spawn({
+    cmd: [process.execPath, VERSIONED_DAEMON_FIXTURE],
+    env: {
+      ...Bun.env,
+      GLOSA_HOME: home,
+      GLOSA_PORT: String(port),
+      ...(buildId === undefined ? {} : { GLOSA_FIXTURE_BUILD_ID: buildId }),
+    } as Record<string, string>,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 describe("bootDaemon — subprocess fault/concurrency", () => {
@@ -128,7 +152,9 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     try {
       const hs = await waitForHandshake(port);
       expect(hs).not.toBeNull();
-      await waitUntil(() => lockOf(home)?.instance_id !== "gl-fake");
+      // The main listener intentionally becomes reachable before lock reclamation completes.
+      // Wait for ownership rather than racing the bind-before-lock lifecycle contract.
+      expect(await waitUntil(() => lockOf(home)?.pid === proc.pid)).toBe(true);
       const lock = lockOf(home);
       expect(lock!.instance_id).not.toBe("gl-fake");
       expect(lock!.pid).toBe(proc.pid);
@@ -240,6 +266,127 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
 // a local try/finally — no state is shared with any sibling test, so no interleaving (real or
 // scheduler-induced) can corrupt another test's view of its own home directory.
 describe("ensureDaemon — client", () => {
+  test("a legacy daemon is replaced and the successful connection reports the current build", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const legacy = spawnVersionedDaemon(home, port);
+    let replacementPid: number | null = null;
+    try {
+      const legacyHandshake = await waitForHandshake(port);
+      expect(legacyHandshake?.build_id).toBeUndefined();
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        replacementPid = result.pid;
+        expect(result.buildId).toBe(BUILD_ID);
+        expect(result.pid).not.toBe(legacy.pid);
+        expect(lockOf(home)?.build_id).toBe(BUILD_ID);
+      }
+      expect(await legacy.exited).toBe(0);
+    } finally {
+      const pid = replacementPid;
+      if (typeof pid === "number") {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // already stopped
+        }
+        await waitUntil(() => lockOf(home) === null, 5000);
+      }
+      try {
+        legacy.kill("SIGKILL");
+      } catch {
+        // already stopped
+      }
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 20000);
+
+  test("a newer protocol-compatible daemon is reused without being signalled", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const newerBuild = "0.2.0-0123456789abcdef";
+    const daemon = spawnVersionedDaemon(home, port, newerBuild);
+    try {
+      expect((await waitForHandshake(port))?.build_id).toBe(newerBuild);
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.pid).toBe(daemon.pid);
+        expect(result.buildId).toBe(newerBuild);
+      }
+      expect(lockOf(home)?.pid).toBe(daemon.pid);
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 12000);
+
+  test("concurrent clients replacing a same-semver divergent daemon converge on one instance", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const divergentBuild = `${APP_VERSION}-${BUILD_ID.endsWith("0000000000000000") ? "1111111111111111" : "0000000000000000"}`;
+    const daemon = spawnVersionedDaemon(home, port, divergentBuild);
+    let replacementPid: number | null = null;
+    try {
+      expect((await waitForHandshake(port))?.build_id).toBe(divergentBuild);
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const results = await Promise.all([ensureDaemon(), ensureDaemon()]);
+      expect(results.every((result) => result.ok)).toBe(true);
+      if (results[0]?.ok && results[1]?.ok) {
+        replacementPid = results[0].pid;
+        expect(results[0].instanceId).toBe(results[1].instanceId);
+        expect(results[0].pid).toBe(results[1].pid);
+        expect(results[0].buildId).toBe(BUILD_ID);
+      }
+      expect(replacementPid).not.toBeNull();
+      expect(lockOf(home)?.pid).toBe(replacementPid ?? undefined);
+      expect(await daemon.exited).toBe(0);
+    } finally {
+      const pid = replacementPid;
+      if (typeof pid === "number") {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // already stopped
+        }
+        await waitUntil(() => lockOf(home) === null, 5000);
+      }
+      try {
+        daemon.kill("SIGKILL");
+      } catch {
+        // already stopped
+      }
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 25000);
+
   test("port authority: reads lock.port, not GLOSA_PORT, when they differ", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
@@ -364,7 +511,7 @@ describe("ensureDaemon — client", () => {
     }
   }, 20000);
 
-  test("proto mismatch: FAILs with an upgrade message instead of using the daemon", async () => {
+  test("newer daemon + protocol mismatch FAILs without attempting a downgrade", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
     const savedPort = process.env.GLOSA_PORT;
@@ -378,6 +525,7 @@ describe("ensureDaemon — client", () => {
           return Response.json({
             protocol_version: "99.0", // major mismatch vs this client's PROTOCOL_VERSION
             instance_id: "gl-future",
+            build_id: "0.2.0-0000000000000000",
             pid: process.pid,
             started_at: new Date().toISOString(),
           });
@@ -386,7 +534,16 @@ describe("ensureDaemon — client", () => {
       },
     });
     ensureHomeDir(home);
-    writeLockExclusive(lockPath(home), sampleLock({ pid: process.pid, port: fakePort }));
+    writeLockExclusive(
+      lockPath(home),
+      sampleLock({
+        instance_id: "gl-future",
+        pid: process.pid,
+        port: fakePort,
+        protocol_version: "99.0",
+        build_id: "0.2.0-0000000000000000",
+      }),
+    );
 
     try {
       process.env.GLOSA_HOME = home;
@@ -395,11 +552,46 @@ describe("ensureDaemon — client", () => {
       const result = await ensureDaemon();
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.reason.toLowerCase()).toContain("upgrade");
+        expect(result.reason).toContain("incompatible glosa versions installed");
         expect(result.reason).toContain("99.0");
       }
+      expect(fakeServer.pendingRequests).toBe(0);
     } finally {
       fakeServer.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 10000);
+
+  test("malformed lock identity fails closed without signalling, unlinking, or spawning", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const daemon = spawnVersionedDaemon(home, port, BUILD_ID);
+    try {
+      expect(await waitForHandshake(port)).not.toBeNull();
+      const raw = JSON.parse(readFileSync(lockPath(home), "utf8"));
+      raw.build_id = 42;
+      await Bun.write(lockPath(home), JSON.stringify(raw));
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("invalid daemon lock build identity");
+      expect(existsSync(lockPath(home))).toBe(true);
+      expect((await waitForHandshake(port, 1000))?.pid).toBe(daemon.pid);
+    } finally {
+      try {
+        daemon.kill("SIGTERM");
+      } catch {
+        // already stopped
+      }
+      await Promise.race([daemon.exited, Bun.sleep(3000)]);
       if (savedHome === undefined) delete process.env.GLOSA_HOME;
       else process.env.GLOSA_HOME = savedHome;
       if (savedPort === undefined) delete process.env.GLOSA_PORT;

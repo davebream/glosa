@@ -7,7 +7,7 @@
 ## F26 — `glosa init` merge/ownership/uninstall
 - Touches only `<ws>/.claude/settings.json` (hooks block), `<ws>/.mcp.json` (mcpServers.glosa), `<ws>/.claude/.glosa-init.json` (glosa's own manifest = authoritative ownership).
 - Ownership dual mechanism (JSON has no comments): manifest records per-file `{path, created, backup, inserted:[{pointer, sha256}]}`; in-band signature fallback = hook commands begin literal `glosa hook ` and MCP key literally `glosa`. Never inject marker keys into Claude schemas.
-- GLOSA_BIN resolution (recorded in manifest): bare `glosa` if on PATH + version matches; else `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (honors no-build-step). Stored so uninstall matches + doctor detects drift.
+- GLOSA_BIN resolution (recorded in manifest): probe bare `glosa --build-id` on PATH and use it only when its exact content-derived identity matches this installation; unsupported flags, errors, or mismatches fall back to `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (honors no-build-step). Stored so uninstall matches + doctor detects drift. `glosa --build-id` prints only the identity and exits without starting a daemon; `glosa --version` remains the root package version.
 - Hook entries written: SessionStart (matcher `startup|resume|clear|compact`) → `glosa hook session-start` (timeout 10) + `glosa hook rewake-watch` (asyncRewake:true, timeout 0); SessionEnd → `glosa hook session-end` (timeout 5); UserPromptSubmit → `glosa hook user-prompt-submit` (10); Stop → `glosa hook stop` (10); Notification → `glosa hook notification` (5). Roles: session-start registers {session_id,cwd,transcript_path,source} + drains parked; rewake-watch = rung-2 (rearmed by stop hook via per-session lease, since asyncRewake is one-shot); user-prompt-submit = rung-3 additionalContext; stop = rung-3 drain (≤8) + rewake rearm; session-end releases lease; notification = hook-fed attention state (preferred over transcript permission heuristic).
 - MCP entry: `{mcpServers:{glosa:{type:"stdio", command:"glosa", args:["mcp"]}}}` (GLOSA_BIN form).
 - Channel command printed (F06 LOCKED): `claude --dangerously-load-development-channels server:glosa` — NEVER `--channels`. Note MCP consent / org policy may still block; doctor verifies real registration.
@@ -17,7 +17,7 @@
 
 ## F30 — platform
 - **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (channel floor; asyncRewake works from 2.1.0 but the channel push needs 2.1.80; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
-- API protocol version: client/daemon must match major (no N/N-1 bridge in v1 → mismatch exit10).
+- API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
 - "No build step / zero native deps" = no bundle/transpile (`bun run` direct, no dist/) AND no native addons (no node-gyp/C/Rust/.node/postinstall-compile). Does NOT mean zero prerequisites: Bun, system git (child process, not a module), and a browser are required host software validated by doctor.
 
 ## F31 — checkpoint query & restore (USER CHOSE FULL/3.B — history: compare + restore)
@@ -32,7 +32,7 @@
 - "byte-identical visual regression" → **"rendered-output regression within tolerance"**: compare rendered region (screenshot/DOM snapshot) vs reference within tolerance, bridge overlay excluded; asserts rendering equivalence, not byte identity.
 - "read-only mirror + composer" → **"read-only transcript view with out-of-band message composer"**: read-only render of transcript JSONL, never writes it; composer sends a new user message to the live terminal session out-of-band via the delivery ladder (injects into running session, does NOT append/edit the transcript file).
 
-## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version)
+## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version --build-id)
 | cmd | args | does | exit |
 |---|---|---|---|
 | `open` | `[dir\|file] [--url]` | ensure daemon (lazy spawn) + ensure `.glosa/` baseline + mint one-time pairing capability; open the browser by default, or print only the ready URL with `--url` | 0;2;3;5 |

@@ -15,6 +15,7 @@ import {
   runUninstall,
   type GlosaBinResolution,
 } from "../src/init.ts";
+import { BUILD_ID } from "../../daemon/src/build-id.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -382,29 +383,51 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
     process.env.PATH = REAL_PATH;
   });
 
-  function fakeGlosaOnPath(dir: string, printedVersion: string): void {
+  function fakeGlosaOnPath(dir: string, printedBuildId: string): void {
     const binDir = join(dir, "fakebin");
     mkdirSync(binDir, { recursive: true });
     const scriptPath = join(binDir, "glosa");
-    writeFileSync(scriptPath, `#!/bin/sh\necho "glosa ${printedVersion}"\n`);
+    writeFileSync(scriptPath, `#!/bin/sh\necho "${printedBuildId}"\n`);
     chmodSync(scriptPath, 0o755);
     process.env.PATH = `${binDir}:${process.env.PATH}`;
   }
 
-  test("bare 'glosa' on PATH with a matching --version resolves to the path form", () => {
+  test("bare 'glosa' on PATH with a matching --build-id resolves to the path form", () => {
     const dir = freshDir();
-    fakeGlosaOnPath(dir, "0.0.0");
+    fakeGlosaOnPath(dir, BUILD_ID);
     const resolved = defaultResolveGlosaBin("/irrelevant/glosa-root");
     expect(resolved).toEqual({ command: "glosa", args: [], mode: "path" });
   });
 
-  test("'glosa' on PATH but a VERSION MISMATCH falls back to the bun-run form", () => {
+  test("'glosa' on PATH but a BUILD-ID MISMATCH falls back to the bun-run form", () => {
     const dir = freshDir();
     fakeGlosaOnPath(dir, "9.9.9"); // stale/foreign glosa binary
     const resolved = defaultResolveGlosaBin("/some/glosa-root");
     expect(resolved.mode).toBe("bun-run");
     expect(resolved.command).toBe("bun");
     expect(resolved.args).toEqual(["run", "--silent", "/some/glosa-root/packages/cli/src/main.ts"]);
+  });
+
+  test("'glosa' on PATH with extra --build-id output is treated as nonmatching", () => {
+    const dir = freshDir();
+    fakeGlosaOnPath(dir, `${BUILD_ID}\nunexpected output`);
+    expect(defaultResolveGlosaBin("/some/glosa-root").mode).toBe("bun-run");
+  });
+
+  test("'glosa' on PATH that does not support --build-id falls back to the bun-run form", () => {
+    const dir = freshDir();
+    const binDir = join(dir, "fakebin");
+    mkdirSync(binDir, { recursive: true });
+    const scriptPath = join(binDir, "glosa");
+    writeFileSync(scriptPath, "#!/bin/sh\nexit 2\n");
+    chmodSync(scriptPath, 0o755);
+    process.env.PATH = `${binDir}:${process.env.PATH}`;
+
+    expect(defaultResolveGlosaBin("/some/glosa-root")).toEqual({
+      command: "bun",
+      args: ["run", "--silent", "/some/glosa-root/packages/cli/src/main.ts"],
+      mode: "bun-run",
+    });
   });
 
   test("no 'glosa' on PATH at all falls back to the bun-run form", () => {

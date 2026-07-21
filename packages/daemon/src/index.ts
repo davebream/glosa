@@ -1,6 +1,8 @@
 // @glosa/daemon — see docs/requirements.md + docs/appendices
 export { bootDaemon, buildChildEnv, ensureDaemon } from "./lifecycle.ts";
 export type { DaemonConnection, EnsureDaemonResult } from "./lifecycle.ts";
+export { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "./build-id.ts";
+export type { ParsedBuildId } from "./build-id.ts";
 export { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
 export type { ProtocolVersion } from "./protocol.ts";
 export { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";

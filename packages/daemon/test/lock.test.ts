@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PROTOCOL_VERSION } from "../src/protocol.ts";
+import { BUILD_ID } from "../src/build-id.ts";
 import { ensureHomeDir, lockPath } from "../src/home.ts";
 import {
   isPidAlive,
@@ -18,6 +19,7 @@ function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
     pid: process.pid,
     port: 4646,
     protocol_version: PROTOCOL_VERSION,
+    build_id: BUILD_ID,
     started_at: new Date().toISOString(),
     host: "127.0.0.1",
     bun: Bun.version,
@@ -42,6 +44,10 @@ describe("lock.ts (pure, hermetic — no subprocesses)", () => {
     expect(parseLock("42")).toBeNull();
     expect(parseLock(JSON.stringify({ pid: 1 }))).toBeNull(); // missing fields
     expect(parseLock(JSON.stringify(sampleLock()))).not.toBeNull();
+    const legacy = parseLock(JSON.stringify(sampleLock({ build_id: undefined })));
+    expect(legacy).not.toBeNull();
+    expect(legacy?.build_id).toBeUndefined();
+    expect(parseLock(JSON.stringify({ ...sampleLock(), build_id: 42 }))).toBeNull();
   });
 
   test("readLock returns null for a missing file", () => {

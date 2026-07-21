@@ -280,6 +280,47 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
     expect(statuses).toEqual(["down", "up"]);
   });
 
+  test("`bye` reconnects immediately without surfacing an outage and preserves the cursor", async () => {
+    const requests: RequestInit[] = [];
+    const sleeps: number[] = [];
+    const statuses: string[] = [];
+    const events: Array<{ event: string; data: unknown }> = [];
+    let call = 0;
+    const fetchFn = async (_path: string, init: RequestInit) => {
+      requests.push(init);
+      call += 1;
+      if (call === 1) {
+        return streamResponse([
+          'id: 7\nevent: journal\ndata: {"n":1}\n\n',
+          "event: bye\ndata: \n\n",
+        ]);
+      }
+      return streamResponse(['id: 8\nevent: journal\ndata: {"n":2}\n\n']);
+    };
+
+    let stop: (() => void) | null = null;
+    await new Promise<void>((resolve) => {
+      stop = openStream({
+        fetchFn,
+        storage: fakeStorage(),
+        slug: "ws",
+        sleepFn: async (ms: number) => void sleeps.push(ms),
+        onStatus: (status: string) => statuses.push(status),
+        onEvent: (frame: { event: string; data: unknown }) => {
+          events.push(frame);
+          if (events.length === 2) resolve();
+        },
+      });
+    });
+    stop!();
+
+    expect(events.map((event) => event.event)).toEqual(["journal", "journal"]);
+    expect(requests).toHaveLength(2);
+    expect(new Headers(requests[1]!.headers).get("Last-Event-ID")).toBe("7");
+    expect(sleeps).toEqual([]);
+    expect(statuses).toEqual([]);
+  });
+
   test("a resync_required frame clears the stored cursor — the next connect carries no Last-Event-ID", async () => {
     const requests: RequestInit[] = [];
     let call = 0;

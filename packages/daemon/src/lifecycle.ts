@@ -2,7 +2,7 @@
 // client-side "find or spawn" helper (ensureDaemon). See docs/appendices/A5-daemon-architecture.md
 // §F13 and docs/requirements.md R1. Three roles, one binary: this module is used by the daemon
 // role (bootDaemon, never imported by the SPA) and by every client role (ensureDaemon).
-import { closeSync, openSync, unlinkSync, appendFileSync } from "node:fs";
+import { closeSync, openSync, appendFileSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
@@ -24,10 +24,35 @@ import { CapabilityStore } from "./capability.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
+import { BUILD_ID, parseBuildId } from "./build-id.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
+const RESTART_LOCK_WAIT_MS = 5000;
+const ENSURE_MAX_PASSES = 8;
+export const SHUTDOWN_DRAIN_MS = 3000;
+
+interface DrainableServer {
+  stop(closeActiveConnections?: boolean): Promise<void>;
+}
+
+export async function drainDaemonServers(
+  servers: readonly DrainableServer[],
+  afterStopAccepting: () => void,
+  closeWorkspaceBuses: () => Promise<void>,
+  timeoutMs = SHUTDOWN_DRAIN_MS,
+): Promise<boolean> {
+  const activeHandlers = servers.map((server) => server.stop(false));
+  afterStopAccepting();
+  const gracefulDrain = Promise.all(activeHandlers).then(closeWorkspaceBuses);
+  const drained = await Promise.race([
+    gracefulDrain.then(() => true),
+    Bun.sleep(timeoutMs).then(() => false),
+  ]);
+  if (!drained) await Promise.allSettled(servers.map((server) => server.stop(true)));
+  return drained;
+}
 
 function log(home: string, line: string): void {
   try {
@@ -86,6 +111,7 @@ export async function bootDaemon(): Promise<never> {
   const startedAt = new Date().toISOString();
   const token = loadToken(home);
   const backend = buildBackend(home);
+  const shutdownController = new AbortController();
   // ONE store, shared by both listeners (P4.1, A1 §7): a token minted on the SPA/API origin
   // (createApiFetch) must be lookup-able by the class-F origin (createClassFFetch) — two
   // independent stores would mean every capability 404s on the very listener that's supposed to
@@ -102,6 +128,7 @@ export async function bootDaemon(): Promise<never> {
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (root) => backend.busRegistry.get(root),
     capabilityStore,
+    shutdownSignal: shutdownController.signal,
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 
@@ -120,6 +147,7 @@ export async function bootDaemon(): Promise<never> {
     pid: process.pid,
     port,
     protocol_version: PROTOCOL_VERSION,
+    build_id: BUILD_ID,
     started_at: startedAt,
     host: "127.0.0.1",
     bun: Bun.version,
@@ -141,11 +169,19 @@ export async function bootDaemon(): Promise<never> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    // Sequential: stop accepting *before* touching the lock, so a future journal-fsync /
-    // SSE-bye step (P2/P3) has a clean "no new work, then cleanup" ordering to slot into.
-    await Promise.all([server.stop(), classFServer.stop()]);
+    // Calling stop(false) synchronously closes the listeners to new work while allowing active
+    // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
+    // long-lived responses from holding the drain open forever.
+    const drained = await drainDaemonServers(
+      [server, classFServer],
+      () => shutdownController.abort(),
+      () => backend.busRegistry.closeAll(),
+    );
+    if (!drained) {
+      log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
+    }
     removeLockIfOwned(lockFile, instanceId);
-    log(home, `${instanceId} graceful shutdown complete`);
+    log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
     process.exit(0);
   };
   process.on("SIGTERM", () => {
@@ -278,6 +314,7 @@ export interface DaemonConnection {
   port: number;
   instanceId: string;
   protocolVersion: string;
+  buildId: string;
   pid: number;
   startedAt: string;
 }
@@ -286,72 +323,156 @@ export type EnsureDaemonResult =
   | ({ ok: true } & DaemonConnection)
   | { ok: false; reason: string; logPath?: string };
 
+export type DaemonBuildDecision =
+  | { action: "use" }
+  | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
+  | { action: "fail"; reason: string };
+
+const incompatibleVersionsReason = (daemonProtocol: string): string =>
+  `incompatible glosa versions installed: daemon protocol ${daemonProtocol}, ` +
+  `client protocol ${PROTOCOL_VERSION}; upgrade glosa`;
+
+export function decideDaemonBuild(
+  clientBuildId: string,
+  daemonBuildId: string | undefined,
+  daemonProtocol: string,
+): DaemonBuildDecision {
+  const client = parseBuildId(clientBuildId);
+  if (!client) return { action: "fail", reason: `invalid client build identity: ${clientBuildId}` };
+  if (daemonBuildId === undefined) return { action: "restart", reason: "legacy" };
+
+  const daemon = parseBuildId(daemonBuildId);
+  if (!daemon) return { action: "fail", reason: `invalid daemon build identity: ${daemonBuildId}` };
+
+  const versionOrder = Bun.semver.order(client.version, daemon.version);
+  if (versionOrder > 0) return { action: "restart", reason: "newer-client" };
+  if (versionOrder === 0 && client.sourceHash !== daemon.sourceHash) {
+    return { action: "restart", reason: "same-version-different-build" };
+  }
+
+  if (!protocolCompatible(PROTOCOL_VERSION, daemonProtocol)) {
+    return { action: "fail", reason: incompatibleVersionsReason(daemonProtocol) };
+  }
+  return { action: "use" };
+}
+
+export function daemonPeerMismatchReason(lock: DaemonLock, hs: HandshakeResponse): string | null {
+  if (lock.instance_id !== hs.instance_id || lock.pid !== hs.pid) {
+    return "daemon lock and handshake identify different processes";
+  }
+  if (lock.protocol_version !== hs.protocol_version) {
+    return "daemon lock and handshake report different protocol versions";
+  }
+  if (lock.build_id !== hs.build_id) {
+    return "daemon lock and handshake report different build identities";
+  }
+  return null;
+}
+
+function toConnection(port: number, hs: HandshakeResponse): DaemonConnection {
+  return {
+    port,
+    instanceId: hs.instance_id,
+    protocolVersion: hs.protocol_version,
+    buildId: hs.build_id as string,
+    pid: hs.pid,
+    startedAt: hs.started_at,
+  };
+}
+
+async function waitForLockOwnershipChange(lockFile: string, instanceId: string): Promise<boolean> {
+  const deadline = Date.now() + RESTART_LOCK_WAIT_MS;
+  while (Date.now() < deadline) {
+    const current = readLock(lockFile);
+    if (!current || current.instance_id !== instanceId) return true;
+    await Bun.sleep(50);
+  }
+  return false;
+}
+
+function malformedLockBuildIdentity(lockFile: string): string | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(lockFile, "utf8"));
+    if (typeof value !== "object" || value === null || !("build_id" in value)) return null;
+    const buildId = (value as Record<string, unknown>).build_id;
+    if (typeof buildId !== "string" || !parseBuildId(buildId)) {
+      return `invalid daemon lock build identity: ${String(buildId)}`;
+    }
+    return null;
+  } catch {
+    // A wholly unparseable legacy/stale lock retains the existing stale-lock recovery behavior.
+    return null;
+  }
+}
+
 export async function ensureDaemon(): Promise<EnsureDaemonResult> {
   const home = ensureHomeDir(glosaHome());
   const lockFile = lockPath(home);
   const seedPort = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
+  let preferredPort = seedPort;
 
-  const lock = readLock(lockFile);
-  if (!lock) return spawnAndWait(home, seedPort);
-
-  if (isPidAlive(lock.pid)) {
-    const hs = await pollHandshake(lock.port, HANDSHAKE_POLL_MS);
-    if (hs) return toResult(lock.port, hs);
-
-    // Alive pid, no valid handshake within the ≤5s budget: a hung glosa daemon and a foreign
-    // squatter on lock.port are indistinguishable from here. Spawning a duplicate would
-    // violate the R1 singleton invariant, so only proceed to reclaim when the port is
-    // *provably free* — otherwise fail closed (mirrors bootDaemon's own
-    // EADDRINUSE-foreign → exit 3 posture; A5 §F13's "PID reuse" stale case is specifically
-    // the free-port case, not this one).
-    if (await probePortBound(lock.port, HANDSHAKE_TIMEOUT_MS)) {
-      log(
-        home,
-        `lock pid ${lock.pid} alive, port ${lock.port} bound but not answering the glosa ` +
-          "handshake — refusing to spawn a duplicate",
-      );
-      return {
-        ok: false,
-        reason:
-          `a process is bound to port ${lock.port} but is not answering the glosa handshake; ` +
-          "the daemon may be hung or the port is taken by another process — not spawning a duplicate",
-        logPath: logPath(home),
-      };
+  for (let pass = 0; pass < ENSURE_MAX_PASSES; pass += 1) {
+    const lock = readLock(lockFile);
+    const identityError = malformedLockBuildIdentity(lockFile);
+    if (identityError) return { ok: false, reason: identityError, logPath: logPath(home) };
+    if (!lock) {
+      const spawnFailure = await spawnAndWait(home, preferredPort);
+      if (spawnFailure) return spawnFailure;
+      continue;
     }
-    log(home, `lock pid ${lock.pid} alive but port ${lock.port} is free — treating lock as stale`);
+
+    preferredPort = lock.port;
+    if (isPidAlive(lock.pid)) {
+      const hs = await pollHandshake(lock.port, HANDSHAKE_POLL_MS);
+      if (hs) {
+        const mismatch = daemonPeerMismatchReason(lock, hs);
+        if (mismatch) return { ok: false, reason: mismatch, logPath: logPath(home) };
+
+        const decision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
+        if (decision.action === "use") return { ok: true, ...toConnection(lock.port, hs) };
+        if (decision.action === "fail") return { ok: false, reason: decision.reason };
+
+        log(home, `refreshing ${hs.instance_id}: ${decision.reason} (${hs.build_id ?? "legacy"} -> ${BUILD_ID})`);
+        try {
+          process.kill(hs.pid, "SIGTERM");
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+            return { ok: false, reason: `could not stop stale glosa daemon: ${(err as Error).message}` };
+          }
+        }
+        if (!(await waitForLockOwnershipChange(lockFile, lock.instance_id))) {
+          return {
+            ok: false,
+            reason: `stale glosa daemon did not release its lock within ${RESTART_LOCK_WAIT_MS}ms`,
+            logPath: logPath(home),
+          };
+        }
+        continue;
+      }
+
+      // Alive pid, no valid handshake within the ≤5s budget: a hung glosa daemon and a foreign
+      // squatter on lock.port are indistinguishable from here. Only reclaim when the port is
+      // provably free, otherwise spawning could violate the singleton invariant.
+      if (await probePortBound(lock.port, HANDSHAKE_TIMEOUT_MS)) {
+        log(home, `lock pid ${lock.pid} alive, port ${lock.port} bound but not answering the glosa handshake`);
+        return {
+          ok: false,
+          reason:
+            `a process is bound to port ${lock.port} but is not answering the glosa handshake; ` +
+            "the daemon may be hung or the port is taken by another process — not spawning a duplicate",
+          logPath: logPath(home),
+        };
+      }
+      log(home, `lock pid ${lock.pid} alive but port ${lock.port} is free — treating lock as stale`);
+    }
+
+    removeLockIfOwned(lockFile, lock.instance_id);
   }
 
-  // Dead pid, or alive pid with a provably free port: genuinely stale. lock.port is the
-  // authoritative port (A5 §F13) — the fresh daemon must reclaim that same port, not
-  // whatever GLOSA_PORT happens to be seeded with right now.
-  unlinkIfPresent(lockFile);
-  return spawnAndWait(home, lock.port);
-}
-
-function unlinkIfPresent(path: string): void {
-  try {
-    unlinkSync(path);
-  } catch {
-    // already gone — fine
-  }
-}
-
-function toResult(port: number, hs: HandshakeResponse): EnsureDaemonResult {
-  if (!protocolCompatible(PROTOCOL_VERSION, hs.protocol_version)) {
-    return {
-      ok: false,
-      reason:
-        `daemon protocol ${hs.protocol_version} is incompatible with this client's ` +
-        `${PROTOCOL_VERSION} — upgrade glosa`,
-    };
-  }
   return {
-    ok: true,
-    port,
-    instanceId: hs.instance_id,
-    protocolVersion: hs.protocol_version,
-    pid: hs.pid,
-    startedAt: hs.started_at,
+    ok: false,
+    reason: "daemon ownership changed too many times while ensuring a connection",
+    logPath: logPath(home),
   };
 }
 
@@ -372,7 +493,10 @@ export function buildChildEnv(
   return env;
 }
 
-async function spawnAndWait(home: string, port: number): Promise<EnsureDaemonResult> {
+async function spawnAndWait(
+  home: string,
+  port: number,
+): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
   const mainPath = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
   const env = buildChildEnv(Bun.env, { home, port });
@@ -393,5 +517,5 @@ async function spawnAndWait(home: string, port: number): Promise<EnsureDaemonRes
       logPath: logPath(home),
     };
   }
-  return toResult(port, hs);
+  return null;
 }

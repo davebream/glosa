@@ -9,6 +9,8 @@ export interface DaemonLock {
   pid: number;
   port: number;
   protocol_version: string;
+  /** Absent only when reading a lock written by a pre-build-id daemon. */
+  build_id?: string;
   started_at: string;
   host: string;
   bun: string;
@@ -22,6 +24,7 @@ function isDaemonLockShape(value: unknown): value is DaemonLock {
     typeof v.pid === "number" &&
     typeof v.port === "number" &&
     typeof v.protocol_version === "string" &&
+    (v.build_id === undefined || typeof v.build_id === "string") &&
     typeof v.started_at === "string" &&
     typeof v.host === "string" &&
     typeof v.bun === "string"

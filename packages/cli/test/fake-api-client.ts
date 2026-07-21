@@ -22,7 +22,14 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
   statusResult: StatusSummary = {
-    daemon: { instance_id: "gl-fake", pid: 1, started_at: "2020-01-01T00:00:00.000Z", protocol_version: "1.0", contract_version: "1.0" },
+    daemon: {
+      instance_id: "gl-fake",
+      pid: 1,
+      started_at: "2020-01-01T00:00:00.000Z",
+      protocol_version: "1.0",
+      contract_version: "1.0",
+      build_id: "0.1.0-alpha.0-0123456789abcdef",
+    },
     workspaces: [],
     sessions: [],
   };

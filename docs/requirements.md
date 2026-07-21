@@ -67,12 +67,18 @@ generic.**
 ## 3. Functional requirements
 
 ### R1 — singleton daemon, ports, workspace model  (detail: A5 §F13, A4, A6 §F30)
-- One daemon/machine; lock `~/.glosa/daemon.lock` carries `{instance_id,pid,port,protocol_version,…}`;
+- One daemon/machine; lock `~/.glosa/daemon.lock` carries
+  `{instance_id,pid,port,protocol_version,build_id,…}`. `build_id` is the root package semver plus a
+  content hash of all runtime source; legacy locks/handshakes may omit it only during migration.
+  A verified older or same-semver-different daemon is automatically replaced; a newer compatible
+  daemon is reused, while an incompatible newer daemon fails closed and is never signalled;
   **`lock.port` is the authoritative port** (env `GLOSA_PORT` default 4646 only seeds a fresh spawn;
   class-F port = `GLOSA_PORT+1` = 4647). No entry point *becomes* the daemon in-process: a client with
   no live daemon **spawns a detached `glosa __daemon`** (unref + ignores SIGHUP/SIGINT) and acts as a
   client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = passing
-  `/api/handshake`. `bind → O_EXCL lock create` is the CAS; simultaneous spawns → one wins.
+  `/api/handshake`. Lock and handshake identity/PID/instance must agree before any signal is sent.
+  Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
+  `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
 - **Workspace = a directory** (git repo or not; never assume/touch a real repo). Sources: session
   registration, `glosa open <dir>`, first-touch `.glosa/`. A **global index** `~/.glosa/workspaces.json`
   (daemon-only writer, atomic) enumerates workspaces; identity = realpath→NFC→strip-slash; slug =

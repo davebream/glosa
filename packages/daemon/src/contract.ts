@@ -2,13 +2,14 @@
 // protocol.ts's daemon-lifecycle handshake version even though both read "1.0" today — see
 // protocol.ts's header comment for why the two compatibility checks are kept apart despite the
 // coincidence.
+import { APP_VERSION } from "./build-id.ts";
 import { PROTOCOL_VERSION, parseProtocolVersion } from "./protocol.ts";
 
 /** `contract_version` in the handshake body and the version `X-Contract-Version` is compared
  * against. Equal to PROTOCOL_VERSION by the P1.3 task's resolution (D2) — not the same concept,
  * just the same value for now. */
 export const CONTRACT_VERSION = PROTOCOL_VERSION;
-export const DAEMON_VERSION = "0.0.0";
+export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
 

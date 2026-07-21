@@ -69,6 +69,7 @@ export interface TranscriptStreamOptions {
   /** Test-only escape hatch to skip standing up a chokidar watcher per connection when a test only
    * cares about the initial read/cursor mechanics. Defaults to on. */
   watchFile?: boolean;
+  shutdownSignal?: AbortSignal;
 }
 
 /** Builds the `GET /w/:slug/transcript/stream` response. `transcriptPath` MUST already have
@@ -94,6 +95,7 @@ export function createTranscriptStreamResponse(
   let closed = false;
   let watcher: FSWatcher | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let shutdownListener: (() => void) | null = null;
   let offset = 0;
   let currentIno: number | null = null;
 
@@ -102,6 +104,7 @@ export function createTranscriptStreamResponse(
     closed = true;
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (watcher) void watcher.close();
+    if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
   };
 
   const stream = new ReadableStream<Uint8Array>({
@@ -115,6 +118,19 @@ export function createTranscriptStreamResponse(
           // happens via cancel()/the abort listener below; a lost enqueue here is harmless.
         }
       };
+      shutdownListener = () => {
+        send(encodeSseFrame({ event: "bye" }));
+        teardown();
+        try {
+          controller.close();
+        } catch {
+          // already closed by the peer
+        }
+      };
+      opts.shutdownSignal?.addEventListener("abort", shutdownListener, { once: true });
+      if (opts.shutdownSignal?.aborted) shutdownListener();
+      if (closed) return;
+
       const sendTranscriptEvent = (ev: unknown) => {
         send(encodeSseFrame({ id: encodeTranscriptCursor({ inode: currentIno as number, byte_offset: offset }), event: "transcript", data: ev }));
       };

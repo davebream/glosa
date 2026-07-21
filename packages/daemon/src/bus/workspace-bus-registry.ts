@@ -45,6 +45,14 @@ export class WorkspaceBusRegistry {
     await bus.close();
   }
 
+  /** Stops every open bus after its current workspace-scoped mutation completes. New lookups
+   * cannot recover an old instance because the map is cleared before any close is awaited. */
+  async closeAll(): Promise<void> {
+    const buses = [...this.buses.values()];
+    this.buses.clear();
+    await Promise.all(buses.map((bus) => bus.close()));
+  }
+
   /** Same operation as `close()`, named for its actual call site: `WorkspaceIndex`'s GC (or an
    * explicit `forget(slug)`) hard-removing a workspace. `WorkspaceIndex` has no reference to this
    * registry on its own — nothing wires the two together automatically — so production boot code

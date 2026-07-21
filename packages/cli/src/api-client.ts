@@ -64,7 +64,14 @@ export interface SessionStatusSummary {
 }
 
 export interface StatusSummary {
-  daemon: { instance_id: string; pid: number; started_at: string; protocol_version: string; contract_version: string };
+  daemon: {
+    instance_id: string;
+    pid: number;
+    started_at: string;
+    protocol_version: string;
+    contract_version: string;
+    build_id: string;
+  };
   workspaces: WorkspaceStatusSummary[];
   sessions: SessionStatusSummary[];
 }

@@ -16,7 +16,8 @@ export type SseEventType =
   | "heartbeat"
   | "resync_required"
   | "transcript"
-  | "mirror_unavailable";
+  | "mirror_unavailable"
+  | "bye";
 
 export interface SseFrame {
   /** Omitted for `heartbeat` and `artifact` — neither advances the cursor (A1 §8.1/§8.3): a

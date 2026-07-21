@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tokenPath } from "../src/token.ts";
+import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "integration-test-token-0123456789abcdef";
@@ -53,7 +54,8 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.contract_version).toBe("1.0");
-    expect(body.daemon_version).toBe("0.0.0");
+    expect(body.daemon_version).toBe(APP_VERSION);
+    expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists
     expect(typeof body.protocol_version).toBe("string");
     expect(typeof body.instance_id).toBe("string");
