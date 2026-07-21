@@ -553,7 +553,26 @@ BUILD-PLAN.md at each task pickup since Dawid may edit it again overnight.
     `artifact_path` (every non-match case — absent/missing/untracked/unconfineable — replies identically,
     201 with `resolution` simply omitted), sidebar tamper-proofing holds both directions, zero telemetry.
 - **Tests after fixes:** 970 pass / 0 fail (2× confirmed), typecheck clean. Committed straight to main
-  per direct-to-main policy.
+  per direct-to-main policy — pre-commit hook flaked TWICE in a row on the same test
+  (`bootDaemon — subprocess fault/concurrency > stale lock: dead pid is reclaimed and a fresh daemon
+  boots`, a subprocess-timing test, not touched by this change) before going green on the third attempt.
+  This is a NEW flake signature, distinct from the previously-logged idle-timeout SSE one — plausibly
+  system load from the concurrent multi-session coordination this task involved (see handoff note
+  above: several background agents/processes were active on this machine at once). Noting it as a
+  second known-flaky subprocess-timing test class; retry on hook failure, don't panic-fix on one red.
+
+### D10 — P5.2's "actual-jethro-topology" acceptance criterion, post-Phase-6 (for P5.2)
+`requirements.md` T8 names an "actual-jethro-topology" suite as part of the release gate; P6.1 (Dawid's
+Phase 6 correction) has since deleted all jethro code from this repo and declared real jethro
+integration out of scope, built in the jethro repo instead. **Decision:** P5.2 cannot exercise a real
+jethro topology (no jethro code here to exercise) — the acceptance suite is reinterpreted as proving
+the SAME class of topology (session→artifact routing, derived-from staleness, class-F manifest
+resolution, multi-stage sidebar ordering) generically, through the P6.1 fixture-adapter protocol, which
+is exactly what P6.1's own fixture-adapter tests already exercise end-to-end over real HTTP routes. P5.2
+should reuse/extend that fixture rather than inventing a second one, and its suite should be named/
+documented as "adapter-topology" (not "jethro-topology") to avoid re-introducing the identifier Phase 6
+just removed. This follows directly from Dawid's own Phase-6 note, not a new judgment call requiring
+debate.
 
 ### D9 — annotation `artifact_path` is additive, not a wire-shape rewrite (P6.1)
 A1 §5.6 / R3's annotation payload has no field naming which artifact it targets — genuinely missing from
