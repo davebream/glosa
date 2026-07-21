@@ -249,6 +249,27 @@ for Origin. Apply in P1.3.
     mutex-serialized order), replay-twice byte-identical.
 - **Tests:** 341 pass / 0 fail (incl. full suite green UNDER the git-hook env); typecheck clean.
 
+### P3.1 full HTTP route catalog + daemon-boot wiring — ✅ (commit b2a5464) — CC: no, focused security review
+- **Built (Sonnet subagent):** the full A1 §5 `/w/:slug/…` route catalog in `http.ts`, integrating the Phase-2
+  backends. `buildBackend` (lifecycle.ts) constructs the daemon's ONE `WorkspaceIndex`+`SessionRegistry`+
+  `WorkspaceBusRegistry` and wires the P2.4-deferred predicates (`setLiveSessionPredicate`,
+  `setOnHardRemove`→`evict`). Fully wired: workspaces, artifacts (matcher), artifacts/:path (raw + `?render=html`
+  via new `artifact-render.ts` markdown-it + `data-line` stamps, `sourceSha256` = SHA256 after `\r\n→\n`),
+  annotations POST (→ WorkspaceBus.createEntry, 201), diff (shadow-git + trailer attribution via
+  `checkpoint-diff.ts`), inbox, session-binding. GETs use a **read-only journal peek-fold** (no git/writes).
+  Shells (full auth pipeline, 501): stream (P3.2), transcript/stream (P4.2), capability (P4.1), inbox-response
+  (F12). Added `markdown-it` dep.
+- **Focused critic review — all 9 security invariants confirmed holding** (slug-gate-first, confinePath +
+  tracked-membership on every path, class-F never served through class-R, full auth pipeline on shells,
+  argv-safe validated diff, read-only peek). **2 should-fix bugs found + fixed:**
+  - **honest-kind violation:** annotations handler spread the raw client body after `kind:"annotation"`, so a
+    client could POST `kind:"attention_request"` and forge a fake attention entry. Fixed: explicit picked
+    fields only.
+  - **reconcile-cache landmine:** the reconcile-once gate was a module-level Set keyed by root string, so
+    after `forget`/GC evict + reopen a fresh bus was never reconciled (state not replayed). Fixed: moved
+    `reconciledOnce` onto the `WorkspaceBus` instance. + capability shell now confinePath-checks (P4.1 prep).
+- **Tests:** 392 pass / 0 fail (incl. full suite green UNDER the git-hook env); typecheck clean.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
