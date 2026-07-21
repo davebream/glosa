@@ -86,6 +86,19 @@ describe("glosa open", () => {
     expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#t=test-token-abc");
   });
 
+  test("URL mode registers the workspace and returns its URL without opening a browser", async () => {
+    const dir = freshDir();
+    const { deps, client, browserCalls } = makeDeps();
+    client.openWorkspaceResult = { slug: "abc123", path: dir };
+
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.data.url).toBe("http://127.0.0.1:4646/#t=test-token-abc");
+    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
+    expect(browserCalls).toHaveLength(0);
+  });
+
   test("a FILE argument opens its owning directory as the workspace, deep-linked via #…&w=<slug>&a=<file>", async () => {
     const { deps, client, browserCalls } = makeDeps({
       dirExists: (d) => d === "/ws/essays",
@@ -109,14 +122,42 @@ describe("glosa open", () => {
     expect(browserCalls[0]).not.toContain("&w=");
   });
 
-  test("--json envelope has exactly the documented top-level keys", async () => {
+  test("URL mode preserves a FILE deep-link without opening a browser", async () => {
+    const { deps, client, browserCalls } = makeDeps({
+      dirExists: (d) => d === "/ws/essays",
+      fileExists: (p) => p === "/ws/essays/07-manuscript.md",
+    });
+    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays" };
+
+    const result = await runOpen("/ws/essays/07-manuscript.md", deps, { launchBrowser: false });
+
+    expect(result.data.url).toBe(
+      "http://127.0.0.1:4646/#t=test-token-abc&w=essays-abc&a=07-manuscript.md",
+    );
+    expect(result.data.focus).toBe("07-manuscript.md");
+    expect(browserCalls).toHaveLength(0);
+  });
+
+  test("URL mode plain output contains exactly the URL", async () => {
     const dir = freshDir();
     const { deps } = makeDeps();
-    const result = await runOpen(dir, deps);
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    const out = captureStdout(() => printOpenResult(result, false, true));
+    expect(out).toBe(`${result.data.url}\n`);
+  });
+
+  test("URL mode --json envelope has exactly the documented top-level keys", async () => {
+    const dir = freshDir();
+    const { deps, client, browserCalls } = makeDeps();
+    client.openWorkspaceResult = { slug: "test-workspace", path: dir };
+    const result = await runOpen(dir, deps, { launchBrowser: false });
 
     const out = captureStdout(() => printOpenResult(result, true));
     const parsed = JSON.parse(out);
     expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "open", exit_code: 0 });
+    expect(parsed.data).toMatchObject({ slug: "test-workspace", path: dir, url: result.data.url });
+    expect(browserCalls).toHaveLength(0);
   });
 });
