@@ -15,7 +15,7 @@ glosa is a local-first writing and review workspace for people working with AI c
 ## Install
 
 ```sh
-bun add --global glosa@alpha
+bun add --global @davebream/glosa@alpha
 ```
 
 Open glosa in the current workspace:
