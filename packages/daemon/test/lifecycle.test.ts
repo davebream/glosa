@@ -225,26 +225,24 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
   }, 10000);
 });
 
+// P1.3 review item 5 follow-up: this describe block used to share one `let home` / `savedHome` /
+// `savedPort` closure across all five tests via beforeEach/afterEach. Several of these tests do
+// a real ~5s wait deep inside `ensureDaemon()` (polling a port that's deliberately never going
+// to answer), and re-read the shared `home` closure variable AFTER that wait — e.g. `fail-closed`
+// asserts `logPath(home)` only after its `await ensureDaemon()` returns. That pattern turned out
+// to be unsafe against this Bun version's test scheduling: under the load of the full suite (and
+// even in isolation), the next test's beforeEach could run and reassign the shared `home` before
+// a still-pending previous test's post-await code read it, producing spurious ENOENT/ path-
+// mismatch failures with no bug in the daemon code itself — confirmed by re-running the same
+// scenario with each test's state made fully local (below) and seeing the flake disappear.
+// Fix: each test now owns a `const home = freshHome()` and saves/restores the env vars itself in
+// a local try/finally — no state is shared with any sibling test, so no interleaving (real or
+// scheduler-induced) can corrupt another test's view of its own home directory.
 describe("ensureDaemon — client", () => {
-  let home: string;
-  let savedHome: string | undefined;
-  let savedPort: string | undefined;
-
-  beforeEach(() => {
-    home = freshHome();
-    savedHome = process.env.GLOSA_HOME;
-    savedPort = process.env.GLOSA_PORT;
-  });
-
-  afterEach(async () => {
-    if (savedHome === undefined) delete process.env.GLOSA_HOME;
-    else process.env.GLOSA_HOME = savedHome;
-    if (savedPort === undefined) delete process.env.GLOSA_PORT;
-    else process.env.GLOSA_PORT = savedPort;
-    cleanupHome(home);
-  });
-
   test("port authority: reads lock.port, not GLOSA_PORT, when they differ", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
     const lockPort = randomPort();
     const envPort = randomPort();
     const daemonProc = spawnDaemon(home, lockPort);
@@ -264,10 +262,23 @@ describe("ensureDaemon — client", () => {
       }
     } finally {
       await stopDaemon(home, daemonProc);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
     }
-  }, 10000);
+    // Timeout bumped from 10s: worst case here is waitForHandshake's own 5s deadline plus
+    // stopDaemon's up-to-6s teardown budget (3s exit wait + 3s lock-gone poll) — ~11s, tighter
+    // than the 10s test timeout allowed once this runs right after the bootDaemon describe
+    // block's ~7 real subprocess spawns/kills (observed: this test is reliably fast in
+    // isolation but intermittently exceeds its old budget after that prior subprocess churn).
+  }, 20000);
 
   test("stale lock: alive-but-foreign-port (nothing listening) is reclaimed on lock.port, ignoring GLOSA_PORT", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
     ensureHomeDir(home);
     const staleLockPort = randomPort(); // nothing listening here — genuinely stale
     const wrongSeedPort = randomPort(); // must be ignored: lock.port is authoritative once a lock exists
@@ -276,27 +287,38 @@ describe("ensureDaemon — client", () => {
     process.env.GLOSA_HOME = home;
     process.env.GLOSA_PORT = String(wrongSeedPort);
 
-    const result = await ensureDaemon();
     try {
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.port).toBe(staleLockPort);
-        expect(result.port).not.toBe(wrongSeedPort);
-        expect(result.instanceId).not.toBe("gl-fake");
+      const result = await ensureDaemon();
+      try {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.port).toBe(staleLockPort);
+          expect(result.port).not.toBe(wrongSeedPort);
+          expect(result.instanceId).not.toBe("gl-fake");
+        }
+      } finally {
+        if (result.ok) {
+          try {
+            process.kill(result.pid, "SIGTERM");
+          } catch {
+            // already dead
+          }
+          await waitUntil(() => lockOf(home) === null);
+        }
       }
     } finally {
-      if (result.ok) {
-        try {
-          process.kill(result.pid, "SIGTERM");
-        } catch {
-          // already dead
-        }
-        await waitUntil(() => lockOf(home) === null);
-      }
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
     }
   }, 12000);
 
   test("fail-closed: alive pid + port bound by a non-glosa squatter refuses to spawn a duplicate", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
     ensureHomeDir(home);
     const port = randomPort();
     // Something is genuinely listening on lock.port, but it never answers the glosa handshake —
@@ -333,10 +355,18 @@ describe("ensureDaemon — client", () => {
       expect(body).toEqual({ not: "a glosa handshake" });
     } finally {
       squatter.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
     }
-  }, 10000);
+  }, 20000);
 
   test("proto mismatch: FAILs with an upgrade message instead of using the daemon", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
     const fakePort = randomPort();
     const fakeServer = Bun.serve({
       hostname: "127.0.0.1",
@@ -369,10 +399,18 @@ describe("ensureDaemon — client", () => {
       }
     } finally {
       fakeServer.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
     }
   }, 10000);
 
   test("handshake-poll timeout: fails referencing the daemon.log path", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
     const port = randomPort();
     // Occupy the port with a non-glosa server so the spawned daemon can never bind it, and so
     // polling never sees a valid handshake shape — this forces the full poll deadline.
@@ -396,6 +434,11 @@ describe("ensureDaemon — client", () => {
       }
     } finally {
       squatter.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
     }
   }, 15000);
 });

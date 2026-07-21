@@ -16,6 +16,10 @@ import {
 } from "./lock.ts";
 import { fetchHandshake, pollHandshake, probePortBound, type HandshakeResponse } from "./handshake.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
+import { createApiFetch, createClassFFetch } from "./http.ts";
+import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+import { internalErrorResponse } from "./problem.ts";
+import { loadToken } from "./token.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -37,12 +41,25 @@ function log(home: string, line: string): void {
 export async function bootDaemon(): Promise<never> {
   const home = ensureHomeDir(glosaHome());
   const port = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
+  const classFPort = Number(Bun.env.GLOSA_CLASSF_PORT ?? port + 1);
   const lockFile = lockPath(home);
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
+  const token = loadToken(home);
 
-  const server = await bindOrExit(home, port, instanceId, startedAt);
+  const apiFetch = createApiFetch({ port, classFPort, token, instanceId, startedAt });
+  const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 
+  // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
+  // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-
+  // lock + O_EXCL → exactly one daemon wins"). Observed empirically: inserting the class-F
+  // bind's own await *before* the lock CAS widens the window between "this process thinks it
+  // won the main port" and "this process has proven it via the lock", and on this environment
+  // `Bun.serve()` does not reliably surface EADDRINUSE between two racing OS processes fast
+  // enough to close that window — two daemons could both consider themselves bound before either
+  // wrote the lock. The lock's real O_EXCL CAS is the actual single-owner guarantee (the port
+  // bind is only a fast-path optimization), so it must follow the primary bind as tightly as
+  // P1.2 had it. Class-F binds only once this process has already won the lock outright.
   const record: DaemonLock = {
     instance_id: instanceId,
     pid: process.pid,
@@ -54,13 +71,24 @@ export async function bootDaemon(): Promise<never> {
   };
   await acquireLockOrExit(home, lockFile, record, server);
 
+  const classFFetch = createClassFFetch({ port: classFPort, spaPort: port });
+  const classFServer = await bindClassFOrExit(
+    home,
+    classFPort,
+    classFFetch,
+    server,
+    classFCspHeaders(port),
+    lockFile,
+    instanceId,
+  );
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     // Sequential: stop accepting *before* touching the lock, so a future journal-fsync /
     // SSE-bye step (P2/P3) has a clean "no new work, then cleanup" ordering to slot into.
-    await server.stop();
+    await Promise.all([server.stop(), classFServer.stop()]);
     removeLockIfOwned(lockFile, instanceId);
     log(home, `${instanceId} graceful shutdown complete`);
     process.exit(0);
@@ -73,35 +101,38 @@ export async function bootDaemon(): Promise<never> {
   process.on("SIGHUP", () => {});
   process.on("SIGINT", () => {});
 
-  log(home, `${instanceId} serving 127.0.0.1:${port}`);
+  log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
   return new Promise<never>(() => {
     // bootDaemon never resolves on the happy path; the process lives until a signal handler
     // (or one of the exit-code branches above) calls process.exit().
   });
 }
 
-async function bindOrExit(
+async function bindMainOrExit(
   home: string,
   port: number,
-  instanceId: string,
-  startedAt: string,
+  fetch: (req: Request) => Promise<Response>,
+  errorCsp: Record<string, string>,
 ): Promise<ReturnType<typeof Bun.serve>> {
   try {
     return Bun.serve({
       hostname: "127.0.0.1",
       port,
-      fetch(req) {
-        const url = new URL(req.url);
-        if (url.pathname === "/api/handshake" && req.method === "GET") {
-          return Response.json({
-            protocol_version: PROTOCOL_VERSION,
-            instance_id: instanceId,
-            pid: process.pid,
-            started_at: startedAt,
-          } satisfies HandshakeResponse);
-        }
-        return new Response("not found", { status: 404 });
-      },
+      fetch,
+      // Defense in depth: createApiFetch already try/catches everything, so this only fires if
+      // a throw somehow escapes that (a bug in the pipeline itself). Bun's default error page
+      // leaks source/stack — this never does (P1.3 review item 2).
+      //
+      // Deliberately NOT passing `development: false` here even though it reads like the more
+      // "production" choice: on this Bun version (1.2.7) it changes `Bun.serve()`'s own
+      // EADDRINUSE behavior — two racing processes both calling `Bun.serve({port: X, development:
+      // false, ...})` for the same port can BOTH return successfully (confirmed via a minimal
+      // repro + `lsof` showing both actually LISTENing), silently breaking the R1 singleton
+      // invariant this whole bind-then-lock dance exists to protect. Omitting `development`
+      // (Bun's own default) throws EADDRINUSE correctly, confirmed by the same repro. The `error`
+      // callback alone is enough for the leak-prevention this option was meant to add — it does
+      // NOT reproduce the EADDRINUSE regression on its own.
+      error: () => internalErrorResponse(errorCsp),
     });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") throw err;
@@ -114,6 +145,39 @@ async function bindOrExit(
       process.exit(0);
     }
     log(home, `EADDRINUSE on 127.0.0.1:${port}, no glosa peer answering — foreign process`);
+    process.exit(3);
+  }
+}
+
+/** Called only after this process has already won the main-port bind AND the lock CAS (see the
+ * ordering note in bootDaemon) — so by this point there is no "benign race with a live glosa
+ * peer" case left to distinguish; any bind failure here is a foreign squatter on the class-F
+ * port. Tears down both the already-bound main server AND the just-acquired lock (this process
+ * is not going to become the running daemon after all) so a failed boot never leaves a half-up
+ * daemon holding the primary port or a lock nobody is going to service. */
+async function bindClassFOrExit(
+  home: string,
+  port: number,
+  fetch: (req: Request) => Promise<Response>,
+  mainServer: ReturnType<typeof Bun.serve>,
+  errorCsp: Record<string, string>,
+  lockFile: string,
+  instanceId: string,
+): Promise<ReturnType<typeof Bun.serve>> {
+  try {
+    return Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch,
+      // See the matching comment in bindMainOrExit — no `development: false` here either, for
+      // the same EADDRINUSE-reliability reason.
+      error: () => internalErrorResponse(errorCsp),
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") throw err;
+    log(home, `EADDRINUSE on class-F port 127.0.0.1:${port} — foreign process, aborting boot`);
+    removeLockIfOwned(lockFile, instanceId);
+    await mainServer.stop();
     process.exit(3);
   }
 }

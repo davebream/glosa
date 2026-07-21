@@ -15,3 +15,15 @@ export {
 export type { DaemonLock } from "./lock.ts";
 export { fetchHandshake, pollHandshake, probePortBound } from "./handshake.ts";
 export type { HandshakeResponse } from "./handshake.ts";
+export { authorizeRequest, isForeignOrigin } from "./auth.ts";
+export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./auth.ts";
+export { confinePath } from "./confine-path.ts";
+export type { ConfineResult } from "./confine-path.ts";
+export { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
+export type { ContractCheck } from "./contract.ts";
+export { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+export { createApiFetch, createClassFFetch } from "./http.ts";
+export type { ApiContext, HandshakeBody } from "./http.ts";
+export { internalErrorResponse, problem } from "./problem.ts";
+export type { ProblemSlug } from "./problem.ts";
+export { loadToken, tokenMatches, tokenPath } from "./token.ts";

@@ -21,3 +21,6 @@ build/
 
 # session handoff (pause/restore) — never commit
 .claude/session.md
+
+# tool scratch (serena etc.)
+.serena/
