@@ -56,6 +56,12 @@ The implementation contract is in `CLAUDE.md`; the authoritative requirements ar
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for accepted product direction and the public
+[Glosa Roadmap project](https://github.com/users/davebream/projects/5) for live execution status.
+The requirements under `docs/` are the normative v1 technical contract, not the current work queue.
+
 ## License
 
 Licensed under the Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The license does not grant rights to project names or trademarks.

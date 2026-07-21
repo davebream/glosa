@@ -1,7 +1,10 @@
 # glosa — overnight build log
 
+> **Archived:** This is the historical v1 build narrative. It is not a current status source or work
+> queue. See [`ROADMAP.md`](../../../ROADMAP.md) and the linked public GitHub Project.
+
 Running narrative of the autonomous overnight build. Newest entries appended at the bottom of each
-section. Source of truth for *progress* is `docs/BUILD-PLAN.md` (checkboxes); this file is the *why*
+section. Source of truth for *progress* is `docs/archive/v1-build/BUILD-PLAN.md` (checkboxes); this file is the *why*
 and the audit trail.
 
 ---
