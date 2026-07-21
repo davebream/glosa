@@ -79,6 +79,32 @@ owns the Host/Origin auth table and is more specific. **Decision:** Host literal
 foreign **Origin** rejection → **403**. Coherent split; satisfies A3's explicit rule and A1's 403 table
 for Origin. Apply in P1.3.
 
+### P1.3 HTTP skeleton + auth — ✅ (commit 5909d71) — CC, security + adversarial review
+- **Built (Sonnet subagent):** two loopback `Bun.serve` listeners (4646 API + 4647 class-F, both
+  Host-checked); `auth.ts` `authorizeRequest` (pure, route-class-scoped Origin/Bearer per A3 §4 — Bearer
+  before Origin so no-token→401 regardless of origin); `confine-path.ts` `confinePath` (realpaths nearest
+  existing ancestor → catches symlink escape even for not-yet-created files; tracked-artifact glob check
+  deferred to P2.2); `token.ts` (constant-time `timingSafeEqual`, length-oracle-safe); `contract.ts`
+  (X-Contract-Version major-mismatch→409, minor→stale-minor warning); `problem.ts` (RFC 9457 envelope);
+  `csp.ts` (SPA + class-F CSP strings, verified verbatim vs A3); handshake body = D2 superset (keeps P1.2
+  fields, adds contract_version/daemon_version/paired).
+- **Adversarial pass — security-auditor (no critical/high; CSP verbatim, DNS-rebinding defeated, tokens
+  constant-time) + critic (2 blockers) + my review:**
+  - **BLOCKER 1 (route-enumeration side channel):** unmatched route returned 404 before the Origin check →
+    foreign origin got 403 on real routes, 404 on fake. **Fixed:** foreign Origin → 403 before 404 (D3).
+  - **BLOCKER 2 (latent info-leak):** no global try/catch → a future throwing handler would leak Bun's
+    dev-error HTML (source, no CSP). **Fixed:** whole pipeline try/catch on both listeners → detail-free
+    `internalErrorResponse` (500 problem+json + CSP) + a Bun.serve `error:` callback.
+  - **Real bug the subagent found while fixing the test flake:** `development: false` on `Bun.serve`
+    (Bun 1.2.7) silently breaks cross-process EADDRINUSE detection → two racing daemons both bind →
+    **R1 singleton violation**. It correctly REFUSED my `development:false` instruction, kept only the
+    `error:` callback (which alone suppresses the dev overlay), and documented it. Verified: two-concurrent-
+    spawn test green across 3 runs.
+  - Decisions logged: D3 (origin-on-unmatched), D4 (malformed contract-version → lenient).
+  - Test-infra: fixed a **pre-existing P1.2 port-collision flake** (random-port step bumped to 4 so the
+    class-F `port+1` derivation can't collide; per-test local home state). Ran full suite 3× post-fix →
+    102 pass / 0 fail every time, typecheck clean.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
