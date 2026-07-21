@@ -19,7 +19,7 @@
   --border-strong: oklch(0.82 0.008 110);
   --primary: oklch(0.5 0.1 110);            /* workbench accent — actions, selection, focus */
   --primary-hover: oklch(0.44 0.1 110);
-  --anchor-wash: oklch(0.95 0.045 108);     /* annotation anchor highlight on the manuscript */
+  --anchor-wash: oklch(0.94 0.032 120);     /* annotation anchor highlight — calm sage, not highlighter */
   --danger: oklch(0.5 0.16 25);
   --warn: oklch(0.55 0.12 75);
   --ok: oklch(0.52 0.1 150);
@@ -709,10 +709,11 @@ button {
   overflow: hidden;
 }
 
-/* The wash hugs the quoted words (inline span), continuing across wraps. */
+/* The wash hugs the quoted words (inline span) as a thin underlay under the baseline half,
+   continuing across wraps — a pencil underline, not a marker smear. */
 .glosa-annotation-quote > span,
 .glosa-composer-quote > span {
-  background: linear-gradient(transparent 55%, var(--anchor-wash) 55%);
+  background: linear-gradient(transparent 64%, var(--anchor-wash) 64%);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
@@ -748,24 +749,26 @@ button {
   color: var(--primary);
 }
 
-/* Intent chip: text, never color-alone. */
+/* Intent on a saved card is metadata, not an affordance: plain muted text with a middot,
+   no pill that pretends to be a button. */
 .glosa-annotation-intent {
   margin-left: auto;
   font-size: var(--text-xs);
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
+  color: var(--muted); /* metadata, but still AA-readable */
+}
+
+.glosa-annotation-intent::before {
+  content: "· ";
 }
 
 /* Composer: in the margin at full width, a fixed bottom tray in compact (brief §7.3). */
 .glosa-composer {
   background: var(--bg);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: var(--space-3);
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
   box-shadow: 0 1px 3px oklch(0.24 0.01 110 / 0.06);
 }
 
@@ -781,45 +784,57 @@ button {
   overflow: hidden;
 }
 
+/* Intent choice: free-floating radio chips, not a segmented tub — three writer-length labels
+   wrap naturally as tags instead of breaking a control that pretends to be one piece. */
 .glosa-composer-intents {
   display: flex;
-  flex-wrap: wrap; /* three writer-length labels won't fit one 300px row — wrap, never clip */
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 2px;
-  gap: 2px;
+  flex-wrap: wrap;
+  gap: var(--space-1);
 }
 
 .glosa-composer-intents button {
-  flex: 1 1 auto;
-  padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
   color: var(--muted);
   font-size: var(--text-xs);
   white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-composer-intents button:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
 }
 
 .glosa-composer-intents button[aria-pressed="true"] {
-  background: var(--bg);
-  color: var(--ink);
+  background: color-mix(in oklch, var(--primary) 10%, var(--bg));
+  border-color: var(--primary);
+  color: var(--primary);
   font-weight: 600;
-  border: 1px solid var(--border-strong);
-  margin: -1px;
 }
 
 .glosa-composer-input {
   font: inherit;
   color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid transparent;
   border-radius: 6px;
   padding: var(--space-2);
   min-height: 3.5rem;
   resize: vertical;
   width: 100%;
   min-width: 0; /* a textarea's intrinsic cols-width must not widen the composer */
+}
+
+/* Text fields get a soft ring, not the 2px button outline — one quiet border plus a faint halo. */
+.glosa-composer-input:focus-visible,
+.glosa-conv-composer-input:focus-visible,
+.glosa-edit-area:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 14%, transparent);
 }
 
 .glosa-composer-input::placeholder {
