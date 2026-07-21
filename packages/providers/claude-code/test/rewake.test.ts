@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — A2 §F07's asyncRewake rearm protocol. The two things the spec demands are proven
 // separately here: (1) rearm keeps working across MANY sequential inbox entries, not just once
 // (F07's whole complaint is "repeated inbox entries silently lose rung 2" without this), and

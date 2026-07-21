@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P1.2 daemon lifecycle — real fault/concurrency tests (A5 §F13). Every test gets its own tmp
 // GLOSA_HOME + a random high port (via helpers.ts) so parallel runs never collide on port/home,
 // and nothing here ever touches a real `~/.glosa`. The bootDaemon-side cases spawn the actual

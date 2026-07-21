@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the history/timeline pane (A6 §F31, P3.5): lists checkpoints for the workspace,
 // lets the human pick any two (or one + "current") to compare in a diff pane, and restore an
 // artifact to a chosen checkpoint. Talks to the daemon ONLY through data-access.js (R6's ONE

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the journal writer (A4 §F04). `.glosa/journal.ndjson` is append-only and is
 // THE single source of truth; current status is never stored anywhere else, only derived by
 // replaying it (replay.ts). This module owns exactly one concern: appending one event envelope

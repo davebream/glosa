@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Class R happy paths + the position→block scoping mechanics the rest of the corpus builds on.
 import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";

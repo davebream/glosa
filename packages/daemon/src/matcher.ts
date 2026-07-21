@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the ONE canonical file matcher (A4 §F20). chokidar v4 dropped glob support and
 // git-pathspec isn't minimatch-compatible, so no consumer (watcher, sidebar, git-pathspec staging)
 // is allowed to hold its own glob — they all consume the single normalized LIST this module

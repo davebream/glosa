@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa request-review <path> [--message] [--action] [--wait <duration>]` (A5 §F23's
 // attention axis, A6 §F26). Creates an `attention_request` entry in the CURRENT WORKING
 // DIRECTORY's workspace (same cwd-scoping convention `resolve`/`apply-begin` use); `<path>` names

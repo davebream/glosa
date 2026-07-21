@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 — wire-compatibility check between data-access.js's hand-duplicated SSE frame parser and
 // the real server-side encoder it has to stay in sync with (packages/daemon/src/sse.ts). The two
 // can't share code directly (data-access.js's own header comment explains why: it ships as plain

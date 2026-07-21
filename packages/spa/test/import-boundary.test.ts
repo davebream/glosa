@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.3 — structural check for R6's "ONE data-access module" invariant: no SPA component talks
 // to the daemon except through data-access.js. Source-text based (not a runtime mock-count), on
 // purpose — it catches a FUTURE stray `fetch(` call anywhere in these files even before a test
@@ -28,6 +29,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
   // itself never calls `fetch` — only `viewer.js`/`annotate.js` are checked here.
   test.each([
     ["../src/viewer.js", read("../src/viewer.js")],
+    ["../src/artifact-tree.js", read("../src/artifact-tree.js")],
     ["../src/annotate.js", read("../src/annotate.js")],
     ["../src/history.js", read("../src/history.js")],
     ["../src/classf-viewer.js", read("../src/classf-viewer.js")],
@@ -46,6 +48,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
     expect(FETCH_REFERENCE_RE.test(withoutComments)).toBe(true);
     for (const src of [
       read("../src/viewer.js"),
+      read("../src/artifact-tree.js"),
       read("../src/annotate.js"),
       read("../src/history.js"),
       read("../src/classf-viewer.js"),
@@ -82,6 +85,12 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
 
   test("annotate.js imports nothing (self-contained — no daemon access of its own)", () => {
     const source = read("../src/annotate.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
+    expect(specifiers).toHaveLength(0);
+  });
+
+  test("artifact-tree.js imports nothing (pure tree rendering — no daemon access)", () => {
+    const source = read("../src/artifact-tree.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
     expect(specifiers).toHaveLength(0);
   });

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.4: closes the "single-writer is convention-only" gap flagged on WorkspaceBus (see the
 // P2.4 comment block in ../../src/bus/bus.ts) — this suite proves the registry's own contract
 // ("same root -> same instance, same shared mutex") rather than re-testing WorkspaceBus's

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Fixture executed as a separate OS PROCESS by lockfile-fallback.test.ts's cross-process suite —
 // proves `withFileLease` serializes real concurrent processes, not just concurrent in-process
 // promises (which JS's single-threaded event loop makes trivially safe on its own). Acquires the

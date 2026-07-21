@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — deterministic byte-sort on the NFC `path` (A4 §F20). The three consumers (watcher,
 // sidebar, git-pathspec staging, wired in later tasks) all depend on identical ordering across
 // runs and across hosts — that only holds if the sort is byte-order on the UTF-8 encoding, NOT a

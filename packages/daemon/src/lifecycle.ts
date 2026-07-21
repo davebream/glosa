@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — F13 daemon lifecycle: the `glosa __daemon` boot body (bootDaemon) and the
 // client-side "find or spawn" helper (ensureDaemon). See docs/appendices/A5-daemon-architecture.md
 // §F13 and docs/requirements.md R1. Three roles, one binary: this module is used by the daemon

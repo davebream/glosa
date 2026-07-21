@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the rich markdown editor (Edit mode's default face; the source textarea remains
 // one toggle away and stays the byte-exact fallback). Built on the vendored ProseMirror bundle
 // (vendor/prosemirror.js) with prosemirror-markdown's CommonMark schema, so what this editor

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — RFC 9457 problem+json error envelope (A1 §1). One shared helper so every
 // route returns the same {type,title,status,detail?,instance?} shape with the right content
 // type, instead of each handler hand-rolling its own error body.

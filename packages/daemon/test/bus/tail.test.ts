@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.2 — bus/tail.ts: the SSE cursor space (A1 §8.1, physical journal-line offsets), read
 // straight off a real journal built via WorkspaceBus (not hand-crafted NDJSON) so these tests
 // exercise the exact bytes production writes.

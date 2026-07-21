@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — `glosa init`'s transactional merge/backup/uninstall (A6 §F26). Every test drives
 // `runInit`/`runUninstall` directly against a real tmp workspace dir (real fs, real JSON files) —
 // no mocking of the merge logic itself, only of `resolveGlosaBin` (so hook command strings are

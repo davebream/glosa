@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers shared across the P1.2 daemon lifecycle suites. Every test gets its own
 // tmp GLOSA_HOME and a random high port so parallel test cases never collide, and nothing here
 // ever touches a real `~/.glosa`.

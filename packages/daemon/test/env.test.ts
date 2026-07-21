@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // ANTHROPIC_API_KEY scrub coverage (docs/CLAUDE.md invariant 5 — "never let a spawned child
 // inherit it"). Two layers: buildChildEnv is a pure function (unit test), and a real
 // Bun.spawn round-trip proves the scrub survives actually handing the env to the OS — Bun.spawn

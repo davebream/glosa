@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P2.5: the guarded inbox/attention lifecycle (A5 §F23). This is the reducer
 // replay.ts's fold engine was left pluggable for; nothing in replay.ts, reconcile.ts, or the
 // dedup logic in `applyEvent` changes here — only WHAT a transition event does to `status`.

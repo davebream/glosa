@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — authorizeRequest: the route-class-scoped Origin/Bearer gate from A3 §4's
 // resolved table. Pure and exhaustively unit-testable — no I/O, no Bun.serve, just header
 // inspection — so the attack-table coverage (A3 §5) lives mostly in its unit tests, not the

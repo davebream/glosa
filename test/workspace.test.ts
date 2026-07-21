@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { test, expect } from "bun:test";
 
 // P1.1 — proves the monorepo is wired: every workspace package resolves by its published name

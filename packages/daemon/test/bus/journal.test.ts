@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import { readFileSync, writeFileSync } from "node:fs";

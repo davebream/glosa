@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — client-side helper for probing `GET /api/handshake` (A5 §F13). This is the
 // lifecycle-level handshake (readiness + proto compat), not the SPA-facing auth/contract
 // handshake — that's wired in P1.3.

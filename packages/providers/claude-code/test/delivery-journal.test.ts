@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — proves the AgentProvider → journal seam end to end: `ClaudeCodeProvider.deliver()`'s
 // `DeliveryResult` really does become the correct `delivery_attempt{via, outcome, reason}` on a
 // REAL `WorkspaceBus` (A5 §F23), via `recordDelivery()` (the one place R7's return shape maps onto

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — SPA-facing contract-version gate (A1 §3). Deliberately separate from
 // protocol.ts's daemon-lifecycle handshake version even though both read "1.0" today — see
 // protocol.ts's header comment for why the two compatibility checks are kept apart despite the

@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: release-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan full history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan bun.lock for known vulnerabilities
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |-
+            --lockfile=bun.lock
+
+  release:
+    name: release
+    needs: security
+    runs-on: macos-14
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.2.7
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Pin npm bootstrap client
+        run: npm install --global npm@11.5.1
+      - name: Verify release tag
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Test (first pass)
+        run: bun test
+      - name: Test (second pass)
+        run: bun test
+      - name: Audit production dependency licenses
+        run: bun run audit:licenses
+      - name: Inspect and smoke-test npm tarball
+        run: bun run package:check
+      - name: Publish package with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "${version}" == *-* ]]; then
+            dist_tag=alpha
+          else
+            dist_tag=latest
+          fi
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            unset NODE_AUTH_TOKEN
+          fi
+          npm publish --access public --tag "${dist_tag}" --provenance
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

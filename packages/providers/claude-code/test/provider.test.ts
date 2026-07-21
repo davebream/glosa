@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — the Claude Code AgentProvider's interface conformance + the R4 delivery ladder,
 // including the channels-OFF fallback (a SEPARATE gate from a channel smoke test, per R4: "all
 // delivery tests pass with channels disabled"). The real channel-push-into-an-idle-Claude-session

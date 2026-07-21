@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P6.1 — unit coverage for the generic-behavior helpers in src/adapters/interface.ts: given an
 // adapter's answers (or no adapter at all), do these compute exactly the generic thing R7
 // promises, with zero domain knowledge? Pure functions, no HTTP/filesystem workspace scaffolding

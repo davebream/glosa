@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P3.5 — checkpoints.ts: since-token resolution (A6 §F31's `yesterday|today|ISO|<checkpoint-id>`)
 // and the full-history listing. The DST day-boundary case is the acceptance-named test here — it
 // proves `resolveDayBoundary` builds the boundary from LOCAL CALENDAR components (so a

@@ -7,7 +7,9 @@ the agent runs as a normal interactive session in the user's terminal; glosa is 
 beside it serving a browser SPA. Claude Code is the deep, required integration; the design is
 agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one provider interface).
 
-Status: **pre-implementation.** The spec is complete and build-ready; no code exists yet.
+Status: **experimental public alpha.** The implementation and deterministic acceptance suites exist,
+but the manual T8 rehearsal against a copy of a real past sermon and the subsequent token-revocation
+check remain incomplete. This is not yet approved for a live sermon week.
 
 ## Read this before writing any code
 
@@ -52,8 +54,8 @@ Status: **pre-implementation.** The spec is complete and build-ready; no code ex
 
 ## Build approach
 
-Implementation runs as a kombajn autonomous epic against `docs/requirements.md`. Tasks T0–T8 (A-level
-detail in the appendices). **T8 is the release gate**: the deterministic acceptance suites (fault,
+Implementation follows `docs/requirements.md`. Tasks T0–T8 have A-level detail in the appendices.
+**T8 is the release gate**: the deterministic acceptance suites (fault,
 concurrency, security, anchor, transcript, actual-jethro-topology) must pass AND a manual rehearsal
 against a copy of a real past sermon must pass. **"Green CI" is not the acceptance bar** — the
 fault-injection/security/concurrency suites are, because a model's self-written happy-path tests will

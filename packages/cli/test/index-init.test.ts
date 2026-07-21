@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P4.3 — `run(["init", ...])`'s CLI wiring: flag parsing, exit codes, and the `--json` envelope
 // (A6 §F26's `{glosa_json:1, ok, command, exit_code, data, warnings, error}` shape). The merge
 // LOGIC itself is covered exhaustively in init.test.ts — this only proves `index.ts` calls it

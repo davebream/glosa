@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — GET /w/:slug/diff support (A1 §5.7): resolves a from..to checkpoint range into
 // per-file unified diffs with their `Glosa-Attribution` trailer, read straight off shadow-git
 // history that checkpoint()/diffShas (git/shadow.ts) already produced — this module only reads it

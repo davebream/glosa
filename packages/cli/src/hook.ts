@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa hook <event>` (A6 §F26's hook entries + A2's per-event roles). Every
 // handler here is deliberately thin: parse the hook JSON on stdin, call the injected
 // `DaemonHookClient`/`RewakeCoordinator`, print the right hook JSON on stdout, return the right
 // exit code. Nothing here writes the transcript or any glosa state file directly — the daemon API
 // (or, for the rewake lease, the coordinator's own lease file — a CLI-local watcher-liveness
 // concern, not workspace state) is the only thing that ever gets mutated.
-import { ClaudeCodeProvider } from "@glosa/providers-claude-code";
-import type { RewakeCoordinator, RewakeLeaseStore } from "@glosa/providers-claude-code";
+import { ClaudeCodeProvider } from "../../providers/claude-code/src/index.ts";
+import type { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
 import type { DaemonHookClient } from "./daemon-client.ts";
 
 export type HookEvent = "session-start" | "rewake-watch" | "session-end" | "user-prompt-submit" | "stop" | "notification";

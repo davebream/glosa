@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "license": "Apache-2.0",
   "description": "glosa Claude Code agent provider — channels push, hook gate/boundary drain, MCP pull, transcript mirror.",
   "main": "src/index.ts",
   "exports": { ".": "./src/index.ts" },

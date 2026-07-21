@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — the APFS NFC/NFD gotcha (A4 §F20). macOS APFS is normalization-insensitive but not
 // normalization-preserving: a filename written with combining-character (NFD) bytes can come back
 // from readdir() in NFD form even though the user "typed" the NFC (precomposed) form. `path` must

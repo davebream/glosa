@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa open [dir]` (A6 §F26). Ensures the daemon is running (lazy spawn via
 // `ensureDaemon`, inside `createClient`), ensures `dir`'s `.glosa/` baseline scaffold exists via
 // the daemon's own `POST /api/workspaces/open` (http.ts's P5.1 addition — this file never
@@ -8,7 +9,7 @@
 // over the appendix here, per this repo's own precedence rule.
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { ensureToken, glosaHome } from "@glosa/daemon";
+import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope } from "./envelope.ts";
 

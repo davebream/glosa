@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the class-F capability store (A1 §7, A3 §1/§3). One in-memory `Map`, exactly
 // as the spec requires: NOT persisted (a daemon restart invalidates every outstanding capability
 // — acceptable for a local single-user tool), directory-scoped and multi-request (not single-use:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — a minimal FIFO async mutex, plus a keyed variant (one mutex per key). This is
 // the serialization primitive behind "the daemon is the sole writer, per-workspace async mutex"
 // (A4 cross-cutting invariant): every journal/inbox write for a given workspace runs inside

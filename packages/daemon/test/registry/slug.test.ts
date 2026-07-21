@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";

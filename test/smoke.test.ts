@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { test, expect } from "bun:test";
 
 // Baseline smoke test so `bun test` is green from the first build task.

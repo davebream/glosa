@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — the global workspace index (A5 §F19): `<GLOSA_HOME>/workspaces.json`. Tracks
 // every workspace glosa has ever seen (across every provider session, `glosa open`, or a
 // discovered `.glosa/` dir), keyed by canonical path. Daemon is the SOLE writer, serialized by

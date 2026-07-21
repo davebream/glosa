@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // P2.2 — diffSnapshots: pure threshold-crossing diff between two resolveMatchedFiles() results
 // (A4 §F20). Grow-past-threshold and shrink-under are the two crossing events the matcher itself
 // is responsible for surfacing; new/deleted are included for completeness of the file-tracking

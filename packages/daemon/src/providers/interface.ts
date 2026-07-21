@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — R7's AgentProvider interface (a first-class v1 deliverable, not a Claude-only
 // concern): the seam every hook/MCP-capable agent CLI implements ONE of to plug into glosa's
 // delivery ladder (R4). Defined here — not inside packages/providers/claude-code — so both the

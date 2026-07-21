@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Test-only helpers for the anchoring resolver corpus (P3.4). Fixtures go through the REAL
 // rendering pipeline (artifact-render.ts's renderMarkdown), and `position` offsets are computed
 // against the REAL rendered textContent via happy-dom — the same string annotate.js's `position`

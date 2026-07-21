@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P3.2: `GET /w/:slug/stream` (A1 §5.5, full protocol A1 §8). Builds the SSE
 // Response — first-connect snapshot, reconnect resume from a journal-line cursor, live push via
 // `WorkspaceBus`'s in-process notifier, best-effort artifact-change push via a chokidar watcher,

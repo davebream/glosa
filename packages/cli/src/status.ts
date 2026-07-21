@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa status [dir] --json` (A6 §F26). Never fails just because the daemon is
 // down — that fact is reported IN `data`, exit 0, unless something else entirely goes wrong
 // (internal error -> exit 70). Aggregates via the daemon's own `GET /api/status` (P5.1 addition,

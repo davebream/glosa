@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /* @glosa/spa — the visual system (design brief: docs/design/2026-07-21-workspace-review-surface-brief.md).
    Served as /app/app.css (allowlisted in packages/daemon/src/http.ts). Plain CSS, no build step.
 
