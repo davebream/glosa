@@ -47,7 +47,16 @@ export interface OpenData {
   focus?: string;
 }
 
-export async function runOpen(target: string, deps: OpenDeps): Promise<CommandEnvelope<OpenData>> {
+export interface OpenOptions {
+  /** Launch the URL through macOS after preparing the workspace. Defaults to true. */
+  launchBrowser?: boolean;
+}
+
+export async function runOpen(
+  target: string,
+  deps: OpenDeps,
+  options: OpenOptions = {},
+): Promise<CommandEnvelope<OpenData>> {
   if (deps.platform() !== "darwin") {
     return {
       ok: false,
@@ -108,7 +117,7 @@ export async function runOpen(target: string, deps: OpenDeps): Promise<CommandEn
   // reads both BEFORE scrubbing the fragment from the address bar.
   const focusParams = focus ? `&w=${encodeURIComponent(opened.slug)}&a=${encodeURIComponent(focus)}` : "";
   const url = `http://127.0.0.1:${client.port}/#t=${token}${focusParams}`;
-  deps.openBrowser(url);
+  if (options.launchBrowser !== false) deps.openBrowser(url);
 
   return {
     ok: true,

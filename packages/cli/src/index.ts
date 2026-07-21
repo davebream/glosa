@@ -303,10 +303,11 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 70;
   }
   if (cmd === "open") {
+    const urlOnly = cmdArgs.includes("--url");
     const parsed = parseFlags(cmdArgs, []);
     const dir = parsed.positional[0] ?? process.cwd();
-    const result = await runOpen(dir, realOpenDeps(createHttpGlosaClient));
-    printOpenResult(result, parsed.json, quiet);
+    const result = await runOpen(dir, realOpenDeps(createHttpGlosaClient), { launchBrowser: !urlOnly });
+    printOpenResult(result, parsed.json, quiet || urlOnly);
     return result.exitCode;
   }
   if (cmd === "resolve") {
