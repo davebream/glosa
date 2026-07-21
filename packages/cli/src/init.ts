@@ -25,6 +25,9 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
+import { CLI_VERSION } from "./version.ts";
+
+export { CLI_VERSION } from "./version.ts";
 
 // ---------------------------------------------------------------------------------------------
 // GLOSA_BIN resolution (A6 §F26)
@@ -35,8 +38,6 @@ export interface GlosaBinResolution {
   args: string[];
   mode: "path" | "bun-run";
 }
-
-export const CLI_VERSION = "0.0.0"; // mirrors index.ts's `--version` output
 
 /** Bare `glosa` if it's on PATH AND its `--version` matches this build; otherwise the no-build-
  * step fallback `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (A6 §F26/§F30 — "honors
