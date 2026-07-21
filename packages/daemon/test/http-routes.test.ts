@@ -409,6 +409,50 @@ describe("A1 §5 route catalog", () => {
     expect(await inboxRes.json()).toEqual({ pending_count: 0, attention: [] });
   });
 
+  test("POST annotations/:id/withdraw → 200 {status:rejected}; the journal keeps the entry, delivery stops (terminal)", async () => {
+    const createRes = await fetchFn(
+      stateChangingReq(`/w/${slug}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(annotationBody()),
+      }),
+    );
+    const { id } = await createRes.json();
+
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/annotations/${id}/withdraw`, { method: "POST" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id, status: "rejected" });
+
+    // Append-only truth: the entry_created line is still there, joined by the terminal transition.
+    const journal = readFileSync(journalPath(root), "utf8");
+    const lines = journal.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    expect(lines.find((l) => l.event === "entry_created" && l.entry === id)).toBeDefined();
+    const transition = lines.find((l) => l.event === "transition_committed" && l.entry === id);
+    expect(transition.detail.to).toBe("rejected");
+    expect(transition.by).toBe("human");
+  });
+
+  test("POST withdraw on an already-terminal entry → 409 conflict (a session may have closed it first)", async () => {
+    const createRes = await fetchFn(
+      stateChangingReq(`/w/${slug}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(annotationBody()),
+      }),
+    );
+    const { id } = await createRes.json();
+    await fetchFn(stateChangingReq(`/w/${slug}/annotations/${id}/withdraw`, { method: "POST" }));
+
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/annotations/${id}/withdraw`, { method: "POST" }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).type).toContain("conflict");
+  });
+
+  test("POST withdraw on an unknown entry id → 404", async () => {
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/annotations/inb-never-existed/withdraw`, { method: "POST" }));
+    expect(res.status).toBe(404);
+  });
+
   test("POST annotation missing body.body → 400 validation-failed", async () => {
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/annotations`, {

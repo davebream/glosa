@@ -2,7 +2,7 @@
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, scrubToken, selectScreen } from "../src/bootstrap.js";
+import { CONTRACT_VERSION, readFocus, scrubToken, selectScreen } from "../src/bootstrap.js";
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -27,6 +27,21 @@ function fakeHistory(): { calls: Array<[unknown, string, string]>; replaceState:
     },
   };
 }
+
+describe("readFocus — the CLI deep-link half of the fragment", () => {
+  test("#t=…&w=<slug>&a=<artifact> yields both; URL-encoding is undone", () => {
+    const loc = { hash: "#t=SECRET&w=essays-abc&a=07%2Fmanuscript.md" };
+    expect(readFocus(loc)).toEqual({ slug: "essays-abc", artifact: "07/manuscript.md" });
+  });
+
+  test("a plain #t=<token> fragment yields nulls (directory open)", () => {
+    expect(readFocus({ hash: "#t=SECRET" })).toEqual({ slug: null, artifact: null });
+  });
+
+  test("no fragment at all yields nulls", () => {
+    expect(readFocus({ hash: "" })).toEqual({ slug: null, artifact: null });
+  });
+});
 
 describe("scrubToken", () => {
   test("#t=<token> present: stashed in sessionStorage under glosa_token", () => {

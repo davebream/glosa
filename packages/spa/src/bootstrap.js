@@ -43,6 +43,17 @@ export function scrubToken(loc, storage, history) {
 }
 
 /**
+ * The CLI's deep-link (`glosa open <file>` → `#t=…&w=<slug>&a=<artifact>`): which workspace to
+ * select and which artifact to focus on load. MUST be read before `scrubToken` strips the
+ * fragment. Absent params → both null (plain `glosa open <dir>` behavior).
+ */
+export function readFocus(loc) {
+  const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
+  const params = new URLSearchParams(hash);
+  return { slug: params.get("w"), artifact: params.get("a") };
+}
+
+/**
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
  * or null if the fetch failed/threw. `token` is whatever `scrubToken` returned.
  */
@@ -70,6 +81,7 @@ function render(screen) {
 }
 
 async function main() {
+  const focus = readFocus(window.location); // before scrubToken — it strips the fragment
   const token = scrubToken(window.location, window.sessionStorage, window.history);
 
   let handshake = null;
@@ -89,7 +101,7 @@ async function main() {
   }
   if (screen === "ready") {
     const readyEl = document.querySelector('[data-screen="ready"]');
-    mountApp(readyEl);
+    mountApp(readyEl, { initialSlug: focus.slug ?? undefined, initialArtifact: focus.artifact ?? undefined });
   }
 }
 

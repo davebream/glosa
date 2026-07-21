@@ -87,6 +87,11 @@ const SPA_ASSETS: Record<string, string> = {
   "classf-viewer.js": "text/javascript; charset=utf-8",
   // P4.2 addition — the read-only conversation mirror + out-of-band composer (R6/F32).
   "conversation.js": "text/javascript; charset=utf-8",
+  // Rich markdown editor (Edit mode's default face) + its vendored ProseMirror bundle.
+  "rich-editor.js": "text/javascript; charset=utf-8",
+  "vendor/prosemirror.js": "text/javascript; charset=utf-8",
+  // Shared confirm dialog (discard-edits and restore guards).
+  "dialog.js": "text/javascript; charset=utf-8",
 };
 
 export interface ApiContext {
@@ -603,6 +608,29 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
     status: 201,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+/** `POST /w/:slug/annotations/:id/withdraw` — the human retracts an annotation from glosa's own
+ * margin UI. The inbox entry is immutable and the journal append-only (R3), so "remove" is a
+ * guarded terminal transition to `rejected` (legal from any non-terminal status, A5 §F23), never
+ * a delete: the entry stops being deliverable/nudgeable but its history stays replayable. 404 for
+ * an id the journal has never seen; 409 `conflict` once terminal (a session may have applied it
+ * concurrently — the UI should refresh, not pretend the retraction won). */
+async function handleWithdrawAnnotation(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const entry = bus.state.entries[entryId];
+  if (!entry) return problem(404, "not-found", "no such annotation entry", entryId, url.pathname);
+  const kind = entry.kind === "attention" ? "attention" : "common";
+  if (isTerminal(kind, entry.status)) {
+    return problem(409, "conflict", "entry already closed", `status is ${entry.status}`, url.pathname);
+  }
+
+  await bus.commitTransition(entryId, "rejected", { by: "human", note: "withdrawn in glosa" });
+  return Response.json({ id: entryId, status: bus.state.entries[entryId]?.status ?? "rejected" });
 }
 
 /** `GET /w/:slug/diff` (A1 §5.7). v1 only implements the `from`/`to` checkpoint-id form — `since`
@@ -1418,6 +1446,11 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleCreateAnnotation(ctx, slug, req) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations\/([^/]+)\/withdraw$/))) {
+    const slug = m[1] as string;
+    const entryId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleWithdrawAnnotation(ctx, slug, entryId, req) };
   }
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/diff$/))) {
     const slug = m[1] as string;

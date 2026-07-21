@@ -29,6 +29,7 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): { deps: OpenDeps; client: 
     openBrowser: (url) => browserCalls.push(url),
     platform: () => "darwin",
     dirExists: () => true,
+    fileExists: () => false,
     ...overrides,
   };
   return { deps, client, browserCalls };
@@ -83,6 +84,29 @@ describe("glosa open", () => {
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
     expect(browserCalls).toHaveLength(1);
     expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#t=test-token-abc");
+  });
+
+  test("a FILE argument opens its owning directory as the workspace, deep-linked via #…&w=<slug>&a=<file>", async () => {
+    const { deps, client, browserCalls } = makeDeps({
+      dirExists: (d) => d === "/ws/essays",
+      fileExists: (p) => p === "/ws/essays/07-manuscript.md",
+    });
+    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays" };
+
+    const result = await runOpen("/ws/essays/07-manuscript.md", deps);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.data.focus).toBe("07-manuscript.md");
+    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: ["/ws/essays"] });
+    expect(browserCalls[0]).toContain("#t=test-token-abc&w=essays-abc&a=07-manuscript.md");
+  });
+
+  test("a directory argument keeps the plain fragment — no w/a params", async () => {
+    const dir = freshDir();
+    const { deps, browserCalls } = makeDeps();
+    await runOpen(dir, deps);
+    expect(browserCalls[0]).not.toContain("&a=");
+    expect(browserCalls[0]).not.toContain("&w=");
   });
 
   test("--json envelope has exactly the documented top-level keys", async () => {

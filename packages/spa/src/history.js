@@ -9,6 +9,7 @@
 // the raw `summary`/`by` fields (which ARE git-shaped internally — `human_edit`, `session:<id>` —
 // that's the API's business, not the reader's).
 import { Diff2Html } from "./vendor/diff2html.js";
+import { confirmDialog } from "./dialog.js";
 
 /** Maps a checkpoint's raw `summary` (the `Glosa-Kind` trailer value, per checkpoints.ts) to a
  * short, document-native phrase. An unrecognized kind (future trailer value this UI doesn't know
@@ -115,12 +116,16 @@ export function mountHistoryPane(container, { dataAccess, slug, path }) {
       await refresh();
     } catch (err) {
       if (err?.status === 409 && err.problem?.would_be_lost_diff) {
+        // The dirty-worktree guard: show exactly what a forced restore would throw away (the
+        // daemon's would-be-lost diff, rendered in the pane behind the dialog), then ask.
         const lostHtml = Diff2Html.html(err.problem.would_be_lost_diff, { drawFileList: false, outputFormat: "line-by-line" });
         renderDiff(lostHtml);
-        const proceed =
-          typeof window !== "undefined" && window.confirm
-            ? window.confirm("This artifact has unsaved changes since its latest saved version. Restoring will discard them — continue?")
-            : false;
+        const proceed = await confirmDialog({
+          title: "Discard the changes shown behind this dialog?",
+          body: "This artifact changed since its latest saved version. Restoring will throw those changes away — the diff pane shows exactly what would be lost.",
+          confirmLabel: "Restore anyway",
+          danger: true,
+        });
         if (proceed) await restoreTo(checkpointId, true);
       } else {
         throw err;

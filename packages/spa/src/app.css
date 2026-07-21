@@ -164,17 +164,18 @@ button {
   height: 100%;
   display: grid;
   grid-template-rows: var(--topbar-height) minmax(0, 1fr);
-  grid-template-columns: var(--nav-width) minmax(0, 1fr) 0;
+  grid-template-columns: var(--nav-width) minmax(0, 1fr);
   grid-template-areas:
-    "topbar topbar topbar"
-    "nav    main   margin";
-  transition: grid-template-columns var(--dur-base) var(--ease-out);
+    "topbar topbar"
+    "nav    main";
 }
 
-/* The contextual margin exists only while annotating, and only where it fits (brief §7.2). */
+/* The contextual margin is an overlay INSIDE the manuscript's scroll container (viewer.js puts
+   it there), so cards scroll glued to their anchors; at annotate widths the manuscript shifts
+   left to clear it (brief §7.2). */
 @media (min-width: 1280px) {
-  .glosa-app[data-mode="annotate"] {
-    grid-template-columns: var(--nav-width) minmax(0, 1fr) var(--margin-width);
+  .glosa-app[data-mode="annotate"] .glosa-main {
+    padding-right: calc(var(--margin-width) + var(--space-4));
   }
 }
 
@@ -350,14 +351,30 @@ button {
   text-wrap: pretty;
 }
 
+/* Connection banner: a thin, sticky, honest strip — content stays readable beneath it. */
+.glosa-banner {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: color-mix(in oklch, var(--warn) 12%, var(--bg));
+  color: var(--warn);
+  border-bottom: 1px solid color-mix(in oklch, var(--warn) 35%, var(--bg));
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-align: center;
+  padding: var(--space-1) var(--space-2);
+}
+
 /* ---------- 7. Manuscript ---------- */
 
 .glosa-main {
   grid-area: main;
   overflow-y: auto;
+  overflow-x: hidden; /* pre/tables scroll internally; the page itself never pans sideways */
   background: var(--bg);
   display: flex;
   flex-direction: column;
+  position: relative; /* the margin overlay and its anchor-aligned cards position against this */
 }
 
 .glosa-content {
@@ -588,6 +605,106 @@ button {
   gap: var(--space-2);
 }
 
+.glosa-edit-topbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Rich | Source face toggle: the same chip vocabulary as the composer's intents. */
+.glosa-editor-face {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.glosa-editor-face button {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-editor-face button:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.glosa-editor-face button[aria-pressed="true"] {
+  background: color-mix(in oklch, var(--primary) 10%, var(--bg));
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* The rich face: a quiet toolbar over a page-like editing surface. The surface carries
+   .glosa-content, so the manuscript typography above styles the ProseMirror document. */
+.glosa-rich {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-2);
+}
+
+.glosa-rich-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.glosa-rich-toolbar button {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  min-width: 1.75rem;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-rich-toolbar button:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-rich-toolbar button[aria-pressed="true"] {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.glosa-rich-b {
+  font-weight: 700;
+}
+
+.glosa-rich-i {
+  font-style: italic;
+  font-family: var(--font-serif);
+}
+
+/* The editing page itself: same measure and serif voice as Preview, minus its outer padding
+   (the edit-wrap already provides the frame). */
+.glosa-rich-surface.glosa-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4) 0 var(--space-8);
+  margin: 0;
+  max-width: var(--measure);
+}
+
+.glosa-rich-surface .ProseMirror {
+  outline: none;
+  min-height: 14rem;
+  white-space: pre-wrap;
+}
+
+.glosa-rich-surface .ProseMirror-selectednode {
+  outline: 2px solid var(--primary);
+}
+
 /* ---------- 9. Buttons ---------- */
 
 .glosa-btn,
@@ -645,30 +762,120 @@ button {
 
 /* ---------- 10. Margin: annotations + composer ---------- */
 
+/* Default (compact / in-between widths): the margin flows after the manuscript as a labeled
+   block. `:empty` collapses it entirely outside Annotate mode. */
 .glosa-margin {
-  grid-area: margin;
-  overflow-y: auto;
-  overflow-x: hidden;
-  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   background: var(--surface);
-  padding: var(--space-4) var(--space-3) var(--space-8);
-  display: none;
+  padding: var(--space-4) var(--space-4) var(--space-8);
+  display: flex;
   flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
 }
 
-/* Never let intrinsic content width (textarea, nowrap labels) force the margin to scroll
-   sideways — every card constrains to the column. */
+.glosa-margin:empty {
+  display: none;
+  border: none;
+}
+
+/* Never let intrinsic content width (textarea, nowrap labels) force the margin sideways —
+   every card constrains to the column. */
 .glosa-margin > * {
   min-width: 0;
   max-width: 100%;
 }
 
-@media (min-width: 1280px) {
-  .glosa-app[data-mode="annotate"] .glosa-margin {
-    display: flex;
-  }
+/* Side overlay (annotate mode ≥1280px, class set by viewer.js): a transparent right rail inside
+   the scroll container; each card is absolutely positioned beside its anchor by layoutMargin. */
+.glosa-margin-side {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--margin-width);
+  border: none;
+  background: none;
+  padding: 0 var(--space-3);
+  display: block;
+  pointer-events: none; /* the rail is a coordinate space; only its cards are interactive */
+}
+
+.glosa-margin-side .glosa-annotation,
+.glosa-margin-side .glosa-composer {
+  position: absolute;
+  left: 0;
+  right: var(--space-3);
+  pointer-events: auto;
+  transition: top var(--dur-base) var(--ease-out);
+}
+
+.glosa-margin-side .glosa-margin-title,
+.glosa-margin-side .glosa-margin-empty {
+  display: none; /* aligned cards ARE the margin; labels only help the in-flow layout */
+}
+
+/* The card↔anchor thread (CSS Custom Highlight API): every annotated passage carries a quiet
+   pencil underline; hovering its card deepens that to the full wash. */
+::highlight(glosa-anchors) {
+  text-decoration: underline;
+  text-decoration-color: oklch(0.8 0.07 110);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+::highlight(glosa-anchor) {
+  background-color: var(--anchor-wash);
+}
+
+/* Side-rail cards sit tighter than in-flow ones: one-line quote, smaller padding — smaller
+   cards mean less collision-push away from their anchors. */
+.glosa-margin-side .glosa-annotation {
+  padding: var(--space-2) var(--space-3);
+}
+
+.glosa-margin-side .glosa-annotation-quote {
+  -webkit-line-clamp: 1;
+}
+
+/* Compact gutter markers: quiet dots at anchor heights along the right edge. */
+.glosa-markers {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 14px;
+  pointer-events: none;
+}
+
+.glosa-marker {
+  position: absolute;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--primary);
+  background: var(--anchor-wash);
+  pointer-events: auto;
+  padding: 0;
+}
+
+.glosa-marker::before {
+  content: "";
+  position: absolute;
+  inset: -8px; /* 26px touch target around a 10px dot */
+}
+
+.glosa-marker:hover {
+  background: var(--primary);
+}
+
+.glosa-annotation-flash {
+  animation: glosa-flash 1.2s var(--ease-out);
+}
+
+@keyframes glosa-flash {
+  0%, 40% { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent); }
+  100% { border-color: var(--border); box-shadow: none; }
 }
 
 .glosa-margin-title {
@@ -749,6 +956,25 @@ button {
   color: var(--primary);
 }
 
+.glosa-annotation[data-state="applied"] .glosa-state-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.glosa-annotation[data-state="applied"] .glosa-annotation-state {
+  color: var(--ok);
+}
+
+.glosa-annotation[data-state="rejected"],
+.glosa-annotation[data-state="stale"] {
+  opacity: 0.75;
+}
+
+.glosa-annotation[data-state="stale"] .glosa-state-dot {
+  border-color: var(--warn);
+  background: var(--warn);
+}
+
 /* Intent on a saved card is metadata, not an affordance: plain muted text with a middot,
    no pill that pretends to be a button. */
 .glosa-annotation-intent {
@@ -759,6 +985,42 @@ button {
 
 .glosa-annotation-intent::before {
   content: "· ";
+}
+
+/* The reverse thread: hovering the underlined passage lights its card up. */
+.glosa-annotation.glosa-annotation-hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 14%, transparent);
+}
+
+/* An unanchored card: the quote is history, not a pointer — no wash, and it says why. */
+.glosa-annotation[data-anchored="false"] .glosa-annotation-quote > span {
+  background: none;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted) 45%, transparent);
+}
+
+.glosa-annotation-lost {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Remove is a quiet last resort: visible but recessive until hovered, red only on intent. */
+.glosa-annotation-remove {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 0 var(--space-1);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--muted) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+.glosa-annotation-remove:hover {
+  color: var(--danger);
+  text-decoration-color: currentColor;
 }
 
 /* Composer: in the margin at full width, a fixed bottom tray in compact (brief §7.3). */
@@ -845,6 +1107,54 @@ button {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* ---------- 10b. Confirm dialog ---------- */
+
+.glosa-dialog {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--ink);
+  padding: var(--space-6);
+  max-width: 26rem;
+  box-shadow: 0 12px 40px oklch(0.24 0.01 110 / 0.18);
+}
+
+.glosa-dialog::backdrop {
+  background: oklch(0.24 0.01 110 / 0.3);
+}
+
+.glosa-dialog h2 {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  text-wrap: balance;
+}
+
+.glosa-dialog p {
+  margin: 0 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-base);
+  text-wrap: pretty;
+}
+
+.glosa-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.glosa-btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: oklch(0.99 0 0);
+}
+
+.glosa-btn-danger:hover {
+  background: color-mix(in oklch, var(--danger) 88%, black);
+  border-color: color-mix(in oklch, var(--danger) 88%, black);
 }
 
 /* ---------- 11. History pane ---------- */
@@ -1097,20 +1407,6 @@ button {
     background: oklch(0.24 0.01 110 / 0.25);
   }
 
-  /* Saved annotations flow below the manuscript instead of a side margin. */
-  .glosa-app[data-mode="annotate"] .glosa-margin {
-    display: flex;
-    grid-area: main;
-    align-self: end;
-    position: static;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-
-  .glosa-app[data-mode="annotate"] .glosa-main {
-    grid-area: main;
-  }
-
   /* The composer leaves the margin and becomes a short bottom tray; the manuscript keeps its
      full reading measure (brief Q11 decision). */
   .glosa-composer {
@@ -1132,17 +1428,8 @@ button {
   to { transform: translateY(0); opacity: 1; }
 }
 
-/* In-between band (1024–1279): navigator stays, margin doesn't fit — annotations flow below. */
-@media (min-width: 1024px) and (max-width: 1279px) {
-  .glosa-app[data-mode="annotate"] .glosa-margin {
-    display: flex;
-    grid-area: main;
-    align-self: end;
-    position: static;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-}
+/* In the 1024–1279 band the navigator stays and annotations flow below the manuscript — that's
+   the .glosa-margin default; no override needed. */
 
 /* ---------- 14. Reduced motion ---------- */
 
@@ -1162,6 +1449,16 @@ button {
 
   .glosa-composer {
     animation: none;
+  }
+
+  .glosa-margin-side .glosa-annotation,
+  .glosa-margin-side .glosa-composer {
+    transition: none;
+  }
+
+  .glosa-annotation-flash {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
   }
 
   .glosa-skeleton > i {

@@ -64,8 +64,11 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     "./history.js",
     "./classf-viewer.js",
     "./conversation.js",
+    "./rich-editor.js",
+    "./dialog.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
+    "./vendor/prosemirror.js",
   ]);
 
   test("viewer.js's local imports are exactly the sanctioned set", () => {
@@ -99,5 +102,19 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     const source = read("../src/conversation.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
     expect(specifiers).toHaveLength(0);
+  });
+
+  test("dialog.js imports nothing (pure DOM — no daemon access)", () => {
+    const source = read("../src/dialog.js");
+    const specifiers = [...source.matchAll(/from\s+["']([^"']+)["']/g)];
+    expect(specifiers).toHaveLength(0);
+  });
+
+  test("rich-editor.js imports only its vendored ProseMirror bundle (pure editor — no daemon access)", () => {
+    const source = read("../src/rich-editor.js");
+    // `from "..."` matcher (not the single-line import regex above): this module's one import is
+    // a multi-line named-import block.
+    const specifiers = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
+    expect(specifiers).toEqual(["./vendor/prosemirror.js"]);
   });
 });

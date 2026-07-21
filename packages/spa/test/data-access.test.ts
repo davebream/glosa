@@ -250,6 +250,36 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
     expect(new Headers(requests[1]!.headers).get("Last-Event-ID")).toBe("7"); // reconnect resumes from the last cursor seen
   });
 
+  test("onStatus reports one 'down' per outage and one 'up' on recovery — deduped across failed retries", async () => {
+    let call = 0;
+    const fetchFn = async () => {
+      call += 1;
+      if (call === 1) return streamResponse(['id: 1\nevent: journal\ndata: {"n":1}\n\n']); // closes → drop
+      if (call <= 3) throw new Error("daemon down"); // two failed retries — still ONE 'down'
+      return streamResponse(['id: 2\nevent: journal\ndata: {"n":2}\n\n']);
+    };
+
+    const statuses: string[] = [];
+    let stop: (() => void) | null = null;
+    await new Promise<void>((resolve) => {
+      let seen = 0;
+      stop = openStream({
+        fetchFn,
+        storage: fakeStorage(),
+        slug: "ws",
+        sleepFn: async () => {},
+        onEvent: () => {
+          seen += 1;
+          if (seen === 2) resolve();
+        },
+        onStatus: (s: string) => statuses.push(s),
+      });
+    });
+    stop!();
+
+    expect(statuses).toEqual(["down", "up"]);
+  });
+
   test("a resync_required frame clears the stored cursor — the next connect carries no Last-Event-ID", async () => {
     const requests: RequestInit[] = [];
     let call = 0;

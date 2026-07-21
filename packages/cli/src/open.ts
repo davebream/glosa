@@ -6,7 +6,8 @@
 // format is D5 (docs/OVERNIGHT-LOG.md): the literal `#t=<token>` wire format bootstrap.js's
 // `scrubToken` parses, NOT A6's looser `#<capability>` shorthand — requirements/decisions govern
 // over the appendix here, per this repo's own precedence rule.
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { ensureToken, glosaHome } from "@glosa/daemon";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope } from "./envelope.ts";
@@ -18,6 +19,7 @@ export interface OpenDeps {
   openBrowser: (url: string) => void;
   platform: () => NodeJS.Platform;
   dirExists: (dir: string) => boolean;
+  fileExists: (path: string) => boolean;
 }
 
 export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenDeps {
@@ -32,7 +34,8 @@ export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenD
       Bun.spawn({ cmd: ["open", url], stdout: "ignore", stderr: "ignore" });
     },
     platform: () => process.platform,
-    dirExists: (dir) => existsSync(dir),
+    dirExists: (dir) => existsSync(dir) && statSync(dir).isDirectory(),
+    fileExists: (path) => existsSync(path) && statSync(path).isFile(),
   };
 }
 
@@ -40,9 +43,11 @@ export interface OpenData {
   slug?: string;
   path?: string;
   url?: string;
+  /** Relative artifact path the SPA deep-links to when `glosa open` was given a FILE. */
+  focus?: string;
 }
 
-export async function runOpen(dir: string, deps: OpenDeps): Promise<CommandEnvelope<OpenData>> {
+export async function runOpen(target: string, deps: OpenDeps): Promise<CommandEnvelope<OpenData>> {
   if (deps.platform() !== "darwin") {
     return {
       ok: false,
@@ -53,15 +58,25 @@ export async function runOpen(dir: string, deps: OpenDeps): Promise<CommandEnvel
       error: { code: "platform-unsupported", kind: "platform_unsupported", message: "glosa v1 is macOS-only" },
     };
   }
-  if (!deps.dirExists(dir)) {
-    return {
-      ok: false,
-      command: "open",
-      exitCode: EXIT_CODES.USAGE,
-      data: {},
-      warnings: [],
-      error: { code: "no-such-directory", kind: "usage", message: `${dir}: no such directory` },
-    };
+  // `glosa open <file>` opens the file's OWNING workspace (its directory) deep-linked to that
+  // artifact — the whole workspace stays reachable, the file is just focused (design brief §9;
+  // extends A6 §F26's directory-only form).
+  let dir = target;
+  let focus: string | null = null;
+  if (!deps.dirExists(target)) {
+    if (deps.fileExists(target)) {
+      dir = dirname(target);
+      focus = basename(target);
+    } else {
+      return {
+        ok: false,
+        command: "open",
+        exitCode: EXIT_CODES.USAGE,
+        data: {},
+        warnings: [],
+        error: { code: "no-such-directory", kind: "usage", message: `${target}: no such file or directory` },
+      };
+    }
   }
 
   // Mint/reuse the pairing token BEFORE ever ensuring the daemon — `bootDaemon` reads
@@ -89,14 +104,17 @@ export async function runOpen(dir: string, deps: OpenDeps): Promise<CommandEnvel
     return { ...daemonUnreachableEnvelope("open", (err as Error).message), data: {} };
   }
 
-  const url = `http://127.0.0.1:${client.port}/#t=${token}`;
+  // The fragment carries the deep-link beside the token (`w`=slug, `a`=artifact): bootstrap.js
+  // reads both BEFORE scrubbing the fragment from the address bar.
+  const focusParams = focus ? `&w=${encodeURIComponent(opened.slug)}&a=${encodeURIComponent(focus)}` : "";
+  const url = `http://127.0.0.1:${client.port}/#t=${token}${focusParams}`;
   deps.openBrowser(url);
 
   return {
     ok: true,
     command: "open",
     exitCode: EXIT_CODES.OK,
-    data: { slug: opened.slug, path: opened.path, url },
+    data: { slug: opened.slug, path: opened.path, url, ...(focus ? { focus } : {}) },
     warnings: [],
   };
 }

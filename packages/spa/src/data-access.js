@@ -94,11 +94,15 @@ export function computeBackoffMs(attempt, rand = Math.random) {
  * known here. `onReconnect()` fires once a DROPPED connection is successfully re-established —
  * never on the very first connect. Returns a `stop()` function; deps are all injectable for testing
  * (`sleepFn`/`randFn` in particular — a test never wants a real backoff timer running). */
+/** @param {string} path
+ *  @param {{fetchFn?: any, storage?: any, onEvent?: (frame: any) => void, onReconnect?: () => void,
+ *           onStatus?: (status: "down"|"up") => unknown, backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
 function openEventStream(path, {
   fetchFn,
   storage,
   onEvent,
   onReconnect,
+  onStatus,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
@@ -107,6 +111,7 @@ function openEventStream(path, {
   let lastEventId = null;
   let attempt = 0;
   let cancelReader = null;
+  let down = false; // dedupes onStatus: one "down" per outage, one "up" per recovery
 
   async function connectOnce(isReconnect) {
     const headers = {};
@@ -118,6 +123,10 @@ function openEventStream(path, {
     if (!res.ok || !res.body) throw new Error(`stream connect failed: ${res.status}`);
 
     attempt = 0; // any successful connect resets backoff, even before a frame arrives
+    if (down) {
+      down = false;
+      onStatus?.("up");
+    }
     if (isReconnect) onReconnect?.();
 
     const reader = res.body.getReader();
@@ -149,6 +158,10 @@ function openEventStream(path, {
         // connect failed, or the stream ended/dropped mid-read — fall through to backoff+retry
       }
       if (stopped) return;
+      if (!down) {
+        down = true;
+        onStatus?.("down"); // fires on drop AND on a failed retry's first drop — deduped above
+      }
       isReconnect = true;
       const wait = backoffFn(attempt, randFn);
       attempt += 1;
@@ -167,17 +180,21 @@ function openEventStream(path, {
  * review note), so a caller's `onReconnect` MUST re-fetch whatever state might have changed while
  * disconnected (the artifact list, the open artifact) rather than trust that live events alone
  * will catch it up. */
+/** @param {{fetchFn?: any, storage?: any, slug?: any, onEvent?: (frame: any) => void,
+ *           onReconnect?: () => void, onStatus?: (status: "down"|"up") => unknown,
+ *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
 export function openStream({
   fetchFn,
   storage,
   slug,
   onEvent,
   onReconnect,
+  onStatus,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
 }) {
-  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, backoffFn, sleepFn, randFn });
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, onStatus, backoffFn, sleepFn, randFn });
 }
 
 /** Opens `GET /w/:slug/transcript/stream` (P4.2, A1 §5.8/§8, A2 §F16) — the conversation mirror's
@@ -259,6 +276,13 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify(record),
       });
     },
+    /** `POST /w/:slug/annotations/:id/withdraw` — terminal `rejected` transition (never a delete;
+     * the journal is append-only). 409 once the entry is already terminal. */
+    withdrawAnnotation(slug, id) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/annotations/${encodeURIComponent(id)}/withdraw`, {
+        method: "POST",
+      });
+    },
     putArtifact(slug, path, content, { ifMatch } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts/${encodePathSegments(path)}`, {
         method: "PUT",
@@ -293,8 +317,8 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify({ path, to, ...(force ? { force: true } : {}) }),
       });
     },
-    openStream(slug, { onEvent, onReconnect } = {}) {
-      return openStream({ fetchFn, storage, slug, onEvent, onReconnect });
+    openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
+      return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus });
     },
     /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
      * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */

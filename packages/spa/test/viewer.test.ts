@@ -127,9 +127,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
   function fakeDataAccess(overrides: Partial<Record<string, unknown>> = {}) {
     const posted: unknown[] = [];
     const put: unknown[] = [];
+    const withdrawn: unknown[] = [];
     return {
       posted,
       put,
+      withdrawn,
       getWorkspaces: async () => [{ slug: "ws-1", path: "/tmp/ws-1" }],
       getArtifacts: async () => [{ path: "notes.md", class: "R" }],
       getArtifact: async (_slug: string, path: string) => ({
@@ -143,6 +145,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
         posted.push(record);
         return { id: "inb-1", status: "pending" };
       },
+      withdrawAnnotation: async (_slug: string, id: string) => {
+        withdrawn.push(id);
+        return { id, status: "rejected" };
+      },
       putArtifact: async (_slug: string, path: string, content: string) => {
         put.push({ path, content });
         return { source_path: path, source_sha256: "sha-2" };
@@ -153,7 +159,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       getCheckpoints: async () => [],
       getDiff: async () => ({ from: "a", to: "b", hunks: [] }),
       restore: async () => ({ path: "notes.md", restored_to: "a", checkpoint_id: "a", source_sha256: "sha-1" }),
-      openStream: () => () => {}, // returns a no-op stop()
+      // Captures the stream handlers so a test can push SSE frames (journal/artifact) by hand.
+      stream: { handlers: null as null | { onEvent?: (frame: unknown) => void; onReconnect?: () => void } },
+      openStream(_slug: string, handlers: { onEvent?: (frame: unknown) => void; onReconnect?: () => void } = {}) {
+        (this as { stream: { handlers: unknown } }).stream.handlers = handlers;
+        return () => {};
+      },
       // P4.1 — the class-F viewer's data-access surface. Not exercised by this file's own tests
       // (none of them open a class-F artifact); stubbed only so mountApp's `dataAccess` shape,
       // inferred from the real createDataAccess() default, is satisfied.
@@ -188,7 +199,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(content.innerHTML).toContain("Title");
   });
 
-  test("switching to Edit mode shows the textarea with the artifact's raw content; Save calls putArtifact", async () => {
+  test("switching to Edit mode + Source face shows the textarea with the artifact's raw content; Save calls putArtifact", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
@@ -199,6 +210,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     (root.querySelector('[data-mode="edit"]') as any).click();
+    // The rich face is Edit's default (or the automatic fallback already picked Source in DOMs
+    // that can't host a ProseMirror view); the Source face is the byte-exact editing contract
+    // this test pins down either way.
+    (root.querySelector(".glosa-face-source") as any).click();
 
     const textarea = root.querySelector(".glosa-edit-area") as any;
     expect(textarea.hidden).toBe(false);
@@ -256,6 +271,22 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const card = root.querySelector(".glosa-annotation") as any;
     expect(card).not.toBeNull();
     expect(card.querySelector(".glosa-annotation-body")!.textContent).toBe("tighten this");
+
+    // A live SSE journal frame for this entry updates the card's state in place (R3's status
+    // machine speaking through the stream).
+    da.stream.handlers?.onEvent?.({
+      event: "journal",
+      data: { event: "transition_committed", entry: "inb-1", detail: { to: "applied" }, by: "session:s1" },
+    });
+    const applied = root.querySelector(".glosa-annotation") as any;
+    expect(applied.getAttribute("data-state")).toBe("applied");
+    expect(applied.querySelector(".glosa-annotation-state")!.textContent).toContain("Done");
+
+    // Remove withdraws the entry (terminal `rejected` daemon-side) and drops the card.
+    (applied.querySelector(".glosa-annotation-remove") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(da.withdrawn).toEqual(["inb-1"]);
+    expect(root.querySelector(".glosa-annotation")).toBeNull();
   });
 
   test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {
