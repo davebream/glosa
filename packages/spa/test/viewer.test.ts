@@ -190,6 +190,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // without awaiting it internally — flush the microtask queue a few times before asserting.
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
+    const brandMark = root.querySelector('.glosa-brand-mark[role="img"][aria-label="glosa"]');
+    expect(brandMark?.querySelector("svg")).not.toBeNull();
+
     const artifactRows = Array.from(root.querySelectorAll(".glosa-artifact-list .glosa-tree-row")) as any[];
     expect(artifactRows.map((row) => row.querySelector(".glosa-tree-label")?.textContent)).toEqual(["notes.md"]);
 
