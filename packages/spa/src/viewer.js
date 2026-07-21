@@ -111,6 +111,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // Static trusted markup (no artifact-derived content ever goes through innerHTML here).
   navToggle.innerHTML =
     '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11m-11 3.5h11m-11 3.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
+  // Same geometry as glosa-mark.svg. Inline here so both forms follow explicit app themes,
+  // including a persisted theme that differs from the operating-system preference.
+  brandMark.innerHTML =
+    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>';
   const artifactNameEl = el("span", { className: "glosa-artifact-name", textContent: "glosa" });
   const artifactDirEl = el("span", { className: "glosa-artifact-dir" });
   const modeBar = el("div", { className: "glosa-modebar", role: "group", "aria-label": "View mode" });
@@ -217,6 +222,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   root.append(
     el("header", { className: "glosa-topbar" }, [
       navToggle,
+      brandMark,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
       el("div", { className: "glosa-topbar-actions" }, [historyToggle, conversationToggle, appearanceHost]),

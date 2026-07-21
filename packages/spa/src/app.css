@@ -158,6 +158,12 @@ button {
   margin: 0 auto;
 }
 
+.glosa-screen-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: var(--space-4);
+}
+
 .glosa-screen h1 + p {
   margin-top: var(--space-2);
 }
@@ -223,6 +229,27 @@ button {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   min-width: 0;
+}
+
+.glosa-brand-mark {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.glosa-brand-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.glosa-logo-ink {
+  fill: var(--ink);
+}
+
+.glosa-logo-accent {
+  fill: var(--primary);
 }
 
 .glosa-nav-toggle {

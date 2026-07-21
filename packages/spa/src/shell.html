@@ -7,8 +7,7 @@
     <!-- Blocking, same-origin preload: explicit appearance overrides land before CSS paints, so
          boot/error screens and the workspace never flash through the system theme. -->
     <script src="/app/appearance-preload.js"></script>
-    <!-- Inline favicon (no extra allowlisted asset): the marginal-stroke mark in the workbench olive. -->
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23636b23'/%3E%3Cpath d='M5 4v8' stroke='%23fdfdf9' stroke-width='1.6' stroke-linecap='round'/%3E%3Cpath d='M8.5 5h3.5M8.5 8h3.5M8.5 11h2' stroke='%23fdfdf9' stroke-width='1.2' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E" />
+    <link rel="icon" href="/app/glosa-mark.svg" type="image/svg+xml" />
     <!-- The visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md),
          served from the same allowlist as bootstrap.js. -->
     <link rel="stylesheet" href="/app/app.css" />
@@ -24,6 +23,7 @@
     <div id="app">
       <div data-screen="down" hidden>
         <div class="glosa-screen">
+          <svg class="glosa-screen-mark" viewBox="0 0 32 32" aria-hidden="true" width="40" height="40"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>
           <h1>glosa isn't running.</h1>
           <p data-message></p>
           <p>In a terminal, run <code>glosa open &lt;directory&gt;</code> — the daemon starts on its own and this page picks it up.</p>
@@ -31,6 +31,7 @@
       </div>
       <div data-screen="unpaired" hidden>
         <div class="glosa-screen">
+          <svg class="glosa-screen-mark" viewBox="0 0 32 32" aria-hidden="true" width="40" height="40"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>
           <h1>This tab isn't paired.</h1>
           <p data-message></p>
           <p>Run <code>glosa open &lt;directory&gt;</code> to open a paired tab — pairing keeps every request on this machine only.</p>
@@ -38,6 +39,7 @@
       </div>
       <div data-screen="mismatch" hidden>
         <div class="glosa-screen">
+          <svg class="glosa-screen-mark" viewBox="0 0 32 32" aria-hidden="true" width="40" height="40"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>
           <h1>glosa was updated.</h1>
           <p data-message></p>
           <p>Reloading to match the running daemon&hellip;</p>
