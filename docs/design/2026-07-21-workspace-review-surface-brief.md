@@ -83,7 +83,7 @@ Production-ready specification · complete review flow (one whole surface) · sh
 
 Three regions on `--bg`, separated by quiet borders — no cards, no elevation at rest (Flat-Until-Floating):
 
-- **Artifact navigator** (left, 260px, collapsible to zero): workspace switcher at top (name + attention badge), then the adapter-ordered artifact list — name, class glyph (R/F), staleness dot, unresolved-annotation count. Writer-sized (5–30 items): a flat scrollable list, no search-first UI, no virtualization.
+- **Artifact navigator** (left, 260px, collapsible to zero): workspace switcher at top (name + attention badge), then an adapter-ordered artifact tree derived from canonical workspace-relative paths — expandable directories, file name, class glyph (R/F), staleness dot, unresolved-annotation count. Preserve adapter order within the hierarchy, auto-reveal the active artifact, and retain expansion state per workspace. Writer-sized (5–30 items): no search-first UI and no virtualization; render only expanded branches.
 - **Manuscript column** (center, dominant): 68ch serif measure, centered in remaining width, generous top whitespace. This is the page; everything else is desk.
 - **Contextual margin** (right, 300px, only in Annotate mode on wide screens): saved annotations align beside their anchors, connected on hover/focus by anchor-wash highlight. Overflowing/stacked annotations collapse to compact chips that expand on focus.
 
