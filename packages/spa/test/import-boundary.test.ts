@@ -57,7 +57,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
   });
 });
 
-describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js import only from data-access.js and each other's sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
+describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js import only from data-access.js, shared UI modules, each other's sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
   const ALLOWED_RELATIVE_IMPORTS = new Set([
     "./data-access.js",
     "./annotate.js",
@@ -67,6 +67,7 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     "./rich-editor.js",
     "./dialog.js",
     "./artifact-tree.js",
+    "./appearance.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",

@@ -325,6 +325,14 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(body).toContain("export function scrubToken");
   });
 
+  test("appearance preload + controller are fixed allowlisted JavaScript assets", async () => {
+    for (const name of ["appearance-preload.js", "appearance.js"]) {
+      const res = await fetch(apiUrl(`/app/${name}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
+    }
+  });
+
   test("GET /app/<unknown file> → 404, not a filesystem read", async () => {
     const res = await fetch(apiUrl("/app/does-not-exist.js"));
     expect(res.status).toBe(404);
