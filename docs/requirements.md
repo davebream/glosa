@@ -224,7 +224,7 @@ the entry survives.
   the `render.py` `<title>` bug. Proposed as reviewable diffs for approval.
 
 ### R8 — CLI + install  (detail: A6 full)
-- Commands (all with `--json` + stable exit codes, A6): `open`, `init` (idempotent hook/MCP merge with
+- Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent hook/MCP merge with
   ownership manifest, backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--wait]`, `doctor` (13 enumerated checks incl. real-channel-
   registration + transcript-root confinement), `status`; internal `mcp`, `hook <event>`. `open`

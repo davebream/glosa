@@ -35,7 +35,7 @@
 ## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version)
 | cmd | args | does | exit |
 |---|---|---|---|
-| `open` | `[dir]` | ensure daemon (lazy spawn) + ensure `.glosa/` baseline + mint one-time pairing capability + open browser to `http://127.0.0.1:<port>/#<capability>` | 0;3;5 |
+| `open` | `[dir\|file] [--url]` | ensure daemon (lazy spawn) + ensure `.glosa/` baseline + mint one-time pairing capability; open the browser by default, or print only the ready URL with `--url` | 0;2;3;5 |
 | `init` | `[dir]` `--print/--force/--uninstall/--restore-backup` | §F26 merge/uninstall | 0;2;6;9;5 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |
@@ -45,4 +45,5 @@
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
 - `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery).
+- `open --url` performs the same token, daemon, registration, and optional file deep-link work without invoking the macOS browser launcher. Plain success output is exactly the URL plus a newline; `--json` retains the F26 envelope with `data:{slug,path,url,focus?}`.
 - doctor 12 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, **channel actually registered** (from registry evidence, not just .mcp.json), transcript-root(under allowed CLAUDE_CONFIG_DIR).
