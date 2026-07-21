@@ -16,6 +16,12 @@ export const CONTRACT_VERSION = "1.0";
 // file's own bun-test importers) — viewer.js/data-access.js/annotate.js/vendor/idiomorph.js all
 // touch `window`/`document` only inside function bodies, never at module load.
 import { mountApp } from "./viewer.js";
+import { createAppearanceController } from "./appearance.js";
+
+// Constructed before `main()` performs its handshake so all four screens inherit appearance.
+// appearance-preload.js already applied the same resolution synchronously before first paint;
+// this controller takes over persistence and live system-theme changes for the page lifetime.
+const appearance = typeof window === "undefined" ? null : createAppearanceController();
 
 const MESSAGES = {
   down: "glosa daemon isn't running — run `glosa open`.",
@@ -101,7 +107,11 @@ async function main() {
   }
   if (screen === "ready") {
     const readyEl = document.querySelector('[data-screen="ready"]');
-    mountApp(readyEl, { initialSlug: focus.slug ?? undefined, initialArtifact: focus.artifact ?? undefined });
+    mountApp(readyEl, {
+      initialSlug: focus.slug ?? undefined,
+      initialArtifact: focus.artifact ?? undefined,
+      appearance,
+    });
   }
 }
 
