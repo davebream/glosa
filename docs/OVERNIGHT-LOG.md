@@ -224,6 +224,31 @@ for Origin. Apply in P1.3.
   the hook-side writer once that caller exists (not reachable yet); slug 64-hex-cap duplicate (negligible).
 - **Tests:** 309 pass / 0 fail (incl. full suite green UNDER the git-hook env → pre-commit safe); typecheck clean.
 
+### P2.5 lifecycle state machine — ✅ (commit 5b0cc36) — CC, doubly adversarially reviewed → **Phase 2 COMPLETE**
+- **Built (Sonnet subagent):** `packages/daemon/src/bus/lifecycle.ts` — the full guarded transition reducer
+  (two axes/tables selected by entry `kind`: common `pending→delivered→seen→{applied|rejected|stale}`,
+  attention `open→delivered→seen→{done|expired|stale}`), guarded (transition applies only from a legal
+  `from`, else ignored on replay = idempotent), first-terminal-wins, `delivery_attempt` structurally off the
+  status axis. Swapped into P2.1's pluggable `Reducer`. D7 (generic `transition_committed`/`attention_committed
+  {to}` events) + D8 (A5 §F23 terminal vocabulary) applied.
+- **Two parallel adversarial reviews (critic + concurrency-expert) — 1 blocker + release-gate fix + should-fix,
+  all fixed:**
+  - **BLOCKER:** entry-kind was read from `entry_created.detail.kind`, but `kind` lives in the inbox payload
+    and `createEntry` never copied it → attention entries silently got the COMMON guard table → all
+    `attention_committed{done|expired}` ignored → status stuck → R9 `--wait` would hang forever. Fixed:
+    `createEntry` derives the event `detail.kind` from `payload.kind`; test drives a real attention entry to `done`.
+  - **HIGH (release gate):** the P2.1 fault-injection suite — the project's *actual* release gate — ran
+    `reconcileWorkspace` with the minimal placeholder reducer, so it validated crash-recovery against the WRONG
+    reducer. Fixed: `reconcileWorkspace` defaults to `lifecycleReducer`; the fault suite's reference fold uses it
+    too → the gate now tests the production guarded reducer.
+  - **D8 conformance:** dropped the `applied→resolved` remap (`to = outcome`); common terminals are now
+    literally `applied/rejected/stale` per A5 §F23 (updated ~15 test sites).
+  - **should-fix:** auto-vivify now guards the `to` value (no limbo entries); added live-bus==restart round-trip
+    test + wrong-axis tests; `recordDeliveryAttempt` now carries the F23 `detail` fields.
+  - Confirmed sound by review: live-fold == replay-fold is *mechanically* identical (same `applyEvent`, same
+    mutex-serialized order), replay-twice byte-identical.
+- **Tests:** 341 pass / 0 fail (incl. full suite green UNDER the git-hook env); typecheck clean.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
@@ -234,6 +259,20 @@ CLI + hook + skills) — OUT OF SCOPE here; leave a jethro-side handoff note in 
 Dependency arrow jethro→glosa only. CC: yes. **Action items:** (a) when I reach P4.5, do P6.1 instead;
 (b) at P6.1, drop `packages/adapters/jethro` from the workspace globs + delete the package; (c) re-read
 BUILD-PLAN.md at each task pickup since Dawid may edit it again overnight.
+
+### D7 — lifecycle event representation (P2.5)
+A5 §F23 lists distinct event names (created/delivered/seen/resolved/done/staled/expired). P2.1 reserved +
+P2.3 already emits the generic `transition_committed{to}` / `attention_committed{to}`. **Decision:** the
+lifecycle reducer standardizes on those generic transition events; the A5 names become `to` values + the
+guard table (keyed off the entry's stored `kind`, common vs attention). Keeps P2.3's emission unchanged.
+
+### D8 — terminal status vocabulary conforms to A5 §F23 (P2.5 review)
+The code had mapped resolve outcome `applied → status "resolved"` (rejected/stale mapped to themselves).
+A5 §F23 says common terminals are **applied/rejected/stale**. **Decision:** conform to the spec —
+`resolveEntry` emits `to = outcome` (status becomes `applied`), `COMMON_TERMINALS = {applied,rejected,stale}`.
+CLAUDE.md treats appendix conformance as review-blocking, so we conform rather than ratify the deviation.
+(P2.5 mid-revision as of this note: also fixing an entry-kind blocker — attention entries were silently
+getting the common guard table — and pointing the release-gate fault suite at the real `lifecycleReducer`.)
 
 ### D2 — handshake body shape reconciliation (for P1.3)
 P1.2 gave `/api/handshake` an internal readiness body `{protocol_version, instance_id, pid, started_at}`.
