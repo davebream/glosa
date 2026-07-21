@@ -334,6 +334,14 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     }
   });
 
+  test("GET /app/glosa-mark.svg serves the fixed product mark as SVG", async () => {
+    const res = await fetch(apiUrl("/app/glosa-mark.svg"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/svg+xml");
+    const body = await res.text();
+    expect(body).toContain("A lowercase g whose olive marginal stroke becomes its descender.");
+  });
+
   test("GET /app/<unknown file> → 404, not a filesystem read", async () => {
     const res = await fetch(apiUrl("/app/does-not-exist.js"));
     expect(res.status).toBe(404);
