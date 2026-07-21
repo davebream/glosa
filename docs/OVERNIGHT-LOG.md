@@ -360,6 +360,33 @@ for Origin. Apply in P1.3.
   provider (CC), P4.4 provider iface + Codex, **P4.5→P6.1**; then P5.1 CLI, P5.2 acceptance suites (CC), P6.1
   generic adapter protocol (CC). ⛔ P5.3/P5.4 = Dawid.
 
+### P4.1 class-F viewer + P4.2 conversation viewer — ✅ (commit 2047d3b, combined) — P4.1 CC
+- **Ran in PARALLEL** (independent subsystems) — but both edited `http.ts`/`data-access.js`/`viewer.js`, so
+  the tree entangled + went transiently red mid-build → committed together. **Lesson: don't parallelize tasks
+  that share a source file; serialize same-file work.**
+- **P4.1 class-F (CC, security-critical):** `capability.ts` (256-bit CSPRNG token+nonce, in-memory, TTL 600s,
+  dir-scoped multi-request), `classf-serve.ts` (`/doc/:token` on 4647, per-request realpath confinement,
+  source-preserving bridge injection), `classf-bridge.ts` + `classf-viewer.js` (MessageChannel nonce bridge,
+  3 parent-trust checks). CSP = A3 §1 verbatim. **Two-reviewer security pass (security-auditor + critic):
+  capability/CSP/bridge/traversal/DNS-rebinding/info-leak all CONFIRMED solid + tested, not theater.** Fixes:
+  self-nav mitigations (strip `<meta http-equiv=refresh>` + parent nav-detect teardown), `</body>` case-fold
+  offset corruption bug, csp.test.ts exact-both, iframe.src/no-srcdoc, foreign-origin mint test.
+- **⚠ SECURITY RESIDUAL logged for Dawid** (see "Blocked — needs Dawid"): sandboxed-iframe **self-navigation**
+  egress can't be fully closed by CSP/sandbox (platform limit) — mitigated + needs a threat-model decision
+  (recommend: class-F artifacts are the user's OWN jethro output, not adversary-supplied → accept residual).
+- **⚠ OWED (documented `// P6.1:` in http.ts):** `anchoring.ts` `resolve()` (P3.4) is built+tested but NOT
+  wired into the annotation lifecycle — annotations persist un-anchored. class-R can be wired now; class-F
+  needs the adapter's `manifest_path` (P6.1). Exercised end-to-end by the P5.4 rehearsal. **Must be wired
+  before v1 done.** Class-F artifact response test loosened to `objectContaining` so P6.1 can add manifest_path.
+- **P4.2 conversation viewer (CC: no):** `transcript/normalize.ts` (isolated TranscriptEvent normalizer —
+  never throws; partial-line buffer, unknown/corrupt quarantine, resume/clear/compact, tool_result caps),
+  `transcript/root.ts` (path confined under `$CLAUDE_CONFIG_DIR`), `transcript/stream.ts` (`transcript/stream`
+  SSE via registry `transcript_path`, `{inode,byte_offset}` cursor, **fail-soft** `mirror_unavailable`).
+  `POST transcript/compose` = 202 out-of-band seam, **never writes the transcript** (tested). SPA
+  `conversation.js` (read-only typed render + composer, fail-soft). Targeted self-review (CC:no at depth).
+- **Tests:** 778 pass / 0 fail (incl. git-hook env); typecheck clean. **Phase 4: P4.1/P4.2 done; P4.3 (Claude
+  provider, CC), P4.4 (provider iface + Codex/T2a), P4.5→P6.1 remain.**
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
