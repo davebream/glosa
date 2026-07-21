@@ -387,6 +387,38 @@ for Origin. Apply in P1.3.
 - **Tests:** 778 pass / 0 fail (incl. git-hook env); typecheck clean. **Phase 4: P4.1/P4.2 done; P4.3 (Claude
   provider, CC), P4.4 (provider iface + Codex/T2a), P4.5→P6.1 remain.**
 
+### P4.3 Claude Code provider + glosa init — ✅ (commit 083fda8) — CC, doubly adversarially reviewed
+- **Built (Sonnet subagent, solo):** `packages/daemon/src/providers/interface.ts` (the R7 `AgentProvider`
+  interface — verbatim), `packages/providers/claude-code/src/{provider,rewake,hook-types}.ts` (Claude
+  provider: R4 delivery ladder channels→gate→boundary→mcp-pull, channels-off fallback; asyncRewake per-session
+  lease rearm), `packages/cli/src/{init,hook,daemon-client}.ts` (`glosa init` transactional hook/MCP merge +
+  the CC hook handlers + the daemon HTTP client). Channel command LOCKED = `--dangerously-load-development-
+  channels server:glosa` (never `--channels`). ANTHROPIC scrubbed on all spawn paths.
+- **Two-reviewer pass (critic + concurrency-expert) — core confirmed solid (write-path atomicity+rollback,
+  invalid-JSON-abort, foreign-key exit 6, uninstall hash paths, ladder+fallback, interface matches R7); 2
+  BLOCKERS + 1 CRITICAL + 1 HIGH + should-fixes, all fixed:**
+  - **B1 (config corruption):** init hook merge was idempotent only by exact command string → a GLOSA_BIN
+    change between runs DUPLICATED glosa's hooks (fire 2×/event forever). Fixed: reconcile hooks via the
+    ownership-manifest's recorded commands + replace-in-place (like mergeMcp); owned-hook detection robust to
+    both `glosa hook` + `bun run …main.ts hook` forms.
+  - **B2 (spec-contract, breaks T8/P5.2):** `delivery_attempt.detail` used non-A5 §F23 values. Fixed: TYPED
+    enums `via∈{channel,asyncRewake,gate,stop,userprompt,mcp_pull}`, `outcome∈{attempted,transport_accepted,
+    presented,failed}`, `reason∈{initial,re_nudge}` (+error); initial-vs-re_nudge now recorded.
+  - **CRITICAL (the crux F07 invariant DIDN'T hold — and its test was theater):** `armIfNeeded` spawned the
+    watcher BEFORE claiming the lease, and each `glosa hook` is a separate OS process racing the on-disk lease
+    → two racing Stop hooks both spawned watchers, the lease loser's kept polling + could signal Claude.
+    Fixed: claim lease (O_EXCL) FIRST, spawn only after winning; replaced the coordinator-bypassing test with a
+    real two-process race asserting exactly one spawn.
+  - **HIGH (silent ownership loss):** concurrent `glosa init` raced the manifest RMW → uninstall could orphan
+    hooks. Fixed: exclusive transaction lock around runInit.
+  - should-fixes: `--print` file-independence, `runUninstall` rollback, drain candidate selection moved
+    in-mutex + failed-attempt entries stay re_nudge-eligible.
+- **Tests:** 874 pass / 0 fail (incl. git-hook env). **Deferred to P5.4 rehearsal:** real channel-push into a
+  live idle Claude; the stdio MCP server (`glosa mcp`) is a stub (returns exit 70) — real MCP wiring is P5.4.
+  **Also owed (from concurrency #4):** whoever wires `deliver()` into a live route must walk the ladder on a
+  failed rung (the drain endpoint is not a retry queue). Phase 4: **P4.4 (provider iface + Codex, T2a research)
+  + P4.5→P6.1 remain.**
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
