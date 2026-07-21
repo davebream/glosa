@@ -4,14 +4,20 @@
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "packages/providers/*", "packages/adapters/*"],
-  "engines": { "bun": ">=1.2.7" },
+  "engines": {
+    "bun": ">=1.2.7"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepare": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/picomatch": "^4.0.3",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "picomatch": "^4.0.5"
   }
 }
