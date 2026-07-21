@@ -9,6 +9,14 @@
 // alongside a real wire-contract change, not on every daemon restart.
 export const CONTRACT_VERSION = "1.0";
 
+// P3.3 — the class-R viewer (workspace/artifact sidebar + Preview/Annotate/Edit). A static
+// top-level import, same as every other module here: no dynamic `import()` needed since this
+// file itself is only ever loaded once, by the shell, so there's no "only load it if reached"
+// case to optimize for. Safe to import even when `main()` never calls `mountApp` (e.g. this
+// file's own bun-test importers) — viewer.js/data-access.js/annotate.js/vendor/idiomorph.js all
+// touch `window`/`document` only inside function bodies, never at module load.
+import { mountApp } from "./viewer.js";
+
 const MESSAGES = {
   down: "glosa daemon isn't running — run `glosa open`.",
   unpaired: "not paired — run `glosa open` to open this workspace.",
@@ -73,6 +81,10 @@ async function main() {
     // R5's third failure screen reloads to fetch the fresh shell + bootstrap the daemon
     // just advertised (A1 §3).
     setTimeout(() => window.location.reload(), 2000);
+  }
+  if (screen === "ready") {
+    const readyEl = document.querySelector('[data-screen="ready"]');
+    mountApp(readyEl);
   }
 }
 

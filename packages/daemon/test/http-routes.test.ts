@@ -180,6 +180,174 @@ describe("A1 §5 route catalog", () => {
     expect(body.type).toContain("not-found");
   });
 
+  // --- PUT /w/:slug/artifacts/:path (P3.3 addition, NOT in A1 §5) ---
+
+  test("PUT artifact writes the file, checkpoints it human-attributed, and the subsequent diff surfaces human (not session/unknown)", async () => {
+    writeFileSync(join(root, "notes.md"), "# Title\n\nOriginal.\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile(); // establishes the baseline commit
+    const before = await headSha(root);
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "# Title\n\nEdited via glosa.\n",
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.source_path).toBe("notes.md");
+    expect(body.class).toBe("R");
+    expect(body.content).toBe("# Title\n\nEdited via glosa.\n");
+    expect(body.rendered_html).toContain("Edited via glosa");
+    expect(typeof body.source_sha256).toBe("string");
+
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("# Title\n\nEdited via glosa.\n");
+
+    const after = await headSha(root);
+    expect(after).not.toBe(before);
+
+    const diffRes = await fetchFn(req(`/w/${slug}/diff?from=${before}&to=${after}`));
+    expect(diffRes.status).toBe(200);
+    const diffBody = await diffRes.json();
+    const hunk = diffBody.hunks.find((h: { path: string }) => h.path === "notes.md");
+    expect(hunk).toBeDefined();
+    expect(hunk.attribution).toBe("human"); // A4 §F05 — glosa's own editor, human BY CONSTRUCTION
+    expect(hunk.diff).toContain("Edited via glosa");
+  });
+
+  test("PUT artifact accepts a JSON {content} body, not just raw text", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "wrapped content\n" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("wrapped content\n");
+  });
+
+  test("PUT artifact with a correct If-Match source_sha256 succeeds", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const getRes = await fetchFn(req(`/w/${slug}/artifacts/notes.md`));
+    const sha = (await getRes.json()).source_sha256;
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain", "If-Match": sha },
+        body: "updated\n",
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test("PUT artifact with a stale If-Match source_sha256 → 409 conflict, file left unchanged", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain", "If-Match": "0000000000000000000000000000000000000000000000000000000000000000" },
+        body: "updated\n",
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).type).toContain("conflict");
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("original\n");
+  });
+
+  test("PUT artifact with an empty body → 400 validation-failed", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("validation-failed");
+  });
+
+  test("PUT artifact on a class-F (.html) path → 400 validation-failed, never writes", async () => {
+    writeFileSync(join(root, "page.html"), "<p>original</p>");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/page.html`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "<p>hacked</p>",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(readFileSync(join(root, "page.html"), "utf8")).toBe("<p>original</p>");
+  });
+
+  test("PUT artifact that is within the workspace but not tracked → 404 not-found", async () => {
+    writeFileSync(join(root, "untracked.json"), "{}");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/untracked.json`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT artifact via a symlink pointing outside the workspace → 400 invalid-path", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "glosa-routes-outside-"));
+    writeFileSync(join(outside, "secret.md"), "top secret\n");
+    symlinkSync(join(outside, "secret.md"), join(root, "escape.md"));
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/escape.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "pwned\n",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("invalid-path");
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  test("PUT artifact on an unknown slug → 404", async () => {
+    const res = await fetchFn(
+      stateChangingReq("/w/does-not-exist/artifacts/notes.md", {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "x\n",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT artifact with no Bearer → 401", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      new Request(`http://127.0.0.1:${PORT}/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { Host: `127.0.0.1:${PORT}`, "Content-Type": "text/plain" },
+        body: "x\n",
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  test("PUT artifact with no Origin → 403 (state-changing route class)", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      req(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "x\n",
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   // --- POST /w/:slug/annotations (5.6) ---
 
   function annotationBody(overrides: Record<string, unknown> = {}) {

@@ -380,6 +380,23 @@ export class WorkspaceBus {
     });
   }
 
+  /** `PUT /w/:slug/artifacts/:path`'s checkpoint (P3.3 addition, A4 §F05's "human by
+   * construction" rule): checkpoints whatever is currently on disk as a `human`-attributed
+   * commit — no lease is involved, because this is a write glosa's OWN editor performed directly
+   * (not proxied through an agent session, so there's no `session:<id>` to attribute it to and
+   * none needed — the honest answer is simply `human`). Caller MUST have already written the file
+   * to disk (via `writeArtifactAtomic`) BEFORE calling this: `checkpoint()` stages whatever's
+   * currently on disk, it doesn't take content as an argument. Mirrors `applyBegin`'s own
+   * reclaim-lock + ensure-shadow-repo-exists preamble since this can be the very first git
+   * operation for a workspace that has never had a lease. */
+  humanEditCheckpoint(): Promise<string> {
+    return this.mutex.runExclusive(this.root, async () => {
+      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      return checkpoint(this.root, { attribution: "human", kind: "human_edit" });
+    });
+  }
+
   /** Routed through the mutex so any write already in flight for this workspace finishes first —
    * `close()` then makes the writer terminal (see `JournalWriter#fd`'s `closed` guard), so a
    * write racing in from AFTER this call throws instead of silently reopening the fd. */

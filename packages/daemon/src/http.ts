@@ -21,7 +21,7 @@ import { confinePath } from "./confine-path.ts";
 import { internalErrorResponse, problem } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
 import { resolveMatchedFiles } from "./matcher.ts";
-import { classifyArtifactPath, renderMarkdown, sourceSha256 } from "./artifact-render.ts";
+import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { createJournalStreamResponse } from "./stream.ts";
 import type { WorkspaceIndex } from "./registry/workspace-index.ts";
@@ -51,6 +51,13 @@ const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
 // not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
 const SPA_ASSETS: Record<string, string> = {
   "bootstrap.js": "text/javascript; charset=utf-8",
+  // P3.3 additions — the class-R viewer + its ONE data-access module (R6), and idiomorph
+  // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
+  // bare-specifier import).
+  "data-access.js": "text/javascript; charset=utf-8",
+  "viewer.js": "text/javascript; charset=utf-8",
+  "annotate.js": "text/javascript; charset=utf-8",
+  "vendor/idiomorph.js": "text/javascript; charset=utf-8",
 };
 
 export interface ApiContext {
@@ -301,6 +308,95 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
   return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "R", content });
 }
 
+/** `PUT /w/:slug/artifacts/:path` — P3.3 addition, NOT in A1 §5 (the class-R editor's save
+ * action). Same slug-gate + `confinePath` + tracked-artifact-membership pipeline as the GET
+ * (A1 §6): confined-but-untracked → 404, same as GET, so this route can only overwrite an
+ * artifact that already exists and is currently tracked — it never creates a new one. Body is
+ * either the raw new source text, or a JSON object `{content: "..."}` (either is accepted so a
+ * plain-text `fetch(..., {body: source})` and a JSON caller both work without a content-type
+ * dance). An optional `If-Match: <source_sha256>` header makes the write conditional — a
+ * mismatch means the file changed since the caller last read it, so the write is refused rather
+ * than silently clobbering someone else's change (a nice-to-have, not required by any invariant
+ * here, since glosa is single-user v1 — but cheap to offer). On success, writes the file
+ * (temp -> fsync -> rename, `writeArtifactAtomic`) then checkpoints it as a `human`-attributed
+ * shadow-git commit (`WorkspaceBus#humanEditCheckpoint`) — an edit made through glosa's own
+ * editor is `human` BY CONSTRUCTION (A4 §F05), never `session`/`unknown`. */
+async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  const confineResult = confinePath(root, rawPathParam);
+  if (!confineResult.ok) {
+    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
+  }
+
+  const relNfc = rawPathParam
+    .split("/")
+    .map((segment) => segment.normalize("NFC"))
+    .join("/");
+  const { tracked } = resolveMatchedFiles(root);
+  const match = tracked.find((f) => f.path === relNfc);
+  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
+
+  if (classifyArtifactPath(match.path) === "F") {
+    return problem(400, "validation-failed", "class-F artifacts are not editable through this route", undefined, url.pathname);
+  }
+
+  const ifMatch = req.headers.get("If-Match");
+  if (ifMatch !== null) {
+    const currentSha = sourceSha256(readFileSync(match.rawPath));
+    if (ifMatch !== currentSha) {
+      return problem(409, "conflict", "source_sha256 has changed since If-Match was captured", undefined, url.pathname);
+    }
+  }
+
+  let raw: string;
+  try {
+    raw = await req.text();
+  } catch {
+    return problem(400, "validation-failed", "unable to read request body", undefined, url.pathname);
+  }
+  if (raw.length === 0) return problem(400, "validation-failed", "request body must not be empty", undefined, url.pathname);
+
+  // Accept either a bare-text body or `{"content": "..."}` — a body that parses as JSON but
+  // isn't that shape (an array, a number, an object with no string `content`) falls back to
+  // treating the ORIGINAL raw text as the content, not an error: a markdown source file starting
+  // with e.g. `123` or `"just a quoted line"` is itself valid JSON, so "parses as JSON" alone
+  // can't be the signal for "caller meant the wrapped-object form".
+  let content = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && typeof (parsed as Record<string, unknown>).content === "string") {
+      content = (parsed as Record<string, unknown>).content as string;
+    }
+  } catch {
+    // not JSON at all — `content` stays the raw text, which is the common case
+  }
+
+  // `resolveBus` (and the reconcile it may trigger) MUST run BEFORE the file is written, not
+  // after: reconcile's own offline-catch-up self-heal checkpoints whatever it finds already
+  // sitting on disk as `unknown` drift (correctly, for content that arrived some other way while
+  // the daemon wasn't watching) — if it ran AFTER this write, the very first reconcile for a
+  // workspace would steal THIS edit's commit as unknown drift before `humanEditCheckpoint` below
+  // ever got to attribute it `human`. Reconciling first means any real pre-existing drift is
+  // captured under its own honest `unknown` commit, leaving a clean slate for our write to be the
+  // next (and only) thing `humanEditCheckpoint` finds staged.
+  const bus = await resolveBus(ctx, root);
+  writeArtifactAtomic(match.rawPath, content);
+  await bus.humanEditCheckpoint();
+
+  const newSha = sourceSha256(Buffer.from(content, "utf8"));
+  return Response.json({
+    source_path: match.path,
+    source_sha256: newSha,
+    class: "R",
+    content,
+    rendered_html: renderMarkdown(content),
+  });
+}
+
 const ANNOTATION_INTENTS = new Set(["content", "classification", "style"]);
 
 function validateAnnotationBody(body: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
@@ -505,6 +601,13 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const slug = m[1] as string;
     const path = m[2] as string;
     return { routeClass: "authed-read", handle: (req) => handleGetArtifact(ctx, slug, path, req) };
+  }
+  // P3.3 addition — not in A1 §5 (see handlePutArtifact's own docstring): the class-R editor's
+  // save action.
+  if (method === "PUT" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts\/(.+)$/))) {
+    const slug = m[1] as string;
+    const path = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handlePutArtifact(ctx, slug, path, req) };
   }
   // P3.2: artifact/journal SSE stream (A1 §5.5, full protocol §8).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
