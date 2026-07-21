@@ -8,7 +8,7 @@
 // `DaemonHookClient` rather than folded into it: that one is deliberately minimal (exactly the
 // four hook-facing routes), and every hook handler's test only ever needs to fake those four —
 // widening that interface would mean every hook test's fake grows methods it never calls.
-import { ensureDaemon, glosaHome, loadToken } from "@glosa/daemon";
+import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
 
 export interface ApiProblem {
   type?: string;

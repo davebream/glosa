@@ -5,8 +5,8 @@
 // exit code. Nothing here writes the transcript or any glosa state file directly — the daemon API
 // (or, for the rewake lease, the coordinator's own lease file — a CLI-local watcher-liveness
 // concern, not workspace state) is the only thing that ever gets mutated.
-import { ClaudeCodeProvider } from "@glosa/providers-claude-code";
-import type { RewakeCoordinator, RewakeLeaseStore } from "@glosa/providers-claude-code";
+import { ClaudeCodeProvider } from "../../providers/claude-code/src/index.ts";
+import type { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
 import type { DaemonHookClient } from "./daemon-client.ts";
 
 export type HookEvent = "session-start" | "rewake-watch" | "session-end" | "user-prompt-submit" | "stop" | "notification";

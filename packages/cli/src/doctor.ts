@@ -6,7 +6,13 @@
 // named anywhere in the spec — that's a doc inconsistency, not a real check this file is missing,
 // so this implements exactly the 12 the table lists.
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { claudeConfigDir, protocolCompatible, PROTOCOL_VERSION, resolveMatchedFiles, tokenPath } from "@glosa/daemon";
+import {
+  claudeConfigDir,
+  protocolCompatible,
+  PROTOCOL_VERSION,
+  resolveMatchedFiles,
+  tokenPath,
+} from "../../daemon/src/index.ts";
 import { join } from "node:path";
 import { checkManifestDrift } from "./init.ts";
 import type { GlosaApiClient } from "./api-client.ts";

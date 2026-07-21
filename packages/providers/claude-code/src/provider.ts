@@ -12,7 +12,14 @@
 // rehearsal's job (see this package's test/ dir header comment); this file only has to prove the
 // LOGIC: try the best rung first, record what actually happened, fall back correctly when a rung
 // is unavailable OR fails.
-import type { AgentProvider, DeliverableEntry, DeliveryResult, Liveness, ProviderCapabilities, SessionBinding } from "@glosa/daemon";
+import type {
+  AgentProvider,
+  DeliverableEntry,
+  DeliveryResult,
+  Liveness,
+  ProviderCapabilities,
+  SessionBinding,
+} from "../../../daemon/src/index.ts";
 import { looksLikeClaudeHookInput } from "./hook-types.ts";
 
 /** The subset of `SessionRegistry` `deliver()`/`liveness()` need — a structural interface, not an

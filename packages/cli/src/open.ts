@@ -9,7 +9,7 @@
 // over the appendix here, per this repo's own precedence rule.
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { ensureToken, glosaHome } from "@glosa/daemon";
+import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope } from "./envelope.ts";
 
