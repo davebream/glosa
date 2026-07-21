@@ -13,6 +13,9 @@ check remain incomplete. This is not yet approved for a live sermon week.
 
 ## Read this before writing any code
 
+- **`ROADMAP.md`** — the maintainer-owned public direction. The linked GitHub Project is the live
+  status source and GitHub issues are the executable work queue. Agents may propose changes, but must
+  not add, remove, or reprioritize roadmap commitments without explicit maintainer approval.
 - **`docs/requirements.md`** — the authoritative build input (v2). Start here. It states every
   requirement (R1–R9), the fixed stack, task decomposition (T0–T8), and the release gate.
 - **`docs/appendices/A1–A6`** — the **normative** deep contracts. When implementing a subsystem, the
@@ -54,7 +57,9 @@ check remain incomplete. This is not yet approved for a live sermon week.
 
 ## Build approach
 
-Implementation follows `docs/requirements.md`. Tasks T0–T8 have A-level detail in the appendices.
+Implementation behavior follows `docs/requirements.md`; current work follows accepted GitHub issues.
+The completed autonomous v1 execution records are archived under `docs/archive/v1-build/` and must not
+be resumed as a live build loop. Tasks T0–T8 have A-level detail in the appendices.
 **T8 is the release gate**: the deterministic acceptance suites (fault,
 concurrency, security, anchor, transcript, actual-jethro-topology) must pass AND a manual rehearsal
 against a copy of a real past sermon must pass. **"Green CI" is not the acceptance bar** — the

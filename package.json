@@ -16,6 +16,7 @@
     "packages/providers/codex/src",
     "packages/spa/src",
     "README.md",
+    "ROADMAP.md",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
