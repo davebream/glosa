@@ -408,6 +408,12 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
     expect(resolved.args).toEqual(["run", "--silent", "/some/glosa-root/packages/cli/src/main.ts"]);
   });
 
+  test("'glosa' on PATH with extra --build-id output is treated as nonmatching", () => {
+    const dir = freshDir();
+    fakeGlosaOnPath(dir, `${BUILD_ID}\nunexpected output`);
+    expect(defaultResolveGlosaBin("/some/glosa-root").mode).toBe("bun-run");
+  });
+
   test("'glosa' on PATH that does not support --build-id falls back to the bun-run form", () => {
     const dir = freshDir();
     const binDir = join(dir, "fakebin");

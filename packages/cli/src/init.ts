@@ -52,8 +52,8 @@ export function defaultResolveGlosaBin(glosaRoot: string): GlosaBinResolution {
   if (onPath) {
     try {
       const proc = Bun.spawnSync({ cmd: [onPath, "--build-id"] });
-      const out = proc.stdout.toString("utf8").trim();
-      if (proc.success && out === BUILD_ID) {
+      const out = proc.stdout.toString("utf8");
+      if (proc.success && out === `${BUILD_ID}\n`) {
         return { command: "glosa", args: [], mode: "path" };
       }
     } catch {
