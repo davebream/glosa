@@ -122,6 +122,36 @@ for Origin. Apply in P1.3.
   localStorage untouched, `replaceState` strips `t=` (the "token never in history/localStorage" invariant).
 - **Tests:** 125 pass / 0 fail; typecheck clean. Real-browser E2E (vs fakes) deferred to T8/rehearsal.
 
+### P2.1 journal-as-truth — ✅ (commit 7ab393a) — CC, the correctness core, doubly adversarially reviewed
+- **Built (Sonnet subagent):** `packages/daemon/src/bus/` — `ulid.ts` (monotonic Crockford ULID, injectable
+  clock/random), `mutex.ts` (FIFO `AsyncMutex` + per-workspace `KeyedMutex`), `io.ts` (short-write loop +
+  dir-fsync), `journal.ts` (append-only, fsync-before-ACK for lifecycle events, MAX_EVENT_BYTES=65536
+  oversize-reject-before-fd-touch), `inbox.ts` (immutable write-once), `quarantine.ts`, `replay.ts` (pure
+  fold, event_id + idem dedup, pluggable reducer — P2.5 swaps the full transition table in), `reconcile.ts`
+  (ordered startup: torn-tail truncate → replay → inbox↔journal self-heal; steps 4–5 apply-lease/offline
+  are typed stubs for P2.3), `bus.ts` (WorkspaceBus facade). Fault suite truncates at **every byte offset
+  of every record** → asserts recovery is exactly one of {before, after} state, never partial.
+- **Two parallel adversarial reviews (concurrency-expert + critic), both probe-verified — 1 blocker + 3
+  durability fixes, all fixed:**
+  - **BLOCKER (idempotency):** `replayJournal` re-appended a `line_quarantined` event + re-copied the bad
+    line on EVERY replay (a malformed line has no event_id to dedup on) → journal + quarantine file grew
+    unboundedly per daemon restart. Derived state stayed byte-identical, which is why the original tests
+    missed it. **Fixed:** `line_quarantined.detail.hash = sha256(raw line)`; replay pre-scans existing
+    hashes and skips the re-append. Regression: reconcile ×2 → identical journal + event counts.
+  - **Durability (inbox):** `renameSync` silently overwrites (no syscall write-once) AND wasn't dir-fsynced
+    → on power loss the rename could un-happen *after* `entry_created` was durable = the "reverse gap"
+    reconcile assumes impossible. **Fixed:** `linkSync` (atomic EEXIST) + `unlinkSync(temp)` +
+    `fsyncContainingDir` before returning.
+  - **Durability (torn-tail):** `truncateSync` relied on a later append's fsync. **Fixed:** explicit
+    `fsyncSync` right after truncate.
+  - **Robustness (mid-process):** a partial `writeAllSync` (e.g. transient ENOSPC) left torn tail bytes
+    while the daemon kept running → next append concatenated into a garbled line. **Fixed:** capture size
+    before write, `ftruncateSync` back on throw. Plus `WorkspaceBus.close()` now drains via the mutex +
+    a `closed` flag so post-close writes throw.
+  - Deferred with notes: one-WorkspaceBus-per-root registry (P2.4, not wired yet); KeyedMutex eviction.
+- **Tests:** 159 pass / 0 fail (34 in bus/), 2× stable, typecheck clean. The fault suite was independently
+  judged genuinely rigorous (real strict two-state invariant, all offsets), not theater.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
