@@ -18,6 +18,7 @@ import { mountConversationPane } from "./conversation.js";
 import { mountRichEditor } from "./rich-editor.js";
 import { confirmDialog } from "./dialog.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
+import { mountAppearanceControl } from "./appearance.js";
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -95,7 +96,7 @@ function splitPath(path) {
  * bootstrap.js doesn't call it today (the SPA never remounts within one page load), but a test
  * does, so a leaked stream connection never outlives one test case.
  */
-export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, initialArtifact } = {}) {
+export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, initialArtifact, appearance } = {}) {
   root.textContent = "";
   root.classList.add("glosa-app");
   root.setAttribute("data-mode", "preview");
@@ -125,6 +126,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     textContent: "Conversation",
     "aria-pressed": "false",
   });
+  const appearanceHost = el("div", { className: "glosa-appearance" });
+  const stopAppearance = appearance ? mountAppearanceControl(appearanceHost, appearance) : null;
 
   // --- navigator ---
   const sidebarList = el("ul", { className: "glosa-workspace-list" });
@@ -216,7 +219,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       navToggle,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
-      el("div", { className: "glosa-topbar-actions" }, [historyToggle, conversationToggle]),
+      el("div", { className: "glosa-topbar-actions" }, [historyToggle, conversationToggle, appearanceHost]),
     ]),
     el("nav", { className: "glosa-sidebar" }, [
       el("h2", { textContent: "Workspaces" }),
@@ -1089,6 +1092,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     stopStream?.();
     stopClassFViewer?.();
     stopConversation?.();
+    stopAppearance?.();
     artifactNavigator.destroy();
   };
 }

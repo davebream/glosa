@@ -8,6 +8,8 @@
 /* ---------- 1. Tokens ---------- */
 
 :root {
+  color-scheme: light;
+
   /* Palette (OKLCH; hue 110 = editorial sage/olive; brief §5). */
   --bg: oklch(1 0 0);                       /* reading surface — pure white paper */
   --surface: oklch(0.972 0.004 110);        /* control surface — topbar, navigator, panels */
@@ -19,6 +21,7 @@
   --border-strong: oklch(0.82 0.008 110);
   --primary: oklch(0.5 0.1 110);            /* workbench accent — actions, selection, focus */
   --primary-hover: oklch(0.44 0.1 110);
+  --on-primary: oklch(0.99 0 0);
   --anchor-wash: oklch(0.94 0.032 120);     /* annotation anchor highlight — calm sage, not highlighter */
   --danger: oklch(0.5 0.16 25);
   --warn: oklch(0.55 0.12 75);
@@ -64,6 +67,28 @@
   --margin-width: 320px;
   --topbar-height: 3rem;
   --measure: 68ch;
+}
+
+/* The approved dark direction is the same annotated workbench under lower ambient light, not an
+   inverted developer console. Depth comes from a three-step olive-charcoal surface ladder; the
+   accent lightens and softens so it remains legible without glowing. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(0.19 0.012 110);
+  --surface: oklch(0.235 0.014 110);
+  --surface-sunken: oklch(0.275 0.016 110);
+  --ink: oklch(0.92 0.012 105);
+  --muted: oklch(0.72 0.014 105);
+  --faint: oklch(0.56 0.012 105);
+  --border: oklch(0.32 0.014 110);
+  --border-strong: oklch(0.5 0.018 110);
+  --primary: oklch(0.68 0.085 110);
+  --primary-hover: oklch(0.75 0.09 110);
+  --on-primary: oklch(0.19 0.012 110);
+  --anchor-wash: oklch(0.34 0.052 112);
+  --danger: oklch(0.7 0.14 25);
+  --warn: oklch(0.74 0.11 75);
+  --ok: oklch(0.7 0.09 150);
 }
 
 /* ---------- 2. Base ---------- */
@@ -127,10 +152,18 @@ button {
   display: grid;
   place-content: center;
   justify-items: start;
-  gap: var(--space-3);
+  gap: 0;
   padding: var(--space-8);
   max-width: 34rem;
   margin: 0 auto;
+}
+
+.glosa-screen h1 + p {
+  margin-top: var(--space-2);
+}
+
+.glosa-screen p + p {
+  margin-top: var(--space-6);
 }
 
 .glosa-screen h1 {
@@ -231,6 +264,114 @@ button {
   gap: var(--space-2);
 }
 
+/* Appearance is the quiet utility at the far edge of the approved top bar. The trigger stays
+   icon-only; the native popover carries the full, explicit System / Light / Dark vocabulary. */
+.glosa-appearance {
+  display: flex;
+  align-items: center;
+  margin-left: var(--space-1);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border);
+}
+
+.glosa-appearance-trigger {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-appearance-trigger::before {
+  content: "";
+  position: absolute;
+  inset: -6px; /* 44px pointer/touch target with the mock's restrained 32px visual mass. */
+}
+
+.glosa-appearance-trigger:hover,
+.glosa-appearance-trigger[aria-expanded="true"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-appearance-icon,
+.glosa-appearance-option-icon,
+.glosa-appearance-check {
+  width: 1.125rem;
+  height: 1.125rem;
+  display: grid;
+  place-items: center;
+}
+
+.glosa-appearance-icon svg,
+.glosa-appearance-option-icon svg,
+.glosa-appearance-check svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-appearance-menu {
+  position: fixed;
+  inset: calc(var(--topbar-height) + var(--space-1)) var(--space-4) auto auto;
+  width: 13rem;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 24px oklch(0.24 0.01 110 / 0.14);
+}
+
+.glosa-appearance-menu::backdrop {
+  background: transparent;
+}
+
+.glosa-appearance-option {
+  width: 100%;
+  min-height: 2.75rem;
+  display: grid;
+  grid-template-columns: 1.125rem minmax(0, 1fr) 1.125rem;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.glosa-appearance-option:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-appearance-option[data-selected="true"] {
+  background: color-mix(in oklch, var(--primary) 12%, var(--surface));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.glosa-appearance-option[data-selected="true"] .glosa-appearance-option-icon,
+.glosa-appearance-option[data-selected="true"] .glosa-appearance-check {
+  color: var(--primary);
+}
+
+.glosa-appearance-option[data-selected="false"] .glosa-appearance-check {
+  visibility: hidden;
+}
+
+.glosa-appearance-option:focus-visible {
+  outline-offset: -2px;
+}
+
 /* Mode control: one stable segmented control, active state never color-alone (weight + bg). */
 .glosa-modebar {
   display: flex;
@@ -245,6 +386,7 @@ button {
   padding: var(--space-1) var(--space-3);
   border-radius: 6px;
   color: var(--muted);
+  font-weight: 500;
   text-transform: capitalize;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
@@ -271,6 +413,7 @@ button {
   padding: var(--space-1) var(--space-3);
   border-radius: 6px;
   color: var(--muted);
+  font-weight: 500;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
@@ -881,7 +1024,7 @@ button {
 .glosa-composer-send {
   background: var(--primary);
   border-color: var(--primary);
-  color: oklch(0.99 0 0); /* white text on a saturated mid-tone fill */
+  color: var(--on-primary);
 }
 
 .glosa-save:hover,
@@ -1418,6 +1561,51 @@ button {
   font-size: var(--text-xs);
 }
 
+/* diff2html ships dark variables but only applies them behind its own utility class. glosa owns
+   theme resolution, so remap the vendor variables at the pane boundary instead of teaching the
+   history module about appearance. */
+:root[data-theme="dark"] .glosa-diff-pane {
+  --d2h-bg-color: var(--bg);
+  --d2h-border-color: var(--border);
+  --d2h-dim-color: var(--muted);
+  --d2h-line-border-color: var(--border);
+  --d2h-file-header-bg-color: var(--surface);
+  --d2h-file-header-border-color: var(--border-strong);
+  --d2h-empty-placeholder-bg-color: var(--surface-sunken);
+  --d2h-empty-placeholder-border-color: var(--border);
+  --d2h-selected-color: color-mix(in oklch, var(--primary) 18%, var(--bg));
+  --d2h-ins-bg-color: color-mix(in oklch, var(--ok) 14%, var(--bg));
+  --d2h-ins-border-color: color-mix(in oklch, var(--ok) 45%, var(--bg));
+  --d2h-ins-highlight-bg-color: color-mix(in oklch, var(--ok) 35%, var(--bg));
+  --d2h-ins-label-color: var(--ok);
+  --d2h-del-bg-color: color-mix(in oklch, var(--danger) 12%, var(--bg));
+  --d2h-del-border-color: color-mix(in oklch, var(--danger) 42%, var(--bg));
+  --d2h-del-highlight-bg-color: color-mix(in oklch, var(--danger) 32%, var(--bg));
+  --d2h-del-label-color: var(--danger);
+  --d2h-change-del-color: color-mix(in oklch, var(--warn) 18%, var(--bg));
+  --d2h-change-ins-color: color-mix(in oklch, var(--ok) 20%, var(--bg));
+  --d2h-info-bg-color: var(--surface);
+  --d2h-info-border-color: var(--border);
+  --d2h-change-label-color: var(--warn);
+  --d2h-moved-label-color: var(--primary);
+}
+
+:root[data-theme="dark"] .glosa-composer,
+:root[data-theme="dark"] .glosa-dialog {
+  background: var(--surface);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .glosa-annotation[data-state="rejected"],
+:root[data-theme="dark"] .glosa-annotation[data-state="stale"] {
+  /* Whole-card opacity compounds contrast loss for 12–13px metadata on dark surfaces. */
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .glosa-sidebar {
+  box-shadow: none;
+}
+
 .glosa-diff-pane:empty {
   display: none;
 }
@@ -1506,7 +1694,7 @@ button {
   padding: var(--space-1) var(--space-3);
   border-radius: 6px;
   background: var(--primary);
-  color: oklch(0.99 0 0);
+  color: var(--on-primary);
   font-weight: 500;
 }
 
@@ -1527,6 +1715,31 @@ button {
 
   .glosa-nav-toggle {
     display: inline-flex;
+  }
+
+  .glosa-topbar {
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
+  }
+
+  .glosa-artifact-dir {
+    display: none;
+  }
+
+  .glosa-modebar button,
+  .glosa-history-toggle,
+  .glosa-conversation-toggle {
+    padding-inline: var(--space-2);
+  }
+
+  .glosa-appearance {
+    margin-left: 0;
+    padding-left: var(--space-1);
+  }
+
+  .glosa-appearance-menu {
+    right: var(--space-2);
+    width: min(13rem, calc(100vw - var(--space-4)));
   }
 
   /* Navigator becomes a left drawer over a backdrop. */
@@ -1596,6 +1809,11 @@ button {
   .glosa-btn,
   .glosa-save,
   .glosa-composer-send {
+    transition: none;
+  }
+
+  .glosa-appearance-trigger,
+  .glosa-appearance-option {
     transition: none;
   }
 

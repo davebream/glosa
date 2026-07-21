@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-21T21:05:34Z",
+  "title": "Design System: glosa",
+  "extensions": {
+    "colorMeta": {
+      "reading-surface": {
+        "role": "neutral",
+        "displayName": "Reading Surface",
+        "canonical": "oklch(1 0 0)",
+        "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.26 0 0)", "oklch(0.38 0 0)", "oklch(0.5 0 0)", "oklch(0.62 0 0)", "oklch(0.74 0 0)", "oklch(0.86 0 0)", "oklch(1 0 0)"]
+      },
+      "control-surface": {
+        "role": "neutral",
+        "displayName": "Control Surface",
+        "canonical": "oklch(0.972 0.004 110)",
+        "tonalRamp": ["oklch(0.15 0.004 110)", "oklch(0.26 0.004 110)", "oklch(0.38 0.004 110)", "oklch(0.5 0.004 110)", "oklch(0.62 0.004 110)", "oklch(0.74 0.004 110)", "oklch(0.86 0.004 110)", "oklch(0.972 0.004 110)"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Editorial Ink",
+        "canonical": "oklch(0.24 0.01 110)",
+        "tonalRamp": ["oklch(0.15 0.01 110)", "oklch(0.24 0.01 110)", "oklch(0.36 0.01 110)", "oklch(0.48 0.01 110)", "oklch(0.6 0.01 110)", "oklch(0.72 0.01 110)", "oklch(0.84 0.01 110)", "oklch(0.95 0.01 110)"]
+      },
+      "workbench-olive": {
+        "role": "primary",
+        "displayName": "Workbench Olive",
+        "canonical": "oklch(0.5 0.1 110)",
+        "tonalRamp": ["oklch(0.15 0.1 110)", "oklch(0.26 0.1 110)", "oklch(0.38 0.1 110)", "oklch(0.5 0.1 110)", "oklch(0.62 0.1 110)", "oklch(0.74 0.1 110)", "oklch(0.86 0.08 110)", "oklch(0.95 0.04 110)"]
+      },
+      "dark-reading-surface": {
+        "role": "neutral",
+        "displayName": "Dark Reading Surface",
+        "canonical": "oklch(0.19 0.012 110)",
+        "tonalRamp": ["oklch(0.15 0.012 110)", "oklch(0.19 0.012 110)", "oklch(0.235 0.014 110)", "oklch(0.275 0.016 110)", "oklch(0.32 0.014 110)", "oklch(0.5 0.018 110)", "oklch(0.72 0.014 105)", "oklch(0.92 0.012 105)"]
+      },
+      "dark-workbench-olive": {
+        "role": "primary",
+        "displayName": "Dark Workbench Olive",
+        "canonical": "oklch(0.68 0.085 110)",
+        "tonalRamp": ["oklch(0.2 0.04 110)", "oklch(0.28 0.06 110)", "oklch(0.38 0.075 110)", "oklch(0.5 0.085 110)", "oklch(0.6 0.085 110)", "oklch(0.68 0.085 110)", "oklch(0.75 0.075 110)", "oklch(0.9 0.035 110)"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Editorial Headline", "purpose": "Boot and overlay headlines only." },
+      "body": { "displayName": "Manuscript Body", "purpose": "Long-form rendered writing at a 68ch measure." },
+      "label": { "displayName": "Workbench Label", "purpose": "Controls, annotations, and product copy." },
+      "metadata": { "displayName": "Technical Metadata", "purpose": "Paths, anchors, timestamps, and identifiers only." }
+    },
+    "shadows": [
+      { "name": "composer-rest", "value": "0 1px 3px oklch(0.24 0.01 110 / 0.06)", "purpose": "Tight separation for the annotation composer." },
+      { "name": "drawer-edge", "value": "2px 0 12px oklch(0.24 0.01 110 / 0.1)", "purpose": "Directional edge for the compact navigator drawer." },
+      { "name": "dialog-float", "value": "0 12px 40px oklch(0.24 0.01 110 / 0.18)", "purpose": "Blocking dialog above its dimmed backdrop only." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "All product state transitions." },
+      { "name": "fast", "value": "150ms", "purpose": "Hover, focus, and anchor-wash feedback." },
+      { "name": "base", "value": "200ms", "purpose": "Drawers, trays, and structural state changes." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "1024px" },
+      { "name": "side-margin", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The next unambiguous action: Save or Send.",
+      "html": "<button class=\"ds-primary\">Save</button>",
+      "css": ".ds-primary { font: 500 0.8125rem/1.5 system-ui, sans-serif; padding: .25rem .75rem; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: oklch(.99 0 0); transition: background 150ms cubic-bezier(.25,1,.5,1), border-color 150ms cubic-bezier(.25,1,.5,1); } .ds-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); } .ds-primary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }"
+    },
+    {
+      "name": "Mode Control",
+      "kind": "nav",
+      "description": "Stable Preview, Annotate, and Edit modes.",
+      "html": "<div class=\"ds-modes\" role=\"group\" aria-label=\"View mode\"><button>Preview</button><button aria-pressed=\"true\">Annotate</button><button>Edit</button></div>",
+      "css": ".ds-modes { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunken); } .ds-modes button { font: 500 .8125rem/1.5 system-ui, sans-serif; padding: .25rem .75rem; border: 0; border-radius: 6px; background: transparent; color: var(--muted); } .ds-modes button:hover { color: var(--ink); } .ds-modes button[aria-pressed=true] { margin: -1px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--ink); font-weight: 600; } .ds-modes button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }"
+    },
+    {
+      "name": "Appearance Control",
+      "kind": "menu",
+      "description": "Quiet top-bar control for persisted System, Light, and Dark appearance choices.",
+      "html": "<button class=\"ds-appearance\" aria-label=\"Appearance: System (dark)\" aria-expanded=\"false\">☾</button><div class=\"ds-appearance-menu\" role=\"menu\" aria-label=\"Appearance\"><button role=\"menuitemradio\" aria-checked=\"true\">System <span>✓</span></button><button role=\"menuitemradio\" aria-checked=\"false\">Light</button><button role=\"menuitemradio\" aria-checked=\"false\">Dark</button></div>",
+      "css": ".ds-appearance { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); } .ds-appearance:hover { background: var(--surface-sunken); color: var(--ink); } .ds-appearance:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; } .ds-appearance-menu { width: 176px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 40px oklch(.12 .01 110 / .24); } .ds-appearance-menu button { width: 100%; height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 500 .8125rem/1.5 system-ui, sans-serif; } .ds-appearance-menu button:hover, .ds-appearance-menu button[aria-checked=true] { background: var(--surface-sunken); color: var(--ink); }"
+    },
+    {
+      "name": "Annotation Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Quiet field with a dedicated focus halo.",
+      "html": "<textarea class=\"ds-field\" placeholder=\"What should change?\"></textarea>",
+      "css": ".ds-field { width: 18rem; min-height: 3.5rem; resize: vertical; font: .8125rem/1.5 system-ui, sans-serif; padding: .5rem; border: 1px solid transparent; border-radius: 6px; background: var(--surface); color: var(--ink); } .ds-field::placeholder { color: var(--muted); } .ds-field:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 14%, transparent); }"
+    },
+    {
+      "name": "Intent Chip",
+      "kind": "chip",
+      "description": "Free-wrapping annotation intent, selected through tint, border, and weight.",
+      "html": "<button class=\"ds-chip\" aria-pressed=\"true\">Change the words</button>",
+      "css": ".ds-chip { font: .75rem/1.5 system-ui, sans-serif; padding: 2px .5rem; border: 1px solid var(--primary); border-radius: 999px; background: color-mix(in oklch, var(--primary) 10%, var(--bg)); color: var(--primary); font-weight: 600; } .ds-chip:hover { border-color: var(--border-strong); color: var(--ink); } .ds-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }"
+    },
+    {
+      "name": "Artifact Row",
+      "kind": "nav",
+      "description": "Compact, scan-friendly artifact navigation.",
+      "html": "<button class=\"ds-row\" aria-current=\"true\"><span aria-hidden=\"true\">▾</span><span>manuscript.md</span></button>",
+      "css": ".ds-row { width: 16rem; height: 28px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 2px; border: 0; border-radius: 5px; background: var(--surface-sunken); color: var(--primary); font: 600 .8125rem/1.5 system-ui, sans-serif; text-align: left; } .ds-row:hover { color: var(--ink); } .ds-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }"
+    },
+    {
+      "name": "Annotation Composer",
+      "kind": "custom",
+      "description": "The one raised work surface in the contextual margin.",
+      "html": "<section class=\"ds-composer\"><q>Selected passage from the manuscript</q><textarea class=\"ds-mini\" placeholder=\"What should change?\"></textarea><button>Send</button></section>",
+      "css": ".ds-composer { width: 18rem; display: grid; gap: .75rem; padding: .75rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--ink); box-shadow: 0 1px 3px oklch(.24 .01 110 / .06); font: .8125rem/1.5 system-ui, sans-serif; } .ds-composer q { color: var(--muted); font-family: ui-serif, Georgia, serif; font-style: italic; } .ds-mini { padding: .5rem; border: 1px solid transparent; border-radius: 6px; background: var(--surface); color: var(--ink); } .ds-composer button { justify-self: end; padding: .25rem .75rem; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: oklch(.99 0 0); } .ds-composer button:hover { background: var(--primary-hover); } .ds-composer :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Annotated Workbench",
+    "overview": "glosa is a precise reading and review instrument. The manuscript is the page; navigation, annotations, provenance, and agent state form the quiet desk around it. The interface combines iA Writer's typographic calm, a copy editor's marked manuscript, and Linear-grade operational clarity only where state needs to be explicit.",
+    "keyCharacteristics": [
+      "Rendered writing dominates a stable 68ch reading measure.",
+      "Control surfaces are quiet, flat, and slightly sage-tinted.",
+      "One olive accent is rare and functional.",
+      "Provenance and delivery state are stated with text or shape as well as color.",
+      "Responsive behavior collapses chrome before compromising the manuscript."
+    ],
+    "rules": [
+      { "name": "The Accent Rarity Rule", "body": "Workbench Olive marks action, focus, selection, or trustworthy state and occupies no more than ten percent of a screen. It never becomes a decorative panel wash.", "section": "colors" },
+      { "name": "The Status Needs Shape Rule", "body": "Danger, warning, success, delivery, and provenance always carry a label, icon, or border treatment. Color is never the only channel.", "section": "colors" },
+      { "name": "The Reading Measure Rule", "body": "Manuscript prose stays between 65ch and 75ch with generous line-height. Operational panels may be denser; writing never becomes a data table.", "section": "typography" },
+      { "name": "The Flat-Until-Floating Rule", "body": "Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace or needs interaction priority.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep rendered writing as the dominant surface and collapse chrome before shrinking the reading measure.",
+      "Do use Workbench Olive only for primary action, focus, selection, and explicit operational state.",
+      "Do preserve keyboard access, visible focus, reduced-motion alternatives, and WCAG 2.2 AA contrast."
+    ],
+    "donts": [
+      "Don't build a generic AI-workflow dashboard or let agent state compete with the manuscript.",
+      "Don't use SaaS landing-page gloss, dark-mode purple gradients, glassmorphism, or decorative agent theatrics.",
+      "Don't imply cmux coupling or hide routing, attribution, or delivery behind vague synced language."
+    ]
+  }
+}

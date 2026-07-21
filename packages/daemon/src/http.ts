@@ -70,6 +70,10 @@ const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
 // basename check alone isn't enough, so every servable file is named here explicitly; anything
 // not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
 const SPA_ASSETS: Record<string, string> = {
+  // Appearance preload is classic/blocking to apply a persisted override before CSS paints;
+  // appearance.js owns the page-lifetime controller and workspace popover.
+  "appearance-preload.js": "text/javascript; charset=utf-8",
+  "appearance.js": "text/javascript; charset=utf-8",
   "bootstrap.js": "text/javascript; charset=utf-8",
   // The SPA's visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md).
   "app.css": "text/css; charset=utf-8",

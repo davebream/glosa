@@ -1,0 +1,6 @@
+{
+  "files": ["packages/spa/src/shell.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}
