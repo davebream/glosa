@@ -105,6 +105,23 @@ for Origin. Apply in P1.3.
     class-F `port+1` derivation can't collide; per-test local home state). Ran full suite 3× post-fix →
     102 pass / 0 fail every time, typecheck clean.
 
+### P1.4 pairing + SPA shell — ✅ (commit d63d192) — CC: no
+- **Built (Sonnet subagent):** `token.ts` `mintToken`/`ensureToken` (128-bit, atomic tmp+fsync+rename,
+  0600, never overwrites); daemon serves `GET /` (SPA shell) + `GET /app/<file>` (static ES modules,
+  allowlist-keyed), both **navigation** class (no Bearer), SPA CSP + nosniff. SPA: `packages/spa/src/
+  shell.html` (four hidden `data-screen` containers) + `bootstrap.js` (**plain .js, not .ts** — no build
+  step means nothing transpiles between disk and browser; added `allowJs:true` to tsconfig). `scrubToken`
+  + `selectScreen` are pure/injectable; `main()` guarded by `typeof window`.
+- **Decision D5 applied:** pairing fragment is `#t=<token>` (A1/A3 wire format), not A6's looser
+  `#<capability>`. Comment in http.ts.
+- **My review found + fixed (myself, 1-liner):** `SPA_ASSETS[name]` lookup let a prototype key
+  (`__proto__`/`constructor`) resolve to a truthy inherited value, slipping past the `undefined` guard →
+  `readFileSync` → 500 instead of 404. Hardened to `Object.hasOwn` + added a regression test (`/app/
+  __proto__` → 404). Not a file-disclosure (allowlist still blocks path escape), just robustness.
+- **Security property tested:** `scrubToken` fake-location/storage/history test asserts token → sessionStorage,
+  localStorage untouched, `replaceState` strips `t=` (the "token never in history/localStorage" invariant).
+- **Tests:** 125 pass / 0 fail; typecheck clean. Real-browser E2E (vs fakes) deferred to T8/rehearsal.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
