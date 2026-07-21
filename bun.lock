@@ -26,6 +26,8 @@
       "dependencies": {
         "@glosa/daemon": "workspace:*",
         "@glosa/providers-claude-code": "workspace:*",
+        "@gunshi/plugin-completion": "0.37.1",
+        "gunshi": "0.37.1",
       },
     },
     "packages/daemon": {
@@ -57,6 +59,8 @@
     },
   },
   "packages": {
+    "@bomb.sh/tab": ["@bomb.sh/tab@0.0.19", "", { "peerDependencies": { "cac": "^6.7.14", "citty": "^0.1.6 || ^0.2.0", "commander": "^13.1.0 || ^14.0.0 || ^15.0.0" }, "optionalPeers": ["cac", "citty", "commander"], "bin": { "tab": "dist/bin/cli.mjs" } }, "sha512-dTRfo9Q9B+lbLG3JCu8a/AGQSfD2XXcFcnakQzVjSOX+VvR/s9zpsH8TlqV3iHqazniRn1Ypwd1hcRlXcu/4BA=="],
+
     "@glosa/cli": ["@glosa/cli@workspace:packages/cli"],
 
     "@glosa/daemon": ["@glosa/daemon@workspace:packages/daemon"],
@@ -66,6 +70,12 @@
     "@glosa/providers-codex": ["@glosa/providers-codex@workspace:packages/providers/codex"],
 
     "@glosa/spa": ["@glosa/spa@workspace:packages/spa"],
+
+    "@gunshi/plugin": ["@gunshi/plugin@0.37.1", "", {}, "sha512-ljjBaL15jCwX6tEtWRdmAQ/y/svGcMZa5mVhMPgXFeQFQ++srK/x5dx8uchQFrE2MTqaFhMMjNK9AQowCyRv9A=="],
+
+    "@gunshi/plugin-completion": ["@gunshi/plugin-completion@0.37.1", "", { "dependencies": { "@bomb.sh/tab": "^0.0.19", "@gunshi/plugin": "0.37.1" }, "peerDependencies": { "@gunshi/plugin-i18n": "0.37.1" } }, "sha512-6FHJiLvFYB1/bOr8waRIpwvyzdL/51vrGJL0klAFOk5CbfWogsOrv3kR+wX9WTgJHYVZJeMafg7tsZCHftZm2w=="],
+
+    "@gunshi/plugin-i18n": ["@gunshi/plugin-i18n@0.37.1", "", { "dependencies": { "@gunshi/plugin": "0.37.1" }, "peerDependencies": { "@gunshi/plugin-global": "0.37.1" }, "optionalPeers": ["@gunshi/plugin-global"] }, "sha512-K5L5IDeaD5JIGEPn4Wcl0cXyPggmmtj4sSQwCsqzAYc30VfJu+BQscoEt7wIoJ3UR6gnjY7BJh5dxGcmBcUvaA=="],
 
     "@profoundlogic/hogan": ["@profoundlogic/hogan@3.0.4", "", { "dependencies": { "nopt": "1.0.10" }, "bin": { "hulk": "bin/hulk" } }, "sha512-pmNVGuooS30Mm7YbZd5T7E5zYVO6D5Ct91sn4T39mUvMUc3sCGridcnhAufL1/Bz2QzAtzEn0agNrdk3+5yWzw=="],
 
@@ -100,6 +110,8 @@
     "diff2html": ["diff2html@3.4.56", "", { "dependencies": { "@profoundlogic/hogan": "^3.0.4", "diff": "^8.0.3" }, "optionalDependencies": { "highlight.js": "11.11.1" } }, "sha512-u9gfn+BlbHcyO7vItCIC4z49LJDUt31tODzOfAuJ5R1E7IdlRL6KjugcB9zOpejD+XiR+dDZbsnHSQ3g6A/u8A=="],
 
     "entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
+
+    "gunshi": ["gunshi@0.37.1", "", {}, "sha512-C3t35z65PQpAHay/gzEu4J/7SNWXn2NhfC4RfZQPxyOqkPfDTizthxCPoSU48OazoVherCuCpFDKI1qcY425Gw=="],
 
     "happy-dom": ["happy-dom@20.11.0", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-XogN4asPd1a56di9prVG6bZxteNcXsZxxKmAvcEfc5Px5Ca2hMyMgk8wvqK2K1V8zXg40j9VANXsDaJYh9DeNA=="],
 
