@@ -294,6 +294,29 @@ for Origin. Apply in P1.3.
   (c) **P3.3 must re-fetch `GET /w/:slug/artifacts` after every SSE reconnect** — artifact frames aren't
   journaled, so a file change missed during a disconnect isn't replayed (spec-faithful, A1 §8.2 case 3).
 
+### P3.3 class-R viewer + 3 modes — ✅ (commit e0865c0) — CC: no (targeted self-review at depth)
+- **Built (Sonnet subagent):** SPA (`packages/spa/src/`) vanilla ES modules — `data-access.js` (R6's ONE
+  daemon path: getArtifacts/getArtifact/postAnnotation/putArtifact/openStream + SSE reconnect w/ A1 §8.2
+  backoff + re-fetch-on-reconnect per the P3.2 note), `annotate.js` (pure W3C annotation record builder —
+  UTF-16 offsets, ±40 prefix/suffix, surrogate-safe — + DOM selection walker), `viewer.js` (Preview/Annotate/
+  Edit mode reducer, idiomorph live-morph, `mountApp` sidebar+viewer), vendored `idiomorph@0.7.4` (no build
+  step → served via SPA_ASSETS allowlist). Daemon: new **`PUT /w/:slug/artifacts/:path`** edit-save route
+  (state-changing; same slug-gate/confinePath/tracked-membership as GET; class-F→400; If-Match→409;
+  `writeArtifactAtomic` + `WorkspaceBus.humanEditCheckpoint` → `human` BY CONSTRUCTION, A4 §F05).
+- **Bug the subagent caught + fixed (provenance integrity):** edit-save must `resolveBus`/reconcile BEFORE
+  writing the file — else the workspace's first offline-catchup reconcile steals the fresh edit as `unknown`
+  drift before `humanEditCheckpoint` runs. A route-level test caught it (attribution came back `unknown`);
+  fixed + documented inline; the diff now correctly shows `human`.
+- **My review (targeted, proportionate for CC:no at deep context):** verified the PUT route writes only to the
+  matcher's confined+tracked `rawPath` (no write-outside-workspace / no `.glosa`/`.git`), reuses the exact
+  auth+confinement pipeline the P3.1 critic already exhaustively verified, and the `human`-attribution ordering
+  is correct + tested. Client-side guarded by an `import-boundary` test (only `data-access.js` calls `fetch`).
+- **Tests:** 494 pass / 0 fail (12 new daemon route tests + SPA logic/DOM/wire-compat/import-boundary; incl.
+  git-hook env). Added `idiomorph` (prod) + `happy-dom` (devDep).
+- **Deferred to P5.4 rehearsal (⛔ Dawid):** real-browser E2E (actual scroll/selection preservation across a
+  live SSE-driven morph — happy-dom does no layout); a real GET-annotations endpoint (margin list is
+  session-local until one exists — a follow-up route).
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
