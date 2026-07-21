@@ -317,6 +317,29 @@ for Origin. Apply in P1.3.
   live SSE-driven morph — happy-dom does no layout); a real GET-annotations endpoint (margin list is
   session-local until one exists — a follow-up route).
 
+### P3.4 anchoring resolver — ✅ (commit ce4739c) — CC, adversarially reviewed (release-gate corpus)
+- **Built (Sonnet subagent):** `packages/daemon/src/anchoring.ts` — total `resolve(annotation, artifact, ctx)
+  → source_range|pipeline_feedback|orphaned`, never throws (top-level try/catch + input sanitizers). Fixed
+  normalization = NFC + whitespace-fold via an **offset-preserving cluster map** (so a folded match recovers
+  the EXACT source span/line/col). Class-R 6-step cascade (identity → block scope → EXACT → NORMALIZED → widen
+  → block_range guidance → orphaned; NEVER pipeline_feedback). Class-F cascade (chunk→transformed:false EXACT/
+  NORMALIZED else orphaned; transformed:true → pipeline_feedback). **F11 honesty enforced structurally.**
+- **Two good subagent calls:** (a) refused to hardcode `adapter:jethro`/`component:format-sermon` in
+  pipeline_feedback (would violate invariant #1) → made caller-supplied via `ctx.pipelineFeedback`; (b)
+  corrected my brief's factual error (`ł` doesn't canonically decompose → used ó/ą/ż).
+- **Adversarial review (critic) — ALL core invariants CONFIRMED holding** (F11 honesty: pipeline_feedback
+  structurally impossible for class-R + never for a verbatim-chunk miss; intent NEVER changes the resolution
+  kind; uniqueness gate never auto-applies to a duplicate; stale-hash never trusts a bad position; totality
+  fuzzed 40+ shapes; invariant #1 clean). **2 should-fix honesty/robustness items fixed:**
+  - class-F conflated "duplicated" with "absent" → a duplicate quote now → `orphaned{ambiguous}` (honest),
+    not the false `quote_absent_not_transformed`.
+  - an unpaired-surrogate quote could yield a bogus mid-surrogate "exact" match → `stripLoneSurrogates` in
+    sanitize. + block_range sibling-block bounding + nits.
+- **Tests:** 585 pass / 0 fail (103-case anchor corpus: NFD/combining, markup-spanning, duplicates, stale
+  hashes, whitespace-fold, class-R-never-feedback, class-F transformed/verbatim, 45-case totality fuzz — all
+  through REAL renderMarkdown + happy-dom positions, not hand-counted; incl. git-hook env). **Phase 3 nearly
+  done — only P3.5 (diff pane) left.**
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
