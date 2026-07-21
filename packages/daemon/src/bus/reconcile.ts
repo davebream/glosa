@@ -10,6 +10,7 @@ import { cleanupOrphanInboxTempFiles, listInboxEntryIds } from "./inbox.ts";
 import { journalPath, quarantinePath, shadowGitDir, workspaceBusDir } from "./paths.ts";
 import { quarantineRawBytes } from "./quarantine.ts";
 import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./replay.ts";
+import { lifecycleReducer } from "./lifecycle.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import { checkpoint, headSha, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
 import { resolveMatchedFiles } from "../matcher.ts";
@@ -235,6 +236,11 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
   mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
 
   const ulidFn = opts.ulid ?? defaultUlid;
+  // P2.5: this is the real daemon-startup path (A4 §F04's ordered sequence), so the reducer it
+  // validates crash-recovery against must be the production one — `lifecycleReducer`, not
+  // replay.ts's placeholder minimal reducer — unless a caller explicitly overrides it (e.g. a
+  // lower-level test proving fold/quarantine mechanics independent of any particular reducer).
+  const reducer = opts.reducer ?? lifecycleReducer;
   const writer = new JournalWriter(jPath);
   try {
     const tail = truncateTornTail({ journalPath: jPath, quarantinePath: qPath, writer, ulid: ulidFn, now: opts.now });
@@ -245,7 +251,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
       writer,
       ulid: ulidFn,
       now: opts.now,
-      reducer: opts.reducer,
+      reducer,
     });
 
     const healedEntryIds = selfHealInbox({
@@ -254,7 +260,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
       writer,
       ulid: ulidFn,
       now: opts.now,
-      reducer: opts.reducer,
+      reducer,
     });
 
     const expiredLeaseIds = reconcileApplyLeases({
@@ -263,7 +269,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
       writer,
       ulid: ulidFn,
       now: opts.now,
-      reducer: opts.reducer,
+      reducer,
     });
     const offlineCatchup = await offlineCatchUp({
       workspaceRoot,
@@ -271,7 +277,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
       writer,
       ulid: ulidFn,
       now: opts.now,
-      reducer: opts.reducer,
+      reducer,
     });
 
     return {

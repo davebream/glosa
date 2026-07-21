@@ -24,7 +24,7 @@ describe("journal.ts — append", () => {
     const root = freshWorkspace();
     const writer = new JournalWriter(journalPath(root));
     appendEvent(writer, event({ event_id: "id-1" }));
-    appendEvent(writer, event({ event_id: "id-2", event: "transition_committed", detail: { to: "resolved" } }));
+    appendEvent(writer, event({ event_id: "id-2", event: "transition_committed", detail: { to: "applied" } }));
     writer.close();
 
     const raw = readFileSync(journalPath(root), "utf8");

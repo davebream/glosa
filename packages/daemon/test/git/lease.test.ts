@@ -52,7 +52,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
 
     // Journal side of the same proof: apply_begin{pre_sha} .. apply_end{post_sha}, both under
     // `session:sess-1`, plus the resulting status transition.
-    expect(bus.state.entries.e1?.status).toBe("resolved");
+    expect(bus.state.entries.e1?.status).toBe("applied");
     expect(bus.state.applyLease).toBeNull(); // lease closed out
   });
 

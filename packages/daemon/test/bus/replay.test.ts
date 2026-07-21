@@ -20,37 +20,37 @@ describe("replay.ts — foldEvents (pure)", () => {
       mkEvent("entry_created", "e1"),
       mkEvent("entry_created", "e2"),
       mkEvent("transition_committed", "e1", { detail: { to: "delivered" } }),
-      mkEvent("transition_committed", "e1", { detail: { to: "resolved" } }),
+      mkEvent("transition_committed", "e1", { detail: { to: "applied" } }),
     ];
     const s1 = foldEvents(events);
     const s2 = foldEvents(events);
     expect(s1.entries).toEqual(s2.entries);
-    expect(s1.entries).toEqual({ e1: { status: "resolved" }, e2: { status: "pending" } });
+    expect(s1.entries).toEqual({ e1: { status: "applied" }, e2: { status: "pending" } });
   });
 
   test("duplicate event_id (the exact same event appended twice) is ignored", () => {
     const created = mkEvent("entry_created", "e1");
-    const resolved = mkEvent("transition_committed", "e1", { detail: { to: "resolved" } });
+    const resolved = mkEvent("transition_committed", "e1", { detail: { to: "applied" } });
     const state = foldEvents([created, resolved, resolved]); // resolved's object appended "twice"
-    expect(state.entries.e1?.status).toBe("resolved");
+    expect(state.entries.e1?.status).toBe("applied");
     expect(state.appliedEventIds.size).toBe(2); // not 3
   });
 
   test("a repeated idem key is a no-op even across two distinct event_ids", () => {
     const created = mkEvent("entry_created", "e1");
-    const first = mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "resolved" } });
+    const first = mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "applied" } });
     const retry = mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "rejected" } });
     const state = foldEvents([created, first, retry]);
-    expect(state.entries.e1?.status).toBe("resolved"); // retry never applied — first-terminal-wins
+    expect(state.entries.e1?.status).toBe("applied"); // retry never applied — first-terminal-wins
   });
 
   test("transition_committed applied twice with the same idem settles on the first terminal state", () => {
     const state = foldEvents([
       mkEvent("entry_created", "e1"),
-      mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "resolved" } }),
-      mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "resolved" } }),
+      mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "applied" } }),
+      mkEvent("transition_committed", "e1", { idem: "resolve:e1", detail: { to: "applied" } }),
     ]);
-    expect(state.entries.e1?.status).toBe("resolved");
+    expect(state.entries.e1?.status).toBe("applied");
   });
 
   test("delivery_attempt never changes status — separate axis", () => {
@@ -66,7 +66,7 @@ describe("replayJournal — corruption quarantine", () => {
     mkdirSync(dirname(jPath), { recursive: true });
     const good1 = JSON.stringify(mkEvent("entry_created", "e1")) + "\n";
     const bad = "{ this is not valid json\n";
-    const good2 = JSON.stringify(mkEvent("transition_committed", "e1", { detail: { to: "resolved" } })) + "\n";
+    const good2 = JSON.stringify(mkEvent("transition_committed", "e1", { detail: { to: "applied" } })) + "\n";
     writeFileSync(jPath, good1 + bad + good2);
 
     const writer = new JournalWriter(jPath);
@@ -79,7 +79,7 @@ describe("replayJournal — corruption quarantine", () => {
     writer.close();
 
     expect(result.quarantineCount).toBe(1);
-    expect(result.state.entries.e1?.status).toBe("resolved"); // good2 still folded — bus not disabled
+    expect(result.state.entries.e1?.status).toBe("applied"); // good2 still folded — bus not disabled
     expect(readFileSync(quarantinePath(root), "utf8")).toContain("this is not valid json");
 
     // The bad line's exclusion is also recorded as a journal event.
@@ -137,7 +137,7 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
     mkdirSync(dirname(jPath), { recursive: true });
     const good1 = JSON.stringify(mkEvent("entry_created", "e1")) + "\n";
     const bad = "{ still not valid json\n";
-    const good2 = JSON.stringify(mkEvent("transition_committed", "e1", { detail: { to: "resolved" } })) + "\n";
+    const good2 = JSON.stringify(mkEvent("transition_committed", "e1", { detail: { to: "applied" } })) + "\n";
     writeFileSync(jPath, good1 + bad + good2);
 
     const first = await reconcileWorkspace(root, { ulid: deterministicUlid(1_000), now: deterministicClock(1_000) });
@@ -153,7 +153,7 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
     const quarantinedAfterSecond = linesAfterSecond.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterSecond).toBe(1); // not re-announced
 
-    expect(second.state.entries.e1?.status).toBe("resolved"); // the bad line still stays folded-out
+    expect(second.state.entries.e1?.status).toBe("applied"); // the bad line still stays folded-out
     cleanupWorkspace(root);
   });
 });

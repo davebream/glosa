@@ -11,17 +11,21 @@ import { inboxDir } from "../../src/bus/paths.ts";
 import { journalPath, quarantinePath, workspaceBusDir } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
+import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { writeInboxEntryOnce } from "../../src/bus/inbox.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
 
 /** Folds a prefix of raw journal bytes that's known to end exactly on a record boundary (so
  * every line in it is guaranteed-valid JSON — no quarantine machinery needed for this reference
- * computation). */
+ * computation). Uses `lifecycleReducer` explicitly — same as `reconcileWorkspace`'s own default
+ * (P2.5) — so this reference computation and the actual result under test are validating the SAME
+ * reducer; this suite is the project's named release-gate fault sweep, so it must exercise the
+ * guarded production reducer, not replay.ts's placeholder minimal one. */
 function entriesAfterPrefix(bytes: Buffer): Record<string, unknown> {
   const text = bytes.toString("utf8");
   const lines = text.length === 0 ? [] : text.split("\n").filter((l) => l.length > 0);
   const events = lines.map((l) => JSON.parse(l) as JournalEvent);
-  return foldEvents(events).entries;
+  return foldEvents(events, lifecycleReducer).entries;
 }
 
 describe("reconcile — kill at every write boundary (headline fault suite)", () => {
@@ -32,7 +36,7 @@ describe("reconcile — kill at every write boundary (headline fault suite)", ()
     await bus.createEntry("e1", { kind: "human_edit" });
     await bus.createEntry("e2", { kind: "annotation" });
     await bus.commitTransition("e1", "delivered");
-    await bus.commitTransition("e1", "resolved");
+    await bus.commitTransition("e1", "applied");
     await bus.close();
     const fullBytes = readFileSync(journalPath(buildRoot));
     cleanupWorkspace(buildRoot);

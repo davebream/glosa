@@ -28,6 +28,8 @@ export type {
   ReplayDeps,
   ReplayResult,
 } from "./replay.ts";
+export { isTerminal, lifecycleReducer } from "./lifecycle.ts";
+export type { DeliveryAttemptRecord, EntryKind } from "./lifecycle.ts";
 export {
   offlineCatchUp,
   reconcileApplyLeases,

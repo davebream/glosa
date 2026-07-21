@@ -46,14 +46,14 @@ describe("concurrency — single-writer proof", () => {
 
     const N = 40;
     const ops = Array.from({ length: N }, () => bus.recordDeliveryAttempt("e1"));
-    ops.push(bus.commitTransition("e1", "resolved"));
+    ops.push(bus.commitTransition("e1", "applied"));
     await Promise.all(ops);
     await bus.close();
 
     const lines = readLines(root);
     expect(lines).toHaveLength(1 + N + 1); // entry_created + N delivery_attempt + 1 transition
     for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
-    expect(bus.state.entries.e1?.status).toBe("resolved");
+    expect(bus.state.entries.e1?.status).toBe("applied");
     cleanupWorkspace(root);
   });
 });

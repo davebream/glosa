@@ -9,7 +9,8 @@
 import { JournalWriter, appendEvent, type EventBy, type JournalEvent } from "./journal.ts";
 import { writeInboxEntryOnce } from "./inbox.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
-import { applyEvent, createEmptyState, defaultReducer, type DerivedState, type Reducer } from "./replay.ts";
+import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { lifecycleReducer } from "./lifecycle.ts";
 import { reconcileWorkspace, type ReconcileResult } from "./reconcile.ts";
 import { KeyedMutex } from "./mutex.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
@@ -69,7 +70,12 @@ export class WorkspaceBus {
     this.mutex = deps.mutex ?? new KeyedMutex<string>();
     this.ulidFn = deps.ulid ?? defaultUlid;
     this.nowFn = deps.now ?? (() => new Date());
-    this.reducer = deps.reducer ?? defaultReducer;
+    // P2.5: the guarded lifecycle reducer is WorkspaceBus's default — this is the real
+    // production path (HTTP/CLI never fold bare journal bytes themselves). `replay.ts`'s own
+    // minimal `defaultReducer` stays the fallback for direct, lower-level `foldEvents`/
+    // `replayJournal`/`reconcileWorkspace` callers (e.g. its own test suite) that never go
+    // through a WorkspaceBus at all.
+    this.reducer = deps.reducer ?? lifecycleReducer;
   }
 
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting
@@ -84,10 +90,24 @@ export class WorkspaceBus {
 
   /** Inbox file atomically first, then `entry_created` — the load-bearing order from A4 §F04.
    * Both steps run inside the same mutex critical section as every other write to this
-   * workspace, so a concurrent transition/delivery call can never observe a half-created entry. */
+   * workspace, so a concurrent transition/delivery call can never observe a half-created entry.
+   *
+   * `payload.kind` (R3: `human_edit`|`annotation`|`attention_request`) is mirrored into the
+   * `entry_created` event's own `detail.kind` — the fold only ever sees journal EVENTS, never the
+   * inbox file, so `lifecycleReducer` (P2.5) needs its own copy of the kind to pick the right
+   * transition table (attention vs. common). `fields.detail`, if given, is applied on top and wins
+   * on any overlapping key, `kind` included. */
   createEntry(id: string, payload: unknown, fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {}): Promise<void> {
     return this.mutex.runExclusive(this.root, () => {
       writeInboxEntryOnce(this.root, id, payload);
+      const payloadKind =
+        payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
+          ? ((payload as Record<string, unknown>).kind as string)
+          : undefined;
+      const detail: Record<string, unknown> | undefined =
+        payloadKind !== undefined || fields.detail !== undefined
+          ? { ...(payloadKind !== undefined ? { kind: payloadKind } : {}), ...(fields.detail ?? {}) }
+          : undefined;
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
@@ -96,7 +116,7 @@ export class WorkspaceBus {
         event: "entry_created",
         by: fields.by ?? "daemon",
         ...(fields.idem !== undefined ? { idem: fields.idem } : {}),
-        ...(fields.detail !== undefined ? { detail: fields.detail } : {}),
+        ...(detail !== undefined ? { detail } : {}),
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
@@ -123,16 +143,32 @@ export class WorkspaceBus {
   }
 
   /** `delivery_attempt` never changes status (separate axis, A5 §F23) and may skip the per-write
-   * fsync — loss here is only a redundant re-nudge. */
-  recordDeliveryAttempt(entryId: string, opts: { by?: EventBy } = {}): Promise<void> {
+   * fsync — loss here is only a redundant re-nudge. The A5 §F23 attempt shape (`via`/`session`/
+   * `outcome`/`reason`/`error?`) rides in `detail`, which is what `lifecycleReducer` reads into
+   * each entry's `deliveryAttempts` list — the actual delivery transports are P4.3's concern,
+   * this just carries their shape through today. */
+  recordDeliveryAttempt(
+    entryId: string,
+    opts: {
+      by?: EventBy;
+      via?: string;
+      session?: string;
+      outcome?: string;
+      reason?: string;
+      error?: string;
+    } = {},
+  ): Promise<void> {
     return this.mutex.runExclusive(this.root, () => {
+      const { by, ...detail } = opts;
+      const hasDetail = Object.values(detail).some((v) => v !== undefined);
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
         at: this.nowFn().toISOString(),
         entry: entryId,
         event: "delivery_attempt",
-        by: opts.by ?? "daemon",
+        by: by ?? "daemon",
+        ...(hasDetail ? { detail } : {}),
       };
       appendEvent(this.writer, event, { fsync: false });
       applyEvent(this.state, event, this.reducer);
@@ -182,8 +218,8 @@ export class WorkspaceBus {
    * lease and have the edit attributed to themselves, which is exactly the forgery §F05 exists to
    * prevent. A mismatched `sessionId` throws `LEASE_SESSION_MISMATCH` rather than falsely
    * attributing anything. Guarded (first-terminal-wins, illegal-from-status) transition rules
-   * belong to P2.5's fuller reducer — this appends the events `resolve` is defined to produce and
-   * lets the minimal reducer fold them. */
+   * belong to P2.5's `lifecycleReducer` — this just appends the events `resolve` is defined to
+   * produce and lets whichever reducer this bus is running fold them. */
   resolveEntry(
     entry: string,
     outcome: "applied" | "rejected" | "stale",
@@ -221,7 +257,7 @@ export class WorkspaceBus {
       appendEvent(this.writer, endEvent);
       applyEvent(this.state, endEvent, this.reducer);
 
-      const to = outcome === "applied" ? "resolved" : outcome;
+      const to = outcome; // A5 §F23 conformance: common terminals are literally applied|rejected|stale
       const transitionEvent: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
