@@ -821,6 +821,39 @@ jethro's internals, only the shape jethro must hand back.
 
 ---
 
+### Post-build smoke test — ✅ real end-to-end verification (Dawid asked "is it executable/testable")
+- **Ran the actual CLI on this real machine, not just the test suite.** `glosa --version`/`--help`
+  work via the linked bin. `glosa doctor --json` against the real (never-before-touched) `~/.glosa`
+  correctly reported real host state (actual Bun/git/Claude Code versions, "not yet paired", "no
+  hooks manifest") — honest, not fabricated.
+- **Found a real bug on the very first real `glosa open`**: `mintToken` never creates `GLOSA_HOME`
+  before writing to it. Every existing test uses `mkdtempSync`-backed tmp homes (which always
+  pre-create the directory), so this was invisible until a genuinely fresh install hit it —
+  `glosa open` mints the token BEFORE the daemon's own boot (by design, so a first-spawn daemon
+  reads a real token, not null), but nothing on that path ever creates the directory. **Fixed**
+  (`mkdirSync(home, {recursive:true})` before the write) + a real regression test using a path that
+  genuinely doesn't exist yet, not a pre-created tmp dir. Committed as `fd3eff4`.
+- **Verified the full stack works after the fix**: real `glosa open` against a fresh scratch
+  `GLOSA_HOME` → real daemon spawns, mints a real token, registers a real workspace; `curl` against
+  the real HTTP API confirms `paired:true`, the workspace/artifact list, and rendered markdown
+  (`data-line`-stamped HTML). Opened the real pairing URL in an actual browser (via cmux) — the SPA
+  genuinely renders the workspace switcher, artifact sidebar, and mode tabs, and clicking into
+  `notes.md` shows correctly-rendered markdown. The page's CSP correctly blocked an `eval()` probe
+  (`script-src 'self'`), a nice incidental confirmation the CSP is really enforced, not just sent.
+- **Minor observations, not chased further:** (a) an unpaired daemon with zero workspaces shut down
+  cleanly on SIGTERM in ~1s; a daemon with one real open workspace didn't respond to SIGTERM within
+  several seconds and needed SIGKILL — possibly slower graceful shutdown when a `WorkspaceBus` has
+  real state to close, worth a look but not investigated further here. (b) A `bun test` full-suite
+  run briefly took 20+ minutes (vs. the normal ~45s) under extreme concurrent system load (7+ other
+  processes/sessions on this machine) and threw a real `GIT_FAILED` (subprocess spawn failure, empty
+  stderr) under that pressure — re-ran clean at ~45-55s once load eased; environmental, not a code
+  regression, but note that heavy concurrent-session load on this machine can transiently break
+  subprocess-spawning tests.
+- All cleaned up: test daemon processes stopped, scratch files confined to the session scratchpad,
+  real `~/.glosa` left in its pre-test state (a clean, never-opened install).
+
+---
+
 ## SUMMARY
 
 **Every buildable BUILD-PLAN.md task is done.** All of Phases 1–6 (P1.1 through P6.1, 20 tasks
