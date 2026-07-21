@@ -4,7 +4,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "../src/build-id.ts";
-import { decideDaemonBuild } from "../src/lifecycle.ts";
+import { daemonPeerMismatchReason, decideDaemonBuild } from "../src/lifecycle.ts";
+import type { DaemonLock } from "../src/lock.ts";
+import type { HandshakeResponse } from "../src/handshake.ts";
 
 const roots: string[] = [];
 
@@ -83,6 +85,10 @@ describe("daemon build decision", () => {
       action: "restart",
       reason: "same-version-different-build",
     });
+    expect(decideDaemonBuild(`1.0.0-${hashA}`, `1.0.0-${hashB}`, "99.0")).toEqual({
+      action: "restart",
+      reason: "same-version-different-build",
+    });
   });
 
   test("uses a newer compatible daemon and rejects a newer incompatible daemon", () => {
@@ -94,7 +100,34 @@ describe("daemon build decision", () => {
 
   test("uses an identical compatible build and fails closed on malformed identities", () => {
     expect(decideDaemonBuild(`1.0.0-${hashA}`, `1.0.0-${hashA}`, "1.0")).toEqual({ action: "use" });
+    expect(decideDaemonBuild(`1.0.0-${hashA}`, `1.0.0-${hashA}`, "99.0").action).toBe("fail");
     expect(decideDaemonBuild(`1.0.0-${hashA}`, "malformed", "1.0").action).toBe("fail");
     expect(decideDaemonBuild("malformed", `1.0.0-${hashA}`, "1.0").action).toBe("fail");
+  });
+
+  test("requires lock and handshake identity, PID, instance, and protocol to agree", () => {
+    const lock: DaemonLock = {
+      instance_id: "gl-1",
+      pid: 42,
+      port: 4646,
+      protocol_version: "1.0",
+      build_id: `1.0.0-${hashA}`,
+      started_at: "2026-07-21T00:00:00.000Z",
+      host: "127.0.0.1",
+      bun: Bun.version,
+    };
+    const handshake: HandshakeResponse = {
+      protocol_version: lock.protocol_version,
+      build_id: lock.build_id,
+      instance_id: lock.instance_id,
+      pid: lock.pid,
+      started_at: lock.started_at,
+    };
+    expect(daemonPeerMismatchReason(lock, handshake)).toBeNull();
+    expect(daemonPeerMismatchReason(lock, { ...handshake, instance_id: "gl-2" })).toContain("different processes");
+    expect(daemonPeerMismatchReason(lock, { ...handshake, pid: 43 })).toContain("different processes");
+    expect(daemonPeerMismatchReason(lock, { ...handshake, protocol_version: "1.1" })).toContain("protocol");
+    expect(daemonPeerMismatchReason(lock, { ...handshake, build_id: `1.0.0-${hashB}` })).toContain("build");
+    expect(daemonPeerMismatchReason({ ...lock, build_id: undefined }, handshake)).toContain("build");
   });
 });
