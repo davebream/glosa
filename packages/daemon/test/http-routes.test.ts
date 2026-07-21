@@ -508,6 +508,262 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(404);
   });
 
+  test("GET diff with to=working diffs a checkpoint against the LIVE working tree, not another checkpoint", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile(); // baseline
+    const from = await headSha(root);
+
+    writeFileSync(join(root, "notes.md"), "v2 — uncommitted\n"); // dirty on disk, never checkpointed
+
+    const res = await fetchFn(req(`/w/${slug}/diff?from=${from}&to=working`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.to).toBe("working");
+    const hunk = body.hunks.find((h: { path: string }) => h.path === "notes.md");
+    expect(hunk).toBeDefined();
+    expect(hunk.diff).toContain("uncommitted");
+  });
+
+  // --- GET /w/:slug/checkpoints (A6 §F31) ---
+
+  test("GET checkpoints lists the workspace's history newest-first with by/summary/bytes_changed", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile(); // baseline: unknown/baseline
+
+    await bus.applyBegin("entry-1", "sess-a");
+    writeFileSync(join(root, "notes.md"), "v2 — leased\n");
+    await bus.resolveEntry("entry-1", "applied", "sess-a");
+
+    const res = await fetchFn(req(`/w/${slug}/checkpoints`));
+    expect(res.status).toBe(200);
+    const rows = await res.json();
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows[0].by).toBe("session:sess-a"); // newest first
+    expect(typeof rows[0].checkpoint_id).toBe("string");
+    expect(typeof rows[0].at).toBe("string");
+    expect(rows[0].bytes_changed).toBeGreaterThan(0);
+    expect(rows.at(-1).by).toBe("unknown"); // the baseline
+  });
+
+  test("GET checkpoints with ?limit=1 returns only the newest row", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+    writeFileSync(join(root, "notes.md"), "v2\n");
+    await bus.humanEditCheckpoint();
+
+    const res = await fetchFn(req(`/w/${slug}/checkpoints?limit=1`));
+    const rows = await res.json();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].by).toBe("human");
+  });
+
+  test("GET checkpoints with an unrecognized ?since= → 400 validation-failed", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+
+    const res = await fetchFn(req(`/w/${slug}/checkpoints?since=not-a-real-token`));
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("validation-failed");
+  });
+
+  test("GET checkpoints with ?limit=0 → 400 validation-failed", async () => {
+    const res = await fetchFn(req(`/w/${slug}/checkpoints?limit=0`));
+    expect(res.status).toBe(400);
+  });
+
+  test("GET checkpoints on an unknown slug → 404", async () => {
+    const res = await fetchFn(req("/w/does-not-exist/checkpoints"));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET checkpoints on a workspace with nothing ever tracked → 200 empty array, not an error", async () => {
+    const res = await fetchFn(req(`/w/${slug}/checkpoints`));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+  });
+
+  // --- POST /w/:slug/restore (A6 §F31 acceptance cases) ---
+
+  test("dirty-worktree refusal: an on-disk edit with no checkpoint yet blocks restore without force → 409 restore-conflict, file unchanged, would-be-lost diff included", async () => {
+    writeFileSync(join(root, "notes.md"), "v1 — checkpointed\n");
+    const bus = ctx.getWorkspaceBus(root);
+    // reconcileOnce (not the bare reconcile()) — it flags this BUS INSTANCE as already-reconciled,
+    // so the restore route's own `resolveBus` call below is a true no-op instead of running its
+    // FIRST-EVER reconcile (and thus offline catch-up) on top of the drift this test is about to
+    // introduce, which would otherwise auto-checkpoint it away before the dirty check ever runs.
+    await bus.reconcileOnce(); // establishes the baseline checkpoint
+    const baseline = await headSha(root);
+
+    writeFileSync(join(root, "notes.md"), "v1 — checkpointed, then edited on disk\n"); // dirty vs baseline, never checkpointed
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: baseline }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.type).toContain("restore-conflict");
+    expect(body.path).toBe("notes.md");
+    expect(body.would_be_lost_diff).toContain("edited on disk");
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("v1 — checkpointed, then edited on disk\n");
+  });
+
+  test("restore-creates-checkpoint: force:true overwrites the dirty file, matches the target checkpoint's bytes, and records a NEW by:human kind:restore checkpoint (history not rewritten)", async () => {
+    writeFileSync(join(root, "notes.md"), "v1 — original\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce(); // baseline; see the dirty-worktree-refusal test above for why reconcileOnce (not bare reconcile())
+    const target = await headSha(root);
+
+    writeFileSync(join(root, "notes.md"), "v2 — a real checkpointed change\n");
+    await bus.humanEditCheckpoint(); // HEAD now differs from `target` — restoring to `target` is a genuine content change, not a no-op
+    const beforeCount = (await fetchFn(req(`/w/${slug}/checkpoints`)).then((r) => r.json())).length;
+
+    writeFileSync(join(root, "notes.md"), "v3 — dirty, about to be discarded\n");
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: target, force: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.path).toBe("notes.md");
+    expect(body.restored_to).toBe(target);
+    expect(typeof body.checkpoint_id).toBe("string");
+
+    const afterSha = await headSha(root);
+    expect(afterSha).not.toBe(target); // a NEW checkpoint, not a rewind of HEAD back onto the target
+    expect(afterSha.startsWith(body.checkpoint_id)).toBe(true); // checkpoint_id is HEAD's short sha
+
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("v1 — original\n"); // bytes match the target checkpoint
+
+    const rows = await fetchFn(req(`/w/${slug}/checkpoints`)).then((r) => r.json());
+    expect(rows.length).toBe(beforeCount + 1); // append-only — the count GREW, nothing was rewritten
+    expect(rows[0]).toMatchObject({ by: "human", summary: "restore", checkpoint_id: body.checkpoint_id });
+  });
+
+  test("restore-then-diff-clean: after a successful restore, diffing the restored-to checkpoint against the working tree is empty", async () => {
+    writeFileSync(join(root, "notes.md"), "v1 — target state\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+    const target = await headSha(root);
+
+    writeFileSync(join(root, "notes.md"), "v2 — different content\n");
+    await bus.humanEditCheckpoint(); // a real checkpoint now sits between target and HEAD
+
+    const restoreRes = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: target, force: true }),
+      }),
+    );
+    expect(restoreRes.status).toBe(200);
+
+    const diffRes = await fetchFn(req(`/w/${slug}/diff?from=${target}&to=working`));
+    expect(diffRes.status).toBe(200);
+    const diffBody = await diffRes.json();
+    const hunk = diffBody.hunks.find((h: { path: string }) => h.path === "notes.md");
+    expect(hunk).toBeUndefined(); // clean — working tree exactly matches the restored-to checkpoint again
+  });
+
+  test("restore with an unknown checkpoint id in `to` → 400 validation-failed", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: "0000000000000000000000000000000000000000000000000000000000000000" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("validation-failed");
+  });
+
+  test("restore on a path that is within the workspace but not tracked → 404", async () => {
+    writeFileSync(join(root, "untracked.json"), "{}");
+    const bus = ctx.getWorkspaceBus(root);
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    await bus.reconcile();
+    const sha = await headSha(root);
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "untracked.json", to: sha }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("restore via a symlink pointing outside the workspace → 400 invalid-path", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+    const sha = await headSha(root);
+    const outside = mkdtempSync(join(tmpdir(), "glosa-routes-outside-"));
+    writeFileSync(join(outside, "secret.md"), "top secret\n");
+    symlinkSync(join(outside, "secret.md"), join(root, "escape.md"));
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "escape.md", to: sha }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).type).toContain("invalid-path");
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  test("restore on an unknown slug → 404", async () => {
+    const res = await fetchFn(
+      stateChangingReq("/w/does-not-exist/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: "abc" }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("restore with missing path/to in the body → 400 validation-failed", async () => {
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("restore with no Origin → 403 (state-changing route class)", async () => {
+    writeFileSync(join(root, "notes.md"), "v1\n");
+    const res = await fetchFn(
+      req(`/w/${slug}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "notes.md", to: "abc" }),
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   // --- WorkspaceBus.reconcileOnce (review fix #2) ---
 
   test("reconcileOnce reconciles once per INSTANCE, not once per root string — a fresh instance after evict()+reopen reconciles again", async () => {

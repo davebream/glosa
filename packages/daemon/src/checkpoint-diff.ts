@@ -49,15 +49,28 @@ export async function fileAttribution(root: string, from: string, to: string, pa
 /** Builds the A1 §5.7 `hunks[]` array: one unified diff + its attribution per file changed between
  * `from` and `to`. Per-file `git diff` calls (rather than splitting one combined diff's text on
  * `diff --git` headers) so the attribution lookup can reuse the exact same pathspec without
- * re-parsing header lines — simpler, and immune to path-quoting edge cases in a combined diff. */
+ * re-parsing header lines — simpler, and immune to path-quoting edge cases in a combined diff.
+ *
+ * `to` may be the sentinel `"working"` (P3.5, A6 §F31's "checkpoint <-> working" diff form) — `git
+ * diff <rev>` with a SINGLE ref compares that ref against the live working tree instead of another
+ * commit, so the sentinel only changes how the argv is built, never what's parsed out of it.
+ * Attribution for the working-tree form still reads trailers from `from..HEAD` (the committed
+ * side of the range) — an uncommitted delta has no trailer of its own to report, so "whatever the
+ * last real checkpoint in range attributed" is the honest answer, same as any other gap the
+ * committed history doesn't cover. */
 export async function buildDiffHunks(root: string, from: string, to: string): Promise<DiffHunk[]> {
-  const nameOnly = await runGit(root, ["diff", "--name-only", "-M", from, to]);
+  const isWorking = to === "working";
+  const nameOnlyArgs = isWorking ? ["diff", "--name-only", "-M", from] : ["diff", "--name-only", "-M", from, to];
+  const nameOnly = await runGit(root, nameOnlyArgs);
   const paths = nameOnly.stdout.split("\n").filter((line) => line.length > 0);
 
   const hunks: DiffHunk[] = [];
   for (const path of paths) {
-    const fileDiff = await runGit(root, ["diff", "-M", from, to, "--", safePathspec(path)]);
-    const attribution = await fileAttribution(root, from, to, path);
+    const diffArgs = isWorking
+      ? ["diff", "-M", from, "--", safePathspec(path)]
+      : ["diff", "-M", from, to, "--", safePathspec(path)];
+    const fileDiff = await runGit(root, diffArgs);
+    const attribution = await fileAttribution(root, from, isWorking ? "HEAD" : to, path);
     hunks.push({ path, diff: fileDiff.stdout, attribution });
   }
   return hunks;

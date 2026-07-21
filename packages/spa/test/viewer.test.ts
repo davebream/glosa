@@ -147,6 +147,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
         put.push({ path, content });
         return { source_path: path, source_sha256: "sha-2" };
       },
+      // P3.5 — the history pane's data-access surface. Not exercised by this file's own tests
+      // (those live in history.test.ts); stubbed here only so mountApp's `dataAccess` shape,
+      // inferred from the real createDataAccess() default, is satisfied.
+      getCheckpoints: async () => [],
+      getDiff: async () => ({ from: "a", to: "b", hunks: [] }),
+      restore: async () => ({ path: "notes.md", restored_to: "a", checkpoint_id: "a", source_sha256: "sha-1" }),
       openStream: () => () => {}, // returns a no-op stop()
       ...overrides,
     };

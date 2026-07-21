@@ -18,7 +18,14 @@ export type ProblemSlug =
   // P3.3 addition — `PUT /w/:slug/artifacts/:path`'s optional `If-Match` optimistic-concurrency
   // check (not in A1 §5, this route isn't either). 409 when the caller's `If-Match` source_sha256
   // no longer matches what's on disk.
-  | "conflict";
+  | "conflict"
+  // P3.5 addition — `POST /w/:slug/restore`'s dirty-worktree guard (A6 §F31). 409 when the
+  // artifact has changes since its latest checkpoint and the caller didn't pass `force`. Not
+  // built via `problem()` below (see `restoreConflictResponse`) because it carries the
+  // would-be-lost diff as an extra RFC 9457 body member, which `problem()`'s fixed shape has no
+  // slot for — the slug is still named here so the vocabulary of possible `type` values is
+  // documented in one place regardless of which helper builds the response.
+  | "restore-conflict";
 
 export function problem(
   status: number,
@@ -40,6 +47,25 @@ export function problem(
     status,
     headers: { "Content-Type": "application/problem+json" },
   });
+}
+
+/** `POST /w/:slug/restore`'s dirty-worktree refusal (A6 §F31): a `409 restore-conflict` that also
+ * carries `would_be_lost_diff` — the unified diff between the artifact's current (dirty) on-disk
+ * bytes and its latest checkpoint — so the human can see exactly what a `force:true` retry would
+ * throw away before choosing to send it. RFC 9457 explicitly allows extra members alongside
+ * `type`/`title`/`status`/`detail`/`instance`, so this stays a valid problem+json body; it's a
+ * dedicated function rather than a `problem()` call because `problem()`'s signature has no slot
+ * for that extra member. */
+export function restoreConflictResponse(instance: string, path: string, wouldBeLostDiff: string): Response {
+  const body = {
+    type: "https://glosa.local/errors/restore-conflict",
+    title: "artifact has changes since its latest checkpoint",
+    status: 409,
+    instance,
+    path,
+    would_be_lost_diff: wouldBeLostDiff,
+  };
+  return new Response(JSON.stringify(body), { status: 409, headers: { "Content-Type": "application/problem+json" } });
 }
 
 /**

@@ -29,6 +29,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
   test.each([
     ["../src/viewer.js", read("../src/viewer.js")],
     ["../src/annotate.js", read("../src/annotate.js")],
+    ["../src/history.js", read("../src/history.js")],
   ])("%s has no direct fetch(...) call", (_name, source) => {
     // Strip comments first so a docstring that merely MENTIONS "fetch(" (there are several,
     // explaining the invariant this test enforces) can't produce a false positive.
@@ -41,15 +42,15 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
       .replace(/\/\/.*$/gm, "")
       .replace(/\/\*[\s\S]*?\*\//g, "");
     expect(FETCH_REFERENCE_RE.test(withoutComments)).toBe(true);
-    for (const src of [read("../src/viewer.js"), read("../src/annotate.js")]) {
+    for (const src of [read("../src/viewer.js"), read("../src/annotate.js"), read("../src/history.js")]) {
       const stripped = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
       expect(FETCH_REFERENCE_RE.test(stripped)).toBe(false);
     }
   });
 });
 
-describe("viewer.js/annotate.js import only from data-access.js, annotate.js, and vendor/ — never a raw daemon URL helper", () => {
-  const ALLOWED_RELATIVE_IMPORTS = new Set(["./data-access.js", "./annotate.js", "./vendor/idiomorph.js"]);
+describe("viewer.js/annotate.js/history.js import only from data-access.js, annotate.js, history.js, and vendor/ — never a raw daemon URL helper", () => {
+  const ALLOWED_RELATIVE_IMPORTS = new Set(["./data-access.js", "./annotate.js", "./history.js", "./vendor/idiomorph.js", "./vendor/diff2html.js"]);
 
   test("viewer.js's local imports are exactly the sanctioned set", () => {
     const source = read("../src/viewer.js");
@@ -62,5 +63,12 @@ describe("viewer.js/annotate.js import only from data-access.js, annotate.js, an
     const source = read("../src/annotate.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
     expect(specifiers).toHaveLength(0);
+  });
+
+  test("history.js's local imports are exactly the sanctioned set (its own vendored diff renderer, nothing else)", () => {
+    const source = read("../src/history.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    const relative = specifiers.filter((s) => s.startsWith("./") || s.startsWith("../"));
+    for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
   });
 });

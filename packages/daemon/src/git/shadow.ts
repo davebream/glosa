@@ -156,6 +156,13 @@ interface CommitOptions {
   message: string;
   trailers: Record<string, string>;
   allowEmpty?: boolean;
+  /** Pins `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` to this instant instead of letting git stamp the
+   * commit with the system clock at spawn time (P3.5). Exists so a test can build a checkpoint
+   * HISTORY with known, controlled timestamps (e.g. straddling a DST transition) to prove
+   * `checkpoints.ts`'s `since=yesterday|today` day-boundary resolution — production callers never
+   * pass this; git's own wall-clock stamp is exactly what "when was this checkpointed" should mean
+   * outside a test. */
+  at?: Date;
 }
 
 export interface TrailerInjectionError extends Error {
@@ -190,6 +197,7 @@ async function commit(root: string, opts: CommitOptions): Promise<string> {
     GIT_AUTHOR_EMAIL: GIT_IDENTITY_EMAIL,
     GIT_COMMITTER_NAME: GIT_IDENTITY_NAME,
     GIT_COMMITTER_EMAIL: GIT_IDENTITY_EMAIL,
+    ...(opts.at !== undefined ? { GIT_AUTHOR_DATE: opts.at.toISOString(), GIT_COMMITTER_DATE: opts.at.toISOString() } : {}),
   });
   await runGit(root, ["commit", ...(opts.allowEmpty ? ["--allow-empty"] : []), "-m", fullMessage], {
     env: identityEnv,
@@ -285,6 +293,8 @@ export interface CheckpointOptions {
   kind: string;
   entry?: string;
   lease?: string;
+  /** See `CommitOptions.at` — threaded through for the same test-only reason. */
+  at?: Date;
 }
 
 /** Stages the tracked∪HEAD union and commits iff something actually changed — otherwise returns
@@ -311,5 +321,25 @@ export async function checkpoint(root: string, opts: CheckpointOptions): Promise
   };
   if (opts.entry !== undefined) trailers["Glosa-Entry"] = opts.entry;
   if (opts.lease !== undefined) trailers["Glosa-Lease"] = opts.lease;
-  return commit(root, { message: "checkpoint", trailers });
+  return commit(root, { message: "checkpoint", trailers, at: opts.at });
+}
+
+/** Whether `path`'s current on-disk bytes differ from what HEAD (the latest checkpoint) has
+ * committed for it — A6 §F31's restore dirty-guard: `POST /w/:slug/restore` refuses to overwrite
+ * an artifact that has changes since its last checkpoint unless the caller passes `force`. */
+export async function isPathDirty(root: string, path: string): Promise<boolean> {
+  const result = await runGit(root, ["diff", "--quiet", "HEAD", "--", safePathspec(path)], {
+    allowExitCodes: [0, 1, 128], // 128: no HEAD yet (nothing ever checkpointed) — treated as "not dirty", nothing to lose
+  });
+  return result.exitCode === 1;
+}
+
+/** The bytes `path` held at checkpoint `sha` (`git show <sha>:<path>`), or `null` if `path` didn't
+ * exist in that checkpoint (A6 §F31 restore — reading the source the restore will copy from). Not
+ * pathspec-guarded via `safePathspec`: `<sha>:<path>` is one combined revision-and-path argv token
+ * that always starts with the sha, never with `-`, so the "-" -> option ambiguity `safePathspec`
+ * exists for (a lone `--`-following pathspec argument) doesn't apply here. */
+export async function readFileAtCheckpoint(root: string, sha: string, path: string): Promise<string | null> {
+  const result = await runGit(root, ["show", `${sha}:${path}`], { allowExitCodes: [0, 128] });
+  return result.exitCode === 0 ? result.stdout : null;
 }

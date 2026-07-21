@@ -7,6 +7,7 @@
 import { createDataAccess } from "./data-access.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
+import { mountHistoryPane } from "./history.js";
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -79,6 +80,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
   const editArea = el("textarea", { className: "glosa-edit-area", hidden: true });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
   const marginEl = el("aside", { className: "glosa-margin" });
+  // P3.5: the checkpoint/diff history pane (A6 §F31) — hidden until the human opens it, and
+  // (re)mounted by history.js's own `mountHistoryPane` whenever it's open and the artifact
+  // changes, rather than this module reaching into checkpoints/diff state itself.
+  const historyToggle = el("button", { className: "glosa-history-toggle", type: "button", textContent: "History" });
+  const historyEl = el("div", { className: "glosa-history", hidden: true });
 
   root.append(
     el("nav", { className: "glosa-sidebar" }, [
@@ -87,7 +93,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
       el("h2", { textContent: "Artifacts" }),
       artifactList,
     ]),
-    el("main", { className: "glosa-main" }, [modeBar, contentEl, editArea, saveButton, marginEl]),
+    el("main", { className: "glosa-main" }, [modeBar, historyToggle, contentEl, editArea, saveButton, marginEl, historyEl]),
   );
 
   let modeState = initialModeState();
@@ -190,10 +196,25 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug } 
     renderMargin();
   });
 
+  let historyVisible = false;
+
+  function renderHistory() {
+    if (!historyVisible || !currentSlug) return;
+    mountHistoryPane(historyEl, { dataAccess, slug: currentSlug, path: currentArtifact?.source_path });
+  }
+
+  historyToggle.addEventListener("click", () => {
+    historyVisible = !historyVisible;
+    historyEl.hidden = !historyVisible;
+    historyToggle.setAttribute("aria-pressed", String(historyVisible));
+    renderHistory();
+  });
+
   async function openArtifact(path) {
     currentArtifact = await dataAccess.getArtifact(currentSlug, path, { render: "html" });
     contentEl.removeAttribute("data-path");
     renderContent();
+    renderHistory(); // the open pane, if any, should reflect the newly opened artifact
   }
 
   async function refreshArtifactList() {

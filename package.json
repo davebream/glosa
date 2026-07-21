@@ -20,6 +20,7 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
+    "diff2html": "^3.4.56",
     "idiomorph": "^0.7.4",
     "markdown-it": "^14.3.0",
     "picomatch": "^4.0.5"

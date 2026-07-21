@@ -18,11 +18,13 @@ import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { confinePath } from "./confine-path.ts";
-import { internalErrorResponse, problem } from "./problem.ts";
+import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
 import { resolveMatchedFiles } from "./matcher.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
+import { listCheckpoints } from "./checkpoints.ts";
+import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { createJournalStreamResponse } from "./stream.ts";
 import type { WorkspaceIndex } from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
@@ -58,6 +60,10 @@ const SPA_ASSETS: Record<string, string> = {
   "viewer.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
   "vendor/idiomorph.js": "text/javascript; charset=utf-8",
+  // P3.5 additions — the checkpoint/diff timeline pane and its ONE vendored rendering dependency.
+  "history.js": "text/javascript; charset=utf-8",
+  "vendor/diff2html.js": "text/javascript; charset=utf-8",
+  "vendor/diff2html.min.css": "text/css; charset=utf-8",
 };
 
 export interface ApiContext {
@@ -465,7 +471,15 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
 
 /** `GET /w/:slug/diff` (A1 §5.7). v1 only implements the `from`/`to` checkpoint-id form — `since`
  * (`last-annotation`|`yesterday`) needs the full checkpoint-history resolution P3.5 owns, so any
- * `since` value 400s for now rather than half-implementing named-token resolution here. */
+ * `since` value 400s for now rather than half-implementing named-token resolution here.
+ *
+ * P3.5 addition: `to=working` is the sentinel for "checkpoint <-> the live working tree" (A6
+ * §F31's "unified diff any two checkpoints OR checkpoint<->working") — it skips the
+ * `commitExists` check (the working tree obviously isn't a checkpoint) and hands off to
+ * `buildDiffHunks`'s own `to==="working"` branch. This is what lets the timeline UI show "what
+ * changed since checkpoint X" for the file as it sits on disk right now, and what
+ * restore-then-diff-clean (P3.5's acceptance case) proves against: after a successful restore,
+ * diffing `from=<restored-to checkpoint>&to=working` for that file comes back with zero hunks. */
 async function handleDiff(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -484,13 +498,121 @@ async function handleDiff(ctx: ApiContext, slug: string, req: Request): Promise<
 
   await resolveBus(ctx, root); // ensures the shadow repo exists (if there's anything to check out) before we ask git about it
 
-  const [fromOk, toOk] = await Promise.all([commitExists(root, from), commitExists(root, to)]);
+  const fromOk = await commitExists(root, from);
+  const toOk = to === "working" || (await commitExists(root, to));
   if (!fromOk || !toOk) {
     return problem(400, "validation-failed", "from/to is not a known checkpoint", undefined, url.pathname);
   }
 
   const hunks = await buildDiffHunks(root, from, to);
   return Response.json({ from, to, hunks });
+}
+
+/** `GET /w/:slug/checkpoints` (A6 §F31) — the full-history listing behind the timeline UI.
+ * `?since=` is optional (omit for full history); `?limit=` caps the row count after filtering.
+ * `checkpoints.ts` owns the actual token resolution/git reads — this handler is just the
+ * query-param parse + slug/shadow-repo plumbing every other route already does. */
+async function handleCheckpoints(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  const limitParam = url.searchParams.get("limit");
+  let limit: number | undefined;
+  if (limitParam !== null) {
+    const n = Number(limitParam);
+    if (!Number.isInteger(n) || n <= 0) {
+      return problem(400, "validation-failed", "limit must be a positive integer", undefined, url.pathname);
+    }
+    limit = n;
+  }
+
+  await resolveBus(ctx, root); // ensures the shadow repo exists before we ask git about it (mirrors handleDiff)
+
+  const since = url.searchParams.get("since") ?? undefined;
+  const result = await listCheckpoints(root, { since, limit }, new Date());
+  if (!result.ok) {
+    return problem(400, "validation-failed", "since is not a recognized token or known checkpoint", undefined, url.pathname);
+  }
+  return Response.json(result.rows);
+}
+
+/** `POST /w/:slug/restore` (A6 §F31) — restores one artifact's bytes from a chosen checkpoint into
+ * the working tree. Body `{path, to, force?}`. Same slug/confinePath/tracked-membership pipeline
+ * as `PUT /w/:slug/artifacts/:path`, plus the dirty-worktree guard this route owns: if `path` has
+ * changes since its latest checkpoint (HEAD) and the caller didn't pass `force:true`, refuses with
+ * `409 restore-conflict` carrying the would-be-lost diff (`restoreConflictResponse`) rather than
+ * silently clobbering it. A successful restore is recorded as a NEW `by:human` checkpoint
+ * (`kind: "restore"`, via `WorkspaceBus#humanEditCheckpoint`) — append-only, same as every other
+ * checkpoint; it never rewrites history. */
+async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const rawPathParam = typeof b?.path === "string" ? b.path : null;
+  const to = typeof b?.to === "string" ? b.to : null;
+  const force = b?.force === true;
+  if (!rawPathParam || !to) {
+    return problem(400, "validation-failed", "path and to are required", undefined, url.pathname);
+  }
+
+  const confineResult = confinePath(root, rawPathParam);
+  if (!confineResult.ok) {
+    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
+  }
+
+  const relNfc = rawPathParam
+    .split("/")
+    .map((segment) => segment.normalize("NFC"))
+    .join("/");
+  const { tracked } = resolveMatchedFiles(root);
+  const match = tracked.find((f) => f.path === relNfc);
+  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
+
+  // resolveBus BEFORE the dirty check / commitExists — same reasoning as handlePutArtifact: it's
+  // what guarantees the shadow repo exists at all (a workspace whose first-ever git op is a
+  // restore call still needs `initShadowRepo` to have run).
+  const bus = await resolveBus(ctx, root);
+
+  if (!(await commitExists(root, to))) {
+    return problem(400, "validation-failed", "to is not a known checkpoint", undefined, url.pathname);
+  }
+
+  const dirty = await isPathDirty(root, match.path);
+  if (dirty && !force) {
+    const lostDiff = await runGit(root, ["diff", "HEAD", "--", safePathspec(match.path)]);
+    return restoreConflictResponse(url.pathname, match.path, lostDiff.stdout);
+  }
+
+  const content = await readFileAtCheckpoint(root, to, match.path);
+  if (content === null) {
+    return problem(404, "not-found", "artifact did not exist at that checkpoint", undefined, url.pathname);
+  }
+
+  writeArtifactAtomic(match.rawPath, content);
+  const fullSha = await bus.humanEditCheckpoint("restore");
+  // Shortened to match `checkpoints.ts`'s `checkpoint_id` format (A6 §F31: "the shadow-git SHORT
+  // sha") — `humanEditCheckpoint` itself returns the full sha (its `checkpoint()`/`headSha()`
+  // return type everywhere else in this codebase), so this is the one place that narrows it to
+  // the same opaque identifier the checkpoints listing hands back for the exact same commit.
+  const shortSha = (await runGit(root, ["rev-parse", "--short", fullSha])).stdout.trim();
+
+  return Response.json({
+    path: match.path,
+    restored_to: to,
+    checkpoint_id: shortSha,
+    source_sha256: sourceSha256(Buffer.from(content, "utf8")),
+  });
 }
 
 /** `GET /w/:slug/inbox` (A1 §5.9) — sidebar badge + attention tray summary. `attention[]` lists
@@ -629,6 +751,16 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/diff$/))) {
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: (req) => handleDiff(ctx, slug, req) };
+  }
+  // P3.5: full checkpoint history (A6 §F31).
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/checkpoints$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: (req) => handleCheckpoints(ctx, slug, req) };
+  }
+  // P3.5: restore an artifact's bytes from a checkpoint (A6 §F31).
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/restore$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleRestore(ctx, slug, req) };
   }
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/inbox$/))) {
     const slug = m[1] as string;

@@ -388,12 +388,17 @@ export class WorkspaceBus {
    * to disk (via `writeArtifactAtomic`) BEFORE calling this: `checkpoint()` stages whatever's
    * currently on disk, it doesn't take content as an argument. Mirrors `applyBegin`'s own
    * reclaim-lock + ensure-shadow-repo-exists preamble since this can be the very first git
-   * operation for a workspace that has never had a lease. */
-  humanEditCheckpoint(): Promise<string> {
+   * operation for a workspace that has never had a lease.
+   *
+   * `kind` defaults to `human_edit` (the `PUT /w/:slug/artifacts/:path` save flow this method was
+   * built for) — `POST /w/:slug/restore` (P3.5, A6 §F31) reuses this same "human by construction,
+   * no lease involved" checkpoint but passes `kind: "restore"` so the timeline can tell a restore
+   * apart from an ordinary editor save without inventing a second near-identical method. */
+  humanEditCheckpoint(kind = "human_edit"): Promise<string> {
     return this.mutex.runExclusive(this.root, async () => {
       reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      return checkpoint(this.root, { attribution: "human", kind: "human_edit" });
+      return checkpoint(this.root, { attribution: "human", kind });
     });
   }
 

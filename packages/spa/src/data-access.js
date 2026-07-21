@@ -226,6 +226,33 @@ export function createDataAccess(deps = {}) {
         body: content,
       });
     },
+    /** `GET /w/:slug/checkpoints` (A6 §F31, P3.5) — the history/timeline listing. `since` is one
+     * of `yesterday|today|<ISO>|<checkpoint-id>` (resolved daemon-side, host-local TZ); `limit`
+     * caps the row count. Omitting both fetches full history. */
+    getCheckpoints(slug, { since, limit } = {}) {
+      const params = new URLSearchParams();
+      if (since !== undefined) params.set("since", since);
+      if (limit !== undefined) params.set("limit", String(limit));
+      const qs = params.toString();
+      return requestJson(`/w/${encodeURIComponent(slug)}/checkpoints${qs ? `?${qs}` : ""}`);
+    },
+    /** `GET /w/:slug/diff` (A1 §5.7, extended P3.5) — a unified diff between two checkpoints, or
+     * a checkpoint and the live working tree (`to: "working"`). */
+    getDiff(slug, { from, to }) {
+      const params = new URLSearchParams({ from, to });
+      return requestJson(`/w/${encodeURIComponent(slug)}/diff?${params.toString()}`);
+    },
+    /** `POST /w/:slug/restore` (A6 §F31, P3.5) — restores `path`'s bytes from checkpoint `to`.
+     * Without `force`, a dirty artifact (changes since its latest checkpoint) is refused with a
+     * `DataAccessError` whose `.problem.would_be_lost_diff` carries what a `force:true` retry
+     * would discard — the caller (history.js) shows that diff before retrying with force. */
+    restore(slug, { path, to, force } = {}) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, to, ...(force ? { force: true } : {}) }),
+      });
+    },
     openStream(slug, { onEvent, onReconnect } = {}) {
       return openStream({ fetchFn, storage, slug, onEvent, onReconnect });
     },
