@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — appearance preference state. This module owns the durable, non-sensitive
 // localStorage preference; bootstrap owns the pairing token separately in sessionStorage.
 
