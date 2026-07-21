@@ -340,6 +340,26 @@ for Origin. Apply in P1.3.
   through REAL renderMarkdown + happy-dom positions, not hand-counted; incl. git-hook env). **Phase 3 nearly
   done — only P3.5 (diff pane) left.**
 
+### P3.5 diff pane + full history — ✅ (commit 7a08b30) — CC: no (targeted self-review) → **Phase 3 COMPLETE**
+- **Built (Sonnet subagent — went idle without a summary; I verified the substance directly):** `GET
+  /w/:slug/checkpoints` (`checkpoints.ts`: `since`=`yesterday|today|ISO|<id>` resolved in HOST-LOCAL TZ, rows
+  carry `by` from the `Glosa-Attribution` trailer, opaque short-sha `checkpoint_id`), `POST /w/:slug/restore`
+  (`handleRestore`: confinePath+tracked-membership, `commitExists(to)` validation, **dirty-guard → 409
+  restore-conflict + the would-be-lost diff unless `force`**, restore recorded as an append-only **`human`**
+  checkpoint kind `restore`, writes only to the confined `match.rawPath`). SPA: `history.js` document-native
+  timeline + diff2html diff pane (vendored `diff2html`), all through `data-access.js` (import-boundary green).
+- **My review (targeted, CC:no at deep context):** verified `handleRestore` writes only to a confined tracked
+  path, the dirty-guard + human-attribution + append-only-restore are correct, and it reuses the auth/
+  confinement machinery already exhaustively verified in P3.1. The **DST day-boundary acceptance test is
+  genuinely rigorous** — real Europe/Warsaw spring-forward (2026-03-29 → 23h span) + fall-back (2026-10-25 →
+  25h span), not mocked.
+- **Tests:** 627 pass / 0 fail (incl. dirty-refusal, restore-creates-human-checkpoint, DST boundary, checkpoint
+  listing attribution; git-hook env green). Added `diff2html` dep. `shadow.ts` gained a commit-date-pin option
+  (deterministic checkpoint timestamps for tests).
+- **PHASES 1–3 COMPLETE (14 tasks).** Next: Phase 4 — P4.1 class-F viewer (CC), P4.2 conversation, P4.3 Claude
+  provider (CC), P4.4 provider iface + Codex, **P4.5→P6.1**; then P5.1 CLI, P5.2 acceptance suites (CC), P6.1
+  generic adapter protocol (CC). ⛔ P5.3/P5.4 = Dawid.
+
 ### Plan change observed (Dawid edited BUILD-PLAN.md mid-run) — P6.1 supersedes P4.5
 Dawid added **Phase 6 / P6.1** and marked P4.5 superseded. Substance: glosa exposes a **generic**
 adapter-registration protocol (session→artifact binding, derived-from edges, data-path recognition,
