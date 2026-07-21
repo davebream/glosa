@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/index.ts";
+import { CLI_VERSION } from "../src/version.ts";
+import { BUILD_ID } from "../../daemon/src/build-id.ts";
 
 const CLI_PATH = join(import.meta.dir, "../src/main.ts");
 const PUBLIC_COMMANDS = [
@@ -101,7 +103,12 @@ describe("Gunshi command surface", () => {
     });
     expect(runCli(["--version"])).toEqual({
       exitCode: 0,
-      stdout: "glosa 0.0.0\n",
+      stdout: `glosa ${CLI_VERSION}\n`,
+      stderr: "",
+    });
+    expect(runCli(["--build-id"])).toEqual({
+      exitCode: 0,
+      stdout: `${BUILD_ID}\n`,
       stderr: "",
     });
   });

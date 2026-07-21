@@ -30,7 +30,14 @@ describe("glosa status", () => {
   test("daemon reachable: reports workspaces/sessions/pending from the aggregate", async () => {
     const client = new FakeGlosaApiClient();
     client.statusResult = {
-      daemon: { instance_id: "gl-1", pid: 42, started_at: "2020-01-01T00:00:00.000Z", protocol_version: "1.0", contract_version: "1.0" },
+      daemon: {
+        instance_id: "gl-1",
+        pid: 42,
+        started_at: "2020-01-01T00:00:00.000Z",
+        protocol_version: "1.0",
+        contract_version: "1.0",
+        build_id: "0.1.0-alpha.0-0123456789abcdef",
+      },
       workspaces: [{ slug: "abc", path: "/repo", last_seen: "2020-01-01T00:00:00.000Z", pending_count: 2, has_attention: true }],
       sessions: [{ session_id: "sess-1", provider: "claude-code", cwd: "/repo", workspace_binding: null, last_active_at: "2020-01-01T00:00:00.000Z", liveness: "alive" }],
     };

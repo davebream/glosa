@@ -5,6 +5,8 @@ import { connect } from "node:net";
 
 export interface HandshakeResponse {
   protocol_version: string;
+  /** Absent only for compatibility with a pre-build-id daemon. */
+  build_id?: string;
   instance_id: string;
   pid: number;
   started_at: string;
@@ -15,10 +17,15 @@ function isHandshakeShape(value: unknown): value is HandshakeResponse {
   const v = value as Record<string, unknown>;
   return (
     typeof v.protocol_version === "string" &&
+    (v.build_id === undefined || typeof v.build_id === "string") &&
     typeof v.instance_id === "string" &&
     typeof v.pid === "number" &&
     typeof v.started_at === "string"
   );
+}
+
+export function parseHandshakeResponse(value: unknown): HandshakeResponse | null {
+  return isHandshakeShape(value) ? value : null;
 }
 
 /** One attempt, bounded by `timeoutMs`. Never throws — a dead/foreign/slow peer just yields null. */
@@ -29,7 +36,7 @@ export async function fetchHandshake(port: number, timeoutMs: number): Promise<H
     const res = await fetch(`http://127.0.0.1:${port}/api/handshake`, { signal: controller.signal });
     if (!res.ok) return null;
     const body: unknown = await res.json();
-    return isHandshakeShape(body) ? body : null;
+    return parseHandshakeResponse(body);
   } catch {
     return null;
   } finally {

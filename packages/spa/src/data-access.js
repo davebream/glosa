@@ -132,6 +132,10 @@ function openEventStream(path, {
     const reader = res.body.getReader();
     cancelReader = () => reader.cancel().catch(() => {});
     for await (const frame of parseSseStream(reader)) {
+      if (frame.event === "bye") {
+        await reader.cancel().catch(() => {});
+        return true;
+      }
       if (frame.event === "resync_required") {
         lastEventId = null; // next connect is a fresh first-connect (§8.2 case 3)
         continue;
@@ -147,22 +151,25 @@ function openEventStream(path, {
       }
       onEvent?.({ event: frame.event, data, id: frame.id });
     }
+    return false;
   }
 
   (async function loop() {
     let isReconnect = false;
     while (!stopped) {
+      let retryImmediately = false;
       try {
-        await connectOnce(isReconnect);
+        retryImmediately = await connectOnce(isReconnect);
       } catch {
         // connect failed, or the stream ended/dropped mid-read — fall through to backoff+retry
       }
       if (stopped) return;
+      isReconnect = true;
+      if (retryImmediately) continue;
       if (!down) {
         down = true;
         onStatus?.("down"); // fires on drop AND on a failed retry's first drop — deduped above
       }
-      isReconnect = true;
       const wait = backoffFn(attempt, randFn);
       attempt += 1;
       await sleepFn(wait);

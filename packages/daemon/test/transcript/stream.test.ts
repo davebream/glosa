@@ -15,6 +15,7 @@ import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { canonicalize } from "../../src/registry/slug.ts";
 import { parseSseStream, type ParsedSseEvent } from "../../src/sse.ts";
+import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
 import { randomPort } from "../helpers.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";
@@ -410,5 +411,31 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       body: JSON.stringify({ text: "hi" }),
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe("createTranscriptStreamResponse — shutdown", () => {
+  test("daemon shutdown emits `bye` and closes the transcript stream", async () => {
+    const root = mkdtempSync(join(tmpdir(), "glosa-transcript-shutdown-"));
+    const transcriptPath = join(root, "session.jsonl");
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "before restart" } }) + "\n",
+    );
+    const shutdown = new AbortController();
+    const response = createTranscriptStreamResponse(
+      transcriptPath,
+      new Request("http://127.0.0.1:1/w/x/transcript/stream"),
+      undefined,
+      { heartbeatMs: 60_000, watchFile: false, shutdownSignal: shutdown.signal },
+    );
+    const events = parseSseStream(response.body!.getReader())[Symbol.asyncIterator]();
+
+    expect((await events.next()).value?.event).toBe("transcript");
+    shutdown.abort();
+    expect((await events.next()).value?.event).toBe("bye");
+    expect((await events.next()).done).toBe(true);
+
+    rmSync(root, { recursive: true, force: true });
   });
 });

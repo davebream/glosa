@@ -15,6 +15,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BUILD_ID } from "./build-id.ts";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
@@ -116,6 +117,8 @@ export interface ApiContext {
    * every existing test's hand-built `ApiContext` literal keeps compiling unchanged — an absent
    * registry IS the zero-adapter core, not a gap to fill in. */
   adapterRegistry?: AdapterRegistry;
+  /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
+  shutdownSignal?: AbortSignal;
 }
 
 /** The handshake body is a superset of P1.2's `HandshakeResponse` (D2): keeps
@@ -125,6 +128,7 @@ export interface ApiContext {
 export interface HandshakeBody {
   contract_version: string;
   daemon_version: string;
+  build_id: string;
   paired: boolean;
   protocol_version: string;
   instance_id: string;
@@ -182,6 +186,7 @@ function handleHandshake(ctx: ApiContext): () => Response {
     const body: HandshakeBody = {
       contract_version: CONTRACT_VERSION,
       daemon_version: DAEMON_VERSION,
+      build_id: BUILD_ID,
       paired: ctx.token !== null,
       protocol_version: PROTOCOL_VERSION,
       instance_id: ctx.instanceId,
@@ -1222,6 +1227,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       started_at: ctx.startedAt,
       protocol_version: PROTOCOL_VERSION,
       contract_version: CONTRACT_VERSION,
+      build_id: BUILD_ID,
     },
     workspaces,
     sessions,
@@ -1247,7 +1253,9 @@ async function handleStream(ctx: ApiContext, slug: string, req: Request, server:
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
   const bus = await resolveBus(ctx, resolved.entry.canonical_path);
-  return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server);
+  return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server, {
+    shutdownSignal: ctx.shutdownSignal,
+  });
 }
 
 /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — resolves the slug, then the LIVE
@@ -1275,7 +1283,9 @@ function handleTranscriptStream(ctx: ApiContext, slug: string, req: Request, ser
     return problem(400, "invalid-path", "transcript path is outside the allowed CLAUDE_CONFIG_DIR root", undefined, url.pathname);
   }
 
-  return createTranscriptStreamResponse(confined.realPath, req, server);
+  return createTranscriptStreamResponse(confined.realPath, req, server, {
+    shutdownSignal: ctx.shutdownSignal,
+  });
 }
 
 /** `POST /w/:slug/transcript/compose` — P4.2 addition, not in A1 §5 (same footing as P3.3's `PUT

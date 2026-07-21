@@ -26,6 +26,7 @@ import {
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { CLI_VERSION } from "./version.ts";
+import { BUILD_ID } from "../../daemon/src/build-id.ts";
 
 export { CLI_VERSION } from "./version.ts";
 
@@ -39,7 +40,7 @@ export interface GlosaBinResolution {
   mode: "path" | "bun-run";
 }
 
-/** Bare `glosa` if it's on PATH AND its `--version` matches this build; otherwise the no-build-
+/** Bare `glosa` if it's on PATH AND its `--build-id` matches this build; otherwise the no-build-
  * step fallback `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (A6 §F26/§F30 — "honors
  * no-build-step"). Injectable via `InitOptions.resolveGlosaBin` so tests never depend on what's
  * actually on the test runner's PATH. */
@@ -50,9 +51,9 @@ export function defaultResolveGlosaBin(glosaRoot: string): GlosaBinResolution {
   const onPath = Bun.which("glosa", { PATH: Bun.env.PATH ?? "" });
   if (onPath) {
     try {
-      const proc = Bun.spawnSync({ cmd: [onPath, "--version"] });
+      const proc = Bun.spawnSync({ cmd: [onPath, "--build-id"] });
       const out = proc.stdout.toString("utf8").trim();
-      if (proc.success && out === `glosa ${CLI_VERSION}`) {
+      if (proc.success && out === BUILD_ID) {
         return { command: "glosa", args: [], mode: "path" };
       }
     } catch {

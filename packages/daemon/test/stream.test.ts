@@ -381,4 +381,30 @@ describe("createJournalStreamResponse — heartbeat (A1 §8.3)", () => {
     await bus.close();
     rmSync(root, { recursive: true, force: true });
   });
+
+  test("daemon shutdown emits `bye`, closes the stream, and releases the bus subscription", async () => {
+    const root = mkdtempSync(join(tmpdir(), "glosa-stream-shutdown-"));
+    const bus = new WorkspaceBus(root, {});
+    await bus.reconcile();
+    const shutdown = new AbortController();
+    const response = createJournalStreamResponse(
+      root,
+      bus,
+      new Request("http://127.0.0.1:1/w/x/stream"),
+      undefined,
+      { heartbeatMs: 60_000, watchArtifacts: false, shutdownSignal: shutdown.signal },
+    );
+    const reader = response.body!.getReader();
+    const events = parseSseStream(reader)[Symbol.asyncIterator]();
+
+    expect((await events.next()).value?.event).toBe("snapshot");
+    expect(bus.listenerCount()).toBe(1);
+    shutdown.abort();
+    expect((await events.next()).value?.event).toBe("bye");
+    expect((await events.next()).done).toBe(true);
+    expect(bus.listenerCount()).toBe(0);
+
+    await bus.close();
+    rmSync(root, { recursive: true, force: true });
+  });
 });

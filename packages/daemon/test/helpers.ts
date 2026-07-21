@@ -87,7 +87,7 @@ export function writeUnparseableLock(home: string): void {
 export async function waitForHandshake(
   port: number,
   deadlineMs = 8000,
-): Promise<{ protocol_version: string; instance_id: string; pid: number; started_at: string } | null> {
+): Promise<{ protocol_version: string; build_id?: string; instance_id: string; pid: number; started_at: string } | null> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
     try {
