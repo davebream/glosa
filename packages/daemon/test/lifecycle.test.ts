@@ -128,6 +128,7 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     try {
       const hs = await waitForHandshake(port);
       expect(hs).not.toBeNull();
+      await waitUntil(() => lockOf(home)?.instance_id !== "gl-fake");
       const lock = lockOf(home);
       expect(lock!.instance_id).not.toBe("gl-fake");
       expect(lock!.pid).toBe(proc.pid);

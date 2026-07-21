@@ -66,6 +66,7 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     "./conversation.js",
     "./rich-editor.js",
     "./dialog.js",
+    "./artifact-tree.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",
