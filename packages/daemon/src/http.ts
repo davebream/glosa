@@ -33,10 +33,11 @@ import { confineTranscriptPath } from "./transcript/root.ts";
 import { createTranscriptStreamResponse } from "./transcript/stream.ts";
 import type { WorkspaceIndex } from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
+import { canonicalize } from "./registry/slug.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
 import { journalPath } from "./bus/paths.ts";
 import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
-import { isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
+import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.ts";
 import type { JournalEvent } from "./bus/journal.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
@@ -685,6 +686,145 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
   return Response.json({ bound: true, session_id: sessionId });
 }
 
+// -------------------------------------------------------------------------------------------
+// P4.3 additions — not in A1 §5 (same footing as P4.2's `/transcript/compose`): the internal
+// `/api/sessions/...` surface `glosa hook <event>` calls into. R2/A2 §F08 are explicit that
+// "providers register live agent sessions via hooks → daemon API (never direct file writes)" —
+// these four routes are that API. Kept under `/api/` (not `/w/:slug/...`) since a hook fires
+// before the caller necessarily knows which workspace slug it landed in; `register` is what
+// resolves that (via `SessionRegistry.register`'s own workspace upsert).
+// -------------------------------------------------------------------------------------------
+
+/** Resolves a hook-supplied path to its canonical identity (realpath -> NFC -> strip trailing
+ * slash, same convention as every other workspace-identity call site) — a hook's `cwd` is NOT
+ * pre-canonicalized the way `/w/:slug/...` routes' `entry.canonical_path` already is. `null` on
+ * anything that doesn't resolve (nonexistent directory, symlink loop, etc.). */
+function canonicalOrNull(path: string): string | null {
+  try {
+    return canonicalize(path);
+  } catch {
+    return null;
+  }
+}
+
+/** `POST /api/sessions/register` — A2 §F08's SessionStart registration + R2's "no live session ->
+ * park; next registration for that workspace drains it" (the drained-workspace list this returns
+ * is exactly `SessionRegistry.register`'s own `drainedWorkspaces`, surfaced so the caller can
+ * decide what to do with a just-unparked workspace — this route never itself pushes/delivers). */
+async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const sessionId = b?.session_id;
+  const provider = b?.provider;
+  const cwd = b?.cwd;
+  const source = b?.source;
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return problem(400, "validation-failed", "session_id is required", undefined, url.pathname);
+  }
+  if (typeof provider !== "string" || provider.length === 0) {
+    return problem(400, "validation-failed", "provider is required", undefined, url.pathname);
+  }
+  if (typeof cwd !== "string" || cwd.length === 0) {
+    return problem(400, "validation-failed", "cwd is required", undefined, url.pathname);
+  }
+  if (typeof source !== "string" || source.length === 0) {
+    return problem(400, "validation-failed", "source is required", undefined, url.pathname);
+  }
+
+  const canonicalCwd = canonicalOrNull(cwd);
+  if (!canonicalCwd) return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
+
+  let workspaceBinding: string | undefined;
+  if (typeof b?.workspace_binding === "string" && b.workspace_binding.length > 0) {
+    const canonicalBinding = canonicalOrNull(b.workspace_binding);
+    if (!canonicalBinding) {
+      return problem(400, "invalid-path", "workspace_binding does not resolve to a real directory", undefined, url.pathname);
+    }
+    workspaceBinding = canonicalBinding;
+  }
+
+  const transcriptPath = typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
+
+  const { record, drainedWorkspaces } = await ctx.sessionRegistry.register({
+    session_id: sessionId,
+    provider,
+    cwd: canonicalCwd,
+    source,
+    ...(workspaceBinding !== undefined ? { workspace_binding: workspaceBinding } : {}),
+    ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
+  });
+
+  return Response.json({
+    session_id: record.session_id,
+    workspace: record.workspace_binding ?? record.cwd,
+    drained_workspaces: drainedWorkspaces,
+  });
+}
+
+/** `POST /api/sessions/:id/heartbeat` — UserPromptSubmit/Stop's lease refresh (A2 §F08: "the
+ * lease... refreshed on each hook"). An unknown session_id is a silent no-op on the registry side
+ * (see `SessionRegistry.heartbeat`'s own docstring) — mirrored here as a 200, not a 404, since a
+ * heartbeat racing a session that just ended is expected, not an error. */
+async function handleSessionHeartbeat(ctx: ApiContext, sessionId: string): Promise<Response> {
+  await ctx.sessionRegistry.heartbeat(sessionId);
+  return Response.json({ ok: true });
+}
+
+/** `POST /api/sessions/:id/deregister` — SessionEnd (A2 §F08: "removes the session from the
+ * active registry (keeps journal audit trail)"). Also a no-op-safe 200 for an unknown id. */
+async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Promise<Response> {
+  await ctx.sessionRegistry.deregister(sessionId);
+  return Response.json({ ok: true });
+}
+
+const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
+
+/** `POST /api/sessions/:id/drain` — the rung-3 turn-boundary drain body (UserPromptSubmit's
+ * additionalContext + Stop's own drain, A6 §F26). Delegates selection AND recording entirely to
+ * `WorkspaceBus.drainCandidates` (P4.3 concurrency review fix #7) — both steps happen inside that
+ * method's own single mutex critical section, so two concurrent drain requests for the same
+ * workspace can never select and double-record the same entries; an entry whose only prior
+ * attempts all `outcome:"failed"` is still eligible (re-drained with `reason:"re_nudge"`, never
+ * permanently excluded by a transport failure). `via` MUST be told apart by the caller, since
+ * `"gate"`/`"stop"`/`"userprompt"`/`"asyncRewake"` are distinct transports and only the caller
+ * (`glosa hook stop` vs. `user-prompt-submit` vs. `rewake-watch`) knows which one is actually
+ * surfacing this drain right now. An unknown session_id is 404 (unlike heartbeat/deregister,
+ * there is no live-registry-race reading here to be lenient about — the caller just registered
+ * this exact session moments earlier in the same hook invocation). */
+async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record) return problem(404, "not-found", "unknown session", undefined, url.pathname);
+
+  let limit = DRAIN_MAX;
+  let via: DeliveryVia = "userprompt";
+  try {
+    const raw = await req.text();
+    if (raw.length > 0) {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof body.limit === "number" && body.limit > 0) limit = Math.min(body.limit, DRAIN_MAX);
+      // The four "this route surfaced it" transports — never channel/mcp_pull, which have their
+      // own separate delivery paths that don't go through this drain-and-mark route at all.
+      if (body.via === "gate" || body.via === "stop" || body.via === "userprompt" || body.via === "asyncRewake") via = body.via;
+    }
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+
+  const root = record.workspace_binding ?? record.cwd;
+  const bus = await resolveBus(ctx, root);
+
+  const drained = await bus.drainCandidates(limit, { via, session: sessionId });
+
+  return Response.json({ drained, count: drained.length });
+}
+
 /** Shared body for the two remaining route SHELLS (A1 §5.8/§5.10) — their real backends land in
  * later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
  * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes. */
@@ -827,8 +967,26 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "GET" && pathname === "/api/workspaces") {
     return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
   }
+  // P4.3: the session-registration surface `glosa hook <event>` calls into (A2 §F08/R2) — see
+  // the handlers' own header comment above.
+  if (method === "POST" && pathname === "/api/sessions/register") {
+    return { routeClass: "state-changing", handle: (req) => handleSessionRegister(ctx, req) };
+  }
 
   let m: RegExpMatchArray | null;
+
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "state-changing", handle: () => handleSessionHeartbeat(ctx, sessionId) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/deregister$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "state-changing", handle: () => handleSessionDeregister(ctx, sessionId) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/drain$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSessionDrain(ctx, sessionId, req) };
+  }
 
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts$/))) {
     const slug = m[1] as string;

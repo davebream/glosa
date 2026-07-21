@@ -8,6 +8,7 @@
   "bin": { "glosa": "src/main.ts" },
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@glosa/daemon": "workspace:*"
+    "@glosa/daemon": "workspace:*",
+    "@glosa/providers-claude-code": "workspace:*"
   }
 }

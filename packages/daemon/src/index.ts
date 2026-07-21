@@ -28,3 +28,29 @@ export { internalErrorResponse, problem } from "./problem.ts";
 export type { ProblemSlug } from "./problem.ts";
 export { loadToken, tokenMatches, tokenPath } from "./token.ts";
 export * from "./bus/index.ts";
+// NOTE: `DeliveryOutcome`/`DeliveryVia`/`DeliveryReason` are NOT re-listed here even though
+// `providers/interface.ts` also re-exports them — they already flow through from
+// `bus/index.ts`'s star-export above (the canonical definition lives in `bus/lifecycle.ts`);
+// naming them again from `providers/interface.ts` would be a duplicate-export collision.
+export type {
+  AgentProvider,
+  DeliverableEntry,
+  DeliveryResult,
+  Liveness as ProviderLiveness,
+  ProviderCapabilities,
+  SessionBinding,
+} from "./providers/interface.ts";
+export { recordDelivery } from "./providers/interface.ts";
+export {
+  isCwdAncestorOf,
+  SessionRegistry,
+} from "./registry/session-registry.ts";
+export type {
+  RegisterInput,
+  RegisterResult,
+  SessionRecord,
+  SessionRegistryDeps,
+  Liveness,
+} from "./registry/session-registry.ts";
+export { route } from "./registry/routing.ts";
+export type { RouteResult } from "./registry/routing.ts";

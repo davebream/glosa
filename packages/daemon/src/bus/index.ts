@@ -29,7 +29,7 @@ export type {
   ReplayResult,
 } from "./replay.ts";
 export { isTerminal, lifecycleReducer } from "./lifecycle.ts";
-export type { DeliveryAttemptRecord, EntryKind } from "./lifecycle.ts";
+export type { DeliveryAttemptRecord, DeliveryOutcome, DeliveryReason, DeliveryVia, EntryKind } from "./lifecycle.ts";
 export {
   offlineCatchUp,
   reconcileApplyLeases,

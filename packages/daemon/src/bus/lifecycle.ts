@@ -30,12 +30,24 @@ import type { JournalEvent } from "./journal.ts";
 
 export type EntryKind = "common" | "attention";
 
+// A5 §F23's authoritative delivery_attempt vocabulary, verbatim:
+// `{via:channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|
+// transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. The single canonical
+// definition — `bus.ts`'s `recordDeliveryAttempt`, `providers/interface.ts`'s `DeliveryResult`,
+// and every call site all import these three types from here rather than each declaring their
+// own, which is what a P4.3 review caught: a provider-local `DeliveryOutcome` had drifted to
+// `"delivered"|"failed"`, free text riding in `reason`, and no `via` distinguishing gate/stop/
+// userprompt — none of that is a legal A5 §F23 value.
+export type DeliveryVia = "channel" | "asyncRewake" | "gate" | "stop" | "userprompt" | "mcp_pull";
+export type DeliveryOutcome = "attempted" | "transport_accepted" | "presented" | "failed";
+export type DeliveryReason = "initial" | "re_nudge";
+
 export interface DeliveryAttemptRecord {
   at: string;
-  via?: string;
+  via?: DeliveryVia;
   session?: string;
-  outcome?: string;
-  reason?: string;
+  outcome?: DeliveryOutcome;
+  reason?: DeliveryReason;
   error?: string;
 }
 
@@ -187,12 +199,16 @@ export const lifecycleReducer: Reducer = (state, event) => {
       const entryState = state.entries[event.entry];
       if (!entryState) return; // attempt for an entry we never saw created — nothing to attach it to
       const d = event.detail ?? {};
+      // Cast, not validate-and-reject: replay must never treat a legacy/malformed
+      // detail.via|outcome|reason (outside today's A5 §F23 vocabulary) as fatal — it's still
+      // carried through verbatim for inspection, just no longer statically guaranteed to be a
+      // CURRENT enum member for anything replayed from an older journal.
       deliveryAttemptsOf(entryState).push({
         at: event.at,
-        via: typeof d.via === "string" ? d.via : undefined,
+        via: typeof d.via === "string" ? (d.via as DeliveryAttemptRecord["via"]) : undefined,
         session: typeof d.session === "string" ? d.session : undefined,
-        outcome: typeof d.outcome === "string" ? d.outcome : undefined,
-        reason: typeof d.reason === "string" ? d.reason : undefined,
+        outcome: typeof d.outcome === "string" ? (d.outcome as DeliveryAttemptRecord["outcome"]) : undefined,
+        reason: typeof d.reason === "string" ? (d.reason as DeliveryAttemptRecord["reason"]) : undefined,
         error: typeof d.error === "string" ? d.error : undefined,
       });
       // Deliberately no `entryState.status = ...` anywhere in this case — that's the whole point

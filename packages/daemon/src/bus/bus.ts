@@ -10,7 +10,14 @@ import { JournalWriter, appendEvent, type EventBy, type JournalEvent } from "./j
 import { writeInboxEntryOnce } from "./inbox.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
 import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
-import { lifecycleReducer } from "./lifecycle.ts";
+import {
+  isTerminal,
+  lifecycleReducer,
+  type DeliveryAttemptRecord,
+  type DeliveryOutcome,
+  type DeliveryReason,
+  type DeliveryVia,
+} from "./lifecycle.ts";
 import { reconcileWorkspace, type ReconcileResult } from "./reconcile.ts";
 import { countJournalLines } from "./tail.ts";
 import { KeyedMutex } from "./mutex.ts";
@@ -247,34 +254,86 @@ export class WorkspaceBus {
   /** `delivery_attempt` never changes status (separate axis, A5 §F23) and may skip the per-write
    * fsync — loss here is only a redundant re-nudge. The A5 §F23 attempt shape (`via`/`session`/
    * `outcome`/`reason`/`error?`) rides in `detail`, which is what `lifecycleReducer` reads into
-   * each entry's `deliveryAttempts` list — the actual delivery transports are P4.3's concern,
-   * this just carries their shape through today. */
+   * each entry's `deliveryAttempts` list. `via`/`outcome`/`reason` are typed to A5 §F23's fixed
+   * vocabulary (`lifecycle.ts`'s `DeliveryVia`/`DeliveryOutcome`/`DeliveryReason`) — a caller
+   * cannot accidentally journal an out-of-spec value like `"delivered"` or a free-text reason. */
   recordDeliveryAttempt(
     entryId: string,
     opts: {
       by?: EventBy;
-      via?: string;
+      via?: DeliveryVia;
       session?: string;
-      outcome?: string;
-      reason?: string;
+      outcome?: DeliveryOutcome;
+      reason?: DeliveryReason;
       error?: string;
     } = {},
   ): Promise<void> {
+    return this.mutex.runExclusive(this.root, () => this.recordDeliveryAttemptLocked(entryId, opts));
+  }
+
+  /** The unlocked body `recordDeliveryAttempt` wraps in its own mutex critical section — pulled
+   * out so `drainCandidates` (below) can call it from WITHIN an ALREADY-held critical section
+   * without deadlocking (`KeyedMutex.runExclusive` is not reentrant — a nested call for the same
+   * root would wait on itself forever). Never call this directly outside a critical section this
+   * class already holds for `this.root`. */
+  private recordDeliveryAttemptLocked(
+    entryId: string,
+    opts: {
+      by?: EventBy;
+      via?: DeliveryVia;
+      session?: string;
+      outcome?: DeliveryOutcome;
+      reason?: DeliveryReason;
+      error?: string;
+    },
+  ): void {
+    const { by, ...detail } = opts;
+    const hasDetail = Object.values(detail).some((v) => v !== undefined);
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: entryId,
+      event: "delivery_attempt",
+      by: by ?? "daemon",
+      ...(hasDetail ? { detail } : {}),
+    };
+    appendEvent(this.writer, event, { fsync: false });
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
+  }
+
+  /** The A5 §F23 turn-boundary/watcher drain, done ATOMICALLY: selects eligible entries AND
+   * records each one's `delivery_attempt` in the SAME mutex critical section (P4.3 concurrency
+   * review fix #7 — an earlier revision selected candidates in the HTTP route, outside any lock,
+   * so two concurrent drains on one workspace could both select and record against the exact
+   * same entries; moving both steps in here, under `this.mutex`, is what makes "select" and
+   * "record" a single indivisible operation two racing callers can't interleave). Eligible =
+   * non-terminal AND not yet SUCCESSFULLY delivered — an entry whose only prior attempts are all
+   * `outcome:"failed"` stays eligible (it gets re-drained, `reason:"re_nudge"`, never
+   * permanently excluded by a transport failure); an entry that already has a
+   * `"presented"`/`"transport_accepted"` attempt on record is excluded, since it doesn't need
+   * re-surfacing. Returns the drained entries' ids/kind/status for the caller to build its own
+   * additionalContext/reminder text. */
+  drainCandidates(limit: number, opts: { via: DeliveryVia; session: string }): Promise<{ id: string; kind: string; status: string }[]> {
     return this.mutex.runExclusive(this.root, () => {
-      const { by, ...detail } = opts;
-      const hasDetail = Object.values(detail).some((v) => v !== undefined);
-      const event: JournalEvent = {
-        v: 1,
-        event_id: this.ulidFn(),
-        at: this.nowFn().toISOString(),
-        entry: entryId,
-        event: "delivery_attempt",
-        by: by ?? "daemon",
-        ...(hasDetail ? { detail } : {}),
-      };
-      appendEvent(this.writer, event, { fsync: false });
-      applyEvent(this.state, event, this.reducer);
-      this.notify(event);
+      const candidates = Object.entries(this.state.entries)
+        .filter(([, e]) => {
+          const kind = e.kind === "attention" ? "attention" : "common";
+          if (isTerminal(kind, e.status)) return false;
+          const attempts = Array.isArray(e.deliveryAttempts) ? (e.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+          const alreadyDelivered = attempts.some((a) => a.outcome === "presented" || a.outcome === "transport_accepted");
+          return !alreadyDelivered;
+        })
+        .slice(0, limit);
+
+      for (const [id, entryState] of candidates) {
+        const attempts = Array.isArray(entryState.deliveryAttempts) ? entryState.deliveryAttempts : [];
+        const reason: DeliveryReason = attempts.length > 0 ? "re_nudge" : "initial";
+        this.recordDeliveryAttemptLocked(id, { via: opts.via, session: opts.session, outcome: "presented", reason });
+      }
+
+      return candidates.map(([id, e]) => ({ id, kind: typeof e.kind === "string" ? e.kind : "common", status: e.status }));
     });
   }
 
