@@ -114,12 +114,15 @@ describe("issue-focused MCP inbox tools", () => {
     expect(reply.ack).toMatchObject({ deliveryId: "delivery-1" });
   });
 
-  test("get uses the same reserved paginated presentation returned by the daemon", async () => {
+  test("get retrieves a durable entry directly even after delivery has been presented", async () => {
     const hook = new HookClient();
-    hook.drained = {
-      delivery_id: "delivery-get",
-      count: 1,
-      drained: [presentation("inb-2", "human_edit", "page opaque")],
+    hook.drained = { delivery_id: null, count: 0, drained: [] };
+    const calls: unknown[] = [];
+    const api: Partial<GlosaApiClient> = {
+      getInboxPresentation: async (workspace, id, cursor) => {
+        calls.push([workspace, id, cursor]);
+        return { presentation: presentation("inb-2", "human_edit", "page opaque") };
+      },
     };
     const reply = await handleMcpRequest(
       {
@@ -128,10 +131,12 @@ describe("issue-focused MCP inbox tools", () => {
         method: "tools/call",
         params: { name: "glosa_inbox_get", arguments: { id: "inb-2", cursor: "opaque" } },
       },
-      deps(hook),
+      deps(hook, api),
     );
     expect(JSON.stringify(reply.response)).toContain("page opaque");
-    expect(hook.drainOptions).toEqual({ via: "mcp_pull", limit: 1, entryId: "inb-2", cursor: "opaque" });
-    expect(reply.ack).toMatchObject({ deliveryId: "delivery-get" });
+    expect(calls).toEqual([["/workspace", "inb-2", "opaque"]]);
+    expect(hook.registered).toBeNull();
+    expect(hook.drainOptions).toBeUndefined();
+    expect(reply.ack).toBeUndefined();
   });
 });
