@@ -10,6 +10,7 @@
 const MAX_MESSAGE_BYTES = 8192; // A3 §2: "size cap 8KB/msg"
 const RATE_LIMIT_PER_SEC = 50; // A3 §2: "rate limit 50 msg/s/iframe (token bucket, drop excess)"
 const MESSAGE_TYPES = new Set(["selection", "mark", "ready", "error"]);
+export const OPAQUE_SANDBOX_HANDSHAKE_TARGET_ORIGIN = "*";
 
 // ---------------------------------------------------------------------------------------------
 // Pure, independently-testable pieces (A3 §2's three orthogonal checks + the message validator +
@@ -174,7 +175,6 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, o
   async function connect() {
     const { url, nonce } = await dataAccess.mintClassFCapability(slug, artifactPath);
     if (cancelled) return;
-    const classFOrigin = new URL(url).origin;
     // Captured NOW, before `load` fires — A3 §2 check 1's "at creation" (here: at src-assignment
     // time, the earliest this window handle exists).
     const iframeWindow = iframe.contentWindow;
@@ -210,7 +210,12 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, o
       channel.port1.onmessage = (event) => router(event.data);
       channel.port1.start();
       port = channel.port1;
-      iframeWindow.postMessage({ type: "glosa:init", nonce }, classFOrigin, [channel.port2]);
+      // The iframe intentionally has an opaque origin (`sandbox="allow-scripts"` without
+      // `allow-same-origin`). A specific target origin therefore cannot match it and the browser
+      // drops the handshake. `*` is safe here because the destination is the exact WindowProxy
+      // captured when this iframe was created, and the one-time capability nonce still gates the
+      // bridge before it accepts the transferred MessagePort.
+      iframeWindow.postMessage({ type: "glosa:init", nonce }, OPAQUE_SANDBOX_HANDSHAKE_TARGET_ORIGIN, [channel.port2]);
     };
     iframe.addEventListener("load", loadHandler);
 

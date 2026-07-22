@@ -161,12 +161,19 @@ export function mountConversationPane(container, { dataAccess, slug }) {
     statusEl.removeAttribute("data-error");
     statusEl.textContent = "Sending message…";
     try {
-      await dataAccess.sendComposerMessage(slug, text);
+      const result = await dataAccess.sendComposerMessage(slug, text);
+      if (!result?.delivered) {
+        throw new Error("agent delivery is not available for this session; use the terminal");
+      }
       composerInput.value = "";
       statusEl.textContent = "Message sent.";
     } catch (error) {
       statusEl.setAttribute("data-error", "true");
-      statusEl.textContent = error instanceof Error ? `Message couldn't be sent: ${error.message}` : "Message couldn't be sent. Try again.";
+      const message = error instanceof Error ? error.message : "Try again.";
+      statusEl.textContent =
+        message === "no session registered"
+          ? "No live agent session is registered for this workspace. Start or resume it, bind it to this workspace, then try again."
+          : `Message couldn't be sent: ${message}`;
     } finally {
       composerSend.disabled = false;
     }
