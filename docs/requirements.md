@@ -1,5 +1,9 @@
 # glosa v1 — requirements (v2, build-ready)
 
+> **Status:** This is the normative v1 technical contract, not the live product roadmap or work queue.
+> See [`ROADMAP.md`](../ROADMAP.md) for accepted direction and its linked GitHub Project for current
+> execution status.
+
 **This is the authoritative build input for glosa v1.** It supersedes v1 in full
 (`archive/requirements-v1-superseded.md`). v1 + the adversarial review
 (`research/codex-review.md`, verdict NEEDS-REWORK, 32 findings) + a six-specialist resolution pass

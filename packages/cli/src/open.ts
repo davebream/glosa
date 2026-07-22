@@ -4,7 +4,7 @@
 // the daemon's own `POST /api/workspaces/open` (http.ts's P5.1 addition — this file never
 // duplicates the scaffold logic itself, per this task's brief), mints/reuses the daemon's pairing
 // token, and opens the SPA in the default browser at the `#t=<token>` fragment. That fragment
-// format is D5 (docs/OVERNIGHT-LOG.md): the literal `#t=<token>` wire format bootstrap.js's
+// format is D5 (docs/archive/v1-build/OVERNIGHT-LOG.md): the literal `#t=<token>` wire format bootstrap.js's
 // `scrubToken` parses, NOT A6's looser `#<capability>` shorthand — requirements/decisions govern
 // over the appendix here, per this repo's own precedence rule.
 import { existsSync, statSync } from "node:fs";

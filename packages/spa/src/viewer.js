@@ -108,25 +108,41 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     type: "button",
     "aria-label": "Show artifacts",
     "aria-expanded": "false",
+    "aria-controls": "glosa-sidebar",
   });
   // Static trusted markup (no artifact-derived content ever goes through innerHTML here).
   navToggle.innerHTML =
     '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11m-11 3.5h11m-11 3.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
+  // Same geometry as glosa-mark.svg. Inline here so both forms follow explicit app themes,
+  // including a persisted theme that differs from the operating-system preference.
+  brandMark.innerHTML =
+    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>';
   const artifactNameEl = el("span", { className: "glosa-artifact-name", textContent: "glosa" });
   const artifactDirEl = el("span", { className: "glosa-artifact-dir" });
   const modeBar = el("div", { className: "glosa-modebar", role: "group", "aria-label": "View mode" });
   const historyToggle = el("button", {
+    id: "glosa-history-toggle",
     className: "glosa-history-toggle",
     type: "button",
     textContent: "History",
-    "aria-pressed": "false",
+    "aria-expanded": "false",
+    "aria-controls": "glosa-history",
   });
   const conversationToggle = el("button", {
+    id: "glosa-conversation-toggle",
     className: "glosa-conversation-toggle",
     type: "button",
     textContent: "Conversation",
-    "aria-pressed": "false",
+    "aria-expanded": "false",
+    "aria-controls": "glosa-conversation",
   });
+  historyToggle.setAttribute("aria-label", "History");
+  historyToggle.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5V2.8M3.5 5.5h2.7M3.7 5.3A7 7 0 1 1 3 12M10 6.2V10l2.7 1.7"/></svg><span>History</span>';
+  conversationToggle.setAttribute("aria-label", "Conversation");
+  conversationToggle.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
   const appearanceHost = el("div", { className: "glosa-appearance" });
   const stopAppearance = appearance ? mountAppearanceControl(appearanceHost, appearance) : null;
 
@@ -167,12 +183,13 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   const backdrop = el("div", { className: "glosa-backdrop" });
 
   // --- manuscript column ---
-  const contentEl = el("div", { className: "glosa-content" });
-  const emptyEl = el("div", { className: "glosa-empty", hidden: true });
+  const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Artifact preview" });
+  const emptyEl = el("div", { className: "glosa-empty", hidden: true, role: "status", "aria-live": "polite" });
   const skeletonEl = el("div", { className: "glosa-skeleton", hidden: true, "aria-hidden": "true" });
   for (let i = 0; i < 8; i++) skeletonEl.append(el("i"));
   const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Artifact source" });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
+  const editStatus = el("p", { className: "glosa-edit-status", role: "status", "aria-live": "polite" });
   // Edit's two faces (rich is the default; Source is the byte-exact fallback and the code view).
   const richEl = el("div", { className: "glosa-rich", hidden: true });
   const faceRichBtn = el("button", { className: "glosa-face-rich", type: "button", textContent: "Rich" });
@@ -185,11 +202,21 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     el("div", { className: "glosa-edit-topbar" }, [faceToggle]),
     richEl,
     editArea,
-    el("div", { className: "glosa-edit-actions" }, [saveButton]),
+    el("div", { className: "glosa-edit-actions" }, [editStatus, saveButton]),
   ]);
-  const classFEl = el("div", { className: "glosa-classf", hidden: true });
-  const historyEl = el("div", { className: "glosa-history", hidden: true });
-  const conversationEl = el("div", { className: "glosa-conversation", hidden: true });
+  const classFEl = el("div", { className: "glosa-classf", hidden: true, role: "region", "aria-label": "Artifact preview" });
+  const historyEl = el("section", {
+    id: "glosa-history",
+    className: "glosa-history",
+    hidden: true,
+    "aria-labelledby": "glosa-history-toggle",
+  });
+  const conversationEl = el("section", {
+    id: "glosa-conversation",
+    className: "glosa-conversation",
+    hidden: true,
+    "aria-labelledby": "glosa-conversation-toggle",
+  });
 
   // --- contextual margin (annotation cards + the ONE composer) ---
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
@@ -201,9 +228,16 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // absolutely positioned at their anchors' document offsets, so they scroll glued to the text.
   // Thin connection banner (hidden while healthy): honest words, no spinner theater.
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
+  const annotateInstructions = el("p", {
+    id: "glosa-annotate-instructions",
+    className: "glosa-visually-hidden",
+    textContent: "Press Enter or Space to annotate this passage.",
+    hidden: true,
+  });
 
   const mainEl = el("main", { className: "glosa-main" }, [
     bannerEl,
+    annotateInstructions,
     emptyEl,
     skeletonEl,
     contentEl,
@@ -218,11 +252,12 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   root.append(
     el("header", { className: "glosa-topbar" }, [
       navToggle,
+      brandMark,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
       el("div", { className: "glosa-topbar-actions" }, [historyToggle, conversationToggle, appearanceHost]),
     ]),
-    el("nav", { className: "glosa-sidebar" }, [
+    el("nav", { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" }, [
       el("h2", { textContent: "Workspaces" }),
       sidebarList,
       artifactHeading,
@@ -250,12 +285,39 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   let stopStream = null;
   let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
 
-  function setNavOpen(open) {
+  const compactNav = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches;
+
+  function focusPreview() {
+    const target = (!emptyEl.hidden ? emptyEl.querySelector(".glosa-empty-title, p") : null)
+      ?? contentEl.querySelector("h1, h2, h3, p")
+      ?? contentEl;
+    if (!(target instanceof HTMLElement)) return;
+    const temporaryTabIndex = !target.hasAttribute("tabindex");
+    if (temporaryTabIndex) target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+    if (temporaryTabIndex) {
+      target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
+    }
+  }
+
+  function setNavOpen(open, { restoreFocus = false, focusDrawer = false } = {}) {
     root.setAttribute("data-nav-open", String(open));
     navToggle.setAttribute("aria-expanded", String(open));
+    navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
+    if (open && focusDrawer && compactNav()) {
+      queueMicrotask(() => {
+        const target = artifactList.querySelector('[role="treeitem"][aria-current="page"]')
+          ?? artifactList.querySelector('[role="treeitem"][tabindex="0"]')
+          ?? sidebarList.querySelector('button[aria-current="true"]')
+          ?? sidebarList.querySelector("button");
+        target?.focus();
+      });
+    } else if (!open && restoreFocus) {
+      queueMicrotask(() => navToggle.focus({ preventScroll: true }));
+    }
   }
-  navToggle.addEventListener("click", () => setNavOpen(root.getAttribute("data-nav-open") !== "true"));
-  backdrop.addEventListener("click", () => setNavOpen(false));
+  navToggle.addEventListener("click", () => setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }));
+  backdrop.addEventListener("click", () => setNavOpen(false, { restoreFocus: true }));
 
   // R6/A5 §F11: class-F Edit follows the generic derived-from edge — enabled only when the
   // artifact metadata carries a `derived_from` path (supplied by a content adapter, P6.1; the
@@ -265,6 +327,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   function renderModeBar() {
+    const restoreModeFocus = modeBar.contains(document.activeElement);
     modeBar.textContent = "";
     for (const mode of MODES) {
       // Opaque class F gets no Edit affordance at all rather than a permanently disabled one
@@ -279,6 +342,9 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       btn.setAttribute("aria-pressed", String(mode === modeState.mode));
       if (!currentArtifact) btn.disabled = true;
       modeBar.append(btn);
+    }
+    if (restoreModeFocus) {
+      queueMicrotask(() => modeBar.querySelector(`[data-mode="${modeState.mode}"]`)?.focus({ preventScroll: true }));
     }
   }
 
@@ -307,6 +373,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         markdown,
         onDirty: () => {
           modeState = modeReducer(modeState, { type: "edited" });
+          editStatus.textContent = "";
+          editStatus.removeAttribute("data-error");
         },
       });
     } catch {
@@ -323,6 +391,25 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   function renderFaceToggle() {
     faceRichBtn.setAttribute("aria-pressed", String(!sourceFace));
     faceSourceBtn.setAttribute("aria-pressed", String(sourceFace));
+  }
+
+  function updateAnnotatableBlocks() {
+    for (const block of contentEl.querySelectorAll(".glosa-annotatable-block")) {
+      block.classList.remove("glosa-annotatable-block");
+      block.removeAttribute("tabindex");
+      block.removeAttribute("aria-describedby");
+    }
+    annotateInstructions.hidden = true;
+    contentEl.removeAttribute("aria-describedby");
+    if (loading || modeState.mode !== "annotate" || !currentArtifact || currentArtifact.class === "F") return;
+    annotateInstructions.hidden = false;
+    contentEl.setAttribute("aria-describedby", annotateInstructions.id);
+    for (const block of contentEl.querySelectorAll(":scope > [data-line]")) {
+      if (!block.textContent.trim()) continue;
+      block.classList.add("glosa-annotatable-block");
+      block.setAttribute("tabindex", "0");
+      block.setAttribute("aria-describedby", annotateInstructions.id);
+    }
   }
 
   function renderContent() {
@@ -344,6 +431,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     renderTitle();
 
     if (!currentArtifact) {
+      updateAnnotatableBlocks();
       if (!loading && !emptyEl.childElementCount) {
         setEmpty(
           "Choose an artifact to review.",
@@ -357,6 +445,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       return;
     }
     if (isClassF) {
+      updateAnnotatableBlocks();
       mountClassFArtifact();
       renderMargin();
       return;
@@ -378,6 +467,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         contentEl.setAttribute("data-path", currentArtifact.source_path);
       }
     }
+    updateAnnotatableBlocks();
     renderMargin();
   }
 
@@ -388,6 +478,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   function mountClassFArtifact(force = false) {
     if (!force && classFEl.getAttribute("data-path") === currentArtifact.source_path && stopClassFViewer) return;
     stopClassFViewer?.();
+    classFEl.setAttribute("role", "region");
+    classFEl.setAttribute("aria-label", "Artifact preview");
     classFEl.setAttribute("data-path", currentArtifact.source_path);
     stopClassFViewer = mountClassFViewer(classFEl, {
       dataAccess,
@@ -397,14 +489,19 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         if (modeState.mode !== "annotate") return;
         openComposer({ body: "", intent: "content", target });
       },
+      onError: (message) => {
+        classFEl.setAttribute("role", "alert");
+        classFEl.removeAttribute("aria-label");
+        classFEl.textContent = `This preview couldn't be opened. ${message}`;
+      },
     });
   }
 
   // --- annotation composer (brief §7.3/§9): selection → composer → intent + comment → post.
   // ONE component; CSS places it in the margin at full width and as a bottom tray in compact. ---
 
-  function openComposer(record) {
-    composer = { record };
+  function openComposer(record, { returnFocus = null } = {}) {
+    composer = { record, returnFocus, draft: "", error: "", submitting: false };
     // Compact (bottom-tray) widths: keep the selected passage visible in the unobscured upper
     // area before the tray covers the bottom of the window (brief §7.3).
     if (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches) {
@@ -417,27 +514,43 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   function closeComposer() {
+    const returnFocus = composer?.returnFocus;
     composer = null;
     renderMargin();
+    queueMicrotask(() => {
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({ preventScroll: true });
+      }
+    });
   }
 
   async function submitComposer(input) {
     const body = input.value.trim();
-    if (!body || !currentSlug || !currentArtifact) return;
+    if (!body || !currentSlug || !currentArtifact || composer?.submitting) return;
+    composer.draft = input.value;
+    composer.error = "";
+    composer.submitting = true;
     const record = { ...composer.record, body };
-    const result = await dataAccess.postAnnotation(currentSlug, record);
-    const list = annotationsByPath.get(currentArtifact.source_path) ?? [];
-    // Delivery is a separate axis from status (R3): the POST response only picks the honest
-    // initial label — "Sent to session" vs "Waiting for a session" (brief §7.5). `id` is kept so
-    // the card's Remove action can withdraw the entry later.
-    list.push({ record, id: result?.id ?? null, state: result?.status === "delivered" ? "delivered" : "waiting" });
-    annotationsByPath.set(currentArtifact.source_path, list);
-    closeComposer();
+    try {
+      const result = await dataAccess.postAnnotation(currentSlug, record);
+      const list = annotationsByPath.get(currentArtifact.source_path) ?? [];
+      // Delivery is a separate axis from status (R3): the POST response only picks the honest
+      // initial label — "Sent to session" vs "Waiting for a session" (brief §7.5). `id` is kept so
+      // the card's Remove action can withdraw the entry later.
+      list.push({ record, id: result?.id ?? null, state: result?.status === "delivered" ? "delivered" : "waiting" });
+      annotationsByPath.set(currentArtifact.source_path, list);
+      closeComposer();
+    } catch (error) {
+      composer.submitting = false;
+      composer.error = error instanceof Error ? `Couldn't send this annotation: ${error.message}` : "Couldn't send this annotation. Try again.";
+      renderMargin();
+      queueMicrotask(() => marginEl.querySelector(".glosa-composer-input")?.focus());
+    }
   }
 
   function buildComposer() {
     const { record } = composer;
-    const form = el("form", { className: "glosa-composer" });
+    const form = el("form", { className: "glosa-composer", "aria-label": "New annotation" });
     if (record.target?.quote?.exact) {
       // Inner span so the anchor wash hugs the quoted words instead of striping the whole card.
       form.append(el("p", { className: "glosa-composer-quote" }, [el("span", { textContent: record.target.quote.exact })]));
@@ -459,6 +572,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       className: "glosa-composer-input",
       placeholder: "What should change here?",
       "aria-label": "Annotation",
+      name: "annotation",
+    });
+    input.value = composer.draft ?? "";
+    input.addEventListener("input", () => {
+      if (composer) composer.draft = input.value;
     });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closeComposer();
@@ -474,8 +592,16 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       textContent: "Send",
       onClick: () => void submitComposer(input),
     });
+    send.disabled = Boolean(composer.submitting);
+    const status = el("p", {
+      className: "glosa-composer-status",
+      role: "status",
+      "aria-live": "polite",
+      textContent: composer.error || (composer.submitting ? "Sending annotation…" : ""),
+    });
+    if (composer.error) status.setAttribute("data-error", "true");
     form.addEventListener("submit", (e) => e.preventDefault());
-    form.append(intents, input, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
+    form.append(intents, input, status, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
     return form;
   }
 
@@ -635,7 +761,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         "aria-label": "Go to annotation",
         onClick: () => {
           const cardEl = [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
-          cardEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+          const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          cardEl?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
           cardEl?.classList.add("glosa-annotation-flash");
           setTimeout(() => cardEl?.classList.remove("glosa-annotation-flash"), 1200);
         },
@@ -756,6 +883,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         el("p", { className: "glosa-annotation-state" }, [
           el("span", { className: "glosa-state-dot", "aria-hidden": "true" }),
           el("span", {
+            role: "status",
+            "aria-live": "polite",
             textContent: item.error
               ? "Couldn't remove — try again"
               : (STATE_LABELS[state] ?? state) + (item.attempts > 1 ? ` · nudged ×${item.attempts}` : ""),
@@ -813,6 +942,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         modeState = discard ? modeReducer(next, { type: "discard" }) : { ...next, mode: "edit", blocked: null };
         renderModeBar();
         renderContent();
+        queueMicrotask(() => modeBar.querySelector(`[data-mode="${modeState.mode}"]`)?.focus({ preventScroll: true }));
       });
       return;
     }
@@ -823,6 +953,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   editArea.addEventListener("input", () => {
     modeState = modeReducer(modeState, { type: "edited" });
+    editStatus.textContent = "";
+    editStatus.removeAttribute("data-error");
   });
 
   // Face switching. Rich → Source hands over the honest text: the serialized doc only when the
@@ -857,28 +989,39 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   });
 
   saveButton.addEventListener("click", async () => {
-    if (!currentSlug || !currentArtifact) return;
-    // The rich face serializes ONLY when the document changed (its own edits, or source-face
-    // edits carried in via `modeState.dirty`); a clean editor saves the artifact's exact bytes.
-    const content = !sourceFace && richEditor
-      ? richEditor.isDirty() || modeState.dirty
-        ? richEditor.getMarkdown()
-        : currentArtifact.content ?? ""
-      : editArea.value;
-    const saved = await dataAccess.putArtifact(currentSlug, currentArtifact.source_path, content, {
-      ifMatch: currentArtifact.source_sha256,
-    });
-    currentArtifact = { ...currentArtifact, content, ...saved };
-    modeState = modeReducer(modeState, { type: "saved" });
-    // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly — matches
-    // the brief's "on save → putArtifact → re-render" flow even though the route happens to
-    // already return it.
-    const fresh = await dataAccess.getArtifact(currentSlug, currentArtifact.source_path, { render: "html" });
-    currentArtifact = fresh;
-    contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
-    teardownRichFace(); // remount the rich face from the freshly saved content
-    renderModeBar();
-    renderContent();
+    if (!currentSlug || !currentArtifact || saveButton.disabled) return;
+    saveButton.disabled = true;
+    editStatus.removeAttribute("data-error");
+    editStatus.textContent = "Saving…";
+    try {
+      // The rich face serializes ONLY when the document changed (its own edits, or source-face
+      // edits carried in via `modeState.dirty`); a clean editor saves the artifact's exact bytes.
+      const content = !sourceFace && richEditor
+        ? richEditor.isDirty() || modeState.dirty
+          ? richEditor.getMarkdown()
+          : currentArtifact.content ?? ""
+        : editArea.value;
+      const saved = await dataAccess.putArtifact(currentSlug, currentArtifact.source_path, content, {
+        ifMatch: currentArtifact.source_sha256,
+      });
+      currentArtifact = { ...currentArtifact, content, ...saved };
+      modeState = modeReducer(modeState, { type: "saved" });
+      // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly — matches
+      // the brief's "on save → putArtifact → re-render" flow even though the route happens to
+      // already return it.
+      const fresh = await dataAccess.getArtifact(currentSlug, currentArtifact.source_path, { render: "html" });
+      currentArtifact = fresh;
+      contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
+      teardownRichFace(); // remount the rich face from the freshly saved content
+      editStatus.textContent = "Saved.";
+      renderModeBar();
+      renderContent();
+    } catch (error) {
+      editStatus.setAttribute("data-error", "true");
+      editStatus.textContent = error instanceof Error ? `Couldn't save this artifact: ${error.message}` : "Couldn't save this artifact. Try again.";
+    } finally {
+      saveButton.disabled = false;
+    }
   });
 
   // Annotate mode: a text selection inside the rendered content opens the composer with the
@@ -888,12 +1031,46 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
     const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
     if (!record) return;
-    openComposer(record);
+    let returnFocus = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
+    while (returnFocus?.parentElement && returnFocus.parentElement !== contentEl) returnFocus = returnFocus.parentElement;
+    openComposer(record, { returnFocus: returnFocus instanceof HTMLElement ? returnFocus : contentEl });
+  });
+
+  // Keyboard-equivalent annotation path: in Annotate mode each top-level rendered block is a
+  // focus target. Enter/Space selects that block and opens the exact same composer as a pointer
+  // selection, so annotation composition never depends on drag-selection alone.
+  contentEl.addEventListener("keydown", (event) => {
+    if ((event.key !== "Enter" && event.key !== " ") || modeState.mode !== "annotate") return;
+    const block = event.target;
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
+    event.preventDefault();
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let textNode = walker.nextNode();
+    while (textNode) {
+      textNodes.push(textNode);
+      textNode = walker.nextNode();
+    }
+    if (textNodes.length === 0) return;
+    const range = document.createRange();
+    range.setStart(textNodes[0], 0);
+    const lastTextNode = textNodes[textNodes.length - 1];
+    range.setEnd(lastTextNode, lastTextNode.textContent.length);
+    const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
+    if (record) openComposer(record, { returnFocus: block });
   });
 
   // ⌘1/2/3 mode switching (brief §9); Escape in the composer input is handled by the composer.
   // On `document` (a non-focusable div never receives key events); removed by unmount below.
   function onShortcut(e) {
+    if (e.key === "Escape" && root.getAttribute("data-nav-open") === "true") {
+      e.preventDefault();
+      setNavOpen(false, { restoreFocus: true });
+      return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const idx = ["1", "2", "3"].indexOf(e.key);
     if (idx === -1) return;
@@ -920,7 +1097,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   historyToggle.addEventListener("click", () => {
     historyVisible = !historyVisible;
     historyEl.hidden = !historyVisible;
-    historyToggle.setAttribute("aria-pressed", String(historyVisible));
+    historyToggle.setAttribute("aria-expanded", String(historyVisible));
     renderHistory();
   });
 
@@ -939,7 +1116,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   conversationToggle.addEventListener("click", () => {
     conversationVisible = !conversationVisible;
     conversationEl.hidden = !conversationVisible;
-    conversationToggle.setAttribute("aria-pressed", String(conversationVisible));
+    conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
     renderConversation();
   });
 
@@ -950,6 +1127,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   async function openArtifact(path) {
+    const returnToReading = compactNav() && root.getAttribute("data-nav-open") === "true";
     loading = true;
     composer = null;
     renderContent();
@@ -965,6 +1143,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       );
       renderModeBar();
       renderContent();
+      if (returnToReading) queueMicrotask(focusPreview);
       return;
     }
     loading = false;
@@ -974,6 +1153,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     renderModeBar();
     renderContent();
     renderHistory(); // the open pane, if any, should reflect the newly opened artifact
+    if (returnToReading) queueMicrotask(focusPreview);
   }
 
   async function refreshArtifactList() {
@@ -1050,13 +1230,32 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     }
   }
 
+  function showWorkspaceError(error) {
+    loading = false;
+    currentArtifact = null;
+    setEmpty(
+      "This workspace couldn't be opened.",
+      el("p", {
+        className: "glosa-empty-hint",
+        textContent: error instanceof Error ? error.message : "Try again, or reopen the workspace from the terminal.",
+      }),
+    );
+    renderModeBar();
+    renderContent();
+  }
+
   async function refreshWorkspaces() {
     const workspaces = await dataAccess.getWorkspaces();
     sidebarList.textContent = "";
     for (const w of workspaces) {
       sidebarList.append(
         el("li", {}, [
-          el("button", { type: "button", textContent: w.slug, "data-key": w.slug, onClick: () => selectWorkspace(w.slug) }),
+          el("button", {
+            type: "button",
+            textContent: w.slug,
+            "data-key": w.slug,
+            onClick: () => void selectWorkspace(w.slug).catch(showWorkspaceError),
+          }),
         ]),
       );
     }
@@ -1084,7 +1283,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   renderModeBar();
   renderContent();
-  void refreshWorkspaces();
+  void refreshWorkspaces().catch(showWorkspaceError);
 
   return () => {
     document.removeEventListener("keydown", onShortcut);

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title description">
+  <title id="title">glosa</title>
+  <desc id="description">A lowercase g whose olive marginal stroke becomes its descender.</desc>
+  <style>
+    .ink { fill: #303129; }
+    .accent { fill: #636b23; }
+    @media (prefers-color-scheme: dark) {
+      .ink { fill: #e8e9df; }
+      .accent { fill: #a4aa64; }
+    }
+  </style>
+  <path class="ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/>
+  <path class="accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/>
+</svg>

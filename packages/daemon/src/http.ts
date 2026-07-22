@@ -78,6 +78,8 @@ const SPA_ASSETS: Record<string, string> = {
   "bootstrap.js": "text/javascript; charset=utf-8",
   // The SPA's visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md).
   "app.css": "text/css; charset=utf-8",
+  // The product mark is a fixed, self-adapting SVG used by the shell and browser chrome.
+  "glosa-mark.svg": "image/svg+xml",
   // P3.3 additions — the class-R viewer + its ONE data-access module (R6), and idiomorph
   // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
   // bare-specifier import).

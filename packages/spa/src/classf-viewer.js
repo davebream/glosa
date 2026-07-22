@@ -152,6 +152,7 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, o
   // matches exactly what A3 §2 specifies as the literal iframe markup.
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("referrerpolicy", "no-referrer");
+  iframe.setAttribute("title", "Artifact preview");
   container.textContent = "";
   container.append(iframe);
 
@@ -216,7 +217,11 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, o
     iframe.src = url;
   }
 
-  void connect();
+  void connect().catch((error) => {
+    if (cancelled) return;
+    teardown();
+    onError?.(error instanceof Error ? error.message : "preview unavailable");
+  });
 
   return teardown;
 }
