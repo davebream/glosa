@@ -1,5 +1,5 @@
 {
-  "name": "glosa",
+  "name": "@davebream/glosa",
   "version": "0.1.0-alpha.0",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
@@ -16,6 +16,7 @@
     "packages/providers/codex/src",
     "packages/spa/src",
     "README.md",
+    "ROADMAP.md",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",

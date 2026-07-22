@@ -15,7 +15,7 @@ glosa is a local-first writing and review workspace for people working with AI c
 ## Install
 
 ```sh
-bun add --global glosa@alpha
+bun add --global @davebream/glosa@alpha
 ```
 
 Open glosa in the current workspace:
@@ -55,6 +55,12 @@ The implementation contract is in `CLAUDE.md`; the authoritative requirements ar
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for accepted product direction and the public
+[Glosa Roadmap project](https://github.com/users/davebream/projects/5) for live execution status.
+The requirements under `docs/` are the normative v1 technical contract, not the current work queue.
 
 ## License
 

@@ -66,6 +66,7 @@ function assertPackContents(files: string[]): void {
     "packages/providers/codex/src/index.ts",
     "packages/spa/src/index.ts",
     "README.md",
+    "ROADMAP.md",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",

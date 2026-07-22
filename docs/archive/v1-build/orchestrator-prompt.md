@@ -1,5 +1,8 @@
 # glosa — overnight orchestrator prompt (for an Opus session)
 
+> **Archived:** This procedure records how the completed v1 build was run. Do not execute or resume
+> this loop. Current work comes from accepted GitHub issues linked by [`ROADMAP.md`](../../../ROADMAP.md).
+
 Runs **unattended overnight**. No human is awake — the loop keeps building autonomously, reasons out
 its own decisions (via a debate subagent), **logs** everything, never blocks the whole night on one
 task, keeps `main` always green, hands off to a fresh session when context fills, and leaves a morning
@@ -9,14 +12,14 @@ verification subagents.**
 ## How to launch (order matters)
 1. `cd ~/code/glosa`, start a **new Opus** session.
 2. **Paste the Orchestrator prompt FIRST** (below). Let it run Phase 0 (probes) and confirm it has read
-   the spec + `docs/BUILD-PLAN.md` and started the loop.
+   the spec + `docs/archive/v1-build/BUILD-PLAN.md` and started the loop.
 3. **Then run the `/goal` line** (within the first minute — it'll be busy). Order matters: the `/goal`
    text acts as an immediate directive, so the full prompt must already be in context before you set it.
-4. Go to sleep. In the morning read `docs/OVERNIGHT-LOG.md` + `git log`.
+4. Go to sleep. In the morning read `docs/archive/v1-build/OVERNIGHT-LOG.md` + `git log`.
 
 ## /goal line
 ```
-/goal Keep executing docs/BUILD-PLAN.md for glosa v1 autonomously in order: every ⬜ task implemented with real (fault/edge, not happy-path) tests passing and committed to main, ✅-ticked, and OVERNIGHT-LOG.md updated. Not done while any unblocked ⬜ task remains. Only clear when every task is ✅ done-green-committed OR ⛔ logged in OVERNIGHT-LOG.md as blocked-needs-Dawid with the reason. Hand off to a fresh session before context exhausts rather than degrading.
+/goal Keep executing docs/archive/v1-build/BUILD-PLAN.md for glosa v1 autonomously in order: every ⬜ task implemented with real (fault/edge, not happy-path) tests passing and committed to main, ✅-ticked, and OVERNIGHT-LOG.md updated. Not done while any unblocked ⬜ task remains. Only clear when every task is ✅ done-green-committed OR ⛔ logged in OVERNIGHT-LOG.md as blocked-needs-Dawid with the reason. Hand off to a fresh session before context exhausts rather than degrading.
 ```
 
 ---
@@ -30,7 +33,7 @@ implementation. **Every substantial implementation or test task goes to a Sonnet
 thoroughness beats token thrift tonight because no human catches a bad pass before morning.
 
 ### The spec + plan are done — execute, don't re-invent
-- **`docs/requirements.md`** = authoritative build input. **`docs/BUILD-PLAN.md`** = the reviewed,
+- **`docs/requirements.md`** = authoritative build input. **`docs/archive/v1-build/BUILD-PLAN.md`** = the reviewed,
   ordered task list (checkboxes) — **your worklist and progress source of truth.** Work its ⬜ tasks in
   order. The scaffold is pre-seeded and `bun test` is already green — extend, don't recreate.
 - **`docs/appendices/A1–A6`** = normative deep contracts; the appendix named on a task IS its spec.
@@ -48,13 +51,13 @@ thoroughness beats token thrift tonight because no human catches a bad pass befo
 Stack (fixed): Bun + TypeScript, no build step, no heavy frontend framework, macOS-only. Monorepo `packages/{daemon,spa,providers/claude-code,providers/codex,adapters/jethro,cli}`.
 
 ### Durable memory (you WILL be compacted — survive it)
-`docs/BUILD-PLAN.md` (checkboxes) + `docs/OVERNIGHT-LOG.md` (running narrative) are your external
+`docs/archive/v1-build/BUILD-PLAN.md` (checkboxes) + `docs/archive/v1-build/OVERNIGHT-LOG.md` (running narrative) are your external
 memory. After any compaction or whenever unsure: re-read both, then continue from the next ⬜. Never
 trust in-context memory over these files. Keep both current — they're how you and I know the state.
 
 ### PHASE 0 — probes (do yourself, cheaply)
 - `bun --version` (≥1.2.7), `git status`, confirm `bun test` green. Read `requirements.md` fully; read
-  `BUILD-PLAN.md`; skim appendix headings. Create `docs/OVERNIGHT-LOG.md` (header + start appending).
+  `BUILD-PLAN.md`; skim appendix headings. Create `docs/archive/v1-build/OVERNIGHT-LOG.md` (header + start appending).
 - **cmux is your terminal** (`cmux tree` to orient; `cmux identify` to learn your own surface — never
   target it). Use a spawned surface for a long-running dev server; prefer plain `bun test` in Bash for
   test gating. **Close surfaces you spawn** when done. (cmux is also how you hand off — see below.)
@@ -110,7 +113,7 @@ your own responses degrading. Don't wait to actually run out. Handoff steps:
    # arm persistence FIRST (no operator to time it), then bootstrap:
    cmux send --surface surface:<n> "<the /goal line verbatim, single line>"
    cmux send-key --surface surface:<n> Enter
-   cmux send --surface surface:<n> "Resume the glosa overnight build. Read docs/orchestrator-prompt.md, docs/BUILD-PLAN.md, docs/OVERNIGHT-LOG.md, and .claude/session.md, then continue the autonomous loop from the next ⬜ task. I am asleep — do not ask me anything; make/log decisions per the prompt."
+   cmux send --surface surface:<n> "Resume the glosa overnight build. Read docs/archive/v1-build/orchestrator-prompt.md, docs/archive/v1-build/BUILD-PLAN.md, docs/archive/v1-build/OVERNIGHT-LOG.md, and .claude/session.md, then continue the autonomous loop from the next ⬜ task. I am asleep — do not ask me anything; make/log decisions per the prompt."
    cmux send-key --surface surface:<n> Enter
    ```
    (Note: the fresh session gets full instructions from the files it's told to read; the `restore` skill

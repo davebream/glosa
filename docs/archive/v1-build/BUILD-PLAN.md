@@ -1,5 +1,8 @@
 # glosa — build plan
 
+> **Archived:** This completed v1 execution checklist is historical evidence. Do not use it as the
+> current roadmap or resume it as a work queue. See [`ROADMAP.md`](../../../ROADMAP.md).
+
 Ordered, dependency-respecting task list derived from `requirements.md §5`, split per the appendices.
 `⬜` todo · `🔄` in progress · `✅` done+green+committed · `⛔` blocked-needs-Dawid (see OVERNIGHT-LOG).
 The orchestrator ticks these as it goes; this file is the source of truth for progress. Each task names
