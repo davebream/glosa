@@ -206,6 +206,40 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(content.innerHTML).toContain("Title");
   });
 
+  test("compact tools collapse secondary actions behind one keyboard-accessible trigger", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const unmount = mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const tools = root.querySelector(".glosa-tools") as any;
+    const trigger = root.querySelector(".glosa-tools-trigger") as any;
+    const menu = root.querySelector(".glosa-tools-menu") as any;
+    expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
+    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(4);
+
+    trigger.click();
+    await Promise.resolve();
+    expect(tools.dataset.open).toBe("true");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(dom.document.activeElement as any).toBe(menu.querySelector("button:not(:disabled)") as any);
+
+    (menu.querySelector(".glosa-history-toggle") as any).click();
+    await Promise.resolve();
+    expect(tools.dataset.open).toBe("false");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(dom.document.activeElement as any).toBe(trigger);
+
+    trigger.click();
+    await Promise.resolve();
+    menu.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as any);
+    await Promise.resolve();
+    expect(tools.dataset.open).toBe("false");
+    expect(dom.document.activeElement as any).toBe(trigger);
+
+    unmount();
+  });
+
   test("switching to Edit mode + Source face shows the textarea with the artifact's raw content; Save calls putArtifact", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
