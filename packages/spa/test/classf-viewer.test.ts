@@ -258,6 +258,7 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
     expect(iframe).not.toBeNull();
     expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(iframe!.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(iframe!.getAttribute("title")).toBe("Artifact preview");
     expect(da.mintCalls).toEqual([["ws-1", "output/docs/notes.html"]]);
     // A3 §2: `src`, not `srcdoc` — srcdoc would give the document the PARENT's origin as its
     // base, defeating the whole "opaque origin from src, not same-origin from srcdoc" design.

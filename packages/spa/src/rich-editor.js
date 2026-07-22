@@ -128,6 +128,11 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
 
   const view = new EditorView(mountEl, {
     state,
+    attributes: {
+      role: "textbox",
+      "aria-label": "Artifact editor",
+      "aria-multiline": "true",
+    },
     dispatchTransaction(tr) {
       view.updateState(view.state.apply(tr));
       if (tr.docChanged) {
