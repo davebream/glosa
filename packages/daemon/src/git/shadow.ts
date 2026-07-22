@@ -54,7 +54,7 @@ function gitFailedError(argv: string[], result: GitResult): GitFailedError {
 }
 
 /** Builds the env every shadow-git call runs under: `ANTHROPIC_API_KEY` scrubbed (never let a
- * spawned child inherit it — docs/CLAUDE.md invariant 5, mirrors `home.ts#buildChildEnv`); and
+ * spawned child inherit it — AGENTS.md invariant 5, mirrors `home.ts#buildChildEnv`); and
  * **every ambient `GIT_*` var dropped during the copy** — not just `GIT_CONFIG_*`. This is a hard
  * isolation requirement, not a nicety: `runGit` always passes `--git-dir`/`--work-tree` on argv, so
  * shadow-git needs ZERO inherited git vars, and a leaked one actively breaks correctness:

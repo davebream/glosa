@@ -31,7 +31,7 @@ function encodePathSegments(path) {
 // ---------------------------------------------------------------------------------------------
 // SSE client (A1 §8) — mirrors packages/daemon/src/sse.ts's wire format/parser byte-for-byte.
 // Can't be a literal cross-package import of that file: it's TypeScript, and glosa's SPA ships as
-// plain, un-transpiled ES modules straight to the browser ("no build step", repo CLAUDE.md), so
+// plain, un-transpiled ES modules straight to the browser ("no build step", repo AGENTS.md), so
 // no browser can execute it directly. Kept in sync by test/sse-wire-compat.test.ts, which feeds
 // THIS parser real frames produced by sse.ts's own `encodeSseFrame` — a genuine cross-package
 // wire-compatibility check even though the code itself is necessarily duplicated.

@@ -15,6 +15,7 @@ the root [`ROADMAP.md`](../ROADMAP.md); live execution status belongs in the pub
 | `appendices/A6-cli-platform.md` | Normative: command surface, exit codes, `init` merge/uninstall, platform pins, checkpoint/restore. |
 | `decisions.md` | The decision log — why things are the way they are. |
 | `options.md` | Product rationale / how the design was arrived at. |
+| `accessibility.md` | Repeatable WCAG-oriented browser checks and the remaining manual assistive-technology checklist. |
 | `research/codex-review.md` | The adversarial review that turned v1 → v2 (32 findings). |
 | `research/jsonl-ui-components.md` | Landscape of Claude Code JSONL/stream-json UI components. |
 | `research/electron-vs-tauri.md` | Shell research (v1 ships no shell; relevant to a future decision). |

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 // Vendored verbatim from `idiomorph@0.7.4`'s `dist/idiomorph.esm.js` (the `idiomorph` npm
 // dependency in the repo root `package.json` pins the version this is a copy of). Vendored,
-// not imported by bare specifier, because glosa's SPA has no build step (repo CLAUDE.md) — a
+// not imported by bare specifier, because glosa's SPA has no build step (repo AGENTS.md) — a
 // browser `<script type="module">` can't resolve a bare `"idiomorph"` specifier without an
 // import map or bundler, so this file is served byte-for-byte as `/app/vendor/idiomorph.js`
 // (packages/daemon/src/http.ts's `SPA_ASSETS` allowlist), the same pattern bootstrap.js itself

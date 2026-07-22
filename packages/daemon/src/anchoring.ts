@@ -11,7 +11,7 @@
 // normalized substring search; Class F anchors via a chunk manifest supplied by the caller (the
 // real manifest wiring is P4.1 — this module only implements the resolution LOGIC given one).
 //
-// Generic-core invariant (CLAUDE.md #1): this module knows nothing about any specific pipeline or
+// Generic-core invariant (AGENTS.md #1): this module knows nothing about any specific pipeline or
 // producer. A5's worked pipeline_feedback example uses a concrete `{adapter, component}` pair
 // purely for illustration — that's not a mandate to hardcode a domain adapter's identity into the
 // daemon core. Callers that DO know (a content adapter, or the route composing this resolver)
