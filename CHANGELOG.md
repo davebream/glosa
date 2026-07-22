@@ -9,11 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Public, maintainer-owned roadmap backed by a live GitHub Project and release milestone.
+- Durable `WorkspaceMetadataDescriptor` v1 registration through HTTP, CLI, and MCP.
+- Explicit CLI/MCP session binding and an action-aware attention badge/tray with structured results.
 
 ### Changed
 
 - Archived the completed autonomous v1 build records and documented AI-assisted contribution
   disclosure and ownership requirements.
+- Bumped the additive HTTP contract to v1.1 and made Claude Channels explicitly optional when the
+  audited hook/MCP fallback succeeds.
+- Replaced live domain-specific integration guidance with the declarative public boundary.
 
 ## [0.1.0-alpha.0] - 2026-07-21
 

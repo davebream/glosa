@@ -3,7 +3,7 @@
 Scope: normative contract for `packages/daemon`'s public HTTP surface. Covers transport,
 versioning, routes, status codes, size limits, SSE resync, and class-F capability-URL issuance.
 Does NOT redefine the `attention_request` state machine (F12), the class-F bridge/postMessage
-protocol or CSP header value (F03/F18), or the jethro adapter's manifest resolution logic (F11) —
+protocol or CSP header value (F03/F18), or manifest resolution logic (F11) —
 those are cross-referenced, not duplicated.
 
 ---
@@ -89,7 +89,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.0", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.1", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -97,7 +97,7 @@ Bearer required. Lists the live registry (R1 sources: live-session cwds, `.glosa
 dirs, manually opened dirs).
 - **200**
 ```json
-[{ "slug": "glosa-a1b2c3", "path": "/Users/dawid/code/glosa",
+[{ "slug": "workspace-a1b2c3", "path": "/Users/example/Documents/workspace",
    "last_seen": "2026-07-20T10:00:00Z", "has_attention": false }]
 ```
 No POST route to create workspaces in v1 — workspace creation is CLI-only (`glosa open <dir>`,
@@ -125,8 +125,8 @@ Class F artifacts return metadata only — actual HTML is never served through t
 ```
 - **200** (class F)
 ```json
-{ "source_path": "output/sermon/speech-notes-2026-07-20.html", "source_sha256": "…",
-  "class": "F", "manifest_path": "output/sermon/chunks-2026…/manifest.json" }
+{ "source_path": "output/document/rendered-preview-2026-07-20.html", "source_sha256": "…",
+  "class": "F", "manifest_path": "output/document/chunks-2026…/manifest.json" }
 ```
 - **400 invalid-path** — path escapes workspace root or fails the tracked-artifact rule.
 - **404 not-found** — path within workspace but no such artifact.
@@ -180,36 +180,70 @@ Same connection/heartbeat/resync mechanics.
   "no session registered" rather than treating this as a stream error).
 
 ### 5.9 `GET /w/:slug/inbox`
-Bearer required. Summary for the sidebar badge + attention tray. Full `attention_request`
-lifecycle payload/response schema is F12's scope — this route's response envelope is stable,
-its `attention[]` item shape is not finalized here.
+Bearer required. Summary for the sidebar badge and attention tray. Immutable request fields are
+read from the inbox entry; status and terminal detail are derived only from journal replay.
 - **200**
 ```json
-{ "pending_count": 2, "attention": [{ "id": "inb-…", "created_at": "…", "status": "pending" }] }
+{
+  "pending_count": 2,
+  "attention": [{
+    "id": "inb-…", "created_at": "…", "status": "delivered",
+    "message": "Please review this draft", "action": "review", "target": "draft.md"
+  }]
+}
 ```
 
-### 5.10 `POST /w/:slug/inbox/:id/response`
-Bearer required, Origin-gated. Human response to an `attention_request`. Body/response schema
-deferred to F12 (this entry only fixes the route's existence, method, and generic status codes).
-- **200** on success, **404 not-found** unknown `:id`, **409** if `:id` is already in a terminal
-  status (F12 owns the exact transition table).
+### 5.10 `POST /w/:slug/inbox/:id/seen`
+Bearer required, Origin-gated. Advances a delivered attention request to `seen`. If presentation and
+the user action race, the daemon appends any required `delivered` then `seen` transitions under the
+workspace mutex. Repeats are idempotent.
+- **200** `{ "id":"inb-…", "status":"seen" }`
+- **404 not-found** for an unknown id or a non-attention entry.
 
-### 5.11 `POST /w/:slug/session-binding`
-Bearer required, Origin-gated. Explicit user pick from the session picker (R2: "the session the
-SPA has explicitly bound to the workspace").
+### 5.11 `POST /w/:slug/inbox/:id/response`
+Bearer required, Origin-gated. Completes attention through `seen→done` and stores the structured result
+in `done.detail`.
+```json
+{ "outcome": "done | approved | changes_requested", "response": "optional bounded text" }
+```
+For action `review`, only `approved` and `changes_requested` are valid; generic actions require `done`.
+The optional response is at most 4096 UTF-8 bytes. Repeating a completed request returns its original
+terminal result and appends no journal event.
+- **200** `{ "id":"inb-…", "status":"done", "detail":{...} }`
+- **400 validation-failed** for an invalid action/outcome pair or oversized response.
+- **404 not-found** for an unknown id or a non-attention entry.
+
+### 5.12 `POST /w/:slug/session-binding`
+Bearer required, Origin-gated. Explicitly binds a registered session to the artifact workspace. This
+is the authoritative routing path for CLI, MCP, and SPA callers; cwd ancestry remains a fallback.
 ```json
 { "session_id": "2b7f19a3-…" }
 ```
 - **200** `{ "bound": true, "session_id": "2b7f19a3-…" }`
 - **404 not-found** — `:slug` unknown, or `session_id` not a live registry entry.
 
-### 5.12 `GET /w/:slug/capability/:artifactPath`
+### 5.13 `POST /w/:slug/capability/:artifactPath`
 Bearer required, Origin-gated. Issues a capability URL for a class-F artifact. Full mechanics in §7.
 - **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "expires_in_s": 600 }`
 - **400 invalid-path** — path confinement failure, or artifact is not class F.
 - **404 not-found** — no such artifact.
 
-### 5.13 Inbox presentation and delivery transaction
+### 5.14 Workspace metadata
+
+The descriptor schema is `WorkspaceMetadataDescriptor` v1 from R7. These routes never include the
+workspace canonical path or pairing token in their response.
+
+- `GET /w/:slug/metadata` — **200** `{descriptor}`; **404** when none is active.
+- `PUT /w/:slug/metadata` — Bearer + Origin; validates the entire descriptor before an atomic replace.
+  Same id replaces; different id returns **409 conflict** and leaves the active descriptor unchanged.
+- `DELETE /w/:slug/metadata` — Bearer + Origin; idempotently clears the descriptor and returns
+  `{cleared:true}`.
+
+Set and clear publish a best-effort `metadata` SSE invalidation without a journal cursor. Clients then
+reload artifacts through the normal data-access module. Persisted metadata is reloaded when a workspace
+opens, so daemon restart does not require re-registration.
+
+### 5.15 Inbox presentation and delivery transaction
 
 All routes require Bearer authentication; POST routes are Origin-gated.
 
@@ -246,13 +280,13 @@ from a **separate loopback port** with no ambient credential.
 
 - The daemon runs a second `Bun.serve` listener on a second port (`GLOSA_CLASSF_PORT`, default
   `<GLOSA_PORT>+1`), bound `127.0.0.1` only, serving `GET /doc/:token/<path...>`.
-- `GET /w/:slug/capability/:artifactPath` (§5.12, main origin, Bearer-authed) mints a token:
+- `POST /w/:slug/capability/:artifactPath` (§5.13, main origin, Bearer-authed and Origin-gated) mints a token:
   256-bit random, stored server-side in an in-memory map
   `token → {slug, artifactDirRealPath, artifactBasename, expiresAt}`. **TTL 600s (10 min).**
   Restart invalidates all tokens (in-memory only — acceptable for a local tool).
 - **The capability is directory-scoped and multi-request, NOT single-use.** This is required
-  for correctness: a class-F document (e.g. speech-notes HTML) loads sibling assets — its own
-  `sermon-notes.css`, `annotate.js`, images — so the token must serve the document **and** its
+  for correctness: a class-F document (e.g. rendered-preview HTML) loads sibling assets — its own
+  `document-notes.css`, `annotate.js`, images — so the token must serve the document **and** its
   siblings for the whole time the iframe is displayed. A single-use/one-request token cannot
   serve the CSS after the initial HTML load. (This supersedes an earlier single-use draft;
   reconciled with A3 §1, which is authoritative on the class-F origin.)
@@ -347,7 +381,7 @@ data: <json>
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major-version mismatch; terminal-status conflict on inbox response | any route (contract check runs before route logic), `POST .../inbox/:id/response` |
+| 409 | contract major mismatch; active metadata owned by another id | any route, `PUT .../metadata` |
 | 413 | request body over 1 MiB | any POST |
 | 500 | unhandled daemon error | any route |
 
@@ -355,7 +389,7 @@ data: <json>
 
 ## Summary of what's out of scope here (do not re-derive)
 
-- `attention_request` full payload/state machine, `--wait` semantics → F12.
+- `attention_request` transition ownership and `--wait` semantics → A5 F23.
 - Exact CSP header value, sandbox token list, postMessage schema/nonce handshake → F03/F18.
 - Manifest→source-range resolution algorithm for class-F annotations → F11.
 - Transcript tailer's partial-line/rotation/corruption handling → F16 (the API only sees its
