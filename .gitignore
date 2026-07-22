@@ -23,6 +23,7 @@ build/
 .claude/session.md
 
 # local agent/tool state (serena, impeccable etc.)
+.conductor/settings.local.toml
 .serena/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
