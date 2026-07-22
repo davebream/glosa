@@ -34,6 +34,7 @@ const PUBLIC_COMMANDS = new Set([
   "inbox",
   "metadata",
   "session",
+  "token",
 ]);
 
 type GlobalValues = {
@@ -516,6 +517,31 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
   );
 
+  const token = lazyHandler(
+    {
+      name: "token",
+      description: "Rotate or revoke the local pairing credential",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "Token action: rotate or revoke" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      if (values.action !== "rotate" && values.action !== "revoke") {
+        const message = `unsupported token action '${String(values.action)}'`;
+        if (values.json) printJsonEnvelope(usageEnvelope("token", message));
+        else process.stderr.write(`glosa token: ${message}\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const tokenModule = await import("./token.ts");
+      const result = tokenModule.runToken(values.action);
+      tokenModule.printTokenResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   const hook = lazyHandler(
     {
       name: "hook",
@@ -614,6 +640,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
     inbox,
     metadata,
     session,
+    token,
     hook,
     mcp,
     __daemon: daemon,

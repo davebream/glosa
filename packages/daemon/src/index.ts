@@ -43,7 +43,17 @@ export { createApiFetch, createClassFFetch } from "./http.ts";
 export type { ApiContext, HandshakeBody } from "./http.ts";
 export { internalErrorResponse, problem } from "./problem.ts";
 export type { ProblemSlug } from "./problem.ts";
-export { ensureToken, loadToken, mintToken, tokenMatches, tokenPath } from "./token.ts";
+export {
+  ensureToken,
+  loadToken,
+  mintToken,
+  revokeToken,
+  rotateToken,
+  TokenAuthority,
+  tokenMatches,
+  tokenPath,
+} from "./token.ts";
+export type { TokenMutationDeps, TokenSource } from "./token.ts";
 export * from "./bus/index.ts";
 // P5.1 — the CLI's `doctor` needs the SAME matcher the daemon uses for its "workspace" check
 // (non-empty tracked set), rather than reimplementing a second, driftable copy of the include/

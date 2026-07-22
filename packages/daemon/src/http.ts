@@ -56,6 +56,7 @@ import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.
 import type { JournalEvent } from "./bus/journal.ts";
 import { buildDeliveryPresentation } from "./delivery/presentation.ts";
 import type { DeliverableEntry } from "./providers/interface.ts";
+import type { TokenSource } from "./token.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -111,7 +112,9 @@ const SPA_ASSETS: Record<string, string> = {
 export interface ApiContext {
   port: number;
   classFPort: number;
-  token: string | null;
+  /** A static token remains accepted for narrow tests. Production passes TokenAuthority so each
+   * request sees the current on-disk generation without restarting the daemon. */
+  token: string | null | TokenSource;
   instanceId: string;
   startedAt: string;
   workspaceIndex: WorkspaceIndex;
@@ -154,6 +157,27 @@ function checkHost(req: Request, port: number): boolean {
   return req.headers.get("Host") === `127.0.0.1:${port}`;
 }
 
+function currentToken(token: ApiContext["token"]): string | null {
+  return typeof token === "object" && token !== null ? token.current() : token;
+}
+
+function tokenGenerationSignal(token: ApiContext["token"]): AbortSignal | undefined {
+  return typeof token === "object" && token !== null ? token.generationSignal() : undefined;
+}
+
+function tokenSnapshot(token: ApiContext["token"]): { token: string | null; signal?: AbortSignal } {
+  return typeof token === "object" && token !== null ? token.snapshot() : { token };
+}
+
+function lifecycleSignal(ctx: ApiContext, authSignal?: AbortSignal): AbortSignal | undefined {
+  const signals = [ctx.shutdownSignal, authSignal ?? tokenGenerationSignal(ctx.token)].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  if (signals.length === 0) return undefined;
+  if (signals.length === 1) return signals[0];
+  return AbortSignal.any(signals);
+}
+
 function withHeaders(res: Response, extra: Record<string, string>): Response {
   const headers = new Headers(res.headers);
   for (const [key, value] of Object.entries(extra)) headers.set(key, value);
@@ -192,7 +216,7 @@ async function readBodyCapped(req: Request): Promise<{ ok: true; body: Uint8Arra
 
 interface RouteMatch {
   routeClass: RouteClass;
-  handle: (req: Request, server?: BunServer) => Response | Promise<Response>;
+  handle: (req: Request, server?: BunServer, authSignal?: AbortSignal) => Response | Promise<Response>;
 }
 
 function handleHandshake(ctx: ApiContext): () => Response {
@@ -201,7 +225,7 @@ function handleHandshake(ctx: ApiContext): () => Response {
       contract_version: CONTRACT_VERSION,
       daemon_version: DAEMON_VERSION,
       build_id: BUILD_ID,
-      paired: ctx.token !== null,
+      paired: currentToken(ctx.token) !== null,
       protocol_version: PROTOCOL_VERSION,
       instance_id: ctx.instanceId,
       pid: process.pid,
@@ -1482,13 +1506,19 @@ function handleNotImplemented(ctx: ApiContext, slug: string, pathname: string, n
  * then hands off to stream.ts, which owns the actual SSE mechanics. Kept a thin wrapper here so
  * stream.ts never has to know about `ApiContext`/slug resolution (avoids an http.ts <-> stream.ts
  * import cycle — see stream.ts's own header comment). */
-async function handleStream(ctx: ApiContext, slug: string, req: Request, server: BunServer | undefined): Promise<Response> {
+async function handleStream(
+  ctx: ApiContext,
+  slug: string,
+  req: Request,
+  server: BunServer | undefined,
+  authSignal?: AbortSignal,
+): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
   const bus = await resolveBus(ctx, resolved.entry.canonical_path);
   return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server, {
-    shutdownSignal: ctx.shutdownSignal,
+    shutdownSignal: lifecycleSignal(ctx, authSignal),
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry.canonical_path, listener)
       : undefined,
@@ -1504,7 +1534,13 @@ async function handleStream(ctx: ApiContext, slug: string, req: Request, server:
  * conversation mirror, so this just takes the first; a future picker is additive. `transcript_
  * path` is confined under `$CLAUDE_CONFIG_DIR` (A2 §F16/A6 §F30's doctor check) BEFORE this route
  * ever opens it — outside that root is refused (400), never tailed. */
-function handleTranscriptStream(ctx: ApiContext, slug: string, req: Request, server: BunServer | undefined): Response {
+function handleTranscriptStream(
+  ctx: ApiContext,
+  slug: string,
+  req: Request,
+  server: BunServer | undefined,
+  authSignal?: AbortSignal,
+): Response {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
@@ -1521,7 +1557,7 @@ function handleTranscriptStream(ctx: ApiContext, slug: string, req: Request, ser
   }
 
   return createTranscriptStreamResponse(confined.realPath, req, server, {
-    shutdownSignal: ctx.shutdownSignal,
+    shutdownSignal: lifecycleSignal(ctx, authSignal),
   });
 }
 
@@ -1688,12 +1724,18 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   // P3.2: artifact/journal SSE stream (A1 §5.5, full protocol §8).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
     const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: (req, server) => handleStream(ctx, slug, req, server) };
+    return {
+      routeClass: "authed-read",
+      handle: (req, server, authSignal) => handleStream(ctx, slug, req, server, authSignal),
+    };
   }
   // P4.2: conversation-mirror SSE stream (A1 §5.8/§8, A2 §F16).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/stream$/))) {
     const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: (req, server) => handleTranscriptStream(ctx, slug, req, server) };
+    return {
+      routeClass: "authed-read",
+      handle: (req, server, authSignal) => handleTranscriptStream(ctx, slug, req, server, authSignal),
+    };
   }
   // P4.2: the conversation viewer's out-of-band composer (F32/R6) — not in A1 §5, see
   // handleComposerSend's own docstring.
@@ -1786,7 +1828,12 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         return withHeaders(problem(404, "not-found", "no such route", undefined, url.pathname), csp);
       }
 
-      const authResult = authorizeRequest(req, { routeClass: route.routeClass, port: ctx.port, token: ctx.token });
+      const authSnapshot = tokenSnapshot(ctx.token);
+      const authResult = authorizeRequest(req, {
+        routeClass: route.routeClass,
+        port: ctx.port,
+        token: authSnapshot.token,
+      });
       if (!authResult.ok) {
         const title = authResult.status === 401 ? "missing or invalid bearer token" : "origin not allowed";
         return withHeaders(problem(authResult.status, authResult.slug, title, undefined, url.pathname), csp);
@@ -1824,7 +1871,17 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         });
       }
 
-      const res = await route.handle(effectiveReq, server);
+      const res = await route.handle(effectiveReq, server, authSnapshot.signal);
+      if (authSnapshot.signal?.aborted && route.routeClass !== "tokenless-handshake") {
+        // A credential generation changed after this request passed auth. Streams already bind
+        // to the same signal; clearing here also closes the narrow mint-after-rotation race where
+        // a stale request could otherwise create a capability after the generation subscriber ran.
+        ctx.capabilityStore.clear();
+        return withHeaders(
+          problem(401, "unauthorized", "missing or invalid bearer token", undefined, url.pathname),
+          csp,
+        );
+      }
       const withCsp = withHeaders(res, csp);
       if (contractWarning) withCsp.headers.set("X-Contract-Warning", "stale-minor");
       return withCsp;
@@ -1849,12 +1906,17 @@ export function createClassFFetch(ctx: {
   port: number;
   spaPort: number;
   capabilityStore: CapabilityStore;
+  tokenSource?: TokenSource;
 }): (req: Request) => Promise<Response> {
   const csp = classFCspHeaders(ctx.spaPort);
 
   return async (req) => {
     try {
       if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
+
+      // Refresh before capability lookup. TokenAuthority's generation subscriber clears the
+      // shared store, so a rotate/revoke invalidates already-minted iframe URLs too.
+      ctx.tokenSource?.current();
 
       const url = new URL(req.url);
       const routeMatch = url.pathname.match(/^\/doc\/([^/]+)\/(.+)$/);

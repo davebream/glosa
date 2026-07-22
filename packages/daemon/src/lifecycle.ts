@@ -20,7 +20,7 @@ import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
 import { createApiFetch, createClassFFetch } from "./http.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { internalErrorResponse } from "./problem.ts";
-import { loadToken } from "./token.ts";
+import { TokenAuthority } from "./token.ts";
 import { CapabilityStore } from "./capability.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
@@ -117,7 +117,7 @@ export async function bootDaemon(): Promise<never> {
   const lockFile = lockPath(home);
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
-  const token = loadToken(home);
+  const tokenAuthority = new TokenAuthority(home, (message) => log(home, message));
   const backend = buildBackend(home);
   const shutdownController = new AbortController();
   // ONE store, shared by both listeners (P4.1, A1 §7): a token minted on the SPA/API origin
@@ -125,11 +125,12 @@ export async function bootDaemon(): Promise<never> {
   // independent stores would mean every capability 404s on the very listener that's supposed to
   // serve it.
   const capabilityStore = new CapabilityStore();
+  tokenAuthority.subscribe(() => capabilityStore.clear());
 
   const apiFetch = createApiFetch({
     port,
     classFPort,
-    token,
+    token: tokenAuthority,
     instanceId,
     startedAt,
     workspaceIndex: backend.workspaceIndex,
@@ -164,7 +165,12 @@ export async function bootDaemon(): Promise<never> {
   };
   await acquireLockOrExit(home, lockFile, record, server);
 
-  const classFFetch = createClassFFetch({ port: classFPort, spaPort: port, capabilityStore });
+  const classFFetch = createClassFFetch({
+    port: classFPort,
+    spaPort: port,
+    capabilityStore,
+    tokenSource: tokenAuthority,
+  });
   const classFServer = await bindClassFOrExit(
     home,
     classFPort,
@@ -184,7 +190,10 @@ export async function bootDaemon(): Promise<never> {
     // long-lived responses from holding the drain open forever.
     const drained = await drainDaemonServers(
       [server, classFServer],
-      () => shutdownController.abort(),
+      () => {
+        shutdownController.abort();
+        tokenAuthority.close();
+      },
       () => backend.busRegistry.closeAll(),
     );
     if (!drained) {
