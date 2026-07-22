@@ -151,6 +151,22 @@ describe("createDataAccess — request shape", () => {
     }
   });
 
+  test("401 clears the stale credential and requests the unpaired screen exactly once", async () => {
+    const storage = fakeStorage({ glosa_token: "stale" });
+    let unauthorized = 0;
+    const da = createDataAccess({
+      storage,
+      fetchFn: async () => jsonResponse(401, { title: "missing or invalid bearer token" }),
+      onUnauthorized: () => unauthorized++,
+    });
+
+    await expect(da.getArtifacts("ws")).rejects.toThrow(DataAccessError);
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+
+    expect(storage.getItem("glosa_token")).toBeNull();
+    expect(unauthorized).toBe(1);
+  });
+
   test("no token in storage → no Authorization header sent", async () => {
     const calls: RequestInit[] = [];
     const fetchFn = async (_path: string, init: RequestInit) => {
@@ -369,5 +385,29 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
 
     expect(requests).toHaveLength(2);
     expect(new Headers(requests[1]!.headers).has("Last-Event-ID")).toBe(false);
+  });
+
+  test("401 stops reconnecting, removes the stale token, and returns the tab to unpaired", async () => {
+    const storage = fakeStorage({ glosa_token: "stale" });
+    let requests = 0;
+    let stop: (() => void) | null = null;
+    await new Promise<void>((resolve) => {
+      stop = openStream({
+        slug: "ws",
+        storage,
+        fetchFn: async () => {
+          requests += 1;
+          return jsonResponse(401, { title: "missing or invalid bearer token" });
+        },
+        sleepFn: async () => {
+          throw new Error("401 must not enter reconnect backoff");
+        },
+        onUnauthorized: resolve,
+      });
+    });
+    stop!();
+
+    expect(requests).toBe(1);
+    expect(storage.getItem("glosa_token")).toBeNull();
   });
 });

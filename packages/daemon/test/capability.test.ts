@@ -53,6 +53,19 @@ describe("CapabilityStore.lookup", () => {
     expect(store.lookup("0".repeat(64))).toBeNull();
   });
 
+  test("clear invalidates every outstanding browser capability at once", () => {
+    const store = new CapabilityStore();
+    const first = store.mint(input());
+    const second = store.mint(input({ slug: "other" }));
+    expect(store.size()).toBe(2);
+
+    store.clear();
+
+    expect(store.size()).toBe(0);
+    expect(store.lookup(first.token)).toBeNull();
+    expect(store.lookup(second.token)).toBeNull();
+  });
+
   test("a token past its expiresAt → null, same as unknown (A1 §7: no distinguishing signal)", () => {
     const store = new CapabilityStore();
     const now = 1_000_000;

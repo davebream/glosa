@@ -24,6 +24,19 @@ must be restored by the integration after session registration or daemon restart
 glosa remains local-first and makes no telemetry or external runtime calls. Channels are an
 optional delivery optimization. Hook, turn-boundary, and MCP delivery remain supported fallbacks.
 
+## Token lifecycle is a local filesystem authority
+
+Rotation and revocation mutate the single mode-0600 token file directly instead of calling an API
+route. This keeps recovery available when the daemon is stopped or its in-memory token state is stale,
+and avoids a second persisted epoch whose update could not be atomic with the token file. Atomic rename
+or unlink is the durable linearization point; the daemon derives an in-memory generation from the
+complete current value.
+
+The daemon combines a directory watcher with request-time refresh. A generation change aborts existing
+credential-bound streams and clears class-F capabilities; subsequent Bearer checks accept only the new
+value. The CLI never returns the replacement token. `glosa open` remains the explicit browser-pairing
+boundary and recovery path.
+
 ## Ownership rule
 
 A change that needs integration-specific code belongs outside this repository. A change belongs in
