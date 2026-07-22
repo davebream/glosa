@@ -219,12 +219,22 @@ export function openTranscriptStream(
     storage,
     onEvent,
     onReconnect,
+    onStatus,
     backoffFn = computeBackoffMs,
     sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randFn = Math.random,
   } = {},
 ) {
-  return openEventStream(`/w/${encodeURIComponent(slug)}/transcript/stream`, { fetchFn, storage, onEvent, onReconnect, backoffFn, sleepFn, randFn });
+  return openEventStream(`/w/${encodeURIComponent(slug)}/transcript/stream`, {
+    fetchFn,
+    storage,
+    onEvent,
+    onReconnect,
+    onStatus,
+    backoffFn,
+    sleepFn,
+    randFn,
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,8 +353,8 @@ export function createDataAccess(deps = {}) {
     },
     /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
      * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */
-    openTranscriptStream(slug, { onEvent, onReconnect } = {}) {
-      return openTranscriptStream(slug, { fetchFn, storage, onEvent, onReconnect });
+    openTranscriptStream(slug, { onEvent, onReconnect, onStatus } = {}) {
+      return openTranscriptStream(slug, { fetchFn, storage, onEvent, onReconnect, onStatus });
     },
     /** `POST /w/:slug/transcript/compose` (P4.2, F32/R6) — the conversation viewer's out-of-band
      * composer: sends a NEW user message to whichever session is bound to this workspace, without

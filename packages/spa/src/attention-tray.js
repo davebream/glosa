@@ -20,6 +20,7 @@ export function mountAttentionTray(host, { dataAccess }) {
   let loading = false;
   let loadError = "";
   let destroyed = false;
+  let refreshPromise = null;
 
   const trigger = node("button", {
     className: "glosa-attention-trigger",
@@ -85,6 +86,7 @@ export function mountAttentionTray(host, { dataAccess }) {
         try {
           await dataAccess.respondToAttention(slug, entry.id, { outcome, response: response.value });
           await refresh();
+          if (open) tray.querySelector("button, textarea")?.focus({ preventScroll: true });
         } catch (error) {
           response.disabled = false;
           for (const candidate of actions.querySelectorAll("button")) candidate.disabled = false;
@@ -117,8 +119,20 @@ export function mountAttentionTray(host, { dataAccess }) {
     tray.append(list);
   }
 
-  async function refresh() {
+  function focusedControl() {
+    const active = document.activeElement;
+    if (!active || !tray.contains(active)) return null;
+    if (active.classList.contains("glosa-attention-close")) return ".glosa-attention-close";
+    const ariaLabel = active.getAttribute("aria-label");
+    if (ariaLabel) return `[aria-label="${CSS.escape(ariaLabel)}"]`;
+    const dataLabel = active.getAttribute("data-label");
+    if (dataLabel) return `[data-label="${CSS.escape(dataLabel)}"]`;
+    return null;
+  }
+
+  async function performRefresh() {
     if (!slug || destroyed) return;
+    const restoreFocus = focusedControl();
     loading = true;
     loadError = "";
     render();
@@ -135,7 +149,16 @@ export function mountAttentionTray(host, { dataAccess }) {
     } finally {
       loading = false;
       render();
+      if (restoreFocus) tray.querySelector(restoreFocus)?.focus({ preventScroll: true });
     }
+  }
+
+  function refresh() {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = performRefresh().finally(() => {
+      refreshPromise = null;
+    });
+    return refreshPromise;
   }
 
   function setOpen(next, restoreFocus = false) {

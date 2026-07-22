@@ -211,6 +211,9 @@ export function mountConversationPane(container, { dataAccess, slug }) {
         // rotation mid-session) rather than plumbing a new signal through the data-access surface
         // for it.
       },
+      onStatus: (status) => {
+        if (status === "down") showMirrorUnavailable();
+      },
     });
   }
 
