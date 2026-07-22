@@ -13,7 +13,7 @@ function node(tag, props = {}, children = []) {
 
 const STATUS_LABELS = { open: "Waiting", delivered: "Delivered", seen: "Seen" };
 
-export function mountAttentionTray(host, { dataAccess }) {
+export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
   let slug = null;
   let open = false;
   let entries = [];
@@ -36,7 +36,8 @@ export function mountAttentionTray(host, { dataAccess }) {
     hidden: true,
     "aria-labelledby": "glosa-attention-title",
   });
-  host.append(trigger, tray);
+  host.append(trigger);
+  overlayHost.append(tray);
 
   function updateTrigger() {
     const badge = trigger.querySelector(".glosa-attention-badge");
@@ -191,7 +192,8 @@ export function mountAttentionTray(host, { dataAccess }) {
     refresh,
     destroy() {
       destroyed = true;
-      host.textContent = "";
+      trigger.remove();
+      tray.remove();
     },
   };
 }
