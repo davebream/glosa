@@ -21,6 +21,7 @@
   --border: oklch(0.9 0.005 110);
   --border-strong: oklch(0.82 0.008 110);
   --primary: oklch(0.5 0.1 110);            /* workbench accent — actions, selection, focus */
+  --focus: var(--primary);
   --primary-hover: oklch(0.44 0.1 110);
   --on-primary: oklch(0.99 0 0);
   --anchor-wash: oklch(0.94 0.032 120);     /* annotation anchor highlight — calm sage, not highlighter */
@@ -104,6 +105,18 @@
    panel the viewer state machine hid. */
 [hidden] {
   display: none !important;
+}
+
+.glosa-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 html {
@@ -438,11 +451,26 @@ button {
 
 .glosa-history-toggle,
 .glosa-conversation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
   border-radius: 6px;
   color: var(--muted);
   font-weight: 500;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-history-toggle svg,
+.glosa-conversation-toggle svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .glosa-history-toggle:hover,
@@ -451,8 +479,8 @@ button {
   color: var(--ink);
 }
 
-.glosa-history-toggle[aria-pressed="true"],
-.glosa-conversation-toggle[aria-pressed="true"] {
+.glosa-history-toggle[aria-expanded="true"],
+.glosa-conversation-toggle[aria-expanded="true"] {
   background: var(--surface-sunken);
   color: var(--ink);
   font-weight: 600;
@@ -818,6 +846,17 @@ button {
   text-underline-offset: 2px;
 }
 
+/* Annotate mode exposes each rendered block as an explicit keyboard target. The focus ring is
+   intentionally inset so enlarged text and narrow layouts never acquire horizontal overflow. */
+.glosa-content .glosa-annotatable-block {
+  border-radius: 4px;
+}
+
+.glosa-content .glosa-annotatable-block:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
 /* Class-F iframe fills the main area edge to edge. */
 .glosa-classf {
   flex: 1;
@@ -828,6 +867,15 @@ button {
   flex: 1;
   border: none;
   width: 100%;
+}
+
+.glosa-classf[role="alert"] {
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  color: var(--danger);
+  font-weight: 600;
+  text-align: center;
 }
 
 /* Empty / loading states (brief §8). */
@@ -921,8 +969,13 @@ button {
 
 .glosa-edit-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.glosa-edit-status {
+  margin-right: auto;
 }
 
 .glosa-edit-topbar {
@@ -1498,6 +1551,21 @@ button {
   min-height: 1em;
 }
 
+.glosa-history-status[data-error="true"],
+.glosa-edit-status[data-error="true"],
+.glosa-composer-status[data-error="true"],
+.glosa-conv-status[data-error="true"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.glosa-edit-status,
+.glosa-composer-status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin: 0;
+}
+
 .glosa-history-compare-current {
   margin-bottom: var(--space-3);
   padding: var(--space-1) var(--space-3);
@@ -1509,6 +1577,13 @@ button {
 
 .glosa-history-compare-current:hover {
   background: var(--surface-sunken);
+}
+
+.glosa-history-compare-current:disabled {
+  color: var(--faint);
+  border-color: var(--border);
+  background: var(--surface-sunken);
+  cursor: not-allowed;
 }
 
 .glosa-history-list {
@@ -1810,6 +1885,85 @@ button {
     box-shadow: 0 -4px 16px oklch(0.24 0.01 110 / 0.12);
     padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
     animation: glosa-tray-up var(--dur-base) var(--ease-out);
+  }
+}
+
+/* Phone widths and 200% desktop zoom need a structural second row. Chrome collapses before the
+   manuscript does, keeping every command visible without horizontal scrolling. */
+@media (max-width: 640px) {
+  :root {
+    --topbar-height: 5.75rem;
+  }
+
+  .glosa-topbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: 2.75rem 2.75rem;
+    column-gap: var(--space-2);
+    row-gap: 0;
+  }
+
+  .glosa-brand-mark {
+    display: none;
+  }
+
+  .glosa-nav-toggle {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .glosa-topbar-title {
+    display: none;
+  }
+
+  .glosa-topbar-actions {
+    grid-column: 3;
+    grid-row: 1;
+    gap: var(--space-1);
+  }
+
+  .glosa-history-toggle > span,
+  .glosa-conversation-toggle > span {
+    display: none;
+  }
+
+  .glosa-modebar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
+  }
+
+  .glosa-modebar button,
+  .glosa-history-toggle,
+  .glosa-conversation-toggle {
+    min-height: 2.25rem;
+  }
+
+  .glosa-content,
+  .glosa-skeleton,
+  .glosa-edit-wrap {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .glosa-history,
+  .glosa-conversation {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .glosa-history-row {
+    flex-wrap: wrap;
+  }
+
+  .glosa-history-kind {
+    flex: 1 1 10rem;
+  }
+
+  .glosa-history-row time {
+    margin-left: 2rem;
   }
 }
 

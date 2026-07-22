@@ -43,7 +43,7 @@ function el(tag, props = {}, children = []) {
     if (key === "onClick") node.addEventListener("click", value);
     else if (key === "onKeydown") node.addEventListener("keydown", value);
     else if (key === "className") node.className = value;
-    else if (key.startsWith("data-")) node.setAttribute(key, value);
+    else if (key.startsWith("data-") || key.startsWith("aria-") || key === "role") node.setAttribute(key, value);
     else node[key] = value;
   }
   for (const child of children) node.append(child);
@@ -103,15 +103,20 @@ function renderItem(item) {
 export function mountConversationPane(container, { dataAccess, slug }) {
   container.textContent = "";
 
-  const statusEl = el("p", { className: "glosa-conv-status", hidden: true });
-  const listEl = el("div", { className: "glosa-conv-list" });
-  const composerInput = el("textarea", { className: "glosa-conv-composer-input", placeholder: "Send a message (out of band — does not edit the transcript)" });
+  const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
+  const listEl = el("div", { className: "glosa-conv-list", role: "region", "aria-label": "Conversation transcript" });
+  const composerInput = el("textarea", {
+    className: "glosa-conv-composer-input",
+    name: "conversation-message",
+    placeholder: "Send a message (out of band — does not edit the transcript)",
+    "aria-label": "Message to the agent session",
+  });
   const composerSend = el("button", { className: "glosa-conv-composer-send", type: "button", textContent: "Send" });
   // P4.3 seam: attention state (e.g. "Claude is waiting for input") comes from the provider's own
   // Notification hook, NOT a heuristic derived from transcript activity/staleness — this element
   // exists as the mount point a future P4.3 wiring flips, never inferred here (R6: "Attention
   // state from the provider's Notification hook, not a transcript stall heuristic").
-  const attentionEl = el("p", { className: "glosa-conv-attention", hidden: true });
+  const attentionEl = el("p", { className: "glosa-conv-attention", hidden: true, role: "status", "aria-live": "polite" });
 
   container.append(
     el("h3", { textContent: "Conversation" }),
@@ -133,6 +138,7 @@ export function mountConversationPane(container, { dataAccess, slug }) {
 
   function showMirrorUnavailable() {
     mirrorAvailable = false;
+    statusEl.removeAttribute("data-error");
     statusEl.hidden = false;
     statusEl.textContent = "mirror unavailable — use the terminal";
     render();
@@ -143,16 +149,24 @@ export function mountConversationPane(container, { dataAccess, slug }) {
     mirrorAvailable = true;
     statusEl.hidden = true;
     statusEl.textContent = "";
+    statusEl.removeAttribute("data-error");
     render();
   }
 
   async function send() {
     const text = composerInput.value.trim();
-    if (!text || !slug) return;
+    if (!text || !slug || composerSend.disabled) return;
     composerSend.disabled = true;
+    statusEl.hidden = false;
+    statusEl.removeAttribute("data-error");
+    statusEl.textContent = "Sending message…";
     try {
       await dataAccess.sendComposerMessage(slug, text);
       composerInput.value = "";
+      statusEl.textContent = "Message sent.";
+    } catch (error) {
+      statusEl.setAttribute("data-error", "true");
+      statusEl.textContent = error instanceof Error ? `Message couldn't be sent: ${error.message}` : "Message couldn't be sent. Try again.";
     } finally {
       composerSend.disabled = false;
     }
