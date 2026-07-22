@@ -6,10 +6,19 @@
 // Code session) — everything here proves the LADDER LOGIC with every transport injected.
 import { describe, expect, test } from "bun:test";
 import { ClaudeCodeProvider, type SessionLivenessSource } from "../src/provider.ts";
-import type { SessionBinding } from "@glosa/daemon";
+import type { DeliverableEntry, SessionBinding } from "@glosa/daemon";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
-const ENTRY = { id: "inb-1", kind: "annotation" as const };
+const ENTRY: DeliverableEntry = {
+  id: "inb-1",
+  kind: "annotation",
+  status: "pending",
+  text: "glosa annotation inb-1\nartifact: notes.md\ncomment:\nAct on this.",
+  bytes: 64,
+  detail: { artifact_path: "notes.md" },
+  truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+  retrieval: { command: "glosa inbox get inb-1", mcp_tool: "glosa_inbox_get" },
+};
 
 function liveness(map: Record<string, "alive" | "stale"> = {}): SessionLivenessSource {
   return { liveness: (id) => map[id] ?? "stale" };
@@ -75,10 +84,14 @@ describe("ClaudeCodeProvider — AgentProvider conformance", () => {
 describe("ClaudeCodeProvider.deliver — the R4 ladder", () => {
   test("rung 1: an accepted channel notification delivers via 'channel', no fallback attempted", async () => {
     let calledSignalWatcher = false;
+    const channelEntries: DeliverableEntry[] = [];
     const provider = new ClaudeCodeProvider({
       liveness: liveness(),
       channelsEnabled: () => true,
-      sendChannel: async () => true,
+      sendChannel: async (_session, entry) => {
+        channelEntries.push(entry);
+        return true;
+      },
       watcherArmed: () => true,
       signalWatcher: async () => {
         calledSignalWatcher = true;
@@ -87,6 +100,7 @@ describe("ClaudeCodeProvider.deliver — the R4 ladder", () => {
     });
     const result = await provider.deliver(SESSION, ENTRY);
     expect(result).toEqual({ via: "channel", outcome: "transport_accepted" });
+    expect(channelEntries[0]).toBe(ENTRY); // exact bounded presentation; no provider-side summary
     expect(calledSignalWatcher).toBe(false);
   });
 

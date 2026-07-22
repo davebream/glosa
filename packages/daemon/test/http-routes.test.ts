@@ -358,6 +358,7 @@ describe("A1 §5 route catalog", () => {
 
   function annotationBody(overrides: Record<string, unknown> = {}) {
     return {
+      artifact_path: "notes.md",
       body: "consider tightening this",
       intent: "content",
       target: {

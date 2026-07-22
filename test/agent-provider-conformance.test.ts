@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import type { AgentProvider, SessionBinding } from "@glosa/daemon";
+import type { AgentProvider, DeliverableEntry, SessionBinding } from "@glosa/daemon";
 import { ClaudeCodeProvider } from "@glosa/providers-claude-code";
 import { CodexProvider } from "@glosa/providers-codex";
 
@@ -12,7 +12,16 @@ import { CodexProvider } from "@glosa/providers-codex";
 // (not inside either provider package) precisely so it can import both without either depending on
 // the other.
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
-const ENTRY = { id: "inb-1", kind: "annotation" as const };
+const ENTRY: DeliverableEntry = {
+  id: "inb-1",
+  kind: "annotation",
+  status: "pending",
+  text: "glosa annotation inb-1\nartifact: notes.md\ncomment:\nAct on this.",
+  bytes: 64,
+  detail: { artifact_path: "notes.md" },
+  truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+  retrieval: { command: "glosa inbox get inb-1", mcp_tool: "glosa_inbox_get" },
+};
 
 const providers: { name: string; make: () => AgentProvider }[] = [
   {

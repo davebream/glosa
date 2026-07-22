@@ -141,7 +141,9 @@ Query param `?since=<cursor>` is the documented fallback for `Last-Event-ID` (se
 Bearer required, Origin-gated (state-changing route, per R5). Body per R3's `annotation`
 payload shape.
 ```json
-{ "body": "consider tightening this", "intent": "content",
+{ "artifact_path": "07_manuscript.md",
+  "captured_rendered_sha256": "<sha256>",
+  "body": "consider tightening this", "intent": "content",
   "target": { "chunk_id": "chunk-004",
               "quote": { "exact": "…", "prefix": "…", "suffix": "…" },
               "position": { "start": 1204, "end": 1240 } } }
@@ -150,7 +152,7 @@ payload shape.
 ```json
 { "id": "inb-1721470000-a1c2", "status": "pending" }
 ```
-- **400 validation-failed** — missing `body`/`intent`/`target.quote.exact`, or `intent` not
+- **400 validation-failed** — missing `artifact_path`/`body`/`intent`/`target.quote.exact`, or `intent` not
   one of `content|classification|style`.
 - **404 not-found** — unknown `:slug`.
 - **413 payload-too-large** — body over 1 MiB (§4).
@@ -206,6 +208,23 @@ Bearer required, Origin-gated. Issues a capability URL for a class-F artifact. F
 - **200** `{ "url": "http://127.0.0.1:4647/doc/<token>/<artifactBasename>", "expires_in_s": 600 }`
 - **400 invalid-path** — path confinement failure, or artifact is not class F.
 - **404 not-found** — no such artifact.
+
+### 5.13 Inbox presentation and delivery transaction
+
+All routes require Bearer authentication; POST routes are Origin-gated.
+
+- `GET /w/:slug/inbox/:id/presentation?cursor=<opaque>` returns one bounded actionable page for
+  CLI retrieval. It is read-only and does not append a delivery attempt.
+- `POST /api/sessions/:id/drain` prepares up to eight oldest-first actionable entries and returns
+  `{delivery_id, drained, count, has_more}`. Prepared entries are reserved for 30 seconds; no
+  `presented` event exists yet.
+- `POST /api/sessions/:id/deliveries/:deliveryId/ack` with
+  `{outcome:"presented"|"failed", error?:string}` consumes the reservation and appends the attempt.
+  Missing/expired tokens return **409 conflict** and the entries remain eligible.
+
+Each `drained[]` item is the R3 discriminated presentation object and is capped at 16 KiB UTF-8;
+the serialized batch is capped at 32 KiB including separators. Continuations use the same opaque
+cursor accepted by the retrieval GET and `glosa_inbox_get` MCP tool.
 
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 

@@ -38,6 +38,12 @@ function mcpPathOf(dir: string): string {
 function manifestPathOf(dir: string): string {
   return join(dir, ".claude", ".glosa-init.json");
 }
+function codexHooksPathOf(dir: string): string {
+  return join(dir, ".codex", "hooks.json");
+}
+function codexConfigPathOf(dir: string): string {
+  return join(dir, ".codex", "config.toml");
+}
 function readJson(path: string): any {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -71,6 +77,8 @@ describe("glosa init — fresh install", () => {
     expect(result.data.channel_command).not.toContain("--channels");
     expect(result.data.files.settings.created).toBe(true);
     expect(result.data.files.mcp.created).toBe(true);
+    expect(result.data.files.codex_hooks.created).toBe(true);
+    expect(result.data.files.codex_config.created).toBe(true);
     expect(result.data.files.settings.backedUp).toBe(false); // nothing to back up — file didn't exist
     expect(result.data.files.mcp.backedUp).toBe(false);
 
@@ -97,11 +105,23 @@ describe("glosa init — fresh install", () => {
     const mcp = readJson(mcpPathOf(dir));
     expect(mcp.mcpServers.glosa).toEqual({ type: "stdio", command: "glosa", args: ["mcp"] });
 
+    const codexHooks = readJson(codexHooksPathOf(dir));
+    expect(codexHooks.hooks.SessionStart[0].hooks[0].command).toBe("glosa hook session-start --provider codex");
+    expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe("glosa hook user-prompt-submit --provider codex");
+    expect(codexHooks.hooks.Stop[0].hooks[0].command).toBe("glosa hook stop --provider codex");
+    expect(codexHooks.hooks.Notification).toBeUndefined();
+    const codexConfig = readFileSync(codexConfigPathOf(dir), "utf8");
+    expect(codexConfig).toContain("[mcp_servers.glosa]");
+    expect(codexConfig).toContain('command = "glosa"');
+    expect(codexConfig).toContain('args = ["mcp"]');
+
     const manifest = readJson(manifestPathOf(dir));
     expect(manifest.version).toBe(1);
     expect(manifest.glosa_bin).toEqual(BIN_A);
     expect(manifest.files.settings.created).toBe(true);
     expect(manifest.files.mcp.created).toBe(true);
+    expect(manifest.files.codex_hooks.created).toBe(true);
+    expect(manifest.files.codex_config.created).toBe(true);
     expect(manifest.files.settings.inserted.length).toBe(6); // 2 SessionStart + 4 singles
     expect(manifest.files.mcp.inserted).toEqual([{ pointer: "/mcpServers/glosa", sha256: expect.any(String) }]);
   });
@@ -298,6 +318,23 @@ describe("glosa init — foreign MCP 'glosa' key", () => {
   });
 });
 
+describe("glosa init — Codex TOML merge", () => {
+  test("preserves foreign tables while adding and later uninstalling only glosa's marked MCP block", async () => {
+    const dir = freshDir();
+    mkdirSync(join(dir, ".codex"), { recursive: true });
+    const foreign = '[mcp_servers.other]\ncommand = "other"\n';
+    writeFileSync(codexConfigPathOf(dir), foreign);
+    const installed = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    expect(installed.ok).toBe(true);
+    expect(readFileSync(codexConfigPathOf(dir), "utf8")).toContain(foreign.trim());
+    expect(readFileSync(codexConfigPathOf(dir), "utf8")).toContain("[mcp_servers.glosa]");
+
+    const removed = await runUninstall({ dir });
+    expect(removed.ok).toBe(true);
+    expect(readFileSync(codexConfigPathOf(dir), "utf8")).toBe(foreign);
+  });
+});
+
 describe("glosa init — --print/--dry-run", () => {
   test("returns a unified diff and writes NOTHING to disk", async () => {
     const dir = freshDir();
@@ -375,6 +412,23 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
     expect(readFileSync(settingsPathOf(dir), "utf8")).toBe(settingsBefore);
     expect(readFileSync(mcpPathOf(dir), "utf8")).toBe(mcpBefore);
     expect(readFileSync(manifestPathOf(dir), "utf8")).toBe(manifestBefore);
+  });
+
+  test("a late Codex config failure rolls back Claude and Codex writes as one transaction", async () => {
+    const dir = freshDir();
+    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const tracked = [settingsPathOf(dir), mcpPathOf(dir), codexHooksPathOf(dir), codexConfigPathOf(dir), manifestPathOf(dir)];
+    const before = new Map(tracked.map((path) => [path, readFileSync(path, "utf8")]));
+    const result = await runInit({
+      dir,
+      resolveGlosaBin: () => ({ command: "glosa-v3", args: [], mode: "path" }),
+      writeFileAtomic: (path, content) => {
+        if (path === codexConfigPathOf(dir)) throw new Error("simulated Codex config write failure");
+        writeFileSync(path, content);
+      },
+    });
+    expect(result.ok).toBe(false);
+    for (const path of tracked) expect(readFileSync(path, "utf8")).toBe(before.get(path)!);
   });
 });
 

@@ -239,6 +239,20 @@ function desiredHooks(bin: GlosaBinResolution): DesiredHook[] {
   ];
 }
 
+function desiredCodexHooks(bin: GlosaBinResolution): DesiredHook[] {
+  return [
+    { event: "SessionStart", role: "session-start", command: binCommandString(bin, "hook", "session-start", "--provider", "codex"), timeout: 10 },
+    { event: "SessionEnd", role: "session-end", command: binCommandString(bin, "hook", "session-end", "--provider", "codex"), timeout: 5 },
+    {
+      event: "UserPromptSubmit",
+      role: "user-prompt-submit",
+      command: binCommandString(bin, "hook", "user-prompt-submit", "--provider", "codex"),
+      timeout: 10,
+    },
+    { event: "Stop", role: "stop", command: binCommandString(bin, "hook", "stop", "--provider", "codex"), timeout: 10 },
+  ];
+}
+
 /** A6 §F26's in-band ownership signature — EXTENDED (P4.3 review fix) to recognize BOTH GLOSA_BIN
  * forms, not just the bare-`glosa` one: a command literally starting `glosa hook ` (path mode),
  * OR the no-build-step fallback `bun run --silent <anything>/packages/cli/src/main.ts hook
@@ -246,7 +260,7 @@ function desiredHooks(bin: GlosaBinResolution): DesiredHook[] {
  * deliberate — this is what lets a REINSTALL at a different glosaRoot still recognize its own
  * prior hooks. Returns the recognized `<role>` suffix, or `null` for anything else (a foreign
  * tool's command never matches either form). */
-const HOOK_ROLE_RE = /^(?:glosa hook (\S+)|bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))$/;
+const HOOK_ROLE_RE = /^(?:glosa hook (\S+)|bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))(?: --provider codex)?$/;
 
 function hookRoleOf(command: unknown): string | null {
   if (typeof command !== "string") return null;
@@ -378,10 +392,17 @@ interface FileManifest {
   inserted: InsertedNode[];
 }
 
+interface TextBlockManifest {
+  path: string;
+  created: boolean;
+  backup: string | null;
+  sha256: string;
+}
+
 export interface OwnershipManifest {
   version: 1;
   glosa_bin: GlosaBinResolution;
-  files: { settings: FileManifest; mcp: FileManifest };
+  files: { settings: FileManifest; mcp: FileManifest; codex_hooks?: FileManifest; codex_config?: TextBlockManifest };
 }
 
 function readManifest(path: string): OwnershipManifest | null {
@@ -479,7 +500,7 @@ export interface InitFileResult {
 }
 
 export interface InitData {
-  files: { settings: InitFileResult; mcp: InitFileResult };
+  files: { settings: InitFileResult; mcp: InitFileResult; codex_hooks: InitFileResult; codex_config: InitFileResult };
   channel_command: string;
   glosa_bin: GlosaBinResolution;
 }
@@ -501,11 +522,71 @@ function defaultGlosaRoot(): string {
 
 function paths(dir: string) {
   const claudeDir = join(dir, ".claude");
+  const codexDir = join(dir, ".codex");
   return {
     settingsPath: join(claudeDir, "settings.json"),
     mcpPath: join(dir, ".mcp.json"),
     manifestPath: join(claudeDir, ".glosa-init.json"),
+    codexHooksPath: join(codexDir, "hooks.json"),
+    codexConfigPath: join(codexDir, "config.toml"),
   };
+}
+
+const CODEX_MCP_START = "# glosa:begin mcp_servers.glosa";
+const CODEX_MCP_END = "# glosa:end mcp_servers.glosa";
+
+function desiredCodexMcpBlock(bin: GlosaBinResolution): string {
+  const args = [...bin.args, "mcp"].map((arg) => JSON.stringify(arg)).join(", ");
+  return [
+    CODEX_MCP_START,
+    "[mcp_servers.glosa]",
+    `command = ${JSON.stringify(bin.command)}`,
+    `args = [${args}]`,
+    CODEX_MCP_END,
+  ].join("\n");
+}
+
+function textSha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function findManagedCodexBlock(raw: string): { start: number; end: number; block: string } | null {
+  const start = raw.indexOf(CODEX_MCP_START);
+  if (start < 0) return null;
+  const markerEnd = raw.indexOf(CODEX_MCP_END, start);
+  if (markerEnd < 0) return null;
+  const end = markerEnd + CODEX_MCP_END.length;
+  return { start, end, block: raw.slice(start, end) };
+}
+
+function removeForeignGlosaTomlTable(raw: string): string {
+  const lines = raw.split("\n");
+  const start = lines.findIndex((line) => /^\s*\[mcp_servers\.glosa\]\s*(?:#.*)?$/.test(line));
+  if (start < 0) return raw;
+  let end = start + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end] as string)) end += 1;
+  lines.splice(start, end - start);
+  return lines.join("\n");
+}
+
+function mergeCodexConfig(
+  rawInput: string | null,
+  bin: GlosaBinResolution,
+  opts: { force: boolean; owned: boolean },
+): { changed: boolean; conflict: boolean; content: string; block: string } {
+  const raw = rawInput ?? "";
+  const desired = desiredCodexMcpBlock(bin);
+  const managed = findManagedCodexBlock(raw);
+  if (managed) {
+    if (!opts.owned && !opts.force) return { changed: false, conflict: true, content: raw, block: managed.block };
+    if (managed.block === desired) return { changed: false, conflict: false, content: raw, block: desired };
+    return { changed: true, conflict: false, content: `${raw.slice(0, managed.start)}${desired}${raw.slice(managed.end)}`, block: desired };
+  }
+  if (/^\s*\[mcp_servers\.glosa\]\s*(?:#.*)?$/m.test(raw) && !opts.force) {
+    return { changed: false, conflict: true, content: raw, block: desired };
+  }
+  const base = opts.force ? removeForeignGlosaTomlTable(raw).trimEnd() : raw.trimEnd();
+  return { changed: true, conflict: false, content: `${base}${base ? "\n\n" : ""}${desired}\n`, block: desired };
 }
 
 function unifiedDiff(path: string, before: string | null, after: string): string {
@@ -532,12 +613,14 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
   const glosaRoot = opts.glosaRoot ?? defaultGlosaRoot();
   const bin = (opts.resolveGlosaBin ?? defaultResolveGlosaBin)(glosaRoot);
   const write = opts.writeFileAtomic ?? writeAtomic;
-  const { settingsPath, mcpPath, manifestPath } = paths(opts.dir);
+  const { settingsPath, mcpPath, manifestPath, codexHooksPath, codexConfigPath } = paths(opts.dir);
 
   const emptyData = (): InitData => ({
     files: {
       settings: { path: settingsPath, created: false, changed: false, backedUp: false },
       mcp: { path: mcpPath, created: false, changed: false, backedUp: false },
+      codex_hooks: { path: codexHooksPath, created: false, changed: false, backedUp: false },
+      codex_config: { path: codexConfigPath, created: false, changed: false, backedUp: false },
     },
     channel_command: CHANNEL_COMMAND,
     glosa_bin: bin,
@@ -545,9 +628,11 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
 
   let settingsParsed: ParsedFile;
   let mcpParsed: ParsedFile;
+  let codexHooksParsed: ParsedFile;
   try {
     settingsParsed = parseJsonFile(settingsPath);
     mcpParsed = parseJsonFile(mcpPath);
+    codexHooksParsed = parseJsonFile(codexHooksPath);
   } catch (err) {
     const e = err as InvalidJsonError;
     return {
@@ -562,11 +647,18 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
 
   const existingManifest = readManifest(manifestPath);
   const mcpOwned = existingManifest?.files.mcp.inserted.some((i) => i.pointer === "/mcpServers/glosa") ?? false;
+  const codexConfigRaw = existsSync(codexConfigPath) ? readFileSync(codexConfigPath, "utf8") : null;
+  const codexConfigOwned = existingManifest?.files.codex_config !== undefined;
 
   const settingsMerge = mergeSettingsHooks(settingsParsed.obj, desiredHooks(bin));
   const mcpMerge = mergeMcp(mcpParsed.obj, bin, { force: opts.force ?? false, owned: mcpOwned });
+  const codexHooksMerge = mergeSettingsHooks(codexHooksParsed.obj, desiredCodexHooks(bin));
+  const codexConfigMerge = mergeCodexConfig(codexConfigRaw, bin, {
+    force: opts.force ?? false,
+    owned: codexConfigOwned,
+  });
 
-  if (mcpMerge.conflict) {
+  if (mcpMerge.conflict || codexConfigMerge.conflict) {
     return {
       ok: false,
       exitCode: 6,
@@ -576,13 +668,13 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       error: {
         code: "mcp-key-conflict",
         kind: "foreign_config_conflict",
-        message: `${mcpPath}: an existing "glosa" MCP server entry was not created by glosa`,
+        message: `${mcpMerge.conflict ? mcpPath : codexConfigPath}: an existing "glosa" MCP server entry was not created by glosa`,
         hint: "pass --force to overwrite it",
       },
     };
   }
 
-  const anyChanged = settingsMerge.changed || mcpMerge.changed;
+  const anyChanged = settingsMerge.changed || mcpMerge.changed || codexHooksMerge.changed || codexConfigMerge.changed;
 
   if (opts.print) {
     // Each file's diff is gated on ITS OWN `merge.changed` — not `anyChanged` (P4.3 review fix
@@ -597,6 +689,12 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
     if (mcpMerge.changed) {
       diff += unifiedDiff(mcpPath, mcpParsed.raw, `${JSON.stringify(mcpParsed.obj, null, mcpParsed.indent)}\n`);
     }
+    if (codexHooksMerge.changed) {
+      diff += unifiedDiff(codexHooksPath, codexHooksParsed.raw, `${JSON.stringify(codexHooksParsed.obj, null, codexHooksParsed.indent)}\n`);
+    }
+    if (codexConfigMerge.changed) {
+      diff += unifiedDiff(codexConfigPath, codexConfigRaw, codexConfigMerge.content);
+    }
     return { ok: true, exitCode: 0, changed: anyChanged, data: emptyData(), diff, warnings: [] };
   }
 
@@ -608,9 +706,12 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
   // moving to the next file, so a failure at any point (including the manifest write itself)
   // rolls back everything this run actually touched, in reverse order (A6 §F26: "no half-install").
   const undo: (() => void)[] = [];
-  const fileResults: { settings: FileManifest; mcp: FileManifest } = {
+  const fileResults: OwnershipManifest["files"] = {
     settings: existingManifest?.files.settings ?? { path: settingsPath, created: false, backup: null, inserted: [] },
     mcp: existingManifest?.files.mcp ?? { path: mcpPath, created: false, backup: null, inserted: [] },
+    codex_hooks: existingManifest?.files.codex_hooks ?? { path: codexHooksPath, created: false, backup: null, inserted: [] },
+    codex_config:
+      existingManifest?.files.codex_config ?? { path: codexConfigPath, created: false, backup: null, sha256: "" },
   };
   const summary: InitData = emptyData();
 
@@ -653,6 +754,38 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
         inserted: [...carried, ...mcpMerge.inserted],
       };
       summary.files.mcp = { path: mcpPath, created, changed: true, backedUp: !created };
+    }
+
+    if (codexHooksMerge.changed) {
+      const created = codexHooksParsed.raw === null;
+      let backup: string | null = fileResults.codex_hooks?.backup ?? null;
+      if (!created) backup = takeBackup(codexHooksPath, codexHooksParsed.raw as string, now(), write);
+      writeJsonAtomic(codexHooksPath, codexHooksParsed.obj, codexHooksParsed.indent, write);
+      undo.push(() => (created ? unlinkSync(codexHooksPath) : writeAtomic(codexHooksPath, codexHooksParsed.raw as string)));
+      const prior = fileResults.codex_hooks?.inserted ?? [];
+      const carried = prior.filter((i) => !codexHooksMerge.inserted.some((n) => n.pointer === i.pointer));
+      fileResults.codex_hooks = {
+        path: codexHooksPath,
+        created: created || (fileResults.codex_hooks?.created ?? false),
+        backup,
+        inserted: [...carried, ...codexHooksMerge.inserted],
+      };
+      summary.files.codex_hooks = { path: codexHooksPath, created, changed: true, backedUp: !created };
+    }
+
+    if (codexConfigMerge.changed) {
+      const created = codexConfigRaw === null;
+      let backup: string | null = fileResults.codex_config?.backup ?? null;
+      if (!created) backup = takeBackup(codexConfigPath, codexConfigRaw as string, now(), write);
+      write(codexConfigPath, codexConfigMerge.content);
+      undo.push(() => (created ? unlinkSync(codexConfigPath) : writeAtomic(codexConfigPath, codexConfigRaw as string)));
+      fileResults.codex_config = {
+        path: codexConfigPath,
+        created: created || (fileResults.codex_config?.created ?? false),
+        backup,
+        sha256: textSha256(codexConfigMerge.block),
+      };
+      summary.files.codex_config = { path: codexConfigPath, created, changed: true, backedUp: !created };
     }
 
     const manifest: OwnershipManifest = { version: 1, glosa_bin: bin, files: fileResults };
@@ -714,7 +847,7 @@ export async function runUninstall(opts: UninstallOptions): Promise<UninstallRes
 }
 
 async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResult> {
-  const { settingsPath, mcpPath, manifestPath } = paths(opts.dir);
+  const { settingsPath, mcpPath, manifestPath, codexHooksPath, codexConfigPath } = paths(opts.dir);
   const write = opts.writeFileAtomic ?? writeAtomic;
   const manifest = readManifest(manifestPath);
   if (!manifest) {
@@ -733,6 +866,12 @@ async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResu
   try {
     const settingsOutcome = uninstallFile(settingsPath, manifest.files.settings, removed, onMismatch, write, undo);
     const mcpOutcome = uninstallFile(mcpPath, manifest.files.mcp, removed, onMismatch, write, undo);
+    const codexHooksOutcome = manifest.files.codex_hooks
+      ? uninstallFile(codexHooksPath, manifest.files.codex_hooks, removed, onMismatch, write, undo)
+      : undefined;
+    const codexConfigOutcome = manifest.files.codex_config
+      ? uninstallTextBlock(codexConfigPath, manifest.files.codex_config, removed, onMismatch, write, undo)
+      : undefined;
 
     if (!anyMismatch) {
       if (existsSync(manifestPath)) {
@@ -745,7 +884,16 @@ async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResu
       undo.push(() =>
         originalManifestRaw !== null ? writeAtomic(manifestPath, originalManifestRaw) : safeUnlink(manifestPath),
       );
-      const survivingManifest: OwnershipManifest = { version: 1, glosa_bin: manifest.glosa_bin, files: { settings: settingsOutcome, mcp: mcpOutcome } };
+      const survivingManifest: OwnershipManifest = {
+        version: 1,
+        glosa_bin: manifest.glosa_bin,
+        files: {
+          settings: settingsOutcome,
+          mcp: mcpOutcome,
+          ...(codexHooksOutcome ? { codex_hooks: codexHooksOutcome } : {}),
+          ...(codexConfigOutcome ? { codex_config: codexConfigOutcome } : {}),
+        },
+      };
       writeJsonAtomic(manifestPath, survivingManifest, "  ", write);
     }
 
@@ -784,7 +932,7 @@ export interface ManifestDriftResult {
 }
 
 export function checkManifestDrift(dir: string): ManifestDriftResult {
-  const { settingsPath, mcpPath, manifestPath } = paths(dir);
+  const { settingsPath, mcpPath, manifestPath, codexHooksPath, codexConfigPath } = paths(dir);
   const manifest = readManifest(manifestPath);
   if (!manifest) return { manifest: null, drifted: [] };
 
@@ -792,6 +940,7 @@ export function checkManifestDrift(dir: string): ManifestDriftResult {
   for (const [path, fileManifest] of [
     [settingsPath, manifest.files.settings],
     [mcpPath, manifest.files.mcp],
+    ...(manifest.files.codex_hooks ? ([[codexHooksPath, manifest.files.codex_hooks]] as const) : []),
   ] as const) {
     if (!existsSync(path)) {
       if (fileManifest.inserted.length > 0) drifted.push(...fileManifest.inserted.map((n) => `${path}${n.pointer} (file missing)`));
@@ -808,6 +957,16 @@ export function checkManifestDrift(dir: string): ManifestDriftResult {
       const resolved = resolvePointer(obj, node.pointer);
       if (!resolved.found || sha256Of(resolved.value) !== node.sha256) {
         drifted.push(`${path}${node.pointer}`);
+      }
+    }
+  }
+  if (manifest.files.codex_config) {
+    if (!existsSync(codexConfigPath)) {
+      drifted.push(`${codexConfigPath} (file missing)`);
+    } else {
+      const managed = findManagedCodexBlock(readFileSync(codexConfigPath, "utf8"));
+      if (!managed || textSha256(managed.block) !== manifest.files.codex_config.sha256) {
+        drifted.push(`${codexConfigPath}[mcp_servers.glosa]`);
       }
     }
   }
@@ -879,6 +1038,32 @@ function uninstallFile(
   }
   removed.push(...toRemove.map((n) => `${path}${n.pointer}`));
   return { ...fileManifest, inserted: surviving };
+}
+
+function uninstallTextBlock(
+  path: string,
+  manifest: TextBlockManifest,
+  removed: string[],
+  onMismatch: (msg: string) => void,
+  write: WriteFileAtomic,
+  undo: (() => void)[],
+): TextBlockManifest {
+  if (!existsSync(path)) return { ...manifest, sha256: "" };
+  const originalRaw = readFileSync(path, "utf8");
+  const managed = findManagedCodexBlock(originalRaw);
+  if (!managed) return { ...manifest, sha256: "" };
+  if (textSha256(managed.block) !== manifest.sha256) {
+    onMismatch(`${path}[mcp_servers.glosa]: modified since glosa installed it — left in place`);
+    return manifest;
+  }
+  const content = `${originalRaw.slice(0, managed.start)}${originalRaw.slice(managed.end)}`
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  undo.push(() => writeAtomic(path, originalRaw));
+  if (manifest.created && content.length === 0) unlinkSync(path);
+  else write(path, content.length > 0 ? `${content}\n` : "");
+  removed.push(`${path}[mcp_servers.glosa]`);
+  return { ...manifest, sha256: "" };
 }
 
 function trailingIndexOf(pointer: string): number {

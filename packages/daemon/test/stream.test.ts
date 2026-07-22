@@ -22,7 +22,7 @@ import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { parseSseStream, type ParsedSseEvent } from "../src/sse.ts";
-import { randomPort } from "./helpers.ts";
+import { randomPort, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "stream-test-token-0123456789abcdef";
 
@@ -64,6 +64,13 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
     capabilityStore: new CapabilityStore(),
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: createApiFetch(ctx), idleTimeout: 2 });
+  // On the macOS CI runner, Bun can occasionally reset the first request immediately after
+  // `Bun.serve()` returns. Warm the ordinary handshake route before exercising the SSE route so
+  // the test measures stream behavior rather than listener startup timing.
+  if (!(await waitForHandshake(port))) {
+    await server.stop(true);
+    throw new Error(`stream test server did not answer its handshake on port ${port}`);
+  }
   return { home, root, port, server, busRegistry, slug: entry.slug };
 }
 

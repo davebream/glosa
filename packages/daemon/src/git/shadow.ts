@@ -296,6 +296,9 @@ export interface CheckpointOptions {
   lease?: string;
   /** See `CommitOptions.at` — threaded through for the same test-only reason. */
   at?: Date;
+  /** Restrict staging to these workspace-relative paths. Human edits use this to avoid attributing
+   * unrelated watcher drift to the reviewer. Omitted keeps the existing all-tracked behavior. */
+  paths?: string[];
 }
 
 /** Stages the tracked∪HEAD union and commits iff something actually changed — otherwise returns
@@ -305,7 +308,7 @@ export interface CheckpointOptions {
  * holding the mutex. */
 export async function checkpoint(root: string, opts: CheckpointOptions): Promise<string> {
   const tracked = resolveMatchedFiles(root).tracked.map((f) => f.path);
-  const union = await trackedUnion(root, tracked);
+  const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire
   // work-tree, including `.glosa/shadow.git/` itself (its own object store, refs, the journal) —

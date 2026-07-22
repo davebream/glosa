@@ -119,6 +119,10 @@ generic.**
   `content` (change the words → source edit) | `classification` (wrong type/split/label → pipeline
   feedback) | `style` (rendering/notation → renderer/CSS). The resolver (R6) uses `intent` only to
   frame/route feedback once anchoring has decided source-vs-pipeline; it never overrides anchoring.
+- Actionable delivery is built from the immutable entry at presentation time. Annotation presentation
+  includes its workspace-relative artifact path, comment body, intent, durable quote/position context,
+  and the current F10/F11 anchoring resolution. Human-edit presentation includes before/after
+  shadow-git checkpoints and bounded unified hunks; it never includes a full artifact body.
 - **Lifecycle** is a state machine with delivery kept as a *separate axis* (A5 §F23): `delivery_attempt`
   events never change status; re-nudging a `delivered` entry emits attempts, not transitions. Full
   transition table + single writer per event in A5.
@@ -147,6 +151,12 @@ the entry survives.
   separate gates.
 - **No cmux.** The universal cross-agent path is the structured blocking gate (Plannotator-proven on
   Claude/Codex/Gemini/Copilot) + turn-boundary drain + MCP-pull.
+- Every injected presentation is UTF-8 bounded: at most 16 KiB per entry and 32 KiB per batch, with
+  at most eight entries in journal creation order. Truncation happens only at field or complete-hunk
+  boundaries and always carries omitted counts plus `glosa inbox get <id> --cursor <cursor>` and MCP
+  `glosa_inbox_get` retrieval instructions. Preparing content reserves it briefly; only a successful
+  hook/channel/MCP write may acknowledge it as `presented`. Failed or expired reservations remain
+  eligible, and later attempts append `reason:re_nudge` without mutating the inbox payload.
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
 - Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins.

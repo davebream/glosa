@@ -8,10 +8,19 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { CodexProvider, type SessionLivenessSource } from "../src/provider.ts";
-import type { SessionBinding } from "@glosa/daemon";
+import type { DeliverableEntry, SessionBinding } from "@glosa/daemon";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
-const ENTRY = { id: "inb-1", kind: "annotation" as const };
+const ENTRY: DeliverableEntry = {
+  id: "inb-1",
+  kind: "annotation",
+  status: "pending",
+  text: "glosa annotation inb-1\nartifact: notes.md\ncomment:\nAct on this.",
+  bytes: 64,
+  detail: { artifact_path: "notes.md" },
+  truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+  retrieval: { command: "glosa inbox get inb-1", mcp_tool: "glosa_inbox_get" },
+};
 
 function liveness(map: Record<string, "alive" | "stale"> = {}): SessionLivenessSource {
   return { liveness: (id) => map[id] ?? "stale" };

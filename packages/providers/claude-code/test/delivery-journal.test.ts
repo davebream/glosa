@@ -8,10 +8,26 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceBus, recordDelivery, type DeliveryAttemptRecord, type SessionBinding } from "@glosa/daemon";
+import { WorkspaceBus, recordDelivery, type DeliverableEntry, type DeliveryAttemptRecord, type SessionBinding } from "@glosa/daemon";
 import { ClaudeCodeProvider } from "../src/provider.ts";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
+const ANNOTATION_ENTRY: DeliverableEntry = {
+  id: "inb-1",
+  kind: "annotation",
+  status: "pending",
+  text: "glosa annotation inb-1\nartifact: notes.md\ncomment:\nAct on this.",
+  bytes: 64,
+  detail: { artifact_path: "notes.md" },
+  truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+  retrieval: { command: "glosa inbox get inb-1", mcp_tool: "glosa_inbox_get" },
+};
+const HUMAN_EDIT_ENTRY: DeliverableEntry = {
+  ...ANNOTATION_ENTRY,
+  kind: "human_edit",
+  text: "glosa human_edit inb-1\ncheckpoints: a..b\nfile: notes.md\n@@ -1 +1 @@\n-old\n+new",
+  detail: { checkpoint_before: "a", checkpoint_after: "b", files: [] },
+};
 
 function attemptsOf(bus: WorkspaceBus, entryId: string): DeliveryAttemptRecord[] {
   return (bus.state.entries[entryId]?.deliveryAttempts as DeliveryAttemptRecord[] | undefined) ?? [];
@@ -40,7 +56,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
       channelsEnabled: () => true,
       sendChannel: async () => true,
     });
-    const result = await provider.deliver(SESSION, { id: "inb-1", kind: "annotation" });
+    const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     const attempts = attemptsOf(bus, "inb-1");
@@ -70,7 +86,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
         throw new Error("channel closed");
       },
     });
-    const result = await provider.deliver(SESSION, { id: "inb-1", kind: "annotation" });
+    const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     expect(attemptsOf(bus, "inb-1")[0]).toMatchObject({
@@ -92,7 +108,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     // structurally unavailable, exactly the "channels disabled" configuration R4 requires every
     // delivery test to also pass under.
     const provider = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
-    const result = await provider.deliver(SESSION, { id: "inb-1", kind: "human_edit" });
+    const result = await provider.deliver(SESSION, HUMAN_EDIT_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     const attempt = attemptsOf(bus, "inb-1")[0];
@@ -110,7 +126,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     const provider = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
 
     for (let i = 0; i < 2; i++) {
-      const result = await provider.deliver(SESSION, { id: "inb-1", kind: "annotation" });
+      const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
       await recordDelivery(bus, "inb-1", SESSION, result);
     }
 
@@ -140,7 +156,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
       channelsEnabled: () => true,
       sendChannel: async () => true,
     });
-    const result = await provider.deliver(SESSION, { id: "inb-1", kind: "annotation" });
+    const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     const attempt = attemptsOf(bus, "inb-1")[0];

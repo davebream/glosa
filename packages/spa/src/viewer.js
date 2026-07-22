@@ -530,7 +530,12 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     composer.draft = input.value;
     composer.error = "";
     composer.submitting = true;
-    const record = { ...composer.record, body };
+    const record = {
+      ...composer.record,
+      body,
+      artifact_path: currentArtifact.source_path,
+      ...(currentArtifact.rendered_sha256 ? { captured_rendered_sha256: currentArtifact.rendered_sha256 } : {}),
+    };
     try {
       const result = await dataAccess.postAnnotation(currentSlug, record);
       const list = annotationsByPath.get(currentArtifact.source_path) ?? [];

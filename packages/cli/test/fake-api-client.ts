@@ -7,6 +7,7 @@ import type {
   AttentionRequestResult,
   EntryStatus,
   GlosaApiClient,
+  InboxPresentationResult,
   ResolveOutcome,
   ResolveResult,
   StatusSummary,
@@ -22,6 +23,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   applyBeginImpl: ((path: string, entry: string, session: string) => Promise<ApplyBeginResult>) | null = null;
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
+  inboxPresentationResult: InboxPresentationResult | null = null;
   statusResult: StatusSummary = {
     daemon: {
       instance_id: "gl-fake",
@@ -60,6 +62,12 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   async getEntryStatus(path: string, entry: string): Promise<EntryStatus | null> {
     this.calls.push({ method: "getEntryStatus", args: [path, entry] });
     return this.entryStatusResult;
+  }
+
+  async getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult> {
+    this.calls.push({ method: "getInboxPresentation", args: [path, entry, cursor] });
+    if (!this.inboxPresentationResult) throw new Error("unexpected getInboxPresentation call");
+    return this.inboxPresentationResult;
   }
 
   async getStatus(): Promise<StatusSummary> {

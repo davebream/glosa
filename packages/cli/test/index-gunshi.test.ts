@@ -230,16 +230,16 @@ describe("Gunshi completion", () => {
 });
 
 describe("internal protocol compatibility", () => {
-  test("hook and mcp failures retain their exact bytes", () => {
+  test("hook failure retains its exact bytes and MCP accepts an empty stdio session", () => {
     expect(runCli(["hook"])).toEqual({
       exitCode: 2,
       stdout: "",
       stderr: "glosa hook: missing <event>\n",
     });
     expect(runCli(["mcp"])).toEqual({
-      exitCode: 70,
+      exitCode: 0,
       stdout: "",
-      stderr: "glosa mcp: stdio MCP server not yet implemented (P5.4)\n",
+      stderr: "",
     });
   });
 

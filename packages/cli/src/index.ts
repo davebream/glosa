@@ -31,6 +31,7 @@ const PUBLIC_COMMANDS = new Set([
   "request-review",
   "doctor",
   "status",
+  "inbox",
 ]);
 
 type GlobalValues = {
@@ -95,6 +96,8 @@ function printInitResult(result: InitResult, json: boolean): void {
   process.stdout.write("glosa init: installed hooks + MCP entry\n");
   process.stdout.write(`  settings: ${result.data.files.settings.path}\n`);
   process.stdout.write(`  mcp:      ${result.data.files.mcp.path}\n`);
+  process.stdout.write(`  codex hooks: ${result.data.files.codex_hooks.path}\n`);
+  process.stdout.write(`  codex mcp:   ${result.data.files.codex_config.path}\n`);
   process.stdout.write(`\nActivate channels for this session with:\n  ${result.data.channel_command}\n`);
 }
 
@@ -117,6 +120,13 @@ function printUninstallResult(result: UninstallResult, json: boolean): void {
       ? `glosa init --uninstall: removed ${result.removed.length} node(s)\n`
       : "glosa init --uninstall: nothing to remove\n",
   );
+}
+
+function writeOutput(stream: NodeJS.WritableStream, value: string): Promise<void> {
+  if (!value) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    stream.write(value, (error?: Error | null) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function readStdin(): Promise<string> {
@@ -404,6 +414,42 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
   );
 
+  const inbox = lazyHandler(
+    {
+      name: "inbox",
+      description: "Retrieve an actionable inbox presentation",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "Inbox action (get)" },
+        id: { type: "positional", required: true, description: "Inbox entry ID" },
+        cursor: { type: "string", description: "Opaque continuation cursor" },
+        workspace: { type: "string", description: "Workspace directory" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      if (values.action !== "get") {
+        process.stderr.write(`glosa inbox: unsupported action '${String(values.action)}'\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const [{ createHttpGlosaClient }, inboxModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./inbox.ts"),
+      ]);
+      const result = await inboxModule.runInboxGet(
+        {
+          workspace: (values.workspace as string | undefined) ?? process.cwd(),
+          id: values.id as string,
+          cursor: values.cursor as string | undefined,
+        },
+        { createClient: createHttpGlosaClient },
+      );
+      inboxModule.printInboxGetResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   const hook = lazyHandler(
     {
       name: "hook",
@@ -411,6 +457,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
       internal: true,
       args: {
         event: { type: "positional", required: false },
+        provider: { type: "string", description: "Hook provider: claude-code or codex" },
       },
     },
     async (context) => {
@@ -432,9 +479,31 @@ function createSubCommands(setExitCode: (code: number) => void) {
       const cwd = (input as { cwd?: unknown } | null)?.cwd;
       if (typeof cwd === "string") lastKnownCwd = cwd;
       const { runHook } = await import("./hook.ts");
-      const outcome = await runHook(values.event as string, input, await hookDeps());
-      if (outcome.stdout) process.stdout.write(outcome.stdout);
-      if (outcome.stderr) process.stderr.write(outcome.stderr);
+      const deps = await hookDeps();
+      const outcome = await runHook(
+        values.event as string,
+        input,
+        deps,
+        process.pid,
+        (values.provider as string | undefined) ?? "claude-code",
+      );
+      try {
+        await writeOutput(process.stdout, outcome.stdout);
+        await writeOutput(process.stderr, outcome.stderr);
+        if (outcome.delivery) {
+          await deps.daemonClient.acknowledge?.(outcome.delivery.sessionId, outcome.delivery.deliveryId, "presented");
+        }
+      } catch (error) {
+        if (outcome.delivery) {
+          await deps.daemonClient.acknowledge?.(
+            outcome.delivery.sessionId,
+            outcome.delivery.deliveryId,
+            "failed",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        throw error;
+      }
       setExitCode(outcome.exitCode);
     },
   );
@@ -442,8 +511,12 @@ function createSubCommands(setExitCode: (code: number) => void) {
   const mcp = lazyHandler(
     { name: "mcp", description: "MCP stdio protocol entry point", internal: true },
     async () => {
-      process.stderr.write("glosa mcp: stdio MCP server not yet implemented (P5.4)\n");
-      setExitCode(EXIT_CODES.INTERNAL);
+      const [{ createHttpDaemonClient }, { createHttpGlosaClient }, { runMcpServer }] = await Promise.all([
+        import("./daemon-client.ts"),
+        import("./api-client.ts"),
+        import("./mcp.ts"),
+      ]);
+      await runMcpServer({ createHookClient: createHttpDaemonClient, createApiClient: createHttpGlosaClient });
     },
   );
 
@@ -472,6 +545,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
     "request-review": requestReview,
     doctor,
     status,
+    inbox,
     hook,
     mcp,
     __daemon: daemon,

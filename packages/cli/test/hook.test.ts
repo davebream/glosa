@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RewakeCoordinator, RewakeLeaseStore } from "@glosa/providers-claude-code";
 import { runHook, type HookDeps } from "../src/hook.ts";
-import type { DaemonHookClient, DrainOptions, DrainResult, RegisterSessionInput, RegisterSessionResult } from "../src/daemon-client.ts";
+import type { DaemonHookClient, DrainedEntry, DrainOptions, DrainResult, RegisterSessionInput, RegisterSessionResult } from "../src/daemon-client.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -50,6 +50,19 @@ class FakeDaemonClient implements DaemonHookClient {
     this.pendingDrain = { drained: [], count: 0 }; // one-shot per call, like the real route
     return result;
   }
+}
+
+function actionable(id: string, kind: DrainedEntry["kind"] = "annotation", text = `glosa ${kind} ${id}`): DrainedEntry {
+  return {
+    id,
+    kind,
+    status: "pending",
+    text,
+    bytes: Buffer.byteLength(text, "utf8"),
+    detail: {},
+    truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+    retrieval: { command: `glosa inbox get ${id}`, mcp_tool: "glosa_inbox_get" },
+  };
 }
 
 function makeDeps(dir: string): { deps: HookDeps; client: FakeDaemonClient; leases: RewakeLeaseStore } {
@@ -91,12 +104,12 @@ describe("glosa hook session-start", () => {
 
   test("drains parked entries immediately and surfaces them as additionalContext", async () => {
     const { deps, client } = makeDeps(freshDir());
-    client.pendingDrain = { drained: [{ id: "inb-1", kind: "annotation", status: "pending" }], count: 1 };
+    client.pendingDrain = { drained: [actionable("inb-1")], count: 1 };
 
     const outcome = await runHook("session-start", SESSION_START_INPUT, deps);
     expect(outcome.exitCode).toBe(0);
     const parsed = JSON.parse(outcome.stdout);
-    expect(parsed.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(parsed.hookSpecificOutput.additionalContext).toContain("inb-1");
   });
 
@@ -131,7 +144,7 @@ describe("glosa hook session-end", () => {
 describe("glosa hook user-prompt-submit", () => {
   test("heartbeats then drains, surfacing additionalContext when something is pending", async () => {
     const { deps, client } = makeDeps(freshDir());
-    client.pendingDrain = { drained: [{ id: "inb-2", kind: "human_edit", status: "pending" }], count: 1 };
+    client.pendingDrain = { drained: [actionable("inb-2", "human_edit")], count: 1 };
 
     const outcome = await runHook(
       "user-prompt-submit",
@@ -188,7 +201,7 @@ describe("glosa hook rewake-watch", () => {
   test("finds a pending entry immediately -> exit 2 with the F07 stderr shape, releases its own lease", async () => {
     const { deps, client, leases } = makeDeps(freshDir());
     leases.tryAcquire("sess-1", 9001);
-    client.pendingDrain = { drained: [{ id: "inb-9", kind: "annotation", status: "pending" }], count: 1 };
+    client.pendingDrain = { drained: [actionable("inb-9", "annotation", "glosa annotation inb-9\nretrieve: glosa inbox get inb-9")], count: 1 };
 
     const outcome = await runHook(
       "rewake-watch",
@@ -198,8 +211,7 @@ describe("glosa hook rewake-watch", () => {
     );
 
     expect(outcome.exitCode).toBe(2);
-    expect(outcome.stderr).toContain("inbox/inb-9");
-    expect(outcome.stderr).toContain("asyncRewake");
+    expect(outcome.stderr).toContain("glosa inbox get inb-9");
     expect(leases.isActive("sess-1")).toBe(false); // released promptly, not left for staleMs to expire
   });
 
@@ -234,5 +246,31 @@ describe("glosa hook — unknown event", () => {
     const outcome = await runHook("not-a-real-event", { session_id: "sess-1", cwd: "/repo" }, deps);
     expect(outcome.exitCode).toBe(2);
     expect(client.calls).toHaveLength(0);
+  });
+});
+
+describe("glosa hook — Codex provider", () => {
+  test("Stop registers Codex semantics and emits a non-empty blocking presentation", async () => {
+    const { deps, client, leases } = makeDeps(freshDir());
+    client.pendingDrain = {
+      delivery_id: "delivery-1",
+      count: 1,
+      drained: [
+        actionable("inb-codex", "annotation", "glosa annotation inb-codex\nartifact: notes.md\ncomment:\nFix this."),
+      ],
+    };
+    const input = { ...SESSION_START_INPUT, turn_id: "turn-1", hook_event_name: "Stop" };
+    const outcome = await runHook("stop", input, deps, 1, "codex");
+    const parsed = JSON.parse(outcome.stdout);
+    expect(parsed).toEqual({ decision: "block", reason: expect.stringContaining("Fix this.") });
+    expect(outcome.delivery).toEqual({ sessionId: "sess-1", deliveryId: "delivery-1" });
+    expect(leases.isActive("sess-1")).toBe(false);
+  });
+
+  test("SessionStart registers provider codex and does not arm Claude's rewake watcher", async () => {
+    const { deps, client, leases } = makeDeps(freshDir());
+    await runHook("session-start", SESSION_START_INPUT, deps, 1, "codex");
+    expect(client.calls[0]).toMatchObject({ method: "register", args: [expect.objectContaining({ provider: "codex" })] });
+    expect(leases.isActive("sess-1")).toBe(false);
   });
 });

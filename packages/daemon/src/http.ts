@@ -13,7 +13,7 @@
 // another, the class-F capability mint (`handleMintCapability`) plus the class-F listener's own
 // serve route (`createClassFFetch`/classf-serve.ts).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILD_ID } from "./build-id.ts";
@@ -52,6 +52,8 @@ import { journalPath } from "./bus/paths.ts";
 import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
 import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.ts";
 import type { JournalEvent } from "./bus/journal.ts";
+import { buildDeliveryPresentation } from "./delivery/presentation.ts";
+import type { DeliverableEntry } from "./providers/interface.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -379,12 +381,14 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
 
   const content = raw.toString("utf8");
   if (url.searchParams.get("render") === "html") {
+    const renderedHtml = renderMarkdown(content);
     return Response.json({
       source_path: match.path,
       source_sha256: sourceSha,
+      rendered_sha256: createHash("sha256").update(renderedHtml, "utf8").digest("hex"),
       class: "R",
       content,
-      rendered_html: renderMarkdown(content),
+      rendered_html: renderedHtml,
     });
   }
   return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "R", content });
@@ -467,8 +471,8 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   // captured under its own honest `unknown` commit, leaving a clean slate for our write to be the
   // next (and only) thing `humanEditCheckpoint` finds staged.
   const bus = await resolveBus(ctx, root);
-  writeArtifactAtomic(match.rawPath, content);
-  await bus.humanEditCheckpoint();
+  const inboxId = generateAnnotationId();
+  const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
 
   const newSha = sourceSha256(Buffer.from(content, "utf8"));
   return Response.json({
@@ -477,6 +481,7 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
     class: "R",
     content,
     rendered_html: renderMarkdown(content),
+    ...(captured ? { inbox_id: inboxId } : {}),
   });
 }
 
@@ -487,6 +492,9 @@ function validateAnnotationBody(body: unknown): { ok: true; value: Record<string
     return { ok: false, reason: "body must be a JSON object" };
   }
   const b = body as Record<string, unknown>;
+  if (typeof b.artifact_path !== "string" || b.artifact_path.length === 0) {
+    return { ok: false, reason: "body.artifact_path is required" };
+  }
   if (typeof b.body !== "string" || b.body.length === 0) return { ok: false, reason: "body.body is required" };
   if (typeof b.intent !== "string" || !ANNOTATION_INTENTS.has(b.intent)) {
     return { ok: false, reason: "body.intent must be one of content|classification|style" };
@@ -558,19 +566,40 @@ function buildAnchoringContext(
   return { artifact, resolveCtx };
 }
 
+function buildActionablePresentation(
+  ctx: ApiContext,
+  root: string,
+  id: string,
+  payload: unknown,
+  status: string,
+  cursor?: string,
+): DeliverableEntry | null {
+  const record = payload !== null && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+  let resolution: Resolution | undefined;
+  if (record?.kind === "annotation" && typeof record.artifact_path === "string") {
+    const built = buildAnchoringContext(ctx, root, record.artifact_path);
+    if (built) {
+      const capturedRenderedSha256 = record.captured_rendered_sha256;
+      resolution = resolveAnchor(
+        { body: record.body, intent: record.intent, target: record.target },
+        built.artifact,
+        {
+          ...built.resolveCtx,
+          ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
+        },
+      );
+    }
+  }
+  return buildDeliveryPresentation(id, payload, { status, ...(resolution ? { resolution } : {}), ...(cursor ? { cursor } : {}) });
+}
+
 /** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
  * `WorkspaceBus.createEntry` — honest provenance only: this route creates the entry, it does NOT
  * decide what the entry means, `resolve()` does.
  *
- * P6.1 wires the OWED anchoring resolution (`anchoring.ts` was BUILT + unit-tested since P3.4 but
- * never called by a live route): an optional `artifact_path` field on the request body — additive
- * to A1 §5.6's documented shape, which has no way to name which artifact an annotation targets at
- * all — tells this route which artifact to resolve against; when present, the 201 response also
- * carries the `Resolution` (`source_range`/`pipeline_feedback`/`orphaned`) inline. Omitting
- * `artifact_path` (today's SPA does) reproduces the exact pre-P6.1 behavior: the entry is created,
- * un-anchored, `resolution` is absent from the response. A likewise-additive `captured_rendered_sha256`
- * field threads through to `ResolveCtx.capturedRenderedSha256` once the SPA starts sending one;
- * absent, Class R's position-trust cascade already degrades to whole-document search (A5 §F10). */
+ * `artifact_path` is required and the SPA also sends the rendered hash it captured. Both are
+ * immutable entry content; anchoring itself is intentionally re-run against current content for
+ * every presentation attempt, so parked or retried annotations never carry a stale resolution. */
 async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -594,13 +623,17 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
   // annotations endpoint.
   await bus.createEntry(id, {
     kind: "annotation",
+    artifact_path: validated.value.artifact_path,
+    ...(typeof validated.value.captured_rendered_sha256 === "string"
+      ? { captured_rendered_sha256: validated.value.captured_rendered_sha256 }
+      : {}),
     body: validated.value.body,
     intent: validated.value.intent,
     target: validated.value.target,
   });
 
   let resolution: Resolution | undefined;
-  const artifactPathRaw = (body as Record<string, unknown>).artifact_path;
+  const artifactPathRaw = validated.value.artifact_path;
   if (typeof artifactPathRaw === "string" && artifactPathRaw.length > 0) {
     const built = buildAnchoringContext(ctx, root, artifactPathRaw);
     if (built) {
@@ -776,8 +809,9 @@ async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promi
     return problem(404, "not-found", "artifact did not exist at that checkpoint", undefined, url.pathname);
   }
 
-  writeArtifactAtomic(match.rawPath, content);
-  const fullSha = await bus.humanEditCheckpoint("restore");
+  const inboxId = generateAnnotationId();
+  const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content), "restore");
+  const fullSha = captured?.checkpoint_after ?? to;
   // Shortened to match `checkpoints.ts`'s `checkpoint_id` format (A6 §F31: "the shadow-git SHORT
   // sha") — `humanEditCheckpoint` itself returns the full sha (its `checkpoint()`/`headSha()`
   // return type everywhere else in this codebase), so this is the one place that narrows it to
@@ -789,6 +823,7 @@ async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promi
     restored_to: to,
     checkpoint_id: shortSha,
     source_sha256: sourceSha256(Buffer.from(content, "utf8")),
+    ...(captured ? { inbox_id: inboxId } : {}),
   });
 }
 
@@ -947,13 +982,12 @@ async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Prom
 
 const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
 
-/** `POST /api/sessions/:id/drain` — the rung-3 turn-boundary drain body (UserPromptSubmit's
- * additionalContext + Stop's own drain, A6 §F26). Delegates selection AND recording entirely to
- * `WorkspaceBus.drainCandidates` (P4.3 concurrency review fix #7) — both steps happen inside that
- * method's own single mutex critical section, so two concurrent drain requests for the same
- * workspace can never select and double-record the same entries; an entry whose only prior
- * attempts all `outcome:"failed"` is still eligible (re-drained with `reason:"re_nudge"`, never
- * permanently excluded by a transport failure). `via` MUST be told apart by the caller, since
+/** `POST /api/sessions/:id/drain` — prepares the rung-3 turn-boundary payload (UserPromptSubmit's
+ * additionalContext + Stop's blocking reason, A6 §F26). Selection, actionable formatting, byte
+ * accounting, and reservation happen under one workspace mutex; no `presented` event is written
+ * until the output owner calls the acknowledgement route after its stream/protocol write succeeds.
+ * An entry whose earlier attempts failed or only reached `transport_accepted` remains eligible.
+ * `via` MUST be told apart by the caller, since
  * `"gate"`/`"stop"`/`"userprompt"`/`"asyncRewake"` are distinct transports and only the caller
  * (`glosa hook stop` vs. `user-prompt-submit` vs. `rewake-watch`) knows which one is actually
  * surfacing this drain right now. An unknown session_id is 404 (unlike heartbeat/deregister,
@@ -966,14 +1000,26 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
 
   let limit = DRAIN_MAX;
   let via: DeliveryVia = "userprompt";
+  let entryId: string | undefined;
+  let cursor: string | undefined;
   try {
     const raw = await req.text();
     if (raw.length > 0) {
       const body = JSON.parse(raw) as Record<string, unknown>;
       if (typeof body.limit === "number" && body.limit > 0) limit = Math.min(body.limit, DRAIN_MAX);
+      if (typeof body.entryId === "string" && body.entryId.length > 0) entryId = body.entryId;
+      if (typeof body.cursor === "string" && body.cursor.length > 0) cursor = body.cursor;
       // The four "this route surfaced it" transports — never channel/mcp_pull, which have their
       // own separate delivery paths that don't go through this drain-and-mark route at all.
-      if (body.via === "gate" || body.via === "stop" || body.via === "userprompt" || body.via === "asyncRewake") via = body.via;
+      if (
+        body.via === "gate" ||
+        body.via === "stop" ||
+        body.via === "userprompt" ||
+        body.via === "asyncRewake" ||
+        body.via === "mcp_pull"
+      ) {
+        via = body.via;
+      }
     }
   } catch {
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
@@ -982,9 +1028,52 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   const root = record.workspace_binding ?? record.cwd;
   const bus = await resolveBus(ctx, root);
 
-  const drained = await bus.drainCandidates(limit, { via, session: sessionId });
+  const prepared = await bus.prepareDelivery(
+    limit,
+    { via, session: sessionId, ...(entryId ? { entryId } : {}) },
+    (id, payload, status) => buildActionablePresentation(ctx, root, id, payload, status, cursor),
+  );
 
-  return Response.json({ drained, count: drained.length });
+  return Response.json(prepared);
+}
+
+async function handleSessionDeliveryAck(ctx: ApiContext, sessionId: string, deliveryId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record) return problem(404, "not-found", "unknown session", undefined, url.pathname);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const value = body as Record<string, unknown> | null;
+  const outcome = value?.outcome;
+  if (outcome !== "presented" && outcome !== "failed") {
+    return problem(400, "validation-failed", "outcome must be presented|failed", undefined, url.pathname);
+  }
+  const root = record.workspace_binding ?? record.cwd;
+  const bus = await resolveBus(ctx, root);
+  const acknowledged = await bus.acknowledgeDelivery(
+    deliveryId,
+    outcome,
+    typeof value?.error === "string" ? value.error : undefined,
+  );
+  if (!acknowledged) return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
+  return Response.json({ acknowledged: true });
+}
+
+async function handleInboxPresentation(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const root = resolved.entry.canonical_path;
+  const bus = await resolveBus(ctx, root);
+  const entry = bus.readEntry(entryId);
+  if (!entry) return problem(404, "not-found", "no such inbox entry", entryId, url.pathname);
+  const presentation = buildActionablePresentation(ctx, root, entryId, entry.payload, entry.status, url.searchParams.get("cursor") ?? undefined);
+  if (!presentation) return problem(422, "validation-failed", "entry payload is not actionable", entryId, url.pathname);
+  return Response.json({ presentation });
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1428,10 +1517,20 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const sessionId = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleSessionDrain(ctx, sessionId, req) };
   }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/deliveries\/([^/]+)\/ack$/))) {
+    const sessionId = m[1] as string;
+    const deliveryId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSessionDeliveryAck(ctx, sessionId, deliveryId, req) };
+  }
 
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts$/))) {
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: () => handleListArtifacts(ctx, slug, pathname) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/presentation$/))) {
+    const slug = m[1] as string;
+    const entryId = m[2] as string;
+    return { routeClass: "authed-read", handle: (req) => handleInboxPresentation(ctx, slug, entryId, req) };
   }
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts\/(.+)$/))) {
     const slug = m[1] as string;

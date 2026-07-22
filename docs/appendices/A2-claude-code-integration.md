@@ -65,6 +65,13 @@ glosa doctor channels
 
 ## F07 — asyncRewake Lifecycle & Rearm Protocol
 
+All channel, hook-gate, boundary, and asyncRewake paths carry the same provider-neutral actionable
+presentation. UserPromptSubmit and SessionStart return `hookSpecificOutput.additionalContext`; Stop
+returns one blocking continuation whose non-empty reason is the presentation; asyncRewake writes the
+presentation to stderr before exit 2. The hook shim acknowledges `presented` only after the selected
+stream write succeeds. Channel notification acceptance records `transport_accepted`, not `presented`.
+Provider formatting must preserve the 16 KiB entry / 32 KiB batch UTF-8 limits from A5 F23.
+
 **Finding:** A SessionStart-launched watcher exits on first wake; repeated inbox entries silently lose rung 2.
 
 ### Specification

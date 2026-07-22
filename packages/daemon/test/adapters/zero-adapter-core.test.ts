@@ -117,7 +117,7 @@ describe("core runs with ZERO adapters (P6.1 acceptance)", () => {
     expect(fRes.status).toBe(200);
   });
 
-  test("class-R annotation with no artifact_path field -> created, un-anchored, no resolution field — the pre-P6.1 behavior, unchanged", async () => {
+  test("class-R annotation without artifact_path is rejected because actionable delivery requires identity", async () => {
     writeFileSync(join(root, "notes.md"), "# Title\n\nBody text here.\n");
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/annotations`, {
@@ -126,10 +126,9 @@ describe("core runs with ZERO adapters (P6.1 acceptance)", () => {
         body: JSON.stringify({ body: "note", intent: "content", target: { quote: { exact: "Body text here.", prefix: "", suffix: "" } } }),
       }),
     );
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
     const parsed = await res.json();
-    expect(parsed.status).toBe("pending");
-    expect(Object.hasOwn(parsed, "resolution")).toBe(false);
+    expect(parsed.type).toContain("validation-failed");
   });
 
   test("class-R annotation resolution wired end-to-end via artifact_path — needs NO adapter (P6.1 OWED wiring)", async () => {
