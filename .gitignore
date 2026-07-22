@@ -27,3 +27,6 @@ build/
 .serena/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
+
+# local-only historical/private notes
+docs/archive/
