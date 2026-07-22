@@ -25,6 +25,28 @@
 - Flags: `--print/--dry-run` (unified-diff, no write), `--force`, `--uninstall`, `--restore-backup`, `--json`.
 - Uninstall: per recorded node, re-hash current node vs recorded — match→remove + prune empty parents; mismatch (externally edited)→leave + warn + exit9. created:true file now empty→delete. Atomic per file; backups retained; manifest deleted on clean removal. Reminder to relaunch Claude without the dev flag.
 
+## F24/F26 — `glosa token` rotation and revocation
+
+- `glosa token rotate [--json]` writes a fresh 128-bit mode-0600 token through A3's atomic
+  temp→fsync→rename commit. It invalidates the previous API token, all class-F capabilities, and
+  credential-bound streams with no grace period. It works whether the daemon is running or stopped.
+- `glosa token revoke [--json]` removes the active token (idempotent when already absent), invalidates
+  all browser/API credentials, and leaves glosa unpaired. `glosa open` creates a new token when needed
+  and is the only documented re-pairing path.
+- Successful human output is stable and contains no credential material:
+  - rotate: `glosa token: rotated; all existing credentials are invalid` then
+    ``Run `glosa open` to re-pair.`` on the next line.
+  - revoke: `glosa token: revoked; all existing credentials are invalid` then the same re-pair line.
+    An already-revoked repeat inserts ` (already revoked)` after `revoked`.
+- Successful `--json` output uses the normal F26 envelope. Rotate data is
+  `{state:"active",invalidated:"all",re_pair_command:"glosa open"}`. Revoke data is
+  `{state:"revoked",invalidated:"all",already_revoked:<bool>,re_pair_command:"glosa open"}`.
+  Neither output surface may contain the token, its digest, or its filesystem contents.
+- Exit codes: `0` success (including repeated revoke); `2` missing/unknown action; `70` filesystem
+  mutation failure. Exit 70 uses `token-rotate-failed` or `token-revoke-failed` and means the prior
+  durable token state was preserved. The command does not emit `3`: it is a local credential-state
+  operation and does not require a live daemon.
+
 ## F30 — platform
 - **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (channel floor; asyncRewake works from 2.1.0 but the channel push needs 2.1.80; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
 - API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
@@ -52,6 +74,7 @@
 | `request-review` | `<path> [--message] [--action] [--wait <dur>]` | create attention_request; --wait blocks to resolution | 0(verdict in data);7 timeout;3;4;2 |
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>]` | explicitly bind a registered session to the artifact workspace | 0;2;3;4;8 |
+| `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
 | `doctor` | `[dir] --json` | 13 enumerated checks | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |

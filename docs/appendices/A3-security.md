@@ -29,7 +29,24 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 ## 3. F24 — token lifecycle + realpath confinement
 - Fragment scrub FIRST statement on bootstrap: read `#t=`, `sessionStorage.setItem('glosa_token',t)`, `history.replaceState(null,'',location.pathname+location.search)` — before any render/error handler.
 - Storage: **sessionStorage** (not localStorage) — bounded to tab lifetime.
-- Rotation: `glosa token rotate` → new 128-bit, atomic temp+rename 0600, bump epoch; daemon compares against CURRENT only (no grace) = immediate hard revoke; stale tabs get 401 → unpaired screen → re-`glosa open`. `glosa token revoke` = kill-all. Daemon stats token file on read, warns (non-fatal) if perms drift.
+- Token state has two durable forms: **active** = `~/.glosa/token` contains one 128-bit hex token at
+  mode 0600; **revoked** = that file is absent. `glosa token rotate` writes a fresh mode-0600 temp,
+  fsyncs it, then atomically renames it over the active file. `glosa token revoke` atomically unlinks
+  the active file and is idempotent when already revoked. There is no separate epoch file and no
+  cross-file transaction: the daemon's in-memory generation increments whenever the complete token
+  value changes or becomes absent. Rotation/revocation work while the daemon is down and do not require
+  API authentication. A failed pre-commit write/fsync/rename/unlink leaves the previous credential state
+  intact; no fallible filesystem operation follows the commit point.
+- The running daemon watches the token directory **and** synchronously refreshes at every auth gate
+  (the watcher closes long-lived state promptly; request-time refresh is the correctness backstop).
+  It compares against CURRENT only, with no grace: every request reaching auth after the atomic commit
+  rejects the previous Bearer with 401. A generation change aborts existing SSE/transcript streams and
+  clears all in-memory class-F capabilities, so revocation is kill-all across API and browser
+  credentials. The SPA treats any 401 as credential invalidation: remove `sessionStorage.glosa_token`,
+  stop reconnecting with it, and render the unpaired state. Re-pair only through `glosa open`.
+- Both token commands use the stable A6 envelope and never include token material in human or JSON
+  output. The daemon stats the token file on refresh and warns once per observed permission drift;
+  drift is non-fatal so the warning cannot lock the user out of rotation/revocation.
 - SPA-origin CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. (SPA refuses to ever be framed.)
 - Log redaction: one `redact()` at logger boundary — strip `Authorization` values; regex-redact token/capability-shaped path segments `[A-Za-z0-9_-]{32,}`. Grep-enforceable single call site.
 - **confinePath(workspaceRoot, relPath)**: reject absolute or `..`-containing; `path.resolve`; realpath the nearest EXISTING ancestor (so not-yet-created files still confined); reject if realAncestor not under realRoot. ONE shared utility at every path entry point (HTTP routes, class-F mint/serve, adapter manifest, git pathspec); grep-enforced in CI. Rejects lexical traversal AND symlink escape. Argv safety: git paths as discrete argv elements + `--` before first path → filename `--force` can't be a flag.
