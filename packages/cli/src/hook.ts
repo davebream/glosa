@@ -6,8 +6,11 @@
 // (or, for the rewake lease, the coordinator's own lease file — a CLI-local watcher-liveness
 // concern, not workspace state) is the only thing that ever gets mutated.
 import { ClaudeCodeProvider } from "../../providers/claude-code/src/index.ts";
+import { CodexProvider } from "../../providers/codex/src/index.ts";
 import type { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
+import type { AgentProvider } from "../../daemon/src/providers/interface.ts";
 import type { DaemonHookClient } from "./daemon-client.ts";
+import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 
 export type HookEvent = "session-start" | "rewake-watch" | "session-end" | "user-prompt-submit" | "stop" | "notification";
 
@@ -32,9 +35,18 @@ export interface HookOutcome {
   exitCode: number;
   stdout: string;
   stderr: string;
+  delivery?: { sessionId: string; deliveryId: string };
 }
 
-const provider = new ClaudeCodeProvider({ liveness: { liveness: () => "stale" } }); // detectSession/liveness delegate is unused for detectSession itself
+const liveness = { liveness: () => "stale" as const };
+const providers: Record<string, AgentProvider> = {
+  "claude-code": new ClaudeCodeProvider({ liveness }),
+  codex: new CodexProvider({ liveness }),
+};
+
+function providerFor(id: string): AgentProvider | null {
+  return providers[id] ?? null;
+}
 
 function ok(stdout = ""): HookOutcome {
   return { exitCode: 0, stdout, stderr: "" };
@@ -43,67 +55,79 @@ function usageError(message: string): HookOutcome {
   return { exitCode: 2, stdout: "", stderr: message };
 }
 
-async function handleSessionStart(input: unknown, deps: HookDeps): Promise<HookOutcome> {
+async function handleSessionStart(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("session-start: hook input missing session_id/cwd");
 
   await deps.daemonClient.register({
     session_id: session.session_id,
-    provider: "claude-code",
+    provider: providerId,
     cwd: session.workspace,
     source: session.source,
     ...(session.transcript_path !== undefined ? { transcript_path: session.transcript_path } : {}),
   });
-  deps.rewake.onSessionStart(session.session_id);
+  if (providerId === "claude-code") deps.rewake.onSessionStart(session.session_id);
   // A2 §F08: "the next SessionStart in the SAME workspace automatically drains" any parked
   // entries — draining here (rather than waiting for the first UserPromptSubmit/Stop) is what
   // makes that drain immediate rather than delayed one full turn. SessionStart surfaces via the
   // same additionalContext shape UserPromptSubmit does, so it shares that `via` value.
   const drained = await deps.daemonClient.drain(session.session_id, { via: "userprompt" });
   if (drained.count === 0) return ok();
-  return ok(JSON.stringify(userPromptSubmitContext(drained.drained)));
+  const text = formatPresentationBatch(drained.drained);
+  return {
+    ...ok(JSON.stringify(additionalContext("SessionStart", text))),
+    ...(drained.delivery_id ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } } : {}),
+  };
 }
 
-async function handleSessionEnd(input: unknown, deps: HookDeps): Promise<HookOutcome> {
+async function handleSessionEnd(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("session-end: hook input missing session_id/cwd");
   await deps.daemonClient.deregister(session.session_id);
-  deps.rewake.onSessionEnd(session.session_id);
+  if (providerId === "claude-code") deps.rewake.onSessionEnd(session.session_id);
   return ok();
 }
 
-function userPromptSubmitContext(drained: { id: string; kind: string }[]): unknown {
-  const summary = drained.map((e) => `${e.kind} ${e.id}`).join(", ");
+function additionalContext(eventName: "SessionStart" | "UserPromptSubmit", text: string): unknown {
   return {
     hookSpecificOutput: {
-      hookEventName: "UserPromptSubmit",
-      additionalContext: `glosa: ${drained.length} inbox entr${drained.length === 1 ? "y" : "ies"} pending (${summary})`,
+      hookEventName: eventName,
+      additionalContext: text,
     },
   };
 }
 
-async function handleUserPromptSubmit(input: unknown, deps: HookDeps): Promise<HookOutcome> {
+async function handleUserPromptSubmit(input: unknown, deps: HookDeps, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("user-prompt-submit: hook input missing session_id/cwd");
   await deps.daemonClient.heartbeat(session.session_id);
   const drained = await deps.daemonClient.drain(session.session_id, { via: "userprompt" });
   if (drained.count === 0) return ok();
-  return ok(JSON.stringify(userPromptSubmitContext(drained.drained)));
+  const text = formatPresentationBatch(drained.drained);
+  return {
+    ...ok(JSON.stringify(additionalContext("UserPromptSubmit", text))),
+    ...(drained.delivery_id ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } } : {}),
+  };
 }
 
-async function handleStop(input: unknown, deps: HookDeps): Promise<HookOutcome> {
+async function handleStop(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("stop: hook input missing session_id/cwd");
   await deps.daemonClient.heartbeat(session.session_id);
   // Bounded drain (A6 §F26: "≤8"; the daemon route itself also caps at 8 — belt and suspenders).
-  await deps.daemonClient.drain(session.session_id, { limit: 8, via: "stop" });
+  const drained = await deps.daemonClient.drain(session.session_id, { limit: 8, via: "stop" });
   // The asyncRewake rearm (A2 §F07) — the one-shot watcher launched at SessionStart has very
   // likely already exited by now; this is what re-arms it for the NEXT entry.
-  deps.rewake.onStop(session.session_id);
-  return ok();
+  if (providerId === "claude-code") deps.rewake.onStop(session.session_id);
+  if (drained.count === 0) return ok();
+  const text = formatPresentationBatch(drained.drained);
+  return {
+    ...ok(JSON.stringify({ decision: "block", reason: text })),
+    ...(drained.delivery_id ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } } : {}),
+  };
 }
 
-async function handleNotification(input: unknown, deps: HookDeps): Promise<HookOutcome> {
+async function handleNotification(input: unknown, deps: HookDeps, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("notification: hook input missing session_id/cwd");
   await deps.daemonClient.heartbeat(session.session_id);
@@ -119,7 +143,7 @@ async function handleNotification(input: unknown, deps: HookDeps): Promise<HookO
  * rearms promptly instead of waiting out `staleMs`) and exits 2 with the F07 stderr reminder.
  * Finds nothing after every attempt → exits 0 (F07: "normal, no new entries yet"). */
 async function handleRewakeWatch(input: unknown, deps: HookDeps, watcherPid: number): Promise<HookOutcome> {
-  const session = provider.detectSession(input);
+  const session = providers["claude-code"]!.detectSession(input);
   if (!session) return usageError("rewake-watch: hook input missing session_id/cwd");
 
   const attempts = deps.rewakePollAttempts ?? 1;
@@ -133,11 +157,11 @@ async function handleRewakeWatch(input: unknown, deps: HookDeps, watcherPid: num
       // event entirely — the session ending, not this one watcher exiting) so the Stop hook's
       // rearm sees "not active" immediately rather than waiting out `staleMs`.
       deps.leases?.release(session.session_id, watcherPid);
-      const entry = drained.drained[0];
       return {
         exitCode: 2,
         stdout: "",
-        stderr: `glosa: inbox/${entry?.id ?? "?"} pending (via asyncRewake) [watcher pid ${watcherPid}]`,
+        stderr: formatPresentationBatch(drained.drained),
+        ...(drained.delivery_id ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } } : {}),
       };
     }
     if (i < attempts - 1) await sleep(intervalMs);
@@ -145,19 +169,28 @@ async function handleRewakeWatch(input: unknown, deps: HookDeps, watcherPid: num
   return ok();
 }
 
-export async function runHook(event: string, input: unknown, deps: HookDeps, watcherPid = process.pid): Promise<HookOutcome> {
+export async function runHook(
+  event: string,
+  input: unknown,
+  deps: HookDeps,
+  watcherPid = process.pid,
+  providerId = "claude-code",
+): Promise<HookOutcome> {
+  const selected = providerFor(providerId);
+  if (!selected) return usageError(`glosa hook: unknown provider '${providerId}'`);
   switch (event as HookEvent) {
     case "session-start":
-      return handleSessionStart(input, deps);
+      return handleSessionStart(input, deps, providerId, selected);
     case "session-end":
-      return handleSessionEnd(input, deps);
+      return handleSessionEnd(input, deps, providerId, selected);
     case "user-prompt-submit":
-      return handleUserPromptSubmit(input, deps);
+      return handleUserPromptSubmit(input, deps, selected);
     case "stop":
-      return handleStop(input, deps);
+      return handleStop(input, deps, providerId, selected);
     case "notification":
-      return handleNotification(input, deps);
+      return handleNotification(input, deps, selected);
     case "rewake-watch":
+      if (providerId !== "claude-code") return usageError("rewake-watch is only supported for claude-code");
       return handleRewakeWatch(input, deps, watcherPid);
     default:
       return usageError(`glosa hook: unknown event '${event}'`);

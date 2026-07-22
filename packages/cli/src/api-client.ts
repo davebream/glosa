@@ -9,6 +9,7 @@
 // four hook-facing routes), and every hook handler's test only ever needs to fake those four —
 // widening that interface would mean every hook test's fake grows methods it never calls.
 import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
+import type { DeliverableEntry } from "../../daemon/src/providers/interface.ts";
 
 export interface ApiProblem {
   type?: string;
@@ -104,6 +105,10 @@ export interface AttentionRequestResult {
   status: string;
 }
 
+export interface InboxPresentationResult {
+  presentation: DeliverableEntry;
+}
+
 export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
 
 /** The interface every P5.1 command depends on. `port` is exposed (rather than kept private)
@@ -120,6 +125,7 @@ export interface GlosaApiClient {
     opts: { message?: string; action?: string; targetPath?: string },
   ): Promise<AttentionRequestResult>;
   getEntryStatus(path: string, entry: string): Promise<EntryStatus | null>;
+  getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
 }
 
@@ -158,11 +164,13 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
     return res;
   }
 
+  async function openWorkspace(path: string): Promise<{ slug: string; path: string }> {
+    return (await call("POST", "/api/workspaces/open", { path })).json();
+  }
+
   return {
     port,
-    async openWorkspace(path) {
-      return (await call("POST", "/api/workspaces/open", { path })).json();
-    },
+    openWorkspace,
     async resolveEntry(path, entry, outcome, session, note) {
       return (
         await call("POST", "/api/workspaces/resolve", {
@@ -195,6 +203,16 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
         if (isApiError(err) && err.status === 404) return null;
         throw err;
       }
+    },
+    async getInboxPresentation(path, entry, cursor) {
+      const workspace = await openWorkspace(path);
+      const suffix = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : "";
+      return (
+        await call(
+          "GET",
+          `/w/${encodeURIComponent(workspace.slug)}/inbox/${encodeURIComponent(entry)}/presentation${suffix}`,
+        )
+      ).json();
     },
     async getStatus() {
       return (await call("GET", "/api/status")).json();

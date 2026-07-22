@@ -59,11 +59,34 @@ export interface DeliveryResult {
   error?: string;
 }
 
-/** The subset of an inbox entry `deliver()` needs — never the full R3 payload. */
-export interface DeliverableEntry {
-  id: string;
-  kind: "human_edit" | "annotation" | "attention_request";
+export interface PresentationRetrieval {
+  command: string;
+  mcp_tool: "glosa_inbox_get";
+  cursor?: string;
 }
+
+export interface PresentationTruncation {
+  truncated: boolean;
+  omitted_bytes: number;
+  omitted_hunks: number;
+}
+
+interface PresentationBase {
+  id: string;
+  status: string;
+  text: string;
+  bytes: number;
+  truncation: PresentationTruncation;
+  retrieval: PresentationRetrieval;
+}
+
+/** Provider-neutral, already-bounded actionable content. The `kind` discriminant keeps annotation,
+ * human-edit, and attention payloads explicit while every transport shares the exact same text,
+ * byte accounting, truncation metadata, and retrieval instructions. */
+export type DeliverableEntry =
+  | (PresentationBase & { kind: "annotation"; detail: Record<string, unknown> })
+  | (PresentationBase & { kind: "human_edit"; detail: Record<string, unknown> })
+  | (PresentationBase & { kind: "attention_request"; detail: Record<string, unknown> });
 
 export type Liveness = "alive" | "stale";
 

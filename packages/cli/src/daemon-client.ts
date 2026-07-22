@@ -5,6 +5,7 @@
 // the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes the handlers
 // testable with an in-memory fake instead of a live daemon subprocess.
 import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
+import type { DeliverableEntry } from "../../daemon/src/providers/interface.ts";
 
 export interface RegisterSessionInput {
   session_id: string;
@@ -20,15 +21,13 @@ export interface RegisterSessionResult {
   drained_workspaces: string[];
 }
 
-export interface DrainedEntry {
-  id: string;
-  kind: string;
-  status: string;
-}
+export type DrainedEntry = DeliverableEntry;
 
 export interface DrainResult {
+  delivery_id?: string | null;
   drained: DrainedEntry[];
   count: number;
+  has_more?: boolean;
 }
 
 /** A5 §F23's turn-boundary/watcher `via` values — exactly the ones `POST /api/sessions/:id/drain`
@@ -36,11 +35,13 @@ export interface DrainResult {
  * MUST say which hook is actually surfacing this drain right now — `deliver()`'s own proactive
  * `"gate"`/`"attempted"` queuing record (providers/interface.ts) is a SEPARATE, earlier event from
  * this route's `"presented"` confirmation once the drain genuinely happens. */
-export type DrainVia = "gate" | "stop" | "userprompt" | "asyncRewake";
+export type DrainVia = "gate" | "stop" | "userprompt" | "asyncRewake" | "mcp_pull";
 
 export interface DrainOptions {
   limit?: number;
   via?: DrainVia;
+  entryId?: string;
+  cursor?: string;
 }
 
 export interface DaemonHookClient {
@@ -48,6 +49,7 @@ export interface DaemonHookClient {
   heartbeat(sessionId: string): Promise<void>;
   deregister(sessionId: string): Promise<void>;
   drain(sessionId: string, opts?: DrainOptions): Promise<DrainResult>;
+  acknowledge?(sessionId: string, deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<void>;
 }
 
 export interface DaemonUnreachableError extends Error {
@@ -98,6 +100,12 @@ export async function createHttpDaemonClient(): Promise<DaemonHookClient> {
     },
     async drain(sessionId, opts) {
       return (await call(`/api/sessions/${encodeURIComponent(sessionId)}/drain`, opts ?? {})).json();
+    },
+    async acknowledge(sessionId, deliveryId, outcome, error) {
+      await call(`/api/sessions/${encodeURIComponent(sessionId)}/deliveries/${encodeURIComponent(deliveryId)}/ack`, {
+        outcome,
+        ...(error ? { error } : {}),
+      });
     },
   };
 }

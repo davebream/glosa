@@ -8,7 +8,7 @@
 //     requires but can't enforce by itself, since it spans both inbox.ts and journal.ts.
 // This is what the HTTP layer (later tasks) and this task's concurrency tests call.
 import { JournalWriter, appendEvent, type EventBy, type JournalEvent } from "./journal.ts";
-import { writeInboxEntryOnce } from "./inbox.ts";
+import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
 import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import {
@@ -30,8 +30,26 @@ import {
   leaseSessionMismatchError,
   noActiveLeaseError,
 } from "./lease.ts";
-import { checkpoint, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
+import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, runGit, safePathspec } from "../git/shadow.ts";
 import { mkdirSync } from "node:fs";
+import type { DeliverableEntry } from "../providers/interface.ts";
+import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
+
+const DELIVERY_RESERVATION_TTL_MS = 30_000;
+
+interface DeliveryReservation {
+  entries: string[];
+  via: DeliveryVia;
+  session: string;
+  expiresAt: number;
+}
+
+export interface PreparedDelivery {
+  delivery_id: string | null;
+  drained: DeliverableEntry[];
+  count: number;
+  has_more: boolean;
+}
 
 // P2.4 — LOAD-BEARING, NOT JUST FOR THE JOURNAL: nothing here stops two WorkspaceBus instances
 // (or a WorkspaceBus + a standalone `reconcileWorkspace(root, ...)` call, e.g. from a health-check
@@ -79,6 +97,7 @@ export class WorkspaceBus {
   // and skip its journal replay/self-heal/offline-catchup forever. Living on the instance means a
   // fresh instance is un-reconciled by construction — no external bookkeeping to keep in sync.
   private reconciledOnce = false;
+  private readonly deliveryReservations = new Map<string, DeliveryReservation>();
 
   // P3.2 — the SSE cursor space (A1 §8.1): `nextSequence` is the physical journal-line offset
   // this bus's NEXT append will claim. Seeded from `countJournalLines` at the end of every
@@ -212,30 +231,36 @@ export class WorkspaceBus {
    * transition table (attention vs. common). `fields.detail`, if given, is applied on top and wins
    * on any overlapping key, `kind` included. */
   createEntry(id: string, payload: unknown, fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {}): Promise<void> {
-    return this.mutex.runExclusive(this.root, () => {
-      writeInboxEntryOnce(this.root, id, payload);
-      const payloadKind =
-        payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
-          ? ((payload as Record<string, unknown>).kind as string)
-          : undefined;
-      const detail: Record<string, unknown> | undefined =
-        payloadKind !== undefined || fields.detail !== undefined
-          ? { ...(payloadKind !== undefined ? { kind: payloadKind } : {}), ...(fields.detail ?? {}) }
-          : undefined;
-      const event: JournalEvent = {
-        v: 1,
-        event_id: this.ulidFn(),
-        at: this.nowFn().toISOString(),
-        entry: id,
-        event: "entry_created",
-        by: fields.by ?? "daemon",
-        ...(fields.idem !== undefined ? { idem: fields.idem } : {}),
-        ...(detail !== undefined ? { detail } : {}),
-      };
-      appendEvent(this.writer, event);
-      applyEvent(this.state, event, this.reducer);
-      this.notify(event);
-    });
+    return this.mutex.runExclusive(this.root, () => this.createEntryLocked(id, payload, fields));
+  }
+
+  private createEntryLocked(
+    id: string,
+    payload: unknown,
+    fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
+  ): void {
+    writeInboxEntryOnce(this.root, id, payload);
+    const payloadKind =
+      payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
+        ? ((payload as Record<string, unknown>).kind as string)
+        : undefined;
+    const detail: Record<string, unknown> | undefined =
+      payloadKind !== undefined || fields.detail !== undefined
+        ? { ...(payloadKind !== undefined ? { kind: payloadKind } : {}), ...(fields.detail ?? {}) }
+        : undefined;
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: id,
+      event: "entry_created",
+      by: fields.by ?? "daemon",
+      ...(fields.idem !== undefined ? { idem: fields.idem } : {}),
+      ...(detail !== undefined ? { detail } : {}),
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
   }
 
   /** Appends a `transition_committed{to}` event. Passing the same `idem` across retried calls
@@ -290,7 +315,7 @@ export class WorkspaceBus {
   }
 
   /** The unlocked body `recordDeliveryAttempt` wraps in its own mutex critical section — pulled
-   * out so `drainCandidates` (below) can call it from WITHIN an ALREADY-held critical section
+   * out so delivery prepare/ack can call it from WITHIN an ALREADY-held critical section
    * without deadlocking (`KeyedMutex.runExclusive` is not reentrant — a nested call for the same
    * root would wait on itself forever). Never call this directly outside a critical section this
    * class already holds for `this.root`. */
@@ -321,38 +346,113 @@ export class WorkspaceBus {
     this.notify(event);
   }
 
-  /** The A5 §F23 turn-boundary/watcher drain, done ATOMICALLY: selects eligible entries AND
-   * records each one's `delivery_attempt` in the SAME mutex critical section (P4.3 concurrency
-   * review fix #7 — an earlier revision selected candidates in the HTTP route, outside any lock,
-   * so two concurrent drains on one workspace could both select and record against the exact
-   * same entries; moving both steps in here, under `this.mutex`, is what makes "select" and
-   * "record" a single indivisible operation two racing callers can't interleave). Eligible =
-   * non-terminal AND not yet SUCCESSFULLY delivered — an entry whose only prior attempts are all
-   * `outcome:"failed"` stays eligible (it gets re-drained, `reason:"re_nudge"`, never
-   * permanently excluded by a transport failure); an entry that already has a
-   * `"presented"`/`"transport_accepted"` attempt on record is excluded, since it doesn't need
-   * re-surfacing. Returns the drained entries' ids/kind/status for the caller to build its own
-   * additionalContext/reminder text. */
-  drainCandidates(limit: number, opts: { via: DeliveryVia; session: string }): Promise<{ id: string; kind: string; status: string }[]> {
-    return this.mutex.runExclusive(this.root, () => {
-      const candidates = Object.entries(this.state.entries)
-        .filter(([, e]) => {
-          const kind = e.kind === "attention" ? "attention" : "common";
-          if (isTerminal(kind, e.status)) return false;
-          const attempts = Array.isArray(e.deliveryAttempts) ? (e.deliveryAttempts as DeliveryAttemptRecord[]) : [];
-          const alreadyDelivered = attempts.some((a) => a.outcome === "presented" || a.outcome === "transport_accepted");
-          return !alreadyDelivered;
-        })
-        .slice(0, limit);
+  private pruneDeliveryReservationsLocked(): void {
+    const now = this.nowFn().getTime();
+    for (const [token, reservation] of this.deliveryReservations) {
+      if (reservation.expiresAt <= now) this.deliveryReservations.delete(token);
+    }
+  }
 
-      for (const [id, entryState] of candidates) {
-        const attempts = Array.isArray(entryState.deliveryAttempts) ? entryState.deliveryAttempts : [];
-        const reason: DeliveryReason = attempts.length > 0 ? "re_nudge" : "initial";
-        this.recordDeliveryAttemptLocked(id, { via: opts.via, session: opts.session, outcome: "presented", reason });
+  /** Selects and formats entries under the workspace mutex, without claiming that the caller has
+   * surfaced them. A later acknowledgement records the actual transport outcome. */
+  prepareDelivery(
+    limit: number,
+    opts: { via: DeliveryVia; session: string; entryId?: string },
+    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+  ): Promise<PreparedDelivery> {
+    return this.mutex.runExclusive(this.root, async () => {
+      this.pruneDeliveryReservationsLocked();
+      const reserved = new Set(Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries));
+      const eligible = Object.entries(this.state.entries).filter(([id, entry]) => {
+        if (opts.entryId && id !== opts.entryId) return false;
+        if (reserved.has(id)) return false;
+        const kind = entry.kind === "attention" ? "attention" : "common";
+        if (isTerminal(kind, entry.status)) return false;
+        const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+        // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
+        // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
+        // turn-boundary/MCP safety-net drain permanently.
+        return !attempts.some((attempt) => attempt.outcome === "presented");
+      });
+
+      const presentations: DeliverableEntry[] = [];
+      let batchBytes = 0;
+      for (const [id, entry] of eligible) {
+        if (presentations.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
+        let presentation: DeliverableEntry | null = null;
+        try {
+          presentation = await build(id, readInboxEntry(this.root, id), entry.status);
+        } catch (error) {
+          const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+          this.recordDeliveryAttemptLocked(id, {
+            via: opts.via,
+            session: opts.session,
+            outcome: "failed",
+            reason: attempts.length > 0 ? "re_nudge" : "initial",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+        if (!presentation) {
+          const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+          this.recordDeliveryAttemptLocked(id, {
+            via: opts.via,
+            session: opts.session,
+            outcome: "failed",
+            reason: attempts.length > 0 ? "re_nudge" : "initial",
+            error: "entry_payload_not_actionable",
+          });
+          continue;
+        }
+        const presentationBytes = presentation.bytes;
+        const separatorBytes = presentations.length > 0 ? Buffer.byteLength("\n\n---\n\n", "utf8") : 0;
+        if (batchBytes + separatorBytes + presentationBytes > MAX_BATCH_PRESENTATION_BYTES) break;
+        presentations.push(presentation);
+        batchBytes += separatorBytes + presentationBytes;
       }
 
-      return candidates.map(([id, e]) => ({ id, kind: typeof e.kind === "string" ? e.kind : "common", status: e.status }));
+      const deliveryId = presentations.length > 0 ? this.ulidFn() : null;
+      if (deliveryId) {
+        this.deliveryReservations.set(deliveryId, {
+          entries: presentations.map((presentation) => presentation.id),
+          via: opts.via,
+          session: opts.session,
+          expiresAt: this.nowFn().getTime() + DELIVERY_RESERVATION_TTL_MS,
+        });
+      }
+      return {
+        delivery_id: deliveryId,
+        drained: presentations,
+        count: presentations.length,
+        has_more: eligible.length > presentations.length,
+      };
     });
+  }
+
+  acknowledgeDelivery(deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<boolean> {
+    return this.mutex.runExclusive(this.root, () => {
+      this.pruneDeliveryReservationsLocked();
+      const reservation = this.deliveryReservations.get(deliveryId);
+      if (!reservation) return false;
+      this.deliveryReservations.delete(deliveryId);
+      for (const id of reservation.entries) {
+        const attempts = this.state.entries[id]?.deliveryAttempts;
+        this.recordDeliveryAttemptLocked(id, {
+          via: reservation.via,
+          session: reservation.session,
+          outcome,
+          reason: Array.isArray(attempts) && attempts.length > 0 ? "re_nudge" : "initial",
+          ...(error ? { error } : {}),
+        });
+      }
+      return true;
+    });
+  }
+
+  readEntry(id: string): { payload: unknown; status: string } | null {
+    const state = this.state.entries[id];
+    if (!state) return null;
+    return { payload: readInboxEntry(this.root, id), status: state.status };
   }
 
   /** `apply-begin` (A4 §F05): under this workspace's ONE git+journal mutex (the same slot every
@@ -458,20 +558,40 @@ export class WorkspaceBus {
     });
   }
 
-  /** `PUT /w/:slug/artifacts/:path`'s checkpoint (P3.3 addition, A4 §F05's "human by
-   * construction" rule): checkpoints whatever is currently on disk as a `human`-attributed
-   * commit — no lease is involved, because this is a write glosa's OWN editor performed directly
-   * (not proxied through an agent session, so there's no `session:<id>` to attribute it to and
-   * none needed — the honest answer is simply `human`). Caller MUST have already written the file
-   * to disk (via `writeArtifactAtomic`) BEFORE calling this: `checkpoint()` stages whatever's
-   * currently on disk, it doesn't take content as an argument. Mirrors `applyBegin`'s own
-   * reclaim-lock + ensure-shadow-repo-exists preamble since this can be the very first git
-   * operation for a workspace that has never had a lease.
-   *
-   * `kind` defaults to `human_edit` (the `PUT /w/:slug/artifacts/:path` save flow this method was
-   * built for) — `POST /w/:slug/restore` (P3.5, A6 §F31) reuses this same "human by construction,
-   * no lease involved" checkpoint but passes `kind: "restore"` so the timeline can tell a restore
-   * apart from an ordinary editor save without inventing a second near-identical method. */
+  /** Serializes a glosa editor save/restore with its path-scoped shadow-git checkpoints and the
+   * immutable `human_edit` inbox entry derived from the resulting unified diff. Holding the same
+   * workspace mutex across before -> mutate -> checkpoint -> diff -> entry creation prevents an
+   * unrelated filesystem change from being folded into this human-attributed edit. */
+  captureHumanEdit(
+    entryId: string,
+    path: string,
+    mutate: () => void,
+    editKind: "edit" | "restore" = "edit",
+  ): Promise<{ checkpoint_before: string; checkpoint_after: string } | null> {
+    return this.mutex.runExclusive(this.root, async () => {
+      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      const before = await headSha(this.root);
+      mutate();
+      const after = await checkpoint(this.root, {
+        attribution: "human",
+        kind: editKind === "restore" ? "restore" : "human_edit",
+        entry: entryId,
+        paths: [path],
+      });
+      if (before === after) return null;
+      const diff = (await runGit(this.root, ["diff", "-M", before, after, "--", safePathspec(path)])).stdout;
+      this.createEntryLocked(entryId, {
+        kind: "human_edit",
+        edit_kind: editKind,
+        checkpoint_before: before,
+        checkpoint_after: after,
+        files: [{ path, diff, diff_bytes: Buffer.byteLength(diff, "utf8") }],
+      });
+      return { checkpoint_before: before, checkpoint_after: after };
+    });
+  }
+
   humanEditCheckpoint(kind = "human_edit"): Promise<string> {
     return this.mutex.runExclusive(this.root, async () => {
       reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
