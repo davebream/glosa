@@ -4,16 +4,18 @@
 
 | Decision | Result | Reason |
 |---|---|---|
-| T8 result | **FAIL** | The real-session pass found two integration defects, and the private rehearsal did not have an honest source-to-render regeneration command. Required manual scenarios therefore remain incomplete. |
-| Overall v1 readiness | **BLOCKED** | T8 is not certified. Token rotation and revocation remain an independent release blocker tracked by issue #20. |
+| T8 result | **PASS — maintainer sign-off pending** | The frozen candidate passed the deterministic gates and every generic real-session scenario. Three defects found during rehearsal were fixed and the affected browser/MCP paths were rerun successfully. |
+| Overall v1 readiness | **BLOCKED** | Token rotation and revocation remain an independent release blocker tracked by issue #20. |
 
-This is a failed rehearsal report, not a compatibility certificate. Issue #19 must remain open until a complete clean rerun passes and the maintainer signs off.
+This report certifies the generic T8 behavior exercised by issue #19. It does not approve v1 release and it does not contain a maintainer signature.
 
 ## Rehearsal boundary
 
-The rehearsal used an ignored private workspace containing maintainer-selected source and rendered artifacts under neutral filenames. The session started from a different working directory and was explicitly bound to the artifact workspace. No private artifact, transcript, pairing token, canonical path, or private metadata is included here.
+The rehearsal used an ignored, generated workspace with neutral source, rendered, manifest, and descriptor files. A deterministic local renderer provided one verbatim region and one transformed region. The browser probe targeted an inert closed loopback port; no external request was attempted or observed.
 
-The run used generic `WorkspaceMetadataDescriptor` v1 only. No external integration package or workflow logic was installed in glosa.
+A real Claude Code session started from a different working directory and was explicitly bound to the artifact workspace. No rehearsal artifact, transcript, pairing token, canonical path, or session identifier is committed here.
+
+The run used `WorkspaceMetadataDescriptor` v1 through the generic adapter interface. No external producer package or workflow logic was installed in glosa.
 
 ## Environment
 
@@ -24,103 +26,86 @@ The run used generic `WorkspaceMetadataDescriptor` v1 only. No external integrat
 | Bun | 1.2.7 |
 | Git | 2.52.0 |
 | glosa | 0.1.0-alpha.0 |
-| glosa build ID after fixes | `0.1.0-alpha.0-6a38eab4e7396b11` |
+| Final glosa build ID | `0.1.0-alpha.0-1e9e6c561c7c1508` |
 | API contract | 1.1 |
 | Workspace metadata contract | 1 |
 | Claude Code | 2.1.217 |
-| Session model reported by Claude Code | Sonnet 5 with high effort · Claude Max |
+| Session model reported by Claude Code | Sonnet 5, high effort |
 | Browser | Google Chrome 150.0.7871.181 |
+
+The installed client rejected the configured custom default during preflight. Sonnet 5 was then selected explicitly for the rehearsal; the user's prior default was restored after the session.
 
 ## Deterministic gate
 
-The manual pass began only after the deterministic gate was green. After the two integration defects found by the rehearsal were fixed, the complete gate was run again from the post-fix behavior tree.
+The manual pass began only after the deterministic gate was green. The complete gate was run again after the rehearsal fixes.
 
 | Command | Actual result |
 |---|---|
 | `bun run typecheck` | PASS |
-| `bun test` — run 1 | PASS — 1,150 tests, 0 failures, 10,589 expectations across 108 files |
-| `bun test` — run 2 | PASS — 1,150 tests, 0 failures, 10,589 expectations across 108 files |
+| `bun test` — run 1 | PASS — 1,156 tests, 0 failures, 10,604 expectations across 108 files |
+| `bun test` — run 2 | PASS — 1,156 tests, 0 failures, 10,604 expectations across 108 files |
 | `bun run audit:licenses` | PASS |
 | `bun run package:check` | PASS — package smoke checked 104 files |
+
+Focused tests also passed for MCP durable retrieval, attention focus and idempotency, transcript fail-soft state, and the three Playwright browser flows rerun after their fixes.
 
 ## Expected and actual results
 
 | Scenario | Expected | Actual | Result |
 |---|---|---|---|
 | Metadata registration and restart | Descriptor validates before persistence, survives restart, rehydrates the adapter, and refreshes clients. | Descriptor v1 registered two neutral artifacts, survived daemon restart, and restored the declared class, order, derived-from edge, and manifest component. | PASS |
-| Explicit session binding | A real session started elsewhere binds to the artifact workspace without cwd guessing. | Claude Code SessionStart registered the session; `glosa session bind` then reported the artifact workspace as its explicit binding. | PASS |
-| Verbatim class-F resolution | A verbatim chunk resolves to its exact source range and is delivered actionably. | The annotation resolved to one exact source range in the declared source artifact. The journal recorded `entry_created`, then `delivery_attempt{via:userprompt,outcome:presented,reason:initial}`. | PASS for resolution and delivery |
-| Verbatim apply and regeneration | The session takes an apply lease, edits source, resolves the lease, and glosa observes the regenerated rendered artifact with session attribution. | No real private renderer command was available. The session correctly refused to hand-edit the rendered artifact or fabricate provenance. No source or rendered file was changed. | **FAIL** |
-| Transformed class-F annotation | A transformed chunk becomes descriptor-derived pipeline feedback and does not edit source. | Not run after the verbatim scenario blocked the pass. | NOT RUN |
-| Parked annotation drain | An entry created without a live session drains after later registration and explicit binding. | Not run. | NOT RUN |
-| Human editor provenance | A browser edit creates immutable `human_edit`, a journal transition, and a `human` shadow checkpoint. | Not run. | NOT RUN |
-| Attention badge and tray | Badge and inline tray expose honest state; keyboard flow reaches `seen → done`; `request-review --wait` receives a structured review outcome. | Not run. | NOT RUN |
-| Conversation mirror and terminal fallback | The live transcript mirrors; unavailable mirror states fail softly; fallback delivery remains actionable. | The real session received the annotation through the UserPromptSubmit fallback. The SPA mirror and fail-soft UI were not fully observed. | PARTIAL |
-| Optional Channels | Attempt activation; if unavailable, accept only when a hook or MCP fallback succeeds and is audited. | Claude Code reported the development Channel unavailable. UserPromptSubmit fallback succeeded and its presentation attempt was journaled. | PASS for required fallback; Channel unavailable |
-| Browser class-F sandbox/CSP | A local inert probe renders through the separate origin without external egress. | Initial browser opening failed before iframe creation because capability minting returned `403 invalid-origin`. The code fix was verified by HTTP and deterministic security tests, but the browser scenario was not completed end to end in this run. | **FAIL** |
+| Explicit session binding | A real session started elsewhere binds to the artifact workspace without cwd guessing. | Claude Code registered from a separate directory; `glosa_session_bind` explicitly associated it with the artifact workspace. A fresh-session repeat confirmed the binding on the final candidate. | PASS |
+| Human editor provenance | An editor save creates immutable `human_edit`, journal state, and a `human` shadow checkpoint. | Playwright drove Edit → Source → Save in the real browser. The immutable entry and journal event were present, and the shadow checkpoint carried `human` attribution. | PASS |
+| Verbatim class-F resolution and apply | The selected verbatim chunk resolves to its exact source range, is delivered actionably, and transitions under an apply lease. | A real pointer selection resolved to source line 3. UserPromptSubmit presented it; exact-ID MCP retrieval still worked after presentation. The session recorded `apply_begin → apply_end → applied`, edited only the source, and received session attribution. | PASS |
+| Regenerated-render pickup | The source change is regenerated by the declared local pipeline and observed by glosa. | The deterministic renderer regenerated the class-F artifact, updated its manifest hash, and the browser showed the revised sentence. | PASS |
+| Transformed class-F annotation | A transformed chunk becomes descriptor-derived pipeline feedback and does not edit source. | The selection resolved to `pipeline_feedback` using only descriptor/manifest fields for the declared component and transformed chunk at source line 5. It was deferred with an explanatory note; the source stayed unchanged. | PASS |
+| Parked annotation drain | An entry created without a live session drains after later registration and explicit binding. | The transformed entry was created while no session was live, then presented by the Stop fallback after a later session registered and bound. | PASS |
+| Attention badge and tray | Badge and inline tray expose honest state; keyboard flow reaches `seen → done`; `request-review --wait` receives a structured review outcome. | Keyboard opening focused the close control, the 390 px layout stayed within the viewport, and Approve completed `delivered → seen → done`. The waiter returned `outcome: approved` plus the bounded response, and Escape restored trigger focus. | PASS |
+| Conversation mirror | The SPA mirrors the explicitly bound live transcript. | A fresh real session replied with a unique neutral marker; Playwright observed that marker in the Conversation transcript region. | PASS |
+| Terminal fallback | An unavailable mirror fails softly and a failed composer send preserves input. | A workspace with no registered session showed `mirror unavailable — use the terminal`. Send explained how to register/bind a session and preserved the full draft. | PASS |
+| Optional Channels | Attempt activation; if direct Channel delivery is unavailable, accept only when a hook or MCP fallback succeeds and is audited. | Development Channels loaded and activation was accepted, but no direct Channel delivery was confirmed. UserPromptSubmit and Stop fallbacks both presented entries and recorded their delivery attempts; MCP exact-ID retrieval succeeded. | PASS via audited fallback |
+| Browser class-F sandbox/CSP | The class-F document runs inside the separate-origin sandbox; annotations work; a local inert probe cannot leave the frame. | Chrome rendered the iframe, ran its local script, completed the nonce-gated annotation handshake, and posted both selections. CSP blocked the loopback probe before any request reached the closed port. | PASS |
 
-## Defects found and mitigations
+## Defects found and verified mitigations
 
-### 1. Browser capability mint returned `403 invalid-origin`
+### 1. Exact-ID MCP retrieval failed after hook presentation
 
-Capability issuance was implemented as a state-changing `GET`. A normal same-origin browser GET does not reliably include an `Origin` header, while glosa correctly requires that header on state-changing routes. The real SPA therefore failed before it could create the class-F iframe.
+The MCP `get` tool reused delivery-drain semantics. Once a hook had honestly marked an entry presented, a subsequent exact-ID retrieval returned no actionable entry even though the advertised immutable entry still existed.
 
-Mitigation implemented in this branch:
+Mitigation: `glosa_inbox_get` now uses the durable API retrieval contract shared with the CLI. A real session retrieved both already-presented annotations by ID, and focused parity coverage passes.
 
-- changed capability issuance to `POST /w/:slug/capability/:artifactPath`;
-- kept missing and foreign origins rejected;
-- updated the SPA data-access call, daemon route, API appendix, and focused tests;
-- verified a real loopback mint returned HTTP 200 after restart;
-- reran the complete security and package gates successfully.
+### 2. Attention refresh could lose keyboard focus
 
-A clean browser rerun is still required; deterministic and HTTP verification do not replace human observation of the iframe, sandbox, bridge, selection, and inert probe.
+Concurrent refreshes replaced the tray DOM while it was open. Focus could fall back to the document after opening or after a successful response, leaving Escape ineffective.
 
-### 2. MCP session binding could fail after a long model turn
+Mitigation: refreshes are serialized, the focused control is restored across replacement, and the successful empty state receives deterministic in-tray focus. Unit coverage and the responsive Playwright approval flow pass.
 
-The registry lease expires after 60 seconds without a hook boundary. A real MCP invocation proved that the session was active, but `glosa_session_bind` attempted the bind before refreshing the existing lease and received `unknown or not-live session`.
+### 3. Transcript connection failures were visually silent
 
-Mitigation implemented in this branch:
+The no-session transcript route correctly returned 404, but the generic reconnect loop did not expose stream health to the Conversation pane. The SPA retried silently instead of showing its documented terminal fallback.
 
-- the MCP bind tool now heartbeats the already-registered session before binding;
-- unknown session IDs remain unknown, so an MCP caller cannot recreate state lost across a daemon restart;
-- the ordinary CLI still refuses stale sessions and cannot resurrect an ended agent;
-- focused MCP tests and typecheck pass.
-
-### 3. No honest private regeneration command
-
-The rehearsal metadata declared the source/render relationship, but the private workspace did not include a real command capable of regenerating the rendered artifact from the source. Editing both files by hand would have fabricated pipeline behavior and invalidated provenance evidence.
-
-Required mitigation for the next run: the maintainer must select either the real private renderer command or an approved deterministic private transformer before the session starts. The command and expected output relationship remain private; this report records only whether regeneration occurred.
-
-### 4. Development restart invalidated live session state
-
-Fixing defect 1 restarted the isolated daemon. Session bindings are intentionally session-scoped and not persisted, so the active Claude Code session was no longer registered. Its later Stop hook failed softly with a 404 rather than inventing a session.
-
-Required mitigation for the next run: freeze the candidate build before starting the clean rehearsal. If a restart is deliberately exercised, allow the external integration to re-register before continuing.
+Mitigation: transcript stream status now travels through the existing single data-access module. The pane shows the fail-soft message on outage and recovers when transcript frames resume. Unit coverage and a real-browser no-session run pass; the composer draft remained intact.
 
 ## Channel and fallback status
 
 | Transport | Status | Evidence |
 |---|---|---|
-| Claude Code Channel | Unavailable | Activation was attempted and Claude Code reported that the development Channel was unavailable. |
-| UserPromptSubmit hook | PASS | Journal recorded a presented delivery attempt for the verbatim annotation. |
-| MCP pull | Available, not the presenting transport | Pull returned no duplicate after UserPromptSubmit had already reserved and presented the entry. |
+| Claude Code Channel | Activated; direct delivery not confirmed | The development Channel was loaded and accepted. The run does not claim a direct delivery that was not observed. |
+| UserPromptSubmit hook | PASS | Journal recorded presented delivery attempts. |
+| Stop hook | PASS | The parked annotation was presented after later registration and binding. |
+| MCP pull/retrieval | PASS | Exact-ID retrieval succeeded after hook presentation; the implementation no longer conflates retrieval with a delivery drain. |
 
-The unavailable Channel is acceptable for compatibility only because the audited hook fallback succeeded. It does not turn the overall rehearsal into a pass.
+The optional Channel result is acceptable because multiple generic fallback paths succeeded and their attempts are auditable in the journal.
 
 ## Sanitization check
 
-- Private rehearsal files remained under ignored local state.
-- No source/rendered content, transcript, token, session identifier, or canonical private path is included in this report.
-- The candidate implementation contains only generic metadata, adapter, session, attention, and transport contracts.
-- No external runtime call, telemetry path, or terminal-multiplexer coupling was added to glosa.
-
-## Required clean rerun
-
-The next attempt must use a frozen build and a preselected private regeneration command, then complete every NOT RUN or PARTIAL row above. It must also re-observe the fixed class-F browser flow in a real browser and exercise the full attention `seen → done` path with `request-review --wait`.
+- Rehearsal data remained under ignored local state.
+- No source/rendered fixture, transcript, token, session identifier, or canonical rehearsal path is included in this report.
+- The live tree search, excluding preserved archive/research history and ignored local state, found no private producer or domain name and no private absolute path.
+- The implementation adds no external runtime call, telemetry path, or terminal-multiplexer coupling.
 
 ## Maintainer review and sign-off
 
 **Status: pending.**
 
-The agent has not signed on the maintainer's behalf. The maintainer must review the rendered report and supply an explicit name/date/result after a complete passing rerun. Until then, this report remains a failed rehearsal record and is not a v1 approval.
+The agent has not signed on the maintainer's behalf. The maintainer must review the rendered report and provide an explicit approval or rejection. Until then, the T8 evidence is complete but the human release-gate sign-off remains outstanding. Overall v1 readiness remains blocked independently by issue #20.
