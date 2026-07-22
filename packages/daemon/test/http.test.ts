@@ -218,7 +218,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(body.type).toContain("not-found");
   });
 
-  test("foreign Origin + unknown route → 403, not 404 — no route-enumeration side channel [review item 1 / D3]", async () => {
+  test("foreign Origin + unknown route → 403, not 404 — no route-enumeration side channel", async () => {
     const res = await fetch(apiUrl("/api/nonexistent"), { headers: { Origin: "http://evil.example.com" } });
     expect(res.status).toBe(403);
     const body = await res.json();

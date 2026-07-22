@@ -1,6 +1,6 @@
 # glosa - docs
 
-Technical design, requirements, and historical records for glosa. Current product direction lives in
+Technical design and requirements for glosa. Current product direction lives in
 the root [`ROADMAP.md`](../ROADMAP.md); live execution status belongs in the public
 [Glosa Roadmap project](https://github.com/users/davebream/projects/5).
 
@@ -19,9 +19,4 @@ the root [`ROADMAP.md`](../ROADMAP.md); live execution status belongs in the pub
 | `research/codex-review.md` | The adversarial review that turned v1 → v2 (32 findings). |
 | `research/jsonl-ui-components.md` | Landscape of Claude Code JSONL/stream-json UI components. |
 | `research/electron-vs-tauri.md` | Shell research (v1 ships no shell; relevant to a future decision). |
-| `archive/requirements-v1-superseded.md` | The original v1. **Do not build from this.** |
-| `archive/2026-07-20-private-decisions.md` | Historical private design exploration; not build input. |
-| `archive/2026-07-20-private-options.md` | Historical private product options; not build input. |
-| `archive/v1-build/` | Frozen autonomous build checklist, log, and orchestrator procedure. Historical evidence only. |
-
 **Precedence**: where `requirements.md` and an appendix disagree, `requirements.md` governs.

@@ -15,8 +15,8 @@ export const DAEMON_VERSION = APP_VERSION;
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };
 
 /**
- * Decision (P1.3 review item 3, logged as D4 in docs/archive/v1-build/OVERNIGHT-LOG.md): a missing header AND an
- * unparseable/partial one (`""`, `"1"`, `"1.0.0"`, `"abc"`, `"2abc"`, `"x.y"` — anything
+ * Per A1 §3, a missing header and an unparseable/partial one (`""`, `"1"`, `"1.0.0"`,
+ * `"abc"`, `"2abc"`, `"x.y"` — anything
  * `parseProtocolVersion` can't turn into a real `{major,minor}`) get the SAME lenient treatment —
  * "unknown minor, same major assumed", never rejected on that basis alone. Only a well-formed
  * version whose MAJOR differs from `PROTOCOL_VERSION`'s major is a *proven* breaking mismatch;

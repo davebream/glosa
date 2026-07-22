@@ -32,7 +32,7 @@ const MESSAGES = {
 
 /**
  * The FIRST thing bootstrap does (A3 §3/F24): read the pairing token out of the `#t=<token>` URL
- * fragment (D5), stash it in sessionStorage — never localStorage, it's bounded to the tab's
+ * fragment (A1 §2), stash it in sessionStorage — never localStorage, it's bounded to the tab's
  * lifetime — and strip the fragment from the address bar via `history.replaceState` before
  * anything else (render, error handling) runs. Takes `location`/`storage`/`history` as params so
  * a test can pass fakes instead of touching a real browser. No `#t=` present → returns whatever

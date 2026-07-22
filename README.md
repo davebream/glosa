@@ -87,6 +87,20 @@ singleton daemon and opens a paired browser tab. Run `glosa doctor` to verify th
 glosa binds feedback to an explicit live session when possible. If more than one session matches, the
 browser asks instead of guessing. If none is live, the entry parks until a matching session registers.
 
+## Related tools
+
+glosa is one part of a useful ecosystem of human-in-the-loop tools. These projects solve adjacent
+problems well; use the one that best fits the work.
+
+| Project | Reach for it when | How glosa differs |
+|---|---|---|
+| [Plannotator](https://github.com/backnotprop/plannotator) | You want a mature, on-demand review surface for plans, documents, HTML, code diffs, or pull requests, with broad agent support and optional sharing. | glosa treats a directory as a long-lived writing workspace. Its journal, parked feedback, shadow history, and conservative provenance are designed to survive changes across files, tools, and agent sessions. It deliberately has no sharing service or runtime network egress. |
+| [Agentation](https://github.com/benjitaylor/agentation) | You are reviewing a running React interface and want element, area, or text annotations with selectors an agent can act on. | glosa reviews file-backed Markdown, HTML, and text, then routes durable feedback through agent hooks and MCP. It does not embed a feedback toolbar in the application being reviewed. |
+
+Plannotator is the closest neighboring project and a strong place to start for established plan,
+document, or code review today. glosa is exploring a narrower question: can a sensitive writing
+workspace remain local, durable, and honestly attributable across many artifacts and agent sessions?
+
 ## Local by design
 
 - The daemon binds to `127.0.0.1`; the browser API is bearer-authenticated and protected against DNS rebinding.

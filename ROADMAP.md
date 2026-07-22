@@ -48,6 +48,4 @@ concrete work.
 - cmux coupling or terminal-keystroke injection.
 - Domain-specific behavior in the generic core.
 
-The normative v1 technical contract remains in [docs/requirements.md](docs/requirements.md). Completed
-autonomous build records are preserved under [docs/archive/v1-build](docs/archive/v1-build/README.md)
-and are not current priorities.
+The normative v1 technical contract remains in [docs/requirements.md](docs/requirements.md).

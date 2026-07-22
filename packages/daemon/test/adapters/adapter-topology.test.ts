@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.2 (T8 release gate — "adapter-topology", per docs/archive/v1-build/OVERNIGHT-LOG.md's D10 reinterpretation:
-// the real-world domain adapter this generalizes from is out of this repo as of P6.1, so this
-// proves the SAME class of topology generically — "Claude cwd != the adapter's own data path;
+// T8 adapter-topology gate. The real-world domain adapter this generalizes from is out of this repo,
+// so this proves the SAME class of topology generically — "Claude cwd != the adapter's own data path;
 // provider binding routes correctly" — through the
 // P6.1 fixture-adapter protocol. `test/adapters/interface.test.ts`'s own `resolveSessionBinding`
 // describe block already unit-tests `AdapterRegistry.resolveSessionBinding` directly in isolation
@@ -28,7 +27,7 @@ import { createFixtureAdapter, FIXTURE_MARKER_FILE } from "../fixtures/adapter/f
 const TOKEN = "adapter-topology-test-token-0123456789";
 const PORT = 4646;
 
-describe("adapter-topology (T8, per D10) — session cwd != adapter's real workspace root", () => {
+describe("adapter-topology (T8) — session cwd != adapter's real workspace root", () => {
   let home: string;
   let cwdDir: string; // what the hook reports as `cwd` — NOT where the adapter says the real data lives
   let realWorkspaceRoot: string; // what the adapter's own state actually associates with the session

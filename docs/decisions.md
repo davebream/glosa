@@ -1,7 +1,7 @@
 # Public boundary decisions
 
-This file records current architectural boundaries. Historical product exploration is retained
-under `docs/archive/` and is not build input.
+This file records current architectural boundaries. `docs/requirements.md` and its normative
+appendices remain the authoritative build input.
 
 ## External integrations are declarative
 

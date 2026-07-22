@@ -101,7 +101,7 @@ The optional Channel result is acceptable because multiple generic fallback path
 
 - Rehearsal data remained under ignored local state.
 - No source/rendered fixture, transcript, token, session identifier, or canonical rehearsal path is included in this report.
-- The live tree search, excluding preserved archive/research history and ignored local state, found no private producer or domain name and no private absolute path.
+- The tracked-tree search found no private producer or domain name and no private absolute path; ignored local rehearsal state remained under `.context/`.
 - The implementation adds no external runtime call, telemetry path, or terminal-multiplexer coupling.
 
 ## Maintainer review and sign-off

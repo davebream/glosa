@@ -3,10 +3,8 @@
 // `ensureDaemon`, inside `createClient`), ensures `dir`'s `.glosa/` baseline scaffold exists via
 // the daemon's own `POST /api/workspaces/open` (http.ts's P5.1 addition — this file never
 // duplicates the scaffold logic itself, per this task's brief), mints/reuses the daemon's pairing
-// token, and opens the SPA in the default browser at the `#t=<token>` fragment. That fragment
-// format is D5 (docs/archive/v1-build/OVERNIGHT-LOG.md): the literal `#t=<token>` wire format bootstrap.js's
-// `scrubToken` parses, NOT A6's looser `#<capability>` shorthand — requirements/decisions govern
-// over the appendix here, per this repo's own precedence rule.
+// token, and opens the SPA in the default browser at the literal `#t=<token>` fragment that A1 §2
+// defines and bootstrap.js's `scrubToken` parses.
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
@@ -91,7 +89,7 @@ export async function runOpen(
 
   // Mint/reuse the pairing token BEFORE ever ensuring the daemon — `bootDaemon` reads
   // `<home>/token` exactly ONCE, at its own boot, and never reloads it afterward (by design: a
-  // daemon legitimately serves the SPA's `unpaired` screen until something pairs it, per D5/
+  // daemon legitimately serves the SPA's `unpaired` screen until something pairs it, per A1 §2/
   // bootstrap.js's `selectScreen`). If THIS call is what causes the daemon's first-ever spawn for
   // this `GLOSA_HOME` (the common case — `glosa open` is normally the very first command run), the
   // token file must already exist on disk before that spawn, or the freshly-spawned daemon would

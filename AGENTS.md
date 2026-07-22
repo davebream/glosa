@@ -24,8 +24,7 @@ check remain incomplete. This is not yet approved for a live document week.
   and an appendix disagree, `requirements.md` governs.**
 - **`docs/decisions.md`** — the decision log (why things are the way they are; read when a requirement
   seems arbitrary). **`docs/options.md`** — the product rationale. **`docs/research/`** — the research
-  the design rests on (the adversarial review, JSONL-UI components, electron-vs-tauri). **`docs/archive/`**
-  — the superseded v1 (do not build from it).
+  the design rests on (the adversarial review, JSONL-UI components, electron-vs-tauri).
 
 ## Non-negotiable invariants (violating any is a review-blocker)
 
@@ -59,8 +58,7 @@ check remain incomplete. This is not yet approved for a live document week.
 ## Build approach
 
 Implementation behavior follows `docs/requirements.md`; current work follows accepted GitHub issues.
-The completed autonomous v1 execution records are archived under `docs/archive/v1-build/` and must not
-be resumed as a live build loop. Tasks T0–T8 have A-level detail in the appendices.
+Tasks T0–T8 have A-level detail in the appendices.
 **T8 is the release gate**: the deterministic acceptance suites (fault,
 concurrency, security, anchor, transcript, explicit-binding topology) must pass AND a manual rehearsal
 against a copy of a real past document must pass. **"Green CI" is not the acceptance bar** — the
