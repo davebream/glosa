@@ -1,0 +1,40 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = """
+bun install --frozen-lockfile
+bun run setup:hooks
+"""
+archive = "./scripts/conductor-archive-glosa.sh"
+run_mode = "concurrent"
+
+[scripts.run.glosa]
+available_in = "local"
+command = "./scripts/conductor-run-glosa.sh"
+default = true
+icon = "globe"
+
+[scripts.run.check]
+command = "bun run typecheck && bun test"
+icon = "test-tube"
+
+[scripts.run.release-gate]
+command = "bun run typecheck && bun test && bun run audit:licenses && bun run package:check"
+icon = "shield-check"
+
+[prompts]
+general = """
+Read AGENTS.md and docs/requirements.md before code. Preserve glosa's review-blocker invariants: generic core with domain in adapters, journal as truth, honest provenance, no cmux coupling, local-first behavior, and zero telemetry/runtime egress from glosa itself. Prefer focused diffs and run the narrowest relevant tests plus bun run typecheck for behavior changes.
+"""
+code_review = """
+Lead with correctness, invariant violations, missing tests, security/privacy regressions, and unintended scope changes. Cite concrete file and line references before summaries.
+"""
+create_pr = """
+Draft a self-contained pull request description using .github/pull_request_template.md. Fill Summary and Verification with actual commands run, keep the AI-assistance disclosure factual, and do not include secrets, private manuscripts, transcripts, tokens, or sensitive local paths.
+"""
+fix_errors = """
+Inspect the failing output, make the narrowest defensible fix, and rerun the failing command before broader checks.
+"""
+resolve_merge_conflicts = """
+Preserve both sides' tests and glosa invariants. Resolve lock files by regenerating with the repository's normal Bun workflow when needed, then run focused tests and bun run typecheck.
+"""
