@@ -117,15 +117,26 @@ function icon(name, className) {
   return span;
 }
 
-/** Mounts the approved quiet-utility trigger and its native top-layer appearance popover. */
-export function mountAppearanceControl(container, controller) {
+/**
+ * Mounts the quiet-utility trigger (labelled in compact menus) and its top-layer popover.
+ * @param {any} container
+ * @param {any} controller
+ * @param {{ overlayHost?: any, returnFocus?: any }} [options]
+ */
+export function mountAppearanceControl(container, controller, { overlayHost = container, returnFocus } = {}) {
   const trigger = document.createElement("button");
   trigger.className = "glosa-appearance-trigger";
   trigger.type = "button";
   trigger.setAttribute("popovertarget", "glosa-appearance-menu");
 
   const triggerIcon = icon("light", "glosa-appearance-icon");
-  trigger.append(triggerIcon);
+  trigger.append(
+    triggerIcon,
+    Object.assign(document.createElement("span"), {
+      className: "glosa-appearance-trigger-label",
+      textContent: "Appearance",
+    }),
+  );
 
   const menu = document.createElement("div");
   menu.id = "glosa-appearance-menu";
@@ -152,7 +163,7 @@ export function mountAppearanceControl(container, controller) {
     row.addEventListener("click", () => {
       controller.setPreference(preference);
       menu.hidePopover?.();
-      trigger.focus();
+      (returnFocus ?? trigger).focus();
     });
     rows.set(preference, row);
     menu.append(row);
@@ -174,7 +185,8 @@ export function mountAppearanceControl(container, controller) {
     options[next].focus();
   });
 
-  container.append(trigger, menu);
+  container.append(trigger);
+  overlayHost.append(menu);
 
   const unsubscribe = controller.subscribe(({ preference, resolved }) => {
     triggerIcon.innerHTML = ICONS[resolved];
