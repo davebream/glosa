@@ -67,23 +67,18 @@ async function getInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
     return { response: error(req.id, -32602, "glosa_inbox_get requires a non-empty id") };
   }
   const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  const sessionId = `mcp-${process.pid}-${randomUUID()}`;
-  const client = await deps.createHookClient();
-  await client.register({ session_id: sessionId, provider: "mcp", cwd: workspace, source: "mcp_get" });
-  const retrieved = await client.drain(sessionId, {
-    via: "mcp_pull",
-    limit: 1,
-    entryId: args.id,
-    ...(typeof args.cursor === "string" ? { cursor: args.cursor } : {}),
-  });
-  const presentation = retrieved.drained[0];
-  if (!presentation) {
-    await client.deregister(sessionId);
-    return { response: error(req.id, -32602, `no pending actionable entry '${args.id}'`) };
-  }
+  // `get` is retrieval by durable ID, not a delivery drain. A hook may already have honestly
+  // acknowledged the entry as presented before the agent follows the advertised retrieval hint;
+  // the drain path intentionally suppresses such entries and would therefore make that hint fail.
+  // Match `glosa inbox get` and the HTTP contract by reading the immutable entry directly.
+  const retrieved = await (await deps.createApiClient()).getInboxPresentation(
+    workspace,
+    args.id,
+    typeof args.cursor === "string" ? args.cursor : undefined,
+  );
+  const presentation = retrieved.presentation;
   return {
     response: result(req.id, textToolResult(presentation.text, { presentation })),
-    ...(retrieved.delivery_id ? { ack: { client, sessionId, deliveryId: retrieved.delivery_id } } : {}),
   };
 }
 

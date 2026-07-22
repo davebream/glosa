@@ -59,6 +59,38 @@ describe("attention tray", () => {
     expect(dom.document.activeElement).toBe(trigger);
   });
 
+  test("successful response keeps keyboard focus inside the refreshed tray", async () => {
+    let pending = true;
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const tray = mountAttentionTray(host, {
+      dataAccess: {
+        getInbox: async () => ({
+          pending_count: pending ? 1 : 0,
+          attention: pending ? [{ id: "a1", status: "seen", message: "Review", action: "review", target: null }] : [],
+        }),
+        markAttentionSeen: async () => ({}),
+        respondToAttention: async () => {
+          pending = false;
+          return { status: "done" };
+        },
+      },
+    });
+    tray.setWorkspace("ws-one");
+    await flush();
+    const trigger = host.querySelector(".glosa-attention-trigger") as any;
+    trigger.click();
+    await flush();
+    (host.querySelector(".glosa-primary-button") as any).click();
+    await flush();
+
+    expect(host.textContent).toContain("No requests need your attention.");
+    const close = host.querySelector(".glosa-attention-close") as any;
+    expect(dom.document.activeElement).toBe(close);
+    host.querySelector(".glosa-attention-tray")?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(dom.document.activeElement).toBe(trigger);
+  });
+
   test("failed response preserves input and returns focus for correction", async () => {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);

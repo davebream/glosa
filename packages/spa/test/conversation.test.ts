@@ -83,16 +83,25 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
 
   function fakeDataAccess() {
     let onEventCb: ((frame: unknown) => void) | null = null;
+    let onStatusCb: ((status: "down" | "up") => void) | null = null;
     const sent: Array<{ slug: string; text: string }> = [];
     return {
       sent,
       emit(frame: unknown) {
         onEventCb?.(frame);
       },
-      openTranscriptStream(_slug: string, { onEvent }: { onEvent: (frame: unknown) => void }) {
+      emitStatus(status: "down" | "up") {
+        onStatusCb?.(status);
+      },
+      openTranscriptStream(
+        _slug: string,
+        { onEvent, onStatus }: { onEvent: (frame: unknown) => void; onStatus?: (status: "down" | "up") => void },
+      ) {
         onEventCb = onEvent;
+        onStatusCb = onStatus ?? null;
         return () => {
           onEventCb = null;
+          onStatusCb = null;
         };
       },
       sendComposerMessage: async (slug: string, text: string) => {
@@ -132,6 +141,19 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     const sendBtn = root.querySelector(".glosa-conv-composer-send") as any;
     input.value = "still works";
     sendBtn.click();
+  });
+
+  test("FAIL-SOFT: an unavailable transcript stream shows the terminal fallback", () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess();
+
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    da.emitStatus("down");
+
+    const status = root.querySelector(".glosa-conv-status") as any;
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toBe("mirror unavailable — use the terminal");
   });
 
   test("a later transcript frame after mirror_unavailable clears the fallback message (mirror recovered)", () => {
