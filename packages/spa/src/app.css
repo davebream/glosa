@@ -305,6 +305,30 @@ button {
   gap: var(--space-2);
 }
 
+.glosa-tools,
+.glosa-tools-menu {
+  display: flex;
+  align-items: center;
+}
+
+.glosa-tools-menu {
+  gap: var(--space-2);
+}
+
+.glosa-tools-trigger {
+  display: none;
+}
+
+.glosa-tools-trigger svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  fill: currentColor;
+}
+
+.glosa-topbar-overlays {
+  display: contents;
+}
+
 /* Appearance is the quiet utility at the far edge of the approved top bar. The trigger stays
    icon-only; the native popover carries the full, explicit System / Light / Dark vocabulary. */
 .glosa-appearance {
@@ -324,6 +348,10 @@ button {
   border-radius: 8px;
   color: var(--muted);
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-appearance-trigger-label {
+  display: none;
 }
 
 .glosa-appearance-trigger::before {
@@ -2021,19 +2049,100 @@ button {
     padding-inline: var(--space-2);
   }
 
+  .glosa-brand-mark {
+    display: none;
+  }
+
   .glosa-artifact-dir {
     display: none;
   }
 
-  .glosa-modebar button,
-  .glosa-history-toggle,
-  .glosa-conversation-toggle {
+  .glosa-modebar button {
     padding-inline: var(--space-2);
   }
 
-  .glosa-appearance {
+  .glosa-tools-trigger {
+    position: relative;
+    width: 2rem;
+    height: 2rem;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--muted);
+  }
+
+  .glosa-tools-trigger:hover,
+  .glosa-tools-trigger[aria-expanded="true"] {
+    background: var(--surface-sunken);
+    color: var(--ink);
+  }
+
+  .glosa-tools:has(.glosa-attention-badge:not([hidden])) .glosa-tools-trigger::after {
+    content: "";
+    position: absolute;
+    top: 0.2rem;
+    right: 0.2rem;
+    width: 0.4rem;
+    height: 0.4rem;
+    border: 1px solid var(--surface);
+    border-radius: 999px;
+    background: var(--primary);
+  }
+
+  .glosa-tools-menu {
+    display: none;
+    position: fixed;
+    z-index: var(--z-tray);
+    top: calc(var(--topbar-height) + var(--space-1));
+    right: var(--space-2);
+    width: 13rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--space-1);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+  }
+
+  .glosa-tools[data-open="true"] .glosa-tools-menu {
+    display: flex;
+  }
+
+  .glosa-tools-menu .glosa-attention,
+  .glosa-tools-menu .glosa-appearance {
+    display: block;
+  }
+
+  .glosa-tools-menu .glosa-attention-trigger,
+  .glosa-tools-menu .glosa-history-toggle,
+  .glosa-tools-menu .glosa-conversation-toggle,
+  .glosa-tools-menu .glosa-appearance-trigger {
+    width: 100%;
+    height: auto;
+    min-height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 6px;
+    text-align: left;
+  }
+
+  .glosa-tools-menu .glosa-appearance {
     margin-left: 0;
-    padding-left: var(--space-1);
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .glosa-tools-menu .glosa-appearance-trigger-label {
+    display: inline;
+  }
+
+  .glosa-tools-menu .glosa-attention-badge {
+    margin-left: auto;
   }
 
   .glosa-appearance-menu {
@@ -2107,10 +2216,6 @@ button {
     row-gap: 0;
   }
 
-  .glosa-brand-mark {
-    display: none;
-  }
-
   .glosa-nav-toggle {
     grid-column: 1;
     grid-row: 1;
@@ -2128,12 +2233,6 @@ button {
     gap: var(--space-1);
   }
 
-  .glosa-history-toggle > span,
-  .glosa-conversation-toggle > span,
-  .glosa-attention-label {
-    display: none;
-  }
-
   .glosa-modebar {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -2141,8 +2240,7 @@ button {
   }
 
   .glosa-modebar button,
-  .glosa-history-toggle,
-  .glosa-conversation-toggle {
+  .glosa-tools-trigger {
     min-height: 2.25rem;
   }
 
@@ -2200,7 +2298,8 @@ button {
   }
 
   .glosa-appearance-trigger,
-  .glosa-appearance-option {
+  .glosa-appearance-option,
+  .glosa-tools-trigger {
     transition: none;
   }
 

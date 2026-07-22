@@ -144,10 +144,80 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   conversationToggle.setAttribute("aria-label", "Conversation");
   conversationToggle.innerHTML =
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
+  const topbarOverlays = el("div", { className: "glosa-topbar-overlays" });
   const appearanceHost = el("div", { className: "glosa-appearance" });
-  const stopAppearance = appearance ? mountAppearanceControl(appearanceHost, appearance) : null;
   const attentionHost = el("div", { className: "glosa-attention" });
-  const attentionTray = mountAttentionTray(attentionHost, { dataAccess });
+  const attentionTray = mountAttentionTray(attentionHost, { dataAccess, overlayHost: topbarOverlays });
+  const toolsTrigger = el("button", {
+    className: "glosa-tools-trigger",
+    type: "button",
+    title: "More tools",
+    "aria-label": "More tools",
+    "aria-expanded": "false",
+    "aria-controls": "glosa-tools-menu",
+  });
+  toolsTrigger.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>';
+  const stopAppearance = appearance
+    ? mountAppearanceControl(appearanceHost, appearance, { overlayHost: topbarOverlays, returnFocus: toolsTrigger })
+    : null;
+  const toolsMenu = el("div", {
+    id: "glosa-tools-menu",
+    className: "glosa-tools-menu",
+    role: "group",
+    "aria-label": "Workspace tools",
+  }, [attentionHost, historyToggle, conversationToggle, appearanceHost]);
+  const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
+  const toolControls = () => [
+    attentionHost.querySelector(".glosa-attention-trigger"),
+    historyToggle,
+    conversationToggle,
+    appearanceHost.querySelector(".glosa-appearance-trigger"),
+  ].filter((control) => control && !control.disabled);
+
+  function setToolsOpen(open, { restoreFocus = false } = {}) {
+    tools.setAttribute("data-open", String(open));
+    toolsTrigger.setAttribute("aria-expanded", String(open));
+    if (open) {
+      queueMicrotask(() => toolControls()[0]?.focus({ preventScroll: true }));
+    } else if (restoreFocus) {
+      queueMicrotask(() => toolsTrigger.focus({ preventScroll: true }));
+    }
+  }
+
+  toolsTrigger.addEventListener("click", () => {
+    setToolsOpen(tools.getAttribute("data-open") !== "true", { restoreFocus: true });
+  });
+  toolsMenu.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest(".glosa-history-toggle, .glosa-conversation-toggle")) {
+      setToolsOpen(false, { restoreFocus: true });
+    }
+  });
+  toolsMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setToolsOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const controls = toolControls();
+    if (controls.length === 0) return;
+    event.preventDefault();
+    const current = Math.max(0, controls.indexOf(document.activeElement));
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? controls.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
+    controls[next].focus();
+  });
+
+  const onDocumentClick = (event) => {
+    if (tools.getAttribute("data-open") !== "true") return;
+    if (event.target instanceof Node && (tools.contains(event.target) || topbarOverlays.contains(event.target))) return;
+    setToolsOpen(false);
+  };
+  document.addEventListener("click", onDocumentClick);
 
   // --- navigator ---
   const sidebarList = el("ul", { className: "glosa-workspace-list" });
@@ -258,7 +328,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       brandMark,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
-      el("div", { className: "glosa-topbar-actions" }, [attentionHost, historyToggle, conversationToggle, appearanceHost]),
+      el("div", { className: "glosa-topbar-actions" }, [tools]),
+      topbarOverlays,
     ]),
     el("nav", { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" }, [
       el("h2", { textContent: "Workspaces" }),
@@ -1302,6 +1373,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   return () => {
     document.removeEventListener("keydown", onShortcut);
+    document.removeEventListener("click", onDocumentClick);
     if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
     teardownRichFace();
     stopStream?.();

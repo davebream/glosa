@@ -117,12 +117,15 @@ describe("createAppearanceController", () => {
       mediaQuery: fakeMediaQuery(false) as any,
     });
     const host = dom.document.createElement("div");
+    const returnFocus = dom.document.createElement("button");
     dom.document.body.append(host);
+    dom.document.body.append(returnFocus);
 
-    const unmount = mountAppearanceControl(host, controller);
+    const unmount = mountAppearanceControl(host, controller, { returnFocus });
     const options = [...host.querySelectorAll('[role="menuitemradio"]')] as unknown as HTMLElement[];
     expect(options).toHaveLength(3);
     expect(host.querySelector('.glosa-appearance-trigger')?.getAttribute("aria-label")).toBe("Appearance: System (light)");
+    expect(host.querySelector('.glosa-appearance-trigger-label')?.textContent).toBe("Appearance");
 
     options[0]!.focus();
     options[0]!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) as any);
@@ -132,6 +135,7 @@ describe("createAppearanceController", () => {
     expect(controller.getSnapshot()).toEqual({ preference: "dark", resolved: "dark" });
     expect(storage.getItem(APPEARANCE_STORAGE_KEY)).toBe("dark");
     expect(host.querySelector('[data-appearance="dark"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(dom.document.activeElement).toBe(returnFocus);
 
     unmount();
     controller.destroy();
