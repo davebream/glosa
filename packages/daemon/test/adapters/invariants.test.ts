@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P6.1 release-blocker acceptance (CLAUDE.md invariant #1: generic core, ZERO domain knowledge) —
+// P6.1 release-blocker acceptance (AGENTS.md invariant #1: generic core, ZERO domain knowledge) —
 // grep-enforced, not just documented: no `jethro`/`sermon`/`format-sermon` identifier may appear
 // anywhere under packages/daemon or packages/spa, and the jethro package stub P6.1 superseded
 // must be gone, not merely unreferenced.

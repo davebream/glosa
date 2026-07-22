@@ -2,7 +2,7 @@
 // @glosa/daemon — tiny fs helpers shared by journal.ts and inbox.ts: an offset-advancing write
 // loop that tolerates a short writeSync (A4 §F04 — "writeSync may write fewer bytes"), and a
 // directory-fsync helper for the "fsync the containing dir once at file creation" rule.
-// POSIX-only (openSync on a directory) — fine, v1 is macOS-only (CLAUDE.md).
+// POSIX-only (openSync on a directory) — fine, v1 is macOS-only (AGENTS.md).
 import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 

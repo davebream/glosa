@@ -29,7 +29,7 @@ bun run audit:licenses
 bun run package:check
 ```
 
-Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `CLAUDE.md` and `docs/requirements.md`.
+Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `AGENTS.md` and `docs/requirements.md`.
 
 ## AI-assisted contributions
 
