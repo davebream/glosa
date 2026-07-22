@@ -97,13 +97,15 @@ export function computeBackoffMs(attempt, rand = Math.random) {
  * (`sleepFn`/`randFn` in particular — a test never wants a real backoff timer running). */
 /** @param {string} path
  *  @param {{fetchFn?: any, storage?: any, onEvent?: (frame: any) => void, onReconnect?: () => void,
- *           onStatus?: (status: "down"|"up") => unknown, backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
+ *           onStatus?: (status: "down"|"up") => unknown, onUnauthorized?: () => unknown,
+ *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
 function openEventStream(path, {
   fetchFn,
   storage,
   onEvent,
   onReconnect,
   onStatus,
+  onUnauthorized,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
@@ -121,6 +123,12 @@ function openEventStream(path, {
     if (lastEventId !== null) headers["Last-Event-ID"] = lastEventId;
 
     const res = await fetchFn(path, { headers });
+    if (res.status === 401) {
+      storage?.removeItem(TOKEN_KEY);
+      stopped = true;
+      onUnauthorized?.();
+      return false;
+    }
     if (!res.ok || !res.body) throw new Error(`stream connect failed: ${res.status}`);
 
     attempt = 0; // any successful connect resets backoff, even before a frame arrives
@@ -190,6 +198,7 @@ function openEventStream(path, {
  * will catch it up. */
 /** @param {{fetchFn?: any, storage?: any, slug?: any, onEvent?: (frame: any) => void,
  *           onReconnect?: () => void, onStatus?: (status: "down"|"up") => unknown,
+ *           onUnauthorized?: () => unknown,
  *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
 export function openStream({
   fetchFn,
@@ -198,11 +207,12 @@ export function openStream({
   onEvent,
   onReconnect,
   onStatus,
+  onUnauthorized,
   backoffFn = computeBackoffMs,
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
 }) {
-  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, onStatus, backoffFn, sleepFn, randFn });
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, onStatus, onUnauthorized, backoffFn, sleepFn, randFn });
 }
 
 /** Opens `GET /w/:slug/transcript/stream` (P4.2, A1 §5.8/§8, A2 §F16) — the conversation mirror's
@@ -220,6 +230,7 @@ export function openTranscriptStream(
     onEvent,
     onReconnect,
     onStatus,
+    onUnauthorized,
     backoffFn = computeBackoffMs,
     sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randFn = Math.random,
@@ -231,6 +242,7 @@ export function openTranscriptStream(
     onEvent,
     onReconnect,
     onStatus,
+    onUnauthorized,
     backoffFn,
     sleepFn,
     randFn,
@@ -247,6 +259,17 @@ export function openTranscriptStream(
 export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
   const storage = deps.storage ?? (typeof sessionStorage !== "undefined" ? sessionStorage : undefined);
+  let unauthorizedHandled = false;
+  const onUnauthorized = deps.onUnauthorized ?? (() => {
+    if (typeof window !== "undefined") window.location.reload();
+  });
+
+  function handleUnauthorized() {
+    storage?.removeItem(TOKEN_KEY);
+    if (unauthorizedHandled) return;
+    unauthorizedHandled = true;
+    onUnauthorized();
+  }
 
   function authHeaders(extra) {
     const headers = { ...(extra ?? {}) };
@@ -258,6 +281,7 @@ export function createDataAccess(deps = {}) {
   async function request(path, init = {}) {
     const res = await fetchFn(path, { ...init, headers: authHeaders(init.headers) });
     if (!res.ok) {
+      if (res.status === 401) handleUnauthorized();
       let problem = null;
       try {
         problem = await res.json();
@@ -349,12 +373,19 @@ export function createDataAccess(deps = {}) {
       });
     },
     openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
-      return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus });
+      return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus, onUnauthorized: handleUnauthorized });
     },
     /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
      * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */
     openTranscriptStream(slug, { onEvent, onReconnect, onStatus } = {}) {
-      return openTranscriptStream(slug, { fetchFn, storage, onEvent, onReconnect, onStatus });
+      return openTranscriptStream(slug, {
+        fetchFn,
+        storage,
+        onEvent,
+        onReconnect,
+        onStatus,
+        onUnauthorized: handleUnauthorized,
+      });
     },
     /** `POST /w/:slug/transcript/compose` (P4.2, F32/R6) — the conversation viewer's out-of-band
      * composer: sends a NEW user message to whichever session is bound to this workspace, without

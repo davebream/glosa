@@ -65,6 +65,13 @@ export class CapabilityStore {
     return record;
   }
 
+  /** Token rotation/revocation invalidates every browser credential, including already-minted
+   * class-F URLs. The live token authority calls this at the same generation boundary used to
+   * abort API streams. */
+  clear(): void {
+    this.map.clear();
+  }
+
   /** Test/diagnostic only — not used by any production path. */
   size(): number {
     return this.map.size;

@@ -169,6 +169,12 @@ the entry survives.
   via a **one-time 256-bit capability URL** on port 4647 (no ambient token there). Origin allowlist is
   route-class-scoped (strict on state-changing, foreign-only-reject on reads/handshake, inapplicable to
   navigation) — the resolved table is A3 §4. No cookies (CSRF structurally dead).
+- **Token lifecycle**: `glosa token rotate` atomically replaces the credential with a fresh 128-bit
+  mode-0600 token; `glosa token revoke` removes the credential. The running daemon observes either
+  transition without restart, aborts credential-bound streams, invalidates every class-F capability,
+  and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
+  tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
+  path. Mutation failures preserve the prior credential state. Token commands never print token material.
 - Versioned route catalog (contract v1.1: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
@@ -251,7 +257,7 @@ the entry survives.
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent hook/MCP merge with
   ownership manifest, backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--wait]`, `metadata set|show|clear`, `session bind`,
-  `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
+  `token rotate|revoke`, `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
   internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`); a workspace is usable SPA-only without
   `init`.

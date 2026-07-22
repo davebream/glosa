@@ -48,6 +48,10 @@ does not import their packages or embed their workflow logic.
 
 glosa binds its daemon to loopback and keeps workspace state on your Mac. AI-agent integrations may still send content to their own providers under those tools' terms and settings. Do not expose the daemon port or place access tokens in a repository.
 
+If a local bearer token may have leaked, run `glosa token revoke`, then `glosa open <directory>` to
+create and pair a replacement. Use `glosa token rotate` when you want to replace it immediately.
+Token commands never print credential material.
+
 Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/davebream/glosa/security/advisories/new), not a public issue. See [SECURITY.md](SECURITY.md).
 
 ## Development

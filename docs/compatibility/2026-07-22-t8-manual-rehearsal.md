@@ -26,7 +26,7 @@ The run used `WorkspaceMetadataDescriptor` v1 through the generic adapter interf
 | Bun | 1.2.7 |
 | Git | 2.52.0 |
 | glosa | 0.1.0-alpha.0 |
-| Final glosa build ID | `0.1.0-alpha.0-1e9e6c561c7c1508` |
+| Final glosa build ID | `0.1.0-alpha.0-427d6ac61ba2da18` |
 | API contract | 1.1 |
 | Workspace metadata contract | 1 |
 | Claude Code | 2.1.217 |
@@ -42,10 +42,10 @@ The manual pass began only after the deterministic gate was green. The complete 
 | Command | Actual result |
 |---|---|
 | `bun run typecheck` | PASS |
-| `bun test` — run 1 | PASS — 1,156 tests, 0 failures, 10,604 expectations across 108 files |
-| `bun test` — run 2 | PASS — 1,156 tests, 0 failures, 10,604 expectations across 108 files |
+| `bun test` — run 1 | PASS — 1,168 tests, 0 failures, 10,666 expectations across 110 files |
+| `bun test` — run 2 | PASS — 1,168 tests, 0 failures, 10,666 expectations across 110 files |
 | `bun run audit:licenses` | PASS |
-| `bun run package:check` | PASS — package smoke checked 104 files |
+| `bun run package:check` | PASS — package smoke checked 105 files |
 
 Focused tests also passed for MCP durable retrieval, attention focus and idempotency, transcript fail-soft state, and the three Playwright browser flows rerun after their fixes.
 
