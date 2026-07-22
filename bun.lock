@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "glosa",
+      "name": "@davebream/glosa",
       "dependencies": {
         "@gunshi/plugin-completion": "0.37.1",
         "chokidar": "^4",

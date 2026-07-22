@@ -141,6 +141,11 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
     expect(visibleText).not.toContain("c2");
     expect(visibleText).toContain("You"); // human attribution, document-native
     expect(visibleText).toContain("Unknown change");
+
+    const checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"]'));
+    expect(checkboxes.every((checkbox) => (checkbox.getAttribute("aria-label") ?? "").startsWith("Select "))).toBe(true);
+    expect(root.querySelector(".glosa-history-status")?.getAttribute("role")).toBe("status");
+    expect((root.querySelector(".glosa-history-compare-current") as any).disabled).toBe(true);
   });
 
   test("checking two rows fetches and renders their diff via diff2html", async () => {
@@ -159,6 +164,7 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
 
     const checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"]')) as any[];
     checkboxes[0]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    expect((root.querySelector(".glosa-history-compare-current") as any).disabled).toBe(false);
     checkboxes[1]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     for (let i = 0; i < 5; i++) await Promise.resolve();
 

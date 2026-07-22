@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Public, maintainer-owned roadmap backed by a live GitHub Project and release milestone.
+
+### Changed
+
+- Archived the completed autonomous v1 build records and documented AI-assisted contribution
+  disclosure and ownership requirements.
+
 ## [0.1.0-alpha.0] - 2026-07-21
 
 ### Added
