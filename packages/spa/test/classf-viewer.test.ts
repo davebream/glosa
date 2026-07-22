@@ -14,6 +14,7 @@ import {
   createTokenBucket,
   isTrustedInitEvent,
   mountClassFViewer,
+  OPAQUE_SANDBOX_HANDSHAKE_TARGET_ORIGIN,
   validateBridgeMessage,
 } from "../src/classf-viewer.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
@@ -283,6 +284,10 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
     iframe.dispatchEvent(new dom.window.Event("load")); // 2nd load — a self-navigation
     expect(container.querySelector("iframe")).toBeNull(); // torn down
     expect(errors).toEqual(["document attempted to navigate"]);
+  });
+
+  test("uses the wildcard target required by an opaque sandbox, while the captured window and nonce remain the handshake gate", () => {
+    expect(OPAQUE_SANDBOX_HANDSHAKE_TARGET_ORIGIN).toBe("*");
   });
 
   test("unmount() removes the iframe from the container", async () => {

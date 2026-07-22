@@ -44,7 +44,7 @@ function randomHex(bytes: number): string {
  *    then on — the bridge never calls `postMessage` on `window`/`parent` again.
  * 3. Sends `ready` once the port is live, then `selection` messages (with `seq`, `quote{exact,
  *    prefix,suffix}`, `range{start,end}`, and an optional `chunk_id` read off the nearest
- *    `[data-chunk-id]` ancestor) on every non-collapsed text selection, and `error` if building
+ *    `[data-chunk-id]` or `[data-chunk]` ancestor) on every non-collapsed text selection, and `error` if building
  *    one throws. All strings are sent as plain text — no HTML is ever constructed from them
  *    (A3 §5 attack #6: the escaping obligation lives on the RENDERING side, not here).
  */
@@ -90,7 +90,10 @@ export function buildBridgeInjection(nonce: string): string {
   function chunkIdOf(node) {
     var el = node && node.nodeType === 3 ? node.parentElement : node;
     while (el && el.nodeType === 1) {
-      var id = el.getAttribute && el.getAttribute("data-chunk-id");
+      // data-chunk-id is the explicit class-F convention. Accept data-chunk as well so
+      // declarative metadata can point at existing renderers without forcing a wrapper solely to
+      // rename their marker attribute.
+      var id = el.getAttribute && (el.getAttribute("data-chunk-id") || el.getAttribute("data-chunk"));
       if (id) return id;
       el = el.parentElement;
     }
@@ -144,10 +147,9 @@ export function buildBridgeInjection(nonce: string): string {
 
   document.addEventListener("mouseup", onSelectionChange);
   document.addEventListener("selectionchange", function () {
-    // selectionchange fires far more often than a human finishes a selection (every caret move);
-    // mouseup above is the primary signal — this is only a fallback for non-mouse selection
-    // (keyboard, assistive tech) and is deliberately debounce-free since v1's iframe fixtures are
-    // small documents (A3 §5's real-browser rehearsal, not this task's unit-test surface).
+    // mouseup covers pointer selection; this fallback makes keyboard and assistive-technology
+    // selections actionable as well. The parent independently rate-limits every bridge message.
+    onSelectionChange();
   });
 })();
 </script>

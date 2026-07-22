@@ -97,7 +97,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
       },
       sendComposerMessage: async (slug: string, text: string) => {
         sent.push({ slug, text });
-        return { accepted: true, delivered: false };
+        return { accepted: true, delivered: true };
       },
     };
   }
@@ -214,6 +214,44 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     expect(status.getAttribute("role")).toBe("status");
     expect(status.getAttribute("data-error")).toBe("true");
     expect(status.textContent).toContain("session unavailable");
+  });
+
+  test("no registered live session keeps the draft and explains how to recover", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = {
+      ...fakeDataAccess(),
+      sendComposerMessage: async () => {
+        throw new Error("no session registered");
+      },
+    };
+
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "keep this draft";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(input.value).toBe("keep this draft");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("No live agent session is registered");
+  });
+
+  test("an accepted but undelivered message keeps the draft rather than claiming it was sent", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = {
+      ...fakeDataAccess(),
+      sendComposerMessage: async () => ({ accepted: true, delivered: false }),
+    };
+
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "keep this draft";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(input.value).toBe("keep this draft");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("agent delivery is not available");
   });
 
   test("unmount() stops the stream (the fake's onEvent handle is cleared)", () => {

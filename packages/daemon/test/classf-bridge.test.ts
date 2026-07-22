@@ -62,4 +62,11 @@ describe("buildBridgeInjection", () => {
     expect(a).toContain(JSON.stringify("1".repeat(64)));
     expect(b).toContain(JSON.stringify("2".repeat(64)));
   });
+
+  test("captures both supported declarative chunk marker names and keyboard selections", () => {
+    const script = buildBridgeInjection("1".repeat(64));
+    expect(script).toContain('getAttribute("data-chunk-id") || el.getAttribute("data-chunk")');
+    expect(script).toContain('document.addEventListener("selectionchange"');
+    expect(script).toContain("onSelectionChange();");
+  });
 });
