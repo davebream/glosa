@@ -62,7 +62,7 @@
     "@types/picomatch": "^4.0.3",
     "happy-dom": "^20.11.0",
     "license-checker-rseidelsohn": "5.0.1",
-    "typescript": "^5.6.0"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@gunshi/plugin-completion": "0.37.1",
