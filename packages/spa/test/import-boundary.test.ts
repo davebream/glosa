@@ -34,6 +34,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
     ["../src/history.js", read("../src/history.js")],
     ["../src/classf-viewer.js", read("../src/classf-viewer.js")],
     ["../src/conversation.js", read("../src/conversation.js")],
+    ["../src/attention-tray.js", read("../src/attention-tray.js")],
   ])("%s has no direct fetch(...) call", (_name, source) => {
     // Strip comments first so a docstring that merely MENTIONS "fetch(" (there are several,
     // explaining the invariant this test enforces) can't produce a false positive.
@@ -53,6 +54,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
       read("../src/history.js"),
       read("../src/classf-viewer.js"),
       read("../src/conversation.js"),
+      read("../src/attention-tray.js"),
     ]) {
       const stripped = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
       expect(FETCH_REFERENCE_RE.test(stripped)).toBe(false);
@@ -71,6 +73,7 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     "./dialog.js",
     "./artifact-tree.js",
     "./appearance.js",
+    "./attention-tray.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",
@@ -111,6 +114,12 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
 
   test("conversation.js imports nothing (self-contained — no daemon access of its own; dataAccess is caller-injected)", () => {
     const source = read("../src/conversation.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
+    expect(specifiers).toHaveLength(0);
+  });
+
+  test("attention-tray.js imports nothing (all daemon access is caller-injected)", () => {
+    const source = read("../src/attention-tray.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
     expect(specifiers).toHaveLength(0);
   });

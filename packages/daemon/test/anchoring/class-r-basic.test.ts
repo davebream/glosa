@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf } from "./helpers.ts";
 
-const SOURCE = `# Kazanie o łasce
+const SOURCE = `# Document o łasce
 
 Boża łaska jest wystarczająca dla każdego grzesznika, który się nawróci.
 

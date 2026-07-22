@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf } from "./helpers.ts";
 
-const SOURCE = `# Kazanie
+const SOURCE = `# Document
 
 Boża łaska jest wystarczająca.
 `;
@@ -21,7 +21,7 @@ describe("Class R never returns pipeline_feedback", () => {
     });
 
     test(`intent="${intent}" on a markup-crossing block_range miss is still source_range, never pipeline_feedback`, () => {
-      const source = `# Kazanie\n\nTo jest **kluczowe** zdanie z linkiem [tutaj](http://example.com).\n`;
+      const source = `# Document\n\nTo jest **kluczowe** zdanie z linkiem [tutaj](http://example.com).\n`;
       const { artifact, freshCtx } = buildRArtifact("07.md", source);
       const quote = "kluczowe zdanie z linkiem tutaj";
       const position = positionOf(artifact, quote);

@@ -111,9 +111,9 @@ describe("core runs with ZERO adapters (P6.1 acceptance)", () => {
   test("class-F capability mint still refuses a class-R path, still mints for class-F", async () => {
     writeFileSync(join(root, "notes.md"), "# Title\n");
     writeFileSync(join(root, "out.html"), "<p>hi</p>");
-    const rRes = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`));
+    const rRes = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`, { method: "POST" }));
     expect(rRes.status).toBe(400);
-    const fRes = await fetchFn(stateChangingReq(`/w/${slug}/capability/out.html`));
+    const fRes = await fetchFn(stateChangingReq(`/w/${slug}/capability/out.html`, { method: "POST" }));
     expect(fRes.status).toBe(200);
   });
 

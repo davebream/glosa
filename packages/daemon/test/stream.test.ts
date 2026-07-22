@@ -23,6 +23,7 @@ import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { parseSseStream, type ParsedSseEvent } from "../src/sse.ts";
 import { randomPort, waitForHandshake } from "./helpers.ts";
+import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 
 const TOKEN = "stream-test-token-0123456789abcdef";
 
@@ -32,6 +33,7 @@ interface Harness {
   port: number;
   server: ReturnType<typeof Bun.serve>;
   busRegistry: WorkspaceBusRegistry;
+  metadataRegistry: WorkspaceMetadataRegistry;
   slug: string;
 }
 
@@ -47,6 +49,7 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
   const workspaceIndex = new WorkspaceIndex({ home });
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
   const busRegistry = new WorkspaceBusRegistry();
+  const metadataRegistry = new WorkspaceMetadataRegistry();
   workspaceIndex.setLiveSessionPredicate((p) => sessionRegistry.forWorkspace(p).length > 0);
   workspaceIndex.setOnHardRemove((p) => busRegistry.evict(p));
 
@@ -62,6 +65,7 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
     sessionRegistry,
     getWorkspaceBus: (r) => busRegistry.get(r),
     capabilityStore: new CapabilityStore(),
+    metadataRegistry,
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: createApiFetch(ctx), idleTimeout: 2 });
   // On the macOS CI runner, Bun can occasionally reset the first request immediately after
@@ -71,7 +75,7 @@ async function buildHarness(opts: { home?: string; root?: string; port?: number 
     await server.stop(true);
     throw new Error(`stream test server did not answer its handshake on port ${port}`);
   }
-  return { home, root, port, server, busRegistry, slug: entry.slug };
+  return { home, root, port, server, busRegistry, metadataRegistry, slug: entry.slug };
 }
 
 async function teardownHarness(h: Harness): Promise<void> {
@@ -194,6 +198,21 @@ describe("GET /w/:slug/stream — SSE protocol (A1 §8)", () => {
     expect(ev.event).toBe("journal");
     expect(Number(ev.id)).toBe(Number(snap.id) + 1);
     expect(JSON.parse(ev.data).entry).toBe("live-1");
+    await disconnect();
+  });
+
+  test("metadata replacement invalidates a connected client without advancing the journal cursor", async () => {
+    writeFileSync(join(h.root, "notes.md"), "# hi\n");
+    const { reader, disconnect } = await connect(h);
+    const snap = await readEvent(reader);
+
+    await h.metadataRegistry.set(h.root, { version: 1, id: "example", artifacts: [{ path: "notes.md", order: 1 }] });
+
+    const event = await readEvent(reader);
+    expect(event.event).toBe("metadata");
+    expect(event.id).toBeUndefined();
+    expect(JSON.parse(event.data)).toEqual({ changed: true });
+    expect(snap.id).toMatch(/^-?\d+$/);
     await disconnect();
   });
 

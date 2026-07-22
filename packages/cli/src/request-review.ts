@@ -7,12 +7,8 @@
 // `handleWorkspaceAttentionRequest`'s docstring in http.ts). `--wait` polls
 // `GET /api/workspaces/entry-status` until the entry reaches a terminal attention status
 // (`done|expired|stale`, A5 §F23) and reports the verdict in `data`; without it, returns
-// immediately after creating the entry.
-//
-// NOTE: as of P5.1, nothing in this codebase can yet drive an attention_request to `done` with a
-// verdict — `POST /w/:slug/inbox/:id/response` (F12) is still the http.ts route SHELL. `--wait`
-// is implemented faithfully (it genuinely polls and will genuinely time out, exit 7, until F12
-// lands) rather than faked — an honest gap, not a silent no-op.
+// immediately after creating the entry. Review requests default to action `review`; the terminal
+// journal detail carries the structured outcome and optional response.
 import { type ApiError, type EntryStatus, type GlosaApiClient, isApiError } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
 
@@ -61,7 +57,7 @@ export async function runRequestReview(args: RequestReviewArgs, deps: RequestRev
 
   let created: { id: string; slug: string; status: string };
   try {
-    created = await client.createAttentionRequest(args.dir, { message: args.message, action: args.action, targetPath: args.path });
+    created = await client.createAttentionRequest(args.dir, { message: args.message, action: args.action ?? "review", targetPath: args.path });
   } catch (err) {
     if (isApiError(err)) {
       return {
@@ -130,5 +126,7 @@ export function printRequestReviewResult(result: CommandEnvelope<RequestReviewDa
     process.stderr.write(`glosa request-review: ${result.error?.message ?? "failed"}\n`);
     return;
   }
-  process.stdout.write(`glosa request-review: ${result.data.id} (${result.data.status})\n`);
+  const outcome = typeof result.data.detail?.outcome === "string" ? `: ${result.data.detail.outcome}` : "";
+  const response = typeof result.data.detail?.response === "string" ? ` — ${result.data.detail.response}` : "";
+  process.stdout.write(`glosa request-review: ${result.data.id} (${result.data.status}${outcome})${response}\n`);
 }

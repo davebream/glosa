@@ -25,11 +25,14 @@ class HookClient implements DaemonHookClient {
     drained: [presentation("inb-1", "annotation", "glosa annotation inb-1\ncomment:\nAct on this.")],
   };
   drainOptions: unknown;
+  heartbeats: string[] = [];
   async register(input: RegisterSessionInput) {
     this.registered = input;
     return { workspace: input.cwd, drained_workspaces: [] };
   }
-  async heartbeat() {}
+  async heartbeat(sessionId: string) {
+    this.heartbeats.push(sessionId);
+  }
   async deregister() {}
   async drain(_sessionId: string, options?: unknown) {
     this.drainOptions = options;
@@ -46,10 +49,58 @@ function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
 }
 
 describe("issue-focused MCP inbox tools", () => {
-  test("tools/list exposes pull/get and no resolve or request-review commands", async () => {
+  test("tools/list exposes inbox plus metadata/session contract tools", async () => {
     const reply = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }, deps(new HookClient()));
     const names = ((reply.response?.result as { tools: Array<{ name: string }> }).tools).map((tool) => tool.name);
-    expect(names).toEqual(["glosa_inbox_pull", "glosa_inbox_get"]);
+    expect(names).toEqual([
+      "glosa_inbox_pull",
+      "glosa_inbox_get",
+      "glosa_metadata_set",
+      "glosa_metadata_show",
+      "glosa_metadata_clear",
+      "glosa_session_bind",
+    ]);
+  });
+
+  test("metadata and session tools call the same API client contract as the CLI", async () => {
+    const calls: unknown[] = [];
+    const api: Partial<GlosaApiClient> = {
+      setMetadata: async (workspace, metadata) => {
+        calls.push(["set", workspace, metadata]);
+        return { metadata, replaced: false };
+      },
+      getMetadata: async (workspace) => {
+        calls.push(["show", workspace]);
+        return { version: 1, id: "fixture", artifacts: [] };
+      },
+      clearMetadata: async (workspace) => {
+        calls.push(["clear", workspace]);
+        return { cleared: true };
+      },
+      bindSession: async (workspace, sessionId) => {
+        calls.push(["bind", workspace, sessionId]);
+        return { bound: true, session_id: sessionId };
+      },
+    };
+    const hook = new HookClient();
+    const d = deps(hook, api);
+    const metadata = { version: 1, id: "fixture", artifacts: [] };
+    for (const [name, arguments_] of [
+      ["glosa_metadata_set", { workspace: "/w", metadata }],
+      ["glosa_metadata_show", { workspace: "/w" }],
+      ["glosa_metadata_clear", { workspace: "/w" }],
+      ["glosa_session_bind", { workspace: "/w", session_id: "s1" }],
+    ] as const) {
+      const reply = await handleMcpRequest({ jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: arguments_ } }, d);
+      expect(reply.response?.error).toBeUndefined();
+    }
+    expect(calls).toEqual([
+      ["set", "/w", metadata],
+      ["show", "/w"],
+      ["clear", "/w"],
+      ["bind", "/w", "s1"],
+    ]);
+    expect(hook.heartbeats).toEqual(["s1"]);
   });
 
   test("pull returns actionable content plus a post-write acknowledgement reservation", async () => {

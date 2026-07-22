@@ -28,7 +28,7 @@ function assertIsValidResolution(res: unknown): asserts res is Resolution {
 }
 
 describe("totality — garbage annotation input never throws", () => {
-  const SOURCE = "# Kazanie\n\nBoża łaska jest wystarczająca.\n";
+  const SOURCE = "# Document\n\nBoża łaska jest wystarczająca.\n";
 
   const garbageAnnotations: unknown[] = [
     null,
@@ -96,7 +96,7 @@ describe("totality — garbage artifact input never throws", () => {
 });
 
 describe("totality — garbage ctx never throws", () => {
-  const { artifact } = buildRArtifact("07.md", "# Kazanie\n\nBoża łaska.\n");
+  const { artifact } = buildRArtifact("07.md", "# Document\n\nBoża łaska.\n");
   const okAnnotation = annotation({ quoteExact: "łaska" });
   const garbageCtxs: unknown[] = [null, undefined, "nope", 42, { capturedRenderedSha256: 12345 }, { pipelineFeedback: "not an object" }, { pipelineFeedback: { adapter: 5 } }];
 
@@ -111,13 +111,13 @@ describe("totality — garbage ctx never throws", () => {
 
 describe("uniqueness gate — 0 or ≥2 matches never auto-apply exact/normalized", () => {
   test("0 matches anywhere (no position) → orphaned, never a fabricated source_range", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nBoża łaska.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nBoża łaska.\n");
     const res = resolve(annotation({ quoteExact: "text that is nowhere in this document" }), artifact, freshCtx);
     expect(res.kind).toBe("orphaned");
   });
 
   test("≥2 matches anywhere (no position) → orphaned{ambiguous}, never a coin-flip source_range", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nAmen amen powiadam.\n\namen znowu tutaj.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nAmen amen powiadam.\n\namen znowu tutaj.\n");
     const res = resolve(annotation({ quoteExact: "amen" }), artifact, freshCtx);
     expect(res.kind).toBe("orphaned");
     if (res.kind !== "orphaned") throw new Error("unreachable");
@@ -125,7 +125,7 @@ describe("uniqueness gate — 0 or ≥2 matches never auto-apply exact/normalize
   });
 
   test("an empty quote never resolves to a confident exact/normalized match", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nBoża łaska.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nBoża łaska.\n");
     const position = positionOf(artifact, "Boża");
     const res = resolve(annotation({ quoteExact: "", position }), artifact, freshCtx);
     if (res.kind === "source_range") {
@@ -139,7 +139,7 @@ describe("uniqueness gate — 0 or ≥2 matches never auto-apply exact/normalize
 
 describe("a lone (unpaired) surrogate in the quote never produces a mid-character 'exact' match", () => {
   test("a lone high surrogate prepended to a real quote is stripped, not searched for literally", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nBoża łaska jest wystarczająca.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nBoża łaska jest wystarczająca.\n");
     const position = positionOf(artifact, "Boża łaska");
     const quoteWithLoneSurrogate = "\uD800Boża łaska"; // an unpaired high surrogate, not a real astral char
     const res = resolve(annotation({ quoteExact: quoteWithLoneSurrogate, position }), artifact, freshCtx);
@@ -153,7 +153,7 @@ describe("a lone (unpaired) surrogate in the quote never produces a mid-characte
   });
 
   test("a well-formed astral character (a real surrogate PAIR) survives sanitization untouched", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nEmoji: 😀 jest tutaj.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nEmoji: 😀 jest tutaj.\n");
     const position = positionOf(artifact, "😀 jest");
     const res = resolve(annotation({ quoteExact: "😀 jest", position }), artifact, freshCtx);
 
@@ -164,7 +164,7 @@ describe("a lone (unpaired) surrogate in the quote never produces a mid-characte
   });
 
   test("a quote consisting ONLY of lone surrogates sanitizes to empty and never fabricates a match", () => {
-    const { artifact, freshCtx } = buildRArtifact("07.md", "# Kazanie\n\nBoża łaska.\n");
+    const { artifact, freshCtx } = buildRArtifact("07.md", "# Document\n\nBoża łaska.\n");
     // \uDE00 is a lone low surrogate, \uD801 (at the very end, nothing following) is a lone high
     // surrogate — neither forms a valid pair, so both are stripped, leaving an empty needle.
     const res = resolve(annotation({ quoteExact: "\uDE00\uD801" }), artifact, freshCtx);

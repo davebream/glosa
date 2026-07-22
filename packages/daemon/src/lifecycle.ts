@@ -26,6 +26,8 @@ import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
+import { AdapterRegistry } from "./adapters/interface.ts";
+import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -74,6 +76,8 @@ export interface DaemonBackend {
   workspaceIndex: WorkspaceIndex;
   sessionRegistry: SessionRegistry;
   busRegistry: WorkspaceBusRegistry;
+  adapterRegistry: AdapterRegistry;
+  metadataRegistry: WorkspaceMetadataRegistry;
 }
 
 export interface BuildBackendOptions {
@@ -87,6 +91,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
   const busRegistry = new WorkspaceBusRegistry();
+  const adapterRegistry = new AdapterRegistry();
+  const metadataRegistry = new WorkspaceMetadataRegistry();
+  adapterRegistry.register(metadataRegistry.adapter());
 
   // Live-session predicate: a workspace under a live session is never GC-hard-removed no matter
   // how long its path has been missing (WorkspaceIndex's own conservative default otherwise).
@@ -95,7 +102,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
   workspaceIndex.setOnHardRemove((canonicalPath) => busRegistry.evict(canonicalPath));
 
-  return { workspaceIndex, sessionRegistry, busRegistry };
+  return { workspaceIndex, sessionRegistry, busRegistry, adapterRegistry, metadataRegistry };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -129,6 +136,8 @@ export async function bootDaemon(): Promise<never> {
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (root) => backend.busRegistry.get(root),
     capabilityStore,
+    adapterRegistry: backend.adapterRegistry,
+    metadataRegistry: backend.metadataRegistry,
     shutdownSignal: shutdownController.signal,
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));

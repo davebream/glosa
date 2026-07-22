@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf } from "./helpers.ts";
 
-const SOURCE = `# Kazanie
+const SOURCE = `# Document
 
 Powtórzenie: "hello world" pojawia się tutaj po raz pierwszy.
 
@@ -50,7 +50,7 @@ describe("duplicate quotes", () => {
   });
 
   test("a quote duplicated even within ONE block (e.g. a repeated word in the same paragraph) → falls through to widen, then block_range guidance", () => {
-    const source = `# Kazanie\n\nAmen, amen, powiadam wam: amen.\n`;
+    const source = `# Document\n\nAmen, amen, powiadam wam: amen.\n`;
     const { artifact, freshCtx } = buildRArtifact("07.md", source);
     const position = positionOf(artifact, "amen", 0);
     const res = resolve(annotation({ quoteExact: "amen", position }), artifact, freshCtx);

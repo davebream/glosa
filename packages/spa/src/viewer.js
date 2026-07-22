@@ -20,6 +20,7 @@ import { mountRichEditor } from "./rich-editor.js";
 import { confirmDialog } from "./dialog.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAppearanceControl } from "./appearance.js";
+import { mountAttentionTray } from "./attention-tray.js";
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -145,6 +146,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
   const appearanceHost = el("div", { className: "glosa-appearance" });
   const stopAppearance = appearance ? mountAppearanceControl(appearanceHost, appearance) : null;
+  const attentionHost = el("div", { className: "glosa-attention" });
+  const attentionTray = mountAttentionTray(attentionHost, { dataAccess });
 
   // --- navigator ---
   const sidebarList = el("ul", { className: "glosa-workspace-list" });
@@ -255,7 +258,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       brandMark,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
-      el("div", { className: "glosa-topbar-actions" }, [historyToggle, conversationToggle, appearanceHost]),
+      el("div", { className: "glosa-topbar-actions" }, [attentionHost, historyToggle, conversationToggle, appearanceHost]),
     ]),
     el("nav", { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" }, [
       el("h2", { textContent: "Workspaces" }),
@@ -1201,18 +1204,25 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       onReconnect: () => {
         void refreshArtifactList();
         void refreshCurrentArtifact();
+        void attentionTray.refresh();
       },
       onEvent: (frame) => {
         if (frame.event === "artifact" && currentArtifact && frame.data?.path === currentArtifact.source_path) {
           void refreshCurrentArtifact();
         }
         if (frame.event === "journal") applyJournalEvent(frame.data);
+        if (frame.event === "journal" || frame.event === "metadata") void attentionTray.refresh();
+        if (frame.event === "metadata") {
+          void refreshArtifactList();
+          void refreshCurrentArtifact();
+        }
       },
     });
   }
 
   async function selectWorkspace(slug) {
     currentSlug = slug;
+    attentionTray.setWorkspace(slug);
     currentArtifact = null;
     artifactNavigator.setWorkspace(slug);
     composer = null;
@@ -1298,6 +1308,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     stopClassFViewer?.();
     stopConversation?.();
     stopAppearance?.();
+    attentionTray.destroy();
     artifactNavigator.destroy();
   };
 }

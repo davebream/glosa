@@ -67,6 +67,7 @@ export interface StreamOptions {
    * only cares about journal/cursor mechanics. Defaults to on. */
   watchArtifacts?: boolean;
   shutdownSignal?: AbortSignal;
+  subscribeMetadata?: (listener: () => void) => () => void;
 }
 
 /** Builds the `GET /w/:slug/stream` response. `server` is used only to disable Bun's idle
@@ -100,11 +101,13 @@ export function createJournalStreamResponse(
   let watcher: FSWatcher | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let shutdownListener: (() => void) | null = null;
+  let unsubscribeMetadata: (() => void) | null = null;
 
   const teardown = (): void => {
     if (closed) return;
     closed = true;
     unsubscribe?.();
+    unsubscribeMetadata?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (watcher) void watcher.close();
     if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
@@ -147,6 +150,9 @@ export function createJournalStreamResponse(
       unsubscribe = bus.subscribe(({ cursor, event }) => {
         send(encodeSseFrame({ id: cursor, event: "journal", data: event }));
       });
+      unsubscribeMetadata = opts.subscribeMetadata?.(() => {
+        send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
+      }) ?? null;
 
       // Defense-in-depth (review item #3): everything from here on is pure setup (no I/O that's
       // expected to fail under normal operation) but a future change — or an edge case neither

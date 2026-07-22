@@ -266,7 +266,7 @@ describe("resolveManifest", () => {
     const manifest = { manifest_version: 1 as const, source_path: "src.md", source_sha256: "abc", chunks: [] };
     const adapter = fakeAdapter({ manifestFor: () => ({ manifest, component: "renderer" }) });
     const result = resolveManifest("/nonexistent-root", adapter, "out.html");
-    expect(result).toEqual({ manifest, component: "renderer" });
+    expect(result).toEqual({ manifest, component: "renderer", adapterId: "fake" });
   });
 
   describe("adapter names a manifestPath — read + parsed through confinePath", () => {
@@ -290,7 +290,7 @@ describe("resolveManifest", () => {
       writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest));
       const adapter = fakeAdapter({ manifestFor: () => ({ manifestPath: "manifest.json", component: "renderer" }) });
       const result = resolveManifest(root, adapter, "out.html");
-      expect(result).toEqual({ manifest, component: "renderer", manifestPath: "manifest.json" });
+      expect(result).toEqual({ manifest, component: "renderer", manifestPath: "manifest.json", adapterId: "fake" });
     });
 
     test("regression (Fix 2): a real-convention .json manifest OUTSIDE any excluded directory resolves successfully, not null — the sidebar's include-glob (md/html/txt only) must NOT gate this path", () => {
@@ -299,7 +299,7 @@ describe("resolveManifest", () => {
       writeFileSync(join(root, "chunks-2026", "manifest.json"), JSON.stringify(manifest));
       const adapter = fakeAdapter({ manifestFor: () => ({ manifestPath: "chunks-2026/manifest.json", component: "renderer" }) });
       const result = resolveManifest(root, adapter, "out.html");
-      expect(result).toEqual({ manifest, component: "renderer", manifestPath: "chunks-2026/manifest.json" });
+      expect(result).toEqual({ manifest, component: "renderer", manifestPath: "chunks-2026/manifest.json", adapterId: "fake" });
     });
 
     test("manifestPath escaping the workspace (confinePath rejection) -> null, never a throw", () => {

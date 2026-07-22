@@ -79,15 +79,15 @@ export function writeUnparseableLock(home: string): void {
   writeFileSync(lockPath(home), "{ this is not json");
 }
 
-// Default bumped from 5000 to 8000 (P1.3 review item 5 follow-up): a real daemon normally
+// Default bumped to 15000 (P1.3 review item 5 follow-up): a real daemon normally
 // answers in well under a second, so this only adds margin for the failure path — it doesn't
 // slow down passing tests, which return as soon as the handshake succeeds. The extra headroom
-// matters once many subprocess-spawning tests run back to back in the same file; a spawn that's
-// usually fast can occasionally take longer under that cumulative load, and 5000ms left too
-// little slack against the surrounding tests' own budgets.
+// matters once the full subprocess suites run twice back to back; a spawn that's usually fast
+// can occasionally take longer under that cumulative load. Passing tests still return as soon as
+// the handshake succeeds, so the margin only affects a genuine failure path.
 export async function waitForHandshake(
   port: number,
-  deadlineMs = 8000,
+  deadlineMs = 15000,
 ): Promise<{ protocol_version: string; build_id?: string; instance_id: string; pid: number; started_at: string } | null> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {

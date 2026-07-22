@@ -35,6 +35,7 @@ import {
   type AdapterSessionHint,
   type ContentAdapter,
 } from "./adapters/interface.ts";
+import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
 import { resolve as resolveAnchor, type ClassFArtifact, type ClassRArtifact, type Resolution, type ResolveCtx } from "./anchoring.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { listCheckpoints } from "./checkpoints.ts";
@@ -49,6 +50,7 @@ import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
 import { journalPath } from "./bus/paths.ts";
+import { readInboxEntry } from "./bus/inbox.ts";
 import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
 import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.ts";
 import type { JournalEvent } from "./bus/journal.ts";
@@ -98,6 +100,7 @@ const SPA_ASSETS: Record<string, string> = {
   "classf-viewer.js": "text/javascript; charset=utf-8",
   // P4.2 addition — the read-only conversation mirror + out-of-band composer (R6/F32).
   "conversation.js": "text/javascript; charset=utf-8",
+  "attention-tray.js": "text/javascript; charset=utf-8",
   // Rich markdown editor (Edit mode's default face) + its vendored ProseMirror bundle.
   "rich-editor.js": "text/javascript; charset=utf-8",
   "vendor/prosemirror.js": "text/javascript; charset=utf-8",
@@ -118,7 +121,7 @@ export interface ApiContext {
    * construct their own `WorkspaceBus`. */
   getWorkspaceBus: (canonicalRoot: string) => WorkspaceBus;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
-   * here (`GET /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
+   * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
   capabilityStore: CapabilityStore;
   /** P6.1 — the daemon's one `AdapterRegistry` (R7). OPTIONAL and defaulted to "no adapter" by
@@ -126,6 +129,8 @@ export interface ApiContext {
    * every existing test's hand-built `ApiContext` literal keeps compiling unchanged — an absent
    * registry IS the zero-adapter core, not a gap to fill in. */
   adapterRegistry?: AdapterRegistry;
+  /** Durable descriptor owner. Optional only for narrow tests; production always wires it. */
+  metadataRegistry?: WorkspaceMetadataRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
 }
@@ -561,8 +566,9 @@ function buildAnchoringContext(
     source,
     ...(manifestResolution ? { manifest: manifestResolution.manifest } : {}),
   };
-  const resolveCtx: ResolveCtx =
-    manifestResolution && adapter ? { pipelineFeedback: { adapter: adapter.id, component: manifestResolution.component } } : {};
+  const resolveCtx: ResolveCtx = manifestResolution
+    ? { pipelineFeedback: { adapter: manifestResolution.adapterId, component: manifestResolution.component } }
+    : {};
   return { artifact, resolveCtx };
 }
 
@@ -837,10 +843,77 @@ function handleInbox(ctx: ApiContext, slug: string, pathname: string): Response 
   const { state, createdAt } = peekJournal(resolved.entry.canonical_path);
   const attention = Object.entries(state.entries)
     .filter(([, e]) => e.kind === "attention" && !isTerminal("attention", e.status))
-    .map(([id, e]) => ({ id, created_at: createdAt.get(id) ?? "", status: e.status }))
+    .map(([id, e]) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        const raw = readInboxEntry(resolved.entry.canonical_path, id);
+        if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) payload = raw as Record<string, unknown>;
+      } catch {
+        // Journal state remains authoritative even if an immutable payload is unreadable.
+      }
+      return {
+        id,
+        created_at: createdAt.get(id) ?? "",
+        status: e.status,
+        message: typeof payload.message === "string" ? payload.message : null,
+        action: typeof payload.action === "string" ? payload.action : null,
+        target: typeof payload.path === "string" ? payload.path : null,
+      };
+    })
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
 
   return Response.json({ pending_count: attention.length, attention });
+}
+
+async function handleAttentionSeen(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  try {
+    return Response.json({ id: entryId, ...(await bus.markAttentionSeen(entryId)) });
+  } catch {
+    return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
+  }
+}
+
+async function handleAttentionResponse(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const outcome = b?.outcome;
+  if (outcome !== "done" && outcome !== "approved" && outcome !== "changes_requested") {
+    return problem(400, "validation-failed", "outcome must be done, approved, or changes_requested", undefined, url.pathname);
+  }
+  const response = b?.response;
+  if (response !== undefined && (typeof response !== "string" || Buffer.byteLength(response, "utf8") > 4096)) {
+    return problem(400, "validation-failed", "response must be a string of at most 4096 bytes", undefined, url.pathname);
+  }
+
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const entry = bus.readEntry(entryId);
+  if (!entry || typeof entry.payload !== "object" || entry.payload === null) {
+    return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
+  }
+  const action = (entry.payload as Record<string, unknown>).action;
+  if (action === "review" && outcome === "done") {
+    return problem(400, "validation-failed", "review requests require approved or changes_requested", undefined, url.pathname);
+  }
+  if (action !== "review" && outcome !== "done") {
+    return problem(400, "validation-failed", "generic requests require outcome done", undefined, url.pathname);
+  }
+  try {
+    return Response.json({ id: entryId, ...(await bus.completeAttention(entryId, outcome, response as string | undefined)) });
+  } catch (error) {
+    return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
+  }
 }
 
 /** `POST /w/:slug/session-binding` (A1 §5.11) — the explicit user pick from the session picker
@@ -871,6 +944,62 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
 
   await ctx.sessionRegistry.register({ ...existing, workspace_binding: resolved.entry.canonical_path });
   return Response.json({ bound: true, session_id: sessionId });
+}
+
+function metadataUnavailable(pathname: string): Response {
+  return problem(500, "internal", "workspace metadata service is unavailable", undefined, pathname);
+}
+
+function metadataError(error: unknown, pathname: string): Response {
+  if (error instanceof WorkspaceMetadataError) {
+    return problem(
+      error.status,
+      error.code === "metadata-conflict" ? "conflict" : "validation-failed",
+      error.message,
+      undefined,
+      pathname,
+    );
+  }
+  return problem(500, "internal", "workspace metadata operation failed", undefined, pathname);
+}
+
+function handleGetMetadata(ctx: ApiContext, slug: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  if (!ctx.metadataRegistry) return metadataUnavailable(pathname);
+  const descriptor = ctx.metadataRegistry.get(resolved.entry.canonical_path);
+  if (!descriptor) return problem(404, "not-found", "workspace metadata is not registered", undefined, pathname);
+  return Response.json({ metadata: descriptor });
+}
+
+async function handleSetMetadata(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  if (!ctx.metadataRegistry) return metadataUnavailable(url.pathname);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  try {
+    const { descriptor, replaced } = await ctx.metadataRegistry.set(resolved.entry.canonical_path, body);
+    return Response.json({ metadata: descriptor, replaced });
+  } catch (error) {
+    return metadataError(error, url.pathname);
+  }
+}
+
+async function handleClearMetadata(ctx: ApiContext, slug: string, pathname: string): Promise<Response> {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  if (!ctx.metadataRegistry) return metadataUnavailable(pathname);
+  try {
+    return Response.json({ cleared: await ctx.metadataRegistry.clear(resolved.entry.canonical_path) });
+  } catch (error) {
+    return metadataError(error, pathname);
+  }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1249,8 +1378,17 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
   if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
 
   const message = typeof b?.message === "string" ? b.message : undefined;
-  const action = typeof b?.action === "string" ? b.action : undefined;
+  const action = typeof b?.action === "string" ? b.action : "review";
   const targetPath = typeof b?.target_path === "string" ? b.target_path : undefined;
+  if (message !== undefined && Buffer.byteLength(message, "utf8") > 4096) {
+    return problem(400, "validation-failed", "message must be at most 4096 bytes", undefined, url.pathname);
+  }
+  if (Buffer.byteLength(action, "utf8") > 64) {
+    return problem(400, "validation-failed", "action must be at most 64 bytes", undefined, url.pathname);
+  }
+  if (targetPath !== undefined && !confinePath(root, targetPath).ok) {
+    return problem(400, "invalid-path", "target_path must be workspace-relative and confined", undefined, url.pathname);
+  }
 
   const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
   const bus = await resolveBus(ctx, root);
@@ -1258,7 +1396,7 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
   await bus.createEntry(id, {
     kind: "attention_request",
     ...(message !== undefined ? { message } : {}),
-    ...(action !== undefined ? { action } : {}),
+    action,
     ...(targetPath !== undefined ? { path: targetPath } : {}),
   });
   return new Response(JSON.stringify({ id, slug: entry.slug, status: "open" }), {
@@ -1351,6 +1489,9 @@ async function handleStream(ctx: ApiContext, slug: string, req: Request, server:
   const bus = await resolveBus(ctx, resolved.entry.canonical_path);
   return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server, {
     shutdownSignal: ctx.shutdownSignal,
+    subscribeMetadata: ctx.metadataRegistry
+      ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry.canonical_path, listener)
+      : undefined,
   });
 }
 
@@ -1418,7 +1559,7 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
   return Response.json({ accepted: true, delivered: false }, { status: 202 });
 }
 
-/** `GET /w/:slug/capability/:artifactPath` (A1 §5.12/§7, P4.1) — mints a fresh, directory-scoped
+/** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-scoped
  * capability for a class-F artifact. Runs the identical slug/confinePath/tracked-membership
  * pipeline handleGetArtifact does (A1 §6) so a mint request is held to the same bar before it's
  * ever allowed to hand one out; a confined-but-untracked path is 404, same failure class as every
@@ -1587,20 +1728,34 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: () => handleInbox(ctx, slug, pathname) };
   }
-  // F12: human response to an attention_request.
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/[^/]+\/response$/))) {
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/seen$/))) {
     const slug = m[1] as string;
-    return {
-      routeClass: "state-changing",
-      handle: () => handleNotImplemented(ctx, slug, pathname, "attention_request response — F12"),
-    };
+    const entryId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleAttentionSeen(ctx, slug, entryId, req) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/response$/))) {
+    const slug = m[1] as string;
+    const entryId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleAttentionResponse(ctx, slug, entryId, req) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleGetMetadata(ctx, slug, pathname) };
+  }
+  if (method === "PUT" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSetMetadata(ctx, slug, req) };
+  }
+  if (method === "DELETE" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: () => handleClearMetadata(ctx, slug, pathname) };
   }
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/session-binding$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleSessionBinding(ctx, slug, req) };
   }
   // P4.1: class-F capability-URL mint (A1 §7).
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/capability\/(.+)$/))) {
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/capability\/(.+)$/))) {
     const slug = m[1] as string;
     const artifactPath = m[2] as string;
     return { routeClass: "state-changing", handle: () => handleMintCapability(ctx, slug, artifactPath, pathname) };

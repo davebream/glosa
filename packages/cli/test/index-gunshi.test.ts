@@ -16,6 +16,9 @@ const PUBLIC_COMMANDS = [
   "request-review",
   "doctor",
   "status",
+  "inbox",
+  "metadata",
+  "session",
 ] as const;
 
 let dirs: string[] = [];

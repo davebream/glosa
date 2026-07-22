@@ -133,11 +133,12 @@ describe("glosa doctor", () => {
     expect(afterDrift.exitCode).toBe(9);
   });
 
-  test("channel check is honestly reported as unverifiable (skip), never a fabricated pass", async () => {
+  test("optional Channel check is honestly skipped without degrading fallback compatibility", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "channel")?.status).toBe("skip");
+    expect(findCheck(result.data.checks, "channel")?.detail).toContain("optional");
   });
 
   test("daemon+proto: unreachable daemon -> FAIL", async () => {

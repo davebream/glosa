@@ -27,7 +27,6 @@ import {
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { CLI_VERSION } from "./version.ts";
-import { BUILD_ID } from "../../daemon/src/build-id.ts";
 
 export { CLI_VERSION } from "./version.ts";
 
@@ -41,27 +40,35 @@ export interface GlosaBinResolution {
   mode: "path" | "bun-run";
 }
 
-/** Bare `glosa` if it's on PATH AND its `--build-id` matches this build; otherwise the no-build-
- * step fallback `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (A6 §F26/§F30 — "honors
- * no-build-step"). Injectable via `InitOptions.resolveGlosaBin` so tests never depend on what's
- * actually on the test runner's PATH. */
-export function defaultResolveGlosaBin(glosaRoot: string): GlosaBinResolution {
-  // `PATH` passed explicitly (not Bun.which's own zero-arg default) — Bun.which otherwise
-  // resolves against a PATH snapshot that doesn't track a later `process.env.PATH` mutation,
-  // which is exactly how a test (and `doctor`'s own re-check) needs this to behave.
-  const onPath = Bun.which("glosa", { PATH: Bun.env.PATH ?? "" });
-  if (onPath) {
-    try {
-      const proc = Bun.spawnSync({ cmd: [onPath, "--build-id"] });
-      const out = proc.stdout.toString("utf8");
-      if (proc.success && out === `${BUILD_ID}\n`) {
-        return { command: "glosa", args: [], mode: "path" };
-      }
-    } catch {
-      // fall through to the bun-run form
-    }
+export class DurableGlosaInstallRequiredError extends Error {
+  constructor(readonly attempted: GlosaBinResolution) {
+    super("`glosa init` requires a durable global or project-local installation");
+    this.name = "DurableGlosaInstallRequiredError";
   }
-  return { command: "bun", args: ["run", "--silent", join(glosaRoot, "packages/cli/src/main.ts")], mode: "bun-run" };
+}
+
+function isEphemeralPackageRunnerPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  return (
+    normalized.includes("/.npm/_npx/") ||
+    normalized.includes("/_npx/") ||
+    normalized.includes("/.bun/install/cache/") ||
+    normalized.includes("/.pnpm/dlx/")
+  );
+}
+
+/** Persist this process's absolute Bun executable plus this installation's CLI entrypoint.
+ * Pinning both sides avoids two PATH dependencies: locating `glosa`, and the installed script's
+ * `#!/usr/bin/env bun` interpreter lookup. The package runner itself is deliberately never stored.
+ * Injectable via `InitOptions.resolveGlosaBin` so tests can exercise reconciliation forms. */
+export function defaultResolveGlosaBin(glosaRoot: string): GlosaBinResolution {
+  const fallback: GlosaBinResolution = {
+    command: process.execPath,
+    args: ["run", "--silent", join(glosaRoot, "packages/cli/src/main.ts")],
+    mode: "bun-run",
+  };
+  if (isEphemeralPackageRunnerPath(glosaRoot)) throw new DurableGlosaInstallRequiredError(fallback);
+  return fallback;
 }
 
 function binCommandString(bin: GlosaBinResolution, ...extraArgs: string[]): string {
@@ -210,7 +217,7 @@ interface DesiredHook {
    * — `command` is exactly what CHANGES across a GLOSA_BIN swap). */
   role: string;
   command: string;
-  timeout: number;
+  timeout?: number;
   asyncRewake?: boolean;
 }
 
@@ -229,7 +236,6 @@ function desiredHooks(bin: GlosaBinResolution): DesiredHook[] {
       matcher: SESSION_START_MATCHER,
       role: "rewake-watch",
       command: binCommandString(bin, "hook", "rewake-watch"),
-      timeout: 0,
       asyncRewake: true,
     },
     { event: "SessionEnd", role: "session-end", command: binCommandString(bin, "hook", "session-end"), timeout: 5 },
@@ -253,14 +259,14 @@ function desiredCodexHooks(bin: GlosaBinResolution): DesiredHook[] {
   ];
 }
 
-/** A6 §F26's in-band ownership signature — EXTENDED (P4.3 review fix) to recognize BOTH GLOSA_BIN
- * forms, not just the bare-`glosa` one: a command literally starting `glosa hook ` (path mode),
- * OR the no-build-step fallback `bun run --silent <anything>/packages/cli/src/main.ts hook
- * <role>` (bun-run mode). Matching the `main.ts` path suffix rather than a specific glosaRoot is
+/** A6 §F26's in-band ownership signature — EXTENDED (P4.3 review fix) to recognize legacy bare
+ * or absolute `glosa hook` commands and the durable no-build-step form whose command is bare or
+ * absolute Bun followed by `run --silent <anything>/packages/cli/src/main.ts hook <role>`.
+ * Matching the `main.ts` path suffix rather than a specific glosaRoot is
  * deliberate — this is what lets a REINSTALL at a different glosaRoot still recognize its own
  * prior hooks. Returns the recognized `<role>` suffix, or `null` for anything else (a foreign
  * tool's command never matches either form). */
-const HOOK_ROLE_RE = /^(?:glosa hook (\S+)|bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))(?: --provider codex)?$/;
+const HOOK_ROLE_RE = /^(?:(?:\S*\/)?glosa hook (\S+)|(?:\S*\/)?bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))(?: --provider codex)?$/;
 
 function hookRoleOf(command: unknown): string | null {
   if (typeof command !== "string") return null;
@@ -302,7 +308,8 @@ function mergeSettingsHooks(root: Json, hooks: DesiredHook[]): MergeResult {
     hooksObj[h.event] ??= [];
     const groups = hooksObj[h.event] as Json[];
 
-    const desiredEntry: Json = { type: "command", command: h.command, timeout: h.timeout };
+    const desiredEntry: Json = { type: "command", command: h.command };
+    if (h.timeout !== undefined) desiredEntry.timeout = h.timeout;
     if (h.asyncRewake) desiredEntry.asyncRewake = true;
 
     // Pass 1 — role match (the reconciliation fix): finds an existing hook regardless of what
@@ -611,11 +618,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
 async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitResult> {
   const glosaRoot = opts.glosaRoot ?? defaultGlosaRoot();
-  const bin = (opts.resolveGlosaBin ?? defaultResolveGlosaBin)(glosaRoot);
   const write = opts.writeFileAtomic ?? writeAtomic;
   const { settingsPath, mcpPath, manifestPath, codexHooksPath, codexConfigPath } = paths(opts.dir);
 
-  const emptyData = (): InitData => ({
+  const emptyData = (glosaBin: GlosaBinResolution): InitData => ({
     files: {
       settings: { path: settingsPath, created: false, changed: false, backedUp: false },
       mcp: { path: mcpPath, created: false, changed: false, backedUp: false },
@@ -623,8 +629,28 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       codex_config: { path: codexConfigPath, created: false, changed: false, backedUp: false },
     },
     channel_command: CHANNEL_COMMAND,
-    glosa_bin: bin,
+    glosa_bin: glosaBin,
   });
+
+  let bin: GlosaBinResolution;
+  try {
+    bin = (opts.resolveGlosaBin ?? defaultResolveGlosaBin)(glosaRoot);
+  } catch (err) {
+    if (!(err instanceof DurableGlosaInstallRequiredError)) throw err;
+    return {
+      ok: false,
+      exitCode: 2,
+      changed: false,
+      data: emptyData(err.attempted),
+      warnings: [],
+      error: {
+        code: "durable-install-required",
+        kind: "usage",
+        message: err.message,
+        hint: "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`",
+      },
+    };
+  }
 
   let settingsParsed: ParsedFile;
   let mcpParsed: ParsedFile;
@@ -639,7 +665,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       ok: false,
       exitCode: 6,
       changed: false,
-      data: emptyData(),
+      data: emptyData(bin),
       warnings: [],
       error: { code: "invalid-json", kind: "foreign_config_conflict", message: e.message, hint: "fix the JSON syntax error, or remove the file, then re-run `glosa init`" },
     };
@@ -663,7 +689,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       ok: false,
       exitCode: 6,
       changed: false,
-      data: emptyData(),
+      data: emptyData(bin),
       warnings: [],
       error: {
         code: "mcp-key-conflict",
@@ -695,11 +721,11 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
     if (codexConfigMerge.changed) {
       diff += unifiedDiff(codexConfigPath, codexConfigRaw, codexConfigMerge.content);
     }
-    return { ok: true, exitCode: 0, changed: anyChanged, data: emptyData(), diff, warnings: [] };
+    return { ok: true, exitCode: 0, changed: anyChanged, data: emptyData(bin), diff, warnings: [] };
   }
 
   if (!anyChanged) {
-    return { ok: true, exitCode: 0, changed: false, data: emptyData(), warnings: [] };
+    return { ok: true, exitCode: 0, changed: false, data: emptyData(bin), warnings: [] };
   }
 
   // --- transactional write: settings -> mcp -> manifest. Every write pushes an undo action BEFORE
@@ -713,7 +739,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
     codex_config:
       existingManifest?.files.codex_config ?? { path: codexConfigPath, created: false, backup: null, sha256: "" },
   };
-  const summary: InitData = emptyData();
+  const summary: InitData = emptyData(bin);
 
   try {
     if (settingsMerge.changed) {
@@ -804,7 +830,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       ok: false,
       exitCode: 70,
       changed: false,
-      data: emptyData(),
+      data: emptyData(bin),
       warnings: [],
       error: { code: "internal", kind: "internal", message: (err as Error).message },
     };

@@ -59,19 +59,20 @@ describe("createDataAccess — request shape", () => {
     expect(calls[0]).toBe("/w/ws/artifacts/a.md");
   });
 
-  test("mintClassFCapability GETs /w/:slug/capability/:artifactPath and URL-encodes the path", async () => {
-    const calls: string[] = [];
-    const fetchFn = async (path: string) => {
-      calls.push(path);
+  test("mintClassFCapability POSTs /w/:slug/capability/:artifactPath and URL-encodes the path", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit) => {
+      calls.push([path, init]);
       return jsonResponse(200, { url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n", expires_in_s: 600 });
     };
     const da = createDataAccess({ fetchFn, storage: fakeStorage() });
 
-    const result = await da.mintClassFCapability("ws", "output/docs/speech notes.html");
+    const result = await da.mintClassFCapability("ws", "output/docs/rendered preview.html");
 
     // encodePathSegments encodes each path segment separately (preserving the `/` separators) —
     // only the segment containing a space gets percent-encoded.
-    expect(calls[0]).toBe("/w/ws/capability/output/docs/speech%20notes.html");
+    expect(calls[0]![0]).toBe("/w/ws/capability/output/docs/rendered%20preview.html");
+    expect(calls[0]![1].method).toBe("POST");
     expect(result.url).toBe("http://127.0.0.1:4647/doc/tok/notes.html");
     expect(result.nonce).toBe("n");
   });
@@ -91,6 +92,27 @@ describe("createDataAccess — request shape", () => {
     expect(captured!.path).toBe("/w/ws/annotations");
     expect(captured!.init.method).toBe("POST");
     expect(JSON.parse(captured!.init.body as string)).toEqual(record);
+  });
+
+  test("attention reads and mutations stay inside the single data-access module", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit = {}) => {
+      calls.push([path, init]);
+      return jsonResponse(200, path.endsWith("/inbox") ? { pending_count: 0, attention: [] } : { status: "done" });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage({ glosa_token: "tok" }) });
+
+    await da.getInbox("ws");
+    await da.markAttentionSeen("ws", "att 1");
+    await da.respondToAttention("ws", "att 1", { outcome: "changes_requested", response: "Please revise" });
+
+    expect(calls.map(([path]) => path)).toEqual([
+      "/w/ws/inbox",
+      "/w/ws/inbox/att%201/seen",
+      "/w/ws/inbox/att%201/response",
+    ]);
+    expect(calls[1]![1].method).toBe("POST");
+    expect(JSON.parse(calls[2]![1].body as string)).toEqual({ outcome: "changes_requested", response: "Please revise" });
   });
 
   test("putArtifact PUTs the content with an If-Match header when given", async () => {
