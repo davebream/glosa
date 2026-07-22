@@ -6,6 +6,8 @@
 // Talks to the daemon through NOTHING — pure DOM; environments without <dialog>.showModal
 // (very old engines, some headless DOMs) fall back to window.confirm so the flow never blocks.
 
+let dialogId = 0;
+
 /**
  * Shows a modal question. Resolves true when the user confirms, false otherwise (cancel, Esc,
  * or backdrop light-dismiss).
@@ -21,13 +23,19 @@ export function confirmDialog({ title, body, confirmLabel = "Continue", danger =
   }
 
   return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const id = `glosa-dialog-${++dialogId}`;
     dialog.className = "glosa-dialog";
     const heading = document.createElement("h2");
+    heading.id = `${id}-title`;
     heading.textContent = title;
+    dialog.setAttribute("aria-labelledby", heading.id);
     dialog.append(heading);
     if (body) {
       const p = document.createElement("p");
+      p.id = `${id}-description`;
       p.textContent = body;
+      dialog.setAttribute("aria-describedby", p.id);
       dialog.append(p);
     }
     const actions = document.createElement("div");
@@ -52,10 +60,15 @@ export function confirmDialog({ title, body, confirmLabel = "Continue", danger =
     dialog.addEventListener("close", () => {
       resolve(dialog.returnValue === "confirm");
       dialog.remove();
+      queueMicrotask(() => {
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+          previousFocus.focus({ preventScroll: true });
+        }
+      });
     });
 
     document.body.append(dialog);
     dialog.showModal();
-    confirm.focus();
+    (danger ? cancel : confirm).focus();
   });
 }

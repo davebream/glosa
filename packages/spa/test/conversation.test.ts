@@ -182,6 +182,8 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
     const input = root.querySelector(".glosa-conv-composer-input") as any;
     const sendBtn = root.querySelector(".glosa-conv-composer-send") as any;
+    expect(input.getAttribute("aria-label")).toBe("Message to the agent session");
+    expect(input.getAttribute("name")).toBe("conversation-message");
     input.value = "please check the edge case";
     sendBtn.click();
 
@@ -189,6 +191,29 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     return Promise.resolve().then(() => {
       expect(da.sent).toEqual([{ slug: "ws-1", text: "please check the edge case" }]);
     });
+  });
+
+  test("composer failures keep the draft and expose a textual live error", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = {
+      ...fakeDataAccess(),
+      sendComposerMessage: async () => {
+        throw new Error("session unavailable");
+      },
+    };
+
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "keep this draft";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const status = root.querySelector(".glosa-conv-status") as any;
+    expect(input.value).toBe("keep this draft");
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.getAttribute("data-error")).toBe("true");
+    expect(status.textContent).toContain("session unavailable");
   });
 
   test("unmount() stops the stream (the fake's onEvent handle is cleared)", () => {
