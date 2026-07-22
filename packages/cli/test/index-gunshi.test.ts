@@ -19,6 +19,7 @@ const PUBLIC_COMMANDS = [
   "inbox",
   "metadata",
   "session",
+  "token",
 ] as const;
 
 let dirs: string[] = [];
