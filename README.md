@@ -50,7 +50,7 @@ bun run audit:licenses
 bun run package:check
 ```
 
-The implementation contract is in `CLAUDE.md`; the authoritative requirements are in `docs/requirements.md`.
+The implementation contract is in `AGENTS.md`; the authoritative requirements are in `docs/requirements.md`.
 
 ## Contributing
 

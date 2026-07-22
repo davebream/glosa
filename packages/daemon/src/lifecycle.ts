@@ -479,7 +479,7 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
 
 /**
  * Builds the spawned daemon's environment: scrubs `ANTHROPIC_API_KEY` (never let a spawned
- * child inherit it — see docs/CLAUDE.md invariant 5) and pins `GLOSA_HOME`/`GLOSA_PORT` so the
+ * child inherit it — see AGENTS.md invariant 5) and pins `GLOSA_HOME`/`GLOSA_PORT` so the
  * child roots itself exactly where this client expects. Pure — exported so the scrub itself is
  * unit-testable independent of actually spawning a process.
  */

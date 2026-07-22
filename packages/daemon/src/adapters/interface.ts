@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — R7's content-adapter interface + the registry the daemon holds (the generic/
-// domain boundary, CLAUDE.md invariant #1: generic core, domain in adapters). Mirrors
+// domain boundary, AGENTS.md invariant #1: generic core, domain in adapters). Mirrors
 // providers/interface.ts's own framing verbatim: this is the seam EXTERNAL code (a package living
 // in ITS OWN repo, outside glosa entirely, or this repo's own neutral fixture adapter under
 // test/fixtures/) registers domain facts through at runtime. The core (http.ts, anchoring.ts,

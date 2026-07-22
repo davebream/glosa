@@ -5,7 +5,7 @@
 //     `EventSource` can't attach the `Authorization: Bearer` header). This half is written here
 //     rather than in packages/spa because it's exercised directly by this task's round-trip tests;
 //     P3.3 has the SPA import it (a same-monorepo relative import — no bundler, no npm package
-//     boundary to cross, per the "no build step" stack constraint in the repo's own CLAUDE.md).
+//     boundary to cross, per the "no build step" stack constraint in the repo's own AGENTS.md).
 // P4.2 additions — `transcript` (a normalized `TranscriptEvent`, A2 §F16) and `mirror_unavailable`
 // (the transcript stream's fail-soft signal: a parse/tail failure that must never surface as a
 // 500 or a dropped connection, A2 §F16 "Failure Recovery") — same wire mechanics as every other
