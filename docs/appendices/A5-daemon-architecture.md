@@ -22,6 +22,17 @@
 - **Two separate axes**: (1) lifecycle status (small state machine, one legal writer/transition, idempotent); (2) `delivery_attempt` events = NOT transitions. Re-nudging a `delivered` entry emits new delivery_attempt (status stays delivered); per-rung "delivered" semantics live in `attempt.outcome`.
 - Event vocab (writer / changes-state / idem-key): created(daemon/→pending/entry); delivery_attempt(daemon/NO/(entry,attempt_seq)); delivered(daemon/pending→delivered/(entry,delivered)); seen(daemon|human/delivered→seen [attention]/(entry,seen)); resolved(session:<id>|human/→applied|rejected|stale/(entry,resolved) first-terminal-wins); done(human|session/seen|delivered→done [attention]); staled(daemon/→stale); expired(daemon/→expired [attention]).
 - delivery_attempt.detail: `{via:channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. (No cmux — glosa is cmux-decoupled; the cross-agent transports are the blocking gate + turn-boundary hooks + MCP-pull, plus Claude channels.)
+- Presentation is two-phase. `prepare` selects non-terminal entries in journal creation order, reads
+  their immutable payloads, builds provider-neutral actionable presentations, and places an in-memory
+  30-second reservation on each selected id. It returns a random delivery token but writes no
+  `presented` attempt. `ack(token,presented|failed)` consumes the reservation and appends one attempt
+  per entry; token expiry or process death releases the entries without changing journal state.
+- Limits are measured with `TextEncoder`: 16 KiB per serialized entry, 32 KiB per serialized batch,
+  maximum eight entries. An annotation always retains id/kind/artifact/body-or-prefix/intent/quote/
+  position/current resolution. A human edit always retains id/kind/checkpoint pair/all file paths and
+  as many complete unified-diff hunks as fit. Every truncation includes omitted byte/hunk counts and an
+  opaque continuation cursor usable through the CLI and MCP retrieval surfaces. Full artifact bodies
+  are forbidden in delivery payloads.
 - Common entries terminal: applied/rejected/stale. Attention terminal: done/expired/stale. Event with guard `from`≠current → ignored on replay (idempotent). Duplicate resolve on terminal = no-op.
 - Replay: fold in order; skip torn final line; malformed completed line → quarantine (not fatal); delivery_attempt never mutates; guarded transitions only when !isTerminal(cur). `--wait` callers resolve when fold reaches done/expired, payload in done.detail.
 

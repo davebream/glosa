@@ -5,11 +5,20 @@
 - Stable exit codes (append-only, `1` reserved/never emitted): 0 ok · 2 usage · 3 daemon_unreachable · 4 not_a_workspace · 5 platform_unsupported · 6 foreign_config_conflict · 7 review_timeout · 8 entry_error · 9 degraded · 10 protocol_mismatch · 11 restore_conflict · 12 lease_conflict · 70 internal.
 
 ## F26 — `glosa init` merge/ownership/uninstall
-- Touches only `<ws>/.claude/settings.json` (hooks block), `<ws>/.mcp.json` (mcpServers.glosa), `<ws>/.claude/.glosa-init.json` (glosa's own manifest = authoritative ownership).
+- Touches only `<ws>/.claude/settings.json` (Claude hooks), `<ws>/.mcp.json` (Claude MCP),
+  `<ws>/.codex/hooks.json` (Codex hooks), `<ws>/.codex/config.toml` (Codex MCP), and
+  `<ws>/.claude/.glosa-init.json` (glosa's authoritative ownership manifest).
 - Ownership dual mechanism (JSON has no comments): manifest records per-file `{path, created, backup, inserted:[{pointer, sha256}]}`; in-band signature fallback = hook commands begin literal `glosa hook ` and MCP key literally `glosa`. Never inject marker keys into Claude schemas.
 - GLOSA_BIN resolution (recorded in manifest): probe bare `glosa --build-id` on PATH and use it only when its exact content-derived identity matches this installation; unsupported flags, errors, or mismatches fall back to `bun run --silent <glosaRoot>/packages/cli/src/main.ts` (honors no-build-step). Stored so uninstall matches + doctor detects drift. `glosa --build-id` prints only the identity and exits without starting a daemon; `glosa --version` remains the root package version.
 - Hook entries written: SessionStart (matcher `startup|resume|clear|compact`) → `glosa hook session-start` (timeout 10) + `glosa hook rewake-watch` (asyncRewake:true, timeout 0); SessionEnd → `glosa hook session-end` (timeout 5); UserPromptSubmit → `glosa hook user-prompt-submit` (10); Stop → `glosa hook stop` (10); Notification → `glosa hook notification` (5). Roles: session-start registers {session_id,cwd,transcript_path,source} + drains parked; rewake-watch = rung-2 (rearmed by stop hook via per-session lease, since asyncRewake is one-shot); user-prompt-submit = rung-3 additionalContext; stop = rung-3 drain (≤8) + rewake rearm; session-end releases lease; notification = hook-fed attention state (preferred over transcript permission heuristic).
 - MCP entry: `{mcpServers:{glosa:{type:"stdio", command:"glosa", args:["mcp"]}}}` (GLOSA_BIN form).
+- Retrieval command: `glosa inbox get <id> [--cursor <opaque>] [--workspace <path>]`; it is read-only
+  and returns the same bounded presentation pages as MCP `glosa_inbox_get`. `glosa mcp` exposes only
+  issue-18's `glosa_inbox_pull` and `glosa_inbox_get` tools in this increment. The stdio shim is a
+  client of the singleton daemon and acknowledges MCP presentation only after its response write.
+- Codex project integration uses owned entries in `.codex/hooks.json` for SessionStart, SessionEnd,
+  UserPromptSubmit, and Stop plus an owned `[mcp_servers.glosa]` block in `.codex/config.toml`.
+  Installation participates in the same backup/rollback/foreign-entry rules as Claude configuration.
 - Channel command printed (F06 LOCKED): `claude --dangerously-load-development-channels server:glosa` — NEVER `--channels`. Note MCP consent / org policy may still block; doctor verifies real registration.
 - Merge algo (transactional, per file, order settings→mcp→manifest): parse (absent→create; invalid JSON→abort exit6 touch nothing); backup `<file>.glosa-backup-<UTC-ISO>` (skip if identical to newest; retain 5); idempotent inserts by identity (hook = exact command string; MCP = key glosa; foreign non-glosa siblings untouched; foreign glosa-key differs & not-owned→exit6 unless --force); atomic temp+fsync+rename preserving indent; update manifest. Second init unchanged → no backup, exit0 data.changed:false. Mid-run failure → restore this-run backups, exit nonzero (no half-install).
 - Flags: `--print/--dry-run` (unified-diff, no write), `--force`, `--uninstall`, `--restore-backup`, `--json`.
