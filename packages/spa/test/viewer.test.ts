@@ -214,6 +214,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     (root.querySelector('[data-mode="edit"]') as any).click();
+    const richTextbox = root.querySelector('.ProseMirror[role="textbox"]');
+    if (richTextbox) {
+      expect(richTextbox.getAttribute("aria-label")).toBe("Artifact editor");
+      expect(richTextbox.getAttribute("aria-multiline")).toBe("true");
+    }
     // The rich face is Edit's default (or the automatic fallback already picked Source in DOMs
     // that can't host a ProseMirror view); the Source face is the byte-exact editing contract
     // this test pins down either way.
@@ -293,6 +298,30 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector(".glosa-annotation")).toBeNull();
   });
 
+  test("Annotate mode: a focused passage opens the composer with Enter and Cancel restores passage focus", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess();
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('[data-mode="annotate"]') as any).click();
+
+    const heading = root.querySelector('.glosa-content > h1[data-line="0"]') as any;
+    expect(heading.getAttribute("tabindex")).toBe("0");
+    expect(heading.getAttribute("aria-describedby")).toBe("glosa-annotate-instructions");
+    heading.focus();
+    heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    const quote = root.querySelector(".glosa-composer-quote") as any;
+    expect(quote.textContent).toContain("Title");
+    (root.querySelector(".glosa-composer-actions .glosa-btn-ghost") as any).click();
+    await Promise.resolve();
+    expect(dom.document.activeElement).toBe(heading);
+  });
+
   test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
@@ -310,14 +339,18 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const toggle = root.querySelector(".glosa-conversation-toggle") as any;
     const pane = root.querySelector(".glosa-conversation") as any;
     expect(pane.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-controls")).toBe("glosa-conversation");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     toggle.click();
     expect(pane.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(openedForSlugs).toEqual(["ws-1"]);
     // conversation.js's own mount renders its composer/status scaffolding into the pane.
     expect(pane.querySelector(".glosa-conv-composer-input")).not.toBeNull();
 
     toggle.click();
     expect(pane.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });
