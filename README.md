@@ -3,7 +3,8 @@
 glosa is a local-first writing and review workspace for people working with AI coding agents. It runs a local daemon, opens a browser workspace, and integrates with Claude Code and Codex without uploading your documents to a glosa service.
 
 > [!WARNING]
-> glosa `0.1.0-alpha.0` is experimental software. Back up important work. The deterministic test suite is automated, but the manual T8 rehearsal and post-rehearsal token revocation check are not yet complete.
+> glosa `0.1.0-alpha.0` is experimental software. Back up important work. The generic T8
+> compatibility rehearsal and token rotation/revocation gate are not yet maintainer-approved.
 
 ## Requirements
 
@@ -17,6 +18,13 @@ glosa is a local-first writing and review workspace for people working with AI c
 ```sh
 bun add --global @davebream/glosa@alpha
 ```
+
+The durable install is required for `glosa init`, because its generated agent hooks and MCP
+configuration must keep working offline after the current shell exits. `npx @davebream/glosa`
+and `bunx @davebream/glosa` are suitable for one-shot commands, but are not persisted by `init`.
+
+Maintainers can run the checkout directly with `bun run packages/cli/src/main.ts`; `init` records
+the absolute Bun executable and checkout entrypoint for that build.
 
 Open glosa in the current workspace:
 
@@ -32,6 +40,9 @@ glosa open
 ```
 
 Run `glosa --help` for all commands or `glosa complete --help` for shell completion setup.
+
+External integrations use the public `glosa metadata set` and `glosa session bind` contracts. glosa
+does not import their packages or embed their workflow logic.
 
 ## Privacy and security
 

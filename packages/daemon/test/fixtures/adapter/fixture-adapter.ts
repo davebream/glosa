@@ -33,7 +33,7 @@ export interface FixtureAdapterOptions {
   roots: string[];
   /** P5.2 (T8 adapter-topology): an OPTIONAL `session_id -> workspace root` map standing in for a
    * real adapter's own out-of-band session-history state (e.g. a provider plugin's own
-   * `session_history` file keyed by session id, tracking the "actual data root" independent of
+   * binding file keyed by session id, tracking the "actual data root" independent of
    * whatever `cwd` the hook happened to report). Omitted entirely by every existing fixture-
    * adapter test (preserving their behavior unchanged — no `sessionBinding` method at all, same
    * as "no opinion"); only tests that pass this exercise the session-binding routing path. */

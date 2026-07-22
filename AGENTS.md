@@ -8,8 +8,8 @@ beside it serving a browser SPA. Claude Code is the deep, required integration; 
 agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one provider interface).
 
 Status: **experimental public alpha.** The implementation and deterministic acceptance suites exist,
-but the manual T8 rehearsal against a copy of a real past sermon and the subsequent token-revocation
-check remain incomplete. This is not yet approved for a live sermon week.
+but the manual T8 rehearsal against a copy of a real past document and the subsequent token-revocation
+check remain incomplete. This is not yet approved for a live document week.
 
 ## Read this before writing any code
 
@@ -29,9 +29,10 @@ check remain incomplete. This is not yet approved for a live sermon week.
 
 ## Non-negotiable invariants (violating any is a review-blocker)
 
-1. **Generic core, domain in adapters.** The core knows nothing about sermons, jethro, or any pipeline.
+1. **Generic core, declarative integration boundary.** The core knows nothing about a producer or pipeline.
    Agent-specific knowledge lives in **providers** (`packages/providers/*`); domain knowledge lives in
-   **content adapters** (`packages/adapters/*`). The core runs with zero adapters.
+   Declarative workspace metadata is hydrated behind the generic content-adapter interface. The core
+   runs with zero adapters and never imports an external integration package.
 2. **The journal is the single source of truth.** Inbox entries are immutable; status is derived by
    replaying the journal. No cross-file "atomic" writes exist (A4).
 3. **Honest provenance.** Attribute a change to a session only when a `apply-begin`→`resolve` lease
@@ -53,7 +54,7 @@ check remain incomplete. This is not yet approved for a live sermon week.
   rendered HTML + small vanilla ES modules. markdown-it (+ `data-line` stamping), idiomorph, diff2html,
   picomatch, chokidar v4, system `git` (shadow repo), a vendored transcript-event normalizer.
 - **macOS-only v1** (pinned floors in A6 §F30). Monorepo:
-  `packages/{daemon, spa, providers/claude-code, providers/codex, adapters/jethro, cli}`.
+  `packages/{daemon, spa, providers/claude-code, providers/codex, cli}`.
 
 ## Build approach
 
@@ -61,8 +62,8 @@ Implementation behavior follows `docs/requirements.md`; current work follows acc
 The completed autonomous v1 execution records are archived under `docs/archive/v1-build/` and must not
 be resumed as a live build loop. Tasks T0–T8 have A-level detail in the appendices.
 **T8 is the release gate**: the deterministic acceptance suites (fault,
-concurrency, security, anchor, transcript, actual-jethro-topology) must pass AND a manual rehearsal
-against a copy of a real past sermon must pass. **"Green CI" is not the acceptance bar** — the
+concurrency, security, anchor, transcript, explicit-binding topology) must pass AND a manual rehearsal
+against a copy of a real past document must pass. **"Green CI" is not the acceptance bar** — the
 fault-injection/security/concurrency suites are, because a model's self-written happy-path tests will
 not catch the hard invariants. When in doubt about a subsystem's contract, the appendix is authoritative;
 do not invent.

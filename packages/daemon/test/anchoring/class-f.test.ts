@@ -9,7 +9,7 @@ import { sourceSha256 } from "../../src/artifact-render.ts";
 
 // The manuscript this class-F artifact's HTML was derived FROM (per R7's derived-from edge) —
 // resolve() anchors into THIS text, never the HTML.
-const MANUSCRIPT = `# Kazanie
+const MANUSCRIPT = `# Document
 
 Boża łaska jest wystarczająca dla każdego grzesznika.
 
@@ -26,7 +26,7 @@ function chunkSliceSha(text: string, l0: number, l1: number): string {
 }
 
 function buildFArtifact(manifest?: ChunkManifest): ClassFArtifact {
-  return { class: "F", path: "output/docs/speech-notes.html", source: MANUSCRIPT, ...(manifest ? { manifest } : {}) };
+  return { class: "F", path: "output/docs/rendered-preview.html", source: MANUSCRIPT, ...(manifest ? { manifest } : {}) };
 }
 
 function freshManifest(chunks: ChunkManifest["chunks"]): ChunkManifest {
@@ -79,8 +79,8 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
   });
 
   test("the quote occurs TWICE within a verbatim chunk → orphaned{ambiguous}, NOT quote_absent_not_transformed — the quote IS present, just not unique", () => {
-    const manuscript = "# Kazanie\n\nAmen, amen, powiadam wam: amen.\n";
-    const artifact: ClassFArtifact = { class: "F", path: "output/docs/speech-notes.html", source: manuscript };
+    const manuscript = "# Document\n\nAmen, amen, powiadam wam: amen.\n";
+    const artifact: ClassFArtifact = { class: "F", path: "output/docs/rendered-preview.html", source: manuscript };
     const manifest: ChunkManifest = {
       manifest_version: 1,
       source_path: "07_manuscript.md",

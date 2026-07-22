@@ -32,6 +32,8 @@ const PUBLIC_COMMANDS = new Set([
   "doctor",
   "status",
   "inbox",
+  "metadata",
+  "session",
 ]);
 
 type GlobalValues = {
@@ -450,6 +452,70 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
   );
 
+  const metadata = lazyHandler(
+    {
+      name: "metadata",
+      description: "Set, show, or clear declarative workspace metadata",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "Metadata action: set, show, or clear" },
+        file: { type: "positional", required: false, description: "Descriptor JSON file for set" },
+        workspace: { type: "string", description: "Workspace directory" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const [{ createHttpGlosaClient }, metadataModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./metadata.ts"),
+      ]);
+      const result = await metadataModule.runMetadata(
+        {
+          action: values.action as string,
+          file: values.file as string | undefined,
+          workspace: (values.workspace as string | undefined) ?? process.cwd(),
+        },
+        createHttpGlosaClient,
+      );
+      metadataModule.printMetadataResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
+  const session = lazyHandler(
+    {
+      name: "session",
+      description: "Bind a live agent session to a workspace",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "Session action (bind)" },
+        id: { type: "positional", required: true, description: "Live session ID" },
+        workspace: { type: "string", description: "Workspace directory" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      if (values.action !== "bind") {
+        const message = `unsupported session action '${String(values.action)}'`;
+        if (values.json) printJsonEnvelope(usageEnvelope("session", message));
+        else process.stderr.write(`glosa session: ${message}\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const [{ createHttpGlosaClient }, sessionModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./session.ts"),
+      ]);
+      const result = await sessionModule.runSessionBind(
+        (values.workspace as string | undefined) ?? process.cwd(),
+        values.id as string,
+        createHttpGlosaClient,
+      );
+      sessionModule.printSessionBindResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   const hook = lazyHandler(
     {
       name: "hook",
@@ -546,6 +612,8 @@ function createSubCommands(setExitCode: (code: number) => void) {
     doctor,
     status,
     inbox,
+    metadata,
+    session,
     hook,
     mcp,
     __daemon: daemon,

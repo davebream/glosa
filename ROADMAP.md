@@ -12,8 +12,10 @@ commitment. We intentionally do not publish speculative delivery dates.
 - **Make agent feedback actionable.** Deliver bounded annotation context and human-edit hunks to
   Claude Code and Codex through their supported hook, gate, and MCP paths, with honest delivery
   accounting. Track: [#18](https://github.com/davebream/glosa/issues/18).
-- **Complete the v1 compatibility gate.** Run and publish the sanitized T8 manual rehearsal required
-  before Glosa graduates from alpha. Track: [#19](https://github.com/davebream/glosa/issues/19).
+- **Complete the generic v1 compatibility gate.** Ship durable declarative workspace metadata,
+  explicit session binding, and action-aware attention; then run the sanitized private T8 rehearsal.
+  No external integration package or workflow logic enters Glosa. Track:
+  [#19](https://github.com/davebream/glosa/issues/19).
 - **Add token rotation and revocation.** Give users a documented way to invalidate Glosa bearer
   credentials and re-pair clients safely. Track: [#20](https://github.com/davebream/glosa/issues/20).
 - **Graduate the public alpha.** Close the undated
@@ -33,7 +35,7 @@ commitment. We intentionally do not publish speculative delivery dates.
 - A standalone desktop shell that preserves the local daemon and browser architecture.
 - Support beyond macOS after the local-first security and lifecycle contracts are portable.
 - Dictation capture when a clear workflow remains after evaluating provider-native voice support.
-- Stable public extension contracts for additional agent providers and content adapters.
+- Stable public extension contracts beyond workspace metadata v1 and the current provider interface.
 
 Later items remain exploratory. They receive tracking issues only when maintainers promote them into
 concrete work.

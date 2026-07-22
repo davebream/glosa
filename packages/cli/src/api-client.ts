@@ -10,6 +10,7 @@
 // widening that interface would mean every hook test's fake grows methods it never calls.
 import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
 import type { DeliverableEntry } from "../../daemon/src/providers/interface.ts";
+import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 
 export interface ApiProblem {
   type?: string;
@@ -127,6 +128,10 @@ export interface GlosaApiClient {
   getEntryStatus(path: string, entry: string): Promise<EntryStatus | null>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
+  setMetadata?(path: string, metadata: WorkspaceMetadataDescriptor): Promise<{ metadata: WorkspaceMetadataDescriptor; replaced: boolean }>;
+  getMetadata?(path: string): Promise<WorkspaceMetadataDescriptor | null>;
+  clearMetadata?(path: string): Promise<{ cleared: boolean }>;
+  bindSession?(path: string, sessionId: string): Promise<{ bound: true; session_id: string }>;
 }
 
 /** The real `GlosaApiClient` — `ensureDaemon()` once per construction (find-or-spawn, R1), then an
@@ -216,6 +221,32 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
     },
     async getStatus() {
       return (await call("GET", "/api/status")).json();
+    },
+    async setMetadata(path, metadata) {
+      const workspace = await openWorkspace(path);
+      return (await call("PUT", `/w/${encodeURIComponent(workspace.slug)}/metadata`, metadata)).json();
+    },
+    async getMetadata(path) {
+      const workspace = await openWorkspace(path);
+      try {
+        const result = (await call("GET", `/w/${encodeURIComponent(workspace.slug)}/metadata`)).json() as Promise<{
+          metadata: WorkspaceMetadataDescriptor;
+        }>;
+        return (await result).metadata;
+      } catch (err) {
+        if (isApiError(err) && err.status === 404) return null;
+        throw err;
+      }
+    },
+    async clearMetadata(path) {
+      const workspace = await openWorkspace(path);
+      return (await call("DELETE", `/w/${encodeURIComponent(workspace.slug)}/metadata`)).json();
+    },
+    async bindSession(path, sessionId) {
+      const workspace = await openWorkspace(path);
+      return (
+        await call("POST", `/w/${encodeURIComponent(workspace.slug)}/session-binding`, { session_id: sessionId })
+      ).json();
     },
   };
 }

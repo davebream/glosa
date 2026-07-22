@@ -79,6 +79,7 @@ describe("class-F listener — real socket", () => {
 
   async function mint(artifactPath: string): Promise<{ url: string; nonce: string; expires_in_s: number }> {
     const req = new Request(`http://127.0.0.1:${API_PORT}/w/${slug}/capability/${artifactPath}`, {
+      method: "POST",
       headers: {
         Host: `127.0.0.1:${API_PORT}`,
         Authorization: `Bearer ${TOKEN}`,
@@ -134,39 +135,39 @@ describe("class-F listener — real socket", () => {
   });
 
   test("directory-scoped + multi-request: ONE mint serves the document AND a sibling asset", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body><p>hi</p></body></html>");
     writeFileSync(join(root, "side-notes.css"), "p { color: green; }");
-    const { url } = await mint("speech-notes.html");
+    const { url } = await mint("rendered-preview.html");
     const docRes = await fetch(url);
     expect(docRes.status).toBe(200);
-    const cssUrl = url.replace(/speech-notes\.html$/, "side-notes.css");
+    const cssUrl = url.replace(/rendered-preview\.html$/, "side-notes.css");
     const cssRes = await fetch(cssUrl);
     expect(cssRes.status).toBe(200);
     expect(await cssRes.text()).toBe("p { color: green; }");
   });
 
   test("bridge injection: the document carries the bridge before </body>; the sibling CSS does not", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hello</p></body></html>");
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body><p>hello</p></body></html>");
     writeFileSync(join(root, "side-notes.css"), "p{}");
-    const { url, nonce } = await mint("speech-notes.html");
+    const { url, nonce } = await mint("rendered-preview.html");
     const docBody = await (await fetch(url)).text();
     expect(docBody).toContain("<p>hello</p>");
     expect(docBody).toContain(JSON.stringify(nonce));
-    const cssBody = await (await fetch(url.replace(/speech-notes\.html$/, "side-notes.css"))).text();
+    const cssBody = await (await fetch(url.replace(/rendered-preview\.html$/, "side-notes.css"))).text();
     expect(cssBody).toBe("p{}");
   });
 
   test("[A3 §5 #4] literal `..` traversal past the token segment → 404 (the URL parser collapses dot-segments before routing ever sees them)", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body>hi</body></html>");
-    const { url } = await mint("speech-notes.html");
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
     const token = url.split("/doc/")[1]!.split("/")[0];
     const res = await fetch(classFUrl(`/doc/${token}/../../../../../../etc/passwd`));
     expect(res.status).toBe(404);
   });
 
   test("[A3 §5 #4] percent-encoded `%2e%2e` traversal → 404, same as the literal form", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body>hi</body></html>");
-    const { url } = await mint("speech-notes.html");
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
     const token = url.split("/doc/")[1]!.split("/")[0];
     const res = await fetch(classFUrl(`/doc/${token}/%2e%2e/%2e%2e/%2e%2e/etc/passwd`));
     expect(res.status).toBe(404);
@@ -176,8 +177,8 @@ describe("class-F listener — real socket", () => {
     const outside = mkdtempSync(join(tmpdir(), "glosa-classf-outside-"));
     writeFileSync(join(outside, "secret.txt"), "top secret");
     symlinkSync(join(outside, "secret.txt"), join(root, "evil-link.html"));
-    writeFileSync(join(root, "speech-notes.html"), "<html><body>hi</body></html>");
-    const { url } = await mint("speech-notes.html");
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body>hi</body></html>");
+    const { url } = await mint("rendered-preview.html");
     const token = url.split("/doc/")[1]!.split("/")[0];
     const res = await fetch(classFUrl(`/doc/${token}/evil-link.html`));
     expect(res.status).toBe(404);

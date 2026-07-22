@@ -57,7 +57,9 @@ export interface DerivedFromEdge {
  * input, A1 §6). `component` feeds `anchoring.ts`'s `ctx.pipelineFeedback` target
  * `{adapter: <this adapter's id>, component}` — the adapter is the only layer allowed to know
  * which producer component a `transformed:true` chunk's feedback should route to. */
-export type ManifestSource = { manifest: ChunkManifest; component: string } | { manifestPath: string; component: string };
+export type ManifestSource =
+  | { manifest: ChunkManifest; component: string; adapterId?: string }
+  | { manifestPath: string; component: string; adapterId?: string };
 
 /** R7's content-adapter interface. Every method past `id`/`recognizes` is OPTIONAL — an adapter
  * that only wants to say "this is my workspace" is legal on its own; the core falls back to its
@@ -153,6 +155,9 @@ export class AdapterRegistry {
   }
 }
 
+export { WorkspaceMetadataRegistry } from "./workspace-metadata.ts";
+export type { WorkspaceMetadataArtifact, WorkspaceMetadataDescriptor } from "./workspace-metadata.ts";
+
 // -------------------------------------------------------------------------------------------
 // Generic behaviors the core computes from an adapter's answers (R7) — ZERO domain knowledge
 // lives past this line, only the mechanical "given an edge/manifest, do the generic thing" logic.
@@ -228,6 +233,7 @@ export interface ResolvedManifest {
   /** Present only when the adapter supplied a path (vs. an inline manifest) — this is what the
    * class-F artifact response's `manifest_path` field (A1 §5.4) surfaces to the client. */
   manifestPath?: string;
+  adapterId: string;
 }
 
 /** Class-F manifest resolution (A5 §F10/§F11's "manifest supplied by the caller"): asks the
@@ -248,7 +254,9 @@ export function resolveManifest(workspaceRoot: string, adapter: ContentAdapter |
   if (!adapter) return null;
   const source = safeAdapterCall(adapter.id, "manifestFor", () => adapter.manifestFor?.(workspaceRoot, artifactPath) ?? null, null);
   if (!source) return null;
-  if ("manifest" in source) return { manifest: source.manifest, component: source.component };
+  if ("manifest" in source) {
+    return { manifest: source.manifest, component: source.component, adapterId: source.adapterId ?? adapter.id };
+  }
 
   const confined = confinePath(workspaceRoot, source.manifestPath);
   if (!confined.ok) return null;
@@ -274,5 +282,10 @@ export function resolveManifest(workspaceRoot: string, adapter: ContentAdapter |
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  return { manifest: parsed as ChunkManifest, component: source.component, manifestPath: source.manifestPath };
+  return {
+    manifest: parsed as ChunkManifest,
+    component: source.component,
+    manifestPath: source.manifestPath,
+    adapterId: source.adapterId ?? adapter.id,
+  };
 }

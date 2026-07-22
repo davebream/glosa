@@ -52,11 +52,11 @@ describe("serveClassFDocument", () => {
 
   test("serves the document itself with the bridge injected before </body>, byte-identical otherwise", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body><p>hello</p></body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body><p>hello</p></body></html>");
     const store = new CapabilityStore();
-    const { token, nonce } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token, nonce } = mintFor(store, artifactDir, "rendered-preview.html");
 
-    const res = serveClassFDocument(store, token, "speech-notes.html");
+    const res = serveClassFDocument(store, token, "rendered-preview.html");
     expect(res).not.toBeNull();
     expect(res!.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
     return res!.text().then((body) => {
@@ -68,11 +68,11 @@ describe("serveClassFDocument", () => {
 
   test("a document with no </body> at all still gets the bridge appended, not dropped", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body><p>no closing tag");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body><p>no closing tag");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
-    const res = serveClassFDocument(store, token, "speech-notes.html");
+    const res = serveClassFDocument(store, token, "rendered-preview.html");
     return res!.text().then((body) => {
       expect(body).toContain("<script>");
       expect(body.startsWith("<html><body><p>no closing tag")).toBe(true);
@@ -81,10 +81,10 @@ describe("serveClassFDocument", () => {
 
   test("a sibling asset (CSS) in the SAME directory is served with its own content-type and NO bridge", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     writeFileSync(join(artifactDir, "notes-style.css"), "body { color: red; }");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     const res = serveClassFDocument(store, token, "notes-style.css");
     expect(res).not.toBeNull();
@@ -97,10 +97,10 @@ describe("serveClassFDocument", () => {
 
   test("a sibling .html file that ISN'T the minted document itself is served bridge-free (A1 §7)", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     writeFileSync(join(artifactDir, "fragment.html"), "<div>partial</div>");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     const res = serveClassFDocument(store, token, "fragment.html");
     return res!.text().then((body) => {
@@ -111,9 +111,9 @@ describe("serveClassFDocument", () => {
 
   test("[A3 §5 #4] a `..`-containing request path → null (confinePath rejects it before any fs read)", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     expect(serveClassFDocument(store, token, "../../../etc/passwd")).toBeNull();
     expect(serveClassFDocument(store, token, "sub/../../escape.html")).toBeNull();
@@ -125,10 +125,10 @@ describe("serveClassFDocument", () => {
     mkdirSync(secretDir, { recursive: true });
     writeFileSync(join(secretDir, "passwd"), "root:x:0:0");
     symlinkSync(join(secretDir, "passwd"), join(artifactDir, "evil-link.html"));
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
 
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     expect(serveClassFDocument(store, token, "evil-link.html")).toBeNull();
   });
@@ -154,18 +154,18 @@ describe("serveClassFDocument", () => {
   test("a request for a directory (not a file) → null, never serves a listing", () => {
     const { artifactDir } = freshWorkspace();
     mkdirSync(join(artifactDir, "subdir"));
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     expect(serveClassFDocument(store, token, "subdir")).toBeNull();
   });
 
   test("a missing sibling file → null", () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
 
     expect(serveClassFDocument(store, token, "missing.css")).toBeNull();
   });
@@ -175,10 +175,10 @@ describe("serveClassFDocument", () => {
 
   async function serveDoc(html: string): Promise<string> {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), html);
+    writeFileSync(join(artifactDir, "rendered-preview.html"), html);
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
-    const res = serveClassFDocument(store, token, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
+    const res = serveClassFDocument(store, token, "rendered-preview.html");
     expect(res).not.toBeNull();
     return res!.text();
   }
@@ -201,13 +201,13 @@ describe("serveClassFDocument", () => {
     expect(scriptIdx).toBeLessThan(lastBodyClose);
   });
 
-  test("a realistic multi-element document (speech-notes-shaped) gets the bridge spliced at the true </body>, otherwise byte-identical", async () => {
+  test("a realistic multi-element document (rendered-preview-shaped) gets the bridge spliced at the true </body>, otherwise byte-identical", async () => {
     const html = [
       "<!doctype html>",
       '<html lang="pl">',
       "<head>",
       '<meta charset="utf-8">',
-      "<title>Kazanie — notatki</title>",
+      "<title>Document — notatki</title>",
       "<style>.verse { color: #333; } .highlight { background: yellow; }</style>",
       "</head>",
       "<body>",
@@ -219,7 +219,7 @@ describe("serveClassFDocument", () => {
       '<section data-chunk-id="chunk-002">',
       "<p>Trzeci fragment.</p>",
       "</section>",
-      "<script>console.log('speech notes loaded');</script>",
+      "<script>console.log('rendered preview loaded');</script>",
       "</body>",
       "</html>",
       "",
@@ -230,9 +230,9 @@ describe("serveClassFDocument", () => {
     expect(body).toContain("<h1>Boża łaska</h1>");
     expect(body).toContain('<section data-chunk-id="chunk-001">');
     expect(body).toContain("Pierwszy fragment kazania.");
-    expect(body).toContain("console.log('speech notes loaded');");
+    expect(body).toContain("console.log('rendered preview loaded');");
     // the bridge is spliced BEFORE the real closing </body>, after the doc's own closing </script>
-    const ownScriptEnd = body.indexOf("speech notes loaded');</script>");
+    const ownScriptEnd = body.indexOf("rendered preview loaded');</script>");
     const bridgeScriptStart = body.indexOf('<script>\n(function () {\n  "use strict";');
     const bodyClose = body.lastIndexOf("</body>");
     expect(ownScriptEnd).toBeGreaterThan(-1);
@@ -272,12 +272,12 @@ describe("serveClassFDocument", () => {
 
   test("meta-refresh stripping does NOT apply to a sibling asset — it's a document-only mitigation", async () => {
     const { artifactDir } = freshWorkspace();
-    writeFileSync(join(artifactDir, "speech-notes.html"), "<html><body>doc</body></html>");
+    writeFileSync(join(artifactDir, "rendered-preview.html"), "<html><body>doc</body></html>");
     // A sibling .html fragment containing a meta-refresh-shaped string in what is NOT the minted
     // document — sibling assets are streamed byte-identical, unconditionally, per A1 §7.
     writeFileSync(join(artifactDir, "fragment.html"), '<meta http-equiv="refresh" content="0;url=x">');
     const store = new CapabilityStore();
-    const { token } = mintFor(store, artifactDir, "speech-notes.html");
+    const { token } = mintFor(store, artifactDir, "rendered-preview.html");
     const res = serveClassFDocument(store, token, "fragment.html");
     const body = await res!.text();
     expect(body).toBe('<meta http-equiv="refresh" content="0;url=x">');

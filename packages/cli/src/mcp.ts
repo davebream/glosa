@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
 import type { GlosaApiClient } from "./api-client.ts";
+import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -86,6 +87,49 @@ async function getInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   };
 }
 
+function toolArgs(req: JsonRpcRequest): Record<string, unknown> {
+  return (req.params?.arguments ?? {}) as Record<string, unknown>;
+}
+
+async function metadataSet(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
+  const args = toolArgs(req);
+  if (typeof args.metadata !== "object" || args.metadata === null || Array.isArray(args.metadata)) {
+    return { response: error(req.id, -32602, "glosa_metadata_set requires a metadata object") };
+  }
+  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
+  const changed = await (await deps.createApiClient()).setMetadata!(workspace, args.metadata as WorkspaceMetadataDescriptor);
+  return { response: result(req.id, textToolResult(`workspace metadata ${changed.replaced ? "replaced" : "registered"}: ${changed.metadata.id}`, changed)) };
+}
+
+async function metadataShow(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
+  const args = toolArgs(req);
+  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
+  const metadata = await (await deps.createApiClient()).getMetadata!(workspace);
+  return { response: result(req.id, textToolResult(metadata ? `workspace metadata: ${metadata.id}` : "workspace metadata is not registered", { metadata })) };
+}
+
+async function metadataClear(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
+  const args = toolArgs(req);
+  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
+  const cleared = await (await deps.createApiClient()).clearMetadata!(workspace);
+  return { response: result(req.id, textToolResult(cleared.cleared ? "workspace metadata cleared" : "workspace metadata already clear", cleared)) };
+}
+
+async function sessionBind(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
+  const args = toolArgs(req);
+  if (typeof args.session_id !== "string" || args.session_id.length === 0) {
+    return { response: error(req.id, -32602, "glosa_session_bind requires a non-empty session_id") };
+  }
+  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
+  // A live MCP tool invocation is itself session activity. Refresh the existing registry lease
+  // before binding so a long model turn (>60s with no hook boundary) cannot make its own explicit
+  // bind fail as stale. Unknown IDs remain unknown because heartbeat is deliberately a no-op for
+  // records that were never registered or were lost across a daemon restart.
+  await (await deps.createHookClient()).heartbeat(args.session_id);
+  const bound = await (await deps.createApiClient()).bindSession!(workspace, args.session_id);
+  return { response: result(req.id, textToolResult(`session bound: ${bound.session_id}`, bound)) };
+}
+
 export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   if (req.method === "initialize") {
     return {
@@ -128,6 +172,39 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
               additionalProperties: false,
             },
           },
+          {
+            name: "glosa_metadata_set",
+            description: "Register or replace this integration's declarative workspace metadata.",
+            inputSchema: {
+              type: "object",
+              required: ["metadata"],
+              properties: {
+                workspace: { type: "string", description: "Workspace path; defaults to the MCP process cwd." },
+                metadata: { type: "object", description: "WorkspaceMetadataDescriptor v1." },
+              },
+              additionalProperties: false,
+            },
+          },
+          {
+            name: "glosa_metadata_show",
+            description: "Show the active declarative workspace metadata.",
+            inputSchema: { type: "object", properties: { workspace: { type: "string" } }, additionalProperties: false },
+          },
+          {
+            name: "glosa_metadata_clear",
+            description: "Clear the active declarative workspace metadata.",
+            inputSchema: { type: "object", properties: { workspace: { type: "string" } }, additionalProperties: false },
+          },
+          {
+            name: "glosa_session_bind",
+            description: "Explicitly bind a live agent session to a workspace.",
+            inputSchema: {
+              type: "object",
+              required: ["session_id"],
+              properties: { session_id: { type: "string" }, workspace: { type: "string" } },
+              additionalProperties: false,
+            },
+          },
         ],
       }),
     };
@@ -136,6 +213,10 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
     const name = req.params?.name;
     if (name === "glosa_inbox_pull") return pullInbox(req, deps);
     if (name === "glosa_inbox_get") return getInbox(req, deps);
+    if (name === "glosa_metadata_set") return metadataSet(req, deps);
+    if (name === "glosa_metadata_show") return metadataShow(req, deps);
+    if (name === "glosa_metadata_clear") return metadataClear(req, deps);
+    if (name === "glosa_session_bind") return sessionBind(req, deps);
     return { response: error(req.id, -32602, `unknown tool '${String(name)}'`) };
   }
   return { response: error(req.id, -32601, `method not found: ${req.method}`) };

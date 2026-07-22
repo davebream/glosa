@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf } from "./helpers.ts";
 
-const SOURCE = `# Kazanie
+const SOURCE = `# Document
 
 Boża łaska jest wystarczająca dla każdego grzesznika.
 

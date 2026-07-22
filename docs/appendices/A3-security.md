@@ -14,7 +14,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Capability: 256-bit, in-memory `Map<capability,{workspace,artifactRealPath,mintedAt}>`, NOT persisted (restart invalidates — fine). TTL 10 min; expired → 404 (no ambient auth on this origin). One capability scopes one artifact's dir (sibling assets resolve under same capability + realpath check per request).
 - CSP on EVERY class-F response:
   `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self' http://127.0.0.1:<SPA_PORT>; base-uri 'none'; object-src 'none'; sandbox allow-scripts;` + `Referrer-Policy: no-referrer`.
-  - `script-src 'self' 'unsafe-inline'` lets format-sermon inline `<script>` run; no eval, no third-party host.
+  - `script-src 'self' 'unsafe-inline'` lets the artifact's inline `<script>` run; no eval, no third-party host.
   - `connect-src 'none' + form-action 'none'` = network lockdown → reconciles "doc JS runs untouched" with "no external calls."
   - **`sandbox allow-scripts` in the CSP header (not just iframe attr)** = the top-level-open fix: applies under ANY load context incl. bare tab; omitting allow-same-origin/popups/top-navigation/forms/modals → every load gets fresh OPAQUE origin. Nothing sensitive lives on this port anyway (token is on SPA port).
   - `frame-ancestors` → only the glosa SPA may embed it.

@@ -9,7 +9,7 @@ function input(overrides: Partial<{ slug: string; artifactDirRealPath: string; a
   return {
     slug: "ws-1",
     artifactDirRealPath: "/tmp/glosa-ws/output/docs",
-    artifactBasename: "speech-notes.html",
+    artifactBasename: "rendered-preview.html",
     ...overrides,
   };
 }
@@ -45,7 +45,7 @@ describe("CapabilityStore.lookup", () => {
     const { token } = store.mint(input({ slug: "example-ws" }));
     const record = store.lookup(token);
     expect(record?.slug).toBe("example-ws");
-    expect(record?.artifactBasename).toBe("speech-notes.html");
+    expect(record?.artifactBasename).toBe("rendered-preview.html");
   });
 
   test("an unknown token → null", () => {

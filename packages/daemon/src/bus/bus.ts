@@ -276,7 +276,11 @@ export class WorkspaceBus {
    * terminal." The event still lands durably in the journal as an honest audit record ("session X
    * explicitly deferred a decision on this entry at time T"), without requiring a new terminal
    * value or lease-closing side effect neither this task nor A5 §F23 specifies. */
-  commitTransition(entryId: string, to: string, opts: { by?: EventBy; idem?: string; note?: string } = {}): Promise<void> {
+  commitTransition(
+    entryId: string,
+    to: string,
+    opts: { by?: EventBy; idem?: string; note?: string; detail?: Record<string, unknown> } = {},
+  ): Promise<void> {
     return this.mutex.runExclusive(this.root, () => {
       const event: JournalEvent = {
         v: 1,
@@ -286,12 +290,69 @@ export class WorkspaceBus {
         event: "transition_committed",
         by: opts.by ?? "daemon",
         ...(opts.idem !== undefined ? { idem: opts.idem } : {}),
-        detail: { to, ...(opts.note !== undefined ? { note: opts.note } : {}) },
+        detail: { to, ...(opts.note !== undefined ? { note: opts.note } : {}), ...(opts.detail ?? {}) },
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
       this.notify(event);
     });
+  }
+
+  /** Marks an attention request as seen without letting concurrent/retried UI calls skip a
+   * lifecycle edge. `open` first becomes `delivered`; terminal entries are stable no-ops. */
+  markAttentionSeen(entryId: string): Promise<{ status: string; detail: Record<string, unknown> | null }> {
+    return this.mutex.runExclusive(this.root, () => {
+      const state = this.state.entries[entryId];
+      if (!state || state.kind !== "attention") throw new Error("unknown attention request");
+      if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
+      if (this.state.entries[entryId]?.status === "delivered") this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
+      const final = this.state.entries[entryId] as typeof state;
+      return { status: final.status, detail: (final.detail as Record<string, unknown> | undefined) ?? null };
+    });
+  }
+
+  /** Completes an attention request through every required intermediate state in one workspace
+   * mutex section. A retry after `done` returns the original detail and appends nothing. */
+  completeAttention(
+    entryId: string,
+    outcome: "done" | "approved" | "changes_requested",
+    response?: string,
+  ): Promise<{ status: string; detail: Record<string, unknown> | null }> {
+    return this.mutex.runExclusive(this.root, () => {
+      const state = this.state.entries[entryId];
+      if (!state || state.kind !== "attention") throw new Error("unknown attention request");
+      if (state.status === "done") {
+        return { status: state.status, detail: (state.detail as Record<string, unknown> | undefined) ?? null };
+      }
+      if (isTerminal("attention", state.status)) throw new Error(`attention request is already ${state.status}`);
+      if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
+      if (this.state.entries[entryId]?.status === "delivered") this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
+      this.appendAttentionTransitionLocked(entryId, "done", {
+        by: "human",
+        detail: { outcome, ...(response !== undefined ? { response } : {}) },
+      });
+      const final = this.state.entries[entryId] as typeof state;
+      return { status: final.status, detail: (final.detail as Record<string, unknown> | undefined) ?? null };
+    });
+  }
+
+  private appendAttentionTransitionLocked(
+    entryId: string,
+    to: string,
+    opts: { by: EventBy; detail?: Record<string, unknown> },
+  ): void {
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: entryId,
+      event: "attention_committed",
+      by: opts.by,
+      detail: { to, ...(opts.detail ?? {}) },
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
   }
 
   /** `delivery_attempt` never changes status (separate axis, A5 §F23) and may skip the per-write

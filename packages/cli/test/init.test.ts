@@ -6,7 +6,7 @@
 // SPECIFIC file in the settings→mcp→manifest sequence can be made to fail without relying on OS
 // permission tricks a sandboxed/root test runner might bypass).
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,7 +16,6 @@ import {
   runUninstall,
   type GlosaBinResolution,
 } from "../src/init.ts";
-import { BUILD_ID } from "../../daemon/src/build-id.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -62,7 +61,7 @@ const BIN_A: GlosaBinResolution = { command: "glosa", args: [], mode: "path" };
  * change looks like — unlike an arbitrary/synthetic command string, which would never be
  * recognized as glosa's own and so could never be RECONCILED, only ever newly inserted. */
 function bunRunBin(glosaRoot: string): GlosaBinResolution {
-  return { command: "bun", args: ["run", "--silent", `${glosaRoot}/packages/cli/src/main.ts`], mode: "bun-run" };
+  return { command: "/opt/bun/bin/bun", args: ["run", "--silent", `${glosaRoot}/packages/cli/src/main.ts`], mode: "bun-run" };
 }
 
 describe("glosa init — fresh install", () => {
@@ -87,7 +86,7 @@ describe("glosa init — fresh install", () => {
     expect(sessionStartGroup.matcher).toBe("startup|resume|clear|compact");
     expect(sessionStartGroup.hooks).toEqual([
       { type: "command", command: "glosa hook session-start", timeout: 10 },
-      { type: "command", command: "glosa hook rewake-watch", timeout: 0, asyncRewake: true },
+      { type: "command", command: "glosa hook rewake-watch", asyncRewake: true },
     ]);
     expect(settings.hooks.SessionEnd[0].hooks[0]).toEqual({ type: "command", command: "glosa hook session-end", timeout: 5 });
     expect(settings.hooks.UserPromptSubmit[0].hooks[0]).toEqual({
@@ -157,7 +156,7 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
     );
 
     await runInit({ dir, resolveGlosaBin: () => BIN_A }); // path mode: "glosa hook <role>"
-    const binB = bunRunBin("/opt/glosa"); // bun-run mode: "bun run --silent /opt/glosa/packages/cli/src/main.ts hook <role>"
+    const binB = bunRunBin("/opt/glosa");
     const result = await runInit({ dir, resolveGlosaBin: () => binB });
 
     expect(result.ok).toBe(true);
@@ -175,8 +174,8 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
       .flatMap((groups: any) => groups.flatMap((g: any) => g.hooks))
       .map((h: any) => h.command);
     expect(allCommands).not.toContain("glosa hook session-start");
-    expect(allCommands).toContain(`bun run --silent /opt/glosa/packages/cli/src/main.ts hook session-start`);
-    expect(allCommands).toContain(`bun run --silent /opt/glosa/packages/cli/src/main.ts hook stop`);
+    expect(allCommands).toContain(`/opt/bun/bin/bun run --silent /opt/glosa/packages/cli/src/main.ts hook session-start`);
+    expect(allCommands).toContain(`/opt/bun/bin/bun run --silent /opt/glosa/packages/cli/src/main.ts hook stop`);
 
     // The foreign hook is preserved byte-for-byte, untouched by the reconciliation.
     const stopHooks = settings.hooks.Stop.flatMap((g: any) => g.hooks);
@@ -197,7 +196,9 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
     expect(result.changed).toBe(true);
     const settings = readJson(settingsPathOf(dir));
     expect(settings.hooks.SessionStart[0].hooks).toHaveLength(2);
-    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe(`bun run --silent /opt/glosa-2/packages/cli/src/main.ts hook session-start`);
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe(
+      `/opt/bun/bin/bun run --silent /opt/glosa-2/packages/cli/src/main.ts hook session-start`,
+    );
   });
 
   test("re-running with the SAME (already-reconciled) bin a second time is a true no-op", async () => {
@@ -433,66 +434,51 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
 });
 
 describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
-  const REAL_PATH = process.env.PATH;
-  afterEach(() => {
-    process.env.PATH = REAL_PATH;
-  });
-
-  function fakeGlosaOnPath(dir: string, printedBuildId: string): void {
-    const binDir = join(dir, "fakebin");
-    mkdirSync(binDir, { recursive: true });
-    const scriptPath = join(binDir, "glosa");
-    writeFileSync(scriptPath, `#!/bin/sh\necho "${printedBuildId}"\n`);
-    chmodSync(scriptPath, 0o755);
-    process.env.PATH = `${binDir}:${process.env.PATH}`;
-  }
-
-  test("bare 'glosa' on PATH with a matching --build-id resolves to the path form", () => {
-    const dir = freshDir();
-    fakeGlosaOnPath(dir, BUILD_ID);
-    const resolved = defaultResolveGlosaBin("/irrelevant/glosa-root");
-    expect(resolved).toEqual({ command: "glosa", args: [], mode: "path" });
-  });
-
-  test("'glosa' on PATH but a BUILD-ID MISMATCH falls back to the bun-run form", () => {
-    const dir = freshDir();
-    fakeGlosaOnPath(dir, "9.9.9"); // stale/foreign glosa binary
+  test("pins the absolute Bun runtime and current installation entrypoint", () => {
     const resolved = defaultResolveGlosaBin("/some/glosa-root");
-    expect(resolved.mode).toBe("bun-run");
-    expect(resolved.command).toBe("bun");
-    expect(resolved.args).toEqual(["run", "--silent", "/some/glosa-root/packages/cli/src/main.ts"]);
-  });
-
-  test("'glosa' on PATH with extra --build-id output is treated as nonmatching", () => {
-    const dir = freshDir();
-    fakeGlosaOnPath(dir, `${BUILD_ID}\nunexpected output`);
-    expect(defaultResolveGlosaBin("/some/glosa-root").mode).toBe("bun-run");
-  });
-
-  test("'glosa' on PATH that does not support --build-id falls back to the bun-run form", () => {
-    const dir = freshDir();
-    const binDir = join(dir, "fakebin");
-    mkdirSync(binDir, { recursive: true });
-    const scriptPath = join(binDir, "glosa");
-    writeFileSync(scriptPath, "#!/bin/sh\nexit 2\n");
-    chmodSync(scriptPath, 0o755);
-    process.env.PATH = `${binDir}:${process.env.PATH}`;
-
-    expect(defaultResolveGlosaBin("/some/glosa-root")).toEqual({
-      command: "bun",
+    expect(resolved).toEqual({
+      command: process.execPath,
       args: ["run", "--silent", "/some/glosa-root/packages/cli/src/main.ts"],
       mode: "bun-run",
     });
   });
 
-  test("no 'glosa' on PATH at all falls back to the bun-run form", () => {
-    process.env.PATH = freshDir(); // an empty dir, guaranteed no `glosa` binary
+  test("does not depend on PATH containing glosa or Bun", () => {
+    const realPath = process.env.PATH;
+    process.env.PATH = freshDir();
     const resolved = defaultResolveGlosaBin("/some/other-root");
+    process.env.PATH = realPath;
     expect(resolved).toEqual({
-      command: "bun",
+      command: process.execPath,
       args: ["run", "--silent", "/some/other-root/packages/cli/src/main.ts"],
       mode: "bun-run",
     });
+  });
+
+  test("an npx package-cache invocation refuses to persist an ephemeral integration command", async () => {
+    const dir = freshDir();
+    const result = await runInit({
+      dir,
+      glosaRoot: "/Users/test/.npm/_npx/abc123/node_modules/@davebream/glosa",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(2);
+    expect(result.error?.code).toBe("durable-install-required");
+    expect(existsSync(settingsPathOf(dir))).toBe(false);
+    expect(existsSync(mcpPathOf(dir))).toBe(false);
+  });
+
+  test("a bunx package-cache invocation refuses to persist an ephemeral integration command", async () => {
+    const dir = freshDir();
+    const result = await runInit({
+      dir,
+      glosaRoot: "/Users/test/.bun/install/cache/@davebream/glosa@0.1.0-alpha.0",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("durable-install-required");
+    expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
   });
 });
 

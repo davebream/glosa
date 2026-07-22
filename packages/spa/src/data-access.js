@@ -325,6 +325,19 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify({ path, to, ...(force ? { force: true } : {}) }),
       });
     },
+    getInbox(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/inbox`);
+    },
+    markAttentionSeen(slug, id) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/seen`, { method: "POST" });
+    },
+    respondToAttention(slug, id, { outcome, response } = {}) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/response`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outcome, ...(response ? { response } : {}) }),
+      });
+    },
     openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
       return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus });
     },
@@ -345,12 +358,14 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify({ text }),
       });
     },
-    /** `GET /w/:slug/capability/:artifactPath` (A1 §5.12/§7, P4.1) — mints a fresh, directory-
+    /** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-
      * scoped capability for a class-F artifact. classf-viewer.js calls this once per iframe
      * open/reload; the response `{url, nonce, expires_in_s}` is exactly what it needs to embed
      * the iframe and complete the nonce-gated MessageChannel handshake (A3 §2). */
     mintClassFCapability(slug, artifactPath) {
-      return requestJson(`/w/${encodeURIComponent(slug)}/capability/${encodePathSegments(artifactPath)}`);
+      return requestJson(`/w/${encodeURIComponent(slug)}/capability/${encodePathSegments(artifactPath)}`, {
+        method: "POST",
+      });
     },
   };
 }

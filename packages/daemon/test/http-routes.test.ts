@@ -19,6 +19,8 @@ import { canonicalize } from "../src/registry/slug.ts";
 import { journalPath } from "../src/bus/paths.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { readFileSync } from "node:fs";
+import { AdapterRegistry } from "../src/adapters/interface.ts";
+import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -45,6 +47,9 @@ describe("A1 §5 route catalog", () => {
 
     const entry = await workspaceIndex.upsertWorkspace(root, "glosa-open");
     slug = entry.slug;
+    const metadataRegistry = new WorkspaceMetadataRegistry();
+    const adapterRegistry = new AdapterRegistry();
+    adapterRegistry.register(metadataRegistry.adapter());
 
     ctx = {
       port: PORT,
@@ -56,6 +61,8 @@ describe("A1 §5 route catalog", () => {
       sessionRegistry,
       getWorkspaceBus: (r) => busRegistry.get(r),
       capabilityStore: new CapabilityStore(),
+      metadataRegistry,
+      adapterRegistry,
     };
     fetchFn = createApiFetch(ctx);
   });
@@ -92,6 +99,27 @@ describe("A1 §5 route catalog", () => {
     expect(await res.json()).toEqual([]);
     // recreate for afterEach's cleanup + other tests in this block sharing `root`
     mkdirSync(root, { recursive: true });
+  });
+
+  test("metadata routes are authenticated, durable, replace by same id, conflict by different id, and clear idempotently", async () => {
+    writeFileSync(join(root, "notes.md"), "# hello\n");
+    const metadata = { version: 1, id: "producer", artifacts: [{ path: "notes.md", class: "R", order: 0 }] };
+    const unauthorized = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", headers: { Authorization: "Bearer wrong" }, body: JSON.stringify(metadata) }));
+    expect(unauthorized.status).toBe(401);
+
+    const first = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(metadata) }));
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ metadata, replaced: false });
+    expect(await (await fetchFn(req(`/w/${slug}/metadata`))).json()).toEqual({ metadata });
+
+    const replacement = { ...metadata, artifacts: [{ path: "notes.md", class: "R", order: 2 }] };
+    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(replacement) }))).json()).toMatchObject({ replaced: true });
+    const conflict = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify({ ...metadata, id: "other" }) }));
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).title).not.toContain(root);
+
+    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({ cleared: true });
+    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({ cleared: false });
   });
 
   // --- GET /w/:slug/artifacts (5.3) ---
@@ -850,13 +878,13 @@ describe("A1 §5 route catalog", () => {
   test("GET inbox surfaces an open attention_request entry", async () => {
     const bus = ctx.getWorkspaceBus(root);
     await bus.reconcile();
-    await bus.createEntry("att-1", { kind: "attention_request", question: "which approach?" });
+    await bus.createEntry("att-1", { kind: "attention_request", message: "Please check this", action: "review", path: "notes.md" });
 
     const res = await fetchFn(req(`/w/${slug}/inbox`));
     const body = await res.json();
     expect(body.pending_count).toBe(1);
     expect(body.attention).toHaveLength(1);
-    expect(body.attention[0]).toMatchObject({ id: "att-1", status: "open" });
+    expect(body.attention[0]).toMatchObject({ id: "att-1", status: "open", message: "Please check this", action: "review", target: "notes.md" });
     expect(typeof body.attention[0].created_at).toBe("string");
   });
 
@@ -943,63 +971,89 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(404);
   });
 
-  // --- Remaining route SHELLS (5.10) ---
+  test("attention seen/response follows delivered → seen → done and is idempotent", async () => {
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce();
+    await bus.createEntry("att-response", { kind: "attention_request", message: "Review it", action: "review", path: "notes.md" });
 
-  test("POST /w/:slug/inbox/:id/response → 501 not-implemented (F12)", async () => {
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-1/response`, { method: "POST" }));
-    expect(res.status).toBe(501);
+    const seen = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/seen`, { method: "POST" }));
+    expect(await seen.json()).toMatchObject({ id: "att-response", status: "seen" });
+    const response = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
+    }));
+    expect(await response.json()).toEqual({ id: "att-response", status: "done", detail: { to: "done", outcome: "approved", response: "Looks good" } });
+    const retry = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
+    }));
+    expect(await retry.json()).toEqual({ id: "att-response", status: "done", detail: { to: "done", outcome: "approved", response: "Looks good" } });
+    expect(bus.state.entries["att-response"]?.status).toBe("done");
   });
 
-  // --- GET /w/:slug/capability/:artifactPath (5.12/§7, P4.1) — the class-F capability mint ---
+  test("attention response validates action-aware outcomes and preserves a generic Done path", async () => {
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcileOnce();
+    await bus.createEntry("att-review", { kind: "attention_request", action: "review" });
+    await bus.createEntry("att-generic", { kind: "attention_request" });
+    const invalidReview = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-review/response`, { method: "POST", body: JSON.stringify({ outcome: "done" }) }));
+    expect(invalidReview.status).toBe(400);
+    const invalidGeneric = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-generic/response`, { method: "POST", body: JSON.stringify({ outcome: "approved" }) }));
+    expect(invalidGeneric.status).toBe(400);
+    const generic = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-generic/response`, { method: "POST", body: JSON.stringify({ outcome: "done" }) }));
+    expect(await generic.json()).toMatchObject({ status: "done", detail: { outcome: "done" } });
+  });
 
-  test("GET /w/:slug/capability/:artifactPath with missing Origin → 403 (state-changing route class)", async () => {
-    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`));
+  // --- POST /w/:slug/capability/:artifactPath (5.13/§7, P4.1) — the class-F capability mint ---
+
+  test("POST /w/:slug/capability/:artifactPath with missing Origin → 403 (state-changing route class)", async () => {
+    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`, { method: "POST" }));
     expect(res.status).toBe(403);
   });
 
-  test("GET /w/:slug/capability/:artifactPath with a FOREIGN Origin → 403 — the mint shares the pipeline, not pinned per-route", async () => {
-    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`, { headers: { Origin: "http://evil.example.com" } }));
+  test("POST /w/:slug/capability/:artifactPath with a FOREIGN Origin → 403 — the mint shares the pipeline, not pinned per-route", async () => {
+    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`, { method: "POST", headers: { Origin: "http://evil.example.com" } }));
     expect(res.status).toBe(403);
   });
 
-  test("GET /w/:slug/capability/:artifactPath via a symlink escape → 400 invalid-path, never reaches the mint (review fix #3)", async () => {
+  test("POST /w/:slug/capability/:artifactPath via a symlink escape → 400 invalid-path, never reaches the mint (review fix #3)", async () => {
     const outside = mkdtempSync(join(tmpdir(), "glosa-routes-outside-"));
     writeFileSync(join(outside, "secret.html"), "<p>nope</p>");
     symlinkSync(join(outside, "secret.html"), join(root, "cap-escape.html"));
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/cap-escape.html`));
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/cap-escape.html`, { method: "POST" }));
     expect(res.status).toBe(400);
     expect((await res.json()).type).toContain("invalid-path");
     rmSync(outside, { recursive: true, force: true });
   });
 
-  test("GET /w/:slug/capability/:artifactPath on a class-R (.md) artifact → 400 invalid-path — class R never goes through this listener (A1 §7)", async () => {
+  test("POST /w/:slug/capability/:artifactPath on a class-R (.md) artifact → 400 invalid-path — class R never goes through this listener (A1 §7)", async () => {
     writeFileSync(join(root, "notes.md"), "# hello\n");
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`));
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/notes.md`, { method: "POST" }));
     expect(res.status).toBe(400);
     expect((await res.json()).type).toContain("invalid-path");
   });
 
-  test("GET /w/:slug/capability/:artifactPath on a confined-but-untracked path → 404, not 400 (§6 step 4)", async () => {
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/does-not-exist.html`));
+  test("POST /w/:slug/capability/:artifactPath on a confined-but-untracked path → 404, not 400 (§6 step 4)", async () => {
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/does-not-exist.html`, { method: "POST" }));
     expect(res.status).toBe(404);
   });
 
-  test("GET /w/:slug/capability/:artifactPath on a tracked class-F artifact → 200 with {url, nonce, expires_in_s}", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
+  test("POST /w/:slug/capability/:artifactPath on a tracked class-F artifact → 200 with {url, nonce, expires_in_s}", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body><p>hi</p></body></html>");
+    const res = await fetchFn(stateChangingReq(`/w/${slug}/capability/rendered-preview.html`, { method: "POST" }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.url.startsWith(`http://127.0.0.1:${ctx.classFPort}/doc/`)).toBe(true);
-    expect(body.url).toMatch(/\/doc\/[0-9a-f]{64}\/speech-notes\.html$/);
+    expect(body.url).toMatch(/\/doc\/[0-9a-f]{64}\/rendered-preview\.html$/);
     expect(typeof body.nonce).toBe("string");
     expect(body.nonce).toMatch(/^[0-9a-f]{64}$/); // 256-bit hex
     expect(body.expires_in_s).toBe(600);
   });
 
-  test("GET /w/:slug/capability/:artifactPath mints a FRESH token+nonce on every call — never reused across mints", async () => {
-    writeFileSync(join(root, "speech-notes.html"), "<html><body><p>hi</p></body></html>");
-    const res1 = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
-    const res2 = await fetchFn(stateChangingReq(`/w/${slug}/capability/speech-notes.html`));
+  test("POST /w/:slug/capability/:artifactPath mints a FRESH token+nonce on every call — never reused across mints", async () => {
+    writeFileSync(join(root, "rendered-preview.html"), "<html><body><p>hi</p></body></html>");
+    const res1 = await fetchFn(stateChangingReq(`/w/${slug}/capability/rendered-preview.html`, { method: "POST" }));
+    const res2 = await fetchFn(stateChangingReq(`/w/${slug}/capability/rendered-preview.html`, { method: "POST" }));
     const [body1, body2] = await Promise.all([res1.json(), res2.json()]);
     expect(body1.url).not.toBe(body2.url);
     expect(body1.nonce).not.toBe(body2.nonce);

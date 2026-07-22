@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf, renderedSha256 } from "./helpers.ts";
 
-const SOURCE = `# Kazanie
+const SOURCE = `# Document
 
 Boża łaska jest wystarczająca dla każdego grzesznika.
 
@@ -43,7 +43,7 @@ describe("stale rendered_sha256", () => {
   });
 
   test("a stale hash + a doc-wide duplicate → orphaned{ambiguous}, since there's no block scope to fall back on", () => {
-    const source = `# Kazanie\n\n"hello world" pierwszy raz.\n\n## Sekcja\n\n"hello world" drugi raz.\n`;
+    const source = `# Document\n\n"hello world" pierwszy raz.\n\n## Sekcja\n\n"hello world" drugi raz.\n`;
     const { artifact } = buildRArtifact("07.md", source);
     const position = positionOf(artifact, "hello world", 0);
     const res = resolve(annotation({ quoteExact: "hello world", position }), artifact, {});

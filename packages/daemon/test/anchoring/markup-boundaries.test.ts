@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "../../src/anchoring.ts";
 import { annotation, buildRArtifact, positionOf } from "./helpers.ts";
 
-const SOURCE = `# Kazanie
+const SOURCE = `# Document
 
 To jest **kluczowe** zdanie z linkiem [tutaj](http://example.com) i \`kodem\` w środku.
 `;
@@ -44,7 +44,7 @@ describe("a rendered selection crossing inline markup boundaries", () => {
   });
 
   test("a middle block's block_range is bounded by the NEXT stamped block, not the whole document", () => {
-    const source = `# Kazanie\n\nTo jest **kluczowe** zdanie z linkiem [tutaj](http://example.com) i \`kodem\`.\n\n## Następna sekcja\n\nDalszy tekst.\n`;
+    const source = `# Document\n\nTo jest **kluczowe** zdanie z linkiem [tutaj](http://example.com) i \`kodem\`.\n\n## Następna sekcja\n\nDalszy tekst.\n`;
     const { artifact, freshCtx } = buildRArtifact("07.md", source);
     const renderedQuote = "kluczowe zdanie z linkiem tutaj i kodem";
     const position = positionOf(artifact, renderedQuote);

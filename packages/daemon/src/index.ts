@@ -22,6 +22,15 @@ export { authorizeRequest, isForeignOrigin } from "./auth.ts";
 export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./auth.ts";
 export { confinePath } from "./confine-path.ts";
 export type { ConfineResult } from "./confine-path.ts";
+export {
+  MAX_WORKSPACE_METADATA_BYTES,
+  WORKSPACE_METADATA_VERSION,
+  WorkspaceMetadataError,
+  WorkspaceMetadataRegistry,
+  validateWorkspaceMetadata,
+  workspaceMetadataPath,
+} from "./adapters/workspace-metadata.ts";
+export type { WorkspaceMetadataArtifact, WorkspaceMetadataDescriptor } from "./adapters/workspace-metadata.ts";
 // P5.1 — `glosa doctor`'s "transcript-root" check (A6 §F30) needs the SAME `$CLAUDE_CONFIG_DIR`
 // resolution the daemon uses to confine a live session's transcript_path (A2 §F16) — never a
 // second, independently-hardcoded `~/.claude` guess.

@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Twelve enumerated checks — A6's own
 // command-surface table names exactly 12 (platform, bun, git, claude-code, browser, daemon+proto,
-// token/pairing, workspace, hooks, mcp, channel-registered, transcript-root), even though one
-// unrelated summary line elsewhere in the docs says "13 enumerated checks". No 13th check is
-// named anywhere in the spec — that's a doc inconsistency, not a real check this file is missing,
-// so this implements exactly the 12 the table lists.
+// token/pairing, workspace, hooks, mcp, optional Channel status, transcript-root).
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   claudeConfigDir,
@@ -130,7 +127,7 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     const claudeOk = meetsFloor(claudeVersionOut, "2.1.80");
     checks.push(
       claudeOk === false
-        ? check("claude-code", "warn", `${claudeVersionOut} is below the channel floor 2.1.80 (asyncRewake needs ≥2.1.0, the channel push needs ≥2.1.80)`)
+        ? check("claude-code", "warn", `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`)
         : check("claude-code", "pass", claudeVersionOut ?? `found at ${claudePath}`),
     );
   }
@@ -220,10 +217,10 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     }
   }
 
-  // 11. channel actually registered (registry evidence) — `glosa mcp` is still a stub (P5.4), so
-  // there is no real signal to check yet; honestly reported as unverifiable rather than a
-  // fabricated pass.
-  checks.push(check("channel", "skip", "cannot verify — channel registration evidence is not available until `glosa mcp` (P5.4) lands"));
+  // 11. Channels are an optional Claude capability. The registry does not expose a durable
+  // registration handshake, so doctor reports the capability as unverified without degrading the
+  // hook/MCP compatibility result.
+  checks.push(check("channel", "skip", "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path"));
 
   // 12. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();

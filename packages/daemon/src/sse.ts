@@ -14,6 +14,7 @@ export type SseEventType =
   | "snapshot"
   | "journal"
   | "artifact"
+  | "metadata"
   | "heartbeat"
   | "resync_required"
   | "transcript"

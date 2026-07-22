@@ -45,7 +45,7 @@ describe("glosa request-review", () => {
     expect(result.data).toEqual({ id: "inb-77", slug: "ws-1", status: "open" });
     expect(client.calls[0]).toMatchObject({
       method: "createAttentionRequest",
-      args: ["/repo", { message: "look at this", action: undefined, targetPath: "notes.md" }],
+      args: ["/repo", { message: "look at this", action: "review", targetPath: "notes.md" }],
     });
   });
 
@@ -56,7 +56,7 @@ describe("glosa request-review", () => {
     client.getEntryStatus = async (_path, entry) => {
       pollCount++;
       if (pollCount < 3) return { id: entry, kind: "attention", status: "delivered", detail: null };
-      return { id: entry, kind: "attention", status: "done", detail: { verdict: "approved" } };
+      return { id: entry, kind: "attention", status: "done", detail: { outcome: "approved", response: "Looks good" } };
     };
     let now = 0;
     const deps: RequestReviewDeps = {
@@ -68,8 +68,11 @@ describe("glosa request-review", () => {
     const result = await runRequestReview({ dir: "/repo", path: "notes.md", waitMs: 60_000 }, deps);
     expect(result.exitCode).toBe(0);
     expect(result.data.status).toBe("done");
-    expect(result.data.detail).toEqual({ verdict: "approved" });
+    expect(result.data.detail).toEqual({ outcome: "approved", response: "Looks good" });
     expect(pollCount).toBe(3);
+    const output = captureStdout(() => printRequestReviewResult(result, false));
+    expect(output).toContain("done: approved");
+    expect(output).toContain("Looks good");
   });
 
   test("--wait: never resolves before the deadline -> exit 7 (review_timeout)", async () => {

@@ -20,12 +20,16 @@ topology**: the agent runs as a normal interactive session in the user's termina
 daemon beside it serving a browser SPA. Claude Code is the deep, required integration; the design is
 agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one provider interface).
 
-**Target repo**: `davebream/glosa` (new, private). Build input for a kombajn autonomous epic.
+**Repository**: `davebream/glosa`. GitHub issues are the executable work queue; this document is the
+normative product contract.
 
 ## 0. What changed from v1 (orientation for anyone who read v1)
 - **No cmux coupling** anywhere. SPA runs in any browser over localhost; delivery uses each agent's own hooks/MCP, not keystroke injection.
 - **In-app editor is IN scope** (Preview / Annotate / Edit modes). v1's "no editing" non-goal is removed.
-- **jethro routing** uses jethro's existing session binding, never terminal cwd (F01).
+- **Explicit session binding** is authoritative; terminal cwd is only a generic fallback (F01).
+- **Declarative workspace metadata** replaces embedded producer/domain adapters. An external
+  integration describes artifacts through the public CLI or MCP contract; glosa owns no integration
+  package or workflow logic.
 - **Multi-agent**: Claude Code deep + Codex built to the same provider interface; provider interface is a first-class deliverable.
 - **History = full** (compare + restore). **Platform = macOS-only, pinned versions.**
 - Durability, auth, daemon lifecycle, anchoring, security, CLI all hardened per appendices A1–A6.
@@ -35,9 +39,9 @@ agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one prov
 of long-form dialogue, (B) no artifact preview/annotation beside the agent, (C) manual edits invisible
 to the agent, (D) annotation of rendered output requiring copy-paste.
 
-**Hard release gate**: the deterministic acceptance suites (§6, per Codex F14) pass, AND the manual
-rehearsal (T8) against a copy of a real past sermon passes. glosa is not used in a live sermon week
-before both pass. No live-week experiments; no Plannotator trial.
+**Hard release gate**: the deterministic acceptance suites pass, AND a maintainer-reviewed manual
+rehearsal (T8) against an ignored copy of real past artifacts passes. The maintainer selects the
+private input and signs the sanitized report; an agent never signs on the maintainer's behalf.
 
 **Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser); dictation capture;
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
@@ -62,7 +66,7 @@ Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy fron
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), **chokidar v4**
 (directory watch), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
-providers/codex, adapters/jethro, cli}`. Three invariant boundaries (review-blockers if violated):
+providers/codex, cli}`. Three invariant boundaries (review-blockers if violated):
 (1) daemon API is versioned + client-agnostic; (2) agent providers and content adapters only enter
 via their interfaces — no special-casing; (3) the SPA talks to the daemon only through the public
 authenticated API. **Adapters/providers carry ALL domain- and agent-specific knowledge; the core is
@@ -100,10 +104,9 @@ generic.**
   by the daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
   transcript_path, source, last_active_at, lease_expiry}`. Liveness = **lease + activity heartbeat**
   (NOT `kill(pid,0)` — hook input has no documented PID).
-- **Routing precedence**: (1) an **explicit provider/adapter-supplied binding** (authoritative); (2)
-  the generic cwd-ancestor fallback. For jethro this is decisive (R7): jethro artifacts live outside
-  any cwd, and jethro's own `track-claude-session` hook already records `{session_id, transcript_path}`
-  in the sermon `state.json` `session_history` — the adapter consumes that. Two sessions bound to one
+- **Routing precedence**: (1) an **explicit session binding** supplied through the API, CLI, or MCP
+  contract (authoritative); (2) the generic cwd-ancestor fallback. This supports artifact workspaces
+  that differ from the agent process cwd without teaching glosa about an external workflow. Two sessions bound to one
   workspace → deliver to the `session_hint`; else a one-time SPA picker (never guess). No live session →
   the entry **parks**; next session registration for that workspace drains it.
 
@@ -166,7 +169,8 @@ the entry survives.
   via a **one-time 256-bit capability URL** on port 4647 (no ambient token there). Origin allowlist is
   route-class-scoped (strict on state-changing, foreign-only-reject on reads/handshake, inapplicable to
   navigation) — the resolved table is A3 §4. No cookies (CSRF structurally dead).
-- Versioned route catalog (`/api/handshake` + eleven `/w/<slug>/…` routes incl. artifact list/content,
+- Versioned route catalog (contract v1.1: `/api/handshake` plus workspace routes including metadata,
+  explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
@@ -208,7 +212,7 @@ the entry survives.
   within chunk lines (miss → `orphaned{quote_absent_not_transformed}`), if producer-declared
   `transformed:true` → typed `pipeline_feedback` to the producer. **Intent never rescues a bad mapping.**
 
-### R7 — providers & adapters (the generic/domain boundary)
+### R7 — providers, adapters, and declarative workspace metadata
 - **Agent-provider interface** (first-class v1 deliverable). Minimal interface (design stage may extend,
   not narrow):
   ```
@@ -225,38 +229,42 @@ the entry survives.
   mirror) and a **Codex provider** (gate + boundaryDrain + mcpPull; push=false — no channels-equivalent).
   Adding a CLI = a new provider, never a core change.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
-  **`derived-from(A→B, via process)`** edges. From an edge the core generically provides (1) Edit-on-A
-  opens source B and (2) staleness (B newer than A's build → A stale). The core has **zero** pipeline/
-  sermon knowledge.
-- **jethro adapter** (`packages/adapters/jethro`): recognizes sermon workspaces at the fixed plugin-data
-  path `~/.claude/plugins/data/jethro-jethro/sermon-sessions/<id>/`; supplies the session binding from
-  `state.json` `session_history` (R2); orders the sidebar by stage; marks the canonical manuscript
-  (`canonical_manuscript` pointer when present, else `07b`→`07` fallback — the common case, verified);
-  declares the speech-notes-HTML → manuscript derived-from edge; classifies numbered stage `.md` as
-  class R and `output/<slug>/speech-notes-*.html` as class F with the `chunks-<ts>/manifest.json`
-  provenance. Schema authority = the TypeScript types in `~/code/jethro/mcp-server/src/state/`.
-- **Core runs with zero adapters**: a plain directory → ordered file list, follow-mode on write
-  activity, all viewers/annotation/editor work; no derived-from → HTML is opaque preview+annotate.
-- **format-sermon companion changes** (separate HITL task T7; files live at
-  `~/.claude/skills/format-sermon/`, outside the repo): `segment.py` records per-chunk
-  `source_start_line`/`source_end_line` + `source_sha256` into `manifest.json`; thread `@@CHUNK(NNN)@@`
-  markers reconciler→`normalize.py`→`render.py` `data-chunk`; add a per-chunk `transformed` flag; fix
-  the `render.py` `<title>` bug. Proposed as reviewable diffs for approval.
+  **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
+  staleness, and class-F source resolution without knowing the workflow that produced either file.
+- **`WorkspaceMetadataDescriptor` v1** is the durable public adapter input. It has an `id` and artifact
+  entries containing a workspace-relative `path`, optional `class`, `order`, `derived_from {path,via}`,
+  and `manifest {path,component}`. There is one active descriptor per workspace. Setting the same id
+  replaces it atomically; a different id conflicts until the active descriptor is cleared.
+- The daemon validates the complete descriptor before persistence: byte and entry limits, exact schema,
+  unique paths, workspace confinement, no symlink components, and existence of every artifact,
+  derived source, and manifest. A failed replacement leaves the previous descriptor intact. The active
+  descriptor persists in daemon-owned workspace runtime state, reloads when the workspace opens, and
+  invalidates connected SPA clients after set or clear.
+- The descriptor is materialized behind the existing generic content-adapter interface. Manifest v1
+  remains the class-F source-map authority; a transformed chunk's pipeline-feedback target is derived
+  only from descriptor id, manifest component, chunk id, and source range. No external package or
+  workflow logic enters glosa.
+- **Core runs with zero adapters**: a plain directory yields an ordered file list and all generic
+  viewer/annotation/editor behavior. Without a descriptor, HTML remains opaque Preview+Annotate.
 
 ### R8 — CLI + install  (detail: A6 full)
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent hook/MCP merge with
   ownership manifest, backups, uninstall — prints the correct channels dev command, never `--channels`),
-  `resolve`, `apply-begin`, `request-review [--wait]`, `doctor` (13 enumerated checks incl. real-channel-
-  registration + transcript-root confinement), `status`; internal `mcp`, `hook <event>`. `open`
+  `resolve`, `apply-begin`, `request-review [--wait]`, `metadata set|show|clear`, `session bind`,
+  `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
+  internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`); a workspace is usable SPA-only without
   `init`.
 
 ### R9 — attention model  (detail: A5 §F23)
-- Agents **knock, never barge**: `attention_request` entries surface as workspace-switcher badges + an
+- Agents **knock, never barge**: `attention_request` entries retain their immutable `message`, `action`,
+  and `target` and surface as workspace-switcher badges plus an
   attention tray (+ optional OS notification, deferred if it complicates persistent state). The SPA
-  **never** auto-switches workspace or steals focus. `attention_request` has a defined payload +
-  unified lifecycle (`open→delivered→seen→done|expired|stale`); `request-review --wait` resolves on
-  `done`/`expired` with the verdict in the event detail.
+  **never** auto-switches workspace or steals focus. All completion paths advance through
+  `delivered→seen→done`; repeated mutations are idempotent. Generic actions show **Done**.
+  `request-review` defaults to action `review` and shows **Approve** / **Request changes**. The terminal
+  `done.detail` is `{outcome:done|approved|changes_requested,response?}` with a bounded optional response;
+  `request-review --wait` returns that structure.
 
 ## 4. Non-functional  (detail: A6 §F30)
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
@@ -272,8 +280,8 @@ the entry survives.
   child env (the $1,800 footgun). Idle daemon < 100 MB RSS.
 
 ## 5. Task decomposition (epic order; each has a testable gate)
-- **T0 — bootstrap**: create `davebream/glosa` (private); monorepo + lefthook/CI (`bun test` + typecheck);
-  `.kombajn/project.json` runner/baseline; copy A1–A6 into the repo as `docs/appendices/`. Gate: CI green.
+- **T0 — bootstrap**: create the repository; monorepo + lefthook/CI (`bun test` + typecheck); copy
+  A1–A6 into the repo as `docs/appendices/`. Gate: CI green.
 - **T1a — daemon lifecycle & API skeleton**: detached-daemon spawn/lock/handshake/port-discovery/
   shutdown (A5 §F13); full R5 auth (Host/Origin/Bearer/capability, `confinePath`); versioned route
   skeleton + `X-Contract-Version`. Gate: lifecycle + auth + attack-suite (A3 §5) unit/integration tests.
@@ -298,31 +306,30 @@ the entry survives.
   reconnect loses no events.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
-  the real speech-notes fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
+  the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
   attack suite; transformed-vs-verbatim chunk anchoring corpus.
 - **T5 — conversation viewer**: transcript discovery via registry + `$CLAUDE_CONFIG_DIR`; normalized
   `TranscriptEvent` layer; typed rendering; out-of-band composer; fail-soft. Gate: fixtures incl. partial
   line, unknown event, resume/clear/compact, huge tool_result, and a corrupted line → graceful degrade.
-- **T6 — jethro adapter**: recognition at plugin-data path; session binding from `session_history`;
-  stage ordering; derived-from edge; class-F manifest resolution. Gate: against fixture copies of the
-  real session `~/.claude/plugins/data/jethro-jethro/sermon-sessions/2026-07-15_j-17,20-23/` (canonical
-  pointer ABSENT → exercises the 07b→07 fallback) + a synthetic post-#314 state + the speech-notes fixture.
-- **T7 — format-sermon companion diffs (HITL)**: produce R7 changes as reviewable diffs; regenerate the
-  fixture to prove `data-chunk`/manifest ranges/`transformed` appear and old outputs still render. Gate:
-  user approval; fixture regenerated clean. **Must precede T6/T8 assertions that depend on new manifest fields.**
-- **T8 — release gate = deterministic suites + manual rehearsal** (Codex F14):
+- **T6 — generic metadata compatibility**: durable descriptor registration, adapter hydration,
+  explicit session binding, class-F manifest resolution, API/CLI/MCP parity, and SPA refresh. Gate:
+  malformed/conflicting/confined/symlink/rollback/restart tests plus neutral manifest fixtures.
+- **T7 — external integration boundary**: an integration may call the public CLI/MCP contracts and
+  produce manifest v1, but glosa never imports its package, state schema, paths, or workflow logic.
+  Gate: compatibility exercised entirely through public contracts with no external code in this repo.
+- **T8 — release gate = deterministic suites + private manual rehearsal**:
   - Deterministic suites (mandatory): storage/fault (kill daemon at each write step → one legal recovered
     state); concurrency; delivery (channels on/off, asyncRewake rearm, boundary, parked/resumed); browser
     security (the A3 §5 attacks); anchor corpus (Polish combining chars, md markup, duplicate quotes,
-    stale hashes, transformed HTML); transcript suite; **actual jethro topology** (Claude cwd ≠ sermon
-    plugin-data path; provider binding routes correctly).
-  - Manual rehearsal: against a COPY of `po-co-to-wszystko` — sources
-    `~/Obsidian/Vault/Ministry/Sermons/output/po-co-to-wszystko/` (render+chunks+manifest) and
-    `~/Obsidian/Vault/Ministry/Sermons/Blisko/jan-17-20-26/Manuskrypt — Po co to wszystko.md` (source).
-    Run a real Claude session (subscription; channels where available): human-edit → journal/attribution;
-    annotate speech-notes → quote→manuscript resolution + source edit + re-render pickup; transformed-
-    element annotation → intent routing (no source edit); parked-entry drain; attention flow; conversation
-    mirror live. Pin Claude version/model; produce a signed-off compatibility report.
+    stale hashes, transformed HTML); transcript suite; **explicit-binding topology** (agent cwd differs
+    from the artifact workspace and routing still succeeds).
+  - Manual rehearsal: copy maintainer-selected real source and rendered artifacts into an ignored
+    workspace under `.context/`, rename them neutrally, and add only private descriptor/manifest marker
+    data needed for one verbatim and one transformed region. Run an isolated daemon and a real Claude
+    Code session from another cwd; bind it explicitly. Exercise human edit/provenance, verbatim source
+    resolution and apply lease, transformed feedback without a source edit, parked drain, attention,
+    conversation mirror/fallback, optional Channels/fallback delivery, and a local inert browser CSP probe.
+    Record exact runtime versions and produce a sanitized report with separate T8 and v1-readiness results.
   - **v1 is done when the deterministic suites are green AND the manual rehearsal passes — not on one model run.**
 
 ## 6. Risks (build-relevant)
@@ -348,9 +355,8 @@ the entry survives.
   now so these are later deploys, but no shell/hosted mode ships in v1.
 - **"Make it a git repo" promotion**: one-click promote a workspace to a real repo (seeded from the shadow
   history) + optional GitHub remote. Future; needs an explicit privacy-consent moment.
-- **Cloudflare-Pages public sermon deploy** (a format-sermon/jethro concern, not glosa): format-sermon's
-  Phase 4 currently deploys speech notes to a public Pages project — an orthogonal privacy decision
-  (add Access, or drop the deploy once glosa serves notes locally). Tracked; not a glosa v1 task.
+- **Publishing an artifact externally** is an integration concern, not a glosa responsibility. glosa
+  itself makes no external runtime calls.
 - **Reference implementations for T5** (transcript viewer): `d-kimuson/claude-code-viewer` (MIT, live
   file-watching viewer) and `claude-code-parser` for protocol knowledge are steal-from references; the
   deliberate decision is **vanilla, not assistant-ui/React** (v2 §2 stack).
@@ -359,13 +365,10 @@ the entry survives.
 - **glosa** — this product. **Artifact** — a document file (markdown, or self-contained rendered HTML).
   **Workspace** — the directory an artifact set lives in. **Session** — one interactive agent process
   working in a workspace. **Provider** — an agent-integration adapter (Claude Code, Codex). **Content
-  adapter** — a domain adapter supplying artifact classes + derived-from edges (jethro). **Class R/F** —
+  adapter** — a generic adapter supplying artifact classes + derived-from edges. **Class R/F** —
   markdown glosa renders (anchors via stamps) / foreign pre-rendered HTML glosa must not restyle (anchors
   via manifest + quotes). **derived-from edge** — generic "A is a rendered/compiled view of source B"
   metadata an adapter declares; the core computes edit-source + staleness from it with no domain knowledge.
-- **jethro** — the user's sermon-prep Claude Code plugin (`~/code/jethro`); produces numbered stage
-  artifacts + `state.json` in `~/.claude/plugins/data/jethro-jethro/sermon-sessions/<id>/`; its
-  `track-claude-session` hook records `{session_id, transcript_path}` into `state.json` `session_history`.
-- **format-sermon** — a local Claude Code skill (`~/.claude/skills/format-sermon/`) compiling a manuscript
-  into color-coded speech-notes HTML (LLM classifier + Python renderer); its output is the class-F fixture.
-- **kombajn** — the user's autonomous build-pipeline orchestrator that consumes this document.
+  **WorkspaceMetadataDescriptor** — the durable declarative metadata v1 document supplied through
+  CLI/MCP. **External integration** — any process outside glosa that supplies metadata, binds sessions,
+  or generates artifacts using public contracts only.

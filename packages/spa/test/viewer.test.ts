@@ -160,6 +160,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       getCheckpoints: async () => [],
       getDiff: async () => ({ from: "a", to: "b", hunks: [] }),
       restore: async () => ({ path: "notes.md", restored_to: "a", checkpoint_id: "a", source_sha256: "sha-1" }),
+      getInbox: async () => ({ pending_count: 0, attention: [] }),
+      markAttentionSeen: async (_slug: string, id: string) => ({ id, status: "seen", detail: null }),
+      respondToAttention: async (_slug: string, id: string, body: unknown) => ({ id, status: "done", detail: body }),
       // Captures the stream handlers so a test can push SSE frames (journal/artifact) by hand.
       stream: { handlers: null as null | { onEvent?: (frame: unknown) => void; onReconnect?: () => void } },
       openStream(_slug: string, handlers: { onEvent?: (frame: unknown) => void; onReconnect?: () => void } = {}) {
