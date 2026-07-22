@@ -10,7 +10,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "chokidar": "^4",
+    "chokidar": "^5",
     "markdown-it": "^14.3.0",
     "picomatch": "^4.0.5"
   }
