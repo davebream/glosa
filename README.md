@@ -1,16 +1,14 @@
 <div align="center">
 
-<pre>
-   __ _ | | ___  ___  __ _
-  / _` || |/ _ \/ __|/ _` |
- | (_| || | (_) \__ \ (_| |
-  \__, ||_|\___/|___/\__,_|
-  |___/
-
- agent writes  ->  you review  ->  feedback returns
-</pre>
-
-<h1>glosa</h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/glosa-wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/glosa-wordmark-light.svg">
+  <img
+    src="docs/assets/glosa-wordmark-light.svg"
+    alt="glosa: make it measurable, then send the note back to the agent"
+    width="760"
+  >
+</picture>
 
 <p><strong>The review surface for writing with coding agents.</strong></p>
 
