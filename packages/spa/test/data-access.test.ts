@@ -115,6 +115,28 @@ describe("createDataAccess — request shape", () => {
     expect(JSON.parse(calls[2]![1].body as string)).toEqual({ outcome: "changes_requested", response: "Please revise" });
   });
 
+  test("conversation compose and reconnect status carry stable message/session identity", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit = {}) => {
+      calls.push([path, init]);
+      return jsonResponse(200, { message_id: "m-1", delivered: true, state: "presented" });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage({ glosa_token: "tok" }) });
+
+    await da.sendComposerMessage("ws", "exact text", { messageId: "m-1", sessionHint: "session-a" });
+    await da.getComposerMessageStatus("ws", "m-1");
+
+    expect(calls.map(([path]) => path)).toEqual([
+      "/w/ws/transcript/compose",
+      "/w/ws/transcript/compose/m-1",
+    ]);
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({
+      text: "exact text",
+      message_id: "m-1",
+      session_hint: "session-a",
+    });
+  });
+
   test("putArtifact PUTs the content with an If-Match header when given", async () => {
     let captured: { path: string; init: RequestInit } | null = null;
     const fetchFn = async (path: string, init: RequestInit) => {

@@ -608,7 +608,11 @@ function createSubCommands(setExitCode: (code: number) => void) {
         import("./api-client.ts"),
         import("./mcp.ts"),
       ]);
-      await runMcpServer({ createHookClient: createHttpDaemonClient, createApiClient: createHttpGlosaClient });
+      await runMcpServer({
+        createHookClient: createHttpDaemonClient,
+        createApiClient: createHttpGlosaClient,
+        sessionId: () => process.env.CLAUDE_CODE_SESSION_ID,
+      });
     },
   );
 
@@ -616,7 +620,19 @@ function createSubCommands(setExitCode: (code: number) => void) {
     { name: "__daemon", description: "Detached daemon process", internal: true },
     async () => {
       const { bootDaemon } = await import("../../daemon/src/index.ts");
-      await bootDaemon();
+      const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
+      const { CodexProvider } = await import("../../providers/codex/src/index.ts");
+      await bootDaemon({
+        providerFactories: [
+          ({ sessionRegistry, pushRegistry }) =>
+            new ClaudeCodeProvider({
+              liveness: sessionRegistry,
+              channelsEnabled: (session) => pushRegistry.has(session.session_id),
+              sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
+            }),
+          ({ sessionRegistry }) => new CodexProvider({ liveness: sessionRegistry }),
+        ],
+      });
     },
   );
 

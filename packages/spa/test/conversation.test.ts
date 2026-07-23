@@ -84,7 +84,9 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
   function fakeDataAccess() {
     let onEventCb: ((frame: unknown) => void) | null = null;
     let onStatusCb: ((status: "down" | "up") => void) | null = null;
-    const sent: Array<{ slug: string; text: string }> = [];
+    let onJournalCb: ((frame: any) => void) | null = null;
+    let onReconnectCb: (() => void) | null = null;
+    const sent: Array<{ slug: string; text: string; options: { messageId: string; sessionHint?: string } }> = [];
     return {
       sent,
       emit(frame: unknown) {
@@ -92,6 +94,12 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
       },
       emitStatus(status: "down" | "up") {
         onStatusCb?.(status);
+      },
+      emitJournal(frame: unknown) {
+        onJournalCb?.(frame);
+      },
+      reconnect() {
+        onReconnectCb?.();
       },
       openTranscriptStream(
         _slug: string,
@@ -104,8 +112,24 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
           onStatusCb = null;
         };
       },
-      sendComposerMessage: async (slug: string, text: string) => {
-        sent.push({ slug, text });
+      openStream(
+        _slug: string,
+        { onEvent, onReconnect }: { onEvent: (frame: any) => void; onReconnect?: () => void },
+      ) {
+        onJournalCb = onEvent;
+        onReconnectCb = onReconnect ?? null;
+        return () => {
+          onJournalCb = null;
+          onReconnectCb = null;
+        };
+      },
+      getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
+      sendComposerMessage: async (
+        slug: string,
+        text: string,
+        options: { messageId: string; sessionHint?: string },
+      ) => {
+        sent.push({ slug, text, options });
         return { accepted: true, delivered: true };
       },
     };
@@ -132,7 +156,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
     expect(() => da.emit({ event: "mirror_unavailable" })).not.toThrow();
 
-    const status = root.querySelector(".glosa-conv-status") as any;
+    const status = root.querySelector(".glosa-conv-mirror-status") as any;
     expect(status.hidden).toBe(false);
     expect(status.textContent).toContain("mirror unavailable");
 
@@ -151,7 +175,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
     da.emitStatus("down");
 
-    const status = root.querySelector(".glosa-conv-status") as any;
+    const status = root.querySelector(".glosa-conv-mirror-status") as any;
     expect(status.hidden).toBe(false);
     expect(status.textContent).toBe("mirror unavailable — use the terminal");
   });
@@ -163,7 +187,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
     da.emit({ event: "mirror_unavailable" });
-    const status = root.querySelector(".glosa-conv-status") as any;
+    const status = root.querySelector(".glosa-conv-mirror-status") as any;
     expect(status.hidden).toBe(false);
 
     da.emit({ event: "transcript", data: { type: "prose", role: "assistant", content: "back online", id: "2" } });
@@ -211,7 +235,11 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
 
     // sendComposerMessage is async — flush microtasks.
     return Promise.resolve().then(() => {
-      expect(da.sent).toEqual([{ slug: "ws-1", text: "please check the edge case" }]);
+      expect(da.sent).toHaveLength(1);
+      expect(da.sent[0]).toMatchObject({ slug: "ws-1", text: "please check the edge case" });
+      expect(da.sent[0]!.options.messageId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
     });
   });
 
@@ -244,7 +272,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     const da = {
       ...fakeDataAccess(),
       sendComposerMessage: async () => {
-        throw new Error("no session registered");
+        throw { problem: { type: "https://glosa.dev/problems/no-bound-session" } };
       },
     };
 
@@ -255,7 +283,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(input.value).toBe("keep this draft");
-    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("No live agent session is registered");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("No live agent session is bound");
   });
 
   test("an accepted but undelivered message keeps the draft rather than claiming it was sent", async () => {
@@ -273,7 +301,151 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(input.value).toBe("keep this draft");
-    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("agent delivery is not available");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toContain("Waiting for the agent");
+    expect((root.querySelector(".glosa-conv-composer-send") as any).disabled).toBe(true);
+  });
+
+  test("a presented journal acknowledgement clears the submitted draft", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const base = fakeDataAccess();
+    const da = {
+      ...base,
+      sendComposerMessage: async (slug: string, text: string, options: any) => {
+        base.sent.push({ slug, text, options });
+        return { accepted: true, delivered: false, state: "transport_accepted" };
+      },
+    };
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "wait for acknowledgement";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const messageId = base.sent[0]!.options.messageId;
+    base.emitJournal({
+      event: "journal",
+      data: { entry: messageId, event: "delivery_attempt", detail: { outcome: "presented" } },
+    });
+
+    expect(input.value).toBe("");
+    expect((root.querySelector(".glosa-conv-status") as any).textContent).toBe("Message sent.");
+    expect((root.querySelector(".glosa-conv-composer-send") as any).disabled).toBe(false);
+  });
+
+  test("an acknowledgement preserves newer textarea edits made while waiting", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const base = fakeDataAccess();
+    const da = { ...base, sendComposerMessage: async () => ({ accepted: true, delivered: false, state: "queued" }) };
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "submitted text";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const stored = JSON.parse(globalThis.sessionStorage.getItem("glosa:conversation-pending:ws-1")!);
+    input.value = "newer unsent draft";
+    base.emitJournal({
+      event: "journal",
+      data: { entry: stored.id, event: "transition_committed", detail: { to: "delivered" } },
+    });
+    expect(input.value).toBe("newer unsent draft");
+  });
+
+  test("ambiguous routing shows a focused native picker and retries with the same message ID", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const base = fakeDataAccess();
+    const calls: any[] = [];
+    const da = {
+      ...base,
+      sendComposerMessage: async (_slug: string, _text: string, options: any) => {
+        calls.push(options);
+        if (calls.length === 1) {
+          throw {
+            problem: {
+              type: "https://glosa.dev/problems/session-selection-required",
+              candidates: [
+                { session_id: "s1", provider: "claude-code", last_active_at: "2026-07-23T10:00:00Z" },
+                { session_id: "s2", provider: "codex", last_active_at: "2026-07-23T10:01:00Z" },
+              ],
+            },
+          };
+        }
+        return { accepted: true, delivered: true, state: "presented" };
+      },
+    };
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as any;
+    input.value = "choose exactly";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const picker = root.querySelector(".glosa-conv-session-picker select") as any;
+    expect(dom.document.activeElement).toBe(picker);
+    picker.value = "s2";
+    (root.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(calls[1].messageId).toBe(calls[0].messageId);
+    expect(calls[1].sessionHint).toBe("s2");
+    expect(input.value).toBe("");
+  });
+
+  test("reload recovery rechecks the durable status and clears only after presented", async () => {
+    const firstRoot = dom.document.createElement("div");
+    dom.document.body.append(firstRoot);
+    const first = {
+      ...fakeDataAccess(),
+      sendComposerMessage: async () => ({ accepted: true, delivered: false, state: "queued" }),
+    };
+    const unmount = mountConversationPane(firstRoot, { dataAccess: first, slug: "ws-reload" });
+    const firstInput = firstRoot.querySelector(".glosa-conv-composer-input") as any;
+    firstInput.value = "survive this reload";
+    (firstRoot.querySelector(".glosa-conv-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    unmount();
+
+    const secondRoot = dom.document.createElement("div");
+    dom.document.body.append(secondRoot);
+    const second = {
+      ...fakeDataAccess(),
+      getComposerMessageStatus: async () => ({ accepted: true, delivered: true, state: "presented" }),
+    };
+    mountConversationPane(secondRoot, { dataAccess: second, slug: "ws-reload" });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect((secondRoot.querySelector(".glosa-conv-composer-input") as any).value).toBe("");
+    expect((secondRoot.querySelector(".glosa-conv-status") as any).textContent).toBe("Message sent.");
+    expect(globalThis.sessionStorage.getItem("glosa:conversation-pending:ws-reload")).toBeNull();
+  });
+
+  test("reload recovery surfaces a durable failure and enables same-ID retry", async () => {
+    globalThis.sessionStorage.setItem(
+      "glosa:conversation-pending:ws-failed",
+      JSON.stringify({
+        id: "123e4567-e89b-42d3-a456-426614174000",
+        text: "retry after reload",
+        sessionHint: "session-a",
+      }),
+    );
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = {
+      ...fakeDataAccess(),
+      getComposerMessageStatus: async () => ({
+        accepted: true,
+        delivered: false,
+        state: "failed",
+        delivery: { outcome: "failed" },
+      }),
+    };
+    mountConversationPane(root, { dataAccess: da, slug: "ws-failed" });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect((root.querySelector(".glosa-conv-composer-input") as any).value).toBe("retry after reload");
+    expect((root.querySelector(".glosa-conv-composer-send") as any).disabled).toBe(false);
+    expect((root.querySelector(".glosa-conv-status") as any).getAttribute("data-error")).toBe("true");
   });
 
   test("unmount() stops the stream (the fake's onEvent handle is cleared)", () => {

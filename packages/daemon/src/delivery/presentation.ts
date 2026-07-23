@@ -199,12 +199,40 @@ function attentionPresentation(id: string, payload: Record<string, unknown>, opt
   };
 }
 
+function conversationPresentation(
+  id: string,
+  payload: Record<string, unknown>,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
+  const message = stringOf(payload.text);
+  const targetSessionId = stringOf(payload.target_session_id);
+  const provider = stringOf(payload.provider);
+  if (!message || !targetSessionId || !provider) return null;
+  const text = `glosa conversation_message ${id}\nmessage:\n${message}`;
+  if (utf8Bytes(text) > (opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES)) return null;
+  return {
+    id,
+    kind: "conversation_message",
+    status: opts.status,
+    text,
+    bytes: utf8Bytes(text),
+    message,
+    message_bytes: utf8Bytes(message),
+    target_session_id: targetSessionId,
+    provider,
+    detail: { target_session_id: targetSessionId, provider },
+    truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+    retrieval: retrieval(id),
+  };
+}
+
 export function buildDeliveryPresentation(id: string, payloadInput: unknown, opts: BuildPresentationOptions): DeliverableEntry | null {
   const payload = recordOf(payloadInput);
   if (!payload) return null;
   if (payload.kind === "annotation") return annotationPresentation(id, payload, opts);
   if (payload.kind === "human_edit") return humanEditPresentation(id, payload, opts);
   if (payload.kind === "attention_request") return attentionPresentation(id, payload, opts);
+  if (payload.kind === "conversation_message") return conversationPresentation(id, payload, opts);
   return null;
 }
 

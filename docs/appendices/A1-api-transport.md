@@ -260,6 +260,31 @@ Each `drained[]` item is the R3 discriminated presentation object and is capped 
 the serialized batch is capped at 32 KiB including separators. Continuations use the same opaque
 cursor accepted by the retrieval GET and `glosa_inbox_get` MCP tool.
 
+### 5.16 Conversation composer delivery
+
+`POST /w/:slug/transcript/compose` is Bearer-authenticated and Origin-gated:
+
+```json
+{ "message_id": "<client UUID, optional>", "text": "<exact UTF-8 text>", "session_hint": "<optional session id>" }
+```
+
+The daemon resolves only live sessions whose explicit `workspace_binding` equals the workspace;
+cwd-ancestor fallback is forbidden. No binding returns **404 no-bound-session**; only stale bindings
+return **409 bound-session-stale**; ambiguous live bindings return **409
+session-selection-required** with only `{session_id,provider,last_active_at}` candidates. Blank or
+over-16-KiB presentations return **400 validation-failed** and are never truncated.
+
+The immutable `conversation_message` stores exact text and target session. Reusing an id with
+different text or target returns **409 idempotency-conflict**. A failed attempt may re-nudge the same
+entry; pending and delivered retries return journal-derived status without another entry. Every
+attempt is fsynced before the response. **200** means terminal `presented`; **202** means `queued` or
+`transport_accepted`.
+
+`GET /w/:slug/transcript/compose/:message_id` returns the same status for reconnect recovery.
+Authenticated bridge routes `GET /api/sessions/:id/push-stream` and
+`POST /api/sessions/:id/conversation/:message_id/ack` are exact-session transport surfaces. A
+transport acknowledgement never implies presentation.
+
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 
 1. Reject any path containing a literal `..` segment, a NUL byte, or a leading `/` (must be

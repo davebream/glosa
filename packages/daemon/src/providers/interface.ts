@@ -86,7 +86,16 @@ interface PresentationBase {
 export type DeliverableEntry =
   | (PresentationBase & { kind: "annotation"; detail: Record<string, unknown> })
   | (PresentationBase & { kind: "human_edit"; detail: Record<string, unknown> })
-  | (PresentationBase & { kind: "attention_request"; detail: Record<string, unknown> });
+  | (PresentationBase & { kind: "attention_request"; detail: Record<string, unknown> })
+  | (PresentationBase & {
+      kind: "conversation_message";
+      /** Exact, unmodified UTF-8 composer text. `text` remains the bounded hook/MCP presentation. */
+      message: string;
+      message_bytes: number;
+      target_session_id: string;
+      provider: string;
+      detail: Record<string, unknown>;
+    });
 
 export type Liveness = "alive" | "stale";
 
@@ -110,6 +119,26 @@ export interface AgentProvider {
   transcriptPath(session: SessionBinding): string | null;
 }
 
+/** Generic provider lookup owned by the composition root. The daemon depends only on this
+ * interface and can still run with an empty registry; provider packages register themselves
+ * outside the core. */
+export class AgentProviderRegistry {
+  private readonly providers = new Map<string, AgentProvider>();
+
+  register(provider: AgentProvider): void {
+    if (this.providers.has(provider.id)) throw new Error(`provider already registered: ${provider.id}`);
+    this.providers.set(provider.id, provider);
+  }
+
+  get(id: string): AgentProvider | undefined {
+    return this.providers.get(id);
+  }
+
+  list(): readonly AgentProvider[] {
+    return [...this.providers.values()];
+  }
+}
+
 /** The one place a `DeliveryResult` becomes a journal `delivery_attempt` (A5 §F23) — every
  * `deliver()` caller should route through this rather than calling `bus.recordDeliveryAttempt`
  * directly, so the R7-return-shape → journal-detail mapping lives in exactly one place. This is
@@ -122,10 +151,13 @@ export function recordDelivery(
   entryId: string,
   session: SessionBinding,
   result: DeliveryResult,
+  opts: { durable?: boolean; idem?: string } = {},
 ): Promise<void> {
   const priorAttempts = bus.state.entries[entryId]?.deliveryAttempts;
   const reason = Array.isArray(priorAttempts) && priorAttempts.length > 0 ? "re_nudge" : "initial";
   return bus.recordDeliveryAttempt(entryId, {
+    ...(opts.idem ? { idem: opts.idem } : {}),
+    ...(opts.durable ? { fsync: true } : {}),
     via: result.via,
     session: session.session_id,
     outcome: result.outcome,

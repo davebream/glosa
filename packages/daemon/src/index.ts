@@ -72,7 +72,8 @@ export type {
   ProviderCapabilities,
   SessionBinding,
 } from "./providers/interface.ts";
-export { recordDelivery } from "./providers/interface.ts";
+export { AgentProviderRegistry, recordDelivery } from "./providers/interface.ts";
+export { SessionPushRegistry } from "./providers/push-registry.ts";
 export {
   isCwdAncestorOf,
   SessionRegistry,

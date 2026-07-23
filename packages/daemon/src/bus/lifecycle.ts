@@ -29,7 +29,7 @@ import type { DerivedEntryState, DerivedState, Reducer } from "./replay.ts";
 import { defaultReducer } from "./replay.ts";
 import type { JournalEvent } from "./journal.ts";
 
-export type EntryKind = "common" | "attention";
+export type EntryKind = "common" | "attention" | "conversation";
 
 // A5 §F23's authoritative delivery_attempt vocabulary, verbatim:
 // `{via:channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|
@@ -64,9 +64,11 @@ type GuardTable = Readonly<Record<string, GuardRule>>;
 
 const COMMON_INITIAL_STATUS = "pending";
 const ATTENTION_INITIAL_STATUS = "open";
+const CONVERSATION_INITIAL_STATUS = "pending";
 
 const COMMON_TERMINALS: ReadonlySet<string> = new Set(["applied", "rejected", "stale"]);
 const ATTENTION_TERMINALS: ReadonlySet<string> = new Set(["done", "expired", "stale"]);
+const CONVERSATION_TERMINALS: ReadonlySet<string> = new Set(["delivered", "stale"]);
 
 // Common: pending -> delivered -> seen? -> {applied|rejected|stale}.
 const COMMON_GUARDS: GuardTable = {
@@ -86,16 +88,29 @@ const ATTENTION_GUARDS: GuardTable = {
   stale: { from: "non-terminal" },
 };
 
+// Conversation messages are complete once a transport has proved presentation. Queueing and
+// transport acceptance remain delivery-attempt facts and never advance this state machine.
+const CONVERSATION_GUARDS: GuardTable = {
+  delivered: { from: [CONVERSATION_INITIAL_STATUS] },
+  stale: { from: "non-terminal" },
+};
+
 function terminalsFor(kind: EntryKind): ReadonlySet<string> {
-  return kind === "attention" ? ATTENTION_TERMINALS : COMMON_TERMINALS;
+  if (kind === "attention") return ATTENTION_TERMINALS;
+  if (kind === "conversation") return CONVERSATION_TERMINALS;
+  return COMMON_TERMINALS;
 }
 
 function guardsFor(kind: EntryKind): GuardTable {
-  return kind === "attention" ? ATTENTION_GUARDS : COMMON_GUARDS;
+  if (kind === "attention") return ATTENTION_GUARDS;
+  if (kind === "conversation") return CONVERSATION_GUARDS;
+  return COMMON_GUARDS;
 }
 
 function initialStatusFor(kind: EntryKind): string {
-  return kind === "attention" ? ATTENTION_INITIAL_STATUS : COMMON_INITIAL_STATUS;
+  if (kind === "attention") return ATTENTION_INITIAL_STATUS;
+  if (kind === "conversation") return CONVERSATION_INITIAL_STATUS;
+  return COMMON_INITIAL_STATUS;
 }
 
 /** Never leave a terminal state — every transition (and `entryKindOf`'s callers) gates on this
@@ -125,11 +140,15 @@ function canTransition(kind: EntryKind, current: string, to: string): boolean {
  * `entry_created` synthesized by reconcile.ts's crash recovery, which never carries a kind —
  * defaults to `"common"`, the more restrictive/ordinary of the two tables. */
 function entryKindFromDetail(detail: Record<string, unknown> | undefined): EntryKind {
-  return detail?.kind === "attention_request" ? "attention" : "common";
+  if (detail?.kind === "attention_request") return "attention";
+  if (detail?.kind === "conversation_message") return "conversation";
+  return "common";
 }
 
 function entryKindOf(entryState: DerivedEntryState): EntryKind {
-  return entryState.kind === "attention" ? "attention" : "common";
+  if (entryState.kind === "attention") return "attention";
+  if (entryState.kind === "conversation") return "conversation";
+  return "common";
 }
 
 function deliveryAttemptsOf(entryState: DerivedEntryState): DeliveryAttemptRecord[] {

@@ -387,17 +387,25 @@ export function createDataAccess(deps = {}) {
         onUnauthorized: handleUnauthorized,
       });
     },
-    /** `POST /w/:slug/transcript/compose` (P4.2, F32/R6) — the conversation viewer's out-of-band
-     * composer: sends a NEW user message to whichever session is bound to this workspace, without
-     * ever touching the transcript file (http.ts's `handleComposerSend` is explicit about this).
-     * Real delivery is a `// P4.3:` seam on the daemon side — the response's `delivered` field
-     * tells the caller whether to treat the send as more than "accepted". */
-    sendComposerMessage(slug, text) {
+    /** `POST /w/:slug/transcript/compose` (F32/R6) — creates or retries one immutable,
+     * exact-session conversation message without touching the transcript. `delivered:true` means
+     * the target session acknowledged presentation; queueing/transport acceptance stay pending. */
+    sendComposerMessage(slug, text, { messageId, sessionHint } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/transcript/compose`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({
+          text,
+          ...(messageId ? { message_id: messageId } : {}),
+          ...(sessionHint ? { session_hint: sessionHint } : {}),
+        }),
       });
+    },
+
+    getComposerMessageStatus(slug, messageId) {
+      return requestJson(
+        `/w/${encodeURIComponent(slug)}/transcript/compose/${encodeURIComponent(messageId)}`,
+      );
     },
     /** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-
      * scoped capability for a class-F artifact. classf-viewer.js calls this once per iframe

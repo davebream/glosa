@@ -179,6 +179,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       // whenever the toggle IS clicked.
       openTranscriptStream: () => () => {}, // returns a no-op stop()
       sendComposerMessage: async () => ({ accepted: true, delivered: false }),
+      getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
       ...overrides,
     };
   }

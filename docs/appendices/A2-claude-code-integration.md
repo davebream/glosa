@@ -23,6 +23,16 @@ A Channel notification accepted by the transport records `delivery_attempt` with
 `via:"channel", outcome:"transport_accepted"`. Acceptance does not prove presentation and therefore
 does not change lifecycle status by itself.
 
+The stdio MCP shim reads `CLAUDE_CODE_SESSION_ID`, advertises
+`capabilities.experimental["claude/channel"]`, and opens one authenticated serialized push stream for
+that exact registered session. A live stream—not configuration or an activation flag—is Channel
+availability. It emits `notifications/claude/channel` with the exact composer text and
+`meta.message_id`, then records only `transport_accepted`.
+
+Claude calls `glosa_conversation_ack` after the event reaches its context. That exact-session
+acknowledgement records `presented` and the terminal conversation transition. Without it, the
+immutable entry stays pending and remains eligible for hook/MCP presentation.
+
 ## F07 — delivery ladder and asyncRewake
 
 Claude delivery uses the best capability available to that live session:
@@ -36,6 +46,9 @@ Channel → asyncRewake → blocking/turn-boundary hook → MCP pull
 - `delivery_attempt` is a separate journal axis; only an acknowledged presentation may append
   `delivered`.
 - Hook and MCP paths are the required compatibility fallback.
+- Targeted conversation entries are filtered by `target_session_id`; another bound session cannot
+  drain or acknowledge them. Generic MCP pull requires an explicit registered session identity for
+  these entries while untargeted inbox behavior remains unchanged.
 - Stop and UserPromptSubmit drains are bounded to eight entries and 32 KiB per batch.
 
 `asyncRewake` is one-shot. SessionStart arms one watcher; after a wake, Stop rearms it under a
@@ -132,6 +145,8 @@ artifact viewing, editing, annotation, and inbox delivery remain usable.
 3. Explicit binding routes across different agent/artifact working directories; parked entries drain.
 4. Stop/UserPromptSubmit presentations obey byte/count limits and acknowledgement ordering.
 5. Transcript fixtures cover partial, unknown, corrupt, resume, clear, compact, and large tool results.
+6. Conversation delivery covers unacknowledged Channel transport, acknowledgement-tool success,
+   exact-session hook/MCP fallback, wrong-session isolation, retries, and daemon restart.
 
 The manual T8 report records the installed Claude Code version, actual session model, Channel attempt,
 and the successful transport used. A Channel failure is reported, never hidden; fallback success is a

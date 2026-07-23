@@ -365,6 +365,8 @@ export class WorkspaceBus {
     entryId: string,
     opts: {
       by?: EventBy;
+      idem?: string;
+      fsync?: boolean;
       via?: DeliveryVia;
       session?: string;
       outcome?: DeliveryOutcome;
@@ -384,6 +386,8 @@ export class WorkspaceBus {
     entryId: string,
     opts: {
       by?: EventBy;
+      idem?: string;
+      fsync?: boolean;
       via?: DeliveryVia;
       session?: string;
       outcome?: DeliveryOutcome;
@@ -391,7 +395,7 @@ export class WorkspaceBus {
       error?: string;
     },
   ): void {
-    const { by, ...detail } = opts;
+    const { by, idem, fsync, ...detail } = opts;
     const hasDetail = Object.values(detail).some((v) => v !== undefined);
     const event: JournalEvent = {
       v: 1,
@@ -400,9 +404,10 @@ export class WorkspaceBus {
       entry: entryId,
       event: "delivery_attempt",
       by: by ?? "daemon",
+      ...(idem !== undefined ? { idem } : {}),
       ...(hasDetail ? { detail } : {}),
     };
-    appendEvent(this.writer, event, { fsync: false });
+    appendEvent(this.writer, event, { fsync: fsync ?? false });
     applyEvent(this.state, event, this.reducer);
     this.notify(event);
   }
@@ -427,8 +432,13 @@ export class WorkspaceBus {
       const eligible = Object.entries(this.state.entries).filter(([id, entry]) => {
         if (opts.entryId && id !== opts.entryId) return false;
         if (reserved.has(id)) return false;
-        const kind = entry.kind === "attention" ? "attention" : "common";
+        const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
         if (isTerminal(kind, entry.status)) return false;
+        const payload = readInboxEntry(this.root, id);
+        if (payload && typeof payload === "object") {
+          const target = (payload as Record<string, unknown>).target_session_id;
+          if (typeof target === "string" && target !== opts.session) return false;
+        }
         const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
         // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
         // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
@@ -498,13 +508,87 @@ export class WorkspaceBus {
       this.deliveryReservations.delete(deliveryId);
       for (const id of reservation.entries) {
         const attempts = this.state.entries[id]?.deliveryAttempts;
+        const payload = readInboxEntry(this.root, id);
+        const isConversation =
+          payload !== null &&
+          typeof payload === "object" &&
+          (payload as Record<string, unknown>).kind === "conversation_message";
         this.recordDeliveryAttemptLocked(id, {
           via: reservation.via,
           session: reservation.session,
           outcome,
           reason: Array.isArray(attempts) && attempts.length > 0 ? "re_nudge" : "initial",
+          ...(isConversation
+            ? {
+                fsync: true,
+                idem: `conversation:${id}:attempt:${outcome}`,
+              }
+            : {}),
           ...(error ? { error } : {}),
         });
+        if (isConversation && outcome === "presented" && this.state.entries[id]?.status !== "delivered") {
+          const event: JournalEvent = {
+            v: 1,
+            event_id: this.ulidFn(),
+            at: this.nowFn().toISOString(),
+            entry: id,
+            event: "transition_committed",
+            by: "daemon",
+            idem: `conversation:${id}:delivered`,
+            detail: { to: "delivered" },
+          };
+          appendEvent(this.writer, event);
+          applyEvent(this.state, event, this.reducer);
+          this.notify(event);
+        }
+      }
+      return true;
+    });
+  }
+
+  /** Direct acknowledgement for a session-targeted conversation message. Channel transports do
+   * not use the hook reservation token, so they acknowledge the immutable entry itself. */
+  acknowledgeConversationMessage(
+    entryId: string,
+    opts: { session: string; via: DeliveryVia; outcome: "transport_accepted" | "presented" | "failed"; error?: string },
+  ): Promise<boolean> {
+    return this.mutex.runExclusive(this.root, () => {
+      const payload = readInboxEntry(this.root, entryId);
+      if (!payload || typeof payload !== "object") return false;
+      const record = payload as Record<string, unknown>;
+      if (record.kind !== "conversation_message" || record.target_session_id !== opts.session) return false;
+      const entry = this.state.entries[entryId];
+      if (!entry) return false;
+      if (entry.status === "delivered") return true;
+      const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+      const latest = attempts.at(-1);
+      const sameChannelAttempt =
+        latest?.via === opts.via &&
+        latest?.session === opts.session &&
+        latest?.outcome === "transport_accepted";
+      this.recordDeliveryAttemptLocked(entryId, {
+        fsync: true,
+        idem: `conversation:${entryId}:attempt:${opts.outcome}`,
+        via: opts.via,
+        session: opts.session,
+        outcome: opts.outcome,
+        reason: sameChannelAttempt ? (latest.reason ?? "initial") : attempts.length > 0 ? "re_nudge" : "initial",
+        ...(opts.error ? { error: opts.error } : {}),
+      });
+      if (opts.outcome === "presented" && this.state.entries[entryId]?.status !== "delivered") {
+        const event: JournalEvent = {
+          v: 1,
+          event_id: this.ulidFn(),
+          at: this.nowFn().toISOString(),
+          entry: entryId,
+          event: "transition_committed",
+          by: "daemon",
+          idem: `conversation:${entryId}:delivered`,
+          detail: { to: "delivered" },
+        };
+        appendEvent(this.writer, event);
+        applyEvent(this.state, event, this.reducer);
+        this.notify(event);
       }
       return true;
     });
