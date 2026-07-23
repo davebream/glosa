@@ -941,6 +941,7 @@ button {
 
 .glosa-main {
   grid-area: main;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden; /* pre/tables scroll internally; the page itself never pans sideways */
   background: var(--bg);
@@ -1163,11 +1164,17 @@ button {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
   width: 100%;
   max-width: calc(var(--measure) + 2 * var(--space-8));
   margin: 0 auto;
   padding: var(--space-6) var(--space-8) var(--space-8);
   gap: var(--space-3);
+}
+
+.glosa-app[data-mode="edit"] .glosa-main {
+  overflow: hidden;
 }
 
 .glosa-edit-area {
@@ -1763,6 +1770,11 @@ button {
 /* ---------- 11. History pane ---------- */
 
 .glosa-history {
+  grid-area: main;
+  z-index: var(--z-sticky);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: var(--space-4) var(--space-6) var(--space-8);
@@ -1946,12 +1958,13 @@ button {
 /* ---------- 12. Conversation pane ---------- */
 
 .glosa-conversation {
-  position: absolute;
-  inset: 0;
+  grid-area: main;
+  position: relative;
   z-index: var(--z-sticky);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 28rem;
+  min-width: 0;
+  min-height: 0;
   background: var(--bg);
   overflow: hidden;
 }
@@ -2380,8 +2393,12 @@ button {
     background: oklch(0.24 0.01 110 / 0.25);
   }
 
-  /* The composer leaves the margin and becomes a short bottom tray; the manuscript keeps its
-     full reading measure (brief Q11 decision). */
+}
+
+/* Until the annotation rail has room beside the manuscript, the composer is a viewport-bound
+   tray. Keeping this breakpoint paired with the 1280px side-margin breakpoint avoids a dead
+   tablet band where a focused composer would otherwise render after the document. */
+@media (max-width: 1279px) {
   .glosa-composer {
     position: fixed;
     left: 0;
@@ -2486,8 +2503,41 @@ button {
   to { transform: translateY(0); opacity: 1; }
 }
 
-/* In the 1024–1279 band the navigator stays and annotations flow below the manuscript — that's
-   the .glosa-margin default; no override needed. */
+/* In the 1024–1279 band the navigator stays while annotation cards flow below the manuscript;
+   the active composer remains the fixed tray defined above. */
+
+/* Coarse pointers need forgiving hit areas even on wide touch laptops. The visible component
+   vocabulary stays compact; only the interactive box grows to the platform-standard 44px. */
+@media (pointer: coarse) {
+  .glosa-nav-toggle,
+  .glosa-tools-trigger,
+  .glosa-tree-tool,
+  .glosa-tree-disclosure,
+  .glosa-appearance-trigger,
+  .glosa-attention-trigger,
+  .glosa-conv-close {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .glosa-modebar button,
+  .glosa-workspace-list button,
+  .glosa-tree-row,
+  .glosa-history-toggle,
+  .glosa-conversation-toggle,
+  .glosa-editor-face button,
+  .glosa-rich-toolbar button,
+  .glosa-composer-intents button {
+    min-height: 2.75rem;
+  }
+
+  .glosa-modebar button,
+  .glosa-editor-face button,
+  .glosa-rich-toolbar button,
+  .glosa-composer-intents button {
+    min-width: 2.75rem;
+  }
+}
 
 /* ---------- 14. Reduced motion ---------- */
 

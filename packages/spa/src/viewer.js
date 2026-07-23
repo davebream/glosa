@@ -304,7 +304,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   const annotateInstructions = el("p", {
     id: "glosa-annotate-instructions",
     className: "glosa-visually-hidden",
-    textContent: "Press Enter or Space to annotate this passage.",
+    textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
     hidden: true,
   });
 
@@ -316,10 +316,19 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     contentEl,
     classFEl,
     editWrap,
-    historyEl,
-    conversationEl,
     marginEl,
     markersEl,
+  ]);
+  const sidebarEl = el("nav", {
+    id: "glosa-sidebar",
+    className: "glosa-sidebar",
+    "aria-label": "Workspace navigation",
+  }, [
+    el("h2", { textContent: "Workspaces" }),
+    sidebarList,
+    artifactHeading,
+    artifactList,
+    artifactListEmpty,
   ]);
 
   root.append(
@@ -331,15 +340,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       el("div", { className: "glosa-topbar-actions" }, [tools]),
       topbarOverlays,
     ]),
-    el("nav", { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" }, [
-      el("h2", { textContent: "Workspaces" }),
-      sidebarList,
-      artifactHeading,
-      artifactList,
-      artifactListEmpty,
-    ]),
+    sidebarEl,
     backdrop,
     mainEl,
+    historyEl,
+    conversationEl,
   );
 
   artifactNavigator = createArtifactTreeNavigator(artifactList, {
@@ -356,10 +361,12 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
   let composer = null; // {record} while the annotation composer is open
+  let annotatableFocusIndex = 0;
   let stopStream = null;
   let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
 
   const compactNav = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches;
+  const compactComposer = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1279px)").matches;
 
   function focusPreview() {
     const target = (!emptyEl.hidden ? emptyEl.querySelector(".glosa-empty-title, p") : null)
@@ -378,6 +385,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     root.setAttribute("data-nav-open", String(open));
     navToggle.setAttribute("aria-expanded", String(open));
     navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
+    syncNavInteractivity();
     if (open && focusDrawer && compactNav()) {
       queueMicrotask(() => {
         const target = artifactList.querySelector('[role="treeitem"][aria-current="page"]')
@@ -390,6 +398,15 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       queueMicrotask(() => navToggle.focus({ preventScroll: true }));
     }
   }
+
+  function syncNavInteractivity() {
+    const hiddenDrawer = compactNav() && root.getAttribute("data-nav-open") !== "true";
+    sidebarEl.inert = hiddenDrawer;
+    if (hiddenDrawer) sidebarEl.setAttribute("aria-hidden", "true");
+    else sidebarEl.removeAttribute("aria-hidden");
+  }
+
+  syncNavInteractivity();
   navToggle.addEventListener("click", () => setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }));
   backdrop.addEventListener("click", () => setNavOpen(false, { restoreFocus: true }));
 
@@ -478,11 +495,14 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     if (loading || modeState.mode !== "annotate" || !currentArtifact || currentArtifact.class === "F") return;
     annotateInstructions.hidden = false;
     contentEl.setAttribute("aria-describedby", annotateInstructions.id);
-    for (const block of contentEl.querySelectorAll(":scope > [data-line]")) {
-      if (!block.textContent.trim()) continue;
+    const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]"))
+      .filter((block) => block.textContent.trim());
+    const focusedIndex = blocks.indexOf(document.activeElement);
+    if (focusedIndex >= 0) annotatableFocusIndex = focusedIndex;
+    annotatableFocusIndex = Math.min(annotatableFocusIndex, Math.max(0, blocks.length - 1));
+    for (const [index, block] of blocks.entries()) {
       block.classList.add("glosa-annotatable-block");
-      block.setAttribute("tabindex", "0");
-      block.setAttribute("aria-describedby", annotateInstructions.id);
+      block.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
     }
   }
 
@@ -578,7 +598,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     composer = { record, returnFocus, draft: "", error: "", submitting: false };
     // Compact (bottom-tray) widths: keep the selected passage visible in the unobscured upper
     // area before the tray covers the bottom of the window (brief §7.3).
-    if (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches) {
+    if (compactComposer()) {
       const anchorNode = window.getSelection()?.anchorNode;
       const anchorEl = anchorNode && (anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement);
       anchorEl?.scrollIntoView?.({ block: "center" });
@@ -1030,6 +1050,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       return;
     }
 
+    const previousMode = modeState.mode;
     let next = modeReducer(modeState, { type: "set_mode", mode });
     if (next.blocked) {
       // The dialog is async; park the blocked state and settle when the user answers.
@@ -1049,6 +1070,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     modeState = next;
     renderModeBar();
     renderContent();
+    if (modeState.mode === "edit" && previousMode !== "edit") mainEl.scrollTop = 0;
   }
 
   editArea.addEventListener("input", () => {
@@ -1140,9 +1162,26 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // focus target. Enter/Space selects that block and opens the exact same composer as a pointer
   // selection, so annotation composition never depends on drag-selection alone.
   contentEl.addEventListener("keydown", (event) => {
-    if ((event.key !== "Enter" && event.key !== " ") || modeState.mode !== "annotate") return;
     const block = event.target;
     if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
+    if (modeState.mode !== "annotate") return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const current = Math.max(0, blocks.indexOf(block));
+      const next = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? blocks.length - 1
+          : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
+      annotatableFocusIndex = next;
+      for (const [index, candidate] of blocks.entries()) {
+        candidate.setAttribute("tabindex", index === next ? "0" : "-1");
+      }
+      blocks[next]?.focus();
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     const textNodes = [];
@@ -1161,6 +1200,15 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     selection?.addRange(range);
     const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
     if (record) openComposer(record, { returnFocus: block });
+  });
+  contentEl.addEventListener("focusin", (event) => {
+    const block = event.target;
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    annotatableFocusIndex = Math.max(0, blocks.indexOf(block));
+    for (const [index, candidate] of blocks.entries()) {
+      candidate.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+    }
   });
 
   // ⌘1/2/3 mode switching (brief §9); Escape in the composer input is handled by the composer.
@@ -1182,6 +1230,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // Card alignment depends on wrapped-line geometry — recompute cards AND gutter markers when
   // the window reflows (a resize can also cross the side-margin breakpoint either way).
   const onResize = () => {
+    syncNavInteractivity();
     layoutMargin();
     renderMarkers();
   };
@@ -1195,7 +1244,9 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   historyToggle.addEventListener("click", () => {
-    historyVisible = !historyVisible;
+    const nextVisible = !historyVisible;
+    if (nextVisible && conversationVisible) setConversationVisible(false);
+    historyVisible = nextVisible;
     historyEl.hidden = !historyVisible;
     historyToggle.setAttribute("aria-expanded", String(historyVisible));
     renderHistory();
@@ -1228,7 +1279,13 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   conversationToggle.addEventListener("click", () => {
-    setConversationVisible(!conversationVisible);
+    const nextVisible = !conversationVisible;
+    if (nextVisible && historyVisible) {
+      historyVisible = false;
+      historyEl.hidden = true;
+      historyToggle.setAttribute("aria-expanded", "false");
+    }
+    setConversationVisible(nextVisible);
   });
 
   function markCurrent(listEl, key) {
