@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa open [dir]` (A6 §F26).
+// P5.1 / issue #46 — `glosa open [target] [focus]` (A6 §F26).
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { printOpenResult, runOpen, type OpenDeps } from "../src/open.ts";
-import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
+import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { captureStdout } from "./test-utils.ts";
 
 let dirs: string[] = [];
@@ -35,6 +35,7 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
     platform: () => "darwin",
     dirExists: () => true,
     fileExists: () => false,
+    isRegularFile: () => false,
     ...overrides,
   };
   return { deps, client, browserCalls };
@@ -58,7 +59,7 @@ describe("glosa open", () => {
   });
 
   test("directory does not exist -> exit 2 (usage)", async () => {
-    const { deps } = makeDeps({ dirExists: () => false });
+    const { deps } = makeDeps({ dirExists: () => false, fileExists: () => false, isRegularFile: () => false });
     const result = await runOpen("/no/such/dir/at/all", deps);
     expect(result.exitCode).toBe(2);
     expect(result.ok).toBe(false);
@@ -76,7 +77,7 @@ describe("glosa open", () => {
     expect(result.error?.kind).toBe("daemon_unreachable");
   });
 
-  test("success: registers the workspace, mints/reuses the token, opens the browser at #t=<token>", async () => {
+  test("success: registers the workspace, mints/reuses the token, opens the browser", async () => {
     const dir = freshDir();
     const { deps, client, browserCalls } = makeDeps();
     client.openWorkspaceResult = { slug: "abc123", path: dir };
@@ -86,9 +87,16 @@ describe("glosa open", () => {
     expect(result.exitCode).toBe(0);
     expect(result.ok).toBe(true);
     expect(result.data.slug).toBe("abc123");
+    expect(result.data.surface).toBe("workspace");
+    expect(result.data.mode).toBe("preview");
+    expect(result.data.preview).toBe(false);
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
     expect(browserCalls).toHaveLength(1);
-    expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#t=test-token-abc");
+    expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#");
+    expect(browserCalls[0]).toContain("t=test-token-abc");
+    expect(browserCalls[0]).toContain("surface=workspace");
+    expect(browserCalls[0]).toContain("mode=preview");
+    expect(browserCalls[0]).not.toContain("lock=");
   });
 
   test("URL mode registers the workspace and returns its URL without opening a browser", async () => {
@@ -99,7 +107,7 @@ describe("glosa open", () => {
     const result = await runOpen(dir, deps, { launchBrowser: false });
 
     expect(result.exitCode).toBe(0);
-    expect(result.data.url).toBe("http://127.0.0.1:4646/#t=test-token-abc");
+    expect(result.data.url).toContain("t=test-token-abc");
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
     expect(browserCalls).toHaveLength(0);
   });
@@ -116,10 +124,11 @@ describe("glosa open", () => {
     });
   });
 
-  test("a FILE argument is resolved by the daemon and deep-linked to its representative artifact", async () => {
+  test("a FILE argument opens as a document surface and deep-links the artifact", async () => {
     const { deps, client, browserCalls } = makeDeps({
       dirExists: (d) => d === "/ws/essays",
       fileExists: (p) => p === "/ws/essays/07-manuscript.md",
+      isRegularFile: (p) => p === "/ws/essays/07-manuscript.md",
     });
     client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays", focus: "07-manuscript.md" };
 
@@ -127,33 +136,124 @@ describe("glosa open", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.data.focus).toBe("07-manuscript.md");
+    expect(result.data.surface).toBe("document");
     expect(client.calls[0]).toMatchObject({
       method: "openWorkspace",
       args: ["/ws/essays/07-manuscript.md"],
     });
-    expect(browserCalls[0]).toContain("#t=test-token-abc&w=essays-abc&a=07-manuscript.md");
+    expect(browserCalls[0]).toContain("t=test-token-abc");
+    expect(browserCalls[0]).toContain("w=essays-abc");
+    expect(browserCalls[0]).toContain("a=07-manuscript.md");
+    expect(browserCalls[0]).toContain("surface=document");
   });
 
-  test("a directory argument keeps the plain fragment — no w/a params", async () => {
+  test("--workspace on a lone file forces workspace surface", async () => {
+    const { deps, browserCalls } = makeDeps({
+      dirExists: () => false,
+      fileExists: (p) => p === "/tmp/lone.md",
+      isRegularFile: (p) => p === "/tmp/lone.md",
+    });
+    const result = await runOpen("/tmp/lone.md", deps, { surface: "workspace" });
+    expect(result.ok).toBe(true);
+    expect(result.data.surface).toBe("workspace");
+    expect(browserCalls[0]).toContain("surface=workspace");
+  });
+
+  test("--document on a directory is a usage error", async () => {
     const dir = freshDir();
-    const { deps, browserCalls } = makeDeps();
-    await runOpen(dir, deps);
-    expect(browserCalls[0]).not.toContain("&a=");
-    expect(browserCalls[0]).not.toContain("&w=");
+    const { deps } = makeDeps({ dirExists: () => true, isRegularFile: () => false });
+    const result = await runOpen(dir, deps, { surface: "document" });
+    expect(result.exitCode).toBe(2);
+    expect(result.ok).toBe(false);
   });
 
-  test("URL mode preserves a FILE deep-link without opening a browser", async () => {
-    const { deps, client, browserCalls } = makeDeps({
+  test("two-arg open <dir> <file> validates focus through the daemon", async () => {
+    const { deps, client } = makeDeps({
       dirExists: (d) => d === "/ws/essays",
       fileExists: (p) => p === "/ws/essays/07-manuscript.md",
+      isRegularFile: (p) => p === "/ws/essays/07-manuscript.md",
     });
     client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays", focus: "07-manuscript.md" };
 
-    const result = await runOpen("/ws/essays/07-manuscript.md", deps, { launchBrowser: false });
+    const result = await runOpen("/ws/essays", deps, { focus: "07-manuscript.md" });
 
-    expect(result.data.url).toBe("http://127.0.0.1:4646/#t=test-token-abc&w=essays-abc&a=07-manuscript.md");
-    expect(result.data.focus).toBe("07-manuscript.md");
-    expect(browserCalls).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    expect(result.data.surface).toBe("workspace");
+    expect(client.calls[0]).toEqual({
+      method: "openWorkspace",
+      args: ["/ws/essays", { focus: "/ws/essays/07-manuscript.md" }],
+    });
+  });
+
+  test("--document with a second positional is a usage error", async () => {
+    const { deps } = makeDeps({
+      dirExists: () => true,
+      isRegularFile: () => true,
+    });
+    const result = await runOpen("/ws", deps, { focus: "a.md", surface: "document" });
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("--preview locks the visit and emits lock=preview", async () => {
+    const dir = freshDir();
+    const { deps, browserCalls } = makeDeps();
+    const result = await runOpen(dir, deps, { previewLock: true });
+    expect(result.data.preview).toBe(true);
+    expect(result.data.mode).toBe("preview");
+    expect(browserCalls[0]).toContain("lock=preview");
+  });
+
+  test("--bind success records bound_session", async () => {
+    const dir = freshDir();
+    const { deps, client } = makeDeps();
+    const result = await runOpen(dir, deps, { bindSessionId: "sess-1", launchBrowser: false });
+    expect(result.ok).toBe(true);
+    expect(result.data.bound_session).toBe("sess-1");
+    expect(client.calls.some((c) => c.method === "bindSession")).toBe(true);
+  });
+
+  test("--bind failure is nonfatal: URL preserved, warning, exit 0", async () => {
+    const dir = freshDir();
+    const { deps, client } = makeDeps();
+    client.bindSessionError = apiError(404, {
+      type: "https://glosa.local/errors/not-found",
+      title: "unknown or not-live session",
+    });
+    const result = await runOpen(dir, deps, { bindSessionId: "dead", launchBrowser: false });
+    expect(result.exitCode).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.data.url).toBeTruthy();
+    expect(result.data.bound_session).toBeUndefined();
+    expect(result.warnings.some((w) => w.code === "bind-failed")).toBe(true);
+  });
+
+  test("--preview --bind emits preview-bind-conflict warning", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps();
+    const result = await runOpen(dir, deps, {
+      previewLock: true,
+      bindSessionId: "sess-1",
+      launchBrowser: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.warnings.some((w) => w.code === "preview-bind-conflict")).toBe(true);
+  });
+
+  test("redirected state_dir appears in successful open data", async () => {
+    const { deps, client } = makeDeps({
+      dirExists: () => false,
+      fileExists: () => true,
+      isRegularFile: () => true,
+    });
+    client.openWorkspaceResult = {
+      slug: "loose",
+      path: "/tmp/parent",
+      focus: "note.md",
+      kind: "loose-file",
+      state_dir: "/tmp/fake-glosa-home/state/abc",
+    };
+    const result = await runOpen("/tmp/parent/note.md", deps, { launchBrowser: false });
+    expect(result.data.state_dir).toBe("/tmp/fake-glosa-home/state/abc");
   });
 
   test("URL mode plain output contains exactly the URL", async () => {
@@ -165,7 +265,7 @@ describe("glosa open", () => {
     expect(out).toBe(`${result.data.url}\n`);
   });
 
-  test("URL mode --json envelope has exactly the documented top-level keys", async () => {
+  test("URL mode --json envelope has surface/mode/preview fields", async () => {
     const dir = freshDir();
     const { deps, client, browserCalls } = makeDeps();
     client.openWorkspaceResult = { slug: "test-workspace", path: dir };
@@ -177,7 +277,14 @@ describe("glosa open", () => {
       ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
     );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "open", exit_code: 0 });
-    expect(parsed.data).toMatchObject({ slug: "test-workspace", path: dir, url: result.data.url });
+    expect(parsed.data).toMatchObject({
+      slug: "test-workspace",
+      path: dir,
+      url: result.data.url,
+      surface: "workspace",
+      mode: "preview",
+      preview: false,
+    });
     expect(browserCalls).toHaveLength(0);
   });
 });

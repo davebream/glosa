@@ -29,9 +29,16 @@ those are cross-referenced, not duplicated.
 - Pairing token: 128-bit, written once to `~/.glosa/token` (0600). SPA reads it once from the
   `#t=<token>` URL fragment (cleared from the URL bar immediately via `history.replaceState`,
   per F24), stores it in memory + `sessionStorage`, sends `Authorization: Bearer <token>` on
-  every request thereafter.
-- **Exactly one route is tokenless**: `GET /api/handshake`. Every other route, including SSE
-  streams, requires the Bearer header. Missing/invalid token → `401 unauthorized`.
+  every request thereafter. Presentation URLs from MCP `glosa_present` use `#p=<ephemeral>`
+  instead: a short-TTL (60s) single-use token redeemed once via
+  `POST /api/presentation-token/redeem` for the current durable pairing token. The durable token
+  never appears in MCP output, daemon logs, or subsequent focus URLs. Non-secret fragment state
+  (`w`, `a`, `surface`, `mode`, `lock`) is preserved across scrub for refresh-safe deep-links:
+  `#…&w=<slug>&a=<artifact>&surface=document|workspace&mode=preview|annotate|edit&lock=preview`.
+- **Exactly one route is tokenless**: `GET /api/handshake`. Presentation-token redemption is
+  Bearer-less but same-origin + Host-checked (`presentation-redeem` route class). Every other
+  route, including SSE streams, requires the Bearer header. Missing/invalid token → `401 unauthorized`.
+  Expired, unknown, and replayed presentation tokens also return `401` without revealing which.
 - SSE auth is via `fetch()`-streaming, never native `EventSource` (F02) — `EventSource` cannot
   attach custom headers, so it cannot carry the Bearer token. The client opens the stream with
   `fetch(url, {headers: {Authorization, 'Last-Event-ID': cursor}})` and reads
@@ -89,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.1", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.2", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`

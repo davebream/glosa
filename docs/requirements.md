@@ -188,10 +188,10 @@ the entry survives.
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.1: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.2: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
-  (full history), transcript stream, inbox/attention) — schemas, status codes, 1 MiB body cap,
+  (full history), transcript stream, inbox/attention, presentation-token mint/redeem) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 

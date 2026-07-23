@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Product-scoped MCP stdio server: durable inbox pull/get, metadata, session bind,
 // conversation acknowledgement, and the optional Claude Channel notification rung.
+import { existsSync, lstatSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -9,6 +10,7 @@ import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult, JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
+import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
@@ -25,9 +27,12 @@ import {
   metadataSetOutputSchema,
   metadataShowInputSchema,
   metadataShowOutputSchema,
+  presentInputSchema,
+  presentOutputSchema,
   sessionBindInputSchema,
   sessionBindOutputSchema,
 } from "./mcp-schemas.ts";
+import { runOpenPresentation } from "./open-presentation.ts";
 import { CLI_VERSION } from "./version.ts";
 
 interface PendingAck {
@@ -52,6 +57,7 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_metadata_clear",
   "glosa_session_bind",
   "glosa_conversation_ack",
+  "glosa_present",
 ] as const;
 
 const readOnlyClosedWorld = {
@@ -421,6 +427,94 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       if (!client.acknowledgeConversation) throw new Error("conversation acknowledgement is unavailable");
       await client.acknowledgeConversation(sessionId, messageId, "presented");
       return toolResult({ message_id: messageId, delivered: true });
+    },
+  );
+
+  server.registerTool(
+    "glosa_present",
+    {
+      title: "Present an artifact",
+      description:
+        "Register/open an absolute file path and return a ready SPA URL. Never launches a browser. mode preview is preview-locked; annotate/edit select an unlocked initial mode. Uses the MCP host session when available, otherwise session_id.",
+      inputSchema: presentInputSchema,
+      outputSchema: presentOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Present an artifact",
+      },
+    },
+    async ({ path, mode, session_id: requestedSession }) => {
+      const hostSession = deps.sessionId?.();
+      if (hostSession && requestedSession && requestedSession !== hostSession) {
+        throw new Error("session_id does not match the MCP host session");
+      }
+      const bindSessionId = hostSession ?? requestedSession;
+      const previewLock = mode === "preview";
+      const result = await runOpenPresentation(
+        path,
+        undefined,
+        "document",
+        {
+          createClient: deps.createApiClient,
+          ensureToken,
+          glosaHome,
+          openBrowser: () => {
+            throw new Error("glosa_present must never launch a browser");
+          },
+          platform: () => process.platform,
+          dirExists: (dir) => {
+            try {
+              return existsSync(dir) && lstatSync(dir).isDirectory();
+            } catch {
+              return false;
+            }
+          },
+          fileExists: (p) => {
+            try {
+              return existsSync(p) && lstatSync(p).isFile();
+            } catch {
+              return false;
+            }
+          },
+          isRegularFile: (p) => {
+            try {
+              const st = lstatSync(p);
+              return st.isFile() && !st.isSymbolicLink();
+            } catch {
+              return false;
+            }
+          },
+        },
+        {
+          launchBrowser: false,
+          usePresentationToken: true,
+          previewLock,
+          mode,
+          bindSessionId,
+        },
+      );
+      if (!result.ok) {
+        throw new Error(result.error?.message ?? "glosa_present failed");
+      }
+      const data = result.data;
+      if (!data.url || !data.slug || !data.path || data.surface === undefined || data.mode === undefined || data.preview === undefined) {
+        throw new Error("glosa_present returned an incomplete presentation payload");
+      }
+      if (data.url.includes("#t=") || /[?&#]t=/.test(data.url)) {
+        throw new Error("glosa_present must not return the durable pairing token");
+      }
+      return toolResult({
+        url: data.url,
+        slug: data.slug,
+        path: data.path,
+        ...(data.focus ? { focus: data.focus } : {}),
+        surface: data.surface,
+        mode: data.mode,
+        preview: data.preview,
+        ...(data.bound_session ? { bound_session: data.bound_session } : {}),
+        ...(data.state_dir ? { state_dir: data.state_dir } : {}),
+        warnings: result.warnings,
+      });
     },
   );
 

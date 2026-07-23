@@ -116,12 +116,21 @@ export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
  * because `glosa open` needs it to build the `http://127.0.0.1:<port>/#t=<token>` pairing URL —
  * without this, `runOpen` would have to re-run `ensureDaemon()` itself just to rediscover a port
  * this client already resolved a moment earlier. */
+export interface OpenWorkspaceResult {
+  slug: string;
+  path: string;
+  focus?: string;
+  kind?: "directory" | "loose-file";
+  /** Absolute redirected state directory when the registration stores its bus under GLOSA_HOME. */
+  state_dir?: string;
+}
+
 export interface GlosaApiClient {
   readonly port: number;
   openWorkspace(
     path: string,
-    opts?: { externalState?: boolean },
-  ): Promise<{ slug: string; path: string; focus?: string }>;
+    opts?: { externalState?: boolean; focus?: string },
+  ): Promise<OpenWorkspaceResult>;
   resolveEntry(
     path: string,
     entry: string,
@@ -144,6 +153,8 @@ export interface GlosaApiClient {
   getMetadata?(path: string): Promise<WorkspaceMetadataDescriptor | null>;
   clearMetadata?(path: string): Promise<{ cleared: boolean }>;
   bindSession?(path: string, sessionId: string): Promise<{ bound: true; session_id: string }>;
+  /** Mint a short-TTL single-use presentation token for MCP/present URLs (`p=`). */
+  mintPresentationToken?(): Promise<{ token: string; expires_in_s: number }>;
 }
 
 /** The real `GlosaApiClient` — `ensureDaemon()` once per construction (find-or-spawn, R1), then an
@@ -183,12 +194,13 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
 
   async function openWorkspace(
     path: string,
-    opts: { externalState?: boolean } = {},
-  ): Promise<{ slug: string; path: string; focus?: string }> {
+    opts: { externalState?: boolean; focus?: string } = {},
+  ): Promise<OpenWorkspaceResult> {
     return (
       await call("POST", "/api/workspaces/open", {
         path,
         ...(opts.externalState ? { external_state: true } : {}),
+        ...(opts.focus ? { focus: opts.focus } : {}),
       })
     ).json();
   }
@@ -267,6 +279,9 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
       return (
         await call("POST", `/w/${encodeURIComponent(workspace.slug)}/session-binding`, { session_id: sessionId })
       ).json();
+    },
+    async mintPresentationToken() {
+      return (await call("POST", "/api/presentation-token/mint", {})).json();
     },
   };
 }

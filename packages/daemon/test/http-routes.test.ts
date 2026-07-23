@@ -184,9 +184,47 @@ describe("A1 §5 route catalog", () => {
     const entry = workspaceIndex.getBySlug(opened.slug)!;
     expect(entry.bus_path).toBe(join(home, "state", entry.registration_id));
     expect(existsSync(join(externalRoot, ".glosa"))).toBe(false);
+    expect(opened.state_dir).toBe(entry.bus_path);
 
     await busRegistry.close(entry);
     rmSync(externalRoot, { recursive: true, force: true });
+  });
+
+  test("presentation-token mint + redeem is single-use; replay and foreign Origin fail closed", async () => {
+    const { PresentationTokenStore } = await import("../src/presentation-token.ts");
+    ctx.presentationTokenStore = new PresentationTokenStore();
+    fetchFn = createApiFetch(ctx);
+
+    const mint = await fetchFn(
+      stateChangingReq("/api/presentation-token/mint", { method: "POST", body: "{}" }),
+    );
+    expect(mint.status).toBe(200);
+    const minted = await mint.json();
+    expect(minted.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(minted.expires_in_s).toBe(60);
+
+    const redeemReq = (token: string, origin?: string) => {
+      const headers = new Headers({
+        Host: `127.0.0.1:${PORT}`,
+        "Content-Type": "application/json",
+        Origin: origin ?? `http://127.0.0.1:${PORT}`,
+      });
+      return new Request(`http://127.0.0.1:${PORT}/api/presentation-token/redeem`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ token }),
+      });
+    };
+
+    const redeemed = await fetchFn(redeemReq(minted.token));
+    expect(redeemed.status).toBe(200);
+    expect(await redeemed.json()).toEqual({ token: TOKEN });
+
+    const replay = await fetchFn(redeemReq(minted.token));
+    expect(replay.status).toBe(401);
+
+    const foreign = await fetchFn(redeemReq("anything", "http://evil.example"));
+    expect(foreign.status).toBe(403);
   });
 
   test("metadata routes are authenticated, durable, replace by same id, conflict by different id, and clear idempotently", async () => {

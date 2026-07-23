@@ -3,7 +3,7 @@
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, focusHash, readFocus, scrubToken, selectScreen, writeFocus } from "../src/bootstrap.js";
+import { CONTRACT_VERSION, focusHash, readFocus, readRoute, scrubSecrets, scrubToken, selectScreen, writeFocus } from "../src/bootstrap.js";
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -100,6 +100,66 @@ describe("writeFocus — reflects on-screen focus into the address bar", () => {
     writeFocus(loc, history as unknown as History, { slug: null, artifact: null });
 
     expect(history.calls[0]![2]).toBe("/");
+  });
+});
+
+describe("readRoute — surface/mode/lock + secrets", () => {
+  test("parses surface, mode, lock, and both pairing secret forms", () => {
+    expect(
+      readRoute({
+        hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=annotate&lock=preview",
+      }),
+    ).toEqual({
+      slug: "essays-abc",
+      artifact: "note.md",
+      surface: "document",
+      mode: "annotate",
+      previewLock: true,
+      durableToken: "SECRET",
+      presentationToken: null,
+    });
+    expect(readRoute({ hash: "#p=PRESENT&w=x&a=y&surface=workspace&mode=preview" }).presentationToken).toBe(
+      "PRESENT",
+    );
+  });
+});
+
+describe("scrubSecrets — preserves non-secret route state", () => {
+  test("scrubs t= while keeping w/a/surface/mode/lock", () => {
+    const loc = {
+      hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=preview&lock=preview",
+      pathname: "/",
+      search: "",
+    };
+    const session = fakeStorage();
+    const history = fakeHistory();
+    const route = readRoute(loc);
+
+    const result = scrubSecrets(loc, session, history as unknown as History, route);
+
+    expect(result).toBe("SECRET");
+    expect(session.getItem("glosa_token")).toBe("SECRET");
+    const [, , url] = history.calls[0]!;
+    expect(url).toBe("/#w=essays-abc&a=note.md&surface=document&mode=preview&lock=preview");
+    expect(url).not.toContain("t=");
+    expect(url).not.toContain("SECRET");
+  });
+
+  test("redeems p= via caller-supplied durable token and scrubs p=", () => {
+    const loc = { hash: "#p=PRESENT&w=essays-abc&a=note.md&surface=document&mode=edit", pathname: "/", search: "" };
+    const session = fakeStorage();
+    const history = fakeHistory();
+    const route = readRoute(loc);
+
+    const result = scrubSecrets(loc, session, history as unknown as History, route, "DURABLE");
+
+    expect(result).toBe("DURABLE");
+    expect(session.getItem("glosa_token")).toBe("DURABLE");
+    const [, , url] = history.calls[0]!;
+    expect(url).not.toContain("p=");
+    expect(url).not.toContain("PRESENT");
+    expect(url).toContain("surface=document");
+    expect(url).toContain("mode=edit");
   });
 });
 

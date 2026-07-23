@@ -161,3 +161,43 @@ describe("authorizeRequest — navigation", () => {
     expect(authorizeRequest(req(), { routeClass: "navigation", port: PORT, token: null })).toEqual({ ok: true });
   });
 });
+
+describe("authorizeRequest — presentation-redeem", () => {
+  test("self Origin, no Bearer → allowed", () => {
+    expect(
+      authorizeRequest(req({ origin: SELF_ORIGIN }), {
+        routeClass: "presentation-redeem",
+        port: PORT,
+        token: TOKEN,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test("missing Origin → 403", () => {
+    expect(authorizeRequest(req(), { routeClass: "presentation-redeem", port: PORT, token: TOKEN })).toEqual({
+      ok: false,
+      status: 403,
+      slug: "invalid-origin",
+    });
+  });
+
+  test("foreign Origin → 403 even with a Bearer", () => {
+    expect(
+      authorizeRequest(req({ origin: FOREIGN_ORIGIN, bearer: TOKEN }), {
+        routeClass: "presentation-redeem",
+        port: PORT,
+        token: TOKEN,
+      }),
+    ).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+
+  test("Sec-Fetch-Site: cross-site → 403", () => {
+    expect(
+      authorizeRequest(req({ origin: SELF_ORIGIN, secFetchSite: "cross-site" }), {
+        routeClass: "presentation-redeem",
+        port: PORT,
+        token: TOKEN,
+      }),
+    ).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+});

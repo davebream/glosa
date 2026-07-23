@@ -22,6 +22,7 @@ import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { internalErrorResponse } from "./problem.ts";
 import { TokenAuthority } from "./token.ts";
 import { CapabilityStore } from "./capability.ts";
+import { PresentationTokenStore } from "./presentation-token.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
@@ -145,7 +146,11 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // independent stores would mean every capability 404s on the very listener that's supposed to
   // serve it.
   const capabilityStore = new CapabilityStore();
-  tokenAuthority.subscribe(() => capabilityStore.clear());
+  const presentationTokenStore = new PresentationTokenStore();
+  tokenAuthority.subscribe(() => {
+    capabilityStore.clear();
+    presentationTokenStore.clear();
+  });
 
   const apiFetch = createApiFetch({
     port,
@@ -157,6 +162,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
     capabilityStore,
+    presentationTokenStore,
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,

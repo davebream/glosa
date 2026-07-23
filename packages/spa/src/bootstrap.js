@@ -8,7 +8,7 @@
 //
 // Kept in lockstep with the daemon's CONTRACT_VERSION (packages/daemon/src/contract.ts) — bump
 // alongside a real wire-contract change, not on every daemon restart.
-export const CONTRACT_VERSION = "1.0";
+export const CONTRACT_VERSION = "1.2";
 
 // P3.3 — the class-R viewer (workspace/artifact sidebar + Preview/Annotate/Edit). A static
 // top-level import, same as every other module here: no dynamic `import()` needed since this
@@ -30,48 +30,82 @@ const MESSAGES = {
   mismatch: "contract mismatch — reload the page.",
 };
 
-/**
- * The FIRST thing bootstrap does (A3 §3/F24): read the pairing token out of the `#t=<token>` URL
- * fragment (A1 §2), stash it in sessionStorage — never localStorage, it's bounded to the tab's
- * lifetime — and strip the fragment from the address bar via `history.replaceState` before
- * anything else (render, error handling) runs. Takes `location`/`storage`/`history` as params so
- * a test can pass fakes instead of touching a real browser. No `#t=` present → returns whatever
- * token is already stored, or null; never throws.
- */
-export function scrubToken(loc, storage, history) {
-  const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
-  const token = new URLSearchParams(hash).get("t");
-  if (token) {
-    storage.setItem("glosa_token", token);
-    history.replaceState(null, "", loc.pathname + loc.search);
-    return token;
-  }
-  return storage.getItem("glosa_token");
-}
+const SURFACES = new Set(["document", "workspace"]);
+const MODES = new Set(["preview", "annotate", "edit"]);
 
 /**
- * The CLI's deep-link (`glosa open <file>` → `#t=…&w=<slug>&a=<artifact>`): which workspace to
- * select and which artifact to focus on load. MUST be read before `scrubToken` strips the
- * fragment. Absent params → both null (plain `glosa open <dir>` behavior).
+ * Read non-secret route state and pairing secrets from the URL fragment. MUST run before
+ * `scrubSecrets` strips `t`/`p`. Absent params → nulls (plain workspace open behavior).
  */
-export function readFocus(loc) {
+export function readRoute(loc) {
   const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
   const params = new URLSearchParams(hash);
-  return { slug: params.get("w"), artifact: params.get("a") };
+  const surfaceRaw = params.get("surface");
+  const modeRaw = params.get("mode");
+  const lockRaw = params.get("lock");
+  return {
+    slug: params.get("w"),
+    artifact: params.get("a"),
+    surface: SURFACES.has(surfaceRaw) ? surfaceRaw : null,
+    mode: MODES.has(modeRaw) ? modeRaw : null,
+    previewLock: lockRaw === "preview",
+    durableToken: params.get("t"),
+    presentationToken: params.get("p"),
+  };
+}
+
+/** @deprecated Prefer `readRoute` — kept as a thin alias for existing tests/callers. */
+export function readFocus(loc) {
+  const route = readRoute(loc);
+  return { slug: route.slug, artifact: route.artifact };
 }
 
 /**
- * The inverse of `readFocus`: the `#w=<slug>&a=<artifact>` fragment for a given focus, or `""`
- * when both are absent (workspace-only or nothing selected). Rebuilt from scratch on every call,
- * so it can carry ONLY `w`/`a` — never `t=`. That is the load-bearing guard: live-reflecting focus
- * into the address bar (see `writeFocus`) can't re-expose the pairing token that `scrubToken`
- * deliberately stripped (A3 §3/F24). Kept in the fragment, never the query string, so focus stays
- * off the wire and out of the daemon's request path (A1 §2).
+ * The FIRST thing bootstrap does (A3 §3/F24): read pairing secrets (`t=` durable or `p=`
+ * presentation) out of the URL fragment, stash the durable token in sessionStorage — never
+ * localStorage — and rewrite the address bar to keep only non-secret route state before anything
+ * else (render, error handling) runs. Takes `location`/`storage`/`history` as params so a test
+ * can pass fakes instead of touching a real browser.
+ *
+ * When `p=` is present, the caller must redeem it first and pass the durable token as
+ * `redeemedToken`; this function never performs network I/O itself.
+ *
+ * @param {string | null} [redeemedToken]
  */
-export function focusHash({ slug, artifact } = {}) {
+export function scrubSecrets(loc, storage, history, route = readRoute(loc), redeemedToken = null) {
+  const durable = redeemedToken || route.durableToken;
+  const hadSecret = Boolean(route.durableToken || route.presentationToken || redeemedToken);
+  if (durable) storage.setItem("glosa_token", durable);
+  if (hadSecret) {
+    const nextHash = focusHash({
+      slug: route.slug,
+      artifact: route.artifact,
+      surface: route.surface,
+      mode: route.mode,
+      previewLock: route.previewLock,
+    });
+    history.replaceState(null, "", loc.pathname + loc.search + nextHash);
+  }
+  return durable || storage.getItem("glosa_token");
+}
+
+/** @deprecated Prefer `scrubSecrets`. */
+export function scrubToken(loc, storage, history) {
+  return scrubSecrets(loc, storage, history);
+}
+
+/**
+ * The inverse of `readRoute`'s non-secret fields: rebuild `#w=&a=&surface=&mode=&lock=` (never
+ * `t=` / `p=`). That is the load-bearing guard: live-reflecting focus into the address bar can't
+ * re-expose pairing secrets that bootstrap deliberately stripped (A3 §3/F24).
+ */
+export function focusHash({ slug, artifact, surface, mode, previewLock } = {}) {
   const params = new URLSearchParams();
   if (slug) params.set("w", slug);
   if (artifact) params.set("a", artifact);
+  if (surface) params.set("surface", surface);
+  if (mode) params.set("mode", mode);
+  if (previewLock) params.set("lock", "preview");
   const query = params.toString();
   return query ? `#${query}` : "";
 }
@@ -79,9 +113,8 @@ export function focusHash({ slug, artifact } = {}) {
 /**
  * Reflect the on-screen focus into the address bar via `history.replaceState` — no new history
  * entry per artifact, so reload/refresh restores the view and the URL stays shareable. Rebuilds
- * `pathname + search + focusHash(...)` from scratch (same shape `scrubToken` leaves behind), which
- * is why the token can never reappear. Takes `loc`/`history` as params for the same
- * test-without-a-browser reason as `scrubToken`.
+ * `pathname + search + focusHash(...)` from scratch (same shape scrub leaves behind), which is
+ * why secrets can never reappear.
  */
 export function writeFocus(loc, history, focus) {
   history.replaceState(null, "", loc.pathname + loc.search + focusHash(focus));
@@ -89,7 +122,7 @@ export function writeFocus(loc, history, focus) {
 
 /**
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
- * or null if the fetch failed/threw. `token` is whatever `scrubToken` returned.
+ * or null if the fetch failed/threw. `token` is whatever scrub returned.
  */
 export function selectScreen(handshake, token) {
   if (!handshake) return "down";
@@ -114,9 +147,31 @@ function render(screen) {
   }
 }
 
+async function redeemPresentationToken(presentationToken) {
+  const res = await fetch("/api/presentation-token/redeem", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: window.location.origin,
+    },
+    body: JSON.stringify({ token: presentationToken }),
+  });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return typeof body?.token === "string" ? body.token : null;
+}
+
 async function main() {
-  const focus = readFocus(window.location); // before scrubToken — it strips the fragment
-  const token = scrubToken(window.location, window.sessionStorage, window.history);
+  const route = readRoute(window.location); // before scrub — it strips secrets from the fragment
+  let redeemed = null;
+  if (route.presentationToken) {
+    try {
+      redeemed = await redeemPresentationToken(route.presentationToken);
+    } catch {
+      redeemed = null;
+    }
+  }
+  const token = scrubSecrets(window.location, window.sessionStorage, window.history, route, redeemed);
 
   let handshake = null;
   try {
@@ -135,11 +190,23 @@ async function main() {
   }
   if (screen === "ready") {
     const readyEl = document.querySelector('[data-screen="ready"]');
+    const surface = route.surface ?? "workspace";
+    const initialMode = route.mode ?? "preview";
+    const previewLock = Boolean(route.previewLock);
     mountApp(readyEl, {
-      initialSlug: focus.slug ?? undefined,
-      initialArtifact: focus.artifact ?? undefined,
+      initialSlug: route.slug ?? undefined,
+      initialArtifact: route.artifact ?? undefined,
+      surface,
+      initialMode,
+      previewLock,
       appearance,
-      onFocusChange: (next) => writeFocus(window.location, window.history, next),
+      onFocusChange: (next) =>
+        writeFocus(window.location, window.history, {
+          ...next,
+          surface,
+          mode: next.mode ?? initialMode,
+          previewLock,
+        }),
     });
   }
 }

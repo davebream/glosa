@@ -47,6 +47,10 @@ import { listCheckpoints } from "./checkpoints.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { createJournalStreamResponse } from "./stream.ts";
 import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
+import {
+  PRESENTATION_TOKEN_TTL_MS,
+  type PresentationTokenStore,
+} from "./presentation-token.ts";
 import { serveClassFDocument } from "./classf-serve.ts";
 import { confineTranscriptPath } from "./transcript/root.ts";
 import { createTranscriptStreamResponse } from "./transcript/stream.ts";
@@ -140,6 +144,9 @@ export interface ApiContext {
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
   capabilityStore: CapabilityStore;
+  /** Short-TTL single-use presentation tokens for MCP `glosa_present` / `#p=` deep-links (A3).
+   * Optional only for narrow tests that never mint or redeem; production always wires it. */
+  presentationTokenStore?: PresentationTokenStore;
   /** P6.1 — the daemon's one `AdapterRegistry` (R7). OPTIONAL and defaulted to "no adapter" by
    * every call site below (`ctx.adapterRegistry?.forWorkspace(root)`) rather than required, so
    * every existing test's hand-built `ApiContext` literal keeps compiling unchanged — an absent
@@ -1458,15 +1465,21 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
   if (typeof rawPath !== "string" || rawPath.length === 0) {
     return problem(400, "validation-failed", "path is required", undefined, url.pathname);
   }
+  const focus = typeof parsed?.focus === "string" && parsed.focus.length > 0 ? parsed.focus : undefined;
   try {
     const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, {
       externalState: parsed?.external_state === true,
+      ...(focus ? { focus } : {}),
     });
     await resolveBus(ctx, opened.entry);
+    const localBus = join(opened.entry.worktree_path, ".glosa");
+    const redirected = opened.entry.bus_path !== localBus;
     return Response.json({
       slug: opened.entry.slug,
       path: opened.entry.worktree_path,
+      kind: opened.entry.kind,
       ...(opened.focus ? { focus: opened.focus } : {}),
+      ...(redirected ? { state_dir: opened.entry.bus_path } : {}),
     });
   } catch (error) {
     if (error instanceof WorkspaceOpenError) {
@@ -1475,6 +1488,46 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     }
     throw error;
   }
+}
+
+/** `POST /api/presentation-token/mint` — CLI/MCP mint a short-TTL single-use `p=` token. */
+function handlePresentationTokenMint(ctx: ApiContext, pathname: string): Response {
+  const store = ctx.presentationTokenStore;
+  if (!store) {
+    return problem(500, "internal", "presentation token store is unavailable", undefined, pathname);
+  }
+  const minted = store.mint();
+  return Response.json({
+    token: minted.token,
+    expires_in_s: PRESENTATION_TOKEN_TTL_MS / 1000,
+  });
+}
+
+/** `POST /api/presentation-token/redeem` — SPA exchanges `p=` once for the durable pairing token.
+ * Expired, unknown, and replayed tokens all collapse to the same 401 (A3). */
+async function handlePresentationTokenRedeem(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const store = ctx.presentationTokenStore;
+  if (!store) {
+    return problem(500, "internal", "presentation token store is unavailable", undefined, url.pathname);
+  }
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const token =
+    typeof (body as { token?: unknown } | null)?.token === "string" ? (body as { token: string }).token : "";
+  if (!token || !store.redeem(token)) {
+    // Collapse unknown / expired / replayed into one 401 with no distinguishing detail.
+    return problem(401, "unauthorized", "invalid or expired presentation token", undefined, url.pathname);
+  }
+  const durable = currentToken(ctx.token);
+  if (!durable) {
+    return problem(401, "unauthorized", "daemon is unpaired", undefined, url.pathname);
+  }
+  return Response.json({ token: durable });
 }
 
 const RESOLVE_TERMINAL_OUTCOMES = new Set(["applied", "rejected", "stale"]);
@@ -2115,6 +2168,12 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && pathname === "/api/workspaces/open") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceOpen(ctx, req) };
   }
+  if (method === "POST" && pathname === "/api/presentation-token/mint") {
+    return { routeClass: "state-changing", handle: () => handlePresentationTokenMint(ctx, pathname) };
+  }
+  if (method === "POST" && pathname === "/api/presentation-token/redeem") {
+    return { routeClass: "presentation-redeem", handle: (req) => handlePresentationTokenRedeem(ctx, req) };
+  }
   if (method === "POST" && pathname === "/api/workspaces/resolve") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceResolve(ctx, req) };
   }
@@ -2369,6 +2428,7 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         // to the same signal; clearing here also closes the narrow mint-after-rotation race where
         // a stale request could otherwise create a capability after the generation subscriber ran.
         ctx.capabilityStore.clear();
+        ctx.presentationTokenStore?.clear();
         return withHeaders(
           problem(401, "unauthorized", "missing or invalid bearer token", undefined, url.pathname),
           csp,

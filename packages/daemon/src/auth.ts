@@ -8,7 +8,14 @@
 import { tokenMatches } from "./token.ts";
 import type { ProblemSlug } from "./problem.ts";
 
-export type RouteClass = "tokenless-handshake" | "authed-read" | "state-changing" | "navigation";
+export type RouteClass =
+  | "tokenless-handshake"
+  | "authed-read"
+  | "state-changing"
+  | "navigation"
+  /** SPA redeems a short-TTL `p=` token for the durable pairing token — Host+same-origin Origin,
+   * no Bearer (the caller does not have one yet). */
+  | "presentation-redeem";
 
 export type AuthorizeResult = { ok: true } | { ok: false; status: number; slug: ProblemSlug };
 
@@ -48,6 +55,16 @@ export function authorizeRequest(req: Request, opts: AuthorizeOptions): Authoriz
     // Reject only a present-and-foreign Origin; absent or self is fine (Bearer is the gate on
     // every other route — handshake has none to gate with).
     if (foreign) return { ok: false, status: 403, slug: "invalid-origin" };
+    return { ok: true };
+  }
+
+  if (routeClass === "presentation-redeem") {
+    // Same-origin only: Origin must be present and self. No Bearer — redemption is how the SPA
+    // obtains the durable pairing token after a `p=` deep-link.
+    if (origin === null || foreign) return { ok: false, status: 403, slug: "invalid-origin" };
+    if (req.headers.get("Sec-Fetch-Site") === "cross-site") {
+      return { ok: false, status: 403, slug: "invalid-origin" };
+    }
     return { ok: true };
   }
 
