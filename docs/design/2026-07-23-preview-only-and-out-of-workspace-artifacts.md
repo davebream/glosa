@@ -1,8 +1,9 @@
 # Pitch: preview-only opens and out-of-workspace artifacts
 
-Status: **proposal** — not a commitment. Per `AGENTS.md` and `CONTRIBUTING.md`, the next step for
-anything accepted here is a maintainer-approved GitHub issue plus a requirements/appendix delta.
-Nothing in this document changes the normative contract by itself.
+Status: **accepted direction** — maintainer decisions recorded below (2026-07-23). Per
+`AGENTS.md` and `CONTRIBUTING.md`, execution proceeds via one GitHub issue per increment, each
+carrying its requirements/appendix delta. Nothing in this document changes the normative
+contract by itself.
 
 ## Problem
 
@@ -110,30 +111,53 @@ require spec edits are called out.
   reviewable, reports are not") would be domain knowledge in the core — invariant 1 forbids it.
   A producer that wants a document presented read-only says so at open time.
 - MCP: there is currently **no open/present tool at all** — the seven tools are inbox/metadata/
-  binding/ack (`packages/cli/src/mcp-tools.ts`). Adding `glosa_present {path, mode}` raises one
-  real design question: should an agent tool call be able to pop a browser on the user's machine?
-  Recommended shape: the tool registers/opens the artifact and returns the ready URL; actually
-  launching a browser stays a CLI/human act, and "please look at this" travels through the
-  existing delivery ladder. Spec delta: A6 (CLI contract) + A1 (fragment contract) + the MCP tool
-  table.
+  binding/ack (`packages/cli/src/mcp-tools.ts`). **Decided:** `glosa_present {path, mode}` joins
+  the v1 MCP surface. Shape: the tool registers/opens the artifact and **returns the ready URL —
+  it never launches a browser itself**; presentation to the human travels through the existing
+  delivery ladder or a human click. Spec delta: A6 (CLI contract) + A1 (fragment contract) + the
+  MCP tool table.
 
-### 2. External-root workspaces: redirected state, bounded scope
+### 2. Three open modes; single-file opens stop promoting the parent directory
 
-For roots the user or producer flags as foreign (tool-owned, read-only, or just not-mine):
+A survey of how editors and writing tools handle "open a single file outside any project"
+(VS Code/Cursor empty window + `workspaceStorage/<hash>/`, JetBrains LightEdit, Zed single-file
+worktrees, Sublime global session state, Obsidian's explicit-vault requirement, Vim's
+`undodir//` convention) is unanimous on three points: no surveyed tool implicitly promotes a
+file's parent directory into a project; per-folder state lives in a global app dir keyed by
+path, not inside the opened folder; and where tools *do* write into folders (`.vscode/`,
+`.idea/`, `.obsidian/`), it happens only after explicit project designation — and is a chronic
+source of user complaints even then. glosa's current parent-dir promotion + `.glosa/`
+scaffolding on single-file open is the pattern the field rejected.
 
-- **State redirection.** Keep the workspace abstraction, but place the bus under
-  `GLOSA_HOME/state/<workspace-hash>/` instead of `<root>/.glosa/`. The daemon's single-writer
-  mutex, journal replay, and shadow-git (`--git-dir` redirected, `--work-tree` unchanged) all
-  survive; only the *location* of state moves. This is a real A4/A5 spec delta (F04's paths stop
-  being literally under the root) and needs a registry flag so both daemon and CLI resolve the
-  same bus location. Note the config chicken-and-egg: per-workspace overrides live in
-  `.glosa/config.json`, which for a foreign root must also live in the redirected state dir.
-- **Bounded promotion.** Allow registering an external root with an explicit artifact list (or a
-  much narrower matcher) instead of the full recursive matcher, so opening one plan does not
-  baseline a tool's entire data tree. The tracked-LIST plumbing already exists; this constrains
-  its input.
-- Default behavior for ordinary `glosa open` in ordinary directories stays exactly as today;
-  external-root is opt-in (flag or registry heuristic — maintainer call; see open questions).
+**Decided design — the argument shape is the intent:**
+
+```
+glosa open <dir>            --> workspace UX (sidebar, hierarchy), first file focused
+glosa open <dir> <file>     --> workspace UX, that file focused (today's deep-link)
+glosa open <file>           --> document UX: no sidebar, no multi-file chrome at all
+```
+
+Single-file open is a first-class presentation mode (Zed's model), not a degraded workspace.
+Under the hood, presentation is decoupled from state so provenance never forks:
+
+- **File inside an already-registered workspace root:** minimal document UI, but annotations,
+  edits, and journal entries flow into that workspace's existing bus and route via its existing
+  bindings. The same file must never accumulate two divergent journals (invariant 2).
+- **Genuinely loose file:** a bounded single-file registration — the tracked LIST contains just
+  that file — with the bus placed under `GLOSA_HOME/state/<workspace-hash>/` instead of
+  `<root>/.glosa/`. Nothing is ever written beside the file. The daemon's single-writer mutex,
+  journal replay, and shadow-git (`--git-dir` redirected, `--work-tree` unchanged) all survive;
+  only the *location* of state moves. A4/A5 spec delta (F04's paths stop being literally under
+  the root); the registry records the bus location so daemon and CLI resolve it identically.
+  Per-workspace config overrides for such registrations live in the redirected state dir
+  (`.glosa/config.json` cannot, since nothing is written to the root).
+- **Adoption rule:** if the parent directory is later opened as a full workspace, the daemon
+  migrates the redirected journal/shadow history into the workspace's bus — history follows the
+  document.
+- **Directory opens:** unchanged from today, with one addition — state redirection is also
+  available as an opt-in flag for foreign/tool-owned roots, and applies automatically when the
+  root is unwritable (a generic filesystem property, not domain knowledge; scaffolding would
+  fail there anyway).
 
 ### 3. One-step producer flow
 
@@ -153,21 +177,22 @@ between explicit binding existing and explicit binding being used.
 | 5 Local-first | Preserved — `GLOSA_HOME` state is still local; no new egress |
 | 6 One data-access module | Preserved — lock flag and present flow ride existing API + fragment |
 
-## Open questions for the maintainer
+## Decisions (maintainer, 2026-07-23)
 
-1. Is UI-level-only preview lock acceptable, or should the daemon also refuse annotation POSTs
-   for a locked open (which would require server-side per-open state)?
-2. External-root state redirection: opt-in flag only, or auto-detected (e.g. root is read-only /
-   under a known tool-data path)? Auto-detection flirts with domain knowledge in the core.
-3. Should `glosa_present` exist in v1's MCP surface at all, or is CLI-only enough until a real
-   pipeline needs it?
-4. Is a single-file workspace (artifact list of one) worth the registry special case, or is a
-   bounded matcher enough?
-5. Sequencing relative to the T8 gate — none of this should land before the release gate closes,
-   unless the maintainer wants preview-only in the rehearsal.
+1. **Preview lock is UI-only.** It expresses intent, not access control; the API keeps accepting
+   annotation POSTs for locked opens, and documentation must never present the lock as a
+   security boundary.
+2. **State redirection trigger:** opt-in flag, plus automatic redirection when the root is
+   unwritable. No tool-path heuristics in the core (invariant 1).
+3. **`glosa_present` ships in the v1 MCP surface**, URL-returning, never browser-launching.
+4. **Three open modes as above.** Single-file open = document UX (no sidebar, no multi-file
+   chrome); loose files get bounded registrations with `GLOSA_HOME`-redirected state; an owning
+   workspace's bus always wins over a parallel registration; adoption migrates history.
+5. **Sequencing: all increments land before the T8 gate closes**, so the manual rehearsal
+   exercises the new open-mode surface rather than the promotion behavior this document retires.
 
 ## Process
 
-If accepted in part or whole: file one GitHub issue per increment (1–3), each carrying its spec
-delta list (A1/A4/A5/A6 + requirements.md where governing text changes). This document then
-becomes background, not contract.
+One GitHub issue per increment (1–3), each carrying its spec delta list (A1/A4/A5/A6 +
+requirements.md where governing text changes). This document then becomes background, not
+contract.
