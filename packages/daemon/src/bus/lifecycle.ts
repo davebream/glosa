@@ -3,7 +3,7 @@
 // replay.ts's fold engine was left pluggable for; nothing in replay.ts, reconcile.ts, or the
 // dedup logic in `applyEvent` changes here — only WHAT a transition event does to `status`.
 //
-// D7 (event representation, pre-resolved by the team lead): A5 §F23 names distinct events per
+// A5 §F23 names distinct events per
 // transition (delivered/seen/resolved/done/staled/expired). P2.1 reserved, and P2.3 already
 // EMITS, the generic `transition_committed{to}` (+ `attention_committed{to}`, reserved). Rather
 // than add the named events, F23's names become the vocabulary of legal `to` VALUES + the guard

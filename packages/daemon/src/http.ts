@@ -72,7 +72,7 @@ export type BunServer = ReturnType<typeof Bun.serve>;
 // `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
 const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
 
-// Fixed allowlist of files servable under `GET /app/<file>` (D5/A3 §3: no path traversal — a
+// Fixed allowlist of files servable under `GET /app/<file>` (A3 §3: no path traversal — a
 // basename check alone isn't enough, so every servable file is named here explicitly; anything
 // not in this map 404s regardless of what else lives on disk under SPA_SRC_DIR).
 const SPA_ASSETS: Record<string, string> = {
@@ -138,7 +138,7 @@ export interface ApiContext {
   shutdownSignal?: AbortSignal;
 }
 
-/** The handshake body is a superset of P1.2's `HandshakeResponse` (D2): keeps
+/** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
  * `protocol_version`/`instance_id`/`pid`/`started_at` so `ensureDaemon`/`fetchHandshake` keep
  * working unchanged, and adds the A1 §5.1 fields the SPA needs (`contract_version` ===
  * `protocol_version` by this task's resolution, `daemon_version`, `paired`). */
@@ -237,7 +237,7 @@ function handleHandshake(ctx: ApiContext): () => Response {
 
 /** `GET /` — the SPA shell (P1.4). Navigation route class: the SPA hasn't read the pairing
  * fragment yet at this point, so this response carries no Bearer and must be non-sensitive
- * (A3 §4's navigation row) — it's static HTML, the token arrives client-side via `#t=` (D5). */
+ * (A3 §4's navigation row) — it's static HTML, and the token arrives client-side via `#t=`. */
 function serveShell(): Response {
   const html = readFileSync(join(SPA_SRC_DIR, "shell.html"), "utf8");
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -1814,14 +1814,14 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
       const url = new URL(req.url);
 
       // Host check runs first, unconditionally, before route lookup even knows a route class
-      // exists (A3 §4 Rule 1). Literal mismatch → 400, closed, no body — never 403 (D1).
+      // exists (A3 §4 Rule 1). Literal mismatch → 400, closed, no body — never 403.
       if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
 
       const route = matchApiRoute(ctx, req.method, url.pathname);
       if (!route) {
         // A foreign Origin is rejected even on a route that doesn't exist (A1 §1 "Origin
         // allowlisted first, regardless of route") — otherwise 403-on-real-route vs
-        // 404-on-fake-route is a route-enumeration side channel for a hostile page (D3).
+        // 404-on-fake-route is a route-enumeration side channel for a hostile page (A3 §4).
         if (isForeignOrigin(req, ctx.port)) {
           return withHeaders(problem(403, "invalid-origin", "origin not allowed", undefined, url.pathname), csp);
         }

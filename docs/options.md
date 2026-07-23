@@ -13,5 +13,3 @@ embed their packages or workflow logic.
 
 `WorkspaceMetadataDescriptor` v1 is intentionally small. New fields require a generic use case,
 an API version decision, validation and confinement rules, and preserved zero-adapter behavior.
-
-Historical exploration is retained under `docs/archive/`; it is not normative build input.

@@ -31,9 +31,9 @@ Required coverage groups:
 | Providers | Channels on/off, hook/MCP fallback, async rearm, explicit cross-directory binding |
 | Transcript | partial/corrupt/unknown events, resume/clear/compact, capped tool results, fail-soft UI |
 
-Before the manual pass, scan the live tree for private producer/domain names and private absolute paths.
-Exclude `docs/archive/`, `docs/research/`, and ignored `.context/` rehearsal data. Historical material is
-allowed only in the two historical documentation trees.
+Before the manual pass, scan every tracked file for private producer/domain names and private absolute
+paths. Rehearsal data is allowed only under ignored `.context/`; no private rehearsal material or
+private historical notes may enter the tracked tree.
 
 ## 2. Private rehearsal workspace
 

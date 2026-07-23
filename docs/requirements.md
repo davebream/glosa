@@ -4,8 +4,8 @@
 > See [`ROADMAP.md`](../ROADMAP.md) for accepted direction and its linked GitHub Project for current
 > execution status.
 
-**This is the authoritative build input for glosa v1.** It supersedes v1 in full
-(`archive/requirements-v1-superseded.md`). v1 + the adversarial review
+**This is the authoritative build input for glosa v1.** It supersedes the original v1 contract in
+full. v1 + the adversarial review
 (`research/codex-review.md`, verdict NEEDS-REWORK, 32 findings) + a six-specialist resolution pass
 produced this document; where v1 and v2 disagree, **v2 governs**. Deep contracts live in the six
 normative appendices under `appendices/` (A1–A6); this document states requirements and references the
