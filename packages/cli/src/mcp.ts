@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Minimal issue-18 MCP stdio server: durable inbox pull and paginated entry retrieval only.
+// Product-scoped MCP 2025-11-25 stdio server: durable inbox pull/get, metadata, session bind,
+// and conversation acknowledgement. Protocol contract only — no resources/prompts/tasks surface.
 import { randomUUID } from "node:crypto";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
+import { GLOSA_MCP_TOOL_BY_NAME, listMcpTools, MCP_PROTOCOL_VERSION } from "./mcp-tools.ts";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -40,11 +42,14 @@ function error(id: JsonRpcRequest["id"], code: number, message: string): Record<
   return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
 }
 
-function textToolResult(text: string, structuredContent?: Record<string, unknown>): Record<string, unknown> {
-  return {
-    content: [{ type: "text", text }],
-    ...(structuredContent ? { structuredContent } : {}),
-  };
+/** MCP structuredContent plus JSON text fallback; inbox tools keep actionable presentation text. */
+function toolResult(structuredContent: Record<string, unknown>, presentationText?: string): Record<string, unknown> {
+  const content: Array<{ type: "text"; text: string }> = [];
+  if (presentationText !== undefined) {
+    content.push({ type: "text", text: presentationText });
+  }
+  content.push({ type: "text", text: JSON.stringify(structuredContent) });
+  return { content, structuredContent };
 }
 
 async function pullInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
@@ -67,9 +72,14 @@ async function pullInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> 
   }
   const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
   const text = drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
+  const structured = {
+    entries: drained.drained,
+    count: drained.count,
+    has_more: drained.has_more ?? false,
+  };
   if (!explicitSession && !drained.delivery_id) await client.deregister(sessionId);
   return {
-    response: result(req.id, textToolResult(text, { entries: drained.drained, count: drained.count, has_more: drained.has_more ?? false })),
+    response: result(req.id, toolResult(structured, text)),
     ...(drained.delivery_id ? { ack: { client, sessionId, deliveryId: drained.delivery_id, deregister: !explicitSession } } : {}),
   };
 }
@@ -90,8 +100,9 @@ async function getInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
     typeof args.cursor === "string" ? args.cursor : undefined,
   );
   const presentation = retrieved.presentation;
+  const structured = { presentation };
   return {
-    response: result(req.id, textToolResult(presentation.text, { presentation })),
+    response: result(req.id, toolResult(structured, presentation.text)),
   };
 }
 
@@ -106,21 +117,21 @@ async function metadataSet(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply
   }
   const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
   const changed = await (await deps.createApiClient()).setMetadata!(workspace, args.metadata as WorkspaceMetadataDescriptor);
-  return { response: result(req.id, textToolResult(`workspace metadata ${changed.replaced ? "replaced" : "registered"}: ${changed.metadata.id}`, changed)) };
+  return { response: result(req.id, toolResult(changed)) };
 }
 
 async function metadataShow(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   const args = toolArgs(req);
   const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
   const metadata = await (await deps.createApiClient()).getMetadata!(workspace);
-  return { response: result(req.id, textToolResult(metadata ? `workspace metadata: ${metadata.id}` : "workspace metadata is not registered", { metadata })) };
+  return { response: result(req.id, toolResult({ metadata })) };
 }
 
 async function metadataClear(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   const args = toolArgs(req);
   const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
   const cleared = await (await deps.createApiClient()).clearMetadata!(workspace);
-  return { response: result(req.id, textToolResult(cleared.cleared ? "workspace metadata cleared" : "workspace metadata already clear", cleared)) };
+  return { response: result(req.id, toolResult(cleared)) };
 }
 
 async function sessionBind(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
@@ -135,7 +146,7 @@ async function sessionBind(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply
   // records that were never registered or were lost across a daemon restart.
   await (await deps.createHookClient()).heartbeat(args.session_id);
   const bound = await (await deps.createApiClient()).bindSession!(workspace, args.session_id);
-  return { response: result(req.id, textToolResult(`session bound: ${bound.session_id}`, bound)) };
+  return { response: result(req.id, toolResult(bound)) };
 }
 
 async function conversationAck(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
@@ -168,7 +179,7 @@ async function conversationAck(req: JsonRpcRequest, deps: McpDeps): Promise<McpR
   return {
     response: result(
       req.id,
-      textToolResult(`conversation message acknowledged: ${messageId}`, {
+      toolResult({
         message_id: messageId,
         delivered: true,
       }),
@@ -178,9 +189,19 @@ async function conversationAck(req: JsonRpcRequest, deps: McpDeps): Promise<McpR
 
 export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   if (req.method === "initialize") {
+    const requested = req.params?.protocolVersion;
+    if (requested !== MCP_PROTOCOL_VERSION) {
+      return {
+        response: error(
+          req.id,
+          -32602,
+          `unsupported protocol version: ${typeof requested === "string" ? requested : "(missing)"}; glosa mcp requires ${MCP_PROTOCOL_VERSION}`,
+        ),
+      };
+    }
     return {
       response: result(req.id, {
-        protocolVersion: typeof req.params?.protocolVersion === "string" ? req.params.protocolVersion : "2025-03-26",
+        protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {
           tools: { listChanged: false },
           experimental: { "claude/channel": {} },
@@ -196,86 +217,15 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
   if (req.method === "tools/list") {
     return {
       response: result(req.id, {
-        tools: [
-          {
-            name: "glosa_inbox_pull",
-            description: "Pull the oldest pending actionable glosa inbox entries.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                workspace: { type: "string", description: "Workspace path; defaults to the MCP process cwd." },
-                limit: { type: "integer", minimum: 1, maximum: 8 },
-                session_id: { type: "string", description: "Explicit registered session for targeted messages." },
-              },
-              additionalProperties: false,
-            },
-          },
-          {
-            name: "glosa_inbox_get",
-            description: "Retrieve an inbox entry or its next truncated page.",
-            inputSchema: {
-              type: "object",
-              required: ["id"],
-              properties: {
-                id: { type: "string" },
-                cursor: { type: "string", description: "Opaque continuation cursor from a prior presentation." },
-                workspace: { type: "string", description: "Workspace path; defaults to the MCP process cwd." },
-              },
-              additionalProperties: false,
-            },
-          },
-          {
-            name: "glosa_metadata_set",
-            description: "Register or replace this integration's declarative workspace metadata.",
-            inputSchema: {
-              type: "object",
-              required: ["metadata"],
-              properties: {
-                workspace: { type: "string", description: "Workspace path; defaults to the MCP process cwd." },
-                metadata: { type: "object", description: "WorkspaceMetadataDescriptor v1." },
-              },
-              additionalProperties: false,
-            },
-          },
-          {
-            name: "glosa_metadata_show",
-            description: "Show the active declarative workspace metadata.",
-            inputSchema: { type: "object", properties: { workspace: { type: "string" } }, additionalProperties: false },
-          },
-          {
-            name: "glosa_metadata_clear",
-            description: "Clear the active declarative workspace metadata.",
-            inputSchema: { type: "object", properties: { workspace: { type: "string" } }, additionalProperties: false },
-          },
-          {
-            name: "glosa_session_bind",
-            description: "Explicitly bind a live agent session to a workspace.",
-            inputSchema: {
-              type: "object",
-              required: ["session_id"],
-              properties: { session_id: { type: "string" }, workspace: { type: "string" } },
-              additionalProperties: false,
-            },
-          },
-          {
-            name: "glosa_conversation_ack",
-            description: "Acknowledge that a targeted glosa conversation message reached this agent context.",
-            inputSchema: {
-              type: "object",
-              required: ["message_id"],
-              properties: {
-                message_id: { type: "string" },
-                session_id: { type: "string", description: "Required only when the MCP host provides no session identity." },
-              },
-              additionalProperties: false,
-            },
-          },
-        ],
+        tools: listMcpTools(),
       }),
     };
   }
   if (req.method === "tools/call") {
     const name = req.params?.name;
+    if (typeof name !== "string" || !GLOSA_MCP_TOOL_BY_NAME.has(name)) {
+      return { response: error(req.id, -32602, `unknown tool '${String(name)}'`) };
+    }
     if (name === "glosa_inbox_pull") return pullInbox(req, deps);
     if (name === "glosa_inbox_get") return getInbox(req, deps);
     if (name === "glosa_metadata_set") return metadataSet(req, deps);
@@ -368,7 +318,7 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
       if (!reply.response) continue;
       try {
         await write(reply.response);
-        if (req.method === "initialize") startPush();
+        if (req.method === "initialize" && !("error" in reply.response)) startPush();
         if (reply.ack) {
           await reply.ack.client.acknowledge?.(reply.ack.sessionId, reply.ack.deliveryId, "presented");
           if (reply.ack.deregister) await reply.ack.client.deregister(reply.ack.sessionId);

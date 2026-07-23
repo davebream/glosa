@@ -26,6 +26,7 @@ import { tokenPath } from "../src/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "concurrency-real-subprocess-test-token-0123456789";
+const SUBPROCESS_TEST_TIMEOUT_MS = 20_000;
 
 describe("real daemon subprocess — genuinely concurrent HTTP requests against ONE workspace", () => {
   let home: string;
@@ -40,8 +41,8 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     mkdirSync(home, { recursive: true });
     writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
     proc = spawnDaemon(home, port, { GLOSA_CLASSF_PORT: String(port + 1) });
-    const hs = await waitForHandshake(port);
-    expect(hs).not.toBeNull();
+    const hs = await waitForHandshake(port, 15_000, proc);
+    expect(hs, `daemon handshake failed (exitCode=${proc.exitCode})`).not.toBeNull();
   });
 
   afterEach(async () => {
@@ -65,7 +66,11 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     });
   }
 
-  test("N real concurrent apply-begin requests for the SAME entry, from N different sessions, over real sockets: exactly one lease wins, everyone else gets a real 409, and the journal ends up with exactly one apply_begin", async () => {
+  function it(name: string, fn: () => Promise<void> | void): void {
+    test(name, fn, SUBPROCESS_TEST_TIMEOUT_MS);
+  }
+
+  it("N real concurrent apply-begin requests for the SAME entry, from N different sessions, over real sockets: exactly one lease wins, everyone else gets a real 409, and the journal ends up with exactly one apply_begin", async () => {
     const N = 8;
     const sessions = Array.from({ length: N }, (_, i) => `session-${i}`);
 
@@ -96,9 +101,9 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     for (const line of lines) expect(() => JSON.parse(line)).not.toThrow(); // never a torn/corrupt line
     const applyBeginLines = lines.filter((l) => l.includes('"apply_begin"'));
     expect(applyBeginLines).toHaveLength(1);
-  }, 20_000);
+  });
 
-  test("concurrent apply-begin requests against TWO DIFFERENT real workspaces never contend with each other — the mutex is genuinely workspace-scoped, not a global daemon-wide lock", async () => {
+  it("concurrent apply-begin requests against TWO DIFFERENT real workspaces never contend with each other — the mutex is genuinely workspace-scoped, not a global daemon-wide lock", async () => {
     // A pure status-code assertion here (both calls return 201) can't tell "correctly
     // workspace-scoped" apart from "accidentally global": with a global mutex the two requests
     // would just serialize in TIME instead of running in parallel, and each would still see its
@@ -163,5 +168,5 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
       rmSync(baselineWorkspaceRoot, { recursive: true, force: true });
       rmSync(otherWorkspaceRoot, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 });

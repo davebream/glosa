@@ -49,12 +49,14 @@ export function randomPort(): number {
   return port;
 }
 
-/** Spawns the real `glosa __daemon` process (not detached — tests want a handle to control it). */
+/** Spawns the real `glosa __daemon` process (not detached — tests want a handle to control it).
+ * stdout/stderr are ignored on purpose: nothing in the shared helpers reads those pipes, and an
+ * undrained pipe can fill and stall the child under full-suite load (flaky handshake timeouts). */
 export function spawnDaemon(
   home: string,
   port: number,
   envOverrides: Record<string, string> = {},
-): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+): Bun.Subprocess<"ignore", "ignore", "ignore"> {
   return Bun.spawn({
     cmd: [process.execPath, MAIN_PATH, "__daemon"],
     env: { ...Bun.env, GLOSA_HOME: home, GLOSA_PORT: String(port), ...envOverrides } as Record<
@@ -62,8 +64,8 @@ export function spawnDaemon(
       string
     >,
     stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
   });
 }
 
@@ -85,12 +87,18 @@ export function writeUnparseableLock(home: string): void {
 // matters once the full subprocess suites run twice back to back; a spawn that's usually fast
 // can occasionally take longer under that cumulative load. Passing tests still return as soon as
 // the handshake succeeds, so the margin only affects a genuine failure path.
+//
+// When `proc` is supplied, bail as soon as the child has exited — otherwise a spawn that lost
+// EADDRINUSE / crashed would burn the full deadline polling a port that will never answer, and
+// under Bun's default 5s test timeout that surfaces as an opaque handshake null / dangling kill.
 export async function waitForHandshake(
   port: number,
   deadlineMs = 15000,
+  proc?: Bun.Subprocess,
 ): Promise<{ protocol_version: string; build_id?: string; instance_id: string; pid: number; started_at: string } | null> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
+    if (proc && proc.exitCode !== null) return null;
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/handshake`, {
         signal: AbortSignal.timeout(500),

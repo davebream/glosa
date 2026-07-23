@@ -13,14 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureToken, lockPath, readLock } from "@glosa/daemon";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
-
-const PORT_BASE = 26000 + Math.floor(Math.random() * 6000);
-let portOffset = 0;
-function randomPort(): number {
-  const port = PORT_BASE + portOffset;
-  portOffset += 4;
-  return port;
-}
+// Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
+// hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
+import { randomPort } from "../../daemon/test/helpers.ts";
 
 let home: string;
 let client: GlosaApiClient;
