@@ -13,8 +13,19 @@
 
 ## F19 — global workspace index `~/.glosa/workspaces.json`
 - **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/hooks/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.
-- Schema: `{version:1, updated_at, workspaces:{<canonical_path>:{canonical_path, slug, source:session|glosa-open|discovered, first_seen, last_seen, present:bool}}}`.
+- Schema v2:
+  `{version:2,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?}}}`.
+  `tracking` is `{mode:"matcher"}` or `{mode:"bounded",paths:[<relative-path>,…]}`. Registration
+  IDs are immutable full SHA-256 hashes of registration kind + canonical identity. v1 entries
+  migrate atomically to directory registrations without changing their slug/root, using
+  `<canonical-root>/.glosa` and matcher tracking.
 - Canonicalization (identity) = realpath→NFC→strip trailing slash. Slug = sanitize(basename)+`-`+sha256(canonical)[:6], collision→lengthen hex (F25). Enumerate switcher = present===true.
+- `POST /api/workspaces/open` accepts the original file or directory path and optional
+  `external_state:true`; it returns the selected slug, work-tree path, and optional representative
+  focus path. Existing registrations and existing local buses are authoritative regardless of the
+  flag. Fresh unwritable directories redirect automatically; fresh writable directories redirect
+  only by opt-in. An unwritable existing local bus fails closed rather than creating a second
+  journal; moving state is a separate migration.
 - GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND present:false ≥ grace (or `glosa forget <slug>`). Conservative.
 
 ## F23 — inbox/attention lifecycle

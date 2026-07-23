@@ -118,8 +118,17 @@ export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
  * this client already resolved a moment earlier. */
 export interface GlosaApiClient {
   readonly port: number;
-  openWorkspace(path: string): Promise<{ slug: string; path: string }>;
-  resolveEntry(path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string): Promise<ResolveResult>;
+  openWorkspace(
+    path: string,
+    opts?: { externalState?: boolean },
+  ): Promise<{ slug: string; path: string; focus?: string }>;
+  resolveEntry(
+    path: string,
+    entry: string,
+    outcome: ResolveOutcome,
+    session: string,
+    note?: string,
+  ): Promise<ResolveResult>;
   applyBegin(path: string, entry: string, session: string): Promise<ApplyBeginResult>;
   createAttentionRequest(
     path: string,
@@ -128,7 +137,10 @@ export interface GlosaApiClient {
   getEntryStatus(path: string, entry: string): Promise<EntryStatus | null>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
-  setMetadata?(path: string, metadata: WorkspaceMetadataDescriptor): Promise<{ metadata: WorkspaceMetadataDescriptor; replaced: boolean }>;
+  setMetadata?(
+    path: string,
+    metadata: WorkspaceMetadataDescriptor,
+  ): Promise<{ metadata: WorkspaceMetadataDescriptor; replaced: boolean }>;
   getMetadata?(path: string): Promise<WorkspaceMetadataDescriptor | null>;
   clearMetadata?(path: string): Promise<{ cleared: boolean }>;
   bindSession?(path: string, sessionId: string): Promise<{ bound: true; session_id: string }>;
@@ -169,8 +181,16 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
     return res;
   }
 
-  async function openWorkspace(path: string): Promise<{ slug: string; path: string }> {
-    return (await call("POST", "/api/workspaces/open", { path })).json();
+  async function openWorkspace(
+    path: string,
+    opts: { externalState?: boolean } = {},
+  ): Promise<{ slug: string; path: string; focus?: string }> {
+    return (
+      await call("POST", "/api/workspaces/open", {
+        path,
+        ...(opts.externalState ? { external_state: true } : {}),
+      })
+    ).json();
   }
 
   return {

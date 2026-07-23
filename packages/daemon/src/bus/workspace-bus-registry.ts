@@ -9,6 +9,7 @@
 // shadow-git repo or journal file.
 import { KeyedMutex } from "./mutex.ts";
 import { WorkspaceBus, type WorkspaceBusDeps } from "./bus.ts";
+import { workspaceRegistrationId, type WorkspaceTarget } from "../workspace.ts";
 
 export class WorkspaceBusRegistry {
   private readonly buses = new Map<string, WorkspaceBus>();
@@ -23,26 +24,57 @@ export class WorkspaceBusRegistry {
    * later call for an already-open root ignores it silently, since there is only ever one bus to
    * reconfigure and reconfiguring a live one out from under existing callers would be worse than
    * ignoring the request. */
-  get(canonicalRoot: string, deps: Omit<WorkspaceBusDeps, "mutex"> = {}): WorkspaceBus {
-    let bus = this.buses.get(canonicalRoot);
+  get(canonicalRoot: WorkspaceTarget, deps: Omit<WorkspaceBusDeps, "mutex"> = {}): WorkspaceBus {
+    const id = workspaceRegistrationId(canonicalRoot);
+    let bus = this.buses.get(id);
+    if (!bus && typeof canonicalRoot !== "string" && canonicalRoot.kind === "directory") {
+      const legacyId = workspaceRegistrationId(canonicalRoot.worktree_path);
+      bus = this.buses.get(legacyId);
+      if (bus) {
+        this.buses.delete(legacyId);
+        this.buses.set(id, bus);
+      }
+    }
+    if (!bus && typeof canonicalRoot === "string") {
+      bus = [...this.buses.values()].find(
+        (candidate) =>
+          typeof candidate.workspace !== "string" &&
+          candidate.workspace.kind === "directory" &&
+          candidate.workspace.worktree_path === canonicalRoot,
+      );
+    }
     if (!bus) {
       bus = new WorkspaceBus(canonicalRoot, { ...deps, mutex: this.mutex });
-      this.buses.set(canonicalRoot, bus);
+      this.buses.set(id, bus);
     }
     return bus;
   }
 
-  has(canonicalRoot: string): boolean {
-    return this.buses.has(canonicalRoot);
+  has(canonicalRoot: WorkspaceTarget): boolean {
+    return this.buses.has(workspaceRegistrationId(canonicalRoot));
   }
 
   /** Closes and forgets the bus for a root, if one is open. A later `get()` for the same root
    * opens a fresh instance. `close()` awaits the bus's own `close()`, which routes through the
    * bus's mutex, so any write already in flight for this root finishes first. */
-  async close(canonicalRoot: string): Promise<void> {
-    const bus = this.buses.get(canonicalRoot);
+  async close(canonicalRoot: WorkspaceTarget): Promise<void> {
+    const id = workspaceRegistrationId(canonicalRoot);
+    const bus =
+      this.buses.get(id) ??
+      [...this.buses.values()].find(
+        (candidate) =>
+          (typeof canonicalRoot === "string" &&
+            typeof candidate.workspace !== "string" &&
+            (candidate.workspace.canonical_path === canonicalRoot ||
+              candidate.workspace.worktree_path === canonicalRoot)) ||
+          (typeof canonicalRoot !== "string" &&
+            typeof candidate.workspace !== "string" &&
+            candidate.workspace.registration_id === canonicalRoot.registration_id),
+      );
     if (!bus) return;
-    this.buses.delete(canonicalRoot);
+    for (const [key, candidate] of this.buses) {
+      if (candidate === bus) this.buses.delete(key);
+    }
     await bus.close();
   }
 
@@ -63,8 +95,15 @@ export class WorkspaceBusRegistry {
    * Without that wiring, a hard-removed workspace's `WorkspaceBus` (open journal fd, `KeyedMutex`
    * slot, in-memory state) leaks for the life of the daemon process, and a later `get()` for the
    * same (now-reused) canonical path would return that stale instance instead of a fresh one. */
-  evict(canonicalRoot: string): Promise<void> {
+  evict(canonicalRoot: WorkspaceTarget): Promise<void> {
     return this.close(canonicalRoot);
+  }
+
+  async evictRegistration(registrationId: string): Promise<void> {
+    const bus = this.buses.get(registrationId);
+    if (!bus) return;
+    this.buses.delete(registrationId);
+    await bus.close();
   }
 }
 
@@ -75,6 +114,9 @@ export class WorkspaceBusRegistry {
 // want isolation from this shared state construct their own `WorkspaceBusRegistry` directly.
 const defaultRegistry = new WorkspaceBusRegistry();
 
-export function getWorkspaceBus(canonicalRoot: string, deps: Omit<WorkspaceBusDeps, "mutex"> = {}): WorkspaceBus {
+export function getWorkspaceBus(
+  canonicalRoot: WorkspaceTarget,
+  deps: Omit<WorkspaceBusDeps, "mutex"> = {},
+): WorkspaceBus {
   return defaultRegistry.get(canonicalRoot, deps);
 }

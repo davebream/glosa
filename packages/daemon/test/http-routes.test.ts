@@ -7,7 +7,7 @@
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiFetch, type ApiContext } from "../src/http.ts";
@@ -101,25 +101,131 @@ describe("A1 §5 route catalog", () => {
     mkdirSync(root, { recursive: true });
   });
 
+  test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
+    const looseRoot = mkdtempSync(join(tmpdir(), "glosa-routes-loose-"));
+    const firstPath = join(looseRoot, "first.md");
+    const secondPath = join(looseRoot, "second.md");
+    writeFileSync(firstPath, "first\n");
+    writeFileSync(secondPath, "second\n");
+
+    const firstResponse = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: firstPath }),
+      }),
+    );
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first).toMatchObject({ path: canonicalize(looseRoot), focus: "first.md" });
+    const firstEntry = workspaceIndex.getBySlug(first.slug);
+    expect(firstEntry?.kind).toBe("loose-file");
+    expect(firstEntry?.bus_path).toBe(join(home, "state", firstEntry?.registration_id ?? ""));
+    expect(existsSync(join(looseRoot, ".glosa"))).toBe(false);
+    expect(
+      (await (await fetchFn(req(`/w/${first.slug}/artifacts`))).json()).map((file: { path: string }) => file.path),
+    ).toEqual(["first.md"]);
+
+    const second = await (
+      await fetchFn(
+        stateChangingReq("/api/workspaces/open", {
+          method: "POST",
+          body: JSON.stringify({ path: secondPath }),
+        }),
+      )
+    ).json();
+    expect(second.slug).not.toBe(first.slug);
+    expect(workspaceIndex.getBySlug(second.slug)?.bus_path).not.toBe(firstEntry?.bus_path);
+    const metadata = { version: 1, id: "first-only", artifacts: [{ path: "first.md", class: "R" }] };
+    expect(
+      (
+        await fetchFn(
+          stateChangingReq(`/w/${first.slug}/metadata`, {
+            method: "PUT",
+            body: JSON.stringify(metadata),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await fetchFn(req(`/w/${second.slug}/metadata`))).status).toBe(404);
+    expect(existsSync(join(firstEntry!.bus_path, "workspace-metadata.json"))).toBe(true);
+
+    await busRegistry.close(firstEntry!);
+    await busRegistry.close(workspaceIndex.getBySlug(second.slug)!);
+    rmSync(looseRoot, { recursive: true, force: true });
+  });
+
+  test("POST /api/workspaces/open refuses an excluded file inside the deepest owning workspace", async () => {
+    const hiddenDir = join(root, ".hidden");
+    const hiddenPath = join(hiddenDir, "secret.md");
+    mkdirSync(hiddenDir);
+    writeFileSync(hiddenPath, "secret\n");
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: hiddenPath }),
+      }),
+    );
+    expect(response.status).toBe(422);
+    expect((await response.json()).type).toContain("artifact-not-tracked");
+    expect(workspaceIndex.list()).toHaveLength(1);
+  });
+
+  test("POST /api/workspaces/open forwards external_state for a fresh directory", async () => {
+    const externalRoot = mkdtempSync(join(tmpdir(), "glosa-routes-external-"));
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: externalRoot, external_state: true }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const opened = await response.json();
+    const entry = workspaceIndex.getBySlug(opened.slug)!;
+    expect(entry.bus_path).toBe(join(home, "state", entry.registration_id));
+    expect(existsSync(join(externalRoot, ".glosa"))).toBe(false);
+
+    await busRegistry.close(entry);
+    rmSync(externalRoot, { recursive: true, force: true });
+  });
+
   test("metadata routes are authenticated, durable, replace by same id, conflict by different id, and clear idempotently", async () => {
     writeFileSync(join(root, "notes.md"), "# hello\n");
     const metadata = { version: 1, id: "producer", artifacts: [{ path: "notes.md", class: "R", order: 0 }] };
-    const unauthorized = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", headers: { Authorization: "Bearer wrong" }, body: JSON.stringify(metadata) }));
+    const unauthorized = await fetchFn(
+      stateChangingReq(`/w/${slug}/metadata`, {
+        method: "PUT",
+        headers: { Authorization: "Bearer wrong" },
+        body: JSON.stringify(metadata),
+      }),
+    );
     expect(unauthorized.status).toBe(401);
 
-    const first = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(metadata) }));
+    const first = await fetchFn(
+      stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(metadata) }),
+    );
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({ metadata, replaced: false });
     expect(await (await fetchFn(req(`/w/${slug}/metadata`))).json()).toEqual({ metadata });
 
     const replacement = { ...metadata, artifacts: [{ path: "notes.md", class: "R", order: 2 }] };
-    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(replacement) }))).json()).toMatchObject({ replaced: true });
-    const conflict = await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify({ ...metadata, id: "other" }) }));
+    expect(
+      await (
+        await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify(replacement) }))
+      ).json(),
+    ).toMatchObject({ replaced: true });
+    const conflict = await fetchFn(
+      stateChangingReq(`/w/${slug}/metadata`, { method: "PUT", body: JSON.stringify({ ...metadata, id: "other" }) }),
+    );
     expect(conflict.status).toBe(409);
     expect((await conflict.json()).title).not.toContain(root);
 
-    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({ cleared: true });
-    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({ cleared: false });
+    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({
+      cleared: true,
+    });
+    expect(await (await fetchFn(stateChangingReq(`/w/${slug}/metadata`, { method: "DELETE" }))).json()).toEqual({
+      cleared: false,
+    });
   });
 
   // --- GET /w/:slug/artifacts (5.3) ---
@@ -186,7 +292,9 @@ describe("A1 §5 route catalog", () => {
     // objectContaining, not toEqual: this pins the fields the route guarantees TODAY without
     // locking the shape as final — a future `manifest_path` addition (P6.1, A1 §5.4's own example
     // response includes it) must not fail this test.
-    expect(body).toEqual(expect.objectContaining({ source_path: "page.html", source_sha256: expect.any(String), class: "F" }));
+    expect(body).toEqual(
+      expect.objectContaining({ source_path: "page.html", source_sha256: expect.any(String), class: "F" }),
+    );
     expect(body.content).toBeUndefined();
   });
 
@@ -284,7 +392,10 @@ describe("A1 §5 route catalog", () => {
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
         method: "PUT",
-        headers: { "Content-Type": "text/plain", "If-Match": "0000000000000000000000000000000000000000000000000000000000000000" },
+        headers: {
+          "Content-Type": "text/plain",
+          "If-Match": "0000000000000000000000000000000000000000000000000000000000000000",
+        },
         body: "updated\n",
       }),
     );
@@ -412,7 +523,10 @@ describe("A1 §5 route catalog", () => {
     expect(typeof body.id).toBe("string");
 
     const journal = readFileSync(journalPath(root), "utf8");
-    const lines = journal.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    const lines = journal
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
     const created = lines.find((l) => l.event === "entry_created" && l.entry === body.id);
     expect(created).toBeDefined();
     expect(created.detail.kind).toBe("annotation");
@@ -431,7 +545,10 @@ describe("A1 §5 route catalog", () => {
     expect(body.status).toBe("pending");
 
     const journal = readFileSync(journalPath(root), "utf8");
-    const lines = journal.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    const lines = journal
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
     const created = lines.find((l) => l.event === "entry_created" && l.entry === body.id);
     expect(created.detail.kind).toBe("annotation"); // NOT attention_request — never surfaces in the attention tray
 
@@ -455,7 +572,10 @@ describe("A1 §5 route catalog", () => {
 
     // Append-only truth: the entry_created line is still there, joined by the terminal transition.
     const journal = readFileSync(journalPath(root), "utf8");
-    const lines = journal.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l));
+    const lines = journal
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
     expect(lines.find((l) => l.event === "entry_created" && l.entry === id)).toBeDefined();
     const transition = lines.find((l) => l.event === "transition_committed" && l.entry === id);
     expect(transition.detail.to).toBe("rejected");
@@ -479,7 +599,9 @@ describe("A1 §5 route catalog", () => {
   });
 
   test("POST withdraw on an unknown entry id → 404", async () => {
-    const res = await fetchFn(stateChangingReq(`/w/${slug}/annotations/inb-never-existed/withdraw`, { method: "POST" }));
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/annotations/inb-never-existed/withdraw`, { method: "POST" }),
+    );
     expect(res.status).toBe(404);
   });
 
@@ -764,7 +886,10 @@ describe("A1 §5 route catalog", () => {
       stateChangingReq(`/w/${slug}/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "notes.md", to: "0000000000000000000000000000000000000000000000000000000000000000" }),
+        body: JSON.stringify({
+          path: "notes.md",
+          to: "0000000000000000000000000000000000000000000000000000000000000000",
+        }),
       }),
     );
     expect(res.status).toBe(400);
@@ -878,13 +1003,24 @@ describe("A1 §5 route catalog", () => {
   test("GET inbox surfaces an open attention_request entry", async () => {
     const bus = ctx.getWorkspaceBus(root);
     await bus.reconcile();
-    await bus.createEntry("att-1", { kind: "attention_request", message: "Please check this", action: "review", path: "notes.md" });
+    await bus.createEntry("att-1", {
+      kind: "attention_request",
+      message: "Please check this",
+      action: "review",
+      path: "notes.md",
+    });
 
     const res = await fetchFn(req(`/w/${slug}/inbox`));
     const body = await res.json();
     expect(body.pending_count).toBe(1);
     expect(body.attention).toHaveLength(1);
-    expect(body.attention[0]).toMatchObject({ id: "att-1", status: "open", message: "Please check this", action: "review", target: "notes.md" });
+    expect(body.attention[0]).toMatchObject({
+      id: "att-1",
+      status: "open",
+      message: "Please check this",
+      action: "review",
+      target: "notes.md",
+    });
     expect(typeof body.attention[0].created_at).toBe("string");
   });
 
@@ -954,7 +1090,9 @@ describe("A1 §5 route catalog", () => {
     await res.body?.cancel(); // never actually read — just proving the pipeline reaches the route
   });
   test("GET /w/:slug/stream with no Bearer → 401 (pipeline runs even for the real route)", async () => {
-    const res = await fetchFn(new Request(`http://127.0.0.1:${PORT}/w/${slug}/stream`, { headers: { Host: `127.0.0.1:${PORT}` } }));
+    const res = await fetchFn(
+      new Request(`http://127.0.0.1:${PORT}/w/${slug}/stream`, { headers: { Host: `127.0.0.1:${PORT}` } }),
+    );
     expect(res.status).toBe(401);
   });
   test("GET /w/:slug/stream on an unknown slug → 404, not 200", async () => {
@@ -974,20 +1112,37 @@ describe("A1 §5 route catalog", () => {
   test("attention seen/response follows delivered → seen → done and is idempotent", async () => {
     const bus = ctx.getWorkspaceBus(root);
     await bus.reconcileOnce();
-    await bus.createEntry("att-response", { kind: "attention_request", message: "Review it", action: "review", path: "notes.md" });
+    await bus.createEntry("att-response", {
+      kind: "attention_request",
+      message: "Review it",
+      action: "review",
+      path: "notes.md",
+    });
 
     const seen = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/seen`, { method: "POST" }));
     expect(await seen.json()).toMatchObject({ id: "att-response", status: "seen" });
-    const response = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
-      method: "POST",
-      body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
-    }));
-    expect(await response.json()).toEqual({ id: "att-response", status: "done", detail: { to: "done", outcome: "approved", response: "Looks good" } });
-    const retry = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
-      method: "POST",
-      body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
-    }));
-    expect(await retry.json()).toEqual({ id: "att-response", status: "done", detail: { to: "done", outcome: "approved", response: "Looks good" } });
+    const response = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
+      }),
+    );
+    expect(await response.json()).toEqual({
+      id: "att-response",
+      status: "done",
+      detail: { to: "done", outcome: "approved", response: "Looks good" },
+    });
+    const retry = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", response: "Looks good" }),
+      }),
+    );
+    expect(await retry.json()).toEqual({
+      id: "att-response",
+      status: "done",
+      detail: { to: "done", outcome: "approved", response: "Looks good" },
+    });
     expect(bus.state.entries["att-response"]?.status).toBe("done");
   });
 
@@ -996,11 +1151,26 @@ describe("A1 §5 route catalog", () => {
     await bus.reconcileOnce();
     await bus.createEntry("att-review", { kind: "attention_request", action: "review" });
     await bus.createEntry("att-generic", { kind: "attention_request" });
-    const invalidReview = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-review/response`, { method: "POST", body: JSON.stringify({ outcome: "done" }) }));
+    const invalidReview = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/att-review/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "done" }),
+      }),
+    );
     expect(invalidReview.status).toBe(400);
-    const invalidGeneric = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-generic/response`, { method: "POST", body: JSON.stringify({ outcome: "approved" }) }));
+    const invalidGeneric = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/att-generic/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved" }),
+      }),
+    );
     expect(invalidGeneric.status).toBe(400);
-    const generic = await fetchFn(stateChangingReq(`/w/${slug}/inbox/att-generic/response`, { method: "POST", body: JSON.stringify({ outcome: "done" }) }));
+    const generic = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/att-generic/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "done" }),
+      }),
+    );
     expect(await generic.json()).toMatchObject({ status: "done", detail: { outcome: "done" } });
   });
 
@@ -1012,7 +1182,9 @@ describe("A1 §5 route catalog", () => {
   });
 
   test("POST /w/:slug/capability/:artifactPath with a FOREIGN Origin → 403 — the mint shares the pipeline, not pinned per-route", async () => {
-    const res = await fetchFn(req(`/w/${slug}/capability/notes.html`, { method: "POST", headers: { Origin: "http://evil.example.com" } }));
+    const res = await fetchFn(
+      req(`/w/${slug}/capability/notes.html`, { method: "POST", headers: { Origin: "http://evil.example.com" } }),
+    );
     expect(res.status).toBe(403);
   });
 

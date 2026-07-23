@@ -10,9 +10,10 @@ import { relative, sep } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 import { encodeSseFrame } from "./sse.ts";
 import { readJournalEventsSince } from "./bus/tail.ts";
-import { resolveMatchedFiles } from "./matcher.ts";
+import { resolveTrackedFiles } from "./matcher.ts";
 import { classifyArtifactPath, sourceSha256 } from "./artifact-render.ts";
 import { isTerminal } from "./bus/lifecycle.ts";
+import { workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -25,8 +26,8 @@ type BunServer = ReturnType<typeof Bun.serve>;
  * payload is guaranteed consistent with whatever cursor this snapshot is stamped with — both are
  * captured in the same synchronous tick as the `subscribe()` call in
  * `createJournalStreamResponse` below. */
-function buildSnapshotData(root: string, bus: WorkspaceBus): unknown {
-  const { tracked } = resolveMatchedFiles(root);
+function buildSnapshotData(root: WorkspaceTarget, bus: WorkspaceBus): unknown {
+  const { tracked } = resolveTrackedFiles(root);
   const artifacts = tracked.map((f) => ({
     path: f.path,
     class: classifyArtifactPath(f.path),
@@ -50,7 +51,8 @@ function toRelPosixPath(root: string, absPath: string): string {
  * (never even watched): this daemon's own shadow-git checkpoints (A4 §F21) live under there, and
  * without this exclude every checkpoint would re-trigger the watcher it's feeding, a self-loop
  * with no artifact behind it. */
-function startArtifactWatcher(root: string, onChange: (relPath: string) => void): FSWatcher {
+function startArtifactWatcher(workspace: WorkspaceTarget, onChange: (relPath: string) => void): FSWatcher {
+  const root = workspaceWorktree(workspace);
   const watcher = watch(root, {
     ignoreInitial: true,
     ignored: (path: string) => relative(root, path).split(sep)[0] === ".glosa",
@@ -75,7 +77,7 @@ export interface StreamOptions {
  * tests that call the fetch pipeline directly (no real bound `Bun.serve`) don't have to fabricate
  * one; production always has a real server, in which case the idle-timeout override always runs. */
 export function createJournalStreamResponse(
-  root: string,
+  root: WorkspaceTarget,
   bus: WorkspaceBus,
   req: Request,
   server: BunServer | undefined,
@@ -150,9 +152,10 @@ export function createJournalStreamResponse(
       unsubscribe = bus.subscribe(({ cursor, event }) => {
         send(encodeSseFrame({ id: cursor, event: "journal", data: event }));
       });
-      unsubscribeMetadata = opts.subscribeMetadata?.(() => {
-        send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
-      }) ?? null;
+      unsubscribeMetadata =
+        opts.subscribeMetadata?.(() => {
+          send(encodeSseFrame({ event: "metadata", data: { changed: true } }));
+        }) ?? null;
 
       // Defense-in-depth (review item #3): everything from here on is pure setup (no I/O that's
       // expected to fail under normal operation) but a future change — or an edge case neither
@@ -201,7 +204,7 @@ export function createJournalStreamResponse(
 
         if (opts.watchArtifacts !== false) {
           watcher = startArtifactWatcher(root, (relPath) => {
-            const { tracked } = resolveMatchedFiles(root);
+            const { tracked } = resolveTrackedFiles(root);
             const match = tracked.find((f) => f.path === relPath);
             if (!match) return; // deleted, excluded, or grew past the oversize threshold — nothing to push
             send(

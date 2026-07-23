@@ -23,29 +23,34 @@ import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { confinePath } from "./confine-path.ts";
 import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
-import { resolveMatchedFiles } from "./matcher.ts";
+import { resolveTrackedFiles } from "./matcher.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import {
-  AdapterRegistry,
+  type AdapterRegistry,
   classifyWithAdapter,
   derivedFromSourcePath,
   isArtifactStale,
   orderWithAdapter,
   resolveManifest,
   type AdapterSessionHint,
-  type ContentAdapter,
 } from "./adapters/interface.ts";
 import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { resolve as resolveAnchor, type ClassFArtifact, type ClassRArtifact, type Resolution, type ResolveCtx } from "./anchoring.ts";
+import {
+  resolve as resolveAnchor,
+  type ClassFArtifact,
+  type ClassRArtifact,
+  type Resolution,
+  type ResolveCtx,
+} from "./anchoring.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { listCheckpoints } from "./checkpoints.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { createJournalStreamResponse } from "./stream.ts";
-import { CAPABILITY_TTL_MS, CapabilityStore } from "./capability.ts";
+import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
 import { serveClassFDocument } from "./classf-serve.ts";
 import { confineTranscriptPath } from "./transcript/root.ts";
 import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import type { WorkspaceIndex } from "./registry/workspace-index.ts";
+import { WorkspaceOpenError, type WorkspaceEntry, type WorkspaceIndex } from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
@@ -56,7 +61,7 @@ import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.
 import type { JournalEvent } from "./bus/journal.ts";
 import { buildDeliveryPresentation } from "./delivery/presentation.ts";
 import {
-  AgentProviderRegistry,
+  type AgentProviderRegistry,
   recordDelivery,
   type DeliverableEntry,
   type DeliveryResult,
@@ -64,6 +69,7 @@ import {
 } from "./providers/interface.ts";
 import type { SessionPushRegistry } from "./providers/push-registry.ts";
 import type { TokenSource } from "./token.ts";
+import type { WorkspaceTarget } from "./workspace.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -129,7 +135,7 @@ export interface ApiContext {
   /** Always resolves to the SAME `WorkspaceBus` instance for a given canonical root (backed by
    * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
    * construct their own `WorkspaceBus`. */
-  getWorkspaceBus: (canonicalRoot: string) => WorkspaceBus;
+  getWorkspaceBus: (workspace: WorkspaceTarget) => WorkspaceBus;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
@@ -287,7 +293,8 @@ function serveSpaAsset(req: Request, pathname: string): Response {
 
 function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   const entry = ctx.workspaceIndex.getBySlug(slug);
-  if (!entry) return { ok: false as const, response: problem(404, "not-found", "unknown workspace", undefined, pathname) };
+  if (!entry)
+    return { ok: false as const, response: problem(404, "not-found", "unknown workspace", undefined, pathname) };
   return { ok: true as const, entry };
 }
 
@@ -296,9 +303,9 @@ function handleListWorkspaces(ctx: ApiContext): Response {
   const entries = ctx.workspaceIndex.list({ presentOnly: true });
   const body = entries.map((e) => ({
     slug: e.slug,
-    path: e.canonical_path,
+    path: e.worktree_path,
     last_seen: e.last_seen,
-    has_attention: hasOpenAttention(peekJournal(e.canonical_path).state),
+    has_attention: hasOpenAttention(peekJournal(e).state),
   }));
   return Response.json(body);
 }
@@ -310,7 +317,7 @@ function handleListWorkspaces(ctx: ApiContext): Response {
  * (`lifecycleReducer`) — a malformed line is silently skipped here rather than quarantined; the
  * durable quarantine still happens the first time any WRITE path (`resolveBus` below) reconciles
  * this workspace for real. */
-function peekJournal(root: string): { state: DerivedState; createdAt: Map<string, string> } {
+function peekJournal(root: WorkspaceTarget): { state: DerivedState; createdAt: Map<string, string> } {
   const path = journalPath(root);
   const createdAt = new Map<string, string>();
   if (!existsSync(path)) return { state: createEmptyState(), createdAt };
@@ -347,7 +354,7 @@ function hasOpenAttention(state: DerivedState): boolean {
  * fix: an external cache keyed by root string would survive past a `WorkspaceBusRegistry.evict()`
  * + reopen and wrongly skip reconciling the fresh instance underneath it — see reconcileOnce's own
  * docstring in bus.ts). */
-async function resolveBus(ctx: ApiContext, root: string): Promise<WorkspaceBus> {
+async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
   const bus = ctx.getWorkspaceBus(root);
   await bus.reconcileOnce();
   return bus;
@@ -360,24 +367,29 @@ async function resolveBus(ctx: ApiContext, root: string): Promise<WorkspaceBus> 
 function handleListArtifacts(ctx: ApiContext, slug: string, pathname: string): Response {
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
-  const adapter = ctx.adapterRegistry?.forWorkspace(root);
+  const root = resolved.entry.worktree_path;
+  const adapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
 
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(resolved.entry);
   const byPath = new Map(tracked.map((f) => [f.path, f]));
   const mtimeMs = new Map(tracked.map((f) => [f.path, statSync(f.rawPath).mtime.getTime()]));
   const resolveSourceMtimeMs = (p: string): number | null => mtimeMs.get(p) ?? null;
 
-  const orderedPaths = orderWithAdapter(adapter, root, tracked.map((f) => f.path));
+  const orderedPaths = orderWithAdapter(
+    adapter,
+    root,
+    tracked.map((f) => f.path),
+    resolved.entry,
+  );
   const body = orderedPaths.map((path) => {
     const f = byPath.get(path)!;
     return {
       path: f.path,
-      class: classifyWithAdapter(adapter, root, f.path, classifyArtifactPath(f.path)),
+      class: classifyWithAdapter(adapter, root, f.path, classifyArtifactPath(f.path), resolved.entry),
       size_bytes: f.sizeBytes,
       mtime: new Date(mtimeMs.get(f.path)!).toISOString(),
       source_sha256: sourceSha256(readFileSync(f.rawPath)),
-      stale: isArtifactStale(adapter, root, f.path, mtimeMs.get(f.path)!, resolveSourceMtimeMs),
+      stale: isArtifactStale(adapter, root, f.path, mtimeMs.get(f.path)!, resolveSourceMtimeMs, resolved.entry),
     };
   });
   return Response.json(body);
@@ -390,7 +402,7 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry.worktree_path;
 
   const confineResult = confinePath(root, rawPathParam);
   if (!confineResult.ok) {
@@ -401,14 +413,14 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(resolved.entry);
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
 
   const raw = readFileSync(match.rawPath);
   const sourceSha = sourceSha256(raw);
-  const adapter = ctx.adapterRegistry?.forWorkspace(root);
-  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path));
+  const adapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
+  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path), resolved.entry);
 
   if (cls === "F") {
     // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
@@ -417,8 +429,8 @@ function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, 
     // viewer.js's `canEdit`/`setMode`) and `manifest_path` (A1 §5.4's own example response) are
     // both domain provenance a CONTENT ADAPTER supplies — the core ships with zero adapters
     // (invariant #1), so both are simply absent when none is registered/recognizes this workspace.
-    const derivedFrom = derivedFromSourcePath(adapter, root, match.path);
-    const manifestResolution = resolveManifest(root, adapter, match.path);
+    const derivedFrom = derivedFromSourcePath(adapter, root, match.path, resolved.entry);
+    const manifestResolution = resolveManifest(root, adapter, match.path, resolved.entry);
     return Response.json({
       source_path: match.path,
       source_sha256: sourceSha,
@@ -460,7 +472,7 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry.worktree_path;
 
   const confineResult = confinePath(root, rawPathParam);
   if (!confineResult.ok) {
@@ -471,13 +483,19 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(resolved.entry);
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
 
-  const putAdapter = ctx.adapterRegistry?.forWorkspace(root);
-  if (classifyWithAdapter(putAdapter, root, match.path, classifyArtifactPath(match.path)) === "F") {
-    return problem(400, "validation-failed", "class-F artifacts are not editable through this route", undefined, url.pathname);
+  const putAdapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
+  if (classifyWithAdapter(putAdapter, root, match.path, classifyArtifactPath(match.path), resolved.entry) === "F") {
+    return problem(
+      400,
+      "validation-failed",
+      "class-F artifacts are not editable through this route",
+      undefined,
+      url.pathname,
+    );
   }
 
   const ifMatch = req.headers.get("If-Match");
@@ -494,7 +512,8 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   } catch {
     return problem(400, "validation-failed", "unable to read request body", undefined, url.pathname);
   }
-  if (raw.length === 0) return problem(400, "validation-failed", "request body must not be empty", undefined, url.pathname);
+  if (raw.length === 0)
+    return problem(400, "validation-failed", "request body must not be empty", undefined, url.pathname);
 
   // Accept either a bare-text body or `{"content": "..."}` — a body that parses as JSON but
   // isn't that shape (an array, a number, an object with no string `content`) falls back to
@@ -504,7 +523,12 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   let content = raw;
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && typeof (parsed as Record<string, unknown>).content === "string") {
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as Record<string, unknown>).content === "string"
+    ) {
       content = (parsed as Record<string, unknown>).content as string;
     }
   } catch {
@@ -519,7 +543,7 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
   // ever got to attribute it `human`. Reconciling first means any real pre-existing drift is
   // captured under its own honest `unknown` commit, leaving a clean slate for our write to be the
   // next (and only) thing `humanEditCheckpoint` finds staged.
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, resolved.entry);
   const inboxId = generateAnnotationId();
   const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
 
@@ -536,7 +560,9 @@ async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: st
 
 const ANNOTATION_INTENTS = new Set(["content", "classification", "style"]);
 
-function validateAnnotationBody(body: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
+function validateAnnotationBody(
+  body: unknown,
+): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return { ok: false, reason: "body must be a JSON object" };
   }
@@ -576,21 +602,22 @@ function generateAnnotationId(): string {
  * own, so this function doesn't need to special-case "no adapter" itself. */
 function buildAnchoringContext(
   ctx: ApiContext,
-  root: string,
+  workspace: WorkspaceEntry,
   artifactPath: string,
 ): { artifact: ClassRArtifact | ClassFArtifact; resolveCtx: ResolveCtx } | null {
+  const root = workspace.worktree_path;
   const confineResult = confinePath(root, artifactPath);
   if (!confineResult.ok) return null;
   const relNfc = artifactPath
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(workspace);
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return null;
 
-  const adapter = ctx.adapterRegistry?.forWorkspace(root);
-  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path));
+  const adapter = ctx.adapterRegistry?.forWorkspace(workspace);
+  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path), workspace);
 
   if (cls === "R") {
     const source = readFileSync(match.rawPath, "utf8");
@@ -598,7 +625,7 @@ function buildAnchoringContext(
     return { artifact, resolveCtx: {} };
   }
 
-  const manifestResolution = resolveManifest(root, adapter, match.path);
+  const manifestResolution = resolveManifest(root, adapter, match.path, workspace);
   let source = "";
   if (manifestResolution) {
     const srcMatch = tracked.find((f) => f.path === manifestResolution.manifest.source_path);
@@ -618,29 +645,32 @@ function buildAnchoringContext(
 
 function buildActionablePresentation(
   ctx: ApiContext,
-  root: string,
+  workspace: WorkspaceEntry,
   id: string,
   payload: unknown,
   status: string,
   cursor?: string,
 ): DeliverableEntry | null {
-  const record = payload !== null && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+  const record =
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
   let resolution: Resolution | undefined;
   if (record?.kind === "annotation" && typeof record.artifact_path === "string") {
-    const built = buildAnchoringContext(ctx, root, record.artifact_path);
+    const built = buildAnchoringContext(ctx, workspace, record.artifact_path);
     if (built) {
       const capturedRenderedSha256 = record.captured_rendered_sha256;
-      resolution = resolveAnchor(
-        { body: record.body, intent: record.intent, target: record.target },
-        built.artifact,
-        {
-          ...built.resolveCtx,
-          ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
-        },
-      );
+      resolution = resolveAnchor({ body: record.body, intent: record.intent, target: record.target }, built.artifact, {
+        ...built.resolveCtx,
+        ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
+      });
     }
   }
-  return buildDeliveryPresentation(id, payload, { status, ...(resolution ? { resolution } : {}), ...(cursor ? { cursor } : {}) });
+  return buildDeliveryPresentation(id, payload, {
+    status,
+    ...(resolution ? { resolution } : {}),
+    ...(cursor ? { cursor } : {}),
+  });
 }
 
 /** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
@@ -654,7 +684,6 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
 
   let body: unknown;
   try {
@@ -665,7 +694,7 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
   const validated = validateAnnotationBody(body);
   if (!validated.ok) return problem(400, "validation-failed", validated.reason, undefined, url.pathname);
 
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, resolved.entry);
   const id = generateAnnotationId();
   // Explicitly picked fields ONLY — never spread the raw parsed body. `kind` in particular must
   // stay a server-assigned constant: a client-supplied `kind` (e.g. "attention_request") spread
@@ -685,7 +714,7 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
   let resolution: Resolution | undefined;
   const artifactPathRaw = validated.value.artifact_path;
   if (typeof artifactPathRaw === "string" && artifactPathRaw.length > 0) {
-    const built = buildAnchoringContext(ctx, root, artifactPathRaw);
+    const built = buildAnchoringContext(ctx, resolved.entry, artifactPathRaw);
     if (built) {
       const capturedRenderedSha256 = (body as Record<string, unknown>).captured_rendered_sha256;
       const resolveCtx: ResolveCtx = {
@@ -712,12 +741,17 @@ async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Reques
  * a delete: the entry stops being deliverable/nudgeable but its history stays replayable. 404 for
  * an id the journal has never seen; 409 `conflict` once terminal (a session may have applied it
  * concurrently — the UI should refresh, not pretend the retraction won). */
-async function handleWithdrawAnnotation(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+async function handleWithdrawAnnotation(
+  ctx: ApiContext,
+  slug: string,
+  entryId: string,
+  req: Request,
+): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
 
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, resolved.entry);
   const entry = bus.state.entries[entryId];
   if (!entry) return problem(404, "not-found", "no such annotation entry", entryId, url.pathname);
   const kind = entry.kind === "attention" ? "attention" : "common";
@@ -744,7 +778,7 @@ async function handleDiff(ctx: ApiContext, slug: string, req: Request): Promise<
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry;
 
   if (url.searchParams.get("since") !== null) {
     // P3.5: `since=last-annotation|yesterday` resolution belongs to the full checkpoint-query UI.
@@ -776,7 +810,7 @@ async function handleCheckpoints(ctx: ApiContext, slug: string, req: Request): P
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry;
 
   const limitParam = url.searchParams.get("limit");
   let limit: number | undefined;
@@ -793,7 +827,13 @@ async function handleCheckpoints(ctx: ApiContext, slug: string, req: Request): P
   const since = url.searchParams.get("since") ?? undefined;
   const result = await listCheckpoints(root, { since, limit }, new Date());
   if (!result.ok) {
-    return problem(400, "validation-failed", "since is not a recognized token or known checkpoint", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "since is not a recognized token or known checkpoint",
+      undefined,
+      url.pathname,
+    );
   }
   return Response.json(result.rows);
 }
@@ -810,7 +850,7 @@ async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promi
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry.worktree_path;
 
   let body: unknown;
   try {
@@ -835,38 +875,43 @@ async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promi
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(resolved.entry);
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
 
   // resolveBus BEFORE the dirty check / commitExists — same reasoning as handlePutArtifact: it's
   // what guarantees the shadow repo exists at all (a workspace whose first-ever git op is a
   // restore call still needs `initShadowRepo` to have run).
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, resolved.entry);
 
-  if (!(await commitExists(root, to))) {
+  if (!(await commitExists(resolved.entry, to))) {
     return problem(400, "validation-failed", "to is not a known checkpoint", undefined, url.pathname);
   }
 
-  const dirty = await isPathDirty(root, match.path);
+  const dirty = await isPathDirty(resolved.entry, match.path);
   if (dirty && !force) {
-    const lostDiff = await runGit(root, ["diff", "HEAD", "--", safePathspec(match.path)]);
+    const lostDiff = await runGit(resolved.entry, ["diff", "HEAD", "--", safePathspec(match.path)]);
     return restoreConflictResponse(url.pathname, match.path, lostDiff.stdout);
   }
 
-  const content = await readFileAtCheckpoint(root, to, match.path);
+  const content = await readFileAtCheckpoint(resolved.entry, to, match.path);
   if (content === null) {
     return problem(404, "not-found", "artifact did not exist at that checkpoint", undefined, url.pathname);
   }
 
   const inboxId = generateAnnotationId();
-  const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content), "restore");
+  const captured = await bus.captureHumanEdit(
+    inboxId,
+    match.path,
+    () => writeArtifactAtomic(match.rawPath, content),
+    "restore",
+  );
   const fullSha = captured?.checkpoint_after ?? to;
   // Shortened to match `checkpoints.ts`'s `checkpoint_id` format (A6 §F31: "the shadow-git SHORT
   // sha") — `humanEditCheckpoint` itself returns the full sha (its `checkpoint()`/`headSha()`
   // return type everywhere else in this codebase), so this is the one place that narrows it to
   // the same opaque identifier the checkpoints listing hands back for the exact same commit.
-  const shortSha = (await runGit(root, ["rev-parse", "--short", fullSha])).stdout.trim();
+  const shortSha = (await runGit(resolved.entry, ["rev-parse", "--short", fullSha])).stdout.trim();
 
   return Response.json({
     path: match.path,
@@ -884,13 +929,13 @@ function handleInbox(ctx: ApiContext, slug: string, pathname: string): Response 
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
 
-  const { state, createdAt } = peekJournal(resolved.entry.canonical_path);
+  const { state, createdAt } = peekJournal(resolved.entry);
   const attention = Object.entries(state.entries)
     .filter(([, e]) => e.kind === "attention" && !isTerminal("attention", e.status))
     .map(([id, e]) => {
       let payload: Record<string, unknown> = {};
       try {
-        const raw = readInboxEntry(resolved.entry.canonical_path, id);
+        const raw = readInboxEntry(resolved.entry, id);
         if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) payload = raw as Record<string, unknown>;
       } catch {
         // Journal state remains authoritative even if an immutable payload is unreadable.
@@ -913,7 +958,7 @@ async function handleAttentionSeen(ctx: ApiContext, slug: string, entryId: strin
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, resolved.entry);
   try {
     return Response.json({ id: entryId, ...(await bus.markAttentionSeen(entryId)) });
   } catch {
@@ -921,7 +966,12 @@ async function handleAttentionSeen(ctx: ApiContext, slug: string, entryId: strin
   }
 }
 
-async function handleAttentionResponse(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+async function handleAttentionResponse(
+  ctx: ApiContext,
+  slug: string,
+  entryId: string,
+  req: Request,
+): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
@@ -934,27 +984,48 @@ async function handleAttentionResponse(ctx: ApiContext, slug: string, entryId: s
   const b = body as Record<string, unknown> | null;
   const outcome = b?.outcome;
   if (outcome !== "done" && outcome !== "approved" && outcome !== "changes_requested") {
-    return problem(400, "validation-failed", "outcome must be done, approved, or changes_requested", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "outcome must be done, approved, or changes_requested",
+      undefined,
+      url.pathname,
+    );
   }
   const response = b?.response;
   if (response !== undefined && (typeof response !== "string" || Buffer.byteLength(response, "utf8") > 4096)) {
-    return problem(400, "validation-failed", "response must be a string of at most 4096 bytes", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "response must be a string of at most 4096 bytes",
+      undefined,
+      url.pathname,
+    );
   }
 
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, resolved.entry);
   const entry = bus.readEntry(entryId);
   if (!entry || typeof entry.payload !== "object" || entry.payload === null) {
     return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
   }
   const action = (entry.payload as Record<string, unknown>).action;
   if (action === "review" && outcome === "done") {
-    return problem(400, "validation-failed", "review requests require approved or changes_requested", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "review requests require approved or changes_requested",
+      undefined,
+      url.pathname,
+    );
   }
   if (action !== "review" && outcome !== "done") {
     return problem(400, "validation-failed", "generic requests require outcome done", undefined, url.pathname);
   }
   try {
-    return Response.json({ id: entryId, ...(await bus.completeAttention(entryId, outcome, response as string | undefined)) });
+    return Response.json({
+      id: entryId,
+      ...(await bus.completeAttention(entryId, outcome, response as string | undefined)),
+    });
   } catch (error) {
     return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
   }
@@ -1011,7 +1082,7 @@ function handleGetMetadata(ctx: ApiContext, slug: string, pathname: string): Res
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
   if (!ctx.metadataRegistry) return metadataUnavailable(pathname);
-  const descriptor = ctx.metadataRegistry.get(resolved.entry.canonical_path);
+  const descriptor = ctx.metadataRegistry.get(resolved.entry);
   if (!descriptor) return problem(404, "not-found", "workspace metadata is not registered", undefined, pathname);
   return Response.json({ metadata: descriptor });
 }
@@ -1028,7 +1099,7 @@ async function handleSetMetadata(ctx: ApiContext, slug: string, req: Request): P
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
   try {
-    const { descriptor, replaced } = await ctx.metadataRegistry.set(resolved.entry.canonical_path, body);
+    const { descriptor, replaced } = await ctx.metadataRegistry.set(resolved.entry, body);
     return Response.json({ metadata: descriptor, replaced });
   } catch (error) {
     return metadataError(error, url.pathname);
@@ -1040,7 +1111,7 @@ async function handleClearMetadata(ctx: ApiContext, slug: string, pathname: stri
   if (!resolved.ok) return resolved.response;
   if (!ctx.metadataRegistry) return metadataUnavailable(pathname);
   try {
-    return Response.json({ cleared: await ctx.metadataRegistry.clear(resolved.entry.canonical_path) });
+    return Response.json({ cleared: await ctx.metadataRegistry.clear(resolved.entry) });
   } catch (error) {
     return metadataError(error, pathname);
   }
@@ -1098,13 +1169,20 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   }
 
   const canonicalCwd = canonicalOrNull(cwd);
-  if (!canonicalCwd) return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
+  if (!canonicalCwd)
+    return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
 
   let workspaceBinding: string | undefined;
   if (typeof b?.workspace_binding === "string" && b.workspace_binding.length > 0) {
     const canonicalBinding = canonicalOrNull(b.workspace_binding);
     if (!canonicalBinding) {
-      return problem(400, "invalid-path", "workspace_binding does not resolve to a real directory", undefined, url.pathname);
+      return problem(
+        400,
+        "invalid-path",
+        "workspace_binding does not resolve to a real directory",
+        undefined,
+        url.pathname,
+      );
     }
     workspaceBinding = canonicalBinding;
   } else if (ctx.adapterRegistry) {
@@ -1119,7 +1197,8 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
     }
   }
 
-  const transcriptPath = typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
+  const transcriptPath =
+    typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
 
   const { record, drainedWorkspaces } = await ctx.sessionRegistry.register({
     session_id: sessionId,
@@ -1199,18 +1278,24 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   }
 
   const root = record.workspace_binding ?? record.cwd;
-  const bus = await resolveBus(ctx, root);
+  const workspace = ctx.workspaceIndex.get(root) ?? (await ctx.workspaceIndex.upsertWorkspace(root, "session"));
+  const bus = await resolveBus(ctx, workspace);
 
   const prepared = await bus.prepareDelivery(
     limit,
     { via, session: sessionId, ...(entryId ? { entryId } : {}) },
-    (id, payload, status) => buildActionablePresentation(ctx, root, id, payload, status, cursor),
+    (id, payload, status) => buildActionablePresentation(ctx, workspace, id, payload, status, cursor),
   );
 
   return Response.json(prepared);
 }
 
-async function handleSessionDeliveryAck(ctx: ApiContext, sessionId: string, deliveryId: string, req: Request): Promise<Response> {
+async function handleSessionDeliveryAck(
+  ctx: ApiContext,
+  sessionId: string,
+  deliveryId: string,
+  req: Request,
+): Promise<Response> {
   const url = new URL(req.url);
   const record = ctx.sessionRegistry.get(sessionId);
   if (!record) return problem(404, "not-found", "unknown session", undefined, url.pathname);
@@ -1226,13 +1311,14 @@ async function handleSessionDeliveryAck(ctx: ApiContext, sessionId: string, deli
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, url.pathname);
   }
   const root = record.workspace_binding ?? record.cwd;
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   const acknowledged = await bus.acknowledgeDelivery(
     deliveryId,
     outcome,
     typeof value?.error === "string" ? value.error : undefined,
   );
-  if (!acknowledged) return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
+  if (!acknowledged)
+    return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
   return Response.json({ acknowledged: true });
 }
 
@@ -1257,9 +1343,7 @@ function handleSessionPushStream(
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (entry: DeliverableEntry) => {
-        controller.enqueue(
-          encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`),
-        );
+        controller.enqueue(encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`));
       };
       unregister = ctx.pushRegistry?.register(sessionId, send) ?? null;
       controller.enqueue(encoder.encode(": connected\n\n"));
@@ -1294,10 +1378,16 @@ async function handleConversationAck(
   }
   const outcome = (body as Record<string, unknown> | null)?.outcome;
   if (outcome !== "transport_accepted" && outcome !== "presented" && outcome !== "failed") {
-    return problem(400, "validation-failed", "outcome must be transport_accepted|presented|failed", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "outcome must be transport_accepted|presented|failed",
+      undefined,
+      url.pathname,
+    );
   }
   if (outcome === "transport_accepted") ctx.pushRegistry?.acknowledgeTransport(sessionId, messageId);
-  const bus = await resolveBus(ctx, record.workspace_binding);
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
   const acknowledged = await bus.acknowledgeConversationMessage(messageId, {
     session: sessionId,
     via: "channel",
@@ -1310,15 +1400,27 @@ async function handleConversationAck(
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
-async function handleInboxPresentation(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
+async function handleInboxPresentation(
+  ctx: ApiContext,
+  slug: string,
+  entryId: string,
+  req: Request,
+): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry;
   const bus = await resolveBus(ctx, root);
   const entry = bus.readEntry(entryId);
   if (!entry) return problem(404, "not-found", "no such inbox entry", entryId, url.pathname);
-  const presentation = buildActionablePresentation(ctx, root, entryId, entry.payload, entry.status, url.searchParams.get("cursor") ?? undefined);
+  const presentation = buildActionablePresentation(
+    ctx,
+    root,
+    entryId,
+    entry.payload,
+    entry.status,
+    url.searchParams.get("cursor") ?? undefined,
+  );
   if (!presentation) return problem(422, "validation-failed", "entry payload is not actionable", entryId, url.pathname);
   return Response.json({ presentation });
 }
@@ -1351,16 +1453,28 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
   } catch {
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
-  const rawPath = (body as Record<string, unknown> | null)?.path;
+  const parsed = body as Record<string, unknown> | null;
+  const rawPath = parsed?.path;
   if (typeof rawPath !== "string" || rawPath.length === 0) {
     return problem(400, "validation-failed", "path is required", undefined, url.pathname);
   }
-  const root = canonicalOrNull(rawPath);
-  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
-
-  const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
-  await resolveBus(ctx, root); // triggers the real first-touch .glosa/ + shadow-git baseline scaffold
-  return Response.json({ slug: entry.slug, path: root });
+  try {
+    const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, {
+      externalState: parsed?.external_state === true,
+    });
+    await resolveBus(ctx, opened.entry);
+    return Response.json({
+      slug: opened.entry.slug,
+      path: opened.entry.worktree_path,
+      ...(opened.focus ? { focus: opened.focus } : {}),
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceOpenError) {
+      const status = error.code === "artifact-not-tracked" ? 422 : 400;
+      return problem(status, error.code, error.message, undefined, url.pathname);
+    }
+    throw error;
+  }
 }
 
 const RESOLVE_TERMINAL_OUTCOMES = new Set(["applied", "rejected", "stale"]);
@@ -1396,7 +1510,7 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   const root = canonicalOrNull(rawPath);
   if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
 
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
 
   if (outcome === "deferred") {
     const entryState = bus.state.entries[entry];
@@ -1424,7 +1538,13 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   }
 
   if (!RESOLVE_TERMINAL_OUTCOMES.has(outcome)) {
-    return problem(400, "validation-failed", "outcome must be one of applied|rejected|deferred|stale", undefined, url.pathname);
+    return problem(
+      400,
+      "validation-failed",
+      "outcome must be one of applied|rejected|deferred|stale",
+      undefined,
+      url.pathname,
+    );
   }
 
   try {
@@ -1460,7 +1580,7 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
   const root = canonicalOrNull(rawPath);
   if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
 
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   try {
     const { leaseId, preSha } = await bus.applyBegin(entry, session);
     return new Response(JSON.stringify({ entry, lease_id: leaseId, pre_sha: preSha }), {
@@ -1469,7 +1589,13 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
     });
   } catch (err) {
     if ((err as { code?: string }).code === "LEASE_HELD") {
-      return problem(409, "lease-conflict", "an apply-lease is already active for this workspace", undefined, url.pathname);
+      return problem(
+        409,
+        "lease-conflict",
+        "an apply-lease is already active for this workspace",
+        undefined,
+        url.pathname,
+      );
     }
     throw err;
   }
@@ -1509,7 +1635,7 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
   }
 
   const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, entry);
   const id = generateAnnotationId();
   await bus.createEntry(id, {
     kind: "attention_request",
@@ -1538,7 +1664,7 @@ async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promis
   const root = canonicalOrNull(rawPath);
   if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
 
-  const bus = await resolveBus(ctx, root);
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   const state = bus.state.entries[entry];
   if (!state) return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
   return Response.json({ id: entry, kind: state.kind, status: state.status, detail: state.detail ?? null });
@@ -1551,14 +1677,14 @@ async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promis
  * add except more network round trips for the CLI to fail independently on. */
 function handleStatusAggregate(ctx: ApiContext): Response {
   const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
-    const { state } = peekJournal(e.canonical_path);
+    const { state } = peekJournal(e);
     const pendingCount = Object.values(state.entries).filter((entry) => {
       const kind = entry.kind === "attention" ? "attention" : "common";
       return !isTerminal(kind, entry.status);
     }).length;
     return {
       slug: e.slug,
-      path: e.canonical_path,
+      path: e.worktree_path,
       last_seen: e.last_seen,
       pending_count: pendingCount,
       has_attention: hasOpenAttention(state),
@@ -1610,11 +1736,11 @@ async function handleStream(
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
-  return createJournalStreamResponse(resolved.entry.canonical_path, bus, req, server, {
+  const bus = await resolveBus(ctx, resolved.entry);
+  return createJournalStreamResponse(resolved.entry, bus, req, server, {
     shutdownSignal: lifecycleSignal(ctx, authSignal),
     subscribeMetadata: ctx.metadataRegistry
-      ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry.canonical_path, listener)
+      ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,
   });
 }
@@ -1647,7 +1773,13 @@ function handleTranscriptStream(
 
   const confined = confineTranscriptPath(transcriptPath);
   if (!confined.ok) {
-    return problem(400, "invalid-path", "transcript path is outside the allowed CLAUDE_CONFIG_DIR root", undefined, url.pathname);
+    return problem(
+      400,
+      "invalid-path",
+      "transcript path is outside the allowed CLAUDE_CONFIG_DIR root",
+      undefined,
+      url.pathname,
+    );
   }
 
   return createTranscriptStreamResponse(confined.realPath, req, server, {
@@ -1745,7 +1877,7 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
   }
   const messageId = typeof suppliedMessageId === "string" ? suppliedMessageId : randomUUID();
   const sessionHint = typeof parsed?.session_hint === "string" ? parsed.session_hint : undefined;
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, resolved.entry);
   const existingEntry = bus.readEntry(messageId);
   let immutableTargetSession: string | undefined;
   let immutableProvider: string | undefined;
@@ -1761,7 +1893,12 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
       typeof existingPayload.provider !== "string" ||
       (sessionHint !== undefined && sessionHint !== existingPayload.target_session_id)
     ) {
-      return conversationProblem(409, "idempotency-conflict", "message_id already identifies a different message", url.pathname);
+      return conversationProblem(
+        409,
+        "idempotency-conflict",
+        "message_id already identifies a different message",
+        url.pathname,
+      );
     }
     immutableTargetSession = existingPayload.target_session_id;
     immutableProvider = existingPayload.provider;
@@ -1773,7 +1910,9 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
     if (latest?.outcome !== "failed") return Response.json(current, { status: 202 });
   }
 
-  const allBound = ctx.sessionRegistry.explicitlyBoundForWorkspace(resolved.entry.canonical_path, { includeStale: true });
+  const allBound = ctx.sessionRegistry.explicitlyBoundForWorkspace(resolved.entry.canonical_path, {
+    includeStale: true,
+  });
   const liveBound = allBound.filter((record) => ctx.sessionRegistry.liveness(record.session_id) === "alive");
   if (allBound.length === 0) {
     return conversationProblem(404, "no-bound-session", "no live session is explicitly bound", url.pathname, {
@@ -1787,9 +1926,7 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
   }
 
   let target = immutableTargetSession
-    ? liveBound.find(
-        (record) => record.session_id === immutableTargetSession && record.provider === immutableProvider,
-      )
+    ? liveBound.find((record) => record.session_id === immutableTargetSession && record.provider === immutableProvider)
     : sessionHint
       ? liveBound.find((record) => record.session_id === sessionHint)
       : undefined;
@@ -1799,9 +1936,15 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
     });
   }
   if (!immutableTargetSession && sessionHint && !target) {
-    return conversationProblem(409, "session-selection-required", "the selected session is not a live binding", url.pathname, {
-      candidates: composerCandidates(liveBound),
-    });
+    return conversationProblem(
+      409,
+      "session-selection-required",
+      "the selected session is not a live binding",
+      url.pathname,
+      {
+        candidates: composerCandidates(liveBound),
+      },
+    );
   }
   if (!target && liveBound.length > 1) {
     return conversationProblem(409, "session-selection-required", "choose a live bound session", url.pathname, {
@@ -1880,13 +2023,18 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
   return Response.json(responseBody, { status: responseBody.delivered === true ? 200 : 202 });
 }
 
-async function handleComposerStatus(ctx: ApiContext, slug: string, messageId: string, pathname: string): Promise<Response> {
+async function handleComposerStatus(
+  ctx: ApiContext,
+  slug: string,
+  messageId: string,
+  pathname: string,
+): Promise<Response> {
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
   if (!CONVERSATION_MESSAGE_ID_RE.test(messageId)) {
     return problem(400, "validation-failed", "message_id must be a UUID", undefined, pathname);
   }
-  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const bus = await resolveBus(ctx, resolved.entry);
   const record = bus.readEntry(messageId);
   const payload = record?.payload;
   if (!payload || typeof payload !== "object" || (payload as Record<string, unknown>).kind !== "conversation_message") {
@@ -1906,7 +2054,7 @@ async function handleComposerStatus(ctx: ApiContext, slug: string, messageId: st
 function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: string, pathname: string): Response {
   const resolved = workspaceOrNotFound(ctx, slug, pathname);
   if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.canonical_path;
+  const root = resolved.entry.worktree_path;
 
   const confineResult = confinePath(root, artifactPath);
   if (!confineResult.ok) {
@@ -1917,12 +2065,12 @@ function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: strin
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { tracked } = resolveMatchedFiles(root);
+  const { tracked } = resolveTrackedFiles(resolved.entry);
   const match = tracked.find((f) => f.path === relNfc);
   if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, pathname);
 
-  const mintAdapter = ctx.adapterRegistry?.forWorkspace(root);
-  if (classifyWithAdapter(mintAdapter, root, match.path, classifyArtifactPath(match.path)) !== "F") {
+  const mintAdapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
+  if (classifyWithAdapter(mintAdapter, root, match.path, classifyArtifactPath(match.path), resolved.entry) !== "F") {
     return problem(400, "invalid-path", "capability minting is only for class-F artifacts", undefined, pathname);
   }
 

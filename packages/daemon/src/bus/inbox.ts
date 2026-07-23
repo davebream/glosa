@@ -18,6 +18,7 @@ import {
 import { join } from "node:path";
 import { fsyncContainingDir, writeAllSync } from "./io.ts";
 import { inboxDir, inboxEntryPath } from "./paths.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 
 export interface InboxEntryExistsError extends Error {
   code: "EEXIST";
@@ -43,7 +44,7 @@ function inboxEntryExistsError(id: string): InboxEntryExistsError {
  * whose rename/link has been durably observed — never silently un-happening. Without this fsync,
  * a power loss could make the new directory entry vanish AFTER `entry_created` was already
  * fsynced to the journal, producing the one gap reconcile has no recovery path for. */
-export function writeInboxEntryOnce(workspaceRoot: string, id: string, payload: unknown): void {
+export function writeInboxEntryOnce(workspaceRoot: WorkspaceTarget, id: string, payload: unknown): void {
   const dir = inboxDir(workspaceRoot);
   mkdirSync(dir, { recursive: true });
   const finalPath = inboxEntryPath(workspaceRoot, id);
@@ -75,7 +76,7 @@ export function writeInboxEntryOnce(workspaceRoot: string, id: string, payload: 
 
 /** Returns the parsed entry, or `null` if it's missing or unparseable (never throws — mirrors
  * `lock.ts#readLock`'s "malformed/missing both mean unusable" convention). */
-export function readInboxEntry(workspaceRoot: string, id: string): unknown | null {
+export function readInboxEntry(workspaceRoot: WorkspaceTarget, id: string): unknown | null {
   try {
     return JSON.parse(readFileSync(inboxEntryPath(workspaceRoot, id), "utf8"));
   } catch {
@@ -85,7 +86,7 @@ export function readInboxEntry(workspaceRoot: string, id: string): unknown | nul
 
 /** Final (`*.json`) entry ids only. A `*.tmp` file from a crash between write and rename is
  * never listed here — it's inert by construction, not a phantom entry. */
-export function listInboxEntryIds(workspaceRoot: string): string[] {
+export function listInboxEntryIds(workspaceRoot: WorkspaceTarget): string[] {
   const dir = inboxDir(workspaceRoot);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
@@ -97,7 +98,7 @@ export function listInboxEntryIds(workspaceRoot: string): string[] {
 /** Best-effort removal of orphaned `*.tmp` files left by a crash-before-rename. They're already
  * inert (never listed by `listInboxEntryIds`); this just tidies the directory. Failure here is
  * non-fatal — reconcile must not fail startup over housekeeping. */
-export function cleanupOrphanInboxTempFiles(workspaceRoot: string): void {
+export function cleanupOrphanInboxTempFiles(workspaceRoot: WorkspaceTarget): void {
   const dir = inboxDir(workspaceRoot);
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {

@@ -28,10 +28,7 @@ import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { AdapterRegistry } from "./adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import {
-  AgentProviderRegistry,
-  type AgentProvider,
-} from "./providers/interface.ts";
+import { AgentProviderRegistry, type AgentProvider } from "./providers/interface.ts";
 import { SessionPushRegistry } from "./providers/push-registry.ts";
 
 const DEFAULT_PORT = 4646;
@@ -54,10 +51,7 @@ export async function drainDaemonServers(
   const activeHandlers = servers.map((server) => server.stop(false));
   afterStopAccepting();
   const gracefulDrain = Promise.all(activeHandlers).then(closeWorkspaceBuses);
-  const drained = await Promise.race([
-    gracefulDrain.then(() => true),
-    Bun.sleep(timeoutMs).then(() => false),
-  ]);
+  const drained = await Promise.race([gracefulDrain.then(() => true), Bun.sleep(timeoutMs).then(() => false)]);
   if (!drained) await Promise.allSettled(servers.map((server) => server.stop(true)));
   return drained;
 }
@@ -120,7 +114,15 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
   workspaceIndex.setOnHardRemove((canonicalPath) => busRegistry.evict(canonicalPath));
 
-  return { workspaceIndex, sessionRegistry, busRegistry, adapterRegistry, metadataRegistry, providerRegistry, pushRegistry };
+  return {
+    workspaceIndex,
+    sessionRegistry,
+    busRegistry,
+    adapterRegistry,
+    metadataRegistry,
+    providerRegistry,
+    pushRegistry,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -153,7 +155,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     startedAt,
     workspaceIndex: backend.workspaceIndex,
     sessionRegistry: backend.sessionRegistry,
-    getWorkspaceBus: (root) => backend.busRegistry.get(root),
+    getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
     capabilityStore,
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
@@ -358,9 +360,7 @@ export interface DaemonConnection {
   startedAt: string;
 }
 
-export type EnsureDaemonResult =
-  | ({ ok: true } & DaemonConnection)
-  | { ok: false; reason: string; logPath?: string };
+export type EnsureDaemonResult = ({ ok: true } & DaemonConnection) | { ok: false; reason: string; logPath?: string };
 
 export type DaemonBuildDecision =
   | { action: "use" }
@@ -532,10 +532,7 @@ export function buildChildEnv(
   return env;
 }
 
-async function spawnAndWait(
-  home: string,
-  port: number,
-): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
+async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
   const mainPath = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
   const env = buildChildEnv(Bun.env, { home, port });

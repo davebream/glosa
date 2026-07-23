@@ -26,6 +26,7 @@ import picomatch from "picomatch";
 import { confinePath } from "../confine-path.ts";
 import { loadMatcherConfig } from "../matcher.ts";
 import type { ChunkManifest } from "../anchoring.ts";
+import { workspaceBusPath, workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
 /** The subset of a live session an adapter needs to decide a `workspace_binding` — mirrors
  * `SessionRecord`'s own identity fields (registry/session-registry.ts) without importing that
@@ -70,7 +71,7 @@ export interface ContentAdapter {
   /** Is `workspaceRoot` (already canonicalized) a workspace this adapter handles? Called on every
    * routing/listing path for that workspace, so it should be cheap — a marker-file stat, not a
    * deep scan — and side-effect-free (it may be called speculatively, more than once per request). */
-  recognizes(workspaceRoot: string): boolean;
+  recognizes(workspaceRoot: string, workspace?: WorkspaceTarget): boolean;
   /** R2's authoritative routing input, derived from adapter-specific state (e.g. a provider's own
    * session-history file) rather than the hook payload's raw `cwd`. `null`/`undefined` defers to
    * the core's existing cwd-ancestor fallback (registry/routing.ts) exactly as if no adapter had
@@ -78,18 +79,18 @@ export interface ContentAdapter {
   sessionBinding?(session: AdapterSessionHint): string | null;
   /** Overrides the extension-based R/F split (`artifact-render.ts`'s `classifyArtifactPath`) for
    * one artifact. `undefined` defers to the extension default. */
-  classifyArtifact?(workspaceRoot: string, artifactPath: string): "R" | "F" | undefined;
+  classifyArtifact?(workspaceRoot: string, artifactPath: string, workspace?: WorkspaceTarget): "R" | "F" | undefined;
   /** Reorders a workspace's tracked-artifact path list for the sidebar (e.g. by pipeline stage).
    * Expected to return a permutation of its input, but the core never trusts that blindly (see
    * `orderWithAdapter`) — a misbehaving adapter can only reorder its own workspace's sidebar,
    * never hide or inject artifacts. */
-  sidebarOrder?(workspaceRoot: string, artifacts: string[]): string[];
+  sidebarOrder?(workspaceRoot: string, artifacts: string[], workspace?: WorkspaceTarget): string[];
   /** The generic derived-from edge (R7) for one artifact, or `null` if it has none (a leaf source,
    * not a build output — e.g. every class-R stage file in a pipeline with no upstream). */
-  derivedFrom?(workspaceRoot: string, artifactPath: string): DerivedFromEdge | null;
+  derivedFrom?(workspaceRoot: string, artifactPath: string, workspace?: WorkspaceTarget): DerivedFromEdge | null;
   /** Class-F manifest resolution (A5 §F10/§F11) for one artifact, or `null` if it has none —
    * opaque preview+annotate only, same as no adapter at all. */
-  manifestFor?(workspaceRoot: string, artifactPath: string): ManifestSource | null;
+  manifestFor?(workspaceRoot: string, artifactPath: string, workspace?: WorkspaceTarget): ManifestSource | null;
 }
 
 /** Runs one adapter method call, degrading to `fallback` (and logging which adapter/method
@@ -129,9 +130,10 @@ export class AdapterRegistry {
    * generic core behavior," so callers never need a null-object stand-in. A `recognizes()` that
    * throws is treated as "not recognized" for THAT adapter only — the registry keeps checking
    * later-registered adapters rather than letting one bad adapter black out the whole lookup. */
-  forWorkspace(workspaceRoot: string): ContentAdapter | undefined {
+  forWorkspace(workspace: WorkspaceTarget): ContentAdapter | undefined {
+    const workspaceRoot = workspaceWorktree(workspace);
     for (const a of this.adapters) {
-      const recognized = safeAdapterCall(a.id, "recognizes", () => a.recognizes(workspaceRoot), false);
+      const recognized = safeAdapterCall(a.id, "recognizes", () => a.recognizes(workspaceRoot, workspace), false);
       if (recognized) return a;
     }
     return undefined;
@@ -170,9 +172,19 @@ export type { WorkspaceMetadataArtifact, WorkspaceMetadataDescriptor } from "./w
  * workspace-relative source path, or `undefined` when there's no edge (same shape as "no
  * adapter") — the SPA already treats a falsy `derived_from` as "class F is opaque"
  * (viewer.js's `canEdit`). */
-export function derivedFromSourcePath(adapter: ContentAdapter | undefined, workspaceRoot: string, artifactPath: string): string | undefined {
+export function derivedFromSourcePath(
+  adapter: ContentAdapter | undefined,
+  workspaceRoot: string,
+  artifactPath: string,
+  workspace?: WorkspaceTarget,
+): string | undefined {
   if (!adapter) return undefined;
-  const edge = safeAdapterCall(adapter.id, "derivedFrom", () => adapter.derivedFrom?.(workspaceRoot, artifactPath) ?? null, null);
+  const edge = safeAdapterCall(
+    adapter.id,
+    "derivedFrom",
+    () => adapter.derivedFrom?.(workspaceRoot, artifactPath, workspace) ?? null,
+    null,
+  );
   return edge?.sourcePath ?? undefined;
 }
 
@@ -187,18 +199,35 @@ export function isArtifactStale(
   artifactPath: string,
   artifactMtimeMs: number,
   resolveSourceMtimeMs: (sourcePath: string) => number | null,
+  workspace?: WorkspaceTarget,
 ): boolean {
   if (!adapter) return false;
-  const edge = safeAdapterCall(adapter.id, "derivedFrom", () => adapter.derivedFrom?.(workspaceRoot, artifactPath) ?? null, null);
+  const edge = safeAdapterCall(
+    adapter.id,
+    "derivedFrom",
+    () => adapter.derivedFrom?.(workspaceRoot, artifactPath, workspace) ?? null,
+    null,
+  );
   if (!edge) return false;
   const sourceMtimeMs = resolveSourceMtimeMs(edge.sourcePath);
   if (sourceMtimeMs === null) return false;
   return sourceMtimeMs > artifactMtimeMs;
 }
 
-export function classifyWithAdapter(adapter: ContentAdapter | undefined, workspaceRoot: string, artifactPath: string, fallback: "R" | "F"): "R" | "F" {
+export function classifyWithAdapter(
+  adapter: ContentAdapter | undefined,
+  workspaceRoot: string,
+  artifactPath: string,
+  fallback: "R" | "F",
+  workspace?: WorkspaceTarget,
+): "R" | "F" {
   if (!adapter) return fallback;
-  return safeAdapterCall(adapter.id, "classifyArtifact", () => adapter.classifyArtifact?.(workspaceRoot, artifactPath) ?? fallback, fallback);
+  return safeAdapterCall(
+    adapter.id,
+    "classifyArtifact",
+    () => adapter.classifyArtifact?.(workspaceRoot, artifactPath, workspace) ?? fallback,
+    fallback,
+  );
 }
 
 /** Applies `sidebarOrder`, then reconciles the result against the REAL tracked-path set rather
@@ -206,9 +235,19 @@ export function classifyWithAdapter(adapter: ContentAdapter | undefined, workspa
  * and any tracked path the adapter's permutation omitted is appended at the end (in its original
  * order) — so a buggy or malicious adapter can reorder a workspace's own sidebar but can never
  * make an artifact disappear from or a foreign one appear in the listing. */
-export function orderWithAdapter(adapter: ContentAdapter | undefined, workspaceRoot: string, paths: readonly string[]): readonly string[] {
+export function orderWithAdapter(
+  adapter: ContentAdapter | undefined,
+  workspaceRoot: string,
+  paths: readonly string[],
+  workspace?: WorkspaceTarget,
+): readonly string[] {
   const proposed = adapter
-    ? safeAdapterCall(adapter.id, "sidebarOrder", () => adapter.sidebarOrder?.(workspaceRoot, [...paths]) ?? null, null)
+    ? safeAdapterCall(
+        adapter.id,
+        "sidebarOrder",
+        () => adapter.sidebarOrder?.(workspaceRoot, [...paths], workspace) ?? null,
+        null,
+      )
     : null;
   if (!proposed) return paths;
 
@@ -250,9 +289,19 @@ export interface ResolvedManifest {
  * `manifest_path` example) is a `.json` file, which never matches that include list by design. A
  * path that fails confinement, falls in an excluded directory, doesn't exist, or isn't valid JSON
  * resolves to `null` — same as "no manifest" — never a throw. */
-export function resolveManifest(workspaceRoot: string, adapter: ContentAdapter | undefined, artifactPath: string): ResolvedManifest | null {
+export function resolveManifest(
+  workspaceRoot: string,
+  adapter: ContentAdapter | undefined,
+  artifactPath: string,
+  workspace?: WorkspaceTarget,
+): ResolvedManifest | null {
   if (!adapter) return null;
-  const source = safeAdapterCall(adapter.id, "manifestFor", () => adapter.manifestFor?.(workspaceRoot, artifactPath) ?? null, null);
+  const source = safeAdapterCall(
+    adapter.id,
+    "manifestFor",
+    () => adapter.manifestFor?.(workspaceRoot, artifactPath, workspace) ?? null,
+    null,
+  );
   if (!source) return null;
   if ("manifest" in source) {
     return { manifest: source.manifest, component: source.component, adapterId: source.adapterId ?? adapter.id };
@@ -265,7 +314,9 @@ export function resolveManifest(workspaceRoot: string, adapter: ContentAdapter |
     .split("/")
     .map((segment) => segment.normalize("NFC"))
     .join("/");
-  const { artifacts } = loadMatcherConfig(workspaceRoot);
+  const { artifacts } = workspace
+    ? loadMatcherConfig(workspaceRoot, workspaceBusPath(workspace))
+    : loadMatcherConfig(workspaceRoot);
   const isExcluded = picomatch(artifacts.exclude, { nocase: false });
   if (isExcluded(manifestRelNfc)) return null;
 

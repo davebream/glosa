@@ -7,6 +7,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import picomatch from "picomatch";
+import { workspaceBusPath, workspaceTracking, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
 
 export interface MatcherArtifactsConfig {
   include: string[];
@@ -38,8 +39,8 @@ export const DEFAULT_MATCHER_CONFIG: MatcherConfig = {
  * `exclude` are UNIONED onto the defaults (an override "adds" a glob, per A4 §F20's example of
  * lowering `maxFileBytes` OR adding a glob) — the scalar fields (`maxFileBytes`,
  * `followSymlinks`) replace the default when present. */
-export function loadMatcherConfig(root: string): MatcherConfig {
-  const overridePath = join(root, ".glosa", "config.json");
+export function loadMatcherConfig(root: string, busPath: string = join(root, ".glosa")): MatcherConfig {
+  const overridePath = join(busPath, "config.json");
   if (!existsSync(overridePath)) return DEFAULT_MATCHER_CONFIG;
 
   let raw: string;
@@ -131,8 +132,7 @@ export function resolveMatchedFiles(
   const dirPrunePatterns = config.artifacts.exclude
     .filter((g) => g.endsWith("/**"))
     .map((g) => g.slice(0, -"/**".length));
-  const isPrunedDir =
-    dirPrunePatterns.length > 0 ? picomatch(dirPrunePatterns, { nocase: false }) : () => false;
+  const isPrunedDir = dirPrunePatterns.length > 0 ? picomatch(dirPrunePatterns, { nocase: false }) : () => false;
 
   const candidates: { path: string; rawPath: string; sizeBytes: number }[] = [];
   const skippedSymlinks: string[] = [];
@@ -188,6 +188,32 @@ export function resolveMatchedFiles(
   return { tracked, oversize, skippedSymlinks };
 }
 
+/** The one tracked-file resolver used by production consumers. Plain strings retain the legacy
+ * recursive matcher form for lower-level callers and tests; registered workspaces additionally
+ * carry their daemon-selected state directory and may replace the recursive walk with a bounded
+ * explicit list. */
+export function resolveTrackedFiles(workspace: WorkspaceTarget): ResolveMatchedFilesResult {
+  const root = workspaceWorktree(workspace);
+  const tracking = workspaceTracking(workspace);
+  if (tracking.mode === "matcher") {
+    return resolveMatchedFiles(root, loadMatcherConfig(root, workspaceBusPath(workspace)));
+  }
+
+  const tracked: MatchedFile[] = [];
+  for (const path of tracking.paths) {
+    const rawPath = join(root, ...path.split("/"));
+    try {
+      const stat = lstatSync(rawPath);
+      if (!stat.isSymbolicLink() && stat.isFile()) tracked.push({ path, rawPath, sizeBytes: stat.size });
+    } catch {
+      // A bounded artifact may be temporarily absent during an atomic save. It stays registered,
+      // but is omitted from the current resolved LIST until it reappears as a regular file.
+    }
+  }
+  tracked.sort((a, b) => byteCompare(a.path, b.path));
+  return { tracked, oversize: [], skippedSymlinks: [] };
+}
+
 export type CrossingEvent =
   | { type: "file_tracked"; path: string }
   | { type: "file_untracked"; path: string; reason: "oversize" | "deleted" };
@@ -208,11 +234,13 @@ export function diffSnapshots(prev: ResolveMatchedFilesResult, next: ResolveMatc
     if (prevTracked.has(path)) events.push({ type: "file_untracked", path, reason: "oversize" }); // grew past
   }
   for (const path of nextTracked) {
-    if (prevOversize.has(path)) events.push({ type: "file_tracked", path }); // shrank under
+    if (prevOversize.has(path))
+      events.push({ type: "file_tracked", path }); // shrank under
     else if (!prevTracked.has(path)) events.push({ type: "file_tracked", path }); // new file
   }
   for (const path of prevTracked) {
-    if (!nextTracked.has(path) && !nextOversize.has(path)) events.push({ type: "file_untracked", path, reason: "deleted" });
+    if (!nextTracked.has(path) && !nextOversize.has(path))
+      events.push({ type: "file_untracked", path, reason: "deleted" });
   }
 
   events.sort((a, b) => byteCompare(a.path, b.path));

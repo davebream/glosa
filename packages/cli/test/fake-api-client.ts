@@ -17,9 +17,10 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   readonly port = 4646;
   calls: { method: string; args: unknown[] }[] = [];
 
-  openWorkspaceResult: { slug: string; path: string } = { slug: "ws-slug", path: "/tmp/ws" };
-  resolveEntryImpl: ((path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string) => Promise<ResolveResult>) | null =
-    null;
+  openWorkspaceResult: { slug: string; path: string; focus?: string } = { slug: "ws-slug", path: "/tmp/ws" };
+  resolveEntryImpl:
+    | ((path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string) => Promise<ResolveResult>)
+    | null = null;
   applyBeginImpl: ((path: string, entry: string, session: string) => Promise<ApplyBeginResult>) | null = null;
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
@@ -37,12 +38,21 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     sessions: [],
   };
 
-  async openWorkspace(path: string): Promise<{ slug: string; path: string }> {
-    this.calls.push({ method: "openWorkspace", args: [path] });
+  async openWorkspace(
+    path: string,
+    opts?: { externalState?: boolean },
+  ): Promise<{ slug: string; path: string; focus?: string }> {
+    this.calls.push({ method: "openWorkspace", args: opts === undefined ? [path] : [path, opts] });
     return this.openWorkspaceResult;
   }
 
-  async resolveEntry(path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string): Promise<ResolveResult> {
+  async resolveEntry(
+    path: string,
+    entry: string,
+    outcome: ResolveOutcome,
+    session: string,
+    note?: string,
+  ): Promise<ResolveResult> {
     this.calls.push({ method: "resolveEntry", args: [path, entry, outcome, session, note] });
     if (this.resolveEntryImpl) return this.resolveEntryImpl(path, entry, outcome, session, note);
     return { entry, status: outcome, to: outcome };
@@ -54,7 +64,10 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     return { entry, lease_id: "lease-1", pre_sha: "abc123" };
   }
 
-  async createAttentionRequest(path: string, opts: { message?: string; action?: string; targetPath?: string }): Promise<AttentionRequestResult> {
+  async createAttentionRequest(
+    path: string,
+    opts: { message?: string; action?: string; targetPath?: string },
+  ): Promise<AttentionRequestResult> {
     this.calls.push({ method: "createAttentionRequest", args: [path, opts] });
     return this.attentionRequestResult;
   }
@@ -76,8 +89,13 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   }
 }
 
-export function apiError(status: number, problem: Record<string, unknown> | null = null): Error & { code: "API_ERROR"; status: number; problem: unknown } {
-  const err = new Error((problem?.title as string | undefined) ?? `glosa daemon request failed with status ${status}`) as Error & {
+export function apiError(
+  status: number,
+  problem: Record<string, unknown> | null = null,
+): Error & { code: "API_ERROR"; status: number; problem: unknown } {
+  const err = new Error(
+    (problem?.title as string | undefined) ?? `glosa daemon request failed with status ${status}`,
+  ) as Error & {
     code: "API_ERROR";
     status: number;
     problem: unknown;

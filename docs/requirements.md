@@ -87,17 +87,24 @@ generic.**
   `/api/handshake`. Lock and handshake identity/PID/instance must agree before any signal is sent.
   Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
   `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
-- **Workspace = a directory** (git repo or not; never assume/touch a real repo). Sources: session
-  registration, `glosa open <dir>`, first-touch `.glosa/`. A **global index** `~/.glosa/workspaces.json`
-  (daemon-only writer, atomic) enumerates workspaces; identity = realpath→NFC→strip-slash; slug =
-  `basename-sha256(path)[:6]` with deterministic collision-lengthening (A4 §F25).
-- **Tracked-artifact rule** (one picomatch matcher → one normalized file LIST feeding watcher + sidebar
-  + git pathspec identically): include `**/*.md,**/*.html,**/*.txt`; exclude dot-dirs, `node_modules`,
-  files > 2 MiB; symlinks never followed/matched; NFC + case-sensitive; per-workspace override in
-  `.glosa/config.json` (A4 §F20).
-- Git-agnostic provenance: shadow repo `GIT_DIR=.glosa/shadow.git --work-tree=<root>`, argv-safe, one
-  git mutex/workspace, deterministic init + baseline, index-lock recovery (A4 §F21). UI speaks
-  versions/timeline/restore — never commits/SHAs.
+- **Workspace registration** separates an immutable registration ID, kind (`directory` or
+  `loose-file`), canonical identity path, work-tree, absolute bus path, and tracked-file policy.
+  Sources: session registration, `glosa open <path>`, first-touch `.glosa/`. The daemon-only,
+  atomically written global index `~/.glosa/workspaces.json` is authoritative. Identity paths use
+  realpath→NFC→strip-slash; slugs remain display/routing labels with deterministic
+  collision-lengthening (A4 §F25). Loose files and redirected directories store state beneath
+  `~/.glosa/state/<full-sha256-registration-id>/` while retaining their original work-tree.
+- **Tracked-artifact rule** produces one normalized file LIST feeding watcher + sidebar + git
+  pathspec identically. Directory registrations use the recursive picomatch policy: include
+  `**/*.md,**/*.html,**/*.txt`; exclude dot-dirs, `node_modules`, files > 2 MiB; symlinks never
+  followed/matched; NFC + case-sensitive. Loose-file registrations use a bounded relative-path
+  list containing exactly the requested existing regular non-symlink file and intentionally bypass
+  matcher extension, exclusion, and size rules. Per-workspace overrides resolve from
+  `<bus-path>/config.json` (A4 §F20).
+- Git-agnostic provenance: shadow repo
+  `GIT_DIR=<bus-path>/shadow.git --work-tree=<work-tree>`, argv-safe, one git mutex/registration,
+  deterministic init + baseline, index-lock recovery (A4 §F21). UI speaks versions/timeline/restore
+  — never commits/SHAs.
 
 ### R2 — session registry & routing  (detail: A2 §F08, A5 §F19)
 - Providers register live agent sessions via hooks → daemon API (never direct file writes; serialized
@@ -116,6 +123,9 @@ generic.**
   `event_id` + `idem` keys). `glosa resolve` appends **one** journal line — no cross-file atomic write
   exists (this is the F04 fix). Startup reconciliation: torn-tail truncate → replay → inbox self-heal →
   apply-lease reconcile → offline-edit catch-up. Corrupt interior line → quarantine, never fatal.
+- Journal, inbox, quarantine, declarative metadata/config, reconciliation state, checkpoints, and
+  shadow Git resolve through the registration's absolute bus path. Redirection changes storage
+  location only; journal replay and apply-lease evidence retain unchanged authority.
 - Entry kinds: `human_edit`, `annotation`, `attention_request`, `conversation_message`. Envelope + payloads exactly per A4/A5
   (`human_edit` = inline hunk diffs referenced by shadow-git sha, never full bodies; `annotation` =
   W3C quote+prefix/suffix+position + `intent` + `target.chunk_id?`). Annotation `intent` enum =
