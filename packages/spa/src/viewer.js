@@ -583,6 +583,10 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       const anchorEl = anchorNode && (anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement);
       anchorEl?.scrollIntoView?.({ block: "center" });
     }
+    // Moving focus into the composer ends the browser's transient selection paint. Keep the
+    // captured range visibly marked for the whole composition step, so the reviewer can still
+    // see exactly what their feedback will attach to.
+    paintComposerSelection();
     renderMargin();
     // The composer is rendered in the margin, not at the selection itself. Native focus normally
     // scrolls the nearest scroll container until that newly inserted control is visible; for a
@@ -594,6 +598,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   function closeComposer() {
     const returnFocus = composer?.returnFocus;
     composer = null;
+    paintComposerSelection();
     renderMargin();
     queueMicrotask(() => {
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
@@ -858,6 +863,16 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   const highlightsAvailable = () =>
     typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
 
+  /** The open composer owns a temporary, persistent selection wash. It deliberately lives in a
+   * separate highlight from saved annotation underlines, so closing/sending a draft cannot erase
+   * the durable annotation state. */
+  function paintComposerSelection() {
+    if (!highlightsAvailable()) return;
+    const range = composer ? rangeForTarget(composer.record?.target) : null;
+    if (range) CSS.highlights.set("glosa-composer-selection", new Highlight(range));
+    else CSS.highlights.delete("glosa-composer-selection");
+  }
+
   let anchoredRanges = []; // [{item, range}] cache from the last underline pass — hit-testing reuses it
 
   /** Every annotated passage carries a permanent quiet underline (the pencil line that says
@@ -937,6 +952,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     marginEl.textContent = "";
     if (modeState.mode !== "annotate" || !currentArtifact) {
       if (composer) composer = null;
+      paintComposerSelection();
       return;
     }
     marginEl.append(el("p", { className: "glosa-margin-title", textContent: "Annotations" }));
@@ -999,6 +1015,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       layoutMargin();
       renderMarkers();
       paintAnchorUnderlines();
+      paintComposerSelection();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(align);
     else align();

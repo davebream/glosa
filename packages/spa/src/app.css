@@ -1425,6 +1425,12 @@ button {
   background-color: var(--anchor-wash);
 }
 
+/* Browser selection paint disappears as soon as focus moves into the annotation composer. Keep
+   the selected passage visibly attached to that open draft until it is sent or cancelled. */
+::highlight(glosa-composer-selection) {
+  background-color: var(--anchor-wash);
+}
+
 /* Side-rail cards sit tighter than in-flow ones: one-line quote, smaller padding — smaller
    cards mean less collision-push away from their anchors. */
 .glosa-margin-side .glosa-annotation {
