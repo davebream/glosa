@@ -1,30 +1,40 @@
 // SPDX-License-Identifier: Apache-2.0
-// Product-scoped MCP 2025-11-25 stdio server: durable inbox pull/get, metadata, session bind,
-// and conversation acknowledgement. Protocol contract only — no resources/prompts/tasks surface.
+// Product-scoped MCP stdio server: durable inbox pull/get, metadata, session bind,
+// conversation acknowledgement, and the optional Claude Channel notification rung.
 import { randomUUID } from "node:crypto";
-import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
-import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
-import type { GlosaApiClient } from "./api-client.ts";
+import type { Readable, Writable } from "node:stream";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { CallToolResult, JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
-import { GLOSA_MCP_TOOL_BY_NAME, listMcpTools, MCP_PROTOCOL_VERSION } from "./mcp-tools.ts";
-
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: string | number | null;
-  method: string;
-  params?: Record<string, unknown>;
-}
+import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
+import type { GlosaApiClient } from "./api-client.ts";
+import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
+import {
+  conversationAckInputSchema,
+  conversationAckOutputSchema,
+  inboxGetInputSchema,
+  inboxGetOutputSchema,
+  inboxPullInputSchema,
+  inboxPullOutputSchema,
+  metadataClearInputSchema,
+  metadataClearOutputSchema,
+  metadataSetInputSchema,
+  metadataSetOutputSchema,
+  metadataShowInputSchema,
+  metadataShowOutputSchema,
+  sessionBindInputSchema,
+  sessionBindOutputSchema,
+} from "./mcp-schemas.ts";
+import { CLI_VERSION } from "./version.ts";
 
 interface PendingAck {
   client: DaemonHookClient;
   sessionId: string;
   deliveryId: string;
-  deregister?: boolean;
-}
-
-interface McpReply {
-  response?: Record<string, unknown>;
-  ack?: PendingAck;
+  deregister: boolean;
 }
 
 export interface McpDeps {
@@ -34,225 +44,386 @@ export interface McpDeps {
   sessionId?: () => string | undefined;
 }
 
-function result(id: JsonRpcRequest["id"], value: unknown): Record<string, unknown> {
-  return { jsonrpc: "2.0", id: id ?? null, result: value };
-}
+export const GLOSA_MCP_TOOL_NAMES = [
+  "glosa_inbox_pull",
+  "glosa_inbox_get",
+  "glosa_metadata_set",
+  "glosa_metadata_show",
+  "glosa_metadata_clear",
+  "glosa_session_bind",
+  "glosa_conversation_ack",
+] as const;
 
-function error(id: JsonRpcRequest["id"], code: number, message: string): Record<string, unknown> {
-  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+const readOnlyClosedWorld = {
+  readOnlyHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+  destructiveHint: false,
+} as const;
+
+function stateChangingClosedWorld(options: { destructiveHint: boolean; idempotentHint: boolean }) {
+  return {
+    readOnlyHint: false,
+    destructiveHint: options.destructiveHint,
+    idempotentHint: options.idempotentHint,
+    openWorldHint: false,
+  } as const;
 }
 
 /** MCP structuredContent plus JSON text fallback; inbox tools keep actionable presentation text. */
-function toolResult(structuredContent: Record<string, unknown>, presentationText?: string): Record<string, unknown> {
-  const content: Array<{ type: "text"; text: string }> = [];
-  if (presentationText !== undefined) {
-    content.push({ type: "text", text: presentationText });
-  }
+function toolResult(structuredContent: Record<string, unknown>, presentationText?: string): CallToolResult {
+  const content: CallToolResult["content"] = [];
+  if (presentationText !== undefined) content.push({ type: "text", text: presentationText });
   content.push({ type: "text", text: JSON.stringify(structuredContent) });
   return { content, structuredContent };
 }
 
-async function pullInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = (req.params?.arguments ?? {}) as Record<string, unknown>;
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  const limit = typeof args.limit === "number" && Number.isInteger(args.limit) ? Math.max(1, Math.min(8, args.limit)) : 8;
-  const requestedSession =
-    typeof args.session_id === "string" && args.session_id.length > 0 ? args.session_id : undefined;
-  const hostSession = deps.sessionId?.();
-  if (hostSession && requestedSession && requestedSession !== hostSession) {
-    return { response: error(req.id, -32602, "session_id does not match the MCP host session") };
-  }
-  const explicitSession = hostSession ?? requestedSession;
-  const sessionId = explicitSession ?? `mcp-${process.pid}-${randomUUID()}`;
-  const client = await deps.createHookClient();
-  if (explicitSession) {
-    await client.heartbeat(sessionId);
-  } else {
-    await client.register({ session_id: sessionId, provider: "mcp", cwd: workspace, source: "mcp_pull" });
-  }
-  const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
-  const text = drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
-  const structured = {
-    entries: drained.drained,
-    count: drained.count,
-    has_more: drained.has_more ?? false,
-  };
-  if (!explicitSession && !drained.delivery_id) await client.deregister(sessionId);
-  return {
-    response: result(req.id, toolResult(structured, text)),
-    ...(drained.delivery_id ? { ack: { client, sessionId, deliveryId: drained.delivery_id, deregister: !explicitSession } } : {}),
-  };
+function responseId(message: JSONRPCMessage): RequestId | undefined {
+  if (!("id" in message) || (!("result" in message) && !("error" in message))) return undefined;
+  return message.id;
 }
 
-async function getInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = (req.params?.arguments ?? {}) as Record<string, unknown>;
-  if (typeof args.id !== "string" || args.id.length === 0) {
-    return { response: error(req.id, -32602, "glosa_inbox_get requires a non-empty id") };
-  }
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  // `get` is retrieval by durable ID, not a delivery drain. A hook may already have honestly
-  // acknowledged the entry as presented before the agent follows the advertised retrieval hint;
-  // the drain path intentionally suppresses such entries and would therefore make that hint fail.
-  // Match `glosa inbox get` and the HTTP contract by reading the immutable entry directly.
-  const retrieved = await (await deps.createApiClient()).getInboxPresentation(
-    workspace,
-    args.id,
-    typeof args.cursor === "string" ? args.cursor : undefined,
+function responseSucceeded(message: JSONRPCMessage): boolean {
+  if (!("result" in message)) return false;
+  const result = message.result;
+  return (
+    typeof result !== "object" ||
+    result === null ||
+    !("isError" in result) ||
+    (result as { isError?: unknown }).isError !== true
   );
-  const presentation = retrieved.presentation;
-  const structured = { presentation };
-  return {
-    response: result(req.id, toolResult(structured, presentation.text)),
-  };
 }
 
-function toolArgs(req: JsonRpcRequest): Record<string, unknown> {
-  return (req.params?.arguments ?? {}) as Record<string, unknown>;
-}
+class DeliveryAcknowledgements {
+  private readonly pending = new Map<RequestId, PendingAck>();
 
-async function metadataSet(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = toolArgs(req);
-  if (typeof args.metadata !== "object" || args.metadata === null || Array.isArray(args.metadata)) {
-    return { response: error(req.id, -32602, "glosa_metadata_set requires a metadata object") };
+  reserve(requestId: RequestId, ack: PendingAck, signal: AbortSignal): void {
+    this.pending.set(requestId, ack);
+    signal.addEventListener(
+      "abort",
+      () => {
+        void this.failed(requestId, "MCP request cancelled before its response was written").catch(() => {});
+      },
+      { once: true },
+    );
   }
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  const changed = await (await deps.createApiClient()).setMetadata!(workspace, args.metadata as WorkspaceMetadataDescriptor);
-  return { response: result(req.id, toolResult(changed)) };
-}
 
-async function metadataShow(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = toolArgs(req);
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  const metadata = await (await deps.createApiClient()).getMetadata!(workspace);
-  return { response: result(req.id, toolResult({ metadata })) };
-}
-
-async function metadataClear(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = toolArgs(req);
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  const cleared = await (await deps.createApiClient()).clearMetadata!(workspace);
-  return { response: result(req.id, toolResult(cleared)) };
-}
-
-async function sessionBind(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = toolArgs(req);
-  if (typeof args.session_id !== "string" || args.session_id.length === 0) {
-    return { response: error(req.id, -32602, "glosa_session_bind requires a non-empty session_id") };
-  }
-  const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
-  // A live MCP tool invocation is itself session activity. Refresh the existing registry lease
-  // before binding so a long model turn (>60s with no hook boundary) cannot make its own explicit
-  // bind fail as stale. Unknown IDs remain unknown because heartbeat is deliberately a no-op for
-  // records that were never registered or were lost across a daemon restart.
-  await (await deps.createHookClient()).heartbeat(args.session_id);
-  const bound = await (await deps.createApiClient()).bindSession!(workspace, args.session_id);
-  return { response: result(req.id, toolResult(bound)) };
-}
-
-async function conversationAck(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  const args = toolArgs(req);
-  const messageId = args.message_id;
-  const requestedSession =
-    typeof args.session_id === "string" && args.session_id.length > 0 ? args.session_id : undefined;
-  const hostSession = deps.sessionId?.();
-  if (hostSession && requestedSession && requestedSession !== hostSession) {
-    return { response: error(req.id, -32602, "session_id does not match the MCP host session") };
-  }
-  const sessionId = hostSession ?? requestedSession;
-  if (typeof messageId !== "string" || messageId.length === 0) {
-    return { response: error(req.id, -32602, "glosa_conversation_ack requires message_id") };
-  }
-  if (!sessionId) {
-    return {
-      response: error(
-        req.id,
-        -32602,
-        "glosa_conversation_ack requires an explicit session_id when the MCP host does not provide one",
-      ),
-    };
-  }
-  const client = await deps.createHookClient();
-  if (!client.acknowledgeConversation) {
-    return { response: error(req.id, -32603, "conversation acknowledgement is unavailable") };
-  }
-  await client.acknowledgeConversation(sessionId, messageId, "presented");
-  return {
-    response: result(
-      req.id,
-      toolResult({
-        message_id: messageId,
-        delivered: true,
-      }),
-    ),
-  };
-}
-
-export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
-  if (req.method === "initialize") {
-    const requested = req.params?.protocolVersion;
-    if (requested !== MCP_PROTOCOL_VERSION) {
-      return {
-        response: error(
-          req.id,
-          -32602,
-          `unsupported protocol version: ${typeof requested === "string" ? requested : "(missing)"}; glosa mcp requires ${MCP_PROTOCOL_VERSION}`,
-        ),
-      };
+  async presented(requestId: RequestId): Promise<void> {
+    const ack = this.pending.get(requestId);
+    if (!ack) return;
+    this.pending.delete(requestId);
+    try {
+      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "presented");
+    } finally {
+      if (ack.deregister) await ack.client.deregister(ack.sessionId);
     }
-    return {
-      response: result(req.id, {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {
-          tools: { listChanged: false },
-          experimental: { "claude/channel": {} },
-        },
-        instructions:
-          "glosa conversation messages arrive as channel events with a message_id. Immediately call glosa_conversation_ack for that message_id before acting; hook delivery remains the safety fallback.",
-        serverInfo: { name: "glosa", version: "1" },
-      }),
-    };
   }
-  if (req.method === "ping") return { response: result(req.id, {}) };
-  if (req.method === "notifications/initialized" || req.method.startsWith("notifications/")) return {};
-  if (req.method === "tools/list") {
-    return {
-      response: result(req.id, {
-        tools: listMcpTools(),
-      }),
-    };
-  }
-  if (req.method === "tools/call") {
-    const name = req.params?.name;
-    if (typeof name !== "string" || !GLOSA_MCP_TOOL_BY_NAME.has(name)) {
-      return { response: error(req.id, -32602, `unknown tool '${String(name)}'`) };
+
+  async failed(requestId: RequestId, reason: string): Promise<void> {
+    const ack = this.pending.get(requestId);
+    if (!ack) return;
+    this.pending.delete(requestId);
+    try {
+      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "failed", reason);
+    } finally {
+      if (ack.deregister) await ack.client.deregister(ack.sessionId);
     }
-    if (name === "glosa_inbox_pull") return pullInbox(req, deps);
-    if (name === "glosa_inbox_get") return getInbox(req, deps);
-    if (name === "glosa_metadata_set") return metadataSet(req, deps);
-    if (name === "glosa_metadata_show") return metadataShow(req, deps);
-    if (name === "glosa_metadata_clear") return metadataClear(req, deps);
-    if (name === "glosa_session_bind") return sessionBind(req, deps);
-    if (name === "glosa_conversation_ack") return conversationAck(req, deps);
-    return { response: error(req.id, -32602, `unknown tool '${String(name)}'`) };
   }
-  return { response: error(req.id, -32601, `method not found: ${req.method}`) };
+
+  async failAll(reason: string): Promise<void> {
+    await Promise.allSettled([...this.pending.keys()].map((requestId) => this.failed(requestId, reason)));
+  }
 }
 
-function writeLine(value: Record<string, unknown>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${JSON.stringify(value)}\n`, (err) => (err ? reject(err) : resolve()));
-  });
+/**
+ * The SDK owns protocol framing. This decorator owns only glosa's durability boundary: a prepared
+ * inbox delivery becomes presented after the corresponding JSON-RPC response reaches stdout.
+ */
+class DeliveryAwareTransport implements Transport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: Transport["onmessage"];
+  sessionId?: string;
+
+  constructor(
+    private readonly inner: Transport,
+    private readonly acknowledgements: DeliveryAcknowledgements,
+  ) {
+    this.sessionId = inner.sessionId;
+  }
+
+  async start(): Promise<void> {
+    this.inner.onclose = () => this.onclose?.();
+    this.inner.onerror = (error) => this.onerror?.(error);
+    this.inner.onmessage = (message, extra) => this.onmessage?.(message, extra);
+    await this.inner.start();
+  }
+
+  async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    const requestId = responseId(message);
+    try {
+      await this.inner.send(message, options);
+    } catch (error) {
+      if (requestId !== undefined) {
+        await this.acknowledgements
+          .failed(requestId, error instanceof Error ? error.message : String(error))
+          .catch(() => {});
+      }
+      throw error;
+    }
+    if (requestId === undefined) return;
+    if (responseSucceeded(message)) {
+      await this.acknowledgements.presented(requestId);
+    } else {
+      await this.acknowledgements.failed(requestId, "MCP tool response reported an error");
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.acknowledgements.failAll("MCP transport closed before its response was written");
+    await this.inner.close();
+  }
+
+  setProtocolVersion(version: string): void {
+    this.inner.setProtocolVersion?.(version);
+  }
 }
 
-export async function runMcpServer(deps: McpDeps): Promise<void> {
-  let writeTail = Promise.resolve();
-  const write = (value: Record<string, unknown>) => {
-    const next = writeTail.then(() => writeLine(value));
-    writeTail = next.catch(() => {});
-    return next;
-  };
+/**
+ * The SDK's stdio transport owns parsing and lifecycle. Its stock send resolves from write()
+ * backpressure alone, though, so use the SDK serializer with a write callback to make a broken
+ * stdout observable by DeliveryAwareTransport before glosa acknowledges presentation.
+ */
+class WriteConfirmedStdioServerTransport extends StdioServerTransport {
+  private readonly handleOutputError = (error: Error) => this.onerror?.(error);
+
+  constructor(
+    input: Readable,
+    private readonly output: Writable,
+  ) {
+    super(input, output);
+  }
+
+  override async start(): Promise<void> {
+    this.output.on("error", this.handleOutputError);
+    await super.start();
+  }
+
+  override send(message: JSONRPCMessage): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.output.write(serializeMessage(message), (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
+  override async close(): Promise<void> {
+    this.output.off("error", this.handleOutputError);
+    await super.close();
+  }
+}
+
+export interface GlosaMcpServer {
+  server: McpServer;
+  connect(transport: Transport): Promise<void>;
+  close(): Promise<void>;
+}
+
+export function createMcpServer(deps: McpDeps): GlosaMcpServer {
+  const acknowledgements = new DeliveryAcknowledgements();
   const pushAbort = new AbortController();
   let pushTask: Promise<void> | null = null;
+
+  const server = new McpServer(
+    { name: "glosa", version: CLI_VERSION },
+    {
+      capabilities: {
+        experimental: { "claude/channel": {} },
+      },
+      instructions:
+        "glosa conversation messages arrive as channel events with a message_id. Immediately call glosa_conversation_ack for that message_id before acting; hook delivery remains the safety fallback.",
+    },
+  );
+
+  server.registerTool(
+    "glosa_inbox_pull",
+    {
+      title: "Pull glosa inbox",
+      description:
+        "Pull the oldest pending actionable glosa inbox entries for a workspace (at most eight). Reserves delivery briefly; successful stdio write acknowledges presentation.",
+      inputSchema: inboxPullInputSchema,
+      outputSchema: inboxPullOutputSchema,
+      annotations: { ...readOnlyClosedWorld, title: "Pull glosa inbox" },
+    },
+    async ({ workspace, limit = 8, session_id: requestedSession }, extra) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const hostSession = deps.sessionId?.();
+      if (hostSession && requestedSession && requestedSession !== hostSession) {
+        throw new Error("session_id does not match the MCP host session");
+      }
+      const explicitSession = hostSession ?? requestedSession;
+      const sessionId = explicitSession ?? `mcp-${process.pid}-${randomUUID()}`;
+      const client = await deps.createHookClient();
+      if (explicitSession) {
+        await client.heartbeat(sessionId);
+      } else {
+        await client.register({ session_id: sessionId, provider: "mcp", cwd: root, source: "mcp_pull" });
+      }
+      const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
+      const text =
+        drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
+      const structuredContent = {
+        entries: drained.drained,
+        count: drained.count,
+        has_more: drained.has_more ?? false,
+      };
+      if (drained.delivery_id) {
+        acknowledgements.reserve(
+          extra.requestId,
+          {
+            client,
+            sessionId,
+            deliveryId: drained.delivery_id,
+            deregister: !explicitSession,
+          },
+          extra.signal,
+        );
+      } else if (!explicitSession) {
+        await client.deregister(sessionId);
+      }
+      return toolResult(structuredContent, text);
+    },
+  );
+
+  server.registerTool(
+    "glosa_inbox_get",
+    {
+      title: "Get glosa inbox entry",
+      description:
+        "Retrieve one durable inbox entry presentation by id, optionally continuing from a truncation cursor. Does not perform delivery drain.",
+      inputSchema: inboxGetInputSchema,
+      outputSchema: inboxGetOutputSchema,
+      annotations: { ...readOnlyClosedWorld, title: "Get glosa inbox entry" },
+    },
+    async ({ id, cursor, workspace }) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const retrieved = await (await deps.createApiClient()).getInboxPresentation(root, id, cursor);
+      const structuredContent = { presentation: retrieved.presentation };
+      return toolResult(structuredContent, retrieved.presentation.text);
+    },
+  );
+
+  server.registerTool(
+    "glosa_metadata_set",
+    {
+      title: "Set workspace metadata",
+      description:
+        "Register or replace this integration's WorkspaceMetadataDescriptor v1 for a workspace. Same id replaces atomically; a different id conflicts until clear.",
+      inputSchema: metadataSetInputSchema,
+      outputSchema: metadataSetOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Set workspace metadata",
+      },
+    },
+    async ({ metadata, workspace }) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const structuredContent = await (await deps.createApiClient()).setMetadata!(
+        root,
+        metadata as WorkspaceMetadataDescriptor,
+      );
+      return toolResult(structuredContent);
+    },
+  );
+
+  server.registerTool(
+    "glosa_metadata_show",
+    {
+      title: "Show workspace metadata",
+      description:
+        "Show the active declarative WorkspaceMetadataDescriptor for a workspace, or null when none is registered.",
+      inputSchema: metadataShowInputSchema,
+      outputSchema: metadataShowOutputSchema,
+      annotations: { ...readOnlyClosedWorld, title: "Show workspace metadata" },
+    },
+    async ({ workspace }) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const metadata = await (await deps.createApiClient()).getMetadata!(root);
+      return toolResult({ metadata });
+    },
+  );
+
+  server.registerTool(
+    "glosa_metadata_clear",
+    {
+      title: "Clear workspace metadata",
+      description: "Clear the active declarative workspace metadata for a workspace.",
+      inputSchema: metadataClearInputSchema,
+      outputSchema: metadataClearOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: true, idempotentHint: true }),
+        title: "Clear workspace metadata",
+      },
+    },
+    async ({ workspace }) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const structuredContent = await (await deps.createApiClient()).clearMetadata!(root);
+      return toolResult(structuredContent);
+    },
+  );
+
+  server.registerTool(
+    "glosa_session_bind",
+    {
+      title: "Bind agent session",
+      description: "Explicitly bind a live registered agent session to a workspace (authoritative routing).",
+      inputSchema: sessionBindInputSchema,
+      outputSchema: sessionBindOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Bind agent session",
+      },
+    },
+    async ({ session_id: sessionId, workspace }) => {
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      await (await deps.createHookClient()).heartbeat(sessionId);
+      const structuredContent = await (await deps.createApiClient()).bindSession!(root, sessionId);
+      return toolResult(structuredContent);
+    },
+  );
+
+  server.registerTool(
+    "glosa_conversation_ack",
+    {
+      title: "Acknowledge conversation message",
+      description:
+        "Acknowledge that a targeted glosa conversation message reached this agent context (presented). Required after channel delivery; hook delivery remains the safety fallback.",
+      inputSchema: conversationAckInputSchema,
+      outputSchema: conversationAckOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Acknowledge conversation message",
+      },
+    },
+    async ({ message_id: messageId, session_id: requestedSession }) => {
+      const hostSession = deps.sessionId?.();
+      if (hostSession && requestedSession && requestedSession !== hostSession) {
+        throw new Error("session_id does not match the MCP host session");
+      }
+      const sessionId = hostSession ?? requestedSession;
+      if (!sessionId) {
+        throw new Error(
+          "glosa_conversation_ack requires an explicit session_id when the MCP host does not provide one",
+        );
+      }
+      const client = await deps.createHookClient();
+      if (!client.acknowledgeConversation) throw new Error("conversation acknowledgement is unavailable");
+      await client.acknowledgeConversation(sessionId, messageId, "presented");
+      return toolResult({ message_id: messageId, delivered: true });
+    },
+  );
+
   const startPush = () => {
     const sessionId = deps.sessionId?.();
     if (!sessionId || pushTask) return;
@@ -265,11 +436,10 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
             sessionId,
             async (entry) => {
               if (entry.kind !== "conversation_message") return;
-              await write({
-                jsonrpc: "2.0",
+              await server.server.notification({
                 method: "notifications/claude/channel",
                 params: { content: entry.message, meta: { message_id: entry.id } },
-              });
+              } as never);
               await client.acknowledgeConversation?.(sessionId, entry.id, "transport_accepted");
             },
             pushAbort.signal,
@@ -293,51 +463,44 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
     })();
   };
 
-  let buffered = "";
-  for await (const chunk of process.stdin) {
-    buffered += Buffer.from(chunk).toString("utf8");
-    let newline = buffered.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffered.slice(0, newline).trim();
-      buffered = buffered.slice(newline + 1);
-      newline = buffered.indexOf("\n");
-      if (!line) continue;
-      let req: JsonRpcRequest;
-      try {
-        req = JSON.parse(line) as JsonRpcRequest;
-      } catch {
-        await write(error(null, -32700, "parse error"));
-        continue;
-      }
-      let reply: McpReply;
-      try {
-        reply = await handleMcpRequest(req, deps);
-      } catch (err) {
-        reply = { response: error(req.id, -32603, err instanceof Error ? err.message : String(err)) };
-      }
-      if (!reply.response) continue;
-      try {
-        await write(reply.response);
-        if (req.method === "initialize" && !("error" in reply.response)) startPush();
-        if (reply.ack) {
-          await reply.ack.client.acknowledge?.(reply.ack.sessionId, reply.ack.deliveryId, "presented");
-          if (reply.ack.deregister) await reply.ack.client.deregister(reply.ack.sessionId);
-        }
-      } catch (err) {
-        if (reply.ack) {
-          await reply.ack.client.acknowledge?.(
-            reply.ack.sessionId,
-            reply.ack.deliveryId,
-            "failed",
-            err instanceof Error ? err.message : String(err),
-          );
-          if (reply.ack.deregister) await reply.ack.client.deregister(reply.ack.sessionId);
-        }
-        throw err;
-      }
-    }
+  server.server.oninitialized = startPush;
+
+  return {
+    server,
+    connect: (transport) => server.connect(new DeliveryAwareTransport(transport, acknowledgements)),
+    close: async () => {
+      pushAbort.abort();
+      await server.close();
+      if (pushTask) await pushTask.catch(() => {});
+      await acknowledgements.failAll("MCP server closed before its response was written");
+    },
+  };
+}
+
+function waitForInputEnd(input: Readable): Promise<void> {
+  if (input.readableEnded || input.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      input.off("end", done);
+      input.off("close", done);
+      resolve();
+    };
+    input.once("end", done);
+    input.once("close", done);
+  });
+}
+
+export async function runMcpServer(
+  deps: McpDeps,
+  streams: { stdin?: Readable; stdout?: Writable } = {},
+): Promise<void> {
+  const input = streams.stdin ?? process.stdin;
+  const output = streams.stdout ?? process.stdout;
+  const runtime = createMcpServer(deps);
+  await runtime.connect(new WriteConfirmedStdioServerTransport(input, output));
+  try {
+    await waitForInputEnd(input);
+  } finally {
+    await runtime.close();
   }
-  pushAbort.abort();
-  const activePushTask = pushTask as Promise<void> | null;
-  if (activePushTask) await activePushTask.catch(() => {});
 }

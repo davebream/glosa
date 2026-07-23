@@ -1,6 +1,6 @@
 {
   "name": "@davebream/glosa",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
   "author": "Dawid Leszczyński",
@@ -66,7 +66,6 @@
     "@types/bun": "latest",
     "@types/markdown-it": "^14.1.2",
     "@types/picomatch": "^4.0.3",
-    "ajv": "^8.17.1",
     "happy-dom": "^20.11.0",
     "lefthook": "^2.1.10",
     "license-checker-rseidelsohn": "5.0.1",
@@ -74,11 +73,16 @@
   },
   "dependencies": {
     "@gunshi/plugin-completion": "0.37.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chokidar": "^5",
     "diff2html": "^3.4.56",
     "gunshi": "0.37.1",
     "idiomorph": "^0.7.4",
     "markdown-it": "^14.3.0",
-    "picomatch": "^4.0.5"
+    "picomatch": "^4.0.5",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.10"
   }
 }
