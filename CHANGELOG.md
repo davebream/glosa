@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Bumped the additive HTTP contract to v1.1 and made Claude Channels explicitly optional when the
   audited hook/MCP fallback succeeds.
 - Replaced live domain-specific integration guidance with the declarative public boundary.
+- Migrated `glosa mcp` to the official TypeScript MCP SDK with strict Zod schemas and
+  SDK-native protocol negotiation, validation, and error framing.
 
 ## [0.1.0-alpha.0] - 2026-07-21
 
