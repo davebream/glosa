@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 4,
+  "tracker": {
+    "planning": {
+      "project": {
+        "owner": "davebream",
+        "number": 5
+      }
+    },
+    "adapter": "github"
+  }
+}
