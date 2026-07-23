@@ -3,7 +3,7 @@
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, readFocus, scrubToken, selectScreen } from "../src/bootstrap.js";
+import { CONTRACT_VERSION, focusHash, readFocus, scrubToken, selectScreen, writeFocus } from "../src/bootstrap.js";
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -41,6 +41,65 @@ describe("readFocus — the CLI deep-link half of the fragment", () => {
 
   test("no fragment at all yields nulls", () => {
     expect(readFocus({ hash: "" })).toEqual({ slug: null, artifact: null });
+  });
+});
+
+describe("focusHash — the inverse of readFocus", () => {
+  test("slug + artifact → #w=&a= with artifact path URL-encoded, w before a", () => {
+    expect(focusHash({ slug: "essays-abc", artifact: "07/manuscript.md" })).toBe("#w=essays-abc&a=07%2Fmanuscript.md");
+  });
+
+  test("round-trips through readFocus", () => {
+    const focus = { slug: "essays-abc", artifact: "07/manuscript.md" };
+    expect(readFocus({ hash: focusHash(focus) })).toEqual(focus);
+  });
+
+  test("slug only (no artifact) → #w= alone", () => {
+    expect(focusHash({ slug: "essays-abc", artifact: null })).toBe("#w=essays-abc");
+  });
+
+  test("neither present → empty string, so replaceState leaves a clean URL with no stray #", () => {
+    expect(focusHash({ slug: null, artifact: null })).toBe("");
+    expect(focusHash()).toBe("");
+  });
+
+  test("never emits t= even if a stray token-shaped value is passed as slug/artifact", () => {
+    // The guard is structural: focusHash only ever reads slug/artifact, so `t=` cannot appear.
+    expect(focusHash({ slug: "t=SECRET", artifact: "t=SECRET" })).not.toContain("t=SECRET&");
+    expect(focusHash({ slug: "essays-abc", artifact: "07/manuscript.md" })).not.toContain("&t=");
+  });
+});
+
+describe("writeFocus — reflects on-screen focus into the address bar", () => {
+  test("rebuilds pathname+search+fragment; the pairing token can never reappear", () => {
+    const loc = { pathname: "/", search: "", hash: "" };
+    const history = fakeHistory();
+
+    writeFocus(loc, history as unknown as History, { slug: "essays-abc", artifact: "07/manuscript.md" });
+
+    expect(history.calls.length).toBe(1);
+    const [, , url] = history.calls[0]!;
+    expect(url).toBe("/#w=essays-abc&a=07%2Fmanuscript.md");
+    expect(url).not.toContain("t=");
+  });
+
+  test("preserves existing pathname + search; no artifact → workspace-only fragment", () => {
+    const loc = { pathname: "/w/foo", search: "?x=1", hash: "" };
+    const history = fakeHistory();
+
+    writeFocus(loc, history as unknown as History, { slug: "essays-abc", artifact: null });
+
+    const [, , url] = history.calls[0]!;
+    expect(url).toBe("/w/foo?x=1#w=essays-abc");
+  });
+
+  test("empty focus → clean URL with no stray fragment", () => {
+    const loc = { pathname: "/", search: "", hash: "" };
+    const history = fakeHistory();
+
+    writeFocus(loc, history as unknown as History, { slug: null, artifact: null });
+
+    expect(history.calls[0]![2]).toBe("/");
   });
 });
 

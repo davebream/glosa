@@ -37,6 +37,29 @@ credential-bound streams and clears class-F capabilities; subsequent Bearer chec
 value. The CLI never returns the replacement token. `glosa open` remains the explicit browser-pairing
 boundary and recovery path.
 
+## The URL fragment is the canonical on-screen focus
+
+The SPA reflects the current workspace and open artifact into the address-bar fragment
+(`#w=<slug>&a=<artifact>`) via `history.replaceState` as the user navigates, not only on load. This
+makes reload/refresh restore the view and makes the URL shareable, so focus lives in one place
+instead of duplicated UI state. The deep-link is no longer one-shot: `readFocus` seeds the initial
+view and `writeFocus` keeps it current thereafter.
+
+Three constraints hold this inside the security boundary:
+
+- **Fragment, never query string.** Focus stays in the `#` fragment so it is never sent to the
+  daemon or written to its request path (A1 §2) — the same reason the pairing token uses the
+  fragment.
+- **The written fragment carries only `w`/`a`, never `t=`.** `focusHash` is rebuilt from scratch on
+  every call and reads only slug/artifact, so live-reflecting focus can never re-expose the pairing
+  token that `scrubToken` strips on load (A3 §3/F24). This is structural, not a runtime filter.
+- **`replaceState`, not `pushState`.** Reflecting focus does not spawn a history entry per artifact;
+  it mutates the current one.
+
+Mode (Preview/Annotate/Edit) is deliberately **not** in the URL. It is an act with a stateful save
+guard (leaving Edit while dirty is blocked pending a discard prompt), and a shareable link should
+land in Preview rather than the source editor — modes are acts, not defaults.
+
 ## Ownership rule
 
 A change that needs integration-specific code belongs outside this repository. A change belongs in

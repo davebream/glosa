@@ -207,6 +207,30 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(content.innerHTML).toContain("Title");
   });
 
+  test("workspace switcher hides at <=1 workspace (MCP/CLI scope), appears and lists all at >=2", async () => {
+    const solo = dom.document.createElement("div");
+    dom.document.body.append(solo);
+    mountApp(solo, { dataAccess: fakeDataAccess() }); // the sole ws-1
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect((solo.querySelector(".glosa-workspace-list") as any).hidden).toBe(true);
+
+    const many = dom.document.createElement("div");
+    dom.document.body.append(many);
+    mountApp(many, {
+      dataAccess: fakeDataAccess({
+        getWorkspaces: async () => [
+          { slug: "ws-1", path: "/tmp/ws-1" },
+          { slug: "ws-2", path: "/tmp/ws-2" },
+        ],
+      }),
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const manyList = many.querySelector(".glosa-workspace-list") as any;
+    expect(manyList.hidden).toBe(false);
+    const keys = Array.from(manyList.querySelectorAll("button[data-key]")).map((b: any) => b.getAttribute("data-key"));
+    expect(keys).toEqual(["ws-1", "ws-2"]);
+  });
+
   test("compact tools collapse secondary actions behind one keyboard-accessible trigger", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
