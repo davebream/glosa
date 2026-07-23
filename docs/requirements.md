@@ -116,7 +116,7 @@ generic.**
   `event_id` + `idem` keys). `glosa resolve` appends **one** journal line — no cross-file atomic write
   exists (this is the F04 fix). Startup reconciliation: torn-tail truncate → replay → inbox self-heal →
   apply-lease reconcile → offline-edit catch-up. Corrupt interior line → quarantine, never fatal.
-- Entry kinds: `human_edit`, `annotation`, `attention_request`. Envelope + payloads exactly per A4/A5
+- Entry kinds: `human_edit`, `annotation`, `attention_request`, `conversation_message`. Envelope + payloads exactly per A4/A5
   (`human_edit` = inline hunk diffs referenced by shadow-git sha, never full bodies; `annotation` =
   W3C quote+prefix/suffix+position + `intent` + `target.chunk_id?`). Annotation `intent` enum =
   `content` (change the words → source edit) | `classification` (wrong type/split/label → pipeline
@@ -152,6 +152,9 @@ the entry survives.
 - Channels are treated as **optional compatibility, not a required gate**: all delivery tests pass with
   channels disabled (the fallback rungs deliver). "Channel smoke test" and "required fallback test" are
   separate gates.
+- Channel writes prove only `transport_accepted`. A targeted conversation message becomes terminal
+  `delivered` only after the exact session acknowledges `presented`; until then it remains eligible
+  for hook/MCP fallback. MCP pull identifies the registered target session explicitly.
 - **No cmux.** The universal cross-agent path is the structured blocking gate (Plannotator-proven on
   Claude/Codex/Gemini/Copilot) + turn-boundary drain + MCP-pull.
 - Every injected presentation is UTF-8 bounded: at most 16 KiB per entry and 32 KiB per batch, with
@@ -210,7 +213,9 @@ the entry survives.
   quarantine, resume/clear/compact handling, tool-result caps (A2 §F16). **Fail soft**: any parse
   failure → "mirror unavailable — use the terminal", never worse; artifact/annotation workflow stays
   usable. Composer sends a NEW user message out-of-band via R4 (never writes the transcript). Attention
-  state from the provider's `Notification` hook, not a transcript stall heuristic.
+  state from the provider's `Notification` hook, not a transcript stall heuristic. The composer keeps
+  one tab-scoped in-flight submission, clears only after `presented`, preserves newer edits, and shows
+  an inline native session picker when multiple live explicit bindings are eligible.
 - **Anchoring resolution contract** (A5 §F10/§F11): total `resolve(annotation, artifact, ctx) →
   source_range | pipeline_feedback | orphaned`. Fixed normalization (NFC, whitespace-fold, UTF-16
   offsets, uniqueness required). Class R = quote-in-stamped-line-range, else `block_range` guidance,

@@ -28,8 +28,9 @@ Required coverage groups:
 | Metadata | schema/limits/conflicts, adapter hydration, API/CLI/MCP parity, SPA invalidation |
 | Anchoring | neutral class-R/F fixtures, verbatim range, transformed feedback, stale/ambiguous cases |
 | Attention | delivered→seen→done, action outcomes, `--wait`, badge/tray keyboard and failure recovery |
-| Providers | Channels on/off, hook/MCP fallback, async rearm, explicit cross-directory binding |
+| Providers | Channels on/off, acknowledgement split, hook/MCP fallback, async rearm, explicit cross-directory binding |
 | Transcript | partial/corrupt/unknown events, resume/clear/compact, capped tool results, fail-soft UI |
+| Composer | exact-session isolation, idempotent retry/restart, picker, draft recovery, presented-only clearing |
 
 Before the manual pass, scan every tracked file for private producer/domain names and private absolute
 paths. Rehearsal data is allowed only under ignored `.context/`; no private rehearsal material or
@@ -74,7 +75,7 @@ journaled delivery attempts.
 | Transformed class F | descriptor-derived pipeline target; no source edit |
 | Parked delivery | entry parks without a live binding and drains after registration/bind |
 | Attention | badge/tray, seen, action-aware response, structured `request-review --wait` completion |
-| Conversation | live normalized mirror; malformed input produces terminal fallback without breaking artifacts |
+| Conversation | live mirror; Claude and Codex boundary delivery from different cwd values; restart between queue and presentation; browser clears only after `presented` |
 | Delivery | Channel succeeds when available, otherwise audited hook/MCP fallback succeeds |
 | Browser security | real browser renders locally; class-F sandbox/CSP blocks only a local inert probe attempt |
 

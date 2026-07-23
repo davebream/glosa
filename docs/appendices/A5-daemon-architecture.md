@@ -20,6 +20,9 @@
 ## F23 — inbox/attention lifecycle
 - Inbox files **immutable**; status field frozen `pending`, non-authoritative. **Authoritative status = journal replay fold** (overrides R3's cross-file rewrite per F04). `resolve` appends ONE journal line, never rewrites the entry.
 - **Two separate axes**: (1) lifecycle status (small state machine, one legal writer/transition, idempotent); (2) `delivery_attempt` events = NOT transitions. Re-nudging a `delivered` entry emits new delivery_attempt (status stays delivered); per-rung "delivered" semantics live in `attempt.outcome`.
+- Conversation entries use terminal `pending → delivered`. The transition is appended only with a
+  durable `delivery_attempt{outcome:"presented"}` for the exact target session; queueing and
+  `transport_accepted` are non-terminal.
 - Event vocab (writer / changes-state / idem-key): created(daemon/→pending/entry); delivery_attempt(daemon/NO/(entry,attempt_seq)); delivered(daemon/pending→delivered/(entry,delivered)); seen(daemon|human/delivered→seen [attention]/(entry,seen)); resolved(session:<id>|human/→applied|rejected|stale/(entry,resolved) first-terminal-wins); done(human|session/seen→done [attention]); staled(daemon/→stale); expired(daemon/→expired [attention]). A seen/response mutation may append missing `delivered` and `seen` transitions under the same workspace mutex; every completion therefore has the auditable `seen→done` path.
 - delivery_attempt.detail: `{via:channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. (No cmux — glosa is cmux-decoupled; the cross-agent transports are the blocking gate + turn-boundary hooks + MCP-pull, plus Claude channels.)
 - Presentation is two-phase. `prepare` selects non-terminal entries in journal creation order, reads
@@ -33,6 +36,10 @@
   as many complete unified-diff hunks as fit. Every truncation includes omitted byte/hunk counts and an
   opaque continuation cursor usable through the CLI and MCP retrieval surfaces. Full artifact bodies
   are forbidden in delivery payloads.
+- Conversation payloads are never truncated. Their immutable entry retains the client id, exact UTF-8
+  text, byte count, provider, and target session. Pending entries survive restart; in-memory
+  reservations may retry at least once. Journal/API errors use bounded stable codes, never exception
+  text, tokens, transcript paths, or canonical workspace paths.
 - Common entries terminal: applied/rejected/stale. Attention terminal: done/expired/stale. Event with guard `from`≠current → ignored on replay (idempotent). Duplicate resolve on terminal = no-op. `done.detail` is `{outcome:"done"|"approved"|"changes_requested", response?:string}`; review actions accept the two review outcomes, while generic actions accept `done`. A terminal retry returns the original detail without appending.
 - Replay: fold in order; skip torn final line; malformed completed line → quarantine (not fatal); delivery_attempt never mutates; guarded transitions only when !isTerminal(cur). `--wait` callers resolve when fold reaches done/expired, payload in done.detail.
 

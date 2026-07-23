@@ -62,6 +62,7 @@ Focused tests also passed for MCP durable retrieval, attention focus and idempot
 | Parked annotation drain | An entry created without a live session drains after later registration and explicit binding. | The transformed entry was created while no session was live, then presented by the Stop fallback after a later session registered and bound. | PASS |
 | Attention badge and tray | Badge and inline tray expose honest state; keyboard flow reaches `seen → done`; `request-review --wait` receives a structured review outcome. | Keyboard opening focused the close control, the 390 px layout stayed within the viewport, and Approve completed `delivered → seen → done`. The waiter returned `outcome: approved` plus the bounded response, and Escape restored trigger focus. | PASS |
 | Conversation mirror | The SPA mirrors the explicitly bound live transcript. | A fresh real session replied with a unique neutral marker; Playwright observed that marker in the Conversation transcript region. | PASS |
+| Conversation delivery extension (#30) | Exact-session Claude and Codex boundary delivery from different working directories; restart between queue and presentation; optional Channel remains non-terminal until acknowledged; browser clears only on `presented`. | Deterministic daemon/provider/MCP/SPA coverage is implemented. The prior rehearsal did not exercise this expanded contract, so no real-session result is claimed. | PENDING REHEARSAL |
 | Terminal fallback | An unavailable mirror fails softly and a failed composer send preserves input. | A workspace with no registered session showed `mirror unavailable — use the terminal`. Send explained how to register/bind a session and preserved the full draft. | PASS |
 | Optional Channels | Attempt activation; if direct Channel delivery is unavailable, accept only when a hook or MCP fallback succeeds and is audited. | Development Channels loaded and activation was accepted, but no direct Channel delivery was confirmed. UserPromptSubmit and Stop fallbacks both presented entries and recorded their delivery attempts; MCP exact-ID retrieval succeeded. | PASS via audited fallback |
 | Browser class-F sandbox/CSP | The class-F document runs inside the separate-origin sandbox; annotations work; a local inert probe cannot leave the frame. | Chrome rendered the iframe, ran its local script, completed the nonce-gated annotation handshake, and posted both selections. CSP blocked the loopback probe before any request reached the closed port. | PASS |
@@ -95,7 +96,9 @@ Mitigation: transcript stream status now travels through the existing single dat
 | Stop hook | PASS | The parked annotation was presented after later registration and binding. |
 | MCP pull/retrieval | PASS | Exact-ID retrieval succeeded after hook presentation; the implementation no longer conflates retrieval with a delivery drain. |
 
-The optional Channel result is acceptable because multiple generic fallback paths succeeded and their attempts are auditable in the journal.
+The prior Channel result remains valid for annotation delivery. Issue #30's conversation
+acknowledgement split still requires the expanded real-session rehearsal above before it can be
+marked PASS.
 
 ## Sanitization check
 
@@ -108,4 +111,7 @@ The optional Channel result is acceptable because multiple generic fallback path
 
 **Status: pending.**
 
-The agent has not signed on the maintainer's behalf. The maintainer must review the rendered report and provide an explicit approval or rejection. Until then, the T8 evidence is complete but the human release-gate sign-off remains outstanding. Overall v1 readiness remains blocked independently by issue #20.
+The agent has not signed on the maintainer's behalf. The maintainer must review the rendered report
+and provide an explicit approval or rejection. The expanded issue #30 conversation scenario is still
+pending real-session rehearsal, and maintainer sign-off remains outstanding. Overall v1 readiness
+remains blocked independently by issue #20.
