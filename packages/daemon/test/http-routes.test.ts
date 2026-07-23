@@ -190,6 +190,50 @@ describe("A1 §5 route catalog", () => {
     rmSync(externalRoot, { recursive: true, force: true });
   });
 
+  test("POST /api/workspaces/open selects the first normalized tracked artifact when requested", async () => {
+    writeFileSync(join(root, "z-last.md"), "z\n");
+    writeFileSync(join(root, "01-first.md"), "first\n");
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: root, focus_first: true }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).focus).toBe("01-first.md");
+  });
+
+  test("POST /api/workspaces/open keeps an explicit focus ahead of focus_first", async () => {
+    writeFileSync(join(root, "01-first.md"), "first\n");
+    writeFileSync(join(root, "z-last.md"), "z\n");
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: root, focus: "z-last.md", focus_first: true }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).focus).toBe("z-last.md");
+  });
+
+  test("POST /api/workspaces/open rejects a required first focus when no artifact is tracked", async () => {
+    const emptyRoot = mkdtempSync(join(tmpdir(), "glosa-routes-empty-"));
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", {
+        method: "POST",
+        body: JSON.stringify({ path: emptyRoot, focus_first: true, require_focus: true }),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).type).toContain("no-tracked-artifact");
+    rmSync(emptyRoot, { recursive: true, force: true });
+  });
+
   test("presentation-token mint + redeem is single-use; replay and foreign Origin fail closed", async () => {
     const { PresentationTokenStore } = await import("../src/presentation-token.ts");
     ctx.presentationTokenStore = new PresentationTokenStore();
