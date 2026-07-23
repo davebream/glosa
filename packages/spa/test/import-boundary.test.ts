@@ -86,6 +86,15 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
   });
 
+  test("viewer.js lazy-loads the optional history, conversation, and rich-editor surfaces", () => {
+    const source = read("../src/viewer.js");
+    const staticSpecifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    for (const optional of ["./history.js", "./conversation.js", "./rich-editor.js"]) {
+      expect(staticSpecifiers).not.toContain(optional);
+      expect(source).toContain(`import("${optional}")`);
+    }
+  });
+
   test("annotate.js imports nothing (self-contained — no daemon access of its own)", () => {
     const source = read("../src/annotate.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];

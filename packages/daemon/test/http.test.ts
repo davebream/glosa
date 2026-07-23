@@ -334,6 +334,20 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(body).toContain("export function scrubToken");
   });
 
+  it("GET /app assets revalidate by ETag instead of retransferring unchanged source", async () => {
+    const first = await fetch(apiUrl("/app/viewer.js"));
+    const etag = first.headers.get("ETag");
+    expect(first.status).toBe(200);
+    expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
+    expect(etag).toBeTruthy();
+
+    const revalidated = await fetch(apiUrl("/app/viewer.js"), {
+      headers: { "If-None-Match": etag! },
+    });
+    expect(revalidated.status).toBe(304);
+    expect(await revalidated.text()).toBe("");
+  });
+
   it("appearance preload + controller are fixed allowlisted JavaScript assets", async () => {
     for (const name of ["appearance-preload.js", "appearance.js"]) {
       const res = await fetch(apiUrl(`/app/${name}`));
