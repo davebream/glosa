@@ -9,6 +9,7 @@ import type {
   GlosaApiClient,
   InboxPresentationResult,
   OpenWorkspaceResult,
+  OpenWorkspaceOptions,
   ResolveOutcome,
   ResolveResult,
   StatusSummary,
@@ -47,7 +48,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
 
   async openWorkspace(
     path: string,
-    opts?: { externalState?: boolean; focus?: string },
+    opts?: OpenWorkspaceOptions,
   ): Promise<OpenWorkspaceResult> {
     this.calls.push({ method: "openWorkspace", args: opts === undefined ? [path] : [path, opts] });
     return this.openWorkspaceResult;

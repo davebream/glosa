@@ -82,7 +82,7 @@ export interface WorkspaceOpenResult {
 
 export class WorkspaceOpenError extends Error {
   constructor(
-    readonly code: "invalid-path" | "artifact-not-tracked" | "unsupported-file",
+    readonly code: "invalid-path" | "artifact-not-tracked" | "no-tracked-artifact" | "unsupported-file",
     message: string,
   ) {
     super(message);
@@ -460,10 +460,12 @@ export class WorkspaceIndex {
    * registration. This closes the alias race: two concurrent hardlink opens cannot both observe
    * "no owner" and create divergent buses. `opts.focus` is an absolute or worktree-relative
    * artifact path for two-arg `glosa open <dir> <file>` — validated via confinement + tracked
-   * membership after the directory registration is established. */
+   * membership after the directory registration is established. `focusFirst` selects the first
+   * normalized tracked artifact only when no explicit focus was supplied; `requireFocus` turns an
+   * empty tracked list into a stable error for document presentations. */
   resolveOpenTarget(
     rawPath: string,
-    opts: { externalState?: boolean; focus?: string } = {},
+    opts: { externalState?: boolean; focus?: string; focusFirst?: boolean; requireFocus?: boolean } = {},
   ): Promise<WorkspaceOpenResult> {
     return this.mutex.runExclusive(() => {
       let leafStat: ReturnType<typeof lstatSync>;
@@ -520,6 +522,16 @@ export class WorkspaceIndex {
 
         if (opts.focus) {
           return { entry, focus: this.resolveFocusInEntry(entry, opts.focus) };
+        }
+        if (opts.focusFirst) {
+          const first = resolveTrackedFiles(entry).tracked[0];
+          if (first) return { entry, focus: first.path };
+          if (opts.requireFocus) {
+            throw new WorkspaceOpenError(
+              "no-tracked-artifact",
+              "document presentation requires at least one tracked artifact",
+            );
+          }
         }
         return { entry };
       }

@@ -80,7 +80,7 @@ describe("glosa open", () => {
   test("success: registers the workspace, mints/reuses the token, opens the browser", async () => {
     const dir = freshDir();
     const { deps, client, browserCalls } = makeDeps();
-    client.openWorkspaceResult = { slug: "abc123", path: dir };
+    client.openWorkspaceResult = { slug: "abc123", path: dir, focus: "01-first.md" };
 
     const result = await runOpen(dir, deps);
 
@@ -90,12 +90,13 @@ describe("glosa open", () => {
     expect(result.data.surface).toBe("workspace");
     expect(result.data.mode).toBe("preview");
     expect(result.data.preview).toBe(false);
-    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
+    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(1);
     expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#");
     expect(browserCalls[0]).toContain("t=test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
     expect(browserCalls[0]).toContain("mode=preview");
+    expect(browserCalls[0]).toContain("a=01-first.md");
     expect(browserCalls[0]).not.toContain("lock=");
   });
 
@@ -108,7 +109,7 @@ describe("glosa open", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.data.url).toContain("t=test-token-abc");
-    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir] });
+    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(0);
   });
 
@@ -120,7 +121,7 @@ describe("glosa open", () => {
 
     expect(client.calls[0]).toEqual({
       method: "openWorkspace",
-      args: [dir, { externalState: true }],
+      args: [dir, { externalState: true, focusFirst: true }],
     });
   });
 
@@ -148,7 +149,7 @@ describe("glosa open", () => {
   });
 
   test("--workspace on a lone file forces workspace surface", async () => {
-    const { deps, browserCalls } = makeDeps({
+    const { deps, client, browserCalls } = makeDeps({
       dirExists: () => false,
       fileExists: (p) => p === "/tmp/lone.md",
       isRegularFile: (p) => p === "/tmp/lone.md",
@@ -157,14 +158,46 @@ describe("glosa open", () => {
     expect(result.ok).toBe(true);
     expect(result.data.surface).toBe("workspace");
     expect(browserCalls[0]).toContain("surface=workspace");
+    expect(client.calls[0]).toEqual({ method: "openWorkspace", args: ["/tmp/lone.md"] });
   });
 
-  test("--document on a directory is a usage error", async () => {
+  test("--document on a directory requests and deep-links its first tracked artifact", async () => {
     const dir = freshDir();
-    const { deps } = makeDeps({ dirExists: () => true, isRegularFile: () => false });
+    const { deps, client, browserCalls } = makeDeps({ dirExists: (path) => path === dir, isRegularFile: () => false });
+    client.openWorkspaceResult = { slug: "essays-abc", path: dir, focus: "01-first.md" };
+
     const result = await runOpen(dir, deps, { surface: "document" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data.surface).toBe("document");
+    expect(result.data.focus).toBe("01-first.md");
+    expect(client.calls[0]).toEqual({
+      method: "openWorkspace",
+      args: [dir, { focusFirst: true, requireFocus: true }],
+    });
+    expect(browserCalls[0]).toContain("a=01-first.md");
+    expect(browserCalls[0]).toContain("surface=document");
+  });
+
+  test("--document on an empty directory returns the stable no-tracked-artifact usage error", async () => {
+    const dir = freshDir();
+    const { deps, client } = makeDeps({ dirExists: (path) => path === dir, isRegularFile: () => false });
+    client.openWorkspace = async (path, opts) => {
+      client.calls.push({ method: "openWorkspace", args: opts === undefined ? [path] : [path, opts] });
+      throw apiError(422, {
+        type: "https://glosa.local/errors/no-tracked-artifact",
+        title: "document presentation requires at least one tracked artifact",
+      });
+    };
+
+    const result = await runOpen(dir, deps, { surface: "document" });
+
     expect(result.exitCode).toBe(2);
-    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("no-tracked-artifact");
+    expect(client.calls[0]).toEqual({
+      method: "openWorkspace",
+      args: [dir, { focusFirst: true, requireFocus: true }],
+    });
   });
 
   test("two-arg open <dir> <file> validates focus through the daemon", async () => {
