@@ -1,12 +1,13 @@
 <div align="center">
 
-<pre>
-        __
-  ___ _/ /__  ___ ___ _       | make it measurable
- / _ `/ / _ \(_-&lt;/ _ `/       |
- \_, /_/\___/___/\_,_/        `-&gt; back to the agent
-/___/
-</pre>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/glosa-wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/glosa-wordmark.svg">
+  <img
+    src="docs/assets/glosa-wordmark.svg"
+    alt="glosa, annotated with the margin note: make it measurable"
+  >
+</picture>
 
 <p><strong>The review surface for writing with coding agents.</strong></p>
 
@@ -103,7 +104,7 @@ workspace remain local, durable, and honestly attributable across many artifacts
 
 ## Local by design
 
-- The daemon binds to `127.0.0.1`; the browser API is bearer-authenticated and protected against DNS rebinding.
+- glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)).
 - glosa has no telemetry, cloud sync, or external runtime calls. Your agent may still send content to its own provider under that tool's terms.
 - Versions live in a workspace-local shadow repository. glosa never assumes or modifies your real Git repository.
 - Provenance is conservative: edits are attributed to a session only when an apply lease proves it; everything else is `human` or `unknown`, never guessed.

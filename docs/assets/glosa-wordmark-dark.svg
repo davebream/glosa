@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="210" viewBox="0 0 820 210" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title description">
+  <title id="title">glosa</title>
+  <desc id="description">The glosa wordmark connected to a margin note reading make it measurable.</desc>
+
+  <text
+    x="60"
+    y="141"
+    fill="#e5e5dc"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="112"
+    font-weight="600"
+    letter-spacing="0"
+    textLength="327"
+    lengthAdjust="spacingAndGlyphs"
+  >glosa</text>
+
+  <rect x="387" y="104" width="135" height="2" fill="#9b9d5e"/>
+  <rect x="521" y="69" width="2" height="82" fill="#9b9d5e"/>
+  <rect x="383" y="101" width="8" height="8" fill="#9b9d5e"/>
+
+  <text
+    x="549"
+    y="79"
+    fill="#9b9d5e"
+    font-family="'SFMono-Regular', Consolas, 'Liberation Mono', monospace"
+    font-size="13"
+    font-weight="600"
+    letter-spacing="0"
+  >MARGIN NOTE</text>
+  <text
+    x="549"
+    y="112"
+    fill="#e5e5dc"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    font-size="24"
+    font-weight="600"
+    letter-spacing="0"
+  >make it measurable</text>
+  <text
+    x="549"
+    y="141"
+    fill="#a6a59b"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    font-size="16"
+    font-weight="400"
+    letter-spacing="0"
+  >routed back to the agent</text>
+</svg>
