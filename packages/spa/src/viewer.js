@@ -13,14 +13,30 @@
 import { createDataAccess } from "./data-access.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
-import { mountHistoryPane } from "./history.js";
 import { mountClassFViewer } from "./classf-viewer.js";
-import { mountConversationPane } from "./conversation.js";
-import { mountRichEditor } from "./rich-editor.js";
 import { confirmDialog } from "./dialog.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { mountAttentionTray } from "./attention-tray.js";
+
+let historyPaneLoader;
+let conversationPaneLoader;
+let richEditorLoader;
+
+function loadHistoryPane() {
+  historyPaneLoader ??= import("./history.js").then((module) => module.mountHistoryPane);
+  return historyPaneLoader;
+}
+
+function loadConversationPane() {
+  conversationPaneLoader ??= import("./conversation.js").then((module) => module.mountConversationPane);
+  return conversationPaneLoader;
+}
+
+function loadRichEditor() {
+  richEditorLoader ??= import("./rich-editor.js").then((module) => module.mountRichEditor);
+  return richEditorLoader;
+}
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -304,7 +320,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   const annotateInstructions = el("p", {
     id: "glosa-annotate-instructions",
     className: "glosa-visually-hidden",
-    textContent: "Press Enter or Space to annotate this passage.",
+    textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
     hidden: true,
   });
 
@@ -316,10 +332,19 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     contentEl,
     classFEl,
     editWrap,
-    historyEl,
-    conversationEl,
     marginEl,
     markersEl,
+  ]);
+  const sidebarEl = el("nav", {
+    id: "glosa-sidebar",
+    className: "glosa-sidebar",
+    "aria-label": "Workspace navigation",
+  }, [
+    el("h2", { textContent: "Workspaces" }),
+    sidebarList,
+    artifactHeading,
+    artifactList,
+    artifactListEmpty,
   ]);
 
   root.append(
@@ -331,15 +356,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       el("div", { className: "glosa-topbar-actions" }, [tools]),
       topbarOverlays,
     ]),
-    el("nav", { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" }, [
-      el("h2", { textContent: "Workspaces" }),
-      sidebarList,
-      artifactHeading,
-      artifactList,
-      artifactListEmpty,
-    ]),
+    sidebarEl,
     backdrop,
     mainEl,
+    historyEl,
+    conversationEl,
   );
 
   artifactNavigator = createArtifactTreeNavigator(artifactList, {
@@ -354,12 +375,16 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   let loading = false;
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per session
   let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
+  let richMountRequest = 0;
+  let richEditorLoading = false;
   const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
   let composer = null; // {record} while the annotation composer is open
+  let annotatableFocusIndex = 0;
   let stopStream = null;
   let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
 
   const compactNav = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches;
+  const compactComposer = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1279px)").matches;
 
   function focusPreview() {
     const target = (!emptyEl.hidden ? emptyEl.querySelector(".glosa-empty-title, p") : null)
@@ -378,6 +403,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     root.setAttribute("data-nav-open", String(open));
     navToggle.setAttribute("aria-expanded", String(open));
     navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
+    syncNavInteractivity();
     if (open && focusDrawer && compactNav()) {
       queueMicrotask(() => {
         const target = artifactList.querySelector('[role="treeitem"][aria-current="page"]')
@@ -390,6 +416,15 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       queueMicrotask(() => navToggle.focus({ preventScroll: true }));
     }
   }
+
+  function syncNavInteractivity() {
+    const hiddenDrawer = compactNav() && root.getAttribute("data-nav-open") !== "true";
+    sidebarEl.inert = hiddenDrawer;
+    if (hiddenDrawer) sidebarEl.setAttribute("aria-hidden", "true");
+    else sidebarEl.removeAttribute("aria-hidden");
+  }
+
+  syncNavInteractivity();
   navToggle.addEventListener("click", () => setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }));
   backdrop.addEventListener("click", () => setNavOpen(false, { restoreFocus: true }));
 
@@ -441,8 +476,18 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   /** Mounts the rich face over `markdown`. A DOM that can't host a ProseMirror view (or any
    * other mount failure) falls back to the source textarea rather than a broken editor. */
-  function mountRichFace(markdown) {
+  async function mountRichFace(markdown) {
+    if (richEditorLoading) return;
+    richEditorLoading = true;
+    const request = ++richMountRequest;
     try {
+      const mountRichEditor = await loadRichEditor();
+      if (
+        request !== richMountRequest
+        || sourceFace
+        || modeState.mode !== "edit"
+        || !currentArtifact
+      ) return;
       richEditor = mountRichEditor(richEl, {
         markdown,
         onDirty: () => {
@@ -451,13 +496,20 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
           editStatus.removeAttribute("data-error");
         },
       });
+      renderContent();
     } catch {
+      if (request !== richMountRequest) return;
       richEditor = null;
       sourceFace = true;
+      renderContent();
+    } finally {
+      if (request === richMountRequest) richEditorLoading = false;
     }
   }
 
   function teardownRichFace() {
+    richMountRequest += 1;
+    richEditorLoading = false;
     richEditor?.destroy();
     richEditor = null;
   }
@@ -478,11 +530,14 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     if (loading || modeState.mode !== "annotate" || !currentArtifact || currentArtifact.class === "F") return;
     annotateInstructions.hidden = false;
     contentEl.setAttribute("aria-describedby", annotateInstructions.id);
-    for (const block of contentEl.querySelectorAll(":scope > [data-line]")) {
-      if (!block.textContent.trim()) continue;
+    const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]"))
+      .filter((block) => block.textContent.trim());
+    const focusedIndex = blocks.indexOf(document.activeElement);
+    if (focusedIndex >= 0) annotatableFocusIndex = focusedIndex;
+    annotatableFocusIndex = Math.min(annotatableFocusIndex, Math.max(0, blocks.length - 1));
+    for (const [index, block] of blocks.entries()) {
       block.classList.add("glosa-annotatable-block");
-      block.setAttribute("tabindex", "0");
-      block.setAttribute("aria-describedby", annotateInstructions.id);
+      block.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
     }
   }
 
@@ -490,7 +545,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     root.setAttribute("data-mode", modeState.mode);
     const isClassF = currentArtifact?.class === "F";
     const isEdit = modeState.mode === "edit" && !isClassF;
-    if (isEdit && !sourceFace && !richEditor) mountRichFace(currentArtifact?.content ?? "");
+    if (isEdit && !sourceFace && !richEditor) void mountRichFace(currentArtifact?.content ?? "");
     if (!isEdit) teardownRichFace();
     const richShown = isEdit && !sourceFace && Boolean(richEditor);
     richEl.hidden = !richShown;
@@ -578,18 +633,27 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     composer = { record, returnFocus, draft: "", error: "", submitting: false };
     // Compact (bottom-tray) widths: keep the selected passage visible in the unobscured upper
     // area before the tray covers the bottom of the window (brief §7.3).
-    if (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches) {
+    if (compactComposer()) {
       const anchorNode = window.getSelection()?.anchorNode;
       const anchorEl = anchorNode && (anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement);
       anchorEl?.scrollIntoView?.({ block: "center" });
     }
+    // Moving focus into the composer ends the browser's transient selection paint. Keep the
+    // captured range visibly marked for the whole composition step, so the reviewer can still
+    // see exactly what their feedback will attach to.
+    paintComposerSelection();
     renderMargin();
-    marginEl.querySelector(".glosa-composer-input")?.focus();
+    // The composer is rendered in the margin, not at the selection itself. Native focus normally
+    // scrolls the nearest scroll container until that newly inserted control is visible; for a
+    // long artifact this can reset the reader's viewport after they release a selection. Keep
+    // keyboard focus moving into the composer, but leave the manuscript exactly where it was.
+    marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true });
   }
 
   function closeComposer() {
     const returnFocus = composer?.returnFocus;
     composer = null;
+    paintComposerSelection();
     renderMargin();
     queueMicrotask(() => {
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
@@ -854,6 +918,16 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   const highlightsAvailable = () =>
     typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
 
+  /** The open composer owns a temporary, persistent selection wash. It deliberately lives in a
+   * separate highlight from saved annotation underlines, so closing/sending a draft cannot erase
+   * the durable annotation state. */
+  function paintComposerSelection() {
+    if (!highlightsAvailable()) return;
+    const range = composer ? rangeForTarget(composer.record?.target) : null;
+    if (range) CSS.highlights.set("glosa-composer-selection", new Highlight(range));
+    else CSS.highlights.delete("glosa-composer-selection");
+  }
+
   let anchoredRanges = []; // [{item, range}] cache from the last underline pass — hit-testing reuses it
 
   /** Every annotated passage carries a permanent quiet underline (the pencil line that says
@@ -933,6 +1007,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     marginEl.textContent = "";
     if (modeState.mode !== "annotate" || !currentArtifact) {
       if (composer) composer = null;
+      paintComposerSelection();
       return;
     }
     marginEl.append(el("p", { className: "glosa-margin-title", textContent: "Annotations" }));
@@ -995,6 +1070,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       layoutMargin();
       renderMarkers();
       paintAnchorUnderlines();
+      paintComposerSelection();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(align);
     else align();
@@ -1009,6 +1085,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       return;
     }
 
+    const previousMode = modeState.mode;
     let next = modeReducer(modeState, { type: "set_mode", mode });
     if (next.blocked) {
       // The dialog is async; park the blocked state and settle when the user answers.
@@ -1028,6 +1105,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     modeState = next;
     renderModeBar();
     renderContent();
+    if (modeState.mode === "edit" && previousMode !== "edit") mainEl.scrollTop = 0;
   }
 
   editArea.addEventListener("input", () => {
@@ -1063,8 +1141,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     const carried = editArea.value;
     sourceFace = false;
     teardownRichFace();
-    mountRichFace(carried);
-    renderContent();
+    renderFaceToggle();
+    void mountRichFace(carried);
   });
 
   saveButton.addEventListener("click", async () => {
@@ -1119,9 +1197,26 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // focus target. Enter/Space selects that block and opens the exact same composer as a pointer
   // selection, so annotation composition never depends on drag-selection alone.
   contentEl.addEventListener("keydown", (event) => {
-    if ((event.key !== "Enter" && event.key !== " ") || modeState.mode !== "annotate") return;
     const block = event.target;
     if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
+    if (modeState.mode !== "annotate") return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const current = Math.max(0, blocks.indexOf(block));
+      const next = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? blocks.length - 1
+          : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
+      annotatableFocusIndex = next;
+      for (const [index, candidate] of blocks.entries()) {
+        candidate.setAttribute("tabindex", index === next ? "0" : "-1");
+      }
+      blocks[next]?.focus();
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     const textNodes = [];
@@ -1140,6 +1235,15 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     selection?.addRange(range);
     const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
     if (record) openComposer(record, { returnFocus: block });
+  });
+  contentEl.addEventListener("focusin", (event) => {
+    const block = event.target;
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    annotatableFocusIndex = Math.max(0, blocks.indexOf(block));
+    for (const [index, candidate] of blocks.entries()) {
+      candidate.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+    }
   });
 
   // ⌘1/2/3 mode switching (brief §9); Escape in the composer input is handled by the composer.
@@ -1161,6 +1265,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   // Card alignment depends on wrapped-line geometry — recompute cards AND gutter markers when
   // the window reflows (a resize can also cross the side-margin breakpoint either way).
   const onResize = () => {
+    syncNavInteractivity();
     layoutMargin();
     renderMarkers();
   };
@@ -1168,16 +1273,27 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   let historyVisible = false;
 
-  function renderHistory() {
+  async function renderHistory() {
     if (!historyVisible || !currentSlug) return;
-    mountHistoryPane(historyEl, { dataAccess, slug: currentSlug, path: currentArtifact?.source_path });
+    const slug = currentSlug;
+    try {
+      const mountHistoryPane = await loadHistoryPane();
+      if (!historyVisible || currentSlug !== slug) return;
+      mountHistoryPane(historyEl, { dataAccess, slug, path: currentArtifact?.source_path });
+    } catch {
+      if (!historyVisible || currentSlug !== slug) return;
+      historyEl.setAttribute("role", "alert");
+      historyEl.textContent = "History couldn't be loaded. Close this panel and try again.";
+    }
   }
 
   historyToggle.addEventListener("click", () => {
-    historyVisible = !historyVisible;
+    const nextVisible = !historyVisible;
+    if (nextVisible && conversationVisible) setConversationVisible(false);
+    historyVisible = nextVisible;
     historyEl.hidden = !historyVisible;
     historyToggle.setAttribute("aria-expanded", String(historyVisible));
-    renderHistory();
+    void renderHistory();
   });
 
   // P4.2 — workspace-scoped (not artifact-scoped, unlike history): re-mounted on open and on every
@@ -1189,25 +1305,40 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     conversationVisible = visible;
     conversationEl.hidden = !conversationVisible;
     conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
-    renderConversation();
+    void renderConversation();
   }
 
-  function renderConversation() {
+  async function renderConversation() {
     stopConversation?.();
     stopConversation = null;
     if (!conversationVisible || !currentSlug) return;
-    stopConversation = mountConversationPane(conversationEl, {
-      dataAccess,
-      slug: currentSlug,
-      onClose: () => {
-        setConversationVisible(false);
-        conversationToggle.focus({ preventScroll: true });
-      },
-    });
+    const slug = currentSlug;
+    try {
+      const mountConversationPane = await loadConversationPane();
+      if (!conversationVisible || currentSlug !== slug) return;
+      stopConversation = mountConversationPane(conversationEl, {
+        dataAccess,
+        slug,
+        onClose: () => {
+          setConversationVisible(false);
+          conversationToggle.focus({ preventScroll: true });
+        },
+      });
+    } catch {
+      if (!conversationVisible || currentSlug !== slug) return;
+      conversationEl.setAttribute("role", "alert");
+      conversationEl.textContent = "Conversation couldn't be loaded. Close this panel and use the terminal.";
+    }
   }
 
   conversationToggle.addEventListener("click", () => {
-    setConversationVisible(!conversationVisible);
+    const nextVisible = !conversationVisible;
+    if (nextVisible && historyVisible) {
+      historyVisible = false;
+      historyEl.hidden = true;
+      historyToggle.setAttribute("aria-expanded", "false");
+    }
+    setConversationVisible(nextVisible);
   });
 
   function markCurrent(listEl, key) {
@@ -1244,7 +1375,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     onFocusChange?.({ slug: currentSlug, artifact: path }); // reflect the opened file into the URL
     renderModeBar();
     renderContent();
-    renderHistory(); // the open pane, if any, should reflect the newly opened artifact
+    void renderHistory(); // the open pane, if any, should reflect the newly opened artifact
     if (returnToReading) queueMicrotask(focusPreview);
   }
 
@@ -1320,7 +1451,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     renderModeBar();
     renderContent();
     startStream();
-    renderConversation(); // the open pane, if any, should follow the newly selected workspace
+    void renderConversation(); // the open pane, if any, should follow the newly selected workspace
     // CLI deep-link (`glosa open <file>`): the first workspace selection focuses the named
     // artifact, once — after that, navigation is the user's.
     if (initialArtifact) {

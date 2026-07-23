@@ -265,6 +265,31 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     unmount();
   });
 
+  test("a closed compact navigator is inert and returns to the focus order only while open", async () => {
+    dom.window.matchMedia = ((query: string) => ({
+      matches: query === "(max-width: 1023px)",
+    })) as typeof dom.window.matchMedia;
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const sidebar = root.querySelector(".glosa-sidebar") as unknown as HTMLElement;
+    const navToggle = root.querySelector(".glosa-nav-toggle") as unknown as HTMLButtonElement;
+    const backdrop = root.querySelector(".glosa-backdrop") as unknown as HTMLElement;
+    expect(sidebar.inert).toBe(true);
+    expect(sidebar.getAttribute("aria-hidden")).toBe("true");
+
+    navToggle.click();
+    expect(sidebar.inert).toBe(false);
+    expect(sidebar.hasAttribute("aria-hidden")).toBe(false);
+
+    backdrop.click();
+    expect(sidebar.inert).toBe(true);
+    expect(sidebar.getAttribute("aria-hidden")).toBe("true");
+  });
+
   test("switching to Edit mode + Source face shows the textarea with the artifact's raw content; Save calls putArtifact", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
@@ -275,7 +300,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
+    const main = root.querySelector(".glosa-main") as unknown as HTMLElement;
+    main.scrollTop = 600;
     (root.querySelector('[data-mode="edit"]') as any).click();
+    expect(main.scrollTop).toBe(0);
     const richTextbox = root.querySelector('.ProseMirror[role="textbox"]');
     if (richTextbox) {
       expect(richTextbox.getAttribute("aria-label")).toBe("Artifact editor");
@@ -303,6 +331,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
+    const focusOptions: FocusOptions[] = [];
+    const nativeFocus = dom.window.HTMLElement.prototype.focus;
+    dom.window.HTMLElement.prototype.focus = function (options?: FocusOptions) {
+      focusOptions.push(options ?? {});
+      return nativeFocus.call(this);
+    };
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -314,6 +348,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const content = root.querySelector(".glosa-content")!;
     const heading = content.querySelector("h1")!;
     const textNode = heading.firstChild!;
+    const mediaQueries: string[] = [];
+    let scrollIntoViewCalls = 0;
+    dom.window.matchMedia = ((query: string) => {
+      mediaQueries.push(query);
+      return { matches: query === "(max-width: 1279px)" };
+    }) as typeof dom.window.matchMedia;
+    (heading as unknown as HTMLElement).scrollIntoView = () => {
+      scrollIntoViewCalls += 1;
+    };
     const range = dom.document.createRange();
     range.setStart(textNode, 0);
     range.setEnd(textNode, 5); // "Title"
@@ -328,6 +371,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(da.posted).toHaveLength(0);
     const composerInput = root.querySelector(".glosa-composer-input") as any;
     expect(composerInput).not.toBeNull();
+    expect(focusOptions.at(-1)).toEqual({ preventScroll: true });
+    expect(mediaQueries).toContain("(max-width: 1279px)");
+    expect(scrollIntoViewCalls).toBe(1);
     composerInput.value = "tighten this";
     (root.querySelector(".glosa-composer-send") as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -372,9 +418,19 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('[data-mode="annotate"]') as any).click();
 
     const heading = root.querySelector('.glosa-content > h1[data-line="0"]') as any;
+    const body = root.querySelector('.glosa-content > p[data-line="2"]') as any;
+    const content = root.querySelector(".glosa-content") as any;
     expect(heading.getAttribute("tabindex")).toBe("0");
-    expect(heading.getAttribute("aria-describedby")).toBe("glosa-annotate-instructions");
+    expect(body.getAttribute("tabindex")).toBe("-1");
+    expect(heading.hasAttribute("aria-describedby")).toBe(false);
+    expect(content.getAttribute("aria-describedby")).toBe("glosa-annotate-instructions");
     heading.focus();
+    heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(dom.document.activeElement).toBe(body);
+    expect(heading.getAttribute("tabindex")).toBe("-1");
+    expect(body.getAttribute("tabindex")).toBe("0");
+    body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    expect(dom.document.activeElement).toBe(heading);
     heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
     const quote = root.querySelector(".glosa-composer-quote") as any;
@@ -400,16 +456,35 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     const toggle = root.querySelector(".glosa-conversation-toggle") as any;
     const pane = root.querySelector(".glosa-conversation") as any;
+    const historyToggle = root.querySelector(".glosa-history-toggle") as any;
+    const historyPane = root.querySelector(".glosa-history") as any;
+    expect(pane.parentElement).toBe(root);
+    expect(historyPane.parentElement).toBe(root);
     expect(pane.hidden).toBe(true);
     expect(toggle.getAttribute("aria-controls")).toBe("glosa-conversation");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     toggle.click();
+    for (let i = 0; i < 5 && openedForSlugs.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     expect(pane.hidden).toBe(false);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(openedForSlugs).toEqual(["ws-1"]);
     // conversation.js's own mount renders its composer/status scaffolding into the pane.
     expect(pane.querySelector(".glosa-conv-composer-input")).not.toBeNull();
+
+    historyToggle.click();
+    expect(pane.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(historyPane.hidden).toBe(false);
+    expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
+
+    toggle.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(historyPane.hidden).toBe(true);
+    expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(pane.hidden).toBe(false);
 
     const close = pane.querySelector(".glosa-conv-close") as any;
     expect(close.getAttribute("aria-label")).toBe("Close conversation");
