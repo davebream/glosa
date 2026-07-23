@@ -6,7 +6,6 @@
 // token, and opens the SPA in the default browser at the literal `#t=<token>` fragment that A1 §2
 // defines and bootstrap.js's `scrubToken` parses.
 import { existsSync, statSync } from "node:fs";
-import { basename, dirname } from "node:path";
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope } from "./envelope.ts";
@@ -49,6 +48,8 @@ export interface OpenData {
 export interface OpenOptions {
   /** Launch the URL through macOS after preparing the workspace. Defaults to true. */
   launchBrowser?: boolean;
+  /** Keep directory state under GLOSA_HOME. Loose files always use external state. */
+  externalState?: boolean;
 }
 
 export async function runOpen(
@@ -66,25 +67,15 @@ export async function runOpen(
       error: { code: "platform-unsupported", kind: "platform_unsupported", message: "glosa v1 is macOS-only" },
     };
   }
-  // `glosa open <file>` opens the file's OWNING workspace (its directory) deep-linked to that
-  // artifact — the whole workspace stays reachable, the file is just focused (design brief §9;
-  // extends A6 §F26's directory-only form).
-  let dir = target;
-  let focus: string | null = null;
-  if (!deps.dirExists(target)) {
-    if (deps.fileExists(target)) {
-      dir = dirname(target);
-      focus = basename(target);
-    } else {
-      return {
-        ok: false,
-        command: "open",
-        exitCode: EXIT_CODES.USAGE,
-        data: {},
-        warnings: [],
-        error: { code: "no-such-directory", kind: "usage", message: `${target}: no such file or directory` },
-      };
-    }
+  if (!deps.dirExists(target) && !deps.fileExists(target)) {
+    return {
+      ok: false,
+      command: "open",
+      exitCode: EXIT_CODES.USAGE,
+      data: {},
+      warnings: [],
+      error: { code: "no-such-directory", kind: "usage", message: `${target}: no such file or directory` },
+    };
   }
 
   // Mint/reuse the pairing token BEFORE ever ensuring the daemon — `bootDaemon` reads
@@ -105,16 +96,19 @@ export async function runOpen(
     return { ...daemonUnreachableEnvelope("open", (err as Error).message), data: {} };
   }
 
-  let opened: { slug: string; path: string };
+  let opened: { slug: string; path: string; focus?: string };
   try {
-    opened = await client.openWorkspace(dir);
+    opened =
+      options.externalState === undefined
+        ? await client.openWorkspace(target)
+        : await client.openWorkspace(target, { externalState: options.externalState });
   } catch (err) {
     return { ...daemonUnreachableEnvelope("open", (err as Error).message), data: {} };
   }
 
   // The fragment carries the deep-link beside the token (`w`=slug, `a`=artifact): bootstrap.js
   // reads both BEFORE scrubbing the fragment from the address bar.
-  const focusParams = focus ? `&w=${encodeURIComponent(opened.slug)}&a=${encodeURIComponent(focus)}` : "";
+  const focusParams = opened.focus ? `&w=${encodeURIComponent(opened.slug)}&a=${encodeURIComponent(opened.focus)}` : "";
   const url = `http://127.0.0.1:${client.port}/#t=${token}${focusParams}`;
   if (options.launchBrowser !== false) deps.openBrowser(url);
 
@@ -122,7 +116,7 @@ export async function runOpen(
     ok: true,
     command: "open",
     exitCode: EXIT_CODES.OK,
-    data: { slug: opened.slug, path: opened.path, url, ...(focus ? { focus } : {}) },
+    data: { slug: opened.slug, path: opened.path, url, ...(opened.focus ? { focus: opened.focus } : {}) },
     warnings: [],
   };
 }

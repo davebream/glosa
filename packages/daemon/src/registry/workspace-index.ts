@@ -7,17 +7,40 @@
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
 // never observe (or assign) a torn/duplicate slug.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  accessSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { constants as fsConstants } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fsyncContainingDir } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { glosaHome } from "../home.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
+import type { WorkspaceKind, WorkspaceLocation, WorkspaceTracking } from "../workspace.ts";
 import { assignSlug, type SlugDeps } from "./slug.ts";
 
 export type WorkspaceSource = "session" | "glosa-open" | "discovered";
 
-export interface WorkspaceEntry {
+export interface WorkspaceEntry extends WorkspaceLocation {
   canonical_path: string;
+  registration_id: string;
+  kind: WorkspaceKind;
+  worktree_path: string;
+  bus_path: string;
+  tracking: WorkspaceTracking;
+  file_identity?: { dev: string; ino: string };
   slug: string;
   slug_len: number;
   source: WorkspaceSource;
@@ -30,9 +53,40 @@ export interface WorkspaceEntry {
 }
 
 export interface WorkspaceIndexFile {
-  version: 1;
+  version: 2;
   updated_at: string;
   workspaces: Record<string, WorkspaceEntry>;
+}
+
+interface LegacyWorkspaceEntry {
+  canonical_path: string;
+  slug: string;
+  slug_len: number;
+  source: WorkspaceSource;
+  first_seen: string;
+  last_seen: string;
+  present: boolean;
+  absent_since?: string;
+}
+
+interface LegacyWorkspaceIndexFile {
+  version: 1;
+  updated_at: string;
+  workspaces: Record<string, LegacyWorkspaceEntry>;
+}
+
+export interface WorkspaceOpenResult {
+  entry: WorkspaceEntry;
+  focus?: string;
+}
+
+export class WorkspaceOpenError extends Error {
+  constructor(
+    readonly code: "invalid-path" | "artifact-not-tracked" | "unsupported-file",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export function workspaceIndexPath(home: string): string {
@@ -45,7 +99,7 @@ export function fallbackWorkspacesLockPath(home: string): string {
   return join(home, ".workspaces.lock");
 }
 
-function isWorkspaceEntryShape(v: unknown): v is WorkspaceEntry {
+function isLegacyWorkspaceEntryShape(v: unknown): v is LegacyWorkspaceEntry {
   if (typeof v !== "object" || v === null) return false;
   const e = v as Record<string, unknown>;
   return (
@@ -59,13 +113,89 @@ function isWorkspaceEntryShape(v: unknown): v is WorkspaceEntry {
   );
 }
 
+function isTrackingShape(v: unknown): v is WorkspaceTracking {
+  if (typeof v !== "object" || v === null) return false;
+  const tracking = v as Record<string, unknown>;
+  return (
+    tracking.mode === "matcher" ||
+    (tracking.mode === "bounded" &&
+      Array.isArray(tracking.paths) &&
+      tracking.paths.every((path) => typeof path === "string"))
+  );
+}
+
+function isWorkspaceEntryShape(v: unknown): v is WorkspaceEntry {
+  if (!isLegacyWorkspaceEntryShape(v)) return false;
+  const e = v as unknown as Record<string, unknown>;
+  return (
+    typeof e.registration_id === "string" &&
+    (e.kind === "directory" || e.kind === "loose-file") &&
+    typeof e.worktree_path === "string" &&
+    isAbsolute(e.worktree_path) &&
+    typeof e.bus_path === "string" &&
+    isAbsolute(e.bus_path) &&
+    isTrackingShape(e.tracking)
+  );
+}
+
 function isWorkspaceIndexShape(v: unknown): v is WorkspaceIndexFile {
   if (typeof v !== "object" || v === null) return false;
   const f = v as Record<string, unknown>;
-  if (f.version !== 1 || typeof f.updated_at !== "string" || typeof f.workspaces !== "object" || f.workspaces === null) {
+  if (
+    f.version !== 2 ||
+    typeof f.updated_at !== "string" ||
+    typeof f.workspaces !== "object" ||
+    f.workspaces === null
+  ) {
     return false;
   }
   return Object.values(f.workspaces as Record<string, unknown>).every(isWorkspaceEntryShape);
+}
+
+function isLegacyWorkspaceIndexShape(v: unknown): v is LegacyWorkspaceIndexFile {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as Record<string, unknown>;
+  return (
+    f.version === 1 &&
+    typeof f.updated_at === "string" &&
+    typeof f.workspaces === "object" &&
+    f.workspaces !== null &&
+    Object.values(f.workspaces as Record<string, unknown>).every(isLegacyWorkspaceEntryShape)
+  );
+}
+
+function registrationId(kind: WorkspaceKind, canonicalPath: string): string {
+  return createHash("sha256").update(`${kind}\0${canonicalPath}`).digest("hex");
+}
+
+function redirectedBusPath(home: string, id: string): string {
+  return join(home, "state", id);
+}
+
+function canonicalPath(path: string): string {
+  const real = realpathSync(path).normalize("NFC");
+  return real.length > 1 && real.endsWith("/") ? real.slice(0, -1) : real;
+}
+
+function relativeNfc(root: string, path: string): string {
+  return relative(root, path)
+    .split(sep)
+    .map((part) => part.normalize("NFC"))
+    .join("/");
+}
+
+function isInside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+function bigintIdentity(path: string): { dev: string; ino: string } {
+  const stat = statSync(path, { bigint: true });
+  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+}
+
+function sameIdentity(a: { dev: string; ino: string }, b: { dev: string; ino: string }): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
 }
 
 // A5 §F19: "GC (on start + throttled ≥60s)"; "hard-remove only ... present:false ≥ grace period."
@@ -90,6 +220,10 @@ export interface WorkspaceIndexDeps {
   /** Does `canonicalPath` currently exist on disk? Defaults to `existsSync`; injectable so GC
    * tests don't need real directories on disk. */
   pathExists?: (canonicalPath: string) => boolean;
+  /** Can a fresh local bus be created beneath this directory? Defaults to an access(2)
+   * write/search check; injectable for deterministic permission tests. Existing local buses are
+   * authoritative and never consult this predicate. */
+  canCreateLocalBus?: (canonicalPath: string) => boolean;
   /** Fired once for each canonical path GC actually hard-removes (never for a soft `present:false`
    * — only real removal from the index). Defaults to a no-op. Production wiring calls
    * `setOnHardRemove` once a `WorkspaceBusRegistry` exists — see `setOnHardRemove`'s own docstring
@@ -106,11 +240,13 @@ export interface GcResult {
 
 export class WorkspaceIndex {
   private readonly path: string;
+  private readonly home: string;
   private readonly mutex: AsyncMutex;
   private readonly now: () => Date;
   private readonly gcGraceMs: number;
   private readonly gcThrottleMs: number;
   private readonly pathExists: (canonicalPath: string) => boolean;
+  private readonly canCreateLocalBus: (canonicalPath: string) => boolean;
   private readonly slugDeps: SlugDeps;
   private hasLiveSession: (canonicalPath: string) => boolean;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
@@ -124,7 +260,8 @@ export class WorkspaceIndex {
   private lastGcAt = -Infinity;
 
   constructor(deps: WorkspaceIndexDeps = {}) {
-    this.path = workspaceIndexPath(deps.home ?? glosaHome());
+    this.home = deps.home ?? glosaHome();
+    this.path = workspaceIndexPath(this.home);
     this.mutex = deps.mutex ?? new AsyncMutex();
     this.now = deps.now ?? (() => new Date());
     this.gcGraceMs = deps.gcGraceMs ?? DEFAULT_GC_GRACE_MS;
@@ -132,6 +269,16 @@ export class WorkspaceIndex {
     this.hasLiveSession = deps.hasLiveSession ?? (() => false);
     this.liveSessionPredicateWired = deps.hasLiveSession !== undefined;
     this.pathExists = deps.pathExists ?? existsSync;
+    this.canCreateLocalBus =
+      deps.canCreateLocalBus ??
+      ((canonicalPath) => {
+        try {
+          accessSync(canonicalPath, fsConstants.W_OK | fsConstants.X_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      });
     this.onHardRemove = deps.onHardRemove ?? (() => {});
     this.slugDeps = deps.slug ?? {};
   }
@@ -172,13 +319,33 @@ export class WorkspaceIndex {
         this.cache = parsed as WorkspaceIndexFile;
         return this.cache;
       }
+      if (isLegacyWorkspaceIndexShape(parsed)) {
+        const migrated: WorkspaceIndexFile = {
+          version: 2,
+          updated_at: this.now().toISOString(),
+          workspaces: {},
+        };
+        for (const legacy of Object.values(parsed.workspaces)) {
+          const id = registrationId("directory", legacy.canonical_path);
+          migrated.workspaces[id] = {
+            ...legacy,
+            registration_id: id,
+            kind: "directory",
+            worktree_path: legacy.canonical_path,
+            bus_path: join(legacy.canonical_path, ".glosa"),
+            tracking: { mode: "matcher" },
+          };
+        }
+        this.persist(migrated);
+        return migrated;
+      }
       // Corrupt OR invalid-shape on-disk content is never silently discarded — mirrors A4 §F04's
       // journal.quarantine convention (a bad record is preserved for inspection, not erased). The
       // next persist() would otherwise overwrite it with no trace at all of what was lost
       // (glosa-open/discovered sources, softened-but-not-yet-GC'd history, ...).
       this.quarantineCorruptFile();
     }
-    this.cache = { version: 1, updated_at: this.now().toISOString(), workspaces: {} };
+    this.cache = { version: 2, updated_at: this.now().toISOString(), workspaces: {} };
     return this.cache;
   }
 
@@ -193,9 +360,13 @@ export class WorkspaceIndex {
     const quarantinePath = `${this.path}.corrupt.${new Date().toISOString()}`;
     try {
       renameSync(this.path, quarantinePath);
-      console.warn(`glosa: ${this.path} was corrupt/unparseable — preserved at ${quarantinePath}; starting a fresh workspace index`);
+      console.warn(
+        `glosa: ${this.path} was corrupt/unparseable — preserved at ${quarantinePath}; starting a fresh workspace index`,
+      );
     } catch (err) {
-      console.warn(`glosa: ${this.path} was corrupt/unparseable, and quarantining it also failed: ${(err as Error).message}`);
+      console.warn(
+        `glosa: ${this.path} was corrupt/unparseable, and quarantining it also failed: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -238,7 +409,9 @@ export class WorkspaceIndex {
     return this.mutex.runExclusive(() => {
       const index = this.load();
       const now = this.now().toISOString();
-      const existing = index.workspaces[canonicalPath];
+      const existing = Object.values(index.workspaces).find(
+        (entry) => entry.kind === "directory" && entry.canonical_path === canonicalPath,
+      );
 
       if (existing) {
         existing.last_seen = now;
@@ -249,15 +422,26 @@ export class WorkspaceIndex {
         return existing;
       }
 
+      const id = registrationId("directory", canonicalPath);
       const existingSlugEntries = Object.values(index.workspaces).map((e) => ({
         canonicalPath: e.canonical_path,
         slug: e.slug,
         slugLen: e.slug_len,
       }));
       const { slug, slugLen } = assignSlug(canonicalPath, existingSlugEntries, this.slugDeps);
+      const localBus = join(canonicalPath, ".glosa");
+      let busPath = localBus;
+      if (!existsSync(localBus) && !this.canCreateLocalBus(canonicalPath)) {
+        busPath = redirectedBusPath(this.home, id);
+      }
 
       const entry: WorkspaceEntry = {
+        registration_id: id,
+        kind: "directory",
         canonical_path: canonicalPath,
+        worktree_path: canonicalPath,
+        bus_path: busPath,
+        tracking: { mode: "matcher" },
         slug,
         slug_len: slugLen,
         source,
@@ -265,11 +449,165 @@ export class WorkspaceIndex {
         last_seen: now,
         present: true,
       };
-      index.workspaces[canonicalPath] = entry;
+      index.workspaces[id] = entry;
       index.updated_at = now;
       this.persist(index);
       return entry;
     });
+  }
+
+  /** Resolves a raw `glosa open` target under the same global-index mutex that persists any new
+   * registration. This closes the alias race: two concurrent hardlink opens cannot both observe
+   * "no owner" and create divergent buses. */
+  resolveOpenTarget(rawPath: string, opts: { externalState?: boolean } = {}): Promise<WorkspaceOpenResult> {
+    return this.mutex.runExclusive(() => {
+      let leafStat: ReturnType<typeof lstatSync>;
+      try {
+        leafStat = lstatSync(rawPath);
+      } catch {
+        throw new WorkspaceOpenError("invalid-path", "path does not exist");
+      }
+      if (leafStat.isSymbolicLink()) {
+        throw new WorkspaceOpenError("unsupported-file", "symlinks cannot be opened as artifacts");
+      }
+
+      let canonical: string;
+      try {
+        canonical = canonicalPath(rawPath);
+      } catch {
+        throw new WorkspaceOpenError("invalid-path", "path could not be canonicalized");
+      }
+
+      const index = this.load();
+      const now = this.now().toISOString();
+
+      if (leafStat.isDirectory()) {
+        const existing = Object.values(index.workspaces).find(
+          (entry) => entry.kind === "directory" && entry.canonical_path === canonical,
+        );
+        if (existing) {
+          existing.last_seen = now;
+          existing.present = true;
+          delete existing.absent_since;
+          index.updated_at = now;
+          this.persist(index);
+          return { entry: existing };
+        }
+
+        const id = registrationId("directory", canonical);
+        const localBus = join(canonical, ".glosa");
+        let busPath = localBus;
+        if (opts.externalState && !existsSync(localBus)) {
+          busPath = redirectedBusPath(this.home, id);
+        } else if (!existsSync(localBus) && !this.canCreateLocalBus(canonical)) {
+          busPath = redirectedBusPath(this.home, id);
+        }
+        const entry = this.createEntry(index, {
+          registration_id: id,
+          kind: "directory",
+          canonical_path: canonical,
+          worktree_path: canonical,
+          bus_path: busPath,
+          tracking: { mode: "matcher" },
+          source: "glosa-open",
+        });
+        return { entry };
+      }
+
+      if (!leafStat.isFile()) {
+        throw new WorkspaceOpenError("unsupported-file", "only regular files and directories can be opened");
+      }
+
+      const owning = Object.values(index.workspaces)
+        .filter((entry) => entry.present && entry.kind === "directory" && isInside(entry.worktree_path, canonical))
+        .sort((a, b) => b.worktree_path.length - a.worktree_path.length)[0];
+      if (owning) {
+        const matched = resolveTrackedFiles(owning).tracked.find(
+          (file) => file.path === relativeNfc(owning.worktree_path, canonical),
+        );
+        if (!matched) {
+          throw new WorkspaceOpenError(
+            "artifact-not-tracked",
+            "file is inside a registered workspace but excluded from its tracked artifact list",
+          );
+        }
+        owning.last_seen = now;
+        owning.present = true;
+        delete owning.absent_since;
+        index.updated_at = now;
+        this.persist(index);
+        return { entry: owning, focus: matched.path };
+      }
+
+      const identity = bigintIdentity(canonical);
+      for (const entry of Object.values(index.workspaces)) {
+        if (!entry.present) continue;
+        for (const file of resolveTrackedFiles(entry).tracked) {
+          try {
+            if (sameIdentity(identity, bigintIdentity(file.rawPath))) {
+              entry.last_seen = now;
+              entry.present = true;
+              delete entry.absent_since;
+              index.updated_at = now;
+              this.persist(index);
+              return { entry, focus: file.path };
+            }
+          } catch {
+            // A raced-away registered file cannot prove inode ownership; continue searching.
+          }
+        }
+      }
+
+      const worktree = canonicalPath(dirname(canonical));
+      const focus = relativeNfc(worktree, canonical);
+      const id = registrationId("loose-file", canonical);
+      const entry = this.createEntry(index, {
+        registration_id: id,
+        kind: "loose-file",
+        canonical_path: canonical,
+        worktree_path: worktree,
+        bus_path: redirectedBusPath(this.home, id),
+        tracking: { mode: "bounded", paths: [focus] },
+        file_identity: identity,
+        source: "glosa-open",
+      });
+      return { entry, focus };
+    });
+  }
+
+  private createEntry(
+    index: WorkspaceIndexFile,
+    input: Pick<
+      WorkspaceEntry,
+      | "registration_id"
+      | "kind"
+      | "canonical_path"
+      | "worktree_path"
+      | "bus_path"
+      | "tracking"
+      | "file_identity"
+      | "source"
+    >,
+  ): WorkspaceEntry {
+    const now = this.now().toISOString();
+    const existingSlugEntries = Object.values(index.workspaces).map((entry) => ({
+      canonicalPath: entry.canonical_path,
+      slug: entry.slug,
+      slugLen: entry.slug_len,
+    }));
+    const { slug, slugLen } = assignSlug(input.canonical_path, existingSlugEntries, this.slugDeps);
+    const entry: WorkspaceEntry = {
+      ...input,
+      slug,
+      slug_len: slugLen,
+      first_seen: now,
+      last_seen: now,
+      present: true,
+    };
+    index.workspaces[entry.registration_id] = entry;
+    index.updated_at = now;
+    this.persist(index);
+    return entry;
   }
 
   getBySlug(slug: string): WorkspaceEntry | null {
@@ -280,7 +618,12 @@ export class WorkspaceIndex {
   }
 
   get(canonicalPath: string): WorkspaceEntry | null {
-    return this.load().workspaces[canonicalPath] ?? null;
+    const entries = Object.values(this.load().workspaces);
+    return (
+      entries.find((entry) => entry.canonical_path === canonicalPath) ??
+      entries.find((entry) => entry.kind === "directory" && entry.worktree_path === canonicalPath) ??
+      null
+    );
   }
 
   list(opts: { presentOnly?: boolean } = {}): WorkspaceEntry[] {
@@ -297,7 +640,7 @@ export class WorkspaceIndex {
       const index = this.load();
       const match = Object.values(index.workspaces).find((e) => e.slug === slug);
       if (!match) return false;
-      delete index.workspaces[match.canonical_path];
+      delete index.workspaces[match.registration_id];
       index.updated_at = this.now().toISOString();
       this.persist(index);
       await this.onHardRemove(match.canonical_path);
@@ -337,7 +680,8 @@ export class WorkspaceIndex {
       const removed: string[] = [];
       let changed = false;
 
-      for (const [canonicalPath, entry] of Object.entries(index.workspaces)) {
+      for (const [registrationId, entry] of Object.entries(index.workspaces)) {
+        const canonicalPath = entry.canonical_path;
         if (this.pathExists(canonicalPath)) {
           if (!entry.present) {
             entry.present = true;
@@ -359,7 +703,7 @@ export class WorkspaceIndex {
         if (this.hasLiveSession(canonicalPath)) continue; // conservative: never remove under a live session
         const absentSince = entry.absent_since ? new Date(entry.absent_since).getTime() : now.getTime();
         if (now.getTime() - absentSince >= this.gcGraceMs) {
-          delete index.workspaces[canonicalPath];
+          delete index.workspaces[registrationId];
           removed.push(canonicalPath);
           changed = true;
         }

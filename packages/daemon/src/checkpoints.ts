@@ -6,6 +6,7 @@
 // module only reads what git/shadow.ts's `checkpoint()` already produced).
 import { commitExists } from "./checkpoint-diff.ts";
 import { runGit } from "./git/shadow.ts";
+import type { WorkspaceTarget } from "./workspace.ts";
 
 export interface CheckpointRow {
   checkpoint_id: string;
@@ -45,7 +46,7 @@ export type SinceResolution =
  * honors its OWN offset — `new Date(since)` does that for free, no extra handling needed); anything
  * else is checked against the shadow repo as a checkpoint id (`ok:false` if it's none of the above
  * — an unrecognized token, per A6 §F31's own listed forms). */
-export async function resolveSince(root: string, since: string, now: Date): Promise<SinceResolution> {
+export async function resolveSince(root: WorkspaceTarget, since: string, now: Date): Promise<SinceResolution> {
   if (since === "yesterday" || since === "today") {
     return { ok: true, mode: "boundary", iso: resolveDayBoundary(since, now) };
   }
@@ -65,16 +66,22 @@ export async function resolveSince(root: string, since: string, now: Date): Prom
 // mirrors checkpoint-diff.ts's per-commit git calls, just combined into one round trip per row.
 const FIELD_SEP = "\x1f";
 
-async function commitMeta(root: string, sha: string): Promise<{ id: string; at: string; by: string; kind: string }> {
-  const format = ["%h", "%cI", "%(trailers:key=Glosa-Attribution,valueonly)", "%(trailers:key=Glosa-Kind,valueonly)"].join(
-    FIELD_SEP,
-  );
+async function commitMeta(
+  root: WorkspaceTarget,
+  sha: string,
+): Promise<{ id: string; at: string; by: string; kind: string }> {
+  const format = [
+    "%h",
+    "%cI",
+    "%(trailers:key=Glosa-Attribution,valueonly)",
+    "%(trailers:key=Glosa-Kind,valueonly)",
+  ].join(FIELD_SEP);
   const result = await runGit(root, ["show", "-s", `--format=${format}`, sha]);
   const [id, at, by, kind] = result.stdout.split(FIELD_SEP).map((s) => s.trim());
   return { id: id ?? sha, at: at ?? "", by: by || "unknown", kind: kind || "unknown" };
 }
 
-async function bytesChanged(root: string, sha: string): Promise<number> {
+async function bytesChanged(root: WorkspaceTarget, sha: string): Promise<number> {
   const parent = await runGit(root, ["rev-parse", `${sha}^`], { allowExitCodes: [0, 128] });
   const from = parent.exitCode === 0 ? parent.stdout.trim() : EMPTY_TREE_SHA;
   const diff = await runGit(root, ["diff", from, sha]);
@@ -92,7 +99,11 @@ export type ListCheckpointsResult = { ok: true; rows: CheckpointRow[] } | { ok: 
  * filters by committer date; a checkpoint id filters to `<id>..HEAD`, i.e. strictly after it);
  * `limit` caps the row count AFTER filtering. `ok:false` only for an unrecognized `since` token —
  * an empty/never-checkpointed workspace is `ok:true, rows:[]`, not an error. */
-export async function listCheckpoints(root: string, opts: ListCheckpointsOptions, now: Date): Promise<ListCheckpointsResult> {
+export async function listCheckpoints(
+  root: WorkspaceTarget,
+  opts: ListCheckpointsOptions,
+  now: Date,
+): Promise<ListCheckpointsResult> {
   let revRange = "HEAD";
   let sinceMs: number | undefined;
 
@@ -112,7 +123,13 @@ export async function listCheckpoints(root: string, opts: ListCheckpointsOptions
   for (const sha of shas) {
     const meta = await commitMeta(root, sha);
     if (sinceMs !== undefined && new Date(meta.at).getTime() < sinceMs) continue;
-    rows.push({ checkpoint_id: meta.id, at: meta.at, by: meta.by, summary: meta.kind, bytes_changed: await bytesChanged(root, sha) });
+    rows.push({
+      checkpoint_id: meta.id,
+      at: meta.at,
+      by: meta.by,
+      summary: meta.kind,
+      bytes_changed: await bytesChanged(root, sha),
+    });
     if (opts.limit !== undefined && rows.length >= opts.limit) break;
   }
   return { ok: true, rows };

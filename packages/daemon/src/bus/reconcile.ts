@@ -14,7 +14,8 @@ import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./re
 import { lifecycleReducer } from "./lifecycle.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import { checkpoint, headSha, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
-import { resolveMatchedFiles } from "../matcher.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
+import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
 export interface TailTruncateResult {
   truncated: boolean;
@@ -84,7 +85,7 @@ export function truncateTornTail(deps: ReconcileDeps): TailTruncateResult {
  * caller doesn't have to re-replay. Also sweeps orphaned inbox `*.tmp` files (crash-before-rename
  * — already inert, this just tidies up). */
 export function selfHealInbox(deps: {
-  workspaceRoot: string;
+  workspaceRoot: WorkspaceTarget;
   state: DerivedState;
   writer: JournalWriter;
   ulid: () => string;
@@ -121,7 +122,7 @@ export function selfHealInbox(deps: {
 // unrecorded as anything more than "unknown" (no checkpoint here either; step 5 immediately after
 // this one is what captures whatever the worktree looks like now, as `unknown`).
 export interface ApplyLeaseReconcileDeps {
-  workspaceRoot: string;
+  workspaceRoot: WorkspaceTarget;
   state: DerivedState;
   writer: JournalWriter;
   ulid: () => string;
@@ -166,7 +167,7 @@ export interface OfflineCatchUpResult {
   error?: string;
 }
 export interface OfflineCatchUpDeps {
-  workspaceRoot: string;
+  workspaceRoot: WorkspaceTarget;
   state: DerivedState;
   writer: JournalWriter;
   ulid: () => string;
@@ -186,7 +187,7 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
   // checkpoints that ever touch this window.
   if (deps.state.applyLease) return { occurred: false };
 
-  const hasTrackedFiles = resolveMatchedFiles(deps.workspaceRoot).tracked.length > 0;
+  const hasTrackedFiles = resolveTrackedFiles(deps.workspaceRoot).tracked.length > 0;
   const shadowExists = existsSync(shadowGitDir(deps.workspaceRoot));
   if (!hasTrackedFiles && !shadowExists) return { occurred: false };
 
@@ -235,7 +236,10 @@ export interface ReconcileResult {
  * touch shadow-git (A4 §F21); both are true no-ops when there's nothing for them to do (no
  * dangling lease / no tracked files and no shadow repo yet), so a workspace that never uses either
  * feature pays no git-spawn cost here. */
-export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileOptions = {}): Promise<ReconcileResult> {
+export async function reconcileWorkspace(
+  workspaceRoot: WorkspaceTarget,
+  opts: ReconcileOptions = {},
+): Promise<ReconcileResult> {
   const jPath = journalPath(workspaceRoot);
   const qPath = quarantinePath(workspaceRoot);
   mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
@@ -260,7 +264,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
     });
 
     const healedEntryIds = selfHealInbox({
-      workspaceRoot,
+      workspaceRoot: workspaceWorktree(workspaceRoot),
       state,
       writer,
       ulid: ulidFn,
@@ -269,7 +273,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
     });
 
     const expiredLeaseIds = reconcileApplyLeases({
-      workspaceRoot,
+      workspaceRoot: workspaceWorktree(workspaceRoot),
       state,
       writer,
       ulid: ulidFn,
@@ -299,7 +303,7 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
     }
 
     return {
-      workspaceRoot,
+      workspaceRoot: workspaceWorktree(workspaceRoot),
       tailTruncated: tail.truncated,
       bytesRemoved: tail.bytesRemoved,
       state,

@@ -202,6 +202,10 @@ function createSubCommands(setExitCode: (code: number) => void) {
         ...GLOBAL_ARGS,
         dir: { type: "positional", required: false, description: "Workspace directory or file" },
         url: { type: "boolean", description: "Print the ready URL without opening a browser" },
+        "external-state": {
+          type: "boolean",
+          description: "Store directory state under GLOSA_HOME instead of beside it",
+        },
       },
     },
     async (context) => {
@@ -214,7 +218,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
       const result = await openModule.runOpen(
         (values.dir as string | undefined) ?? process.cwd(),
         openModule.realOpenDeps(createHttpGlosaClient),
-        { launchBrowser: !urlOnly },
+        { launchBrowser: !urlOnly, externalState: Boolean(values["external-state"]) },
       );
       openModule.printOpenResult(result, Boolean(values.json), Boolean(values.quiet) || urlOnly);
       setExitCode(result.exitCode);
@@ -408,10 +412,9 @@ function createSubCommands(setExitCode: (code: number) => void) {
         import("./api-client.ts"),
         import("./status.ts"),
       ]);
-      const result = await statusModule.runStatus(
-        (values.dir as string | undefined) ?? process.cwd(),
-        { createClient: createHttpGlosaClient },
-      );
+      const result = await statusModule.runStatus((values.dir as string | undefined) ?? process.cwd(), {
+        createClient: createHttpGlosaClient,
+      });
       statusModule.printStatusResult(result, Boolean(values.json));
       setExitCode(result.exitCode);
     },
@@ -600,50 +603,41 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
   );
 
-  const mcp = lazyHandler(
-    { name: "mcp", description: "MCP stdio protocol entry point", internal: true },
-    async () => {
-      const [{ createHttpDaemonClient }, { createHttpGlosaClient }, { runMcpServer }] = await Promise.all([
-        import("./daemon-client.ts"),
-        import("./api-client.ts"),
-        import("./mcp.ts"),
-      ]);
-      await runMcpServer({
-        createHookClient: createHttpDaemonClient,
-        createApiClient: createHttpGlosaClient,
-        sessionId: () => process.env.CLAUDE_CODE_SESSION_ID,
-      });
-    },
-  );
+  const mcp = lazyHandler({ name: "mcp", description: "MCP stdio protocol entry point", internal: true }, async () => {
+    const [{ createHttpDaemonClient }, { createHttpGlosaClient }, { runMcpServer }] = await Promise.all([
+      import("./daemon-client.ts"),
+      import("./api-client.ts"),
+      import("./mcp.ts"),
+    ]);
+    await runMcpServer({
+      createHookClient: createHttpDaemonClient,
+      createApiClient: createHttpGlosaClient,
+      sessionId: () => process.env.CLAUDE_CODE_SESSION_ID,
+    });
+  });
 
-  const daemon = lazyHandler(
-    { name: "__daemon", description: "Detached daemon process", internal: true },
-    async () => {
-      const { bootDaemon } = await import("../../daemon/src/index.ts");
-      const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
-      const { CodexProvider } = await import("../../providers/codex/src/index.ts");
-      await bootDaemon({
-        providerFactories: [
-          ({ sessionRegistry, pushRegistry }) =>
-            new ClaudeCodeProvider({
-              liveness: sessionRegistry,
-              channelsEnabled: (session) => pushRegistry.has(session.session_id),
-              sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
-            }),
-          ({ sessionRegistry }) => new CodexProvider({ liveness: sessionRegistry }),
-        ],
-      });
-    },
-  );
+  const daemon = lazyHandler({ name: "__daemon", description: "Detached daemon process", internal: true }, async () => {
+    const { bootDaemon } = await import("../../daemon/src/index.ts");
+    const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
+    const { CodexProvider } = await import("../../providers/codex/src/index.ts");
+    await bootDaemon({
+      providerFactories: [
+        ({ sessionRegistry, pushRegistry }) =>
+          new ClaudeCodeProvider({
+            liveness: sessionRegistry,
+            channelsEnabled: (session) => pushRegistry.has(session.session_id),
+            sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
+          }),
+        ({ sessionRegistry }) => new CodexProvider({ liveness: sessionRegistry }),
+      ],
+    });
+  });
 
   const placeholder = (name: string) =>
-    lazyHandler(
-      { name, description: "Reserved command", internal: true },
-      async () => {
-        process.stderr.write(`glosa: command not yet implemented: ${name}\n`);
-        setExitCode(EXIT_CODES.USAGE);
-      },
-    );
+    lazyHandler({ name, description: "Reserved command", internal: true }, async () => {
+      process.stderr.write(`glosa: command not yet implemented: ${name}\n`);
+      setExitCode(EXIT_CODES.USAGE);
+    });
 
   return {
     open,
@@ -673,9 +667,7 @@ function commandNameForError(argv: readonly string[], error: unknown): string {
 
 function usageMessage(error: unknown): string {
   if (error instanceof AggregateError) {
-    const messages = error.errors
-      .filter((item): item is Error => item instanceof Error)
-      .map((item) => item.message);
+    const messages = error.errors.filter((item): item is Error => item instanceof Error).map((item) => item.message);
     if (messages.length > 0) return messages.join("; ");
   }
   return error instanceof Error ? error.message : String(error);

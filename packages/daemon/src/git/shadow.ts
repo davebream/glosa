@@ -13,7 +13,8 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { appendEvent, type JournalWriter } from "../bus/journal.ts";
 import { shadowGitDir } from "../bus/paths.ts";
-import { resolveMatchedFiles } from "../matcher.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
+import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
 export const GLOSA_BRANCH = "glosa";
 const GIT_IDENTITY_NAME = "glosa";
@@ -97,8 +98,9 @@ export interface RunGitOptions {
  * shadow repo. `args` are everything after `git`; `--git-dir`/`--work-tree` are injected here so
  * no call site can forget them (and thus accidentally operate on the user's own repo, if the
  * workspace happens to be one). */
-export async function runGit(root: string, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
-  const argv = ["git", `--git-dir=${shadowGitDir(root)}`, `--work-tree=${root}`, ...args];
+export async function runGit(workspace: WorkspaceTarget, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
+  const root = workspaceWorktree(workspace);
+  const argv = ["git", `--git-dir=${shadowGitDir(workspace)}`, `--work-tree=${root}`, ...args];
   const proc = Bun.spawn({
     cmd: argv,
     cwd: root,
@@ -117,7 +119,7 @@ export async function runGit(root: string, args: string[], opts: RunGitOptions =
   return result;
 }
 
-export function indexLockPath(root: string): string {
+export function indexLockPath(root: WorkspaceTarget): string {
   return `${shadowGitDir(root)}/index.lock`;
 }
 
@@ -132,7 +134,7 @@ export interface ReclaimIndexLockDeps {
  * git operator for this workspace, so a leftover lock can only be a stale remnant of a git
  * process that died mid-operation on a PREVIOUS run — never a concurrent live writer racing us
  * right now (A4 §F21). Call before the first git op of a session and again at reconcile. */
-export function reclaimIndexLock(root: string, deps: ReclaimIndexLockDeps): boolean {
+export function reclaimIndexLock(root: WorkspaceTarget, deps: ReclaimIndexLockDeps): boolean {
   const lockFile = indexLockPath(root);
   if (!existsSync(lockFile)) return false;
   unlinkSync(lockFile);
@@ -180,7 +182,7 @@ function trailerInjectionError(key: string): TrailerInjectionError {
   return err;
 }
 
-async function commit(root: string, opts: CommitOptions): Promise<string> {
+async function commit(root: WorkspaceTarget, opts: CommitOptions): Promise<string> {
   // A trailer value with an embedded `\n`/`\r` could inject its own `Key: Value` line (e.g. an
   // attribution value of `unknown\nGlosa-Attribution: human` would forge a second,
   // independently-parseable `Glosa-Attribution: human` trailer below the real one) — this is the
@@ -198,7 +200,9 @@ async function commit(root: string, opts: CommitOptions): Promise<string> {
     GIT_AUTHOR_EMAIL: GIT_IDENTITY_EMAIL,
     GIT_COMMITTER_NAME: GIT_IDENTITY_NAME,
     GIT_COMMITTER_EMAIL: GIT_IDENTITY_EMAIL,
-    ...(opts.at !== undefined ? { GIT_AUTHOR_DATE: opts.at.toISOString(), GIT_COMMITTER_DATE: opts.at.toISOString() } : {}),
+    ...(opts.at !== undefined
+      ? { GIT_AUTHOR_DATE: opts.at.toISOString(), GIT_COMMITTER_DATE: opts.at.toISOString() }
+      : {}),
   });
   await runGit(root, ["commit", ...(opts.allowEmpty ? ["--allow-empty"] : []), "-m", fullMessage], {
     env: identityEnv,
@@ -206,14 +210,14 @@ async function commit(root: string, opts: CommitOptions): Promise<string> {
   return headSha(root);
 }
 
-export async function headSha(root: string): Promise<string> {
+export async function headSha(root: WorkspaceTarget): Promise<string> {
   const result = await runGit(root, ["rev-parse", "HEAD"]);
   return result.stdout.trim();
 }
 
 /** `git diff -M a b` — renames surface here (`-M`), not at write time; nothing about staging
  * needs to know about them. */
-export async function diffShas(root: string, a: string, b: string): Promise<string> {
+export async function diffShas(root: WorkspaceTarget, a: string, b: string): Promise<string> {
   const result = await runGit(root, ["diff", "-M", a, b]);
   return result.stdout;
 }
@@ -232,7 +236,7 @@ export async function diffShas(root: string, a: string, b: string): Promise<stri
  * real path — poisoning the union so the next `git add -- <union>` fatals on a pathspec that
  * doesn't exist, wedging every future checkpoint for this workspace. `-z` output is raw bytes,
  * never quoted, so this holds for ANY filename git can track. */
-async function trackedUnion(root: string, currentTracked: string[]): Promise<string[]> {
+async function trackedUnion(root: WorkspaceTarget, currentTracked: string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];
   return [...new Set([...currentTracked, ...headTracked])].sort();
@@ -251,7 +255,7 @@ export interface InitShadowRepoDeps {
  * and the baseline commit is skipped once `HEAD` already resolves to something (this call, or any
  * later checkpoint). Safe to call before every lease/checkpoint operation, not just once at
  * startup — the redundant `init`/`config` calls are cheap and this is never a hot loop. */
-export async function initShadowRepo(root: string, deps: InitShadowRepoDeps): Promise<void> {
+export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepoDeps): Promise<void> {
   mkdirSync(shadowGitDir(root), { recursive: true });
   await runGit(root, ["init", "--quiet"]);
   await runGit(root, ["symbolic-ref", "HEAD", `refs/heads/${GLOSA_BRANCH}`]);
@@ -269,7 +273,7 @@ export async function initShadowRepo(root: string, deps: InitShadowRepoDeps): Pr
   const head = await runGit(root, ["rev-parse", "--verify", "-q", "HEAD"], { allowExitCodes: [0, 1] });
   if (head.exitCode === 0) return; // a baseline (or later) commit already exists
 
-  const tracked = resolveMatchedFiles(root).tracked.map((f) => f.path);
+  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
   if (tracked.length > 0) await runGit(root, ["add", "-A", "--", ...tracked.map(safePathspec)]);
   await commit(root, {
     message: "checkpoint",
@@ -306,8 +310,8 @@ export interface CheckpointOptions {
  * return current HEAD sha, DO NOT commit"). Assumes `initShadowRepo` has already run for this
  * root (so `HEAD` resolves) — callers are responsible for that ordering, same as they are for
  * holding the mutex. */
-export async function checkpoint(root: string, opts: CheckpointOptions): Promise<string> {
-  const tracked = resolveMatchedFiles(root).tracked.map((f) => f.path);
+export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions): Promise<string> {
+  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
   const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire
@@ -331,7 +335,7 @@ export async function checkpoint(root: string, opts: CheckpointOptions): Promise
 /** Whether `path`'s current on-disk bytes differ from what HEAD (the latest checkpoint) has
  * committed for it — A6 §F31's restore dirty-guard: `POST /w/:slug/restore` refuses to overwrite
  * an artifact that has changes since its last checkpoint unless the caller passes `force`. */
-export async function isPathDirty(root: string, path: string): Promise<boolean> {
+export async function isPathDirty(root: WorkspaceTarget, path: string): Promise<boolean> {
   const result = await runGit(root, ["diff", "--quiet", "HEAD", "--", safePathspec(path)], {
     allowExitCodes: [0, 1, 128], // 128: no HEAD yet (nothing ever checkpointed) — treated as "not dirty", nothing to lose
   });
@@ -343,7 +347,7 @@ export async function isPathDirty(root: string, path: string): Promise<boolean> 
  * pathspec-guarded via `safePathspec`: `<sha>:<path>` is one combined revision-and-path argv token
  * that always starts with the sha, never with `-`, so the "-" -> option ambiguity `safePathspec`
  * exists for (a lone `--`-following pathspec argument) doesn't apply here. */
-export async function readFileAtCheckpoint(root: string, sha: string, path: string): Promise<string | null> {
+export async function readFileAtCheckpoint(root: WorkspaceTarget, sha: string, path: string): Promise<string | null> {
   const result = await runGit(root, ["show", `${sha}:${path}`], { allowExitCodes: [0, 128] });
   return result.exitCode === 0 ? result.stdout : null;
 }

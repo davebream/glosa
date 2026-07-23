@@ -7,6 +7,8 @@ export type ProblemSlug =
   | "unauthorized"
   | "contract-mismatch"
   | "invalid-path"
+  | "artifact-not-tracked"
+  | "unsupported-file"
   | "not-found"
   | "payload-too-large"
   | "validation-failed"

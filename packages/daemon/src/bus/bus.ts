@@ -21,6 +21,7 @@ import {
 } from "./lifecycle.ts";
 import { reconcileWorkspace, type ReconcileResult } from "./reconcile.ts";
 import { countJournalLines } from "./tail.ts";
+import { workspaceRegistrationId, workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 import { KeyedMutex } from "./mutex.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import {
@@ -82,6 +83,7 @@ export interface WorkspaceBusDeps {
 
 export class WorkspaceBus {
   readonly root: string;
+  readonly workspace: WorkspaceTarget;
   state: DerivedState = createEmptyState();
 
   private readonly writer: JournalWriter;
@@ -89,6 +91,7 @@ export class WorkspaceBus {
   private readonly ulidFn: () => string;
   private readonly nowFn: () => Date;
   private readonly reducer: Reducer;
+  private readonly mutexKey: string;
   // P3.1 review fix: tracks whether THIS INSTANCE has reconciled — deliberately an instance field,
   // not something a caller tracks externally keyed by root string. A root string survives a
   // WorkspaceBusRegistry evict()+reopen (WorkspaceIndex hard-remove → onHardRemove → evict → a
@@ -109,8 +112,10 @@ export class WorkspaceBus {
   private nextSequence = 0;
   private readonly listeners = new Set<(payload: { cursor: number; event: JournalEvent }) => void>();
 
-  constructor(workspaceRoot: string, deps: WorkspaceBusDeps = {}) {
-    this.root = workspaceRoot;
+  constructor(workspaceRoot: WorkspaceTarget, deps: WorkspaceBusDeps = {}) {
+    this.workspace = workspaceRoot;
+    this.root = workspaceWorktree(workspaceRoot);
+    this.mutexKey = workspaceRegistrationId(workspaceRoot);
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
     this.writer = new JournalWriter(journalPath(workspaceRoot));
     this.mutex = deps.mutex ?? new KeyedMutex<string>();
@@ -145,13 +150,17 @@ export class WorkspaceBus {
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting
    * derived state as this bus's baseline. Call once before serving live writes. */
   reconcile(): Promise<ReconcileResult> {
-    return this.mutex.runExclusive(this.root, async () => {
-      const result = await reconcileWorkspace(this.root, { ulid: this.ulidFn, now: this.nowFn, reducer: this.reducer });
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      const result = await reconcileWorkspace(this.workspace, {
+        ulid: this.ulidFn,
+        now: this.nowFn,
+        reducer: this.reducer,
+      });
       this.state = result.state;
       // Re-derived from the file, not incremented — reconcile's own writer may have just
       // appended fresh `line_quarantined`/self-heal events, so only a fresh physical count is
       // guaranteed to match reality (see the field docstring above).
-      this.nextSequence = countJournalLines(this.root);
+      this.nextSequence = countJournalLines(this.workspace);
       return result;
     });
   }
@@ -201,7 +210,7 @@ export class WorkspaceBus {
    * paid on the write path, which is already doing real fsync'd disk I/O, so it isn't the cost
    * that matters here; correctness is. */
   private notify(event: JournalEvent): void {
-    this.nextSequence = countJournalLines(this.root);
+    this.nextSequence = countJournalLines(this.workspace);
     const cursor = this.nextSequence - 1; // the physical line `event` itself just became
     // Each listener runs in its own try/catch (review fix): the append + state mutation this
     // notify() follows has ALREADY durably succeeded by this point, so a throwing listener must
@@ -230,8 +239,12 @@ export class WorkspaceBus {
    * inbox file, so `lifecycleReducer` (P2.5) needs its own copy of the kind to pick the right
    * transition table (attention vs. common). `fields.detail`, if given, is applied on top and wins
    * on any overlapping key, `kind` included. */
-  createEntry(id: string, payload: unknown, fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {}): Promise<void> {
-    return this.mutex.runExclusive(this.root, () => this.createEntryLocked(id, payload, fields));
+  createEntry(
+    id: string,
+    payload: unknown,
+    fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
+  ): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => this.createEntryLocked(id, payload, fields));
   }
 
   private createEntryLocked(
@@ -239,7 +252,7 @@ export class WorkspaceBus {
     payload: unknown,
     fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
   ): void {
-    writeInboxEntryOnce(this.root, id, payload);
+    writeInboxEntryOnce(this.workspace, id, payload);
     const payloadKind =
       payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
         ? ((payload as Record<string, unknown>).kind as string)
@@ -281,7 +294,7 @@ export class WorkspaceBus {
     to: string,
     opts: { by?: EventBy; idem?: string; note?: string; detail?: Record<string, unknown> } = {},
   ): Promise<void> {
-    return this.mutex.runExclusive(this.root, () => {
+    return this.mutex.runExclusive(this.mutexKey, () => {
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
@@ -301,11 +314,12 @@ export class WorkspaceBus {
   /** Marks an attention request as seen without letting concurrent/retried UI calls skip a
    * lifecycle edge. `open` first becomes `delivered`; terminal entries are stable no-ops. */
   markAttentionSeen(entryId: string): Promise<{ status: string; detail: Record<string, unknown> | null }> {
-    return this.mutex.runExclusive(this.root, () => {
+    return this.mutex.runExclusive(this.mutexKey, () => {
       const state = this.state.entries[entryId];
       if (!state || state.kind !== "attention") throw new Error("unknown attention request");
       if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
-      if (this.state.entries[entryId]?.status === "delivered") this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
+      if (this.state.entries[entryId]?.status === "delivered")
+        this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
       const final = this.state.entries[entryId] as typeof state;
       return { status: final.status, detail: (final.detail as Record<string, unknown> | undefined) ?? null };
     });
@@ -318,7 +332,7 @@ export class WorkspaceBus {
     outcome: "done" | "approved" | "changes_requested",
     response?: string,
   ): Promise<{ status: string; detail: Record<string, unknown> | null }> {
-    return this.mutex.runExclusive(this.root, () => {
+    return this.mutex.runExclusive(this.mutexKey, () => {
       const state = this.state.entries[entryId];
       if (!state || state.kind !== "attention") throw new Error("unknown attention request");
       if (state.status === "done") {
@@ -326,7 +340,8 @@ export class WorkspaceBus {
       }
       if (isTerminal("attention", state.status)) throw new Error(`attention request is already ${state.status}`);
       if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
-      if (this.state.entries[entryId]?.status === "delivered") this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
+      if (this.state.entries[entryId]?.status === "delivered")
+        this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
       this.appendAttentionTransitionLocked(entryId, "done", {
         by: "human",
         detail: { outcome, ...(response !== undefined ? { response } : {}) },
@@ -374,7 +389,7 @@ export class WorkspaceBus {
       error?: string;
     } = {},
   ): Promise<void> {
-    return this.mutex.runExclusive(this.root, () => this.recordDeliveryAttemptLocked(entryId, opts));
+    return this.mutex.runExclusive(this.mutexKey, () => this.recordDeliveryAttemptLocked(entryId, opts));
   }
 
   /** The unlocked body `recordDeliveryAttempt` wraps in its own mutex critical section — pulled
@@ -426,20 +441,25 @@ export class WorkspaceBus {
     opts: { via: DeliveryVia; session: string; entryId?: string },
     build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
   ): Promise<PreparedDelivery> {
-    return this.mutex.runExclusive(this.root, async () => {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
       this.pruneDeliveryReservationsLocked();
-      const reserved = new Set(Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries));
+      const reserved = new Set(
+        Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
+      );
       const eligible = Object.entries(this.state.entries).filter(([id, entry]) => {
         if (opts.entryId && id !== opts.entryId) return false;
         if (reserved.has(id)) return false;
-        const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
+        const kind =
+          entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
         if (isTerminal(kind, entry.status)) return false;
-        const payload = readInboxEntry(this.root, id);
+        const payload = readInboxEntry(this.workspace, id);
         if (payload && typeof payload === "object") {
           const target = (payload as Record<string, unknown>).target_session_id;
           if (typeof target === "string" && target !== opts.session) return false;
         }
-        const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+        const attempts = Array.isArray(entry.deliveryAttempts)
+          ? (entry.deliveryAttempts as DeliveryAttemptRecord[])
+          : [];
         // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
         // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
         // turn-boundary/MCP safety-net drain permanently.
@@ -452,7 +472,7 @@ export class WorkspaceBus {
         if (presentations.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
         let presentation: DeliverableEntry | null = null;
         try {
-          presentation = await build(id, readInboxEntry(this.root, id), entry.status);
+          presentation = await build(id, readInboxEntry(this.workspace, id), entry.status);
         } catch (error) {
           const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
           this.recordDeliveryAttemptLocked(id, {
@@ -501,14 +521,14 @@ export class WorkspaceBus {
   }
 
   acknowledgeDelivery(deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<boolean> {
-    return this.mutex.runExclusive(this.root, () => {
+    return this.mutex.runExclusive(this.mutexKey, () => {
       this.pruneDeliveryReservationsLocked();
       const reservation = this.deliveryReservations.get(deliveryId);
       if (!reservation) return false;
       this.deliveryReservations.delete(deliveryId);
       for (const id of reservation.entries) {
         const attempts = this.state.entries[id]?.deliveryAttempts;
-        const payload = readInboxEntry(this.root, id);
+        const payload = readInboxEntry(this.workspace, id);
         const isConversation =
           payload !== null &&
           typeof payload === "object" &&
@@ -552,8 +572,8 @@ export class WorkspaceBus {
     entryId: string,
     opts: { session: string; via: DeliveryVia; outcome: "transport_accepted" | "presented" | "failed"; error?: string },
   ): Promise<boolean> {
-    return this.mutex.runExclusive(this.root, () => {
-      const payload = readInboxEntry(this.root, entryId);
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      const payload = readInboxEntry(this.workspace, entryId);
       if (!payload || typeof payload !== "object") return false;
       const record = payload as Record<string, unknown>;
       if (record.kind !== "conversation_message" || record.target_session_id !== opts.session) return false;
@@ -563,9 +583,7 @@ export class WorkspaceBus {
       const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
       const latest = attempts.at(-1);
       const sameChannelAttempt =
-        latest?.via === opts.via &&
-        latest?.session === opts.session &&
-        latest?.outcome === "transport_accepted";
+        latest?.via === opts.via && latest?.session === opts.session && latest?.outcome === "transport_accepted";
       this.recordDeliveryAttemptLocked(entryId, {
         fsync: true,
         idem: `conversation:${entryId}:attempt:${opts.outcome}`,
@@ -597,7 +615,7 @@ export class WorkspaceBus {
   readEntry(id: string): { payload: unknown; status: string } | null {
     const state = this.state.entries[id];
     if (!state) return null;
-    return { payload: readInboxEntry(this.root, id), status: state.status };
+    return { payload: readInboxEntry(this.workspace, id), status: state.status };
   }
 
   /** `apply-begin` (A4 §F05): under this workspace's ONE git+journal mutex (the same slot every
@@ -607,14 +625,14 @@ export class WorkspaceBus {
    * drifted before this lease started isn't this session's doing) as `pre_sha`, then append
    * `apply_begin` recording it plus a 15-minute expiry. */
   applyBegin(entry: string, sessionId: string): Promise<{ leaseId: string; preSha: string }> {
-    return this.mutex.runExclusive(this.root, async () => {
-      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       const active = this.state.applyLease;
       if (active && !isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
 
-      const preSha = await checkpoint(this.root, { attribution: "unknown", kind: "pre_apply", entry });
+      const preSha = await checkpoint(this.workspace, { attribution: "unknown", kind: "pre_apply", entry });
 
       const leaseId = this.ulidFn();
       const now = this.nowFn();
@@ -652,8 +670,8 @@ export class WorkspaceBus {
     sessionId: string,
     opts: { note?: string } = {},
   ): Promise<{ leaseId: string; postSha: string }> {
-    return this.mutex.runExclusive(this.root, async () => {
-      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       const lease = this.state.applyLease;
       if (!lease || lease.entry !== entry) throw noActiveLeaseError(entry);
@@ -664,7 +682,7 @@ export class WorkspaceBus {
       // keeps the attributed value tied to what `applyBegin` actually proved, not to whatever this
       // call happened to be invoked with.
       const attributedSession = lease.session;
-      const postSha = await checkpoint(this.root, {
+      const postSha = await checkpoint(this.workspace, {
         attribution: `session:${attributedSession}`,
         kind: "post_apply",
         entry,
@@ -713,19 +731,19 @@ export class WorkspaceBus {
     mutate: () => void,
     editKind: "edit" | "restore" = "edit",
   ): Promise<{ checkpoint_before: string; checkpoint_after: string } | null> {
-    return this.mutex.runExclusive(this.root, async () => {
-      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      const before = await headSha(this.root);
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      const before = await headSha(this.workspace);
       mutate();
-      const after = await checkpoint(this.root, {
+      const after = await checkpoint(this.workspace, {
         attribution: "human",
         kind: editKind === "restore" ? "restore" : "human_edit",
         entry: entryId,
         paths: [path],
       });
       if (before === after) return null;
-      const diff = (await runGit(this.root, ["diff", "-M", before, after, "--", safePathspec(path)])).stdout;
+      const diff = (await runGit(this.workspace, ["diff", "-M", before, after, "--", safePathspec(path)])).stdout;
       this.createEntryLocked(entryId, {
         kind: "human_edit",
         edit_kind: editKind,
@@ -738,10 +756,10 @@ export class WorkspaceBus {
   }
 
   humanEditCheckpoint(kind = "human_edit"): Promise<string> {
-    return this.mutex.runExclusive(this.root, async () => {
-      reclaimIndexLock(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      await initShadowRepo(this.root, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      return checkpoint(this.root, { attribution: "human", kind });
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      return checkpoint(this.workspace, { attribution: "human", kind });
     });
   }
 
@@ -749,7 +767,7 @@ export class WorkspaceBus {
    * `close()` then makes the writer terminal (see `JournalWriter#fd`'s `closed` guard), so a
    * write racing in from AFTER this call throws instead of silently reopening the fd. */
   close(): Promise<void> {
-    return this.mutex.runExclusive(this.root, () => {
+    return this.mutex.runExclusive(this.mutexKey, () => {
       this.writer.close();
     });
   }

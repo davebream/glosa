@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { journalPath } from "./paths.ts";
 import type { JournalEvent } from "./journal.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 
 /** Same trailing-newline trim as replay.ts's `replayJournal` — a clean (or already
  * torn-tail-truncated) file ends in `"\n"`, so the last `split("\n")` element is `""`; drop it
@@ -25,7 +26,7 @@ function effectiveLines(raw: string): string[] {
  * `reconcile()` (bus.ts), which is what makes a restarted daemon assign the SAME sequence number
  * to the same logical next-event as the crashed one: same bytes on disk -> same line count -> same
  * next id (A1 §8.2 case 4). */
-export function countJournalLines(root: string): number {
+export function countJournalLines(root: WorkspaceTarget): number {
   const path = journalPath(root);
   if (!existsSync(path)) return 0;
   return effectiveLines(readFileSync(path, "utf8")).length;
@@ -62,7 +63,7 @@ export interface JournalTailEntry {
  * index, indexing the line array with `undefined` and throwing out of `tryParseEvent`. Clamped to
  * 0 here too, defense-in-depth: this function is safe to call with ANY integer `sinceSeq`,
  * regardless of what the caller validated. */
-export function readJournalEventsSince(root: string, sinceSeq: number): JournalTailEntry[] {
+export function readJournalEventsSince(root: WorkspaceTarget, sinceSeq: number): JournalTailEntry[] {
   const path = journalPath(root);
   if (!existsSync(path)) return [];
   const lines = effectiveLines(readFileSync(path, "utf8"));
