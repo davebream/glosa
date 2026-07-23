@@ -391,6 +391,25 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       }
     });
 
+    // #38 (github): the reported production failure — a registered session's drain hit a real
+    // (not forced-via-stub) bus failure, specifically offline catch-up's shadow-git bootstrap, and
+    // came back as an unhandled 500 with no recovery short of a daemon restart. Delivery itself
+    // never touches git — it must succeed even when shadow-git can't be bootstrapped.
+    test("a broken shadow-git bootstrap does not fail a registered session's drain", async () => {
+      writeFileSync(join(root, "notes.md"), "hello");
+      const busDir = join(root, ".glosa");
+      mkdirSync(busDir, { recursive: true });
+      writeFileSync(join(busDir, "shadow.git"), "not a directory"); // blocks initShadowRepo's mkdirSync
+
+      await sessionRegistry.register({ session_id: "sess-shadow-broken", provider: "claude-code", cwd: root, source: "startup" });
+      const res = await fetchFn(
+        req("/api/sessions/sess-shadow-broken/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ count: 0, drained: [] });
+    });
+
     test("unknown session_id -> 404", async () => {
       const res = await fetchFn(req("/api/sessions/unknown/drain", { method: "POST", body: "" }));
       expect(res.status).toBe(404);
