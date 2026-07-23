@@ -23,6 +23,102 @@ function payload() {
 }
 
 describe("two-phase delivery reservations", () => {
+  test("targeted conversation messages drain and acknowledge only for the exact session", async () => {
+    const root = freshWorkspace();
+    roots.push(root);
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await bus.createEntry("message-1", {
+      kind: "conversation_message",
+      text: "exact target only",
+      target_session_id: "session-a",
+      provider: "claude-code",
+    });
+    const build = (id: string, value: unknown, status: string) =>
+      buildDeliveryPresentation(id, value, { status });
+
+    expect((await bus.prepareDelivery(8, { via: "mcp_pull", session: "session-b" }, build)).count).toBe(0);
+    expect(
+      await bus.acknowledgeConversationMessage("message-1", {
+        session: "session-b",
+        via: "mcp_pull",
+        outcome: "presented",
+      }),
+    ).toBe(false);
+    expect(bus.state.entries["message-1"]?.status).toBe("pending");
+
+    const prepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "session-a" }, build);
+    expect(prepared.drained).toHaveLength(1);
+    expect(await bus.acknowledgeDelivery(prepared.delivery_id!, "presented")).toBe(true);
+    expect(bus.state.entries["message-1"]?.status).toBe("delivered");
+  });
+
+  test("a pending conversation target survives journal replay after daemon restart", async () => {
+    const root = freshWorkspace();
+    roots.push(root);
+    const first = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await first.createEntry("message-restart", {
+      kind: "conversation_message",
+      text: "survive restart",
+      target_session_id: "session-a",
+      provider: "codex",
+    });
+    await first.recordDeliveryAttempt("message-restart", {
+      via: "gate",
+      session: "session-a",
+      outcome: "attempted",
+      reason: "initial",
+      fsync: true,
+    });
+    await first.close();
+
+    const restarted = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await restarted.reconcile();
+    const build = (id: string, value: unknown, status: string) =>
+      buildDeliveryPresentation(id, value, { status });
+    expect(restarted.state.entries["message-restart"]?.status).toBe("pending");
+    expect((await restarted.prepareDelivery(8, { via: "mcp_pull", session: "session-b" }, build)).count).toBe(0);
+    expect((await restarted.prepareDelivery(8, { via: "mcp_pull", session: "session-a" }, build)).count).toBe(1);
+    await restarted.close();
+  });
+
+  test("Channel transport and presentation are one initial attempt; repeated terminal ack is idempotent", async () => {
+    const root = freshWorkspace();
+    roots.push(root);
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await bus.createEntry("message-channel", {
+      kind: "conversation_message",
+      text: "ack once",
+      target_session_id: "session-a",
+      provider: "claude-code",
+    });
+    expect(
+      await bus.acknowledgeConversationMessage("message-channel", {
+        session: "session-a",
+        via: "channel",
+        outcome: "transport_accepted",
+      }),
+    ).toBe(true);
+    expect(
+      await bus.acknowledgeConversationMessage("message-channel", {
+        session: "session-a",
+        via: "channel",
+        outcome: "presented",
+      }),
+    ).toBe(true);
+    expect(
+      await bus.acknowledgeConversationMessage("message-channel", {
+        session: "session-a",
+        via: "channel",
+        outcome: "presented",
+      }),
+    ).toBe(true);
+    expect(bus.state.entries["message-channel"]?.status).toBe("delivered");
+    expect(bus.state.entries["message-channel"]?.deliveryAttempts).toEqual([
+      expect.objectContaining({ outcome: "transport_accepted", reason: "initial" }),
+      expect.objectContaining({ outcome: "presented", reason: "initial" }),
+    ]);
+  });
+
   test("prepare reserves without claiming presentation; ack writes presented afterward", async () => {
     const root = freshWorkspace();
     roots.push(root);

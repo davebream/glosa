@@ -21,6 +21,29 @@ function annotation(body: string) {
 }
 
 describe("actionable inbox presentations", () => {
+  test("conversation messages expose exact text, UTF-8 byte count, client ID, and target without truncation", () => {
+    const message = "Sprawdź 🙂 dokładnie.";
+    const result = buildDeliveryPresentation(
+      "123e4567-e89b-42d3-a456-426614174000",
+      {
+        kind: "conversation_message",
+        text: message,
+        target_session_id: "session-exact",
+        provider: "claude-code",
+      },
+      { status: "pending" },
+    );
+    expect(result).toMatchObject({
+      id: "123e4567-e89b-42d3-a456-426614174000",
+      kind: "conversation_message",
+      message,
+      message_bytes: Buffer.byteLength(message, "utf8"),
+      target_session_id: "session-exact",
+      provider: "claude-code",
+      truncation: { truncated: false },
+    });
+  });
+
   test("annotation includes identity, path, comment, intent, selectors, and source-range resolution", () => {
     const result = buildDeliveryPresentation("inb-a", annotation("Make the connection explicit."), {
       status: "pending",

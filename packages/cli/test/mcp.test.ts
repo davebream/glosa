@@ -38,6 +38,11 @@ class HookClient implements DaemonHookClient {
     this.drainOptions = options;
     return this.drained;
   }
+  async acknowledgeConversation(
+    _sessionId: string,
+    _messageId: string,
+    _outcome: "transport_accepted" | "presented" | "failed",
+  ) {}
 }
 
 function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
@@ -49,6 +54,17 @@ function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
 }
 
 describe("issue-focused MCP inbox tools", () => {
+  test("initialize advertises the experimental Claude Channel and acknowledgement instruction", async () => {
+    const reply = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26" } },
+      deps(new HookClient()),
+    );
+    expect(reply.response?.result).toMatchObject({
+      capabilities: { experimental: { "claude/channel": {} } },
+    });
+    expect(JSON.stringify(reply.response?.result)).toContain("glosa_conversation_ack");
+  });
+
   test("tools/list exposes inbox plus metadata/session contract tools", async () => {
     const reply = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }, deps(new HookClient()));
     const names = ((reply.response?.result as { tools: Array<{ name: string }> }).tools).map((tool) => tool.name);
@@ -59,7 +75,47 @@ describe("issue-focused MCP inbox tools", () => {
       "glosa_metadata_show",
       "glosa_metadata_clear",
       "glosa_session_bind",
+      "glosa_conversation_ack",
     ]);
+  });
+
+  test("conversation acknowledgement uses the exact MCP session identity", async () => {
+    const calls: unknown[] = [];
+    const hook = new HookClient();
+    hook.acknowledgeConversation = async (
+      sessionId: string,
+      messageId: string,
+      outcome: "transport_accepted" | "presented" | "failed",
+    ) => {
+      calls.push([sessionId, messageId, outcome]);
+    };
+    const reply = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "glosa_conversation_ack", arguments: { message_id: "m-1" } },
+      },
+      { ...deps(hook), sessionId: () => "claude-session-1" },
+    );
+    expect(reply.response?.error).toBeUndefined();
+    expect(calls).toEqual([["claude-session-1", "m-1", "presented"]]);
+  });
+
+  test("the MCP host session cannot be overridden for targeted pull or acknowledgement", async () => {
+    const hook = new HookClient();
+    const d = { ...deps(hook), sessionId: () => "host-session" };
+    for (const [name, arguments_] of [
+      ["glosa_inbox_pull", { session_id: "other-session" }],
+      ["glosa_conversation_ack", { message_id: "m-1", session_id: "other-session" }],
+    ] as const) {
+      const reply = await handleMcpRequest(
+        { jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: arguments_ } },
+        d,
+      );
+      expect(reply.response?.error).toMatchObject({ code: -32602 });
+    }
+    expect(hook.heartbeats).toEqual([]);
   });
 
   test("metadata and session tools call the same API client contract as the CLI", async () => {

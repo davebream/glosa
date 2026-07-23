@@ -52,7 +52,11 @@ class FakeDaemonClient implements DaemonHookClient {
   }
 }
 
-function actionable(id: string, kind: DrainedEntry["kind"] = "annotation", text = `glosa ${kind} ${id}`): DrainedEntry {
+function actionable(
+  id: string,
+  kind: Exclude<DrainedEntry["kind"], "conversation_message"> = "annotation",
+  text = `glosa ${kind} ${id}`,
+): DrainedEntry {
   return {
     id,
     kind,

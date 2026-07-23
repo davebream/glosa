@@ -18,6 +18,13 @@ import { canonicalize } from "../../src/registry/slug.ts";
 import { parseSseStream, type ParsedSseEvent } from "../../src/sse.ts";
 import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
 import { randomPort } from "../helpers.ts";
+import {
+  AgentProviderRegistry,
+  type AgentProvider,
+  type DeliverableEntry,
+  type DeliveryResult,
+  type SessionBinding,
+} from "../../src/providers/interface.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";
 
@@ -29,14 +36,19 @@ interface Harness {
   port: number;
   server: ReturnType<typeof Bun.serve>;
   sessionRegistry: SessionRegistry;
+  busRegistry: WorkspaceBusRegistry;
   slug: string;
+  delivered: Array<{ session: SessionBinding; entry: DeliverableEntry }>;
+  deliveryResult: { current: DeliveryResult };
 }
 
 // `confineTranscriptPath` (transcript/root.ts) reads `Bun.env.CLAUDE_CONFIG_DIR` at call time —
 // same save/restore-in-beforeEach/afterEach discipline as git/shadow.test.ts's own
 // `Bun.env.GIT_CONFIG_GLOBAL` handling, since it's a process-global the daemon under test reads
 // live, not something `Bun.serve` can scope per-listener.
-async function buildHarness(opts: { home?: string; root?: string; claudeConfigDir?: string; port?: number } = {}): Promise<Harness> {
+async function buildHarness(
+  opts: { home?: string; root?: string; claudeConfigDir?: string; port?: number; withProvider?: boolean } = {},
+): Promise<Harness> {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), "glosa-transcript-home-"));
   const root = opts.root ?? canonicalize(mkdtempSync(join(tmpdir(), "glosa-transcript-ws-")));
   const claudeConfigDir = opts.claudeConfigDir ?? mkdtempSync(join(tmpdir(), "glosa-transcript-claude-"));
@@ -52,6 +64,23 @@ async function buildHarness(opts: { home?: string; root?: string; claudeConfigDi
   workspaceIndex.setOnHardRemove((p) => busRegistry.evict(p));
 
   const entry = await workspaceIndex.upsertWorkspace(root, "glosa-open");
+  const delivered: Array<{ session: SessionBinding; entry: DeliverableEntry }> = [];
+  const deliveryResult = { current: { via: "gate", outcome: "attempted" } as DeliveryResult };
+  const providerRegistry = new AgentProviderRegistry();
+  if (opts.withProvider !== false) {
+    const provider: AgentProvider = {
+      id: "claude-code",
+      capabilities: () => ({ push: true, gate: true, boundaryDrain: true, mcpPull: true }),
+      detectSession: () => null,
+      deliver: async (session, deliverable) => {
+        delivered.push({ session, entry: deliverable });
+        return deliveryResult.current;
+      },
+      liveness: () => "alive",
+      transcriptPath: (session) => session.transcript_path ?? null,
+    };
+    providerRegistry.register(provider);
+  }
 
   const ctx: ApiContext = {
     port,
@@ -63,9 +92,22 @@ async function buildHarness(opts: { home?: string; root?: string; claudeConfigDi
     sessionRegistry,
     getWorkspaceBus: (r) => busRegistry.get(r),
     capabilityStore: new CapabilityStore(),
+    providerRegistry,
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: createApiFetch(ctx), idleTimeout: 2 });
-  return { home, root, claudeConfigDir, savedClaudeConfigDir, port, server, sessionRegistry, slug: entry.slug };
+  return {
+    home,
+    root,
+    claudeConfigDir,
+    savedClaudeConfigDir,
+    port,
+    server,
+    sessionRegistry,
+    busRegistry,
+    slug: entry.slug,
+    delivered,
+    deliveryResult,
+  };
 }
 
 async function teardownHarness(h: Harness): Promise<void> {
@@ -353,6 +395,7 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
 describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", () => {
   let h: Harness;
+  const MESSAGE_ID = "123e4567-e89b-42d3-a456-426614174000";
 
   beforeEach(async () => {
     h = await buildHarness();
@@ -370,18 +413,205 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
     });
   }
 
-  test("accepts a message for a workspace with a live session — accepted:true, delivered:false (P4.3 seam), NEVER writes the transcript file", async () => {
+  test("queues an immutable, exact-session message and NEVER writes the transcript file", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess-compose.jsonl");
     writeFileSync(transcriptPath, "");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: "/different/producer/cwd",
+      workspace_binding: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
-    const res = await composeReq({ text: "please also check the edge case" });
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "please also check the edge case" });
     expect(res.status).toBe(202);
     const body = await res.json();
-    expect(body).toEqual({ accepted: true, delivered: false });
+    expect(body).toMatchObject({
+      message_id: MESSAGE_ID,
+      accepted: true,
+      delivered: false,
+      state: "queued",
+      delivery: { via: "gate", outcome: "attempted" },
+    });
+    expect(h.delivered).toHaveLength(1);
+    expect(h.delivered[0]).toMatchObject({
+      session: { session_id: "s1", workspace: h.root },
+      entry: {
+        id: MESSAGE_ID,
+        kind: "conversation_message",
+        message: "please also check the edge case",
+        message_bytes: 31,
+        target_session_id: "s1",
+      },
+    });
 
     // The transcript file on disk is completely untouched by the composer.
     expect(statSync(transcriptPath).size).toBe(0);
+  });
+
+  test("cwd-only registration is rejected; composer routing requires an explicit binding", async () => {
+    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, source: "startup" });
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "hello" });
+    expect(res.status).toBe(404);
+    expect((await res.json()).type).toContain("no-bound-session");
+  });
+
+  test("only stale explicit bindings return a recoverable conflict", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+      lease_expiry: "2000-01-01T00:00:00.000Z",
+    });
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "hello" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).type).toContain("bound-session-stale");
+  });
+
+  test("a zero-provider daemon remains valid and reports delivery unavailable safely", async () => {
+    await teardownHarness(h);
+    h = await buildHarness({ withProvider: false });
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "hello" });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.type).toContain("delivery-unavailable");
+    expect(JSON.stringify(body)).not.toContain(h.root);
+  });
+
+  test("multiple live bindings require a valid hint and expose only safe candidates", async () => {
+    for (const [session_id, provider] of [["s1", "claude-code"], ["s2", "codex"]] as const) {
+      await h.sessionRegistry.register({
+        session_id,
+        provider,
+        cwd: `/producer/${session_id}`,
+        workspace_binding: h.root,
+        source: "startup",
+      });
+    }
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "hello" });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.type).toContain("session-selection-required");
+    expect(body.candidates).toEqual([
+      expect.objectContaining({ session_id: "s1", provider: "claude-code" }),
+      expect.objectContaining({ session_id: "s2", provider: "codex" }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain(h.root);
+    expect(JSON.stringify(body)).not.toContain("/producer/");
+
+    const hinted = await composeReq({ message_id: MESSAGE_ID, text: "hello", session_hint: "s1" });
+    expect(hinted.status).toBe(202);
+    expect(h.delivered[0]?.session.session_id).toBe("s1");
+  });
+
+  test("an invalid session hint is rejected instead of silently choosing the sole live binding", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    const res = await composeReq({ message_id: MESSAGE_ID, text: "hello", session_hint: "not-s1" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).type).toContain("session-selection-required");
+    expect(h.delivered).toHaveLength(0);
+  });
+
+  test("same ID/text/target is idempotent; changed text conflicts", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "same" })).status).toBe(202);
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "same" })).status).toBe(202);
+    expect(h.delivered).toHaveLength(1);
+    h.sessionRegistry.deregister("s1");
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "same" })).status).toBe(202);
+    const conflict = await composeReq({ message_id: MESSAGE_ID, text: "changed" });
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).type).toContain("idempotency-conflict");
+  });
+
+  test("a failed attempt retries the immutable entry and records reason re_nudge", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    h.deliveryResult.current = { via: "gate", outcome: "failed", error: "/private/transcript token-secret" };
+    const failed = await composeReq({ message_id: MESSAGE_ID, text: "retry me" });
+    expect(failed.status).toBe(502);
+    const failedBody = await failed.json();
+    expect(failedBody.state).toBe("failed");
+    expect(JSON.stringify(failedBody)).not.toContain("token-secret");
+
+    h.deliveryResult.current = { via: "gate", outcome: "attempted" };
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "retry me" })).status).toBe(202);
+    expect(h.delivered).toHaveLength(2);
+    const attempts = h.busRegistry.get(h.root).state.entries[MESSAGE_ID]!.deliveryAttempts as Array<{
+      reason?: string;
+    }>;
+    expect(attempts?.map((attempt) => attempt.reason)).toEqual(["initial", "re_nudge"]);
+  });
+
+  test("a presented acknowledgement is the only success state and status survives lookup", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "ack me" })).status).toBe(202);
+    const ack = await fetch(`http://127.0.0.1:${h.port}/api/sessions/s1/conversation/${MESSAGE_ID}/ack`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+        Origin: `http://127.0.0.1:${h.port}`,
+      },
+      body: JSON.stringify({ outcome: "presented" }),
+    });
+    expect(ack.status).toBe(200);
+    const status = await fetch(
+      `http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose/${MESSAGE_ID}`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+    );
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ message_id: MESSAGE_ID, delivered: true, state: "presented" });
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "ack me" })).status).toBe(200);
+    expect(h.delivered).toHaveLength(1);
+  });
+
+  test("blank and over-16-KiB presentations are rejected without truncation", async () => {
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
+    expect((await composeReq({ message_id: MESSAGE_ID, text: "   \n" })).status).toBe(400);
+    const over = await composeReq({ message_id: MESSAGE_ID, text: "🙂".repeat(4096) });
+    expect(over.status).toBe(400);
+    expect(h.delivered).toHaveLength(0);
   });
 
   test("no session registered → 404", async () => {
@@ -390,7 +620,13 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
   });
 
   test("missing/empty text → 400 validation-failed", async () => {
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, source: "startup" });
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
     const res = await composeReq({ text: "" });
     expect(res.status).toBe(400);
   });
@@ -405,7 +641,13 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
   });
 
   test("missing Origin (state-changing route) → 403", async () => {
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, source: "startup" });
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      workspace_binding: h.root,
+      source: "startup",
+    });
     const res = await fetch(`http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
