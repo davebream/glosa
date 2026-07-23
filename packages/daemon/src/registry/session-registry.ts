@@ -176,6 +176,20 @@ export class SessionRegistry {
     return this.parkedWorkspaces.has(canonicalWorkspace);
   }
 
+  /** Exact explicit bindings only. Conversation composition uses this stricter view and never
+   * falls back to cwd ancestry. `includeStale` exists so the API can distinguish "not bound"
+   * from "bound session needs to be resumed" without treating a stale record as routable. */
+  explicitlyBoundForWorkspace(
+    canonicalWorkspace: string,
+    opts: { includeStale?: boolean } = {},
+  ): SessionRecord[] {
+    return [...this.sessions.values()].filter(
+      (record) =>
+        record.workspace_binding === canonicalWorkspace &&
+        (opts.includeStale === true || this.liveness(record.session_id) === "alive"),
+    );
+  }
+
   /** Live sessions (per `liveness()`) that route to `canonicalWorkspace`, honoring R2's
    * precedence: rung (1) any LIVE session with an explicit `workspace_binding` equal to this
    * path wins outright, full stop — if at least one exists, cwd-ancestor sessions are never even

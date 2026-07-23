@@ -28,6 +28,11 @@ import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { AdapterRegistry } from "./adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
+import {
+  AgentProviderRegistry,
+  type AgentProvider,
+} from "./providers/interface.ts";
+import { SessionPushRegistry } from "./providers/push-registry.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -78,6 +83,13 @@ export interface DaemonBackend {
   busRegistry: WorkspaceBusRegistry;
   adapterRegistry: AdapterRegistry;
   metadataRegistry: WorkspaceMetadataRegistry;
+  providerRegistry: AgentProviderRegistry;
+  pushRegistry: SessionPushRegistry;
+}
+
+export interface ProviderFactoryDeps {
+  sessionRegistry: SessionRegistry;
+  pushRegistry: SessionPushRegistry;
 }
 
 export interface BuildBackendOptions {
@@ -85,6 +97,7 @@ export interface BuildBackendOptions {
    * defaults (A5 §F19: grace ~24h, throttle ~60s). */
   gcGraceMs?: number;
   gcThrottleMs?: number;
+  providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
@@ -93,7 +106,12 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const busRegistry = new WorkspaceBusRegistry();
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
+  const providerRegistry = new AgentProviderRegistry();
+  const pushRegistry = new SessionPushRegistry();
   adapterRegistry.register(metadataRegistry.adapter());
+  for (const factory of opts.providerFactories ?? []) {
+    providerRegistry.register(factory({ sessionRegistry, pushRegistry }));
+  }
 
   // Live-session predicate: a workspace under a live session is never GC-hard-removed no matter
   // how long its path has been missing (WorkspaceIndex's own conservative default otherwise).
@@ -102,7 +120,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
   workspaceIndex.setOnHardRemove((canonicalPath) => busRegistry.evict(canonicalPath));
 
-  return { workspaceIndex, sessionRegistry, busRegistry, adapterRegistry, metadataRegistry };
+  return { workspaceIndex, sessionRegistry, busRegistry, adapterRegistry, metadataRegistry, providerRegistry, pushRegistry };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -110,7 +128,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
 // lifecycle handshake, and blocks forever — every exit happens via an explicit process.exit()
 // call below, per A5 §F13's exit-code table. Never returns normally.
 // ---------------------------------------------------------------------------------------------
-export async function bootDaemon(): Promise<never> {
+export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never> {
   const home = ensureHomeDir(glosaHome());
   const port = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
   const classFPort = Number(Bun.env.GLOSA_CLASSF_PORT ?? port + 1);
@@ -118,7 +136,7 @@ export async function bootDaemon(): Promise<never> {
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
   const tokenAuthority = new TokenAuthority(home, (message) => log(home, message));
-  const backend = buildBackend(home);
+  const backend = buildBackend(home, opts);
   const shutdownController = new AbortController();
   // ONE store, shared by both listeners (P4.1, A1 §7): a token minted on the SPA/API origin
   // (createApiFetch) must be lookup-able by the class-F origin (createClassFFetch) — two
@@ -139,6 +157,8 @@ export async function bootDaemon(): Promise<never> {
     capabilityStore,
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
+    providerRegistry: backend.providerRegistry,
+    pushRegistry: backend.pushRegistry,
     shutdownSignal: shutdownController.signal,
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));

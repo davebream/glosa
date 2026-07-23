@@ -50,6 +50,16 @@ export interface DaemonHookClient {
   deregister(sessionId: string): Promise<void>;
   drain(sessionId: string, opts?: DrainOptions): Promise<DrainResult>;
   acknowledge?(sessionId: string, deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<void>;
+  acknowledgeConversation?(
+    sessionId: string,
+    messageId: string,
+    outcome: "transport_accepted" | "presented" | "failed",
+  ): Promise<void>;
+  openConversationPush?(
+    sessionId: string,
+    onEntry: (entry: DrainedEntry) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface DaemonUnreachableError extends Error {
@@ -106,6 +116,41 @@ export async function createHttpDaemonClient(): Promise<DaemonHookClient> {
         outcome,
         ...(error ? { error } : {}),
       });
+    },
+    async acknowledgeConversation(sessionId, messageId, outcome) {
+      await call(
+        `/api/sessions/${encodeURIComponent(sessionId)}/conversation/${encodeURIComponent(messageId)}/ack`,
+        { outcome },
+      );
+    },
+    async openConversationPush(sessionId, onEntry, signal) {
+      const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Origin: base,
+          Authorization: `Bearer ${token}`,
+        },
+        signal,
+      });
+      if (!res.ok || !res.body) throw unreachableError(`push-stream -> HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        let boundary = buffered.indexOf("\n\n");
+        while (boundary >= 0) {
+          const frame = buffered.slice(0, boundary);
+          buffered = buffered.slice(boundary + 2);
+          boundary = buffered.indexOf("\n\n");
+          const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+          const data = frame.match(/^data:\s*(.+)$/m)?.[1];
+          if (event !== "conversation_message" || !data) continue;
+          await onEntry(JSON.parse(data) as DrainedEntry);
+        }
+      }
     },
   };
 }

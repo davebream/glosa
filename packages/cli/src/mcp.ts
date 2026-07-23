@@ -17,6 +17,7 @@ interface PendingAck {
   client: DaemonHookClient;
   sessionId: string;
   deliveryId: string;
+  deregister?: boolean;
 }
 
 interface McpReply {
@@ -28,6 +29,7 @@ export interface McpDeps {
   createHookClient: () => Promise<DaemonHookClient>;
   createApiClient: () => Promise<GlosaApiClient>;
   cwd?: () => string;
+  sessionId?: () => string | undefined;
 }
 
 function result(id: JsonRpcRequest["id"], value: unknown): Record<string, unknown> {
@@ -49,15 +51,26 @@ async function pullInbox(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> 
   const args = (req.params?.arguments ?? {}) as Record<string, unknown>;
   const workspace = typeof args.workspace === "string" ? args.workspace : (deps.cwd ?? process.cwd)();
   const limit = typeof args.limit === "number" && Number.isInteger(args.limit) ? Math.max(1, Math.min(8, args.limit)) : 8;
-  const sessionId = `mcp-${process.pid}-${randomUUID()}`;
+  const requestedSession =
+    typeof args.session_id === "string" && args.session_id.length > 0 ? args.session_id : undefined;
+  const hostSession = deps.sessionId?.();
+  if (hostSession && requestedSession && requestedSession !== hostSession) {
+    return { response: error(req.id, -32602, "session_id does not match the MCP host session") };
+  }
+  const explicitSession = hostSession ?? requestedSession;
+  const sessionId = explicitSession ?? `mcp-${process.pid}-${randomUUID()}`;
   const client = await deps.createHookClient();
-  await client.register({ session_id: sessionId, provider: "mcp", cwd: workspace, source: "mcp_pull" });
+  if (explicitSession) {
+    await client.heartbeat(sessionId);
+  } else {
+    await client.register({ session_id: sessionId, provider: "mcp", cwd: workspace, source: "mcp_pull" });
+  }
   const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
   const text = drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
-  if (!drained.delivery_id) await client.deregister(sessionId);
+  if (!explicitSession && !drained.delivery_id) await client.deregister(sessionId);
   return {
     response: result(req.id, textToolResult(text, { entries: drained.drained, count: drained.count, has_more: drained.has_more ?? false })),
-    ...(drained.delivery_id ? { ack: { client, sessionId, deliveryId: drained.delivery_id } } : {}),
+    ...(drained.delivery_id ? { ack: { client, sessionId, deliveryId: drained.delivery_id, deregister: !explicitSession } } : {}),
   };
 }
 
@@ -125,12 +138,55 @@ async function sessionBind(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply
   return { response: result(req.id, textToolResult(`session bound: ${bound.session_id}`, bound)) };
 }
 
+async function conversationAck(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
+  const args = toolArgs(req);
+  const messageId = args.message_id;
+  const requestedSession =
+    typeof args.session_id === "string" && args.session_id.length > 0 ? args.session_id : undefined;
+  const hostSession = deps.sessionId?.();
+  if (hostSession && requestedSession && requestedSession !== hostSession) {
+    return { response: error(req.id, -32602, "session_id does not match the MCP host session") };
+  }
+  const sessionId = hostSession ?? requestedSession;
+  if (typeof messageId !== "string" || messageId.length === 0) {
+    return { response: error(req.id, -32602, "glosa_conversation_ack requires message_id") };
+  }
+  if (!sessionId) {
+    return {
+      response: error(
+        req.id,
+        -32602,
+        "glosa_conversation_ack requires an explicit session_id when the MCP host does not provide one",
+      ),
+    };
+  }
+  const client = await deps.createHookClient();
+  if (!client.acknowledgeConversation) {
+    return { response: error(req.id, -32603, "conversation acknowledgement is unavailable") };
+  }
+  await client.acknowledgeConversation(sessionId, messageId, "presented");
+  return {
+    response: result(
+      req.id,
+      textToolResult(`conversation message acknowledged: ${messageId}`, {
+        message_id: messageId,
+        delivered: true,
+      }),
+    ),
+  };
+}
+
 export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Promise<McpReply> {
   if (req.method === "initialize") {
     return {
       response: result(req.id, {
         protocolVersion: typeof req.params?.protocolVersion === "string" ? req.params.protocolVersion : "2025-03-26",
-        capabilities: { tools: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          experimental: { "claude/channel": {} },
+        },
+        instructions:
+          "glosa conversation messages arrive as channel events with a message_id. Immediately call glosa_conversation_ack for that message_id before acting; hook delivery remains the safety fallback.",
         serverInfo: { name: "glosa", version: "1" },
       }),
     };
@@ -149,6 +205,7 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
               properties: {
                 workspace: { type: "string", description: "Workspace path; defaults to the MCP process cwd." },
                 limit: { type: "integer", minimum: 1, maximum: 8 },
+                session_id: { type: "string", description: "Explicit registered session for targeted messages." },
               },
               additionalProperties: false,
             },
@@ -200,6 +257,19 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
               additionalProperties: false,
             },
           },
+          {
+            name: "glosa_conversation_ack",
+            description: "Acknowledge that a targeted glosa conversation message reached this agent context.",
+            inputSchema: {
+              type: "object",
+              required: ["message_id"],
+              properties: {
+                message_id: { type: "string" },
+                session_id: { type: "string", description: "Required only when the MCP host provides no session identity." },
+              },
+              additionalProperties: false,
+            },
+          },
         ],
       }),
     };
@@ -212,6 +282,7 @@ export async function handleMcpRequest(req: JsonRpcRequest, deps: McpDeps): Prom
     if (name === "glosa_metadata_show") return metadataShow(req, deps);
     if (name === "glosa_metadata_clear") return metadataClear(req, deps);
     if (name === "glosa_session_bind") return sessionBind(req, deps);
+    if (name === "glosa_conversation_ack") return conversationAck(req, deps);
     return { response: error(req.id, -32602, `unknown tool '${String(name)}'`) };
   }
   return { response: error(req.id, -32601, `method not found: ${req.method}`) };
@@ -224,6 +295,54 @@ function writeLine(value: Record<string, unknown>): Promise<void> {
 }
 
 export async function runMcpServer(deps: McpDeps): Promise<void> {
+  let writeTail = Promise.resolve();
+  const write = (value: Record<string, unknown>) => {
+    const next = writeTail.then(() => writeLine(value));
+    writeTail = next.catch(() => {});
+    return next;
+  };
+  const pushAbort = new AbortController();
+  let pushTask: Promise<void> | null = null;
+  const startPush = () => {
+    const sessionId = deps.sessionId?.();
+    if (!sessionId || pushTask) return;
+    pushTask = (async () => {
+      while (!pushAbort.signal.aborted) {
+        try {
+          const client = await deps.createHookClient();
+          if (!client.openConversationPush || !client.acknowledgeConversation) return;
+          await client.openConversationPush(
+            sessionId,
+            async (entry) => {
+              if (entry.kind !== "conversation_message") return;
+              await write({
+                jsonrpc: "2.0",
+                method: "notifications/claude/channel",
+                params: { content: entry.message, meta: { message_id: entry.id } },
+              });
+              await client.acknowledgeConversation?.(sessionId, entry.id, "transport_accepted");
+            },
+            pushAbort.signal,
+          );
+        } catch {
+          if (pushAbort.signal.aborted) return;
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 1_000);
+            timer.unref?.();
+            pushAbort.signal.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+        }
+      }
+    })();
+  };
+
   let buffered = "";
   for await (const chunk of process.stdin) {
     buffered += Buffer.from(chunk).toString("utf8");
@@ -237,7 +356,7 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
       try {
         req = JSON.parse(line) as JsonRpcRequest;
       } catch {
-        await writeLine(error(null, -32700, "parse error"));
+        await write(error(null, -32700, "parse error"));
         continue;
       }
       let reply: McpReply;
@@ -248,10 +367,11 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
       }
       if (!reply.response) continue;
       try {
-        await writeLine(reply.response);
+        await write(reply.response);
+        if (req.method === "initialize") startPush();
         if (reply.ack) {
           await reply.ack.client.acknowledge?.(reply.ack.sessionId, reply.ack.deliveryId, "presented");
-          await reply.ack.client.deregister(reply.ack.sessionId);
+          if (reply.ack.deregister) await reply.ack.client.deregister(reply.ack.sessionId);
         }
       } catch (err) {
         if (reply.ack) {
@@ -261,10 +381,13 @@ export async function runMcpServer(deps: McpDeps): Promise<void> {
             "failed",
             err instanceof Error ? err.message : String(err),
           );
-          await reply.ack.client.deregister(reply.ack.sessionId);
+          if (reply.ack.deregister) await reply.ack.client.deregister(reply.ack.sessionId);
         }
         throw err;
       }
     }
   }
+  pushAbort.abort();
+  const activePushTask = pushTask as Promise<void> | null;
+  if (activePushTask) await activePushTask.catch(() => {});
 }

@@ -13,7 +13,7 @@
 // another, the class-F capability mint (`handleMintCapability`) plus the class-F listener's own
 // serve route (`createClassFFetch`/classf-serve.ts).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILD_ID } from "./build-id.ts";
@@ -55,7 +55,14 @@ import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts
 import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.ts";
 import type { JournalEvent } from "./bus/journal.ts";
 import { buildDeliveryPresentation } from "./delivery/presentation.ts";
-import type { DeliverableEntry } from "./providers/interface.ts";
+import {
+  AgentProviderRegistry,
+  recordDelivery,
+  type DeliverableEntry,
+  type DeliveryResult,
+  type SessionBinding,
+} from "./providers/interface.ts";
+import type { SessionPushRegistry } from "./providers/push-registry.ts";
 import type { TokenSource } from "./token.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
@@ -134,6 +141,10 @@ export interface ApiContext {
   adapterRegistry?: AdapterRegistry;
   /** Durable descriptor owner. Optional only for narrow tests; production always wires it. */
   metadataRegistry?: WorkspaceMetadataRegistry;
+  /** Provider implementations are injected by the outer composition root. An absent registry is
+   * the supported zero-provider core and yields an honest delivery-unavailable response. */
+  providerRegistry?: AgentProviderRegistry;
+  pushRegistry?: SessionPushRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
 }
@@ -1216,6 +1227,80 @@ async function handleSessionDeliveryAck(ctx: ApiContext, sessionId: string, deli
   return Response.json({ acknowledged: true });
 }
 
+function handleSessionPushStream(
+  ctx: ApiContext,
+  sessionId: string,
+  req: Request,
+  server: BunServer | undefined,
+): Response {
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown live session", undefined, new URL(req.url).pathname);
+  }
+  if (!record.workspace_binding) {
+    return problem(409, "conflict", "session is not explicitly bound", undefined, new URL(req.url).pathname);
+  }
+  if (!ctx.pushRegistry) {
+    return problem(503, "internal", "session push is unavailable", undefined, new URL(req.url).pathname);
+  }
+  const encoder = new TextEncoder();
+  let unregister: (() => void) | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (entry: DeliverableEntry) => {
+        controller.enqueue(
+          encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`),
+        );
+      };
+      unregister = ctx.pushRegistry?.register(sessionId, send) ?? null;
+      controller.enqueue(encoder.encode(": connected\n\n"));
+    },
+    cancel() {
+      unregister?.();
+    },
+  });
+  req.signal.addEventListener("abort", () => unregister?.(), { once: true });
+  server?.timeout(req, 0);
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+  });
+}
+
+async function handleConversationAck(
+  ctx: ApiContext,
+  sessionId: string,
+  messageId: string,
+  req: Request,
+): Promise<Response> {
+  const url = new URL(req.url);
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record?.workspace_binding) {
+    return problem(404, "not-found", "unknown explicitly bound session", undefined, url.pathname);
+  }
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const outcome = (body as Record<string, unknown> | null)?.outcome;
+  if (outcome !== "transport_accepted" && outcome !== "presented" && outcome !== "failed") {
+    return problem(400, "validation-failed", "outcome must be transport_accepted|presented|failed", undefined, url.pathname);
+  }
+  if (outcome === "transport_accepted") ctx.pushRegistry?.acknowledgeTransport(sessionId, messageId);
+  const bus = await resolveBus(ctx, record.workspace_binding);
+  const acknowledged = await bus.acknowledgeConversationMessage(messageId, {
+    session: sessionId,
+    via: "channel",
+    outcome,
+    ...(outcome === "failed" ? { error: "channel_transport_failed" } : {}),
+  });
+  if (!acknowledged) {
+    return problem(409, "conflict", "conversation message does not target this session", undefined, url.pathname);
+  }
+  return Response.json({ acknowledged: true, delivered: outcome === "presented" });
+}
+
 async function handleInboxPresentation(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -1561,14 +1646,71 @@ function handleTranscriptStream(
   });
 }
 
-/** `POST /w/:slug/transcript/compose` — P4.2 addition, not in A1 §5 (same footing as P3.3's `PUT
- * /w/:slug/artifacts/:path`): the conversation viewer's out-of-band composer (F32/R6). Sends a
- * NEW user message to the session bound to this workspace WITHOUT ever touching the transcript
- * file — the normalizer above is read-only by construction, and writing the JSONL transcript
- * directly here would both violate that and race Claude Code's own writer. Real delivery is an
- * `AgentProvider` concern (R7's `deliver(session, entry)`, e.g. a Channel/asyncRewake/Stop-cap
- * send per A2) that doesn't exist yet — P4.3/P4.4's scope — so this route accepts the message and
- * reports `delivered: false` rather than fabricating success. */
+const CONVERSATION_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function conversationProblem(
+  status: number,
+  slug: string,
+  title: string,
+  instance: string,
+  extra: Record<string, unknown> = {},
+): Response {
+  return new Response(
+    JSON.stringify({
+      type: `https://glosa.local/errors/${slug}`,
+      title,
+      status,
+      instance,
+      ...extra,
+    }),
+    { status, headers: { "Content-Type": "application/problem+json" } },
+  );
+}
+
+function conversationResult(
+  messageId: string,
+  state: { status: string; deliveryAttempts?: unknown },
+  fallback?: DeliveryResult,
+): Record<string, unknown> {
+  const attempts = Array.isArray(state.deliveryAttempts)
+    ? (state.deliveryAttempts as Array<Record<string, unknown>>)
+    : [];
+  const latest = attempts.at(-1) ?? fallback;
+  const delivered =
+    state.status === "delivered" ||
+    (latest !== undefined && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "presented");
+  return {
+    message_id: messageId,
+    accepted: true,
+    delivered,
+    state: delivered
+      ? "presented"
+      : latest && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "transport_accepted"
+        ? "transport_accepted"
+        : latest && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "failed"
+          ? "failed"
+          : "queued",
+    ...(latest
+      ? {
+          delivery: {
+            via: (latest as Record<string, unknown>).via,
+            outcome: (latest as Record<string, unknown>).outcome,
+          },
+        }
+      : {}),
+  };
+}
+
+function composerCandidates(records: ReturnType<SessionRegistry["explicitlyBoundForWorkspace"]>) {
+  return records.map((record) => ({
+    session_id: record.session_id,
+    provider: record.provider,
+    last_active_at: record.last_active_at,
+  }));
+}
+
+/** `POST /w/:slug/transcript/compose` — out-of-band, session-targeted conversation delivery.
+ * The immutable inbox + journal carry the message; the transcript remains read-only. */
 async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -1580,19 +1722,170 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
   } catch {
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
-  const text = (body as Record<string, unknown> | null)?.text;
-  if (typeof text !== "string" || text.length === 0) {
+  const parsed = body as Record<string, unknown> | null;
+  const text = parsed?.text;
+  if (typeof text !== "string" || text.trim().length === 0) {
     return problem(400, "validation-failed", "text is required", undefined, url.pathname);
   }
-
-  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path);
-  if (sessions.length === 0) {
-    return problem(404, "not-found", "no session registered", undefined, url.pathname);
+  const suppliedMessageId = parsed?.message_id;
+  if (
+    suppliedMessageId !== undefined &&
+    (typeof suppliedMessageId !== "string" || !CONVERSATION_MESSAGE_ID_RE.test(suppliedMessageId))
+  ) {
+    return problem(400, "validation-failed", "message_id must be a UUID", undefined, url.pathname);
+  }
+  const messageId = typeof suppliedMessageId === "string" ? suppliedMessageId : randomUUID();
+  const sessionHint = typeof parsed?.session_hint === "string" ? parsed.session_hint : undefined;
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const existingEntry = bus.readEntry(messageId);
+  let immutableTargetSession: string | undefined;
+  let immutableProvider: string | undefined;
+  if (existingEntry !== null) {
+    const existingPayload =
+      existingEntry.payload && typeof existingEntry.payload === "object"
+        ? (existingEntry.payload as Record<string, unknown>)
+        : null;
+    if (
+      existingPayload?.kind !== "conversation_message" ||
+      existingPayload.text !== text ||
+      typeof existingPayload.target_session_id !== "string" ||
+      typeof existingPayload.provider !== "string" ||
+      (sessionHint !== undefined && sessionHint !== existingPayload.target_session_id)
+    ) {
+      return conversationProblem(409, "idempotency-conflict", "message_id already identifies a different message", url.pathname);
+    }
+    immutableTargetSession = existingPayload.target_session_id;
+    immutableProvider = existingPayload.provider;
+    const existingState = bus.state.entries[messageId];
+    if (!existingState) return internalErrorResponse();
+    const current = conversationResult(messageId, existingState);
+    const latest = Array.isArray(existingState.deliveryAttempts) ? existingState.deliveryAttempts.at(-1) : undefined;
+    if (existingState.status === "delivered") return Response.json(current);
+    if (latest?.outcome !== "failed") return Response.json(current, { status: 202 });
   }
 
-  // P4.3: real delivery routes `text` through the resolved session's AgentProvider — this is the
-  // seam that fills in once that interface lands. Until then: accepted, not delivered.
-  return Response.json({ accepted: true, delivered: false }, { status: 202 });
+  const allBound = ctx.sessionRegistry.explicitlyBoundForWorkspace(resolved.entry.canonical_path, { includeStale: true });
+  const liveBound = allBound.filter((record) => ctx.sessionRegistry.liveness(record.session_id) === "alive");
+  if (allBound.length === 0) {
+    return conversationProblem(404, "no-bound-session", "no live session is explicitly bound", url.pathname, {
+      recovery: "Start or resume an agent session and bind it to this workspace.",
+    });
+  }
+  if (liveBound.length === 0) {
+    return conversationProblem(409, "bound-session-stale", "the bound session is stale", url.pathname, {
+      recovery: "Resume the bound agent session and try again.",
+    });
+  }
+
+  let target = immutableTargetSession
+    ? liveBound.find(
+        (record) => record.session_id === immutableTargetSession && record.provider === immutableProvider,
+      )
+    : sessionHint
+      ? liveBound.find((record) => record.session_id === sessionHint)
+      : undefined;
+  if (immutableTargetSession && !target) {
+    return conversationProblem(409, "bound-session-stale", "the target session is not live", url.pathname, {
+      recovery: "Resume the originally targeted agent session and try again.",
+    });
+  }
+  if (!immutableTargetSession && sessionHint && !target) {
+    return conversationProblem(409, "session-selection-required", "the selected session is not a live binding", url.pathname, {
+      candidates: composerCandidates(liveBound),
+    });
+  }
+  if (!target && liveBound.length > 1) {
+    return conversationProblem(409, "session-selection-required", "choose a live bound session", url.pathname, {
+      candidates: composerCandidates(liveBound),
+    });
+  }
+  target ??= liveBound[0];
+  if (!target) {
+    return conversationProblem(409, "bound-session-stale", "the selected session is not live", url.pathname, {
+      candidates: composerCandidates(liveBound),
+    });
+  }
+
+  const provider = ctx.providerRegistry?.get(target.provider);
+  if (!provider) {
+    return conversationProblem(503, "delivery-unavailable", "delivery is unavailable for this provider", url.pathname, {
+      provider: target.provider,
+      retryable: true,
+    });
+  }
+
+  const payload = {
+    kind: "conversation_message",
+    text,
+    target_session_id: target.session_id,
+    provider: target.provider,
+  } as const;
+  const preview = buildDeliveryPresentation(messageId, payload, { status: "pending" });
+  if (!preview || preview.bytes > 16 * 1024) {
+    return conversationProblem(400, "validation-failed", "message exceeds the 16 KiB delivery limit", url.pathname, {
+      max_bytes: 16 * 1024,
+    });
+  }
+
+  if (existingEntry === null) {
+    await bus.createEntry(messageId, payload, { idem: `conversation:${messageId}:created` });
+  }
+
+  const session: SessionBinding = {
+    session_id: target.session_id,
+    workspace: target.workspace_binding as string,
+    source: target.source,
+    ...(target.transcript_path ? { transcript_path: target.transcript_path } : {}),
+  };
+  let result: DeliveryResult;
+  try {
+    const deliverable = buildDeliveryPresentation(messageId, payload, { status: "pending" });
+    if (!deliverable) throw new Error("invalid_conversation_message");
+    result = await provider.deliver(session, deliverable);
+  } catch {
+    result = { via: "gate", outcome: "failed", error: "provider_delivery_failed" };
+  }
+  if (result.outcome === "failed") result = { ...result, error: "provider_delivery_failed" };
+  const priorAttempts = bus.state.entries[messageId]?.deliveryAttempts;
+  const attemptCount = Array.isArray(priorAttempts) ? priorAttempts.length : 0;
+  const latestRecorded = Array.isArray(priorAttempts) ? priorAttempts.at(-1) : undefined;
+  if (
+    bus.state.entries[messageId]?.status !== "delivered" &&
+    (latestRecorded?.via !== result.via || latestRecorded?.outcome !== result.outcome)
+  ) {
+    await recordDelivery(bus, messageId, session, result, {
+      durable: true,
+      idem: `conversation:${messageId}:delivery:${attemptCount + 1}`,
+    });
+  }
+
+  const state = bus.state.entries[messageId];
+  if (!state) return internalErrorResponse();
+  const responseBody = conversationResult(messageId, state, result);
+  if (result.outcome === "failed") {
+    return conversationProblem(502, "delivery-failed", "the provider could not start delivery", url.pathname, {
+      ...responseBody,
+      retryable: true,
+    });
+  }
+  return Response.json(responseBody, { status: responseBody.delivered === true ? 200 : 202 });
+}
+
+async function handleComposerStatus(ctx: ApiContext, slug: string, messageId: string, pathname: string): Promise<Response> {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  if (!CONVERSATION_MESSAGE_ID_RE.test(messageId)) {
+    return problem(400, "validation-failed", "message_id must be a UUID", undefined, pathname);
+  }
+  const bus = await resolveBus(ctx, resolved.entry.canonical_path);
+  const record = bus.readEntry(messageId);
+  const payload = record?.payload;
+  if (!payload || typeof payload !== "object" || (payload as Record<string, unknown>).kind !== "conversation_message") {
+    return problem(404, "not-found", "conversation message not found", undefined, pathname);
+  }
+  const state = bus.state.entries[messageId];
+  if (!state) return problem(404, "not-found", "conversation message not found", undefined, pathname);
+  return Response.json(conversationResult(messageId, state));
 }
 
 /** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-scoped
@@ -1699,6 +1992,21 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     const deliveryId = m[2] as string;
     return { routeClass: "state-changing", handle: (req) => handleSessionDeliveryAck(ctx, sessionId, deliveryId, req) };
   }
+  if (method === "GET" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/push-stream$/))) {
+    const sessionId = m[1] as string;
+    return {
+      routeClass: "authed-read",
+      handle: (req, server) => handleSessionPushStream(ctx, sessionId, req, server),
+    };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/conversation\/([^/]+)\/ack$/))) {
+    const sessionId = m[1] as string;
+    const messageId = m[2] as string;
+    return {
+      routeClass: "state-changing",
+      handle: (req) => handleConversationAck(ctx, sessionId, messageId, req),
+    };
+  }
 
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts$/))) {
     const slug = m[1] as string;
@@ -1742,6 +2050,14 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/compose$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleComposerSend(ctx, slug, req) };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/compose\/([^/]+)$/))) {
+    const slug = m[1] as string;
+    const messageId = m[2] as string;
+    return {
+      routeClass: "authed-read",
+      handle: () => handleComposerStatus(ctx, slug, messageId, pathname),
+    };
   }
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
     const slug = m[1] as string;

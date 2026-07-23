@@ -73,6 +73,19 @@ function renderSubagentGroup(group) {
   return el("details", { className: "glosa-conv-subagent-group" }, [summary, ...body]);
 }
 
+function newMessageId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  if (bytes.every((byte) => byte === 0)) {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /** Renders one grouped item (the output of `groupEvents`) to a DOM node. `unknown` events (the
  * normalizer's own quarantine kind, A2 §F16) render as a small, clearly-marked placeholder rather
  * than being silently dropped — the human should be able to tell "the mirror skipped something
@@ -104,7 +117,15 @@ export function mountConversationPane(container, { dataAccess, slug }) {
   container.textContent = "";
 
   const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
+  const mirrorStatusEl = el("p", { className: "glosa-conv-mirror-status", hidden: true, role: "status", "aria-live": "polite" });
   const listEl = el("div", { className: "glosa-conv-list", role: "region", "aria-label": "Conversation transcript" });
+  const sessionPickerLabel = el("label", {
+    className: "glosa-conv-session-picker",
+    hidden: true,
+    textContent: "Send to ",
+  });
+  const sessionPicker = el("select", { "aria-label": "Agent session" });
+  sessionPickerLabel.append(sessionPicker);
   const composerInput = el("textarea", {
     className: "glosa-conv-composer-input",
     name: "conversation-message",
@@ -120,15 +141,91 @@ export function mountConversationPane(container, { dataAccess, slug }) {
 
   container.append(
     el("h3", { textContent: "Conversation" }),
+    mirrorStatusEl,
     statusEl,
     attentionEl,
     listEl,
+    sessionPickerLabel,
     el("div", { className: "glosa-conv-composer" }, [composerInput, composerSend]),
   );
 
   let events = [];
   let mirrorAvailable = true;
   let stopStream = null;
+  let stopDeliveryStream = null;
+  let pending = null;
+  let waitingForPresentation = false;
+  const pendingStorageKey = `glosa:conversation-pending:${slug ?? "unknown"}`;
+
+  function readStoredPending() {
+    try {
+      const parsed = JSON.parse(globalThis.sessionStorage?.getItem(pendingStorageKey) ?? "null");
+      return parsed && typeof parsed.id === "string" && typeof parsed.text === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function storePending(value) {
+    try {
+      if (value) globalThis.sessionStorage?.setItem(pendingStorageKey, JSON.stringify(value));
+      else globalThis.sessionStorage?.removeItem(pendingStorageKey);
+    } catch {
+      // Tab storage is an optional resilience layer; delivery still remains durable in the daemon.
+    }
+  }
+
+  function setDeliveryStatus(text, isError = false) {
+    statusEl.hidden = false;
+    statusEl.textContent = text;
+    if (isError) statusEl.setAttribute("data-error", "true");
+    else statusEl.removeAttribute("data-error");
+  }
+
+  function showSessionPicker(candidates) {
+    sessionPicker.textContent = "";
+    sessionPicker.append(el("option", { value: "", textContent: "Choose a session…" }));
+    for (const candidate of candidates) {
+      const suffix = String(candidate.session_id ?? "").slice(-8);
+      sessionPicker.append(
+        el("option", {
+          value: candidate.session_id,
+          textContent: `${candidate.provider ?? "agent"} · …${suffix}`,
+        }),
+      );
+    }
+    sessionPickerLabel.hidden = false;
+    sessionPicker.focus();
+  }
+
+  function markWaiting(result) {
+    waitingForPresentation = true;
+    composerSend.disabled = true;
+    setDeliveryStatus(
+      result?.state === "transport_accepted"
+        ? "Message reached the session transport. Waiting for the agent to acknowledge it…"
+        : "Message queued. Waiting for the agent…",
+    );
+    storePending(pending);
+  }
+
+  function markPresented() {
+    if (!pending) return;
+    if (composerInput.value === pending.text) composerInput.value = "";
+    pending = null;
+    waitingForPresentation = false;
+    composerSend.disabled = false;
+    sessionPickerLabel.hidden = true;
+    storePending(null);
+    setDeliveryStatus("Message sent.");
+  }
+
+  function markFailed(message) {
+    waitingForPresentation = false;
+    composerSend.disabled = false;
+    setDeliveryStatus(message, true);
+    storePending(pending);
+  }
 
   function render() {
     listEl.textContent = "";
@@ -138,44 +235,61 @@ export function mountConversationPane(container, { dataAccess, slug }) {
 
   function showMirrorUnavailable() {
     mirrorAvailable = false;
-    statusEl.removeAttribute("data-error");
-    statusEl.hidden = false;
-    statusEl.textContent = "mirror unavailable — use the terminal";
+    mirrorStatusEl.hidden = false;
+    mirrorStatusEl.textContent = "mirror unavailable — use the terminal";
     render();
   }
 
   function showMirrorAvailable() {
     if (mirrorAvailable) return;
     mirrorAvailable = true;
-    statusEl.hidden = true;
-    statusEl.textContent = "";
-    statusEl.removeAttribute("data-error");
+    mirrorStatusEl.hidden = true;
+    mirrorStatusEl.textContent = "";
     render();
   }
 
   async function send() {
-    const text = composerInput.value.trim();
-    if (!text || !slug || composerSend.disabled) return;
+    const text = composerInput.value;
+    if (!text.trim() || !slug || composerSend.disabled || waitingForPresentation) return;
+    const selectedSession = sessionPicker.value || pending?.sessionHint || undefined;
+    if (!pending || pending.text !== text) {
+      pending = {
+        id: newMessageId(),
+        text,
+        ...(selectedSession ? { sessionHint: selectedSession } : {}),
+      };
+    } else if (selectedSession) {
+      pending.sessionHint = selectedSession;
+    }
+    storePending(pending);
     composerSend.disabled = true;
-    statusEl.hidden = false;
-    statusEl.removeAttribute("data-error");
-    statusEl.textContent = "Sending message…";
+    setDeliveryStatus("Sending…");
     try {
-      const result = await dataAccess.sendComposerMessage(slug, text);
-      if (!result?.delivered) {
-        throw new Error("agent delivery is not available for this session; use the terminal");
-      }
-      composerInput.value = "";
-      statusEl.textContent = "Message sent.";
+      const result = await dataAccess.sendComposerMessage(slug, text, {
+        messageId: pending.id,
+        sessionHint: pending.sessionHint,
+      });
+      if (result?.delivered) markPresented();
+      else markWaiting(result);
     } catch (error) {
-      statusEl.setAttribute("data-error", "true");
-      const message = error instanceof Error ? error.message : "Try again.";
-      statusEl.textContent =
-        message === "no session registered"
-          ? "No live agent session is registered for this workspace. Start or resume it, bind it to this workspace, then try again."
-          : `Message couldn't be sent: ${message}`;
+      const candidates = error?.problem?.candidates;
+      if (Array.isArray(candidates) && candidates.length > 1) {
+        showSessionPicker(candidates);
+        markFailed("Choose which live agent session should receive this message.");
+      } else {
+        const type = String(error?.problem?.type ?? "");
+        const message =
+          type.endsWith("/no-bound-session")
+            ? "No live agent session is bound to this workspace. Start or resume it, bind it, then try again."
+            : type.endsWith("/bound-session-stale")
+              ? "The bound agent session is stale. Resume it, then try again."
+              : error instanceof Error
+                ? error.message
+                : "Try again.";
+        markFailed(`Message couldn't be sent: ${message}`);
+      }
     } finally {
-      composerSend.disabled = false;
+      if (!waitingForPresentation) composerSend.disabled = false;
     }
   }
   composerSend.addEventListener("click", () => void send());
@@ -217,10 +331,52 @@ export function mountConversationPane(container, { dataAccess, slug }) {
     });
   }
 
+  async function refreshPendingStatus() {
+    if (!pending || typeof dataAccess.getComposerMessageStatus !== "function") return;
+    try {
+      const result = await dataAccess.getComposerMessageStatus(slug, pending.id);
+      if (result?.delivered) markPresented();
+      else if (result?.state === "failed" || result?.delivery?.outcome === "failed") {
+        markFailed("Message delivery failed. Try again.");
+      } else markWaiting(result);
+    } catch (error) {
+      if (error?.status === 404) {
+        markFailed("The pending message is no longer available. Send it again.");
+      }
+    }
+  }
+
+  function startDeliveryStream() {
+    if (typeof dataAccess.openStream !== "function") return;
+    stopDeliveryStream?.();
+    stopDeliveryStream = dataAccess.openStream(slug, {
+      onEvent: (frame) => {
+        if (!pending || frame.event !== "journal" || frame.data?.entry !== pending.id) return;
+        if (frame.data.event === "delivery_attempt" && frame.data.detail?.outcome === "presented") {
+          markPresented();
+        } else if (frame.data.event === "delivery_attempt" && frame.data.detail?.outcome === "failed") {
+          markFailed("Message delivery failed. Try again.");
+        } else if (frame.data.event === "transition_committed" && frame.data.detail?.to === "delivered") {
+          markPresented();
+        }
+      },
+      onReconnect: () => void refreshPendingStatus(),
+      onStatus: () => {},
+    });
+  }
+
+  pending = readStoredPending();
+  if (pending) {
+    composerInput.value = pending.text;
+    markWaiting({ state: "queued" });
+  }
   render();
   startStream();
+  startDeliveryStream();
+  if (pending) void refreshPendingStatus();
 
   return function unmount() {
     stopStream?.();
+    stopDeliveryStream?.();
   };
 }
