@@ -51,11 +51,16 @@ function el(tag, props = {}, children = []) {
 }
 
 function renderProse(ev) {
-  return el("p", { className: `glosa-conv-prose glosa-conv-${ev.role}`, textContent: ev.content });
+  const speaker = ev.role === "user" ? "You" : ev.role === "assistant" ? "Agent" : "Session";
+  return el("p", {
+    className: `glosa-conv-prose glosa-conv-${ev.role}`,
+    textContent: ev.content,
+    "data-speaker": speaker,
+  });
 }
 
 function renderToolUse(ev) {
-  const summary = el("summary", { textContent: `🔧 ${ev.tool_name}` });
+  const summary = el("summary", { textContent: `Tool · ${ev.tool_name}` });
   const body = el("pre", { className: "glosa-conv-tool-input", textContent: JSON.stringify(ev.input, null, 2) });
   return el("details", { className: "glosa-conv-tool-use" }, [summary, body]);
 }
@@ -113,7 +118,7 @@ function renderItem(item) {
  * — this module never constructs its own, per R6's ONE-data-access-module invariant. Returns
  * `unmount()`, which tears down the SSE subscription.
  */
-export function mountConversationPane(container, { dataAccess, slug }) {
+export function mountConversationPane(container, { dataAccess, slug, onClose = () => {} }) {
   container.textContent = "";
 
   const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
@@ -129,25 +134,47 @@ export function mountConversationPane(container, { dataAccess, slug }) {
   const composerInput = el("textarea", {
     className: "glosa-conv-composer-input",
     name: "conversation-message",
-    placeholder: "Send a message (out of band — does not edit the transcript)",
+    placeholder: "Message the active session…",
     "aria-label": "Message to the agent session",
   });
   const composerSend = el("button", { className: "glosa-conv-composer-send", type: "button", textContent: "Send" });
+  const closeButton = el("button", {
+    className: "glosa-conv-close",
+    type: "button",
+    title: "Close conversation",
+    "aria-label": "Close conversation",
+    textContent: "×",
+    onClick: () => onClose?.(),
+  });
   // P4.3 seam: attention state (e.g. "Claude is waiting for input") comes from the provider's own
   // Notification hook, NOT a heuristic derived from transcript activity/staleness — this element
   // exists as the mount point a future P4.3 wiring flips, never inferred here (R6: "Attention
   // state from the provider's Notification hook, not a transcript stall heuristic").
   const attentionEl = el("p", { className: "glosa-conv-attention", hidden: true, role: "status", "aria-live": "polite" });
 
-  container.append(
-    el("h3", { textContent: "Conversation" }),
-    mirrorStatusEl,
-    statusEl,
-    attentionEl,
+  const header = el("header", { className: "glosa-conv-header" }, [
+    el("div", { className: "glosa-conv-heading" }, [
+      el("h3", { textContent: "Conversation" }),
+      el("p", { textContent: "Read-only session mirror" }),
+    ]),
+    closeButton,
+  ]);
+  const feed = el("div", { className: "glosa-conv-feed" }, [
+    el("div", { className: "glosa-conv-notices" }, [mirrorStatusEl, statusEl, attentionEl]),
     listEl,
+  ]);
+  const composer = el("footer", { className: "glosa-conv-composer-wrap" }, [
     sessionPickerLabel,
-    el("div", { className: "glosa-conv-composer" }, [composerInput, composerSend]),
-  );
+    el("div", { className: "glosa-conv-composer" }, [
+      composerInput,
+      el("div", { className: "glosa-conv-composer-actions" }, [
+        el("span", { className: "glosa-conv-shortcut", textContent: "⌘↵ to send · delivered out of band" }),
+        composerSend,
+      ]),
+    ]),
+  ]);
+
+  container.append(header, feed, composer);
 
   let events = [];
   let mirrorAvailable = true;

@@ -146,6 +146,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     const p = root.querySelector(".glosa-conv-prose") as any;
     expect(p).not.toBeNull();
     expect(p.textContent).toBe("hello mirror");
+    expect(p.getAttribute("data-speaker")).toBe("You");
   });
 
   test("FAIL-SOFT: a mirror_unavailable frame shows the fallback message and does not throw — composer still works", () => {
