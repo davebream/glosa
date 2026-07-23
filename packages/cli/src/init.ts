@@ -647,7 +647,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
         code: "durable-install-required",
         kind: "usage",
         message: err.message,
-        hint: "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`",
+        hint: "install with `bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/`, then re-run `glosa init`",
       },
     };
   }
