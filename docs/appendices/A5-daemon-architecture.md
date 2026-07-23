@@ -13,8 +13,8 @@
 
 ## F19 — global workspace index `~/.glosa/workspaces.json`
 - **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/hooks/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.
-- Schema v2:
-  `{version:2,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?}}}`.
+- Schema v3:
+  `{version:3,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?,lifecycle}},adoptions}`.
   `tracking` is `{mode:"matcher"}` or `{mode:"bounded",paths:[<relative-path>,…]}`. Registration
   IDs are immutable full SHA-256 hashes of registration kind + canonical identity. v1 entries
   migrate atomically to directory registrations without changing their slug/root, using
@@ -25,7 +25,11 @@
   focus path. Existing registrations and existing local buses are authoritative regardless of the
   flag. Fresh unwritable directories redirect automatically; fresh writable directories redirect
   only by opt-in. An unwritable existing local bus fails closed rather than creating a second
-  journal; moving state is a separate migration.
+  journal; moving state is a separate migration. A loose-file-to-directory open is the narrow
+  exception: it creates a durable adoption record, seals source histories in place, and publishes a
+  new directory state atomically by same-filesystem rename. The index lifecycle is
+  `active → adopting → adopted`; a source is never made writable again, and a restart resumes the
+  same plan rather than beginning a second migration.
 - GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND present:false ≥ grace (or `glosa forget <slug>`). Conservative.
 
 ## F23 — inbox/attention lifecycle

@@ -351,3 +351,22 @@ export async function readFileAtCheckpoint(root: WorkspaceTarget, sha: string, p
   const result = await runGit(root, ["show", `${sha}:${path}`], { allowExitCodes: [0, 128] });
   return result.exitCode === 0 ? result.stdout : null;
 }
+
+/** Imports a sealed source's object graph under a private ref without merging unrelated worktree
+ * histories. `git fetch` owns the object-copy and ref-update mechanics; retries are safe because
+ * the source is sealed and the destination ref is deterministic. */
+export async function importLineage(
+  target: WorkspaceTarget,
+  source: WorkspaceTarget,
+  sourceRegistrationId: string,
+): Promise<string> {
+  const sourceHead = await runGit(source, ["rev-parse", "--verify", "HEAD"]);
+  const sha = sourceHead.stdout.trim();
+  await runGit(target, [
+    "fetch",
+    "--no-tags",
+    shadowGitDir(source),
+    `${sha}:refs/glosa/lineages/${sourceRegistrationId}/head`,
+  ]);
+  return sha;
+}

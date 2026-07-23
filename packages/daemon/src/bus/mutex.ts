@@ -36,4 +36,16 @@ export class KeyedMutex<K> {
     }
     return mutex.runExclusive(fn);
   }
+
+  /** Acquires a stable, deduplicated set of keys in lexical order. Adoption needs this narrow
+   * multi-key primitive so it can inspect every source lease and seal every source without a
+   * second writer slipping between source A and source B. */
+  runExclusiveMany<T>(keys: readonly K[], fn: () => T | Promise<T>): Promise<T> {
+    const sorted = [...new Set(keys)].sort((a, b) => String(a).localeCompare(String(b)));
+    const acquire = (index: number): Promise<T> => {
+      if (index >= sorted.length) return Promise.resolve().then(fn);
+      return this.runExclusive(sorted[index]!, () => acquire(index + 1));
+    };
+    return acquire(0);
+  }
 }

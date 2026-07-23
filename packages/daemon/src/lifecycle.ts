@@ -26,6 +26,7 @@ import { PresentationTokenStore } from "./presentation-token.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
+import { resumePendingAdoptions } from "./adoption.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { AdapterRegistry } from "./adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
@@ -161,6 +162,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     workspaceIndex: backend.workspaceIndex,
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
+    sealAdoptionSources: (sources, adoptionId, targetRegistrationId) =>
+      backend.busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId),
     capabilityStore,
     presentationTokenStore,
     adapterRegistry: backend.adapterRegistry,
@@ -192,6 +195,19 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     bun: Bun.version,
   };
   await acquireLockOrExit(home, lockFile, record, server);
+
+  try {
+    await resumePendingAdoptions(
+      backend.workspaceIndex,
+      (workspace) => backend.busRegistry.get(workspace),
+      (sources, adoptionId, targetRegistrationId) =>
+        backend.busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+    );
+  } catch (error) {
+    // A sealed adoption is deliberately fail-closed for its own target, but must not prevent a
+    // daemon from serving unrelated workspaces. The next open retries the same durable plan.
+    log(home, `${instanceId} adoption resume deferred: ${(error as Error).message}`);
+  }
 
   const classFFetch = createClassFFetch({
     port: classFPort,

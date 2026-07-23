@@ -105,6 +105,12 @@ generic.**
   `GIT_DIR=<bus-path>/shadow.git --work-tree=<work-tree>`, argv-safe, one git mutex/registration,
   deterministic init + baseline, index-lock recovery (A4 §F21). UI speaks versions/timeline/restore
   — never commits/SHAs.
+- **Loose-to-directory adoption is seal-and-link, never a physical migration.** Opening a parent
+  directory seals each contained loose-file bus, retains its journal/inbox and shadow repo beneath
+  `~/.glosa` as historical truth, imports its Git head under a target lineage ref, and carries only
+  non-terminal entries as explicitly provenance-marked target aliases. The new directory bus is
+  the sole live writer. A target with pre-existing state or a live source apply lease fails closed;
+  the implementation never recursively moves or deletes source state (A4/A5).
 
 ### R2 — session registry & routing  (detail: A2 §F08, A5 §F19)
 - Providers register live agent sessions via hooks → daemon API (never direct file writes; serialized

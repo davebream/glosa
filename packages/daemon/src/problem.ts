@@ -32,7 +32,12 @@ export type ProblemSlug =
   | "restore-conflict"
   // P5.1 addition — `POST /api/workspaces/apply-begin` (A4 §F05 / A6 §F26 exit 12
   // `lease_conflict`): a second apply-begin while one is already active for this workspace.
-  | "lease-conflict";
+  | "lease-conflict"
+  // Adoption is a workspace-routing conflict, not a generic server failure. Kept distinct so
+  // callers can safely retry a live lease hand-off while treating existing local state as final.
+  | "adoption-blocked"
+  | "adoption-conflict"
+  | "workspace-adopted";
 
 export function problem(
   status: number,

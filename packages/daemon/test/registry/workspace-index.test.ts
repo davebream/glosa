@@ -415,7 +415,7 @@ describe("WorkspaceIndex — v2 workspace contexts", () => {
     expect(entry.kind).toBe("directory");
     expect(entry.tracking).toEqual({ mode: "matcher" });
     expect(entry.registration_id).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).version).toBe(2);
+    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).version).toBe(3);
 
     cleanup(home);
     cleanup(root);

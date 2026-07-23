@@ -47,6 +47,10 @@ export interface ApplyLeaseState {
 export interface DerivedState {
   entries: Record<string, DerivedEntryState>;
   applyLease: ApplyLeaseState | null;
+  /** Present only after a durable `adoption_sealed`; mutators must reject rather than letting a
+   * stale in-memory bus append into historical lineage. */
+  adoptionSeal: { adoptionId: string; targetRegistrationId: string } | null;
+  lineages: Record<string, Record<string, unknown>>;
   appliedEventIds: Set<string>;
   appliedIdemKeys: Set<string>;
   quarantineCount: number;
@@ -56,6 +60,8 @@ export function createEmptyState(): DerivedState {
   return {
     entries: {},
     applyLease: null,
+    adoptionSeal: null,
+    lineages: {},
     appliedEventIds: new Set(),
     appliedIdemKeys: new Set(),
     quarantineCount: 0,
@@ -106,6 +112,17 @@ export const defaultReducer: Reducer = (state, event) => {
       if (state.applyLease && typeof leaseId === "string" && state.applyLease.leaseId === leaseId) {
         state.applyLease = null;
       }
+      return;
+    }
+    case "adoption_sealed": {
+      const d = event.detail;
+      if (!d || typeof d.adoption_id !== "string" || typeof d.target_registration_id !== "string") return;
+      state.adoptionSeal = { adoptionId: d.adoption_id, targetRegistrationId: d.target_registration_id };
+      return;
+    }
+    case "lineage_attached": {
+      const adoptionId = event.detail?.adoption_id;
+      if (typeof adoptionId === "string") state.lineages[adoptionId] = event.detail ?? {};
       return;
     }
     default:

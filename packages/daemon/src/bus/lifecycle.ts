@@ -214,6 +214,25 @@ export const lifecycleReducer: Reducer = (state, event) => {
       };
       return;
     }
+    case "entry_adopted": {
+      if (!event.entry || state.entries[event.entry]) return;
+      const d = event.detail ?? {};
+      const kind = entryKindFromDetail(d);
+      const status = typeof d.status === "string" ? d.status : initialStatusFor(kind);
+      const attempts = Array.isArray(d.delivery_attempts) ? d.delivery_attempts : [];
+      state.entries[event.entry] = {
+        status,
+        kind,
+        // The source journal remains the audit trail; carrying the current delivery axis keeps a
+        // retry after adoption from pretending an already-delivered item was never attempted.
+        deliveryAttempts: attempts,
+        origin: {
+          source_registration_id: d.source_registration_id,
+          source_entry_id: d.source_entry_id,
+        },
+      };
+      return;
+    }
     case "delivery_attempt": {
       if (!event.entry) return;
       const entryState = state.entries[event.entry];

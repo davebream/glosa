@@ -263,6 +263,22 @@ export async function reconcileWorkspace(
       reducer,
     });
 
+    // An adopted loose bus is historical evidence. Replay and torn-tail repair remain safe, but
+    // self-healing, lease expiry, and offline Git catch-up would append fresh events and violate
+    // the seal. The parent workspace is the only live writer from this point onward.
+    if (state.adoptionSeal) {
+      return {
+        workspaceRoot: workspaceWorktree(workspaceRoot),
+        tailTruncated: tail.truncated,
+        bytesRemoved: tail.bytesRemoved,
+        state,
+        healedEntryIds: [],
+        quarantineCount,
+        expiredLeaseIds: [],
+        offlineCatchup: { occurred: false },
+      };
+    }
+
     const healedEntryIds = selfHealInbox({
       workspaceRoot: workspaceWorktree(workspaceRoot),
       state,
