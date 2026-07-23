@@ -5,9 +5,9 @@
 // true no-ops (no git spawned at all) when there's nothing for them to do — the exact property
 // P2.1's fault-injection sweep (reconcile-fault.test.ts) now leans on to stay fast.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
-import { shadowGitDir } from "../../src/bus/paths.ts";
+import { shadowGitDir, workspaceBusDir } from "../../src/bus/paths.ts";
 import { runGit } from "../../src/git/shadow.ts";
 import { cleanupWorkspace, deterministicUlid, freshWorkspace, writeFile } from "./helpers.ts";
 
@@ -70,5 +70,25 @@ describe("reconcile step 5 — offline catch-up", () => {
     expect(second.offlineCatchup.occurred).toBe(false);
     const countAfterSecond = (await runGit(root, ["rev-list", "--count", "HEAD"])).stdout.trim();
     expect(countAfterSecond).toBe(countAfterFirst);
+  });
+
+  // #38 (github): a real drain in production came back as an unhandled 500 for a session the
+  // daemon HAD registered — traced to this step: offline catch-up is best-effort drift provenance
+  // (attributed "unknown"), not a delivery dependency, but a failure here (broken git toolchain,
+  // permission issue, corrupted shadow repo) was propagating all the way up through
+  // resolveBus()/handleSessionDrain and taking the whole workspace bus down with it.
+  test("a broken shadow-git bootstrap does not fail reconcile — journal-backed state stays usable", async () => {
+    writeFile(root, "notes.md", "hello");
+    // Force initShadowRepo's mkdirSync(shadowGitDir(root)) to fail deterministically, without
+    // relying on permission bits (which behave inconsistently for a root-run CI container): put a
+    // plain file where step 5 expects to create the shadow-git directory.
+    mkdirSync(workspaceBusDir(root), { recursive: true });
+    writeFileSync(shadowGitDir(root), "not a directory");
+
+    const result = await reconcileWorkspace(root, { ulid: deterministicUlid(), now: () => new Date() });
+
+    expect(result.offlineCatchup.occurred).toBe(false);
+    expect(result.offlineCatchup.error).toBeTruthy();
+    expect(result.state).toBeDefined(); // reconcile completed — did not throw
   });
 });

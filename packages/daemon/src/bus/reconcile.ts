@@ -160,6 +160,10 @@ export interface OfflineCatchUpResult {
   occurred: boolean;
   preSha?: string;
   postSha?: string;
+  /** Set instead of throwing when the shadow-git bootstrap itself fails (broken git toolchain,
+   * permission issue, corrupted shadow repo, ...) — see `reconcileWorkspace`'s catch around this
+   * step for why this must never take the rest of reconcile down with it. */
+  error?: string;
 }
 export interface OfflineCatchUpDeps {
   workspaceRoot: string;
@@ -272,14 +276,27 @@ export async function reconcileWorkspace(workspaceRoot: string, opts: ReconcileO
       now: opts.now,
       reducer,
     });
-    const offlineCatchup = await offlineCatchUp({
-      workspaceRoot,
-      state,
-      writer,
-      ulid: ulidFn,
-      now: opts.now,
-      reducer,
-    });
+    // Step 5 is best-effort drift *provenance* capture (attributed "unknown"), not a dependency of
+    // the journal-backed inbox/delivery machinery the rest of the bus serves — a broken git
+    // toolchain, permission issue, or corrupted shadow repo here must never take the whole
+    // workspace down (glosa/#38: this used to propagate all the way up through resolveBus() and
+    // fail every request against the workspace, including plain message delivery that never
+    // touches git at all).
+    let offlineCatchup: OfflineCatchUpResult;
+    try {
+      offlineCatchup = await offlineCatchUp({
+        workspaceRoot,
+        state,
+        writer,
+        ulid: ulidFn,
+        now: opts.now,
+        reducer,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[glosa] offline catch-up failed for ${workspaceRoot}: ${message}`);
+      offlineCatchup = { occurred: false, error: message };
+    }
 
     return {
       workspaceRoot,
