@@ -115,17 +115,17 @@ export function classifyOpenTarget(
   }
 
   if (override === "document") {
-    if (!isRegularFile(normalizedTarget)) {
-      return {
-        openPath: normalizedTarget,
-        surface: "document",
-        error: {
-          code: "not-a-file",
-          message: `${normalizedTarget}: --document requires an existing regular non-symlink file`,
-        },
-      };
+    if (isRegularFile(normalizedTarget) || deps.dirExists(normalizedTarget)) {
+      return { openPath: normalizedTarget, surface: "document" };
     }
-    return { openPath: normalizedTarget, surface: "document" };
+    return {
+      openPath: normalizedTarget,
+      surface: "document",
+      error: {
+        code: "not-a-file",
+        message: `${normalizedTarget}: --document requires an existing directory or regular non-symlink file`,
+      },
+    };
   }
 
   if (override === "workspace") {
@@ -235,9 +235,12 @@ export async function runOpenPresentation(
 
   let opened: OpenWorkspaceResult;
   try {
+    const focusFirst = !classified.focusPath && deps.dirExists(classified.openPath);
     const openOpts = {
       ...(options.externalState === undefined ? {} : { externalState: options.externalState }),
       ...(classified.focusPath ? { focus: classified.focusPath } : {}),
+      ...(focusFirst ? { focusFirst: true } : {}),
+      ...(focusFirst && classified.surface === "document" ? { requireFocus: true } : {}),
     };
     opened =
       Object.keys(openOpts).length === 0

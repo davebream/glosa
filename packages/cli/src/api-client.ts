@@ -125,11 +125,20 @@ export interface OpenWorkspaceResult {
   state_dir?: string;
 }
 
+export interface OpenWorkspaceOptions {
+  externalState?: boolean;
+  focus?: string;
+  /** Select the first path in the daemon's normalized tracked-artifact order. */
+  focusFirst?: boolean;
+  /** Fail when `focusFirst` cannot select a tracked artifact. */
+  requireFocus?: boolean;
+}
+
 export interface GlosaApiClient {
   readonly port: number;
   openWorkspace(
     path: string,
-    opts?: { externalState?: boolean; focus?: string },
+    opts?: OpenWorkspaceOptions,
   ): Promise<OpenWorkspaceResult>;
   resolveEntry(
     path: string,
@@ -194,13 +203,15 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
 
   async function openWorkspace(
     path: string,
-    opts: { externalState?: boolean; focus?: string } = {},
+    opts: OpenWorkspaceOptions = {},
   ): Promise<OpenWorkspaceResult> {
     return (
       await call("POST", "/api/workspaces/open", {
         path,
         ...(opts.externalState ? { external_state: true } : {}),
         ...(opts.focus ? { focus: opts.focus } : {}),
+        ...(opts.focusFirst ? { focus_first: true } : {}),
+        ...(opts.requireFocus ? { require_focus: true } : {}),
       })
     ).json();
   }

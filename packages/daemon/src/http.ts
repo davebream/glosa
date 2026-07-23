@@ -1470,6 +1470,8 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, {
       externalState: parsed?.external_state === true,
       ...(focus ? { focus } : {}),
+      ...(parsed?.focus_first === true ? { focusFirst: true } : {}),
+      ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
     });
     await resolveBus(ctx, opened.entry);
     const localBus = join(opened.entry.worktree_path, ".glosa");
@@ -1483,7 +1485,7 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     });
   } catch (error) {
     if (error instanceof WorkspaceOpenError) {
-      const status = error.code === "artifact-not-tracked" ? 422 : 400;
+      const status = error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact" ? 422 : 400;
       return problem(status, error.code, error.message, undefined, url.pathname);
     }
     throw error;
