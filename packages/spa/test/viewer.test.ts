@@ -507,6 +507,20 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.getAttribute("data-surface")).toBe("document");
     expect((root.querySelector(".glosa-nav-toggle") as any).hidden).toBe(true);
     expect((root.querySelector(".glosa-sidebar") as any).hidden).toBe(true);
+    expect(dom.document.title).toBe("notes.md");
+  });
+
+  test("workspace surface updates the tab title for workspace and artifact focus", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(dom.document.title).toBe("ws-1");
+
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(dom.document.title).toBe("ws-1 — notes.md");
   });
 
   test("preview lock shows only Preview and ignores Annotate/Edit shortcuts", async () => {

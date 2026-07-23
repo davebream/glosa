@@ -490,11 +490,13 @@ export function mountApp(root, {
     if (!currentArtifact) {
       artifactNameEl.textContent = "glosa";
       artifactDirEl.textContent = "";
+      document.title = currentSlug ?? "glosa";
       return;
     }
     const { dir, name } = splitPath(currentArtifact.source_path);
     artifactNameEl.textContent = name;
     artifactDirEl.textContent = dir;
+    document.title = surface === "document" || !currentSlug ? name : `${currentSlug} — ${name}`;
   }
 
   /** Mounts the rich face over `markdown`. A DOM that can't host a ProseMirror view (or any
