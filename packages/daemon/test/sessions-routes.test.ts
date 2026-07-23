@@ -3,8 +3,8 @@
 // heartbeat, deregister, drain. Same harness style as http-routes.test.ts — a real `createApiFetch`
 // pipeline in-process against real `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry`
 // instances over real tmp workspaces.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiFetch, type ApiContext } from "../src/http.ts";
@@ -319,6 +319,76 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
         await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ limit: 2 }) }))
       ).json();
       expect(body.count).toBe(2);
+    });
+
+    test("distinct glosa-open/session workspace entries and a resumed session drain without a daemon restart", async () => {
+      const nested = join(root, "subdir");
+      mkdirSync(nested);
+      await workspaceIndex.upsertWorkspace(nested, "glosa-open");
+
+      for (const source of ["startup", "resume"]) {
+        const registration = await fetchFn(
+          req("/api/sessions/register", {
+            method: "POST",
+            body: JSON.stringify({ session_id: "sess-resumed", provider: "claude-code", cwd: root, source }),
+          }),
+        );
+        expect(registration.status).toBe(200);
+
+        const drain = await fetchFn(
+          req("/api/sessions/sess-resumed/drain", {
+            method: "POST",
+            body: JSON.stringify({ via: "mcp_pull" }),
+          }),
+        );
+        expect(drain.status).toBe(200);
+        expect(await drain.json()).toMatchObject({ count: 0, drained: [] });
+      }
+
+      const entries = workspaceIndex
+        .list({ presentOnly: true })
+        .map(({ canonical_path, source }) => ({ canonical_path, source }));
+      expect(entries).toHaveLength(2);
+      expect(entries).toContainEqual({ canonical_path: root, source: "session" });
+      expect(entries).toContainEqual({ canonical_path: nested, source: "glosa-open" });
+      expect(sessionRegistry.get("sess-resumed")?.source).toBe("resume");
+    });
+
+    test("a registered-session bus failure returns a safe 500 and logs request context, message, and stack", async () => {
+      await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
+      const failure = new Error("forced bus resolution failure");
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      ctx.getWorkspaceBus = () => {
+        throw failure;
+      };
+
+      try {
+        const res = await fetchFn(
+          req("/api/sessions/sess-1/drain?private=query-secret", {
+            method: "POST",
+            body: JSON.stringify({ via: "mcp_pull", private: "body-secret" }),
+          }),
+        );
+
+        expect(res.status).toBe(500);
+        expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+        expect(await res.json()).toEqual({
+          type: "https://glosa.local/errors/internal",
+          title: "internal error",
+          status: 500,
+        });
+
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        const logged = errorSpy.mock.calls.flat().join("\n");
+        expect(logged).toContain("POST /api/sessions/sess-1/drain");
+        expect(logged).toContain(failure.message);
+        expect(logged).toContain(failure.stack as string);
+        expect(logged).not.toContain("query-secret");
+        expect(logged).not.toContain("body-secret");
+        expect(logged).not.toContain(TOKEN);
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
 
     test("unknown session_id -> 404", async () => {

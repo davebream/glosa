@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+pre-commit:
+  commands:
+    biome:
+      run: bun run lint:staged
+
+pre-push:
+  parallel: true
+  commands:
+    typecheck:
+      run: bun run typecheck
+    test:
+      run: bun test
