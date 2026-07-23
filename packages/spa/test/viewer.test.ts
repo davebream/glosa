@@ -303,6 +303,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
+    const focusOptions: FocusOptions[] = [];
+    const nativeFocus = dom.window.HTMLElement.prototype.focus;
+    dom.window.HTMLElement.prototype.focus = function (options?: FocusOptions) {
+      focusOptions.push(options ?? {});
+      return nativeFocus.call(this);
+    };
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -328,6 +334,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(da.posted).toHaveLength(0);
     const composerInput = root.querySelector(".glosa-composer-input") as any;
     expect(composerInput).not.toBeNull();
+    expect(focusOptions.at(-1)).toEqual({ preventScroll: true });
     composerInput.value = "tighten this";
     (root.querySelector(".glosa-composer-send") as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();

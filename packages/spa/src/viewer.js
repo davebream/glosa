@@ -584,7 +584,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       anchorEl?.scrollIntoView?.({ block: "center" });
     }
     renderMargin();
-    marginEl.querySelector(".glosa-composer-input")?.focus();
+    // The composer is rendered in the margin, not at the selection itself. Native focus normally
+    // scrolls the nearest scroll container until that newly inserted control is visible; for a
+    // long artifact this can reset the reader's viewport after they release a selection. Keep
+    // keyboard focus moving into the composer, but leave the manuscript exactly where it was.
+    marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true });
   }
 
   function closeComposer() {
