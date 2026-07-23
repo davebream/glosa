@@ -81,5 +81,8 @@
     "markdown-it": "^14.3.0",
     "picomatch": "^4.0.5",
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.10"
   }
 }
