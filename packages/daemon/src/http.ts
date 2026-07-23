@@ -43,7 +43,8 @@ import {
   type ResolveCtx,
 } from "./anchoring.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
-import { listCheckpoints } from "./checkpoints.ts";
+import { checkpointArtifactPath, listCheckpoints } from "./checkpoints.ts";
+import { adoptLooseLineages } from "./adoption.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { createJournalStreamResponse } from "./stream.ts";
 import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
@@ -54,10 +55,15 @@ import {
 import { serveClassFDocument } from "./classf-serve.ts";
 import { confineTranscriptPath } from "./transcript/root.ts";
 import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import { WorkspaceOpenError, type WorkspaceEntry, type WorkspaceIndex } from "./registry/workspace-index.ts";
+import {
+  AdoptionError,
+  WorkspaceOpenError,
+  type WorkspaceEntry,
+  type WorkspaceIndex,
+} from "./registry/workspace-index.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
-import type { WorkspaceBus } from "./bus/bus.ts";
+import { WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
 import { journalPath } from "./bus/paths.ts";
 import { readInboxEntry } from "./bus/inbox.ts";
 import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
@@ -140,6 +146,12 @@ export interface ApiContext {
    * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
    * construct their own `WorkspaceBus`. */
   getWorkspaceBus: (workspace: WorkspaceTarget) => WorkspaceBus;
+  /** Atomically preflights and seals all loose sources through the daemon's shared registry. */
+  sealAdoptionSources?: (
+    sources: readonly WorkspaceTarget[],
+    adoptionId: string,
+    targetRegistrationId: string,
+  ) => Promise<void>;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
@@ -901,7 +913,8 @@ async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promi
     return restoreConflictResponse(url.pathname, match.path, lostDiff.stdout);
   }
 
-  const content = await readFileAtCheckpoint(resolved.entry, to, match.path);
+  const checkpointPath = await checkpointArtifactPath(resolved.entry, to, match.path);
+  const content = await readFileAtCheckpoint(resolved.entry, to, checkpointPath);
   if (content === null) {
     return problem(404, "not-found", "artifact did not exist at that checkpoint", undefined, url.pathname);
   }
@@ -1473,6 +1486,9 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
       ...(parsed?.focus_first === true ? { focusFirst: true } : {}),
       ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
     });
+    if (opened.entry.kind === "directory") {
+      await adoptLooseLineages(ctx.workspaceIndex, opened.entry, ctx.getWorkspaceBus, ctx.sealAdoptionSources);
+    }
     await resolveBus(ctx, opened.entry);
     const localBus = join(opened.entry.worktree_path, ".glosa");
     const redirected = opened.entry.bus_path !== localBus;
@@ -1487,6 +1503,12 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     if (error instanceof WorkspaceOpenError) {
       const status = error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact" ? 422 : 400;
       return problem(status, error.code, error.message, undefined, url.pathname);
+    }
+    if (error instanceof AdoptionError) {
+      return problem(409, error.code, error.message, undefined, url.pathname);
+    }
+    if (error instanceof WorkspaceAdoptedError) {
+      return problem(409, "workspace-adopted", error.message, undefined, url.pathname);
     }
     throw error;
   }
@@ -2440,6 +2462,12 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
       if (contractWarning) withCsp.headers.set("X-Contract-Warning", "stale-minor");
       return withCsp;
     } catch (error) {
+      if (error instanceof WorkspaceAdoptedError) {
+        return withHeaders(problem(409, "workspace-adopted", error.message, undefined, new URL(req.url).pathname), csp);
+      }
+      if (error instanceof AdoptionError) {
+        return withHeaders(problem(409, error.code, error.message, undefined, new URL(req.url).pathname), csp);
+      }
       // Never let a throw anywhere in the pipeline (a route handler, a future JSON.parse, a bug
       // in this function) reach Bun's default error response — that leaks source/stack in dev
       // mode and has no CSP either way (P1.3 review item 2). The Bun.serve `error` callback in

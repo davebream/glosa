@@ -7,6 +7,8 @@
 import { commitExists } from "./checkpoint-diff.ts";
 import { runGit } from "./git/shadow.ts";
 import type { WorkspaceTarget } from "./workspace.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { journalPath } from "./bus/paths.ts";
 
 export interface CheckpointRow {
   checkpoint_id: string;
@@ -14,6 +16,101 @@ export interface CheckpointRow {
   by: string;
   summary: string;
   bytes_changed: number;
+  origin: "workspace" | "lineage";
+  lineage_id?: string;
+}
+
+interface LineageSourcePath {
+  registration_id: string;
+  source_path: string;
+  target_path: string;
+}
+
+interface LineageInfo {
+  adoption_id: string;
+  sources: LineageSourcePath[];
+}
+
+function attachedLineages(root: WorkspaceTarget): LineageInfo[] {
+  const path = journalPath(root);
+  if (!existsSync(path)) return [];
+  const byId = new Map<string, LineageInfo>();
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      const event = JSON.parse(line) as { event?: unknown; detail?: Record<string, unknown> };
+      if (event.event !== "lineage_attached") continue;
+      const adoptionId = event.detail?.adoption_id;
+      const sources = event.detail?.sources;
+      if (typeof adoptionId !== "string" || !Array.isArray(sources)) continue;
+      byId.set(adoptionId, {
+        adoption_id: adoptionId,
+        sources: sources.filter(
+          (source): source is LineageSourcePath =>
+            typeof source === "object" &&
+            source !== null &&
+            typeof (source as Record<string, unknown>).registration_id === "string" &&
+            typeof (source as Record<string, unknown>).source_path === "string" &&
+            typeof (source as Record<string, unknown>).target_path === "string",
+        ),
+      });
+    } catch {
+      // Replay owns quarantine; a history listing remains read-only and ignores a torn/bad line.
+    }
+  }
+  return [...byId.values()];
+}
+
+async function lineageRefs(root: WorkspaceTarget): Promise<Map<string, string>> {
+  const result = await runGit(root, ["for-each-ref", "--format=%(refname)", "refs/glosa/lineages"], {
+    allowExitCodes: [0, 128],
+  });
+  if (result.exitCode !== 0) return new Map();
+  const refs = new Map<string, string>();
+  for (const ref of result.stdout.split("\n").filter(Boolean)) {
+    const id = ref.split("/").at(-2);
+    if (id) refs.set(id, ref);
+  }
+  return refs;
+}
+
+async function checkpointOrigins(
+  root: WorkspaceTarget,
+): Promise<Map<string, { origin: "workspace" | "lineage"; lineageId?: string }>> {
+  const origins = new Map<string, { origin: "workspace" | "lineage"; lineageId?: string }>();
+  if (await commitExists(root, "HEAD")) {
+    const active = await runGit(root, ["log", "--format=%H", "HEAD"]);
+    for (const sha of active.stdout.split("\n").filter(Boolean)) origins.set(sha, { origin: "workspace" });
+  }
+  for (const [lineageId, ref] of await lineageRefs(root)) {
+    const log = await runGit(root, ["log", "--format=%H", ref]);
+    for (const sha of log.stdout.split("\n").filter(Boolean)) {
+      if (!origins.has(sha)) origins.set(sha, { origin: "lineage", lineageId });
+    }
+  }
+  return origins;
+}
+
+/** Returns the historical source path for a target artifact at `checkpoint`, if that checkpoint
+ * belongs to an imported lineage. Active workspace commits intentionally return the input path. */
+export async function checkpointArtifactPath(
+  root: WorkspaceTarget,
+  checkpoint: string,
+  targetPath: string,
+): Promise<string> {
+  const refs = await lineageRefs(root);
+  for (const lineage of attachedLineages(root)) {
+    for (const source of lineage.sources) {
+      if (source.target_path !== targetPath) continue;
+      const ref = refs.get(source.registration_id);
+      if (!ref) continue;
+      const reachable = await runGit(root, ["merge-base", "--is-ancestor", checkpoint, ref], {
+        allowExitCodes: [0, 1],
+      });
+      if (reachable.exitCode === 0) return source.source_path;
+    }
+  }
+  return targetPath;
 }
 
 // git's magic empty-tree object — diffing a root commit (no parent) against this is how you get
@@ -104,23 +201,32 @@ export async function listCheckpoints(
   opts: ListCheckpointsOptions,
   now: Date,
 ): Promise<ListCheckpointsResult> {
-  let revRange = "HEAD";
   let sinceMs: number | undefined;
+  let sinceCheckpoint: string | undefined;
 
   if (opts.since !== undefined) {
     const resolved = await resolveSince(root, opts.since, now);
     if (!resolved.ok) return { ok: false };
-    if (resolved.mode === "checkpoint") revRange = `${resolved.checkpointId}..HEAD`;
+    if (resolved.mode === "checkpoint") sinceCheckpoint = resolved.checkpointId;
     else sinceMs = new Date(resolved.iso).getTime();
   }
 
-  if (!(await commitExists(root, "HEAD"))) return { ok: true, rows: [] }; // nothing ever checkpointed
-
-  const log = await runGit(root, ["log", "--format=%H", revRange]);
-  const shas = log.stdout.split("\n").filter((line) => line.length > 0);
+  const origins = await checkpointOrigins(root);
+  if (origins.size === 0) return { ok: true, rows: [] };
+  const refs = [...(await lineageRefs(root)).values()];
+  const revisions = [...((await commitExists(root, "HEAD")) ? ["HEAD"] : []), ...refs];
+  const orderedLog = await runGit(root, ["log", "--date-order", "--format=%H", ...revisions]);
+  let shas = orderedLog.stdout.split("\n").filter(Boolean);
+  if (sinceCheckpoint) {
+    const resolved = await runGit(root, ["rev-parse", "--verify", sinceCheckpoint]);
+    const index = shas.indexOf(resolved.stdout.trim());
+    if (index >= 0) shas = shas.slice(0, index);
+  }
 
   const rows: CheckpointRow[] = [];
   for (const sha of shas) {
+    const origin = origins.get(sha);
+    if (!origin) continue;
     const meta = await commitMeta(root, sha);
     if (sinceMs !== undefined && new Date(meta.at).getTime() < sinceMs) continue;
     rows.push({
@@ -129,6 +235,8 @@ export async function listCheckpoints(
       by: meta.by,
       summary: meta.kind,
       bytes_changed: await bytesChanged(root, sha),
+      origin: origin.origin,
+      ...(origin.lineageId ? { lineage_id: origin.lineageId } : {}),
     });
     if (opts.limit !== undefined && rows.length >= opts.limit) break;
   }

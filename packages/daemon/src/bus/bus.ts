@@ -52,6 +52,12 @@ export interface PreparedDelivery {
   has_more: boolean;
 }
 
+export class WorkspaceAdoptedError extends Error {
+  constructor(readonly targetRegistrationId: string) {
+    super(`workspace has been adopted by ${targetRegistrationId}`);
+  }
+}
+
 // P2.4 — LOAD-BEARING, NOT JUST FOR THE JOURNAL: nothing here stops two WorkspaceBus instances
 // (or a WorkspaceBus + a standalone `reconcileWorkspace(root, ...)` call, e.g. from a health-check
 // endpoint or a cron) from being opened/run for the same canonical root at once. Each would hold
@@ -111,6 +117,10 @@ export class WorkspaceBus {
   // WorkspaceBus is the SOLE writer for its root (P2.4's registry invariant).
   private nextSequence = 0;
   private readonly listeners = new Set<(payload: { cursor: number; event: JournalEvent }) => void>();
+
+  private assertWritable(): void {
+    if (this.state.adoptionSeal) throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
+  }
 
   constructor(workspaceRoot: WorkspaceTarget, deps: WorkspaceBusDeps = {}) {
     this.workspace = workspaceRoot;
@@ -252,6 +262,7 @@ export class WorkspaceBus {
     payload: unknown,
     fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
   ): void {
+    this.assertWritable();
     writeInboxEntryOnce(this.workspace, id, payload);
     const payloadKind =
       payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
@@ -270,6 +281,84 @@ export class WorkspaceBus {
       by: fields.by ?? "daemon",
       ...(fields.idem !== undefined ? { idem: fields.idem } : {}),
       ...(detail !== undefined ? { detail } : {}),
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
+  }
+
+  /** Creates an active alias for a non-terminal source entry. The source payload is copied
+   * byte-for-byte by the coordinator; its original journal remains the historical truth. */
+  adoptEntry(id: string, payload: unknown, detail: Record<string, unknown>, idem: string): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      writeInboxEntryOnce(this.workspace, id, payload);
+      const event: JournalEvent = {
+        v: 1,
+        event_id: this.ulidFn(),
+        at: this.nowFn().toISOString(),
+        entry: id,
+        event: "entry_adopted",
+        by: "daemon",
+        idem,
+        detail,
+      };
+      appendEvent(this.writer, event);
+      applyEvent(this.state, event, this.reducer);
+      this.notify(event);
+    });
+  }
+
+  attachLineage(detail: Record<string, unknown>, idem: string): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      const event: JournalEvent = {
+        v: 1,
+        event_id: this.ulidFn(),
+        at: this.nowFn().toISOString(),
+        event: "lineage_attached",
+        by: "daemon",
+        idem,
+        detail,
+      };
+      appendEvent(this.writer, event);
+      applyEvent(this.state, event, this.reducer);
+      this.notify(event);
+    });
+  }
+
+  /** Sealing is itself a journalled state transition. It is intentionally checked inside the
+   * same lock as apply-begin so a lease can never appear between the coordinator's check and the
+   * source becoming read-only. */
+  sealForAdoption(adoptionId: string, targetRegistrationId: string): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => this.sealForAdoptionLocked(adoptionId, targetRegistrationId));
+  }
+
+  /** The registry holds every source mutex before calling this. Keep the lease predicate here so
+   * adoption uses the bus clock (including deterministic test clocks), not process wall time. */
+  activeApplyLeaseIdForAdoptionLocked(): string | null {
+    const active = this.state.applyLease;
+    return active && !isLeaseExpired(active, this.nowFn()) ? active.leaseId : null;
+  }
+
+  /** Called by `WorkspaceBusRegistry#sealForAdoption` while its shared keyed mutex already holds
+   * this registration. Kept public only to make the total lock ordering explicit at the one
+   * cross-workspace call site. */
+  sealForAdoptionLocked(adoptionId: string, targetRegistrationId: string): void {
+    if (this.state.adoptionSeal) {
+      if (this.state.adoptionSeal.adoptionId === adoptionId) return;
+      throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
+    }
+    const activeLeaseId = this.activeApplyLeaseIdForAdoptionLocked();
+    if (activeLeaseId) throw leaseHeldError(activeLeaseId);
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      event: "adoption_sealed",
+      by: "daemon",
+      idem: `adoption-seal:${adoptionId}`,
+      detail: { adoption_id: adoptionId, target_registration_id: targetRegistrationId },
     };
     appendEvent(this.writer, event);
     applyEvent(this.state, event, this.reducer);
@@ -295,6 +384,7 @@ export class WorkspaceBus {
     opts: { by?: EventBy; idem?: string; note?: string; detail?: Record<string, unknown> } = {},
   ): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
@@ -315,6 +405,7 @@ export class WorkspaceBus {
    * lifecycle edge. `open` first becomes `delivered`; terminal entries are stable no-ops. */
   markAttentionSeen(entryId: string): Promise<{ status: string; detail: Record<string, unknown> | null }> {
     return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
       const state = this.state.entries[entryId];
       if (!state || state.kind !== "attention") throw new Error("unknown attention request");
       if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
@@ -333,6 +424,7 @@ export class WorkspaceBus {
     response?: string,
   ): Promise<{ status: string; detail: Record<string, unknown> | null }> {
     return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
       const state = this.state.entries[entryId];
       if (!state || state.kind !== "attention") throw new Error("unknown attention request");
       if (state.status === "done") {
@@ -389,7 +481,10 @@ export class WorkspaceBus {
       error?: string;
     } = {},
   ): Promise<void> {
-    return this.mutex.runExclusive(this.mutexKey, () => this.recordDeliveryAttemptLocked(entryId, opts));
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      this.recordDeliveryAttemptLocked(entryId, opts);
+    });
   }
 
   /** The unlocked body `recordDeliveryAttempt` wraps in its own mutex critical section — pulled
@@ -442,6 +537,7 @@ export class WorkspaceBus {
     build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
   ): Promise<PreparedDelivery> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
       this.pruneDeliveryReservationsLocked();
       const reserved = new Set(
         Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
@@ -522,6 +618,7 @@ export class WorkspaceBus {
 
   acknowledgeDelivery(deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<boolean> {
     return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
       this.pruneDeliveryReservationsLocked();
       const reservation = this.deliveryReservations.get(deliveryId);
       if (!reservation) return false;
@@ -573,6 +670,7 @@ export class WorkspaceBus {
     opts: { session: string; via: DeliveryVia; outcome: "transport_accepted" | "presented" | "failed"; error?: string },
   ): Promise<boolean> {
     return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
       const payload = readInboxEntry(this.workspace, entryId);
       if (!payload || typeof payload !== "object") return false;
       const record = payload as Record<string, unknown>;
@@ -626,6 +724,7 @@ export class WorkspaceBus {
    * `apply_begin` recording it plus a 15-minute expiry. */
   applyBegin(entry: string, sessionId: string): Promise<{ leaseId: string; preSha: string }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
@@ -671,6 +770,7 @@ export class WorkspaceBus {
     opts: { note?: string } = {},
   ): Promise<{ leaseId: string; postSha: string }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       const lease = this.state.applyLease;
@@ -732,6 +832,7 @@ export class WorkspaceBus {
     editKind: "edit" | "restore" = "edit",
   ): Promise<{ checkpoint_before: string; checkpoint_after: string } | null> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       const before = await headSha(this.workspace);
@@ -757,6 +858,7 @@ export class WorkspaceBus {
 
   humanEditCheckpoint(kind = "human_edit"): Promise<string> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       return checkpoint(this.workspace, { attribution: "human", kind });

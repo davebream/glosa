@@ -11,14 +11,14 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
   temp→fsync→rename), `<bus-path>/journal.quarantine.ndjson`, and redirected declarative
   metadata/config. A normal local directory uses `<work-tree>/.glosa`; redirected state uses
   `~/.glosa/state/<full-sha256-registration-id>`. Moving the bus does not alter journal authority.
-- Event envelope: `{v, event_id:ULID, at, entry, event, by:daemon|watcher|session:<id>|human, idem?, detail}`. Types incl. entry_created, delivery_attempt, transition_committed, attention_committed, baseline_checkpoint, auto_checkpoint, apply_begin/end/expired, journal_tail_truncated, line_quarantined, git_index_lock_reclaimed, offline_catchup.
+- Event envelope: `{v, event_id:ULID, at, entry, event, by:daemon|watcher|session:<id>|human, idem?, detail}`. Types incl. entry_created, delivery_attempt, transition_committed, attention_committed, baseline_checkpoint, auto_checkpoint, apply_begin/end/expired, journal_tail_truncated, line_quarantined, git_index_lock_reclaimed, offline_catchup, adoption_sealed, lineage_attached, entry_adopted.
 - MAX_EVENT_BYTES = 65536 incl trailing `\n`. **Diffs never in journal** — live in shadow git, referenced by sha → events stay small. Oversize serialization → reject `EVENT_TOO_LARGE`, never truncate into journal.
 - Write: single `openSync(path,"a")` fd held at start; offset-advancing loop tolerating short writes; per-workspace mutex = single writer so records never interleave.
 - fsync: `fsyncSync` BEFORE returning success for lifecycle-critical events (entry_created, transition_committed, attention_committed, apply_begin/end, baseline_checkpoint). High-freq delivery_attempt may batch-flush (loss = redundant re-nudge only). Dir fsync once at file creation.
 - Torn final line (no trailing `\n`) = crash mid-append → `ftruncate` to lastNewline+1, append `journal_tail_truncated{bytes,hash}` (raw → quarantine). Safe because fsync-before-ACK means ACKed events always have their newline.
 - Idempotent replay: pure left-fold in file order; duplicate event_id ignored; already-applied idem → no-op; replay twice = byte-identical state. `resolve` re-run folds to no-op.
 - Corruption quarantine: a non-final bad/oversize/invalid line → append to quarantine file + `line_quarantined` event + SKIP + continue folding. One bad interior line never disables the bus. Journal never rewritten (append-only); derived state excludes it. Count surfaced in doctor/status.
-- Startup reconcile (ordered): 1 torn-tail truncate; 2 replay→derived state; 3 inbox↔journal self-heal (creation order = inbox file atomically FIRST, then entry_created; on startup an inbox file with no entry_created → synthesize+append it; reverse gap impossible); 4 apply-lease reconcile (apply_begin w/o apply_end & expired → apply_expired, interval→unknown); 5 offline catch-up (diff HEAD vs worktree → auto_checkpoint attributed unknown + offline_catchup).
+- Startup reconcile (ordered): 1 torn-tail truncate; 2 replay→derived state; 3 inbox↔journal self-heal (creation order = inbox file atomically FIRST, then entry_created; on startup an inbox file with no entry_created → synthesize+append it; reverse gap impossible); 4 apply-lease reconcile (apply_begin w/o apply_end & expired → apply_expired, interval→unknown); 5 offline catch-up (diff HEAD vs worktree → auto_checkpoint attributed unknown + offline_catchup). A replayed `adoption_sealed` stops at step 2: torn-tail repair/replay remain valid, but no later reconciliation step may append to a historical source.
 - **This is why `resolve` touches ONE file (a journal append) — dodges two-file atomicity entirely.**
 
 ## F05 — apply-lease proven attribution
@@ -62,6 +62,22 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
   Hardlink aliases reuse the first registration and its durable representative focus path.
 - Resolution, the final alias recheck, and new registration persist under the global index writer.
   Concurrent aliases therefore cannot create parallel buses, baselines, journals, or mutexes.
+
+## Loose-file adoption — seal and link
+- When a directory workspace opens over contained loose-file registrations, the global index records
+  one durable adoption plan. The daemon holds every source registration mutex in stable lexical
+  order, preflights every apply lease, and only then appends lifecycle-critical
+  `adoption_sealed{adoption_id,target_registration_id}` events. Any live lease or existing target
+  state fails closed before a source is sealed.
+- A sealed source is permanently read-only historical evidence: its immutable inbox, journal, and
+  shadow repo remain at their original `~/.glosa/state/<registration-id>` path. The target imports
+  each source head to `refs/glosa/lineages/<source-registration-id>/head`; it never creates a
+  synthetic merge commit or rewrites the target branch.
+- The target journal records `lineage_attached` with source/target path mapping and imported heads,
+  then `entry_adopted` aliases for every non-terminal source entry. Source journals remain the
+  truth for pre-adoption history; the aliases are new target lifecycle events with explicit source
+  registration and entry provenance. No source is recursively moved, deleted, or garbage-collected
+  as part of adoption.
 
 ## F25 — slug
 - Canonical path (realpath→NFC→strip trailing slash) = IDENTITY; slug = route label only.

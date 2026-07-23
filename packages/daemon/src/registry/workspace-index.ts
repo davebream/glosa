@@ -7,7 +7,7 @@
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
 // never observe (or assign) a torn/duplicate slug.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   accessSync,
   closeSync,
@@ -33,6 +33,42 @@ import { assignSlug, type SlugDeps } from "./slug.ts";
 
 export type WorkspaceSource = "session" | "glosa-open" | "discovered";
 
+/** A registration is never silently re-used once its writer has been handed to an adopted
+ * directory workspace. `adopting` is the durable claim that makes a crashed hand-off resumable;
+ * `adopted` keeps the source locator available for historical lineage reads. */
+export type WorkspaceLifecycle =
+  | { state: "active" }
+  | { state: "adopting"; adoption_id: string; target_registration_id: string }
+  | { state: "adopted"; adoption_id: string; target_registration_id: string; sealed_at: string };
+
+export type AdoptionPhase = "planned" | "sources_sealed" | "target_published" | "committed";
+
+export interface AdoptionSource {
+  registration_id: string;
+  /** Path in the loose file's one-file worktree. */
+  source_path: string;
+  /** Corresponding tracked path in the directory worktree. */
+  target_path: string;
+}
+
+export interface AdoptionRecord {
+  adoption_id: string;
+  target_registration_id: string;
+  phase: AdoptionPhase;
+  sources: AdoptionSource[];
+  created_at: string;
+  updated_at: string;
+}
+
+export class AdoptionError extends Error {
+  constructor(
+    readonly code: "adoption-conflict" | "adoption-blocked",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export interface WorkspaceEntry extends WorkspaceLocation {
   canonical_path: string;
   registration_id: string;
@@ -47,12 +83,20 @@ export interface WorkspaceEntry extends WorkspaceLocation {
   first_seen: string;
   last_seen: string;
   present: boolean;
+  lifecycle?: WorkspaceLifecycle;
   /** Set the moment `present` flips false — the GC grace-period clock starts here, not at
    * "whenever GC happens to notice." Cleared if the workspace comes back present. */
   absent_since?: string;
 }
 
 export interface WorkspaceIndexFile {
+  version: 3;
+  updated_at: string;
+  workspaces: Record<string, WorkspaceEntry>;
+  adoptions: Record<string, AdoptionRecord>;
+}
+
+interface V2WorkspaceIndexFile {
   version: 2;
   updated_at: string;
   workspaces: Record<string, WorkspaceEntry>;
@@ -142,14 +186,28 @@ function isWorkspaceIndexShape(v: unknown): v is WorkspaceIndexFile {
   if (typeof v !== "object" || v === null) return false;
   const f = v as Record<string, unknown>;
   if (
-    f.version !== 2 ||
+    f.version !== 3 ||
     typeof f.updated_at !== "string" ||
     typeof f.workspaces !== "object" ||
-    f.workspaces === null
+    f.workspaces === null ||
+    typeof f.adoptions !== "object" ||
+    f.adoptions === null
   ) {
     return false;
   }
   return Object.values(f.workspaces as Record<string, unknown>).every(isWorkspaceEntryShape);
+}
+
+function isV2WorkspaceIndexShape(v: unknown): v is V2WorkspaceIndexFile {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as Record<string, unknown>;
+  return (
+    f.version === 2 &&
+    typeof f.updated_at === "string" &&
+    typeof f.workspaces === "object" &&
+    f.workspaces !== null &&
+    Object.values(f.workspaces as Record<string, unknown>).every(isWorkspaceEntryShape)
+  );
 }
 
 function isLegacyWorkspaceIndexShape(v: unknown): v is LegacyWorkspaceIndexFile {
@@ -319,11 +377,27 @@ export class WorkspaceIndex {
         this.cache = parsed as WorkspaceIndexFile;
         return this.cache;
       }
+      if (isV2WorkspaceIndexShape(parsed)) {
+        const migrated: WorkspaceIndexFile = {
+          version: 3,
+          updated_at: this.now().toISOString(),
+          workspaces: Object.fromEntries(
+            Object.entries(parsed.workspaces).map(([id, entry]) => [
+              id,
+              { ...entry, lifecycle: entry.lifecycle ?? { state: "active" } },
+            ]),
+          ),
+          adoptions: {},
+        };
+        this.persist(migrated);
+        return migrated;
+      }
       if (isLegacyWorkspaceIndexShape(parsed)) {
         const migrated: WorkspaceIndexFile = {
-          version: 2,
+          version: 3,
           updated_at: this.now().toISOString(),
           workspaces: {},
+          adoptions: {},
         };
         for (const legacy of Object.values(parsed.workspaces)) {
           const id = registrationId("directory", legacy.canonical_path);
@@ -334,6 +408,7 @@ export class WorkspaceIndex {
             worktree_path: legacy.canonical_path,
             bus_path: join(legacy.canonical_path, ".glosa"),
             tracking: { mode: "matcher" },
+            lifecycle: { state: "active" },
           };
         }
         this.persist(migrated);
@@ -345,7 +420,7 @@ export class WorkspaceIndex {
       // (glosa-open/discovered sources, softened-but-not-yet-GC'd history, ...).
       this.quarantineCorruptFile();
     }
-    this.cache = { version: 2, updated_at: this.now().toISOString(), workspaces: {} };
+    this.cache = { version: 3, updated_at: this.now().toISOString(), workspaces: {}, adoptions: {} };
     return this.cache;
   }
 
@@ -448,6 +523,7 @@ export class WorkspaceIndex {
         first_seen: now,
         last_seen: now,
         present: true,
+        lifecycle: { state: "active" },
       };
       index.workspaces[id] = entry;
       index.updated_at = now;
@@ -671,11 +747,148 @@ export class WorkspaceIndex {
       first_seen: now,
       last_seen: now,
       present: true,
+      lifecycle: { state: "active" },
     };
     index.workspaces[entry.registration_id] = entry;
     index.updated_at = now;
     this.persist(index);
     return entry;
+  }
+
+  /** Claims every durable loose-file bus that becomes owned by `target`. This is deliberately
+   * metadata only: callers seal the source journals before changing writer ownership, then call
+   * the phase transitions below. Keeping the plan in the index makes a crash between those two
+   * durable writes discoverable without treating the index as entry-status truth. */
+  beginAdoption(target: WorkspaceEntry): Promise<AdoptionRecord | null> {
+    return this.mutex.runExclusive(() => {
+      const index = this.load();
+      const currentTarget = index.workspaces[target.registration_id];
+      if (!currentTarget) throw new AdoptionError("adoption-blocked", "target workspace registration disappeared");
+
+      const existing = Object.values(index.adoptions).find(
+        (record) => record.target_registration_id === target.registration_id && record.phase !== "committed",
+      );
+      if (existing) return existing;
+
+      const localBus = join(target.worktree_path, ".glosa");
+      if (target.kind !== "directory" || target.bus_path !== localBus) return null;
+
+      const tracked = new Set(resolveTrackedFiles(target).tracked.map((file) => file.path));
+      const sources: AdoptionSource[] = Object.values(index.workspaces)
+        .filter(
+          (entry) =>
+            entry.kind === "loose-file" &&
+            entry.present &&
+            (entry.lifecycle?.state ?? "active") === "active" &&
+            existsSync(entry.bus_path) &&
+            isInside(target.worktree_path, entry.canonical_path),
+        )
+        .map((entry) => {
+          const targetPath = relativeNfc(target.worktree_path, entry.canonical_path);
+          const sourcePath = entry.tracking.mode === "bounded" ? (entry.tracking.paths[0] ?? targetPath) : targetPath;
+          return { registration_id: entry.registration_id, source_path: sourcePath, target_path: targetPath };
+        })
+        .filter((source) => tracked.has(source.target_path))
+        .sort((a, b) => a.registration_id.localeCompare(b.registration_id));
+
+      if (sources.length === 0) return null;
+      if (existsSync(localBus)) {
+        throw new AdoptionError("adoption-conflict", "workspace state already exists at the directory root");
+      }
+
+      const now = this.now().toISOString();
+      const record: AdoptionRecord = {
+        adoption_id: randomUUID(),
+        target_registration_id: target.registration_id,
+        phase: "planned",
+        sources,
+        created_at: now,
+        updated_at: now,
+      };
+      index.adoptions[record.adoption_id] = record;
+      currentTarget.lifecycle = {
+        state: "adopting",
+        adoption_id: record.adoption_id,
+        target_registration_id: target.registration_id,
+      };
+      for (const source of sources) {
+        const entry = index.workspaces[source.registration_id];
+        if (entry) {
+          entry.lifecycle = {
+            state: "adopting",
+            adoption_id: record.adoption_id,
+            target_registration_id: target.registration_id,
+          };
+        }
+      }
+      index.updated_at = now;
+      this.persist(index);
+      return record;
+    });
+  }
+
+  getAdoption(adoptionId: string): AdoptionRecord | null {
+    return this.load().adoptions[adoptionId] ?? null;
+  }
+
+  getWorkspaceByRegistration(registrationId: string): WorkspaceEntry | null {
+    return this.load().workspaces[registrationId] ?? null;
+  }
+
+  pendingAdoptions(): AdoptionRecord[] {
+    return Object.values(this.load().adoptions).filter((record) => record.phase !== "committed");
+  }
+
+  markAdoptionSourcesSealed(adoptionId: string): Promise<AdoptionRecord> {
+    return this.updateAdoption(adoptionId, "sources_sealed");
+  }
+
+  markAdoptionTargetPublished(adoptionId: string): Promise<AdoptionRecord> {
+    return this.updateAdoption(adoptionId, "target_published");
+  }
+
+  commitAdoption(adoptionId: string): Promise<AdoptionRecord> {
+    return this.mutex.runExclusive(() => {
+      const index = this.load();
+      const record = index.adoptions[adoptionId];
+      if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
+      const now = this.now().toISOString();
+      record.phase = "committed";
+      record.updated_at = now;
+      const target = index.workspaces[record.target_registration_id];
+      if (target) target.lifecycle = { state: "active" };
+      for (const source of record.sources) {
+        const entry = index.workspaces[source.registration_id];
+        if (entry) {
+          entry.lifecycle = {
+            state: "adopted",
+            adoption_id: record.adoption_id,
+            target_registration_id: record.target_registration_id,
+            sealed_at: now,
+          };
+        }
+      }
+      index.updated_at = now;
+      this.persist(index);
+      return record;
+    });
+  }
+
+  private updateAdoption(
+    adoptionId: string,
+    phase: Exclude<AdoptionPhase, "planned" | "committed">,
+  ): Promise<AdoptionRecord> {
+    return this.mutex.runExclusive(() => {
+      const index = this.load();
+      const record = index.adoptions[adoptionId];
+      if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
+      if (record.phase === "committed") return record;
+      record.phase = phase;
+      record.updated_at = this.now().toISOString();
+      index.updated_at = record.updated_at;
+      this.persist(index);
+      return record;
+    });
   }
 
   getBySlug(slug: string): WorkspaceEntry | null {
@@ -749,6 +962,10 @@ export class WorkspaceIndex {
       let changed = false;
 
       for (const [registrationId, entry] of Object.entries(index.workspaces)) {
+        // A sealed adopted bus is a lineage locator, not disposable cache. Its original journal
+        // remains the immutable truth for pre-adoption events, so ordinary missing-path GC must
+        // never erase the registration that lets the target resolve it.
+        if (entry.lifecycle && entry.lifecycle.state !== "active") continue;
         const canonicalPath = entry.canonical_path;
         if (this.pathExists(canonicalPath)) {
           if (!entry.present) {

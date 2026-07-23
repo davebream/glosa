@@ -32,7 +32,10 @@ export type EventType =
   | "journal_tail_truncated"
   | "line_quarantined"
   | "offline_catchup"
-  | "git_index_lock_reclaimed";
+  | "git_index_lock_reclaimed"
+  | "adoption_sealed"
+  | "lineage_attached"
+  | "entry_adopted";
 
 export interface JournalEvent {
   v: 1;
@@ -57,6 +60,9 @@ const LIFECYCLE_CRITICAL_EVENTS: ReadonlySet<EventType> = new Set([
   "apply_begin",
   "apply_end",
   "baseline_checkpoint",
+  "adoption_sealed",
+  "lineage_attached",
+  "entry_adopted",
 ]);
 
 export interface EventTooLargeError extends Error {
