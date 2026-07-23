@@ -191,8 +191,47 @@ between explicit binding existing and explicit binding being used.
 5. **Sequencing: all increments land before the T8 gate closes**, so the manual rehearsal
    exercises the new open-mode surface rather than the promotion behavior this document retires.
 
+## Expert validation refinements (2026-07-23)
+
+A validation pass (architect, cli-expert, mcp-expert — all "sound with concerns") produced these
+refinements, now the basis of the work-item decomposition:
+
+- **The adoption migration is its own work item.** It is the only provenance-critical piece and is
+  off the critical path (loose opens work without it), so it splits out of the redirection work.
+  Migration must move shadow-git **byte-identical** (the journal's `apply_begin.pre_sha` /
+  `apply_end.post_sha` reference those shas — a re-baseline silently breaks invariant 3), carry a
+  crash-resume marker (F04's startup reconcile has no half-migrated state), handle a cross-filesystem
+  move as copy→fsync→seal-source rather than an atomic rename, and hold **both** the loose-registration
+  mutex (key = file path) and the workspace mutex (key = dir path) under a defined lock order during
+  the adoption window, since both then cover the same physical work-tree.
+- **Owning-workspace-bus-wins needs an explicit rule per aliasing edge:** hardlinks (same inode, two
+  realpaths), files inside the root but excluded by the F20 matcher (never leave an unprovenanced
+  orphan), nested/overlapping registered workspaces (deepest-root wins), and using the same
+  realpath→NFC→case-sensitive normalization as F20/F25 for the inside-a-root test.
+- **`glosa open` argument-shape=intent gets explicit overrides.** `--document` / `--workspace` win
+  over the stat, and a trailing slash means "directory" — needed because a not-yet-existing path
+  (a `--bind` producer opening a file the agent just wrote) can't be stat-classified, and
+  workspace-mode-on-a-lone-file is otherwise undiscoverable. `--bind` failure is non-fatal
+  (`warnings[]`, exit 0). The `--json` envelope gains `mode`, `preview`, `bound_session?`, and the
+  redirected state dir.
+- **`glosa_present` must not carry the durable pairing token.** Returning `~/.glosa/token` through an
+  MCP result exposes a full-API credential to the transcript/logs; mint a short-TTL single-use token
+  per call instead. `mode` is an enum; `path` is absolute, resolved server-side through `confinePath`;
+  hints are state-changing + idempotent, closed-world.
+
 ## Process
 
-One GitHub issue per increment (1–3), each carrying its spec delta list (A1/A4/A5/A6 +
-requirements.md where governing text changes). This document then becomes background, not
+**Three work items** (right-sized to implementation sessions), not the original three increments:
+
+1. **WI-1 — Open-surface & presentation modes** (CLI + MCP + SPA): three open modes, `--preview`
+   lock, `glosa_present`, `--bind`, SPA gating. Effort M.
+2. **WI-2 — Loose-file state redirection & bounded registration** (daemon): redirected bus, bounded
+   tracked-list, owning-bus-wins. Effort L.
+3. **WI-3 — Adoption migration** (daemon, depends on WI-2): move redirected history in-root on
+   full-workspace open. Effort M, provenance-critical, off critical path.
+
+Wave structure: WI-1 and WI-2 start concurrently; WI-3 follows WI-2. Each ships as a GitHub issue
+carrying its spec-delta list (A1/A2/A3/A4/A5/A6 + requirements.md where governing text changes).
+Open sequencing question: WI-3 may land after the T8 gate (it does not change what the manual
+rehearsal exercises) — see the pitch's Open Questions. This document then becomes background, not
 contract.
