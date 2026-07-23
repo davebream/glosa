@@ -1185,18 +1185,29 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   let conversationVisible = false;
   let stopConversation = null;
 
+  function setConversationVisible(visible) {
+    conversationVisible = visible;
+    conversationEl.hidden = !conversationVisible;
+    conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
+    renderConversation();
+  }
+
   function renderConversation() {
     stopConversation?.();
     stopConversation = null;
     if (!conversationVisible || !currentSlug) return;
-    stopConversation = mountConversationPane(conversationEl, { dataAccess, slug: currentSlug });
+    stopConversation = mountConversationPane(conversationEl, {
+      dataAccess,
+      slug: currentSlug,
+      onClose: () => {
+        setConversationVisible(false);
+        conversationToggle.focus({ preventScroll: true });
+      },
+    });
   }
 
   conversationToggle.addEventListener("click", () => {
-    conversationVisible = !conversationVisible;
-    conversationEl.hidden = !conversationVisible;
-    conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
-    renderConversation();
+    setConversationVisible(!conversationVisible);
   });
 
   function markCurrent(listEl, key) {

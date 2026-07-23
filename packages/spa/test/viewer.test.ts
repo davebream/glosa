@@ -387,8 +387,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // conversation.js's own mount renders its composer/status scaffolding into the pane.
     expect(pane.querySelector(".glosa-conv-composer-input")).not.toBeNull();
 
-    toggle.click();
+    const close = pane.querySelector(".glosa-conv-close") as any;
+    expect(close.getAttribute("aria-label")).toBe("Close conversation");
+    close.click();
     expect(pane.hidden).toBe(true);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(dom.document.activeElement).toBe(toggle);
   });
 });
