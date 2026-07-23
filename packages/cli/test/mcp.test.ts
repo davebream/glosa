@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import Ajv2020 from "ajv/dist/2020.js";
-import { handleMcpRequest, type McpDeps } from "../src/mcp.ts";
+import { PassThrough, Writable } from "node:stream";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
-  GLOSA_MCP_TOOLS,
-  JSON_SCHEMA_2020_12,
-  MCP_PROTOCOL_VERSION,
-  type McpToolDefinition,
-  workspaceMetadataDescriptorSchema,
-} from "../src/mcp-tools.ts";
-import type { DaemonHookClient, DrainResult, RegisterSessionInput } from "../src/daemon-client.ts";
+  type CallToolResult,
+  LATEST_PROTOCOL_VERSION,
+  type Request,
+  type Result,
+} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import type { GlosaApiClient } from "../src/api-client.ts";
-
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+import type { DaemonHookClient, DrainResult, RegisterSessionInput } from "../src/daemon-client.ts";
+import { createMcpServer, GLOSA_MCP_TOOL_NAMES, type GlosaMcpServer, type McpDeps, runMcpServer } from "../src/mcp.ts";
+import {
+  conversationAckInputSchema,
+  inboxGetInputSchema,
+  inboxPullInputSchema,
+  metadataClearInputSchema,
+  metadataSetInputSchema,
+  metadataShowInputSchema,
+  sessionBindInputSchema,
+  workspaceMetadataDescriptorSchema,
+} from "../src/mcp-schemas.ts";
+import { CLI_VERSION } from "../src/version.ts";
 
 function presentation(id: string, kind: "annotation" | "human_edit", text: string) {
   return {
@@ -36,23 +47,48 @@ class HookClient implements DaemonHookClient {
   };
   drainOptions: unknown;
   heartbeats: string[] = [];
+  deregistered: string[] = [];
+  deliveryAcks: Array<[string, string, "presented" | "failed", string?]> = [];
+  conversationAcks: Array<[string, string, "transport_accepted" | "presented" | "failed"]> = [];
+  push?: DaemonHookClient["openConversationPush"];
+
   async register(input: RegisterSessionInput) {
     this.registered = input;
     return { workspace: input.cwd, drained_workspaces: [] };
   }
+
   async heartbeat(sessionId: string) {
     this.heartbeats.push(sessionId);
   }
-  async deregister() {}
+
+  async deregister(sessionId: string) {
+    this.deregistered.push(sessionId);
+  }
+
   async drain(_sessionId: string, options?: unknown) {
     this.drainOptions = options;
     return this.drained;
   }
+
+  async acknowledge(sessionId: string, deliveryId: string, outcome: "presented" | "failed", error?: string) {
+    this.deliveryAcks.push([sessionId, deliveryId, outcome, error]);
+  }
+
   async acknowledgeConversation(
-    _sessionId: string,
-    _messageId: string,
-    _outcome: "transport_accepted" | "presented" | "failed",
-  ) {}
+    sessionId: string,
+    messageId: string,
+    outcome: "transport_accepted" | "presented" | "failed",
+  ) {
+    this.conversationAcks.push([sessionId, messageId, outcome]);
+  }
+
+  async openConversationPush(
+    sessionId: string,
+    onEntry: Parameters<NonNullable<DaemonHookClient["openConversationPush"]>>[1],
+    signal: AbortSignal,
+  ) {
+    if (this.push) return this.push(sessionId, onEntry, signal);
+  }
 }
 
 function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
@@ -63,19 +99,48 @@ function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
   };
 }
 
-function toolResultPayload(reply: { response?: Record<string, unknown> }): {
-  content: Array<{ type: string; text: string }>;
-  structuredContent: Record<string, unknown>;
-} {
-  return (reply.response?.result as {
-    content: Array<{ type: string; text: string }>;
-    structuredContent: Record<string, unknown>;
-  })!;
+interface Connected {
+  runtime: GlosaMcpServer;
+  client: Client;
+  serverTransport: InMemoryTransport;
+  close(): Promise<void>;
 }
 
-function assertOutputConforms(tool: McpToolDefinition, structured: unknown): void {
-  const validate = ajv.compile(tool.outputSchema);
-  expect(validate(structured), JSON.stringify(validate.errors)).toBe(true);
+async function connect(d: McpDeps): Promise<Connected> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const runtime = createMcpServer(d);
+  await runtime.connect(serverTransport);
+  const client = new Client({ name: "glosa-test", version: "1" }, { capabilities: {} });
+  await client.connect(clientTransport);
+  return {
+    runtime,
+    client,
+    serverTransport,
+    close: async () => {
+      await client.close();
+      await runtime.close();
+    },
+  };
+}
+
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+function structured(result: { structuredContent?: Record<string, unknown> }): Record<string, unknown> {
+  expect(result.structuredContent).toBeDefined();
+  return result.structuredContent!;
+}
+
+async function callTool(
+  client: Client,
+  request: { name: string; arguments?: Record<string, unknown> },
+): Promise<CallToolResult> {
+  return (await client.callTool(request)) as CallToolResult;
 }
 
 const VALID_METADATA = {
@@ -91,95 +156,101 @@ const VALID_METADATA = {
   ],
 };
 
-describe("MCP 2025-11-25 tool contract", () => {
-  test("initialize accepts only 2025-11-25 and never echoes a client-supplied version", async () => {
-    const ok = await handleMcpRequest(
-      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: MCP_PROTOCOL_VERSION } },
-      deps(new HookClient()),
-    );
-    expect(ok.response?.result).toMatchObject({
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {
-        tools: { listChanged: false },
+describe("official TypeScript MCP SDK contract", () => {
+  test("SDK initialization advertises latest protocol, channel capability, instructions, and package version", async () => {
+    const connected = await connect(deps(new HookClient()));
+    try {
+      expect(LATEST_PROTOCOL_VERSION).toBe("2025-11-25");
+      expect(connected.client.getServerVersion()).toEqual({ name: "glosa", version: CLI_VERSION });
+      expect(connected.client.getServerCapabilities()).toMatchObject({
+        tools: { listChanged: true },
         experimental: { "claude/channel": {} },
-      },
-    });
-    expect(JSON.stringify(ok.response?.result)).toContain("glosa_conversation_ack");
-
-    for (const protocolVersion of ["2025-03-26", "2025-06-18", "2024-11-05", undefined]) {
-      const rejected = await handleMcpRequest(
-        {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: protocolVersion === undefined ? {} : { protocolVersion },
-        },
-        deps(new HookClient()),
-      );
-      const rejectedError = rejected.response?.error as { code: number; message: string } | undefined;
-      expect(rejectedError).toMatchObject({ code: -32602 });
-      expect(rejectedError?.message).toContain(MCP_PROTOCOL_VERSION);
-    }
-  });
-
-  test("tools/list advertises complete Draft 2020-12 metadata for every tool", async () => {
-    const reply = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }, deps(new HookClient()));
-    const listed = reply.response?.result as { tools: McpToolDefinition[] } | undefined;
-    expect(listed).toBeDefined();
-    if (!listed) throw new Error("expected tools/list result");
-    const tools = listed.tools;
-    expect(tools.map((tool) => tool.name)).toEqual(GLOSA_MCP_TOOLS.map((tool) => tool.name));
-
-    for (const tool of tools) {
-      expect(tool.title.length).toBeGreaterThan(0);
-      expect(tool.description.length).toBeGreaterThan(0);
-      expect(tool.inputSchema.$schema).toBe(JSON_SCHEMA_2020_12);
-      expect(tool.outputSchema.$schema).toBe(JSON_SCHEMA_2020_12);
-      expect(tool.inputSchema.type).toBe("object");
-      expect(tool.outputSchema.type).toBe("object");
-      expect(tool.inputSchema.additionalProperties).toBe(false);
-      expect(tool.outputSchema.additionalProperties).toBe(false);
-      expect(tool.execution).toEqual({ taskSupport: "forbidden" });
-      expect(tool.annotations.openWorldHint).toBe(false);
-      expect(typeof tool.annotations.readOnlyHint).toBe("boolean");
-      expect(typeof tool.annotations.idempotentHint).toBe("boolean");
-      expect(ajv.validateSchema(tool.inputSchema)).toBe(true);
-      expect(ajv.validateSchema(tool.outputSchema)).toBe(true);
-    }
-
-    const byName = new Map(tools.map((tool) => [tool.name, tool]));
-    for (const name of ["glosa_inbox_pull", "glosa_inbox_get", "glosa_metadata_show"]) {
-      expect(byName.get(name)?.annotations).toMatchObject({
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
       });
+      expect(connected.client.getInstructions()).toContain("glosa_conversation_ack");
+    } finally {
+      await connected.close();
     }
-    for (const name of ["glosa_metadata_set", "glosa_metadata_clear", "glosa_session_bind", "glosa_conversation_ack"]) {
-      expect(byName.get(name)?.annotations.readOnlyHint).toBe(false);
-      expect(byName.get(name)?.annotations.openWorldHint).toBe(false);
-    }
-    expect(byName.get("glosa_metadata_clear")?.annotations.destructiveHint).toBe(true);
   });
 
-  test("input schemas accept valid examples and reject invalid ones", () => {
-    const cases: Array<{
-      name: string;
-      valid: Record<string, unknown>[];
-      invalid: Record<string, unknown>[];
-    }> = [
+  test("SDK negotiates an older supported protocol version without custom interception", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let buffered = "";
+    let resolveResponse: (value: string) => void = () => {};
+    const responseLine = new Promise<string>((resolve) => {
+      resolveResponse = resolve;
+    });
+    output.on("data", (chunk) => {
+      buffered += chunk.toString();
+      const newline = buffered.indexOf("\n");
+      if (newline >= 0) resolveResponse(buffered.slice(0, newline));
+    });
+
+    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "compatibility-test", version: "1" },
+        },
+      })}\n`,
+    );
+    const response = JSON.parse(await responseLine) as { result: { protocolVersion: string } };
+    input.end();
+    await running;
+    expect(response.result.protocolVersion).toBe("2025-06-18");
+  });
+
+  test("tools/list is SDK-generated from the seven Zod registrations", async () => {
+    const connected = await connect(deps(new HookClient()));
+    try {
+      const tools = (await connected.client.listTools()).tools;
+      expect(tools.map((tool) => tool.name)).toEqual([...GLOSA_MCP_TOOL_NAMES]);
+      for (const tool of tools) {
+        expect(tool.title?.length).toBeGreaterThan(0);
+        expect(tool.description?.length).toBeGreaterThan(0);
+        expect(tool.inputSchema.type).toBe("object");
+        expect(tool.outputSchema?.type).toBe("object");
+        expect(tool.inputSchema.additionalProperties).toBe(false);
+        expect(tool.outputSchema?.additionalProperties).toBe(false);
+        expect(tool.execution).toEqual({ taskSupport: "forbidden" });
+        expect(tool.annotations?.openWorldHint).toBe(false);
+        expect(typeof tool.annotations?.readOnlyHint).toBe("boolean");
+        expect(typeof tool.annotations?.idempotentHint).toBe("boolean");
+      }
+
+      const byName = new Map(tools.map((tool) => [tool.name, tool]));
+      for (const name of ["glosa_inbox_pull", "glosa_inbox_get", "glosa_metadata_show"]) {
+        expect(byName.get(name)?.annotations).toMatchObject({
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        });
+      }
+      expect(byName.get("glosa_metadata_clear")?.annotations?.destructiveHint).toBe(true);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("strict Zod inputs accept valid examples and reject invalid or unknown fields", () => {
+    const cases = [
       {
-        name: "glosa_inbox_pull",
+        schema: inboxPullInputSchema,
         valid: [{}, { workspace: "/w", limit: 3, session_id: "s1" }],
         invalid: [{ limit: 0 }, { limit: 9 }, { workspace: 1 }, { extra: true }],
       },
       {
-        name: "glosa_inbox_get",
+        schema: inboxGetInputSchema,
         valid: [{ id: "inb-1" }, { id: "inb-1", cursor: "opaque", workspace: "/w" }],
         invalid: [{}, { id: "" }, { id: "inb-1", cursor: 1 }, { id: "inb-1", unexpected: true }],
       },
       {
-        name: "glosa_metadata_set",
+        schema: metadataSetInputSchema,
         valid: [{ metadata: VALID_METADATA }, { workspace: "/w", metadata: { version: 1, id: "a", artifacts: [] } }],
         invalid: [
           {},
@@ -189,89 +260,102 @@ describe("MCP 2025-11-25 tool contract", () => {
         ],
       },
       {
-        name: "glosa_metadata_show",
+        schema: metadataShowInputSchema,
         valid: [{}, { workspace: "/w" }],
         invalid: [{ workspace: "" }, { workspace: "/w", extra: true }],
       },
       {
-        name: "glosa_metadata_clear",
+        schema: metadataClearInputSchema,
         valid: [{}, { workspace: "/w" }],
         invalid: [{ workspace: 1 }, { cleared: true }],
       },
       {
-        name: "glosa_session_bind",
+        schema: sessionBindInputSchema,
         valid: [{ session_id: "s1" }, { session_id: "s1", workspace: "/w" }],
         invalid: [{}, { session_id: "" }, { session_id: "s1", extra: true }],
       },
       {
-        name: "glosa_conversation_ack",
+        schema: conversationAckInputSchema,
         valid: [{ message_id: "m-1" }, { message_id: "m-1", session_id: "s1" }],
         invalid: [{}, { message_id: "" }, { message_id: "m-1", session_id: 1 }],
       },
-    ];
+    ] as const;
 
     for (const example of cases) {
-      const tool = GLOSA_MCP_TOOLS.find((entry) => entry.name === example.name)!;
-      const validate = ajv.compile(tool.inputSchema);
-      for (const value of example.valid) {
-        expect(validate(value), `${example.name} valid ${JSON.stringify(value)} -> ${JSON.stringify(validate.errors)}`).toBe(true);
-      }
-      for (const value of example.invalid) {
-        expect(validate(value), `${example.name} invalid ${JSON.stringify(value)}`).toBe(false);
-      }
+      for (const value of example.valid) expect(example.schema.safeParse(value).success).toBe(true);
+      for (const value of example.invalid) expect(example.schema.safeParse(value).success).toBe(false);
     }
-
-    const validateDescriptor = ajv.compile({
-      $schema: JSON_SCHEMA_2020_12,
-      ...workspaceMetadataDescriptorSchema,
-    });
-    expect(validateDescriptor(VALID_METADATA)).toBe(true);
-    expect(validateDescriptor({ version: 1, id: "bad id", artifacts: [] })).toBe(false);
-  });
-
-  test("conversation acknowledgement uses the exact MCP session identity", async () => {
-    const calls: unknown[] = [];
-    const hook = new HookClient();
-    hook.acknowledgeConversation = async (
-      sessionId: string,
-      messageId: string,
-      outcome: "transport_accepted" | "presented" | "failed",
-    ) => {
-      calls.push([sessionId, messageId, outcome]);
-    };
-    const reply = await handleMcpRequest(
-      {
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/call",
-        params: { name: "glosa_conversation_ack", arguments: { message_id: "m-1" } },
-      },
-      { ...deps(hook), sessionId: () => "claude-session-1" },
+    expect(workspaceMetadataDescriptorSchema.safeParse(VALID_METADATA).success).toBe(true);
+    expect(workspaceMetadataDescriptorSchema.safeParse({ version: 1, id: "bad id", artifacts: [] }).success).toBe(
+      false,
     );
-    expect(reply.response?.error).toBeUndefined();
-    expect(calls).toEqual([["claude-session-1", "m-1", "presented"]]);
-    const payload = toolResultPayload(reply);
-    assertOutputConforms(GLOSA_MCP_TOOLS.find((tool) => tool.name === "glosa_conversation_ack")!, payload.structuredContent);
-    expect(payload.content).toEqual([{ type: "text", text: JSON.stringify(payload.structuredContent) }]);
   });
 
-  test("the MCP host session cannot be overridden for targeted pull or acknowledgement", async () => {
+  test("SDK-native tool errors reject invalid input and session identity overrides", async () => {
     const hook = new HookClient();
-    const d = { ...deps(hook), sessionId: () => "host-session" };
-    for (const [name, arguments_] of [
-      ["glosa_inbox_pull", { session_id: "other-session" }],
-      ["glosa_conversation_ack", { message_id: "m-1", session_id: "other-session" }],
-    ] as const) {
-      const reply = await handleMcpRequest(
-        { jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: arguments_ } },
-        d,
-      );
-      expect(reply.response?.error).toMatchObject({ code: -32602 });
+    const connected = await connect({ ...deps(hook), sessionId: () => "host-session" });
+    try {
+      const invalid = await callTool(connected.client, { name: "glosa_inbox_get", arguments: {} });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.content).toEqual([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("Input validation error") }),
+      ]);
+      const unknown = await callTool(connected.client, { name: "glosa_unknown", arguments: {} });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content).toEqual([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("not found") }),
+      ]);
+
+      for (const [name, args] of [
+        ["glosa_inbox_pull", { session_id: "other-session" }],
+        ["glosa_conversation_ack", { message_id: "m-1", session_id: "other-session" }],
+      ] as const) {
+        const result = await callTool(connected.client, { name, arguments: args });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          expect.objectContaining({ type: "text", text: "session_id does not match the MCP host session" }),
+        ]);
+      }
+      expect(hook.heartbeats).toEqual([]);
+    } finally {
+      await connected.close();
     }
-    expect(hook.heartbeats).toEqual([]);
   });
 
-  test("metadata and session tools call the same API client contract as the CLI", async () => {
+  test("SDK validates structured output against the registered Zod schema", async () => {
+    const hook = new HookClient();
+    const api: Partial<GlosaApiClient> = {
+      getMetadata: async () => ({ version: 2, id: "invalid", artifacts: [] }) as never,
+    };
+    const connected = await connect(deps(hook, api));
+    try {
+      const result = await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("Output validation error") }),
+      ]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("conversation acknowledgement uses the exact MCP host session", async () => {
+    const hook = new HookClient();
+    const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
+    try {
+      const result = await callTool(connected.client, {
+        name: "glosa_conversation_ack",
+        arguments: { message_id: "m-1" },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(structured(result)).toEqual({ message_id: "m-1", delivered: true });
+      expect(hook.conversationAcks).toEqual([["claude-session-1", "m-1", "presented"]]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("metadata and session tools retain CLI/API parity", async () => {
     const calls: unknown[] = [];
     const api: Partial<GlosaApiClient> = {
       setMetadata: async (workspace, metadata) => {
@@ -292,45 +376,85 @@ describe("MCP 2025-11-25 tool contract", () => {
       },
     };
     const hook = new HookClient();
-    const d = deps(hook, api);
-    const metadata = { version: 1, id: "fixture", artifacts: [] };
-    for (const [name, arguments_] of [
-      ["glosa_metadata_set", { workspace: "/w", metadata }],
-      ["glosa_metadata_show", { workspace: "/w" }],
-      ["glosa_metadata_clear", { workspace: "/w" }],
-      ["glosa_session_bind", { workspace: "/w", session_id: "s1" }],
-    ] as const) {
-      const reply = await handleMcpRequest({ jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: arguments_ } }, d);
-      expect(reply.response?.error).toBeUndefined();
-      const payload = toolResultPayload(reply);
-      const tool = GLOSA_MCP_TOOLS.find((entry) => entry.name === name)!;
-      assertOutputConforms(tool, payload.structuredContent);
-      expect(payload.content).toEqual([{ type: "text", text: JSON.stringify(payload.structuredContent) }]);
+    const connected = await connect(deps(hook, api));
+    try {
+      for (const [name, args] of [
+        ["glosa_metadata_set", { workspace: "/w", metadata: { version: 1, id: "fixture", artifacts: [] } }],
+        ["glosa_metadata_show", { workspace: "/w" }],
+        ["glosa_metadata_clear", { workspace: "/w" }],
+        ["glosa_session_bind", { workspace: "/w", session_id: "s1" }],
+      ] as const) {
+        const result = await callTool(connected.client, { name, arguments: args });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toBeDefined();
+        expect(result.content).toEqual([{ type: "text", text: JSON.stringify(result.structuredContent) }]);
+      }
+      expect(calls).toEqual([
+        ["set", "/w", { version: 1, id: "fixture", artifacts: [] }],
+        ["show", "/w"],
+        ["clear", "/w"],
+        ["bind", "/w", "s1"],
+      ]);
+      expect(hook.heartbeats).toEqual(["s1"]);
+    } finally {
+      await connected.close();
     }
-    expect(calls).toEqual([
-      ["set", "/w", metadata],
-      ["show", "/w"],
-      ["clear", "/w"],
-      ["bind", "/w", "s1"],
-    ]);
-    expect(hook.heartbeats).toEqual(["s1"]);
   });
 
-  test("pull returns actionable content plus JSON text and a post-write acknowledgement reservation", async () => {
+  test("pull keeps actionable text and acknowledges only after the SDK transport write", async () => {
     const hook = new HookClient();
-    const reply = await handleMcpRequest(
-      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "glosa_inbox_pull", arguments: {} } },
-      deps(hook),
-    );
-    expect(hook.registered).toMatchObject({ provider: "mcp", cwd: "/workspace", source: "mcp_pull" });
-    const payload = toolResultPayload(reply);
-    expect(payload.content[0]?.text).toContain("Act on this.");
-    expect(payload.content[1]?.text).toBe(JSON.stringify(payload.structuredContent));
-    assertOutputConforms(GLOSA_MCP_TOOLS.find((tool) => tool.name === "glosa_inbox_pull")!, payload.structuredContent);
-    expect(reply.ack).toMatchObject({ deliveryId: "delivery-1" });
+    const events: string[] = [];
+    hook.acknowledge = async (sessionId, deliveryId, outcome, error) => {
+      events.push(outcome);
+      hook.deliveryAcks.push([sessionId, deliveryId, outcome, error]);
+    };
+    const connected = await connect(deps(hook));
+    const send = connected.serverTransport.send.bind(connected.serverTransport);
+    connected.serverTransport.send = async (message, options) => {
+      await send(message, options);
+      if ("result" in message && typeof message.result === "object" && message.result && "content" in message.result) {
+        events.push("write");
+      }
+    };
+    try {
+      const result = await callTool(connected.client, { name: "glosa_inbox_pull", arguments: {} });
+      await waitFor(() => hook.deliveryAcks.length === 1, "post-write delivery acknowledgement");
+      expect(result.content[0]).toEqual(
+        expect.objectContaining({ type: "text", text: expect.stringContaining("Act on this.") }),
+      );
+      expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
+      expect(hook.registered).toMatchObject({ provider: "mcp", cwd: "/workspace", source: "mcp_pull" });
+      expect(events).toEqual(["write", "presented"]);
+      expect(hook.deliveryAcks[0]?.slice(1, 3)).toEqual(["delivery-1", "presented"]);
+      if (!hook.registered) throw new Error("expected temporary MCP registration");
+      expect(hook.deregistered).toEqual([hook.registered.session_id]);
+    } finally {
+      await connected.close();
+    }
   });
 
-  test("get retrieves a durable entry directly even after delivery has been presented", async () => {
+  test("transport write failure records failed and cleans up the temporary MCP session", async () => {
+    const hook = new HookClient();
+    const connected = await connect(deps(hook));
+    const send = connected.serverTransport.send.bind(connected.serverTransport);
+    connected.serverTransport.send = async (message, options) => {
+      if ("result" in message && typeof message.result === "object" && message.result && "content" in message.result) {
+        throw new Error("stdout unavailable");
+      }
+      await send(message, options);
+    };
+    try {
+      void callTool(connected.client, { name: "glosa_inbox_pull", arguments: {} }).catch(() => {});
+      await waitFor(() => hook.deliveryAcks.some((ack) => ack[2] === "failed"), "failed delivery acknowledgement");
+      expect(hook.deliveryAcks[0]?.slice(1)).toEqual(["delivery-1", "failed", "stdout unavailable"]);
+      if (!hook.registered) throw new Error("expected temporary MCP registration");
+      expect(hook.deregistered).toEqual([hook.registered.session_id]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("get retrieves the durable entry directly without registering or draining", async () => {
     const hook = new HookClient();
     hook.drained = { delivery_id: null, count: 0, drained: [] };
     const calls: unknown[] = [];
@@ -340,22 +464,136 @@ describe("MCP 2025-11-25 tool contract", () => {
         return { presentation: presentation("inb-2", "human_edit", "page opaque") };
       },
     };
-    const reply = await handleMcpRequest(
-      {
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: { name: "glosa_inbox_get", arguments: { id: "inb-2", cursor: "opaque" } },
-      },
-      deps(hook, api),
+    const connected = await connect(deps(hook, api));
+    try {
+      const result = await callTool(connected.client, {
+        name: "glosa_inbox_get",
+        arguments: { id: "inb-2", cursor: "opaque" },
+      });
+      expect(result.content[0]).toEqual({ type: "text", text: "page opaque" });
+      expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
+      expect(calls).toEqual([["/workspace", "inb-2", "opaque"]]);
+      expect(hook.registered).toBeNull();
+      expect(hook.drainOptions).toBeUndefined();
+      expect(hook.deliveryAcks).toEqual([]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("initialized SDK connection sends Claude channel notifications and records transport acceptance", async () => {
+    const channelNotificationSchema = z.object({
+      method: z.literal("notifications/claude/channel"),
+      params: z.object({
+        content: z.string(),
+        meta: z.object({ message_id: z.string() }),
+      }),
+    });
+    type ChannelNotification = z.infer<typeof channelNotificationSchema>;
+    const hook = new HookClient();
+    hook.push = async (_sessionId, onEntry, signal) => {
+      await onEntry({
+        id: "message-1",
+        kind: "conversation_message",
+        status: "pending",
+        text: "bounded",
+        bytes: 7,
+        message: "Exact composer text",
+        message_bytes: 19,
+        target_session_id: "claude-session-1",
+        provider: "claude-code",
+        detail: {},
+        truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+        retrieval: { command: "glosa inbox get message-1", mcp_tool: "glosa_inbox_get" },
+      });
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    };
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const runtime = createMcpServer({ ...deps(hook), sessionId: () => "claude-session-1" });
+    await runtime.connect(serverTransport);
+    const client = new Client<Request, ChannelNotification, Result>(
+      { name: "channel-test", version: "1" },
+      { capabilities: {} },
     );
-    const payload = toolResultPayload(reply);
-    expect(payload.content[0]?.text).toBe("page opaque");
-    expect(payload.content[1]?.text).toBe(JSON.stringify(payload.structuredContent));
-    assertOutputConforms(GLOSA_MCP_TOOLS.find((tool) => tool.name === "glosa_inbox_get")!, payload.structuredContent);
-    expect(calls).toEqual([["/workspace", "inb-2", "opaque"]]);
-    expect(hook.registered).toBeNull();
-    expect(hook.drainOptions).toBeUndefined();
-    expect(reply.ack).toBeUndefined();
+    const notifications: ChannelNotification[] = [];
+    client.setNotificationHandler(channelNotificationSchema, (notification) => {
+      notifications.push(notification);
+    });
+    await client.connect(clientTransport);
+    try {
+      await waitFor(
+        () => notifications.length === 1 && hook.conversationAcks.length === 1,
+        "Claude channel notification acknowledgement",
+      );
+      expect(notifications[0]).toEqual({
+        method: "notifications/claude/channel",
+        params: { content: "Exact composer text", meta: { message_id: "message-1" } },
+      });
+      expect(hook.conversationAcks).toEqual([["claude-session-1", "message-1", "transport_accepted"]]);
+    } finally {
+      await client.close();
+      await runtime.close();
+    }
+  });
+
+  test("stdio write failure records failed before the temporary session is cleaned up", async () => {
+    const hook = new HookClient();
+    const input = new PassThrough();
+    let resolveInitializeWrite = () => {};
+    const initializeWritten = new Promise<void>((resolve) => {
+      resolveInitializeWrite = resolve;
+    });
+    let writes = 0;
+    const output = new Writable({
+      write(_chunk, _encoding, callback) {
+        writes++;
+        if (writes === 1) {
+          callback();
+          resolveInitializeWrite();
+        } else {
+          callback(new Error("broken stdout"));
+        }
+      },
+    });
+
+    const running = runMcpServer(deps(hook), { stdin: input, stdout: output });
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: LATEST_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "stdio-test", version: "1" },
+        },
+      })}\n`,
+    );
+    await initializeWritten;
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "glosa_inbox_pull", arguments: {} },
+      })}\n`,
+    );
+
+    await waitFor(() => hook.deliveryAcks.some((ack) => ack[2] === "failed"), "stdio write failure");
+    input.end();
+    await running;
+    expect(hook.deliveryAcks[0]?.slice(1)).toEqual(["delivery-1", "failed", "broken stdout"]);
+    if (!hook.registered) throw new Error("expected temporary MCP registration");
+    expect(hook.deregistered).toEqual([hook.registered.session_id]);
+  });
+
+  test("stdio server exits cleanly when its input reaches EOF", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    input.end();
+    await expect(running).resolves.toBeUndefined();
   });
 });
