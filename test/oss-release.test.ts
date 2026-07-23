@@ -60,13 +60,13 @@ describe("OSS release metadata", () => {
     const candidates = [
       ...walk(join(root, "packages")),
       ...walk(join(root, "test")),
-      join(root, ".githooks/pre-commit"),
+      join(root, "lefthook.yml"),
       ...walk(join(root, "scripts")),
     ].filter((path) => {
       const rel = relative(root, path);
       if (rel.includes("/vendor/")) return false;
-      if (!/(^packages\/.*\/(src|test)\/|^test\/|^scripts\/|^\.githooks\/pre-commit$)/.test(rel)) return false;
-      return /\.(ts|js|css|html)$/.test(path) || rel === ".githooks/pre-commit";
+      if (!/(^packages\/.*\/(src|test)\/|^test\/|^scripts\/|^lefthook\.yml$)/.test(rel)) return false;
+      return /\.(ts|js|css|html)$/.test(path) || rel === "lefthook.yml";
     });
 
     for (const path of candidates) {

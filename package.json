@@ -52,15 +52,22 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "setup:hooks": "git config core.hooksPath .githooks",
+    "lint": "biome lint --changed --since origin/main --no-errors-on-unmatched",
+    "lint:staged": "biome lint --staged --no-errors-on-unmatched",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "bun run lint && bun run typecheck && bun test",
+    "setup:hooks": "lefthook install --reset-hooks-path",
     "audit:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow '0BSD;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;MIT;Python-2.0'",
     "package:check": "bun run scripts/package-smoke.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.5",
     "@types/bun": "latest",
     "@types/markdown-it": "^14.1.2",
     "@types/picomatch": "^4.0.3",
     "happy-dom": "^20.11.0",
+    "lefthook": "^2.1.10",
     "license-checker-rseidelsohn": "5.0.1",
     "typescript": "^7.0.2"
   },
