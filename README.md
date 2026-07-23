@@ -58,8 +58,12 @@ open at once, and feedback waits durably when no matching agent session is live.
 Install the alpha CLI globally:
 
 ```sh
-bun add --global @davebream/glosa@alpha
+bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/
 ```
+
+The explicit registry keeps a scope-level `.npmrc` mapping for `@davebream` from redirecting this
+public package to another registry. Do not use the `davebream/glosa` GitHub shorthand: it installs
+the repository's moving default branch rather than the published alpha.
 
 Set up the agent integration once in a writing workspace, then open it:
 

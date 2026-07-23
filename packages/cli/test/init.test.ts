@@ -478,6 +478,9 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("durable-install-required");
+    expect(result.error?.hint).toBe(
+      "install with `bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/`, then re-run `glosa init`",
+    );
     expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
   });
 });
