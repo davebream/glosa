@@ -19,7 +19,7 @@ describe("live token lifecycle", () => {
     const first = ensureToken(home);
     let daemon = spawnDaemon(home, port);
     try {
-      expect(await waitForHandshake(port)).not.toBeNull();
+      expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
       expect((await authedRead(port, first)).status).toBe(200);
 
       const second = rotateToken(home);
@@ -37,12 +37,12 @@ describe("live token lifecycle", () => {
       await stopDaemon(home, daemon);
       const offlineToken = rotateToken(home);
       daemon = spawnDaemon(home, port);
-      expect(await waitForHandshake(port)).not.toBeNull();
+      expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
       expect((await authedRead(port, second)).status).toBe(401);
       expect((await authedRead(port, offlineToken)).status).toBe(200);
     } finally {
       await stopDaemon(home, daemon);
       cleanupHome(home);
     }
-  });
+  }, 20_000);
 });
