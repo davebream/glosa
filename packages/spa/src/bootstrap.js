@@ -61,6 +61,33 @@ export function readFocus(loc) {
 }
 
 /**
+ * The inverse of `readFocus`: the `#w=<slug>&a=<artifact>` fragment for a given focus, or `""`
+ * when both are absent (workspace-only or nothing selected). Rebuilt from scratch on every call,
+ * so it can carry ONLY `w`/`a` — never `t=`. That is the load-bearing guard: live-reflecting focus
+ * into the address bar (see `writeFocus`) can't re-expose the pairing token that `scrubToken`
+ * deliberately stripped (A3 §3/F24). Kept in the fragment, never the query string, so focus stays
+ * off the wire and out of the daemon's request path (A1 §2).
+ */
+export function focusHash({ slug, artifact } = {}) {
+  const params = new URLSearchParams();
+  if (slug) params.set("w", slug);
+  if (artifact) params.set("a", artifact);
+  const query = params.toString();
+  return query ? `#${query}` : "";
+}
+
+/**
+ * Reflect the on-screen focus into the address bar via `history.replaceState` — no new history
+ * entry per artifact, so reload/refresh restores the view and the URL stays shareable. Rebuilds
+ * `pathname + search + focusHash(...)` from scratch (same shape `scrubToken` leaves behind), which
+ * is why the token can never reappear. Takes `loc`/`history` as params for the same
+ * test-without-a-browser reason as `scrubToken`.
+ */
+export function writeFocus(loc, history, focus) {
+  history.replaceState(null, "", loc.pathname + loc.search + focusHash(focus));
+}
+
+/**
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
  * or null if the fetch failed/threw. `token` is whatever `scrubToken` returned.
  */
@@ -112,6 +139,7 @@ async function main() {
       initialSlug: focus.slug ?? undefined,
       initialArtifact: focus.artifact ?? undefined,
       appearance,
+      onFocusChange: (next) => writeFocus(window.location, window.history, next),
     });
   }
 }

@@ -98,7 +98,7 @@ function splitPath(path) {
  * bootstrap.js doesn't call it today (the SPA never remounts within one page load), but a test
  * does, so a leaked stream connection never outlives one test case.
  */
-export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, initialArtifact, appearance } = {}) {
+export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, initialArtifact, appearance, onFocusChange } = {}) {
   root.textContent = "";
   root.classList.add("glosa-app");
   root.setAttribute("data-mode", "preview");
@@ -1227,6 +1227,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       loading = false;
       currentArtifact = null;
       artifactNavigator.setCurrent(null, { reveal: false });
+      onFocusChange?.({ slug: currentSlug, artifact: null }); // URL reflects on-screen state: no open file
       setEmpty(
         "This artifact couldn't be opened.",
         el("p", { className: "glosa-empty-hint", textContent: err?.message ?? "Try again, or pick another artifact." }),
@@ -1240,6 +1241,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     setNavOpen(false); // compact: picking an artifact closes the drawer and returns to reading
     contentEl.removeAttribute("data-path");
     artifactNavigator.setCurrent(path);
+    onFocusChange?.({ slug: currentSlug, artifact: path }); // reflect the opened file into the URL
     renderModeBar();
     renderContent();
     renderHistory(); // the open pane, if any, should reflect the newly opened artifact
@@ -1306,6 +1308,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     currentSlug = slug;
     attentionTray.setWorkspace(slug);
     currentArtifact = null;
+    onFocusChange?.({ slug, artifact: null }); // a deep-linked artifact re-reflects below via openArtifact
     artifactNavigator.setWorkspace(slug);
     composer = null;
     emptyEl.textContent = ""; // drop any stale per-artifact error so the default teaching state returns
@@ -1356,6 +1359,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         ]),
       );
     }
+    // MCP/CLI single-workspace mode: a "list of one" is noise — you're already scoped, and a lone
+    // workspace auto-selects below. The switcher only earns its space once a SECOND workspace is
+    // live (the machine-wide singleton daemon can serve several at once). Buttons stay in the DOM
+    // for markCurrent + the compact-drawer focus fallback; only the switcher chrome is hidden.
+    sidebarList.hidden = workspaces.length <= 1;
     if (workspaces.length === 0) {
       setEmpty(
         "No workspaces yet.",
