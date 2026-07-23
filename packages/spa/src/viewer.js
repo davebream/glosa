@@ -13,14 +13,30 @@
 import { createDataAccess } from "./data-access.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
-import { mountHistoryPane } from "./history.js";
 import { mountClassFViewer } from "./classf-viewer.js";
-import { mountConversationPane } from "./conversation.js";
-import { mountRichEditor } from "./rich-editor.js";
 import { confirmDialog } from "./dialog.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { mountAttentionTray } from "./attention-tray.js";
+
+let historyPaneLoader;
+let conversationPaneLoader;
+let richEditorLoader;
+
+function loadHistoryPane() {
+  historyPaneLoader ??= import("./history.js").then((module) => module.mountHistoryPane);
+  return historyPaneLoader;
+}
+
+function loadConversationPane() {
+  conversationPaneLoader ??= import("./conversation.js").then((module) => module.mountConversationPane);
+  return conversationPaneLoader;
+}
+
+function loadRichEditor() {
+  richEditorLoader ??= import("./rich-editor.js").then((module) => module.mountRichEditor);
+  return richEditorLoader;
+}
 
 export const MODES = ["preview", "annotate", "edit"];
 
@@ -359,6 +375,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   let loading = false;
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per session
   let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
+  let richMountRequest = 0;
+  let richEditorLoading = false;
   const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
   let composer = null; // {record} while the annotation composer is open
   let annotatableFocusIndex = 0;
@@ -458,8 +476,18 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   /** Mounts the rich face over `markdown`. A DOM that can't host a ProseMirror view (or any
    * other mount failure) falls back to the source textarea rather than a broken editor. */
-  function mountRichFace(markdown) {
+  async function mountRichFace(markdown) {
+    if (richEditorLoading) return;
+    richEditorLoading = true;
+    const request = ++richMountRequest;
     try {
+      const mountRichEditor = await loadRichEditor();
+      if (
+        request !== richMountRequest
+        || sourceFace
+        || modeState.mode !== "edit"
+        || !currentArtifact
+      ) return;
       richEditor = mountRichEditor(richEl, {
         markdown,
         onDirty: () => {
@@ -468,13 +496,20 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
           editStatus.removeAttribute("data-error");
         },
       });
+      renderContent();
     } catch {
+      if (request !== richMountRequest) return;
       richEditor = null;
       sourceFace = true;
+      renderContent();
+    } finally {
+      if (request === richMountRequest) richEditorLoading = false;
     }
   }
 
   function teardownRichFace() {
+    richMountRequest += 1;
+    richEditorLoading = false;
     richEditor?.destroy();
     richEditor = null;
   }
@@ -510,7 +545,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     root.setAttribute("data-mode", modeState.mode);
     const isClassF = currentArtifact?.class === "F";
     const isEdit = modeState.mode === "edit" && !isClassF;
-    if (isEdit && !sourceFace && !richEditor) mountRichFace(currentArtifact?.content ?? "");
+    if (isEdit && !sourceFace && !richEditor) void mountRichFace(currentArtifact?.content ?? "");
     if (!isEdit) teardownRichFace();
     const richShown = isEdit && !sourceFace && Boolean(richEditor);
     richEl.hidden = !richShown;
@@ -1106,8 +1141,8 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     const carried = editArea.value;
     sourceFace = false;
     teardownRichFace();
-    mountRichFace(carried);
-    renderContent();
+    renderFaceToggle();
+    void mountRichFace(carried);
   });
 
   saveButton.addEventListener("click", async () => {
@@ -1238,9 +1273,18 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
 
   let historyVisible = false;
 
-  function renderHistory() {
+  async function renderHistory() {
     if (!historyVisible || !currentSlug) return;
-    mountHistoryPane(historyEl, { dataAccess, slug: currentSlug, path: currentArtifact?.source_path });
+    const slug = currentSlug;
+    try {
+      const mountHistoryPane = await loadHistoryPane();
+      if (!historyVisible || currentSlug !== slug) return;
+      mountHistoryPane(historyEl, { dataAccess, slug, path: currentArtifact?.source_path });
+    } catch {
+      if (!historyVisible || currentSlug !== slug) return;
+      historyEl.setAttribute("role", "alert");
+      historyEl.textContent = "History couldn't be loaded. Close this panel and try again.";
+    }
   }
 
   historyToggle.addEventListener("click", () => {
@@ -1249,7 +1293,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     historyVisible = nextVisible;
     historyEl.hidden = !historyVisible;
     historyToggle.setAttribute("aria-expanded", String(historyVisible));
-    renderHistory();
+    void renderHistory();
   });
 
   // P4.2 — workspace-scoped (not artifact-scoped, unlike history): re-mounted on open and on every
@@ -1261,21 +1305,30 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     conversationVisible = visible;
     conversationEl.hidden = !conversationVisible;
     conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
-    renderConversation();
+    void renderConversation();
   }
 
-  function renderConversation() {
+  async function renderConversation() {
     stopConversation?.();
     stopConversation = null;
     if (!conversationVisible || !currentSlug) return;
-    stopConversation = mountConversationPane(conversationEl, {
-      dataAccess,
-      slug: currentSlug,
-      onClose: () => {
-        setConversationVisible(false);
-        conversationToggle.focus({ preventScroll: true });
-      },
-    });
+    const slug = currentSlug;
+    try {
+      const mountConversationPane = await loadConversationPane();
+      if (!conversationVisible || currentSlug !== slug) return;
+      stopConversation = mountConversationPane(conversationEl, {
+        dataAccess,
+        slug,
+        onClose: () => {
+          setConversationVisible(false);
+          conversationToggle.focus({ preventScroll: true });
+        },
+      });
+    } catch {
+      if (!conversationVisible || currentSlug !== slug) return;
+      conversationEl.setAttribute("role", "alert");
+      conversationEl.textContent = "Conversation couldn't be loaded. Close this panel and use the terminal.";
+    }
   }
 
   conversationToggle.addEventListener("click", () => {
@@ -1322,7 +1375,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     onFocusChange?.({ slug: currentSlug, artifact: path }); // reflect the opened file into the URL
     renderModeBar();
     renderContent();
-    renderHistory(); // the open pane, if any, should reflect the newly opened artifact
+    void renderHistory(); // the open pane, if any, should reflect the newly opened artifact
     if (returnToReading) queueMicrotask(focusPreview);
   }
 
@@ -1398,7 +1451,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     renderModeBar();
     renderContent();
     startStream();
-    renderConversation(); // the open pane, if any, should follow the newly selected workspace
+    void renderConversation(); // the open pane, if any, should follow the newly selected workspace
     // CLI deep-link (`glosa open <file>`): the first workspace selection focuses the named
     // artifact, once — after that, navigation is the user's.
     if (initialArtifact) {

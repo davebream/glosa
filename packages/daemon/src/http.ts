@@ -256,7 +256,7 @@ function serveShell(): Response {
 
 /** `GET /app/<file>` — the SPA's static ES modules (P1.4). `name` is checked against the fixed
  * allowlist, not just sanitized, so a request can never read anything else under SPA_SRC_DIR. */
-function serveSpaAsset(pathname: string): Response {
+function serveSpaAsset(req: Request, pathname: string): Response {
   const name = pathname.slice("/app/".length);
   // Object.hasOwn, not a bare `SPA_ASSETS[name]` lookup: a prototype key like `__proto__` or
   // `constructor` would otherwise resolve to a truthy inherited value, slip past the `undefined`
@@ -266,7 +266,16 @@ function serveSpaAsset(pathname: string): Response {
     return problem(404, "not-found", "no such static asset", undefined, pathname);
   }
   const body = readFileSync(join(SPA_SRC_DIR, name), "utf8");
-  return new Response(body, { headers: { "Content-Type": contentType } });
+  const etag = `"${sourceSha256(Buffer.from(body, "utf8"))}"`;
+  const headers = {
+    "Content-Type": contentType,
+    "Cache-Control": "private, no-cache",
+    ETag: etag,
+  };
+  if (req.headers.get("If-None-Match") === etag) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(body, { headers });
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1934,7 +1943,8 @@ function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: strin
   });
 }
 
-function matchApiRoute(ctx: ApiContext, method: string, pathname: string): RouteMatch | null {
+function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
+  const method = req.method;
   if (method === "GET" && pathname === "/api/handshake") {
     return { routeClass: "tokenless-handshake", handle: handleHandshake(ctx) };
   }
@@ -1942,7 +1952,7 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
     return { routeClass: "navigation", handle: () => serveShell() };
   }
   if (method === "GET" && pathname.startsWith("/app/")) {
-    return { routeClass: "navigation", handle: () => serveSpaAsset(pathname) };
+    return { routeClass: "navigation", handle: () => serveSpaAsset(req, pathname) };
   }
   if (method === "GET" && pathname === "/api/workspaces") {
     return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
@@ -2151,7 +2161,7 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
       // exists (A3 §4 Rule 1). Literal mismatch → 400, closed, no body — never 403.
       if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
 
-      const route = matchApiRoute(ctx, req.method, url.pathname);
+      const route = matchApiRoute(ctx, req, url.pathname);
       if (!route) {
         // A foreign Origin is rejected even on a route that doesn't exist (A1 §1 "Origin
         // allowlisted first, regardless of route") — otherwise 403-on-real-route vs
