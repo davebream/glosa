@@ -8,6 +8,7 @@ import type {
   EntryStatus,
   GlosaApiClient,
   InboxPresentationResult,
+  OpenWorkspaceResult,
   ResolveOutcome,
   ResolveResult,
   StatusSummary,
@@ -17,7 +18,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   readonly port = 4646;
   calls: { method: string; args: unknown[] }[] = [];
 
-  openWorkspaceResult: { slug: string; path: string; focus?: string } = { slug: "ws-slug", path: "/tmp/ws" };
+  openWorkspaceResult: OpenWorkspaceResult = { slug: "ws-slug", path: "/tmp/ws" };
   resolveEntryImpl:
     | ((path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string) => Promise<ResolveResult>)
     | null = null;
@@ -25,6 +26,12 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
   inboxPresentationResult: InboxPresentationResult | null = null;
+  bindSessionResult: { bound: true; session_id: string } | null = null;
+  bindSessionError: Error | null = null;
+  mintPresentationTokenResult: { token: string; expires_in_s: number } = {
+    token: "present-token-abc",
+    expires_in_s: 60,
+  };
   statusResult: StatusSummary = {
     daemon: {
       instance_id: "gl-fake",
@@ -40,8 +47,8 @@ export class FakeGlosaApiClient implements GlosaApiClient {
 
   async openWorkspace(
     path: string,
-    opts?: { externalState?: boolean },
-  ): Promise<{ slug: string; path: string; focus?: string }> {
+    opts?: { externalState?: boolean; focus?: string },
+  ): Promise<OpenWorkspaceResult> {
     this.calls.push({ method: "openWorkspace", args: opts === undefined ? [path] : [path, opts] });
     return this.openWorkspaceResult;
   }
@@ -86,6 +93,17 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   async getStatus(): Promise<StatusSummary> {
     this.calls.push({ method: "getStatus", args: [] });
     return this.statusResult;
+  }
+
+  async bindSession(path: string, sessionId: string): Promise<{ bound: true; session_id: string }> {
+    this.calls.push({ method: "bindSession", args: [path, sessionId] });
+    if (this.bindSessionError) throw this.bindSessionError;
+    return this.bindSessionResult ?? { bound: true, session_id: sessionId };
+  }
+
+  async mintPresentationToken(): Promise<{ token: string; expires_in_s: number }> {
+    this.calls.push({ method: "mintPresentationToken", args: [] });
+    return this.mintPresentationTokenResult;
   }
 }
 

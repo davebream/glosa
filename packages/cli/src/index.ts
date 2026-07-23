@@ -197,11 +197,32 @@ function createSubCommands(setExitCode: (code: number) => void) {
   const open = lazyHandler(
     {
       name: "open",
-      description: "Open a workspace in glosa",
+      description: "Open a workspace or document in glosa",
       args: {
         ...GLOBAL_ARGS,
-        dir: { type: "positional", required: false, description: "Workspace directory or file" },
+        target: { type: "positional", required: false, description: "Workspace directory or file" },
+        focus: {
+          type: "positional",
+          required: false,
+          description: "Artifact to focus inside a workspace directory",
+        },
         url: { type: "boolean", description: "Print the ready URL without opening a browser" },
+        preview: {
+          type: "boolean",
+          description: "Open locked in Preview mode (hides Annotate/Edit affordances)",
+        },
+        bind: {
+          type: "string",
+          description: "Bind a live agent session after registration (nonfatal on failure)",
+        },
+        document: {
+          type: "boolean",
+          description: "Force document surface (single-file UX, no navigator)",
+        },
+        workspace: {
+          type: "boolean",
+          description: "Force workspace surface (sidebar / multi-file chrome)",
+        },
         "external-state": {
           type: "boolean",
           description: "Store directory state under GLOSA_HOME instead of beside it",
@@ -215,10 +236,24 @@ function createSubCommands(setExitCode: (code: number) => void) {
         import("./open.ts"),
       ]);
       const urlOnly = Boolean(values.url);
+      const document = Boolean(values.document);
+      const workspace = Boolean(values.workspace);
+      if (document && workspace) {
+        process.stderr.write("glosa open: --document and --workspace are mutually exclusive\n");
+        setExitCode(2);
+        return;
+      }
       const result = await openModule.runOpen(
-        (values.dir as string | undefined) ?? process.cwd(),
+        (values.target as string | undefined) ?? process.cwd(),
         openModule.realOpenDeps(createHttpGlosaClient),
-        { launchBrowser: !urlOnly, externalState: Boolean(values["external-state"]) },
+        {
+          launchBrowser: !urlOnly,
+          externalState: Boolean(values["external-state"]),
+          previewLock: Boolean(values.preview),
+          bindSessionId: typeof values.bind === "string" ? values.bind : undefined,
+          focus: values.focus as string | undefined,
+          surface: document ? "document" : workspace ? "workspace" : "auto",
+        },
       );
       openModule.printOpenResult(result, Boolean(values.json), Boolean(values.quiet) || urlOnly);
       setExitCode(result.exitCode);

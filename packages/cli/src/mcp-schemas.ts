@@ -184,3 +184,40 @@ export const conversationAckOutputSchema = z
     delivered: z.literal(true).describe("Always true on success."),
   })
   .strict();
+
+const absoluteFilePath = z
+  .string()
+  .min(1)
+  .refine((value) => value.startsWith("/"), { message: "path must be absolute" })
+  .describe("Absolute path to an existing regular file to present.");
+
+export const presentInputSchema = z
+  .object({
+    path: absoluteFilePath,
+    mode: z
+      .enum(["preview", "annotate", "edit"])
+      .describe(
+        "Initial presentation mode. preview creates a preview-locked visit; annotate and edit select an unlocked initial mode.",
+      ),
+    session_id: sessionId
+      .optional()
+      .describe("Session to bind when the MCP host does not provide one; ignored when the host session is available."),
+  })
+  .strict();
+
+export const presentOutputSchema = z
+  .object({
+    url: z.string().min(1).describe("Ready SPA URL with a short-TTL presentation token (p=), never the durable pairing token."),
+    slug: z.string().min(1),
+    path: z.string().min(1).describe("Workspace work-tree path."),
+    focus: z.string().min(1).optional().describe("Workspace-relative artifact path when known."),
+    surface: z.enum(["document", "workspace"]),
+    mode: z.enum(["preview", "annotate", "edit"]),
+    preview: z.boolean().describe("True when the visit is preview-locked."),
+    bound_session: z.string().min(1).optional().describe("Session id when binding succeeded."),
+    state_dir: z.string().min(1).optional().describe("Redirected state directory when applicable."),
+    warnings: z
+      .array(z.object({ code: z.string(), message: z.string() }).strict())
+      .describe("Nonfatal warnings such as bind-failed or preview-bind-conflict."),
+  })
+  .strict();

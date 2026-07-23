@@ -458,8 +458,13 @@ export class WorkspaceIndex {
 
   /** Resolves a raw `glosa open` target under the same global-index mutex that persists any new
    * registration. This closes the alias race: two concurrent hardlink opens cannot both observe
-   * "no owner" and create divergent buses. */
-  resolveOpenTarget(rawPath: string, opts: { externalState?: boolean } = {}): Promise<WorkspaceOpenResult> {
+   * "no owner" and create divergent buses. `opts.focus` is an absolute or worktree-relative
+   * artifact path for two-arg `glosa open <dir> <file>` — validated via confinement + tracked
+   * membership after the directory registration is established. */
+  resolveOpenTarget(
+    rawPath: string,
+    opts: { externalState?: boolean; focus?: string } = {},
+  ): Promise<WorkspaceOpenResult> {
     return this.mutex.runExclusive(() => {
       let leafStat: ReturnType<typeof lstatSync>;
       try {
@@ -485,33 +490,45 @@ export class WorkspaceIndex {
         const existing = Object.values(index.workspaces).find(
           (entry) => entry.kind === "directory" && entry.canonical_path === canonical,
         );
+        let entry: WorkspaceEntry;
         if (existing) {
           existing.last_seen = now;
           existing.present = true;
           delete existing.absent_since;
           index.updated_at = now;
           this.persist(index);
-          return { entry: existing };
+          entry = existing;
+        } else {
+          const id = registrationId("directory", canonical);
+          const localBus = join(canonical, ".glosa");
+          let busPath = localBus;
+          if (opts.externalState && !existsSync(localBus)) {
+            busPath = redirectedBusPath(this.home, id);
+          } else if (!existsSync(localBus) && !this.canCreateLocalBus(canonical)) {
+            busPath = redirectedBusPath(this.home, id);
+          }
+          entry = this.createEntry(index, {
+            registration_id: id,
+            kind: "directory",
+            canonical_path: canonical,
+            worktree_path: canonical,
+            bus_path: busPath,
+            tracking: { mode: "matcher" },
+            source: "glosa-open",
+          });
         }
 
-        const id = registrationId("directory", canonical);
-        const localBus = join(canonical, ".glosa");
-        let busPath = localBus;
-        if (opts.externalState && !existsSync(localBus)) {
-          busPath = redirectedBusPath(this.home, id);
-        } else if (!existsSync(localBus) && !this.canCreateLocalBus(canonical)) {
-          busPath = redirectedBusPath(this.home, id);
+        if (opts.focus) {
+          return { entry, focus: this.resolveFocusInEntry(entry, opts.focus) };
         }
-        const entry = this.createEntry(index, {
-          registration_id: id,
-          kind: "directory",
-          canonical_path: canonical,
-          worktree_path: canonical,
-          bus_path: busPath,
-          tracking: { mode: "matcher" },
-          source: "glosa-open",
-        });
         return { entry };
+      }
+
+      if (opts.focus) {
+        throw new WorkspaceOpenError(
+          "invalid-path",
+          "focus is only valid when the open target is a directory",
+        );
       }
 
       if (!leafStat.isFile()) {
@@ -573,6 +590,45 @@ export class WorkspaceIndex {
       });
       return { entry, focus };
     });
+  }
+
+  /** Resolve an absolute or worktree-relative focus path against a directory registration:
+   * must be an existing regular non-symlink file, confined under the worktree, and present in
+   * the tracked-artifact list. */
+  private resolveFocusInEntry(entry: WorkspaceEntry, rawFocus: string): string {
+    const candidate = isAbsolute(rawFocus) ? rawFocus : join(entry.worktree_path, rawFocus);
+    let focusStat: ReturnType<typeof lstatSync>;
+    try {
+      focusStat = lstatSync(candidate);
+    } catch {
+      throw new WorkspaceOpenError("invalid-path", "focus path does not exist");
+    }
+    if (focusStat.isSymbolicLink()) {
+      throw new WorkspaceOpenError("unsupported-file", "symlinks cannot be opened as artifacts");
+    }
+    if (!focusStat.isFile()) {
+      throw new WorkspaceOpenError("unsupported-file", "focus must be a regular file");
+    }
+
+    let focusCanonical: string;
+    try {
+      focusCanonical = canonicalPath(candidate);
+    } catch {
+      throw new WorkspaceOpenError("invalid-path", "focus path could not be canonicalized");
+    }
+    if (!isInside(entry.worktree_path, focusCanonical) && entry.worktree_path !== focusCanonical) {
+      throw new WorkspaceOpenError("invalid-path", "focus path escapes the workspace");
+    }
+
+    const rel = relativeNfc(entry.worktree_path, focusCanonical);
+    const matched = resolveTrackedFiles(entry).tracked.find((file) => file.path === rel);
+    if (!matched) {
+      throw new WorkspaceOpenError(
+        "artifact-not-tracked",
+        "focus file is not in the workspace tracked artifact list",
+      );
+    }
+    return matched.path;
   }
 
   private createEntry(

@@ -205,7 +205,7 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(response.result.protocolVersion).toBe("2025-06-18");
   });
 
-  test("tools/list is SDK-generated from the seven Zod registrations", async () => {
+  test("tools/list is SDK-generated from the eight Zod registrations", async () => {
     const connected = await connect(deps(new HookClient()));
     try {
       const tools = (await connected.client.listTools()).tools;
@@ -232,6 +232,12 @@ describe("official TypeScript MCP SDK contract", () => {
         });
       }
       expect(byName.get("glosa_metadata_clear")?.annotations?.destructiveHint).toBe(true);
+      expect(byName.get("glosa_present")?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
     } finally {
       await connected.close();
     }
@@ -595,5 +601,64 @@ describe("official TypeScript MCP SDK contract", () => {
     const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
     input.end();
     await expect(running).resolves.toBeUndefined();
+  });
+
+  test("glosa_present returns a p= URL, never launches a browser, never returns durable t=", async () => {
+    const mkdtemp = await import("node:fs").then((fs) => fs.mkdtempSync);
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { writeFileSync, rmSync } = await import("node:fs");
+    const dir = mkdtemp(join(tmpdir(), "glosa-present-"));
+    const file = join(dir, "note.md");
+    writeFileSync(file, "# hi\n");
+    try {
+      const calls: string[] = [];
+      const api: Partial<GlosaApiClient> = {
+        port: 4646,
+        openWorkspace: async (path) => {
+          calls.push(`open:${path}`);
+          return { slug: "note-abc", path: dir, focus: "note.md", kind: "loose-file", state_dir: join(dir, "state") };
+        },
+        mintPresentationToken: async () => {
+          calls.push("mint");
+          return { token: "ephemeral-present-token", expires_in_s: 60 };
+        },
+        bindSession: async (path, sessionId) => {
+          calls.push(`bind:${path}:${sessionId}`);
+          return { bound: true, session_id: sessionId };
+        },
+      };
+      const connected = await connect({
+        ...deps(new HookClient(), api),
+        sessionId: () => "host-session",
+      });
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_present",
+          arguments: { path: file, mode: "preview" },
+        });
+        expect(result.isError).not.toBe(true);
+        const body = structured(result) as {
+          url: string;
+          preview: boolean;
+          surface: string;
+          mode: string;
+          bound_session?: string;
+        };
+        expect(body.url).toContain("p=ephemeral-present-token");
+        expect(body.url).not.toContain("t=");
+        expect(body.preview).toBe(true);
+        expect(body.surface).toBe("document");
+        expect(body.mode).toBe("preview");
+        expect(body.bound_session).toBe("host-session");
+        expect(calls.some((c) => c.startsWith("open:"))).toBe(true);
+        expect(calls).toContain("mint");
+        expect(calls.some((c) => c.startsWith("bind:"))).toBe(true);
+      } finally {
+        await connected.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -27,7 +27,17 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Message schema (over channel): `selection|mark|ready|error` with `seq`, `quote{exact,prefix,suffix}`, `range{start,end}`. Validate with zod every inbound; unknown → drop+log. Size cap 8KB/msg. Rate limit 50 msg/s/iframe (token bucket, drop excess). All strings = plain text, escaped at every render surface.
 
 ## 3. F24 — token lifecycle + realpath confinement
-- Fragment scrub FIRST statement on bootstrap: read `#t=`, `sessionStorage.setItem('glosa_token',t)`, `history.replaceState(null,'',location.pathname+location.search)` — before any render/error handler.
+- Fragment scrub FIRST statement on bootstrap: read `#t=` (durable) or `#p=` (presentation),
+  redeem `p` once for the durable token when present, `sessionStorage.setItem('glosa_token', durable)`,
+  `history.replaceState` to pathname+search plus non-secret fragment state
+  (`w`/`a`/`surface`/`mode`/`lock`) — before any render/error handler. Secrets never reappear in
+  subsequent focus URLs. Preview lock (`lock=preview`) is a UI affordance only — not authorization;
+  annotation POSTs remain accepted when authenticated.
+- Presentation tokens are distinct from the durable pairing token and from class-F capabilities:
+  256-bit, 60s TTL, single-use, in-memory only. Mint via authenticated
+  `POST /api/presentation-token/mint`; redeem via same-origin Host-checked
+  `POST /api/presentation-token/redeem`. Expired/unknown/replayed collapse to one 401. Token
+  rotation/revocation clears outstanding presentation tokens alongside class-F capabilities.
 - Storage: **sessionStorage** (not localStorage) — bounded to tab lifetime.
 - Token state has two durable forms: **active** = `~/.glosa/token` contains one 128-bit hex token at
   mode 0600; **revoked** = that file is absent. `glosa token rotate` writes a fresh mode-0600 temp,
@@ -57,8 +67,9 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   | Route class | Bearer | Origin rule |
   |---|---|---|
   | Tokenless handshake `GET /api/handshake` | No | Reject if Origin present+foreign; allow self/absent. Body non-sensitive `{contract_version,daemon_version,paired}`. |
+  | Presentation redeem `POST /api/presentation-token/redeem` | No (redeems for Bearer) | Reject if Origin missing OR foreign; also reject `Sec-Fetch-Site: cross-site`. Returns the durable pairing token once. |
   | Authed reads (GET: artifact, SSE, diff, transcript, inbox) | Yes (401) | Reject only if Origin present+foreign; absent allowed (Bearer is the gate). |
-  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, token) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
+  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
   | Navigation (top GET: `/` SPA shell, `/doc/<cap>/...` class-F) | No (nav can't carry headers) | Origin checks inapplicable; SPA shell is static+non-sensitive, self-auths via fragment post-load; class-F gated by PATH CAPABILITY not headers. |
 - Resolves the doc contradiction: "every request validated" = the Host check unconditionally; Origin check is route-class-scoped.
 

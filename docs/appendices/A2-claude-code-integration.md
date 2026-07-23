@@ -97,7 +97,9 @@ configured Claude root after realpath confinement.
 
 Routing precedence is fixed:
 
-1. explicit `POST /w/:slug/session-binding`, `glosa session bind`, or `glosa_session_bind`;
+1. explicit `POST /w/:slug/session-binding`, `glosa session bind`, `glosa_session_bind`,
+   `glosa open --bind <session-id>`, or `glosa_present` (host session or explicit `session_id`);
+   open/present binding failures are nonfatal warnings that preserve the presentation URL;
 2. generic cwd-ancestor matching;
 3. park the entry until a session is registered and bound.
 

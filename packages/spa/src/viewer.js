@@ -48,8 +48,8 @@ export const INTENTS = [
   { value: "style", label: "Fix how it looks" },
 ];
 
-export function initialModeState() {
-  return { mode: "preview", dirty: false, blocked: null };
+export function initialModeState(mode = "preview") {
+  return { mode: MODES.includes(mode) ? mode : "preview", dirty: false, blocked: null };
 }
 
 /**
@@ -114,10 +114,21 @@ function splitPath(path) {
  * bootstrap.js doesn't call it today (the SPA never remounts within one page load), but a test
  * does, so a leaked stream connection never outlives one test case.
  */
-export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, initialArtifact, appearance, onFocusChange } = {}) {
+export function mountApp(root, {
+  dataAccess = createDataAccess(),
+  initialSlug,
+  initialArtifact,
+  surface = "workspace",
+  initialMode = "preview",
+  previewLock = false,
+  appearance,
+  onFocusChange,
+} = {}) {
   root.textContent = "";
   root.classList.add("glosa-app");
-  root.setAttribute("data-mode", "preview");
+  root.setAttribute("data-mode", MODES.includes(initialMode) ? initialMode : "preview");
+  root.setAttribute("data-surface", surface === "document" ? "document" : "workspace");
+  if (previewLock) root.setAttribute("data-preview-lock", "true");
 
   // --- top bar ---
   const navToggle = el("button", {
@@ -363,11 +374,19 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     conversationEl,
   );
 
+  if (surface === "document") {
+    // Document surface: no navigator toggle, workspace switcher, sidebar, or artifact tree.
+    navToggle.hidden = true;
+    sidebarEl.hidden = true;
+    backdrop.hidden = true;
+    root.setAttribute("data-nav-open", "false");
+  }
+
   artifactNavigator = createArtifactTreeNavigator(artifactList, {
     onOpen: (path) => void openArtifact(path),
   });
 
-  let modeState = initialModeState();
+  let modeState = initialModeState(previewLock ? "preview" : initialMode);
   // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
   // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
   let currentSlug = null;
@@ -438,7 +457,11 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   function renderModeBar() {
     const restoreModeFocus = modeBar.contains(document.activeElement);
     modeBar.textContent = "";
-    for (const mode of MODES) {
+    // Preview lock is a UI affordance expressing intent ("not for review"), not authorization —
+    // Annotate/Edit controls and shortcuts are omitted for this visit; the annotation API still
+    // accepts authenticated POSTs.
+    const visibleModes = previewLock ? ["preview"] : MODES;
+    for (const mode of visibleModes) {
       // Opaque class F gets no Edit affordance at all rather than a permanently disabled one
       // (brief §7.4) — but only once an artifact is open; before that the control stays whole.
       if (mode === "edit" && currentArtifact && !canEdit(currentArtifact)) continue;
@@ -1077,6 +1100,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
   }
 
   function setMode(mode) {
+    if (previewLock && mode !== "preview") return;
     // Class-F Edit follows the derived-from edge (R6/R7) rather than switching THIS artifact into
     // edit mode: with an edge, open the source (class-R) artifact and edit that; with none, Edit
     // is absent from the mode control entirely — a programmatic call is a no-op.
@@ -1098,6 +1122,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
         modeState = discard ? modeReducer(next, { type: "discard" }) : { ...next, mode: "edit", blocked: null };
         renderModeBar();
         renderContent();
+        onFocusChange?.({ slug: currentSlug, artifact: currentArtifact?.source_path ?? null, mode: modeState.mode });
         queueMicrotask(() => modeBar.querySelector(`[data-mode="${modeState.mode}"]`)?.focus({ preventScroll: true }));
       });
       return;
@@ -1105,6 +1130,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     modeState = next;
     renderModeBar();
     renderContent();
+    onFocusChange?.({ slug: currentSlug, artifact: currentArtifact?.source_path ?? null, mode: modeState.mode });
     if (modeState.mode === "edit" && previousMode !== "edit") mainEl.scrollTop = 0;
   }
 
@@ -1258,6 +1284,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     const idx = ["1", "2", "3"].indexOf(e.key);
     if (idx === -1) return;
     e.preventDefault();
+    if (previewLock && idx !== 0) return; // preview lock: only ⌘1 (Preview) remains meaningful
     if (currentArtifact) setMode(MODES[idx]);
   }
   document.addEventListener("keydown", onShortcut);
@@ -1358,7 +1385,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
       loading = false;
       currentArtifact = null;
       artifactNavigator.setCurrent(null, { reveal: false });
-      onFocusChange?.({ slug: currentSlug, artifact: null }); // URL reflects on-screen state: no open file
+      onFocusChange?.({ slug: currentSlug, artifact: null, mode: modeState.mode }); // URL reflects on-screen state: no open file
       setEmpty(
         "This artifact couldn't be opened.",
         el("p", { className: "glosa-empty-hint", textContent: err?.message ?? "Try again, or pick another artifact." }),
@@ -1372,7 +1399,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     setNavOpen(false); // compact: picking an artifact closes the drawer and returns to reading
     contentEl.removeAttribute("data-path");
     artifactNavigator.setCurrent(path);
-    onFocusChange?.({ slug: currentSlug, artifact: path }); // reflect the opened file into the URL
+    onFocusChange?.({ slug: currentSlug, artifact: path, mode: modeState.mode }); // reflect the opened file into the URL
     renderModeBar();
     renderContent();
     void renderHistory(); // the open pane, if any, should reflect the newly opened artifact
@@ -1439,7 +1466,7 @@ export function mountApp(root, { dataAccess = createDataAccess(), initialSlug, i
     currentSlug = slug;
     attentionTray.setWorkspace(slug);
     currentArtifact = null;
-    onFocusChange?.({ slug, artifact: null }); // a deep-linked artifact re-reflects below via openArtifact
+    onFocusChange?.({ slug, artifact: null, mode: modeState.mode }); // a deep-linked artifact re-reflects below via openArtifact
     artifactNavigator.setWorkspace(slug);
     composer = null;
     emptyEl.textContent = ""; // drop any stale per-artifact error so the default teaching state returns

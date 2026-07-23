@@ -493,4 +493,37 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(dom.document.activeElement).toBe(toggle);
   });
+
+  test("document surface hides navigator chrome", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    (mountApp as any)(root, {
+      dataAccess: fakeDataAccess(),
+      surface: "document",
+      initialSlug: "ws-1",
+      initialArtifact: "notes.md",
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(root.getAttribute("data-surface")).toBe("document");
+    expect((root.querySelector(".glosa-nav-toggle") as any).hidden).toBe(true);
+    expect((root.querySelector(".glosa-sidebar") as any).hidden).toBe(true);
+  });
+
+  test("preview lock shows only Preview and ignores Annotate/Edit shortcuts", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    (mountApp as any)(root, {
+      dataAccess: fakeDataAccess(),
+      previewLock: true,
+      initialSlug: "ws-1",
+      initialArtifact: "notes.md",
+    });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(root.getAttribute("data-preview-lock")).toBe("true");
+    const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map(
+      (el) => (el as any).dataset.mode,
+    );
+    expect(modes).toEqual(["preview"]);
+    expect(root.getAttribute("data-mode")).toBe("preview");
+  });
 });

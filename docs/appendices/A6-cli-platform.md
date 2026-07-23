@@ -67,7 +67,7 @@
 ## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version --build-id)
 | cmd | args | does | exit |
 |---|---|---|---|
-| `open` | `[dir\|file] [--url]` | ensure daemon (lazy spawn) + ensure `.glosa/` baseline + mint one-time pairing capability; open the browser by default, or print only the ready URL with `--url` | 0;2;3;5 |
+| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface. `--preview` locks Preview (UI affordance, not authorization). | 0;2;3;5 |
 | `init` | `[dir]` `--print/--force/--uninstall/--restore-backup` | §F26 merge/uninstall | 0;2;6;9;5 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |
@@ -81,7 +81,16 @@
 | `hook <event>` | internal | CC hook entry point | per hook |
 | `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
 - `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery).
-- `open --url` performs the same token, daemon, registration, and optional file deep-link work without invoking the macOS browser launcher. Plain success output is exactly the URL plus a newline; `--json` retains the F26 envelope with `data:{slug,path,url,focus?}`.
+- `open --url` performs the same token, daemon, registration, optional file deep-link, surface/mode,
+  and bind work without invoking the macOS browser launcher. Plain success output is exactly the URL
+  plus a newline; `--json` retains the F26 envelope with
+  `data:{slug,path,url,focus?,surface,mode,preview,bound_session?,state_dir?}`.
+- `--bind` after successful registration is nonfatal on unknown/stale sessions: the URL is still
+  returned, a `bind-failed` warning is appended, and the exit code stays 0. `--preview --bind`
+  additionally emits `preview-bind-conflict` (feedback controls hidden while wiring feedback routing)
+  but is not hard-blocked.
+- Preview lock is an **affordance expressing intent ("not for review")**, not access control: the
+  annotation API continues to accept authenticated POSTs for the artifact.
 - doctor 12 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
 
 ## Metadata and binding output
@@ -91,8 +100,13 @@
 - `metadata set` validates local JSON syntax before contacting the daemon. Daemon validation remains
   authoritative and failed replacement never clears the prior descriptor.
 - Same-id set and repeated clear are idempotent. A different active id is an explicit conflict.
-- MCP parity tools are `glosa_metadata_set`, `glosa_metadata_show`, `glosa_metadata_clear`, and
-  `glosa_session_bind`; their arguments and returned data match the CLI/API contract.
+- MCP parity tools are `glosa_inbox_pull`, `glosa_inbox_get`, `glosa_metadata_set`,
+  `glosa_metadata_show`, `glosa_metadata_clear`, `glosa_session_bind`, `glosa_conversation_ack`, and
+  `glosa_present`; their arguments and returned data match the CLI/API contract.
+- `glosa_present {path, mode, session_id?}` registers an absolute existing file, returns a ready URL
+  with a short-TTL single-use presentation token (`p=`), never launches a browser, and never returns
+  the durable pairing token. Annotations: mutating, non-destructive, idempotent, closed-world.
+  `mode:"preview"` is preview-locked; `annotate`/`edit` select an unlocked initial mode.
 
 ### Shell completion setup
 

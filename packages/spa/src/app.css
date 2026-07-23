@@ -223,6 +223,19 @@ button {
     "nav    main";
 }
 
+.glosa-app[data-surface="document"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "main";
+}
+
+.glosa-app[data-surface="document"] .glosa-nav-toggle,
+.glosa-app[data-surface="document"] .glosa-sidebar,
+.glosa-app[data-surface="document"] .glosa-backdrop {
+  display: none;
+}
+
 /* The contextual margin is an overlay INSIDE the manuscript's scroll container (viewer.js puts
    it there), so cards scroll glued to their anchors; at annotate widths the manuscript shifts
    left to clear it (brief §7.2). */
