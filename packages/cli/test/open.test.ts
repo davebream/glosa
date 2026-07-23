@@ -20,7 +20,11 @@ afterEach(() => {
   dirs = [];
 });
 
-function makeDeps(overrides: Partial<OpenDeps> = {}): { deps: OpenDeps; client: FakeGlosaApiClient; browserCalls: string[] } {
+function makeDeps(overrides: Partial<OpenDeps> = {}): {
+  deps: OpenDeps;
+  client: FakeGlosaApiClient;
+  browserCalls: string[];
+} {
   const client = new FakeGlosaApiClient();
   const browserCalls: string[] = [];
   const deps: OpenDeps = {
@@ -100,18 +104,33 @@ describe("glosa open", () => {
     expect(browserCalls).toHaveLength(0);
   });
 
-  test("a FILE argument opens its owning directory as the workspace, deep-linked via #…&w=<slug>&a=<file>", async () => {
+  test("--external-state is forwarded only when explicitly requested", async () => {
+    const dir = freshDir();
+    const { deps, client } = makeDeps();
+
+    await runOpen(dir, deps, { externalState: true });
+
+    expect(client.calls[0]).toEqual({
+      method: "openWorkspace",
+      args: [dir, { externalState: true }],
+    });
+  });
+
+  test("a FILE argument is resolved by the daemon and deep-linked to its representative artifact", async () => {
     const { deps, client, browserCalls } = makeDeps({
       dirExists: (d) => d === "/ws/essays",
       fileExists: (p) => p === "/ws/essays/07-manuscript.md",
     });
-    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays" };
+    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays", focus: "07-manuscript.md" };
 
     const result = await runOpen("/ws/essays/07-manuscript.md", deps);
 
     expect(result.exitCode).toBe(0);
     expect(result.data.focus).toBe("07-manuscript.md");
-    expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: ["/ws/essays"] });
+    expect(client.calls[0]).toMatchObject({
+      method: "openWorkspace",
+      args: ["/ws/essays/07-manuscript.md"],
+    });
     expect(browserCalls[0]).toContain("#t=test-token-abc&w=essays-abc&a=07-manuscript.md");
   });
 
@@ -128,13 +147,11 @@ describe("glosa open", () => {
       dirExists: (d) => d === "/ws/essays",
       fileExists: (p) => p === "/ws/essays/07-manuscript.md",
     });
-    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays" };
+    client.openWorkspaceResult = { slug: "essays-abc", path: "/ws/essays", focus: "07-manuscript.md" };
 
     const result = await runOpen("/ws/essays/07-manuscript.md", deps, { launchBrowser: false });
 
-    expect(result.data.url).toBe(
-      "http://127.0.0.1:4646/#t=test-token-abc&w=essays-abc&a=07-manuscript.md",
-    );
+    expect(result.data.url).toBe("http://127.0.0.1:4646/#t=test-token-abc&w=essays-abc&a=07-manuscript.md");
     expect(result.data.focus).toBe("07-manuscript.md");
     expect(browserCalls).toHaveLength(0);
   });
@@ -156,7 +173,9 @@ describe("glosa open", () => {
 
     const out = captureStdout(() => printOpenResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "open", exit_code: 0 });
     expect(parsed.data).toMatchObject({ slug: "test-workspace", path: dir, url: result.data.url });
     expect(browserCalls).toHaveLength(0);

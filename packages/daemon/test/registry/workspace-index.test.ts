@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { WorkspaceIndex, workspaceIndexPath } from "../../src/registry/workspace-index.ts";
+import { resolveTrackedFiles } from "../../src/matcher.ts";
+import { WorkspaceIndex, WorkspaceOpenError, workspaceIndexPath } from "../../src/registry/workspace-index.ts";
 import { cleanup, deterministicClock, freshHome, freshWorkspaceDir, manualClock } from "./helpers.ts";
 
 describe("WorkspaceIndex — atomicity + concurrency", () => {
@@ -215,7 +217,11 @@ describe("WorkspaceIndex — forget", () => {
   test("forget() also fires onHardRemove, same as a GC hard-remove", async () => {
     const home = freshHome();
     const removedPaths: string[] = [];
-    const index = new WorkspaceIndex({ home, now: deterministicClock(), onHardRemove: (p) => void removedPaths.push(p) });
+    const index = new WorkspaceIndex({
+      home,
+      now: deterministicClock(),
+      onHardRemove: (p) => void removedPaths.push(p),
+    });
     const entry = await index.upsertWorkspace("/ws/a", "glosa-open");
 
     await index.forget(entry.slug);
@@ -317,7 +323,13 @@ describe("WorkspaceIndex — unwired GC safety", () => {
     // daemon boot would be in before its startup sequence gets around to connecting the
     // SessionRegistry. The unwired default predicate reads as "no live session," which must NOT
     // be treated as an affirmative answer.
-    const index = new WorkspaceIndex({ home, now: clock, gcGraceMs: 0, gcThrottleMs: 0, pathExists: (p) => existing.has(p) });
+    const index = new WorkspaceIndex({
+      home,
+      now: clock,
+      gcGraceMs: 0,
+      gcThrottleMs: 0,
+      pathExists: (p) => existing.has(p),
+    });
     await index.upsertWorkspace("/ws/a", "session");
 
     await index.gc({ force: true }); // pass 1: softens
@@ -366,5 +378,201 @@ describe("WorkspaceIndex — corrupt file quarantine", () => {
     const siblings = readdirSync(home).filter((name) => name.startsWith("workspaces.json.corrupt."));
     expect(siblings).toHaveLength(1);
     cleanup(home);
+  });
+});
+
+describe("WorkspaceIndex — v2 workspace contexts", () => {
+  test("atomically migrates a v1 directory entry without changing its slug, root, or local bus", () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 1,
+        updated_at: "2024-01-01T00:00:00.000Z",
+        workspaces: {
+          [root]: {
+            canonical_path: root,
+            slug: "kept-slug",
+            slug_len: 6,
+            source: "session",
+            first_seen: "2024-01-01T00:00:00.000Z",
+            last_seen: "2024-01-01T00:00:00.000Z",
+            present: true,
+          },
+        },
+      }),
+    );
+
+    const entry = new WorkspaceIndex({ home }).list()[0];
+    expect(entry).toBeDefined();
+    if (!entry) throw new Error("expected migrated workspace entry");
+    expect(entry.slug).toBe("kept-slug");
+    expect(entry.canonical_path).toBe(root);
+    expect(entry.worktree_path).toBe(root);
+    expect(entry.bus_path).toBe(join(root, ".glosa"));
+    expect(entry.kind).toBe("directory");
+    expect(entry.tracking).toEqual({ mode: "matcher" });
+    expect(entry.registration_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).version).toBe(2);
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("two loose sibling files receive distinct full-hash buses and bounded tracked lists", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const firstPath = join(root, "first.md");
+    const secondPath = join(root, "second.md");
+    writeFileSync(firstPath, "first");
+    writeFileSync(secondPath, "second");
+    const index = new WorkspaceIndex({ home });
+
+    const first = await index.resolveOpenTarget(firstPath);
+    const second = await index.resolveOpenTarget(secondPath);
+
+    expect(first.entry.kind).toBe("loose-file");
+    expect(second.entry.kind).toBe("loose-file");
+    expect(first.entry.registration_id).not.toBe(second.entry.registration_id);
+    expect(first.entry.bus_path).toBe(join(home, "state", first.entry.registration_id));
+    expect(second.entry.bus_path).toBe(join(home, "state", second.entry.registration_id));
+    expect(resolveTrackedFiles(first.entry).tracked.map((file) => file.path)).toEqual(["first.md"]);
+    expect(resolveTrackedFiles(second.entry).tracked.map((file) => file.path)).toEqual(["second.md"]);
+    expect(index.get(root)).toBeNull();
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("concurrent hardlink aliases converge on one registration and its representative focus", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const representative = join(root, "representative.md");
+    const alias = join(root, "alias.md");
+    writeFileSync(representative, "shared");
+    linkSync(representative, alias);
+    const index = new WorkspaceIndex({ home });
+
+    const [first, second] = await Promise.all([
+      index.resolveOpenTarget(representative),
+      index.resolveOpenTarget(alias),
+    ]);
+
+    expect(second.entry.registration_id).toBe(first.entry.registration_id);
+    expect(second.entry.bus_path).toBe(first.entry.bus_path);
+    expect(second.focus).toBe("representative.md");
+    expect(index.list()).toHaveLength(1);
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("deepest directory registration owns a tracked file; exclusions and symlinks fail closed", async () => {
+    const home = freshHome();
+    const outer = freshWorkspaceDir();
+    const inner = join(outer, "nested");
+    const hidden = join(inner, ".hidden", "secret.md");
+    const tracked = join(inner, "note.md");
+    const symlink = join(inner, "alias.md");
+    mkdirSync(join(inner, ".hidden"), { recursive: true });
+    writeFileSync(hidden, "hidden");
+    writeFileSync(tracked, "tracked");
+    symlinkSync(tracked, symlink);
+    const index = new WorkspaceIndex({ home });
+    await index.resolveOpenTarget(outer);
+    const nested = await index.resolveOpenTarget(inner);
+
+    const owned = await index.resolveOpenTarget(tracked);
+    expect(owned.entry.registration_id).toBe(nested.entry.registration_id);
+    expect(owned.focus).toBe("note.md");
+    await expect(index.resolveOpenTarget(hidden)).rejects.toMatchObject({ code: "artifact-not-tracked" });
+    await expect(index.resolveOpenTarget(symlink)).rejects.toBeInstanceOf(WorkspaceOpenError);
+
+    cleanup(home);
+    cleanup(outer);
+  });
+
+  test("fresh directory redirection is opt-in when writable and automatic when local state cannot be created", async () => {
+    const home = freshHome();
+    const localRoot = freshWorkspaceDir();
+    const explicitRoot = freshWorkspaceDir();
+    const unwritableRoot = freshWorkspaceDir();
+    const unwritableHome = freshHome();
+    const localIndex = new WorkspaceIndex({ home, canCreateLocalBus: () => true });
+
+    const local = await localIndex.resolveOpenTarget(localRoot);
+    const explicit = await localIndex.resolveOpenTarget(explicitRoot, { externalState: true });
+    const unwritable = await new WorkspaceIndex({
+      home: unwritableHome,
+      canCreateLocalBus: () => false,
+    }).resolveOpenTarget(unwritableRoot);
+
+    expect(local.entry.bus_path).toBe(join(local.entry.canonical_path, ".glosa"));
+    expect(explicit.entry.bus_path).toBe(join(home, "state", explicit.entry.registration_id));
+    expect(unwritable.entry.bus_path).toEndWith(join("state", unwritable.entry.registration_id));
+
+    cleanup(home);
+    cleanup(localRoot);
+    cleanup(explicitRoot);
+    cleanup(unwritableRoot);
+    cleanup(unwritableHome);
+  });
+
+  test("an existing local bus remains authoritative even when external state is requested", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    mkdirSync(join(root, ".glosa"));
+    const entry = await new WorkspaceIndex({
+      home,
+      canCreateLocalBus: () => false,
+    }).resolveOpenTarget(root, { externalState: true });
+
+    expect(entry.entry.bus_path).toBe(join(entry.entry.canonical_path, ".glosa"));
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("redirected matcher config is restored from the registered bus after an index restart", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const customPath = join(root, "artifact.custom");
+    writeFileSync(customPath, "custom");
+    const firstIndex = new WorkspaceIndex({ home });
+    const opened = await firstIndex.resolveOpenTarget(root, { externalState: true });
+    mkdirSync(opened.entry.bus_path, { recursive: true });
+    writeFileSync(
+      join(opened.entry.bus_path, "config.json"),
+      JSON.stringify({ artifacts: { include: ["**/*.custom"] } }),
+    );
+
+    const reloaded = new WorkspaceIndex({ home }).get(opened.entry.canonical_path);
+    expect(reloaded).not.toBeNull();
+    expect(resolveTrackedFiles(reloaded!).tracked.map((file) => file.path)).toEqual(["artifact.custom"]);
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("segment-boundary prefix siblings do not inherit a registered directory bus", async () => {
+    const home = freshHome();
+    const parent = freshWorkspaceDir();
+    const owner = join(parent, "docs");
+    const prefixSibling = join(parent, "docs-archive");
+    mkdirSync(owner);
+    mkdirSync(prefixSibling);
+    const siblingFile = join(prefixSibling, "note.md");
+    writeFileSync(siblingFile, "sibling");
+    const index = new WorkspaceIndex({ home });
+    const registered = await index.resolveOpenTarget(owner);
+    const opened = await index.resolveOpenTarget(siblingFile);
+
+    expect(opened.entry.kind).toBe("loose-file");
+    expect(opened.entry.registration_id).not.toBe(registered.entry.registration_id);
+
+    cleanup(home);
+    cleanup(parent);
   });
 });
