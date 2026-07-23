@@ -2122,6 +2122,24 @@ function matchApiRoute(ctx: ApiContext, method: string, pathname: string): Route
   return null;
 }
 
+function logUnhandledRequestError(req: Request, error: unknown): void {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  let pathname = "<invalid-url>";
+  try {
+    pathname = new URL(req.url).pathname;
+  } catch {
+    // The Request constructor normally guarantees a valid URL. Keep logging fail-safe anyway:
+    // this diagnostic path must never mask the original exception with a second throw.
+  }
+  const stack = normalized.stack ?? `${normalized.name}: ${normalized.message}\n    <stack unavailable>`;
+  // The detached daemon redirects stderr to ~/.glosa/daemon.log. Deliberately log only the
+  // request method/path plus exception diagnostics — never headers, query parameters, or body,
+  // any of which may contain bearer/capability tokens or manuscript content.
+  console.error(
+    `[glosa] unhandled request ${req.method} ${pathname}\nmessage: ${normalized.message}\nstack:\n${stack}`,
+  );
+}
+
 export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServer) => Promise<Response> {
   const csp = spaCspHeaders(ctx.classFPort);
 
@@ -2201,12 +2219,12 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
       const withCsp = withHeaders(res, csp);
       if (contractWarning) withCsp.headers.set("X-Contract-Warning", "stale-minor");
       return withCsp;
-    } catch {
+    } catch (error) {
       // Never let a throw anywhere in the pipeline (a route handler, a future JSON.parse, a bug
       // in this function) reach Bun's default error response — that leaks source/stack in dev
-      // mode and has no CSP either way (P1.3 review item 2). `development: false` + the
-      // Bun.serve `error` callback in lifecycle.ts are the second layer, for a throw that
-      // somehow still escapes this try/catch.
+      // mode and has no CSP either way (P1.3 review item 2). The Bun.serve `error` callback in
+      // lifecycle.ts is the second layer, for a throw that somehow still escapes this try/catch.
+      logUnhandledRequestError(req, error);
       return internalErrorResponse(csp);
     }
   };
