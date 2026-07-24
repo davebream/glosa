@@ -5,13 +5,13 @@
 // `glosa __daemon` subprocess — that's the point, per the task brief: these are fault-injection
 // and race scenarios a happy-path unit test can't exercise.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
-import { reclaimStaleLock, writeLockExclusive, type DaemonLock } from "../src/lock.ts";
-import { PROTOCOL_VERSION } from "../src/protocol.ts";
 import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
+import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
 import { ensureDaemon } from "../src/lifecycle.ts";
+import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lock.ts";
+import { PROTOCOL_VERSION } from "../src/protocol.ts";
 import {
   cleanupHome,
   deadPid,
@@ -41,11 +41,7 @@ function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
 
 const VERSIONED_DAEMON_FIXTURE = fileURLToPath(new URL("./fixtures/versioned-daemon.ts", import.meta.url));
 
-function spawnVersionedDaemon(
-  home: string,
-  port: number,
-  buildId?: string,
-): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+function spawnVersionedDaemon(home: string, port: number, buildId?: string): Bun.Subprocess<"ignore", "pipe", "pipe"> {
   return Bun.spawn({
     cmd: [process.execPath, VERSIONED_DAEMON_FIXTURE],
     env: {
@@ -311,6 +307,61 @@ describe("ensureDaemon — client", () => {
       cleanupHome(home);
     }
   }, 20000);
+
+  test("fails closed instead of spawning when an answering daemon has no lock", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const daemon = spawnDaemon(home, port);
+    try {
+      const handshake = await waitForHandshake(port);
+      expect(handshake).not.toBeNull();
+      unlinkSync(lockPath(home));
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+
+      expect(result).toMatchObject({ ok: false });
+      if (!result.ok) expect(result.reason).toContain("without a lock");
+      expect(lockOf(home)).toBeNull();
+      expect((await waitForHandshake(port, 1000))?.instance_id).toBe(handshake!.instance_id);
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 12000);
+
+  test("fails closed when an answering daemon has an unparseable lock", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const daemon = spawnDaemon(home, port);
+    try {
+      expect(await waitForHandshake(port)).not.toBeNull();
+      writeUnparseableLock(home);
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+
+      expect(result).toMatchObject({ ok: false });
+      if (!result.ok) expect(result.reason).toContain("unusable lock");
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 12000);
 
   test("a newer protocol-compatible daemon is reused without being signalled", async () => {
     const home = freshHome();
