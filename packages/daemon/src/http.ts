@@ -46,7 +46,7 @@ import {
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { BUILD_ID } from "./build-id.ts";
-import { WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
+import { ApprovalConflictError, type AttentionVerdict, WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
 import { readInboxEntry } from "./bus/inbox.ts";
 import type { JournalEvent } from "./bus/journal.ts";
 import { type DeliveryVia, isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
@@ -958,13 +958,21 @@ function handleInbox(ctx: ApiContext, slug: string, pathname: string): Response 
       } catch {
         // Journal state remains authoritative even if an immutable payload is unreadable.
       }
+      const targetPath =
+        typeof payload.target_path === "string"
+          ? payload.target_path
+          : typeof payload.path === "string"
+            ? payload.path
+            : null;
       return {
         id,
         created_at: createdAt.get(id) ?? "",
         status: e.status,
         message: typeof payload.message === "string" ? payload.message : null,
         action: typeof payload.action === "string" ? payload.action : null,
-        target: typeof payload.path === "string" ? payload.path : null,
+        target: targetPath,
+        target_path: targetPath,
+        approval_mode: payload.approval_mode === true,
       };
     })
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -1026,7 +1034,91 @@ async function handleAttentionResponse(
   if (!entry || typeof entry.payload !== "object" || entry.payload === null) {
     return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
   }
-  const action = (entry.payload as Record<string, unknown>).action;
+  const payload = entry.payload as Record<string, unknown>;
+  const action = payload.action;
+  const approvalMode = payload.approval_mode === true;
+  if (approvalMode) {
+    if (outcome !== "approved") {
+      return problem(
+        400,
+        "validation-failed",
+        "approval-mode requests require outcome approved",
+        undefined,
+        url.pathname,
+      );
+    }
+    if (response !== undefined) {
+      return problem(
+        400,
+        "validation-failed",
+        "approval-mode requests do not accept response text",
+        undefined,
+        url.pathname,
+      );
+    }
+    const revisionId = b?.revision_id;
+    if (typeof revisionId !== "string" || !/^[a-f0-9]{64}$/.test(revisionId)) {
+      return problem(
+        400,
+        "validation-failed",
+        "revision_id must be a lowercase SHA-256 digest",
+        undefined,
+        url.pathname,
+      );
+    }
+    if (entry.status === "done") {
+      return Response.json({
+        id: entryId,
+        ...(await bus.completeAttention(entryId)),
+      });
+    }
+    const targetPath = payload.target_path;
+    if (typeof targetPath !== "string") {
+      return problem(409, "conflict", "approval request has no target artifact", undefined, url.pathname);
+    }
+    const tracked = resolveTrackedFiles(bus.workspace).tracked.find((file) => file.path === targetPath);
+    if (!tracked) {
+      return problem(
+        409,
+        "artifact-revision-changed",
+        "the approval target is no longer available",
+        undefined,
+        url.pathname,
+      );
+    }
+    let currentRevision: string;
+    try {
+      currentRevision = sourceSha256(readFileSync(tracked.rawPath));
+    } catch {
+      return problem(
+        409,
+        "artifact-revision-changed",
+        "the approval target is no longer available",
+        undefined,
+        url.pathname,
+      );
+    }
+    if (currentRevision !== revisionId) {
+      return problem(
+        409,
+        "artifact-revision-changed",
+        "the artifact changed before approval; review the latest revision and try again",
+        undefined,
+        url.pathname,
+      );
+    }
+    const verdict: AttentionVerdict = {
+      outcome: "approved",
+      target_path: targetPath,
+      revision_id: revisionId,
+      completed_at: new Date().toISOString(),
+    };
+    try {
+      return Response.json({ id: entryId, ...(await bus.completeAttention(entryId, verdict)) });
+    } catch (error) {
+      return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
+    }
+  }
   if (action === "review" && outcome === "done") {
     return problem(
       400,
@@ -1040,9 +1132,13 @@ async function handleAttentionResponse(
     return problem(400, "validation-failed", "generic requests require outcome done", undefined, url.pathname);
   }
   try {
+    const verdict: AttentionVerdict = {
+      outcome,
+      ...(response !== undefined ? { response } : {}),
+    };
     return Response.json({
       id: entryId,
-      ...(await bus.completeAttention(entryId, outcome, response as string | undefined)),
+      ...(await bus.completeAttention(entryId, verdict)),
     });
   } catch (error) {
     return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
@@ -1680,8 +1776,8 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
  * daemon-side half (A5 §F23's attention axis: `open -> delivered -> seen -> {done|expired|stale}`).
  * `path` here is the WORKSPACE root (same convention as `open`/`resolve`/`apply-begin` — the CLI
  * runs from the workspace directory); `target_path`, if given, is the artifact the review concerns,
- * carried as informational payload only (no anchoring — that's `POST /w/:slug/annotations`'s job,
- * a different entry kind). */
+ * carried as informational payload for ordinary review. Approval mode upgrades it to a normalized
+ * tracked-artifact identity used for revision-bound completion. */
 async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -1699,25 +1795,91 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
   const message = typeof b?.message === "string" ? b.message : undefined;
   const action = typeof b?.action === "string" ? b.action : "review";
   const targetPath = typeof b?.target_path === "string" ? b.target_path : undefined;
+  if (b?.approval_mode !== undefined && typeof b.approval_mode !== "boolean") {
+    return problem(400, "validation-failed", "approval_mode must be a boolean", undefined, url.pathname);
+  }
+  const approvalMode = b?.approval_mode === true;
   if (message !== undefined && Buffer.byteLength(message, "utf8") > 4096) {
     return problem(400, "validation-failed", "message must be at most 4096 bytes", undefined, url.pathname);
   }
   if (Buffer.byteLength(action, "utf8") > 64) {
     return problem(400, "validation-failed", "action must be at most 64 bytes", undefined, url.pathname);
   }
-  if (targetPath !== undefined && !confinePath(root, targetPath).ok) {
+  const confinedTarget = targetPath !== undefined ? confinePath(root, targetPath) : null;
+  if (targetPath !== undefined && !confinedTarget?.ok) {
     return problem(400, "invalid-path", "target_path must be workspace-relative and confined", undefined, url.pathname);
+  }
+  if (approvalMode && targetPath === undefined) {
+    return problem(400, "validation-failed", "approval-mode requests require target_path", undefined, url.pathname);
   }
 
   const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
   const bus = await resolveBus(ctx, entry);
+  let normalizedTargetPath = targetPath;
+  if (approvalMode) {
+    if (!confinedTarget?.ok || !existsSync(confinedTarget.realPath)) {
+      return problem(
+        400,
+        "invalid-path",
+        "approval target must be an existing tracked artifact",
+        undefined,
+        url.pathname,
+      );
+    }
+    let requestedRealPath: string;
+    try {
+      requestedRealPath = realpathSync(confinedTarget.realPath);
+    } catch {
+      return problem(
+        400,
+        "invalid-path",
+        "approval target must be an existing tracked artifact",
+        undefined,
+        url.pathname,
+      );
+    }
+    const match = resolveTrackedFiles(bus.workspace).tracked.find((file) => {
+      try {
+        return realpathSync(file.rawPath) === requestedRealPath;
+      } catch {
+        return false;
+      }
+    });
+    if (!match) {
+      return problem(
+        400,
+        "invalid-path",
+        "approval target must be an existing tracked artifact",
+        undefined,
+        url.pathname,
+      );
+    }
+    normalizedTargetPath = match.path;
+  }
   const id = generateAnnotationId();
-  await bus.createEntry(id, {
-    kind: "attention_request",
-    ...(message !== undefined ? { message } : {}),
-    action,
-    ...(targetPath !== undefined ? { path: targetPath } : {}),
-  });
+  try {
+    await bus.createAttentionRequest(id, {
+      kind: "attention_request",
+      ...(message !== undefined ? { message } : {}),
+      action,
+      ...(approvalMode
+        ? { target_path: normalizedTargetPath!, approval_mode: true }
+        : targetPath !== undefined
+          ? { path: targetPath }
+          : {}),
+    });
+  } catch (error) {
+    if (error instanceof ApprovalConflictError) {
+      return problem(
+        409,
+        "approval-conflict",
+        "an approval request is already active for this artifact",
+        undefined,
+        url.pathname,
+      );
+    }
+    throw error;
+  }
   return new Response(JSON.stringify({ id, slug: entry.slug, status: "open" }), {
     status: 201,
     headers: { "Content-Type": "application/json" },

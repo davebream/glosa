@@ -80,11 +80,25 @@ export interface StatusSummary {
   sessions: SessionStatusSummary[];
 }
 
+export interface StandardAttentionVerdict {
+  outcome: "done" | "approved" | "changes_requested";
+  response?: string;
+}
+
+export interface ApprovalVerdict {
+  outcome: "approved";
+  target_path: string;
+  revision_id: string;
+  completed_at: string;
+}
+
+export type AttentionVerdict = StandardAttentionVerdict | ApprovalVerdict;
+
 export interface EntryStatus {
   id: string;
   kind: string;
   status: string;
-  detail: Record<string, unknown> | null;
+  detail: AttentionVerdict | null;
 }
 
 export interface ResolveResult {
@@ -148,7 +162,7 @@ export interface GlosaApiClient {
   applyBegin(path: string, entry: string, session: string): Promise<ApplyBeginResult>;
   createAttentionRequest(
     path: string,
-    opts: { message?: string; action?: string; targetPath?: string },
+    opts: { message?: string; action?: string; targetPath?: string; approvalMode?: boolean },
   ): Promise<AttentionRequestResult>;
   getEntryStatus(path: string, entry: string): Promise<EntryStatus | null>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
@@ -235,6 +249,7 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
           ...(opts.message !== undefined ? { message: opts.message } : {}),
           ...(opts.action !== undefined ? { action: opts.action } : {}),
           ...(opts.targetPath !== undefined ? { target_path: opts.targetPath } : {}),
+          ...(opts.approvalMode === true ? { approval_mode: true } : {}),
         })
       ).json();
     },

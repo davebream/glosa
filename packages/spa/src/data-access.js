@@ -99,17 +99,20 @@ export function computeBackoffMs(attempt, rand = Math.random) {
  *  @param {{fetchFn?: any, storage?: any, onEvent?: (frame: any) => void, onReconnect?: () => void,
  *           onStatus?: (status: "down"|"up") => unknown, onUnauthorized?: () => unknown,
  *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
-function openEventStream(path, {
-  fetchFn,
-  storage,
-  onEvent,
-  onReconnect,
-  onStatus,
-  onUnauthorized,
-  backoffFn = computeBackoffMs,
-  sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  randFn = Math.random,
-}) {
+function openEventStream(
+  path,
+  {
+    fetchFn,
+    storage,
+    onEvent,
+    onReconnect,
+    onStatus,
+    onUnauthorized,
+    backoffFn = computeBackoffMs,
+    sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    randFn = Math.random,
+  },
+) {
   let stopped = false;
   let lastEventId = null;
   let attempt = 0;
@@ -212,7 +215,17 @@ export function openStream({
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randFn = Math.random,
 }) {
-  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, { fetchFn, storage, onEvent, onReconnect, onStatus, onUnauthorized, backoffFn, sleepFn, randFn });
+  return openEventStream(`/w/${encodeURIComponent(slug)}/stream`, {
+    fetchFn,
+    storage,
+    onEvent,
+    onReconnect,
+    onStatus,
+    onUnauthorized,
+    backoffFn,
+    sleepFn,
+    randFn,
+  });
 }
 
 /** Opens `GET /w/:slug/transcript/stream` (P4.2, A1 §5.8/§8, A2 §F16) — the conversation mirror's
@@ -260,9 +273,11 @@ export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
   const storage = deps.storage ?? (typeof sessionStorage !== "undefined" ? sessionStorage : undefined);
   let unauthorizedHandled = false;
-  const onUnauthorized = deps.onUnauthorized ?? (() => {
-    if (typeof window !== "undefined") window.location.reload();
-  });
+  const onUnauthorized =
+    deps.onUnauthorized ??
+    (() => {
+      if (typeof window !== "undefined") window.location.reload();
+    });
 
   function handleUnauthorized() {
     storage?.removeItem(TOKEN_KEY);
@@ -365,11 +380,15 @@ export function createDataAccess(deps = {}) {
     markAttentionSeen(slug, id) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/seen`, { method: "POST" });
     },
-    respondToAttention(slug, id, { outcome, response } = {}) {
+    respondToAttention(slug, id, { outcome, response, revisionId } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/response`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outcome, ...(response ? { response } : {}) }),
+        body: JSON.stringify({
+          outcome,
+          ...(response ? { response } : {}),
+          ...(revisionId ? { revision_id: revisionId } : {}),
+        }),
       });
     },
     openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
@@ -403,9 +422,7 @@ export function createDataAccess(deps = {}) {
     },
 
     getComposerMessageStatus(slug, messageId) {
-      return requestJson(
-        `/w/${encodeURIComponent(slug)}/transcript/compose/${encodeURIComponent(messageId)}`,
-      );
+      return requestJson(`/w/${encodeURIComponent(slug)}/transcript/compose/${encodeURIComponent(messageId)}`);
     },
     /** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-
      * scoped capability for a class-F artifact. classf-viewer.js calls this once per iframe

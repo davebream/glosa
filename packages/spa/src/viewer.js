@@ -114,21 +114,28 @@ function splitPath(path) {
  * bootstrap.js doesn't call it today (the SPA never remounts within one page load), but a test
  * does, so a leaked stream connection never outlives one test case.
  */
-export function mountApp(root, {
-  dataAccess = createDataAccess(),
-  initialSlug,
-  initialArtifact,
-  surface = "workspace",
-  initialMode = "preview",
-  previewLock = false,
-  appearance,
-  onFocusChange,
-} = {}) {
+export function mountApp(
+  root,
+  {
+    dataAccess = createDataAccess(),
+    initialSlug,
+    initialArtifact,
+    surface = "workspace",
+    initialMode = "preview",
+    previewLock = false,
+    appearance,
+    onFocusChange,
+  } = {},
+) {
   root.textContent = "";
   root.classList.add("glosa-app");
   root.setAttribute("data-mode", MODES.includes(initialMode) ? initialMode : "preview");
   root.setAttribute("data-surface", surface === "document" ? "document" : "workspace");
   if (previewLock) root.setAttribute("data-preview-lock", "true");
+  let attentionEntries = [];
+  let approvalBusy = false;
+  let approvalError = "";
+  let approvalResult = null;
 
   // --- top bar ---
   const navToggle = el("button", {
@@ -174,7 +181,13 @@ export function mountApp(root, {
   const topbarOverlays = el("div", { className: "glosa-topbar-overlays" });
   const appearanceHost = el("div", { className: "glosa-appearance" });
   const attentionHost = el("div", { className: "glosa-attention" });
-  const attentionTray = mountAttentionTray(attentionHost, { dataAccess, overlayHost: topbarOverlays });
+  const attentionTray = mountAttentionTray(attentionHost, {
+    dataAccess,
+    overlayHost: topbarOverlays,
+    onEntriesChange: setAttentionEntries,
+    onOpenArtifact: requestOpenArtifact,
+    getCurrentArtifact: () => currentArtifact?.source_path ?? null,
+  });
   const toolsTrigger = el("button", {
     className: "glosa-tools-trigger",
     type: "button",
@@ -185,30 +198,60 @@ export function mountApp(root, {
   });
   toolsTrigger.innerHTML =
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg><span class="glosa-visually-hidden">More</span>';
-  const shortcutsToggle = el("button", { className: "glosa-shortcuts-toggle", type: "button", textContent: "Keyboard shortcuts", "aria-expanded": "false", "aria-controls": "glosa-shortcuts" });
-  const copySourceButton = el("button", { className: "glosa-tools-copy-source", type: "button", textContent: "Copy source", hidden: true });
-  const printArtifactButton = el("button", { className: "glosa-tools-print", type: "button", textContent: "Print / Save as PDF", hidden: true });
+  const shortcutsToggle = el("button", {
+    className: "glosa-shortcuts-toggle",
+    type: "button",
+    textContent: "Keyboard shortcuts",
+    "aria-expanded": "false",
+    "aria-controls": "glosa-shortcuts",
+  });
+  const copySourceButton = el("button", {
+    className: "glosa-tools-copy-source",
+    type: "button",
+    textContent: "Copy source",
+    hidden: true,
+  });
+  const printArtifactButton = el("button", {
+    className: "glosa-tools-print",
+    type: "button",
+    textContent: "Print / Save as PDF",
+    hidden: true,
+  });
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
   let toolsStatusArtifactPath = null;
   const stopAppearance = appearance
     ? mountAppearanceControl(appearanceHost, appearance, { overlayHost: topbarOverlays, returnFocus: toolsTrigger })
     : null;
-  const toolsMenu = el("div", {
-    id: "glosa-tools-menu",
-    className: "glosa-tools-menu",
-    role: "group",
-    "aria-label": "Workspace tools",
-  }, [attentionHost, historyToggle, conversationToggle, copySourceButton, printArtifactButton, appearanceHost, shortcutsToggle, toolsStatus]);
+  const toolsMenu = el(
+    "div",
+    {
+      id: "glosa-tools-menu",
+      className: "glosa-tools-menu",
+      role: "group",
+      "aria-label": "Workspace tools",
+    },
+    [
+      attentionHost,
+      historyToggle,
+      conversationToggle,
+      copySourceButton,
+      printArtifactButton,
+      appearanceHost,
+      shortcutsToggle,
+      toolsStatus,
+    ],
+  );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
-  const toolControls = () => [
-    attentionHost.querySelector(".glosa-attention-trigger"),
-    historyToggle,
-    conversationToggle,
-    copySourceButton,
-    printArtifactButton,
-    appearanceHost.querySelector(".glosa-appearance-trigger"),
-    shortcutsToggle,
-  ].filter((control) => control && !control.disabled && !control.hidden);
+  const toolControls = () =>
+    [
+      attentionHost.querySelector(".glosa-attention-trigger"),
+      historyToggle,
+      conversationToggle,
+      copySourceButton,
+      printArtifactButton,
+      appearanceHost.querySelector(".glosa-appearance-trigger"),
+      shortcutsToggle,
+    ].filter((control) => control && !control.disabled && !control.hidden);
 
   function setToolsStatus(message, { error = false } = {}) {
     toolsStatus.hidden = !message;
@@ -287,11 +330,12 @@ export function mountApp(root, {
     if (controls.length === 0) return;
     event.preventDefault();
     const current = Math.max(0, controls.indexOf(document.activeElement));
-    const next = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? controls.length - 1
-        : (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? controls.length - 1
+          : (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
     controls[next].focus();
   });
 
@@ -311,8 +355,7 @@ export function mountApp(root, {
     type: "button",
     title: "Expand all folders",
     "aria-label": "Expand all folders",
-    innerHTML:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>',
+    innerHTML: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>',
     onClick: () => artifactNavigator?.expandAll(),
   });
   const collapseArtifacts = el("button", {
@@ -320,8 +363,7 @@ export function mountApp(root, {
     type: "button",
     title: "Collapse all folders",
     "aria-label": "Collapse all folders",
-    innerHTML:
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>',
+    innerHTML: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>',
     onClick: () => artifactNavigator?.collapseAll(),
   });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [el("h2", { textContent: "Artifacts" })]);
@@ -354,7 +396,12 @@ export function mountApp(root, {
     editArea,
     el("div", { className: "glosa-edit-actions" }, [editStatus, saveButton]),
   ]);
-  const classFEl = el("div", { className: "glosa-classf", hidden: true, role: "region", "aria-label": "Artifact preview" });
+  const classFEl = el("div", {
+    className: "glosa-classf",
+    hidden: true,
+    role: "region",
+    "aria-label": "Artifact preview",
+  });
   const historyEl = el("section", {
     id: "glosa-history",
     className: "glosa-history",
@@ -367,7 +414,12 @@ export function mountApp(root, {
     hidden: true,
     "aria-labelledby": "glosa-conversation-toggle",
   });
-  const shortcutsEl = el("section", { id: "glosa-shortcuts", className: "glosa-shortcuts", hidden: true, "aria-labelledby": "glosa-shortcuts-toggle" });
+  const shortcutsEl = el("section", {
+    id: "glosa-shortcuts",
+    className: "glosa-shortcuts",
+    hidden: true,
+    "aria-labelledby": "glosa-shortcuts-toggle",
+  });
 
   // --- contextual margin (annotation cards + the ONE composer) ---
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
@@ -379,6 +431,11 @@ export function mountApp(root, {
   // absolutely positioned at their anchors' document offsets, so they scroll glued to the text.
   // Thin connection banner (hidden while healthy): honest words, no spinner theater.
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
+  const approvalStrip = el("section", {
+    className: "glosa-approval-strip",
+    hidden: true,
+    "aria-label": "Final approval",
+  });
   const annotateInstructions = el("p", {
     id: "glosa-annotate-instructions",
     className: "glosa-visually-hidden",
@@ -388,6 +445,7 @@ export function mountApp(root, {
 
   const mainEl = el("main", { className: "glosa-main" }, [
     bannerEl,
+    approvalStrip,
     annotateInstructions,
     emptyEl,
     skeletonEl,
@@ -397,17 +455,15 @@ export function mountApp(root, {
     marginEl,
     markersEl,
   ]);
-  const sidebarEl = el("nav", {
-    id: "glosa-sidebar",
-    className: "glosa-sidebar",
-    "aria-label": "Workspace navigation",
-  }, [
-    el("h2", { textContent: "Workspaces" }),
-    sidebarList,
-    artifactHeading,
-    artifactList,
-    artifactListEmpty,
-  ]);
+  const sidebarEl = el(
+    "nav",
+    {
+      id: "glosa-sidebar",
+      className: "glosa-sidebar",
+      "aria-label": "Workspace navigation",
+    },
+    [el("h2", { textContent: "Workspaces" }), sidebarList, artifactHeading, artifactList, artifactListEmpty],
+  );
 
   root.append(
     el("header", { className: "glosa-topbar" }, [
@@ -435,7 +491,7 @@ export function mountApp(root, {
   }
 
   artifactNavigator = createArtifactTreeNavigator(artifactList, {
-    onOpen: (path) => void openArtifact(path),
+    onOpen: (path) => void requestOpenArtifact(path),
   });
 
   let modeState = initialModeState(previewLock ? "preview" : initialMode);
@@ -455,13 +511,137 @@ export function mountApp(root, {
   let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
   let classFInteractive = false;
 
-  const compactNav = () => modeState?.mode === "preview" || (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches);
+  const compactNav = () =>
+    modeState?.mode === "preview" ||
+    (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches);
   const compactComposer = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1279px)").matches;
 
+  function matchingApprovalRequest() {
+    const path = currentArtifact?.source_path;
+    if (!path) return null;
+    return (
+      attentionEntries.find((entry) => entry.approval_mode === true && (entry.target_path ?? entry.target) === path) ??
+      null
+    );
+  }
+
+  function setAttentionEntries(entries) {
+    attentionEntries = Array.isArray(entries) ? entries : [];
+    renderApprovalStrip();
+  }
+
+  function renderApprovalStrip() {
+    if (!approvalStrip) return;
+    approvalStrip.textContent = "";
+    const currentPath = currentArtifact?.source_path;
+    if (approvalResult?.slug === currentSlug && approvalResult?.path === currentPath) {
+      approvalStrip.hidden = false;
+      approvalStrip.setAttribute("data-state", "success");
+      approvalStrip.append(
+        el("div", { className: "glosa-approval-copy" }, [
+          el("strong", { textContent: "Revision approved" }),
+          el("span", {
+            textContent: `Revision ${approvalResult.revisionId.slice(0, 12)} is approved. Later edits do not change that verdict.`,
+          }),
+        ]),
+      );
+      return;
+    }
+
+    const request = matchingApprovalRequest();
+    if (!request) {
+      approvalStrip.hidden = true;
+      approvalStrip.removeAttribute("data-state");
+      return;
+    }
+
+    approvalStrip.hidden = false;
+    approvalStrip.setAttribute("data-state", approvalError ? "error" : approvalBusy ? "loading" : "ready");
+    const supportingText =
+      request.message ||
+      (request.action && request.action !== "review"
+        ? `Requested check: ${request.action}`
+        : "Review this artifact before approving its saved revision.");
+    const copy = el("div", { className: "glosa-approval-copy" }, [
+      el("strong", { textContent: "Final approval requested" }),
+      el("span", { textContent: supportingText }),
+    ]);
+    const status = el("p", {
+      className: "glosa-approval-status",
+      role: approvalError ? "alert" : "status",
+      "aria-live": "polite",
+      textContent: approvalError || (approvalBusy ? "Saving and approving…" : ""),
+      hidden: !approvalError && !approvalBusy,
+    });
+    const button = el("button", {
+      className: "glosa-approval-button",
+      type: "button",
+      textContent: approvalBusy ? "Approving…" : "Final approval",
+      onClick: () => void approveCurrentArtifact(request),
+    });
+    button.disabled = approvalBusy;
+    approvalStrip.append(copy, el("div", { className: "glosa-approval-actions" }, [status, button]));
+  }
+
+  async function approveCurrentArtifact(request) {
+    if (approvalBusy || !currentArtifact || request !== matchingApprovalRequest()) return;
+    if (composer?.submitting || composer?.draft?.trim()) {
+      approvalError = "Send or cancel the annotation draft before final approval.";
+      if (composer) composer.error = approvalError;
+      renderMargin();
+      renderApprovalStrip();
+      queueMicrotask(() => marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true }));
+      return;
+    }
+
+    approvalError = "";
+    const dirty = currentArtifact.class === "R" && (modeState.dirty || Boolean(richEditor?.isDirty()));
+    const confirmed = await confirmDialog({
+      title: "Approve this revision?",
+      body: dirty
+        ? "Your pending edits will be saved first. This approves that exact saved revision; later edits will not change the approval."
+        : "This approves the current saved revision. Later edits will not change the approval.",
+      confirmLabel: "Approve revision",
+    });
+    if (!confirmed || request !== matchingApprovalRequest()) return;
+
+    approvalBusy = true;
+    renderApprovalStrip();
+    try {
+      if (dirty) await saveCurrentArtifact({ onlyIfDirty: true });
+      const revisionId = currentArtifact?.source_sha256;
+      if (!revisionId) throw new Error("The saved artifact has no revision identifier.");
+      const result = await dataAccess.respondToAttention(currentSlug, request.id, {
+        outcome: "approved",
+        revisionId,
+      });
+      const verdict = result?.detail ?? {};
+      approvalResult = {
+        slug: currentSlug,
+        path: currentArtifact.source_path,
+        revisionId: verdict.revision_id ?? revisionId,
+      };
+      attentionEntries = attentionEntries.filter((entry) => entry.id !== request.id);
+      approvalError = "";
+      void attentionTray.refresh();
+    } catch (error) {
+      const revisionChanged = String(error?.problem?.type ?? "").includes("artifact-revision-changed");
+      approvalError = revisionChanged
+        ? "The artifact changed before approval. Review the latest revision and try again."
+        : error instanceof Error
+          ? `Couldn’t approve this revision: ${error.message}`
+          : "Couldn’t approve this revision. Try again.";
+    } finally {
+      approvalBusy = false;
+      renderApprovalStrip();
+    }
+  }
+
   function focusPreview() {
-    const target = (!emptyEl.hidden ? emptyEl.querySelector(".glosa-empty-title, p") : null)
-      ?? contentEl.querySelector("h1, h2, h3, p")
-      ?? contentEl;
+    const target =
+      (!emptyEl.hidden ? emptyEl.querySelector(".glosa-empty-title, p") : null) ??
+      contentEl.querySelector("h1, h2, h3, p") ??
+      contentEl;
     if (!(target instanceof HTMLElement)) return;
     const temporaryTabIndex = !target.hasAttribute("tabindex");
     if (temporaryTabIndex) target.setAttribute("tabindex", "-1");
@@ -478,10 +658,11 @@ export function mountApp(root, {
     syncNavInteractivity();
     if (open && focusDrawer && compactNav()) {
       queueMicrotask(() => {
-        const target = artifactList.querySelector('[role="treeitem"][aria-current="page"]')
-          ?? artifactList.querySelector('[role="treeitem"][tabindex="0"]')
-          ?? sidebarList.querySelector('button[aria-current="true"]')
-          ?? sidebarList.querySelector("button");
+        const target =
+          artifactList.querySelector('[role="treeitem"][aria-current="page"]') ??
+          artifactList.querySelector('[role="treeitem"][tabindex="0"]') ??
+          sidebarList.querySelector('button[aria-current="true"]') ??
+          sidebarList.querySelector("button");
         target?.focus();
       });
     } else if (!open && restoreFocus) {
@@ -497,7 +678,9 @@ export function mountApp(root, {
   }
 
   syncNavInteractivity();
-  navToggle.addEventListener("click", () => setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }));
+  navToggle.addEventListener("click", () =>
+    setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }),
+  );
   backdrop.addEventListener("click", () => setNavOpen(false, { restoreFocus: true }));
 
   // R6/A5 §F11: class-F Edit follows the generic derived-from edge — enabled only when the
@@ -560,12 +743,7 @@ export function mountApp(root, {
     const request = ++richMountRequest;
     try {
       const mountRichEditor = await loadRichEditor();
-      if (
-        request !== richMountRequest
-        || sourceFace
-        || modeState.mode !== "edit"
-        || !currentArtifact
-      ) return;
+      if (request !== richMountRequest || sourceFace || modeState.mode !== "edit" || !currentArtifact) return;
       richEditor = mountRichEditor(richEl, {
         markdown,
         onDirty: () => {
@@ -608,8 +786,9 @@ export function mountApp(root, {
     if (loading || modeState.mode !== "annotate" || !currentArtifact || currentArtifact.class === "F") return;
     annotateInstructions.hidden = false;
     contentEl.setAttribute("aria-describedby", annotateInstructions.id);
-    const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]"))
-      .filter((block) => block.textContent.trim());
+    const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]")).filter((block) =>
+      block.textContent.trim(),
+    );
     const focusedIndex = blocks.indexOf(document.activeElement);
     if (focusedIndex >= 0) annotatableFocusIndex = focusedIndex;
     annotatableFocusIndex = Math.min(annotatableFocusIndex, Math.max(0, blocks.length - 1));
@@ -637,6 +816,7 @@ export function mountApp(root, {
     contentEl.hidden = isEdit || isClassF || !currentArtifact || loading;
     classFEl.hidden = !isClassF;
     renderTitle();
+    renderApprovalStrip();
 
     if (!currentArtifact) {
       updateAnnotatableBlocks();
@@ -645,7 +825,8 @@ export function mountApp(root, {
           "Choose an artifact to review.",
           el("p", {
             className: "glosa-empty-hint",
-            textContent: "Its rendered manuscript opens here — switch to Annotate and select any passage to comment on it.",
+            textContent:
+              "Its rendered manuscript opens here — switch to Annotate and select any passage to comment on it.",
           }),
         );
       }
@@ -692,13 +873,20 @@ export function mountApp(root, {
     classFEl.textContent = "";
     const interactive = modeState.mode !== "preview" || classFInteractive;
     const frameHost = el("div", { className: "glosa-classf-frame" });
-    const status = el("p", { className: "glosa-classf-status", role: "status", textContent: interactive ? "Interactive preview" : "Reading-only preview of external content" });
+    const status = el("p", {
+      className: "glosa-classf-status",
+      role: "status",
+      textContent: interactive ? "Interactive preview" : "Reading-only preview of external content",
+    });
     const openInteractive = el("button", {
       className: "glosa-classf-interactive",
       type: "button",
       textContent: "Open interactive preview",
       hidden: interactive,
-      onClick: () => { classFInteractive = true; mountClassFArtifact(true); },
+      onClick: () => {
+        classFInteractive = true;
+        mountClassFArtifact(true);
+      },
     });
     classFEl.append(status, openInteractive, frameHost);
     stopClassFViewer = mountClassFViewer(frameHost, {
@@ -777,7 +965,10 @@ export function mountApp(root, {
       closeComposer();
     } catch (error) {
       composer.submitting = false;
-      composer.error = error instanceof Error ? `Couldn't send this annotation: ${error.message}` : "Couldn't send this annotation. Try again.";
+      composer.error =
+        error instanceof Error
+          ? `Couldn't send this annotation: ${error.message}`
+          : "Couldn't send this annotation. Try again.";
       renderMargin();
       queueMicrotask(() => marginEl.querySelector(".glosa-composer-input")?.focus());
     }
@@ -788,7 +979,9 @@ export function mountApp(root, {
     const form = el("form", { className: "glosa-composer", "aria-label": "New annotation" });
     if (record.target?.quote?.exact) {
       // Inner span so the anchor wash hugs the quoted words instead of striping the whole card.
-      form.append(el("p", { className: "glosa-composer-quote" }, [el("span", { textContent: record.target.quote.exact })]));
+      form.append(
+        el("p", { className: "glosa-composer-quote" }, [el("span", { textContent: record.target.quote.exact })]),
+      );
     }
     const intents = el("div", { className: "glosa-composer-intents", role: "group", "aria-label": "Feedback intent" });
     for (const intent of INTENTS) {
@@ -820,7 +1013,12 @@ export function mountApp(root, {
         void submitComposer(input);
       }
     });
-    const cancel = el("button", { className: "glosa-btn glosa-btn-ghost", type: "button", textContent: "Cancel", onClick: closeComposer });
+    const cancel = el("button", {
+      className: "glosa-btn glosa-btn-ghost",
+      type: "button",
+      textContent: "Cancel",
+      onClick: closeComposer,
+    });
     const send = el("button", {
       className: "glosa-composer-send",
       type: "button",
@@ -952,7 +1150,11 @@ export function mountApp(root, {
   /** True when the margin is the side overlay (annotate mode, wide window) rather than the
    * in-flow block under the manuscript. */
   function isSideMargin() {
-    return modeState.mode === "annotate" && typeof window !== "undefined" && window.matchMedia?.("(min-width: 1280px)").matches;
+    return (
+      modeState.mode === "annotate" &&
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(min-width: 1280px)").matches
+    );
   }
 
   /** Aligns each margin card (and the open composer) beside its anchor: anchor rect → offset in
@@ -971,9 +1173,7 @@ export function mountApp(root, {
     for (const cardEl of positioned) {
       const item = cardEl._glosaItem;
       const range = item ? rangeForTarget(item.record?.target ?? item.target) : null;
-      const anchorTop = range
-        ? range.getBoundingClientRect().top - mainTop + mainEl.scrollTop
-        : prevBottom + 8;
+      const anchorTop = range ? range.getBoundingClientRect().top - mainTop + mainEl.scrollTop : prevBottom + 8;
       const top = Math.max(anchorTop, prevBottom + (prevBottom ? 8 : 0));
       cardEl.style.top = `${Math.round(top)}px`;
       prevBottom = top + cardEl.offsetHeight;
@@ -996,7 +1196,8 @@ export function mountApp(root, {
         "aria-label": "Go to annotation",
         onClick: () => {
           const cardEl = [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
-          const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          const reducedMotion =
+            typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
           cardEl?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
           cardEl?.classList.add("glosa-annotation-flash");
           setTimeout(() => cardEl?.classList.remove("glosa-annotation-flash"), 1200);
@@ -1007,8 +1208,7 @@ export function mountApp(root, {
     }
   }
 
-  const highlightsAvailable = () =>
-    typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
+  const highlightsAvailable = () => typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
 
   /** The open composer owns a temporary, persistent selection wash. It deliberately lives in a
    * separate highlight from saved annotation underlines, so closing/sending a draft cannot erase
@@ -1034,7 +1234,8 @@ export function mountApp(root, {
       }
     }
     if (!highlightsAvailable()) return;
-    if (anchoredRanges.length) CSS.highlights.set("glosa-anchors", new Highlight(...anchoredRanges.map((a) => a.range)));
+    if (anchoredRanges.length)
+      CSS.highlights.set("glosa-anchors", new Highlight(...anchoredRanges.map((a) => a.range)));
     else CSS.highlights.delete("glosa-anchors");
   }
 
@@ -1119,10 +1320,17 @@ export function mountApp(root, {
       const anchored = Boolean(rangeForTarget(record.target));
       const card = el("div", { className: "glosa-annotation", "data-state": state, "data-anchored": String(anchored) });
       if (record.target?.quote?.exact) {
-        card.append(el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]));
+        card.append(
+          el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]),
+        );
       }
       if (!anchored) {
-        card.append(el("p", { className: "glosa-annotation-lost", textContent: "Lost its place — the passage changed since this was written." }));
+        card.append(
+          el("p", {
+            className: "glosa-annotation-lost",
+            textContent: "Lost its place — the passage changed since this was written.",
+          }),
+        );
       }
       card.append(
         el("p", { className: "glosa-annotation-body", textContent: record.body }),
@@ -1221,9 +1429,10 @@ export function mountApp(root, {
       renderContent();
       return;
     }
-    const carried = richEditor && (richEditor.isDirty() || modeState.dirty)
-      ? richEditor.getMarkdown()
-      : currentArtifact?.content ?? "";
+    const carried =
+      richEditor && (richEditor.isDirty() || modeState.dirty)
+        ? richEditor.getMarkdown()
+        : (currentArtifact?.content ?? "");
     teardownRichFace();
     sourceFace = true;
     renderContent();
@@ -1243,19 +1452,26 @@ export function mountApp(root, {
     void mountRichFace(carried);
   });
 
-  saveButton.addEventListener("click", async () => {
-    if (!currentSlug || !currentArtifact || saveButton.disabled) return;
+  function currentEditorContent() {
+    if (!currentArtifact) return "";
+    return !sourceFace && richEditor
+      ? richEditor.isDirty() || modeState.dirty
+        ? richEditor.getMarkdown()
+        : (currentArtifact.content ?? "")
+      : editArea.value;
+  }
+
+  async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
+    if (!currentSlug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
+    const dirty = modeState.dirty || Boolean(richEditor?.isDirty());
+    if (onlyIfDirty && !dirty) return currentArtifact;
     saveButton.disabled = true;
     editStatus.removeAttribute("data-error");
     editStatus.textContent = "Saving…";
     try {
       // The rich face serializes ONLY when the document changed (its own edits, or source-face
       // edits carried in via `modeState.dirty`); a clean editor saves the artifact's exact bytes.
-      const content = !sourceFace && richEditor
-        ? richEditor.isDirty() || modeState.dirty
-          ? richEditor.getMarkdown()
-          : currentArtifact.content ?? ""
-        : editArea.value;
+      const content = currentEditorContent();
       const saved = await dataAccess.putArtifact(currentSlug, currentArtifact.source_path, content, {
         ifMatch: currentArtifact.source_sha256,
       });
@@ -1271,11 +1487,25 @@ export function mountApp(root, {
       editStatus.textContent = "Saved.";
       renderModeBar();
       renderContent();
+      return currentArtifact;
     } catch (error) {
       editStatus.setAttribute("data-error", "true");
-      editStatus.textContent = error instanceof Error ? `Couldn't save this artifact: ${error.message}` : "Couldn't save this artifact. Try again.";
+      editStatus.textContent =
+        error instanceof Error
+          ? `Couldn't save this artifact: ${error.message}`
+          : "Couldn't save this artifact. Try again.";
+      throw error;
     } finally {
       saveButton.disabled = false;
+    }
+  }
+
+  saveButton.addEventListener("click", async () => {
+    if (!currentSlug || !currentArtifact || saveButton.disabled) return;
+    try {
+      await saveCurrentArtifact();
+    } catch {
+      // saveCurrentArtifact keeps the user's source intact and renders the actionable error.
     }
   });
 
@@ -1286,8 +1516,10 @@ export function mountApp(root, {
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
     const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
     if (!record) return;
-    let returnFocus = selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
-    while (returnFocus?.parentElement && returnFocus.parentElement !== contentEl) returnFocus = returnFocus.parentElement;
+    let returnFocus =
+      selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
+    while (returnFocus?.parentElement && returnFocus.parentElement !== contentEl)
+      returnFocus = returnFocus.parentElement;
     openComposer(record, { returnFocus: returnFocus instanceof HTMLElement ? returnFocus : contentEl });
   });
 
@@ -1302,11 +1534,12 @@ export function mountApp(root, {
     if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       event.preventDefault();
       const current = Math.max(0, blocks.indexOf(block));
-      const next = event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? blocks.length - 1
-          : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? blocks.length - 1
+            : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
       annotatableFocusIndex = next;
       for (const [index, candidate] of blocks.entries()) {
         candidate.setAttribute("tabindex", index === next ? "0" : "-1");
@@ -1374,9 +1607,19 @@ export function mountApp(root, {
   let shortcutsVisible = false;
 
   function closeContextSurfaces(except = null) {
-    if (except !== "history") { historyVisible = false; historyEl.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); }
-    if (except !== "conversation") { setConversationVisible(false); }
-    if (except !== "shortcuts") { shortcutsVisible = false; shortcutsEl.hidden = true; shortcutsToggle.setAttribute("aria-expanded", "false"); }
+    if (except !== "history") {
+      historyVisible = false;
+      historyEl.hidden = true;
+      historyToggle.setAttribute("aria-expanded", "false");
+    }
+    if (except !== "conversation") {
+      setConversationVisible(false);
+    }
+    if (except !== "shortcuts") {
+      shortcutsVisible = false;
+      shortcutsEl.hidden = true;
+      shortcutsToggle.setAttribute("aria-expanded", "false");
+    }
   }
 
   async function renderHistory() {
@@ -1385,7 +1628,18 @@ export function mountApp(root, {
     try {
       const mountHistoryPane = await loadHistoryPane();
       if (!historyVisible || currentSlug !== slug) return;
-      mountHistoryPane(historyEl, { dataAccess, slug, path: currentArtifact?.source_path, canRestore: modeState.mode === "edit", onClose: () => { historyVisible = false; historyEl.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); toolsTrigger.focus({ preventScroll: true }); } });
+      mountHistoryPane(historyEl, {
+        dataAccess,
+        slug,
+        path: currentArtifact?.source_path,
+        canRestore: modeState.mode === "edit",
+        onClose: () => {
+          historyVisible = false;
+          historyEl.hidden = true;
+          historyToggle.setAttribute("aria-expanded", "false");
+          toolsTrigger.focus({ preventScroll: true });
+        },
+      });
       queueMicrotask(() => historyEl.querySelector("h3")?.focus({ preventScroll: true }));
     } catch {
       if (!historyVisible || currentSlug !== slug) return;
@@ -1453,8 +1707,22 @@ export function mountApp(root, {
     shortcutsToggle.setAttribute("aria-expanded", String(nextVisible));
     if (nextVisible) {
       shortcutsEl.textContent = "";
-      const close = el("button", { type: "button", className: "glosa-context-close", textContent: "Close keyboard shortcuts", onClick: () => { shortcutsVisible = false; shortcutsEl.hidden = true; shortcutsToggle.setAttribute("aria-expanded", "false"); toolsTrigger.focus({ preventScroll: true }); } });
-      shortcutsEl.append(el("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }), el("p", { textContent: "⌘/Ctrl+1 Preview · ⌘/Ctrl+2 Annotate · ⌘/Ctrl+3 Edit" }), close);
+      const close = el("button", {
+        type: "button",
+        className: "glosa-context-close",
+        textContent: "Close keyboard shortcuts",
+        onClick: () => {
+          shortcutsVisible = false;
+          shortcutsEl.hidden = true;
+          shortcutsToggle.setAttribute("aria-expanded", "false");
+          toolsTrigger.focus({ preventScroll: true });
+        },
+      });
+      shortcutsEl.append(
+        el("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }),
+        el("p", { textContent: "⌘/Ctrl+1 Preview · ⌘/Ctrl+2 Annotate · ⌘/Ctrl+3 Edit" }),
+        close,
+      );
       queueMicrotask(() => shortcutsEl.querySelector("h3")?.focus({ preventScroll: true }));
     }
   });
@@ -1465,11 +1733,32 @@ export function mountApp(root, {
     }
   }
 
+  async function requestOpenArtifact(path) {
+    if (!path) return false;
+    if (path === currentArtifact?.source_path) {
+      queueMicrotask(() => approvalStrip.querySelector("button")?.focus({ preventScroll: true }));
+      return true;
+    }
+    if (modeState.mode === "edit" && modeState.dirty) {
+      const discard = await confirmDialog({
+        title: "Discard unsaved edits?",
+        body: "This artifact has changes that haven't been saved. Opening another artifact throws them away.",
+        confirmLabel: "Discard edits",
+        danger: true,
+      });
+      if (!discard) return false;
+      modeState = { ...modeState, dirty: false, blocked: null };
+    }
+    approvalError = "";
+    return openArtifact(path);
+  }
+
   async function openArtifact(path) {
     const returnToReading = compactNav() && root.getAttribute("data-nav-open") === "true";
     loading = true;
     classFInteractive = false;
     composer = null;
+    teardownRichFace();
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(currentSlug, path, { render: "html" });
@@ -1485,7 +1774,7 @@ export function mountApp(root, {
       renderModeBar();
       renderContent();
       if (returnToReading) queueMicrotask(focusPreview);
-      return;
+      return false;
     }
     loading = false;
     setNavOpen(false); // compact: picking an artifact closes the drawer and returns to reading
@@ -1496,6 +1785,7 @@ export function mountApp(root, {
     renderContent();
     void renderHistory(); // the open pane, if any, should reflect the newly opened artifact
     if (returnToReading) queueMicrotask(focusPreview);
+    return true;
   }
 
   async function refreshArtifactList() {

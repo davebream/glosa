@@ -194,7 +194,8 @@ function applyGuardedTransition(state: DerivedState, event: JournalEvent): void 
   // The terminal (or any legally-applied) transition's own `detail` — e.g. an attention `done`'s
   // verdict — rides along on the entry so a `--wait` caller (R9) can read it off the derived
   // state without re-scanning the journal for the resolving event.
-  entryState.detail = event.detail;
+  const { to: _transitionTarget, ...publicDetail } = event.detail ?? {};
+  entryState.detail = Object.keys(publicDetail).length > 0 ? publicDetail : undefined;
 }
 
 /** The full P2.5 reducer: owns `entry_created` / `delivery_attempt` / `transition_committed` /

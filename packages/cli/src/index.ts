@@ -370,6 +370,10 @@ function createSubCommands(setExitCode: (code: number) => void) {
         path: { type: "positional", required: true, description: "Artifact path" },
         message: { type: "string", description: "Message shown with the request" },
         action: { type: "string", description: "Requested review action" },
+        "require-approval": {
+          type: "boolean",
+          description: "Require explicit final approval of the saved artifact revision",
+        },
         wait: { type: "string", description: "Wait for a verdict for this duration" },
       },
     },
@@ -398,6 +402,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
           path: values.path as string,
           message: values.message as string | undefined,
           action: values.action as string | undefined,
+          requireApproval: values["require-approval"] as boolean | undefined,
           waitMs,
         },
         requestModule.realRequestReviewDeps(createHttpGlosaClient),

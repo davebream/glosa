@@ -13,7 +13,16 @@ function node(tag, props = {}, children = []) {
 
 const STATUS_LABELS = { open: "Waiting", delivered: "Delivered", seen: "Seen" };
 
-export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
+export function mountAttentionTray(
+  host,
+  {
+    dataAccess,
+    overlayHost = host,
+    onEntriesChange = () => {},
+    onOpenArtifact = async (_path) => true,
+    getCurrentArtifact = () => null,
+  },
+) {
   let slug = null;
   let open = false;
   let entries = [];
@@ -29,7 +38,8 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
     "aria-controls": "glosa-attention-tray",
     "aria-label": "Attention requests",
   });
-  trigger.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.2a4.6 4.6 0 0 0-4.6 4.6v2.5L4 12.7h12l-1.4-2.4V7.8A4.6 4.6 0 0 0 10 3.2ZM8.2 15a2 2 0 0 0 3.6 0"/></svg><span class="glosa-attention-label">Attention</span><span class="glosa-attention-badge" hidden>0</span>';
+  trigger.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.2a4.6 4.6 0 0 0-4.6 4.6v2.5L4 12.7h12l-1.4-2.4V7.8A4.6 4.6 0 0 0 10 3.2ZM8.2 15a2 2 0 0 0 3.6 0"/></svg><span class="glosa-attention-label">Attention</span><span class="glosa-attention-badge" hidden>0</span>';
   const tray = node("section", {
     id: "glosa-attention-tray",
     className: "glosa-attention-tray",
@@ -45,7 +55,10 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
     badge.hidden = entries.length === 0;
     trigger.disabled = !slug;
     trigger.setAttribute("aria-expanded", String(open));
-    trigger.setAttribute("aria-label", entries.length > 0 ? `Attention requests, ${entries.length} pending` : "Attention requests, none pending");
+    trigger.setAttribute(
+      "aria-label",
+      entries.length > 0 ? `Attention requests, ${entries.length} pending` : "Attention requests, none pending",
+    );
   }
 
   function render() {
@@ -54,9 +67,19 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
     updateTrigger();
     if (!open) return;
 
-    const close = node("button", { className: "glosa-attention-close", type: "button", textContent: "Close", "aria-label": "Close attention requests" });
+    const close = node("button", {
+      className: "glosa-attention-close",
+      type: "button",
+      textContent: "Close",
+      "aria-label": "Close attention requests",
+    });
     close.addEventListener("click", () => setOpen(false, true));
-    tray.append(node("div", { className: "glosa-attention-heading" }, [node("h2", { id: "glosa-attention-title", textContent: "Attention" }), close]));
+    tray.append(
+      node("div", { className: "glosa-attention-heading" }, [
+        node("h2", { id: "glosa-attention-title", textContent: "Attention" }),
+        close,
+      ]),
+    );
 
     if (loading) {
       tray.append(node("p", { className: "glosa-attention-state", textContent: "Loading requests…", role: "status" }));
@@ -65,17 +88,35 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
     if (loadError) {
       const retry = node("button", { className: "glosa-secondary-button", type: "button", textContent: "Try again" });
       retry.addEventListener("click", () => void refresh());
-      tray.append(node("div", { className: "glosa-attention-state", role: "alert" }, [node("p", { textContent: loadError }), retry]));
+      tray.append(
+        node("div", { className: "glosa-attention-state", role: "alert" }, [
+          node("p", { textContent: loadError }),
+          retry,
+        ]),
+      );
       return;
     }
     if (entries.length === 0) {
-      tray.append(node("p", { className: "glosa-attention-state", textContent: "No requests need your attention.", role: "status" }));
+      tray.append(
+        node("p", {
+          className: "glosa-attention-state",
+          textContent: "No requests need your attention.",
+          role: "status",
+        }),
+      );
       return;
     }
 
     const list = node("ul", { className: "glosa-attention-list" });
     for (const entry of entries) {
-      const response = node("textarea", { className: "glosa-attention-response", rows: 2, maxLength: 4096, placeholder: "Optional response", "aria-label": `Response to ${entry.message ?? entry.target ?? "request"}` });
+      const targetPath = entry.target_path ?? entry.target;
+      const response = node("textarea", {
+        className: "glosa-attention-response",
+        rows: 2,
+        maxLength: 4096,
+        placeholder: "Optional response",
+        "aria-label": `Response to ${entry.message ?? targetPath ?? "request"}`,
+      });
       const status = node("p", { className: "glosa-attention-response-status", role: "status", "aria-live": "polite" });
       const actions = node("div", { className: "glosa-attention-actions" });
 
@@ -97,25 +138,68 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
         }
       };
 
-      const specs = entry.action === "review"
-        ? [["approved", "Approve"], ["changes_requested", "Request changes"]]
-        : [["done", "Done"]];
-      for (const [outcome, label] of specs) {
-        const button = node("button", { className: outcome === "approved" || outcome === "done" ? "glosa-primary-button" : "glosa-secondary-button", type: "button", textContent: label, "data-label": label });
-        button.addEventListener("click", () => void submit(outcome, button));
+      if (entry.approval_mode === true) {
+        const isCurrent = targetPath && targetPath === getCurrentArtifact();
+        const label = isCurrent ? "Continue review" : "Open artifact";
+        const button = node("button", {
+          className: "glosa-primary-button",
+          type: "button",
+          textContent: label,
+          "data-label": label,
+        });
+        button.disabled = !targetPath;
+        button.addEventListener("click", async () => {
+          status.textContent = "";
+          button.disabled = true;
+          button.textContent = "Opening…";
+          try {
+            const opened = await onOpenArtifact(targetPath);
+            if (opened !== false) setOpen(false);
+            else {
+              button.disabled = false;
+              button.textContent = label;
+            }
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = label;
+            status.textContent = error instanceof Error ? error.message : "The artifact could not be opened.";
+          }
+        });
         actions.append(button);
+      } else {
+        const specs =
+          entry.action === "review"
+            ? [
+                ["approved", "Approve"],
+                ["changes_requested", "Request changes"],
+              ]
+            : [["done", "Done"]];
+        for (const [outcome, label] of specs) {
+          const button = node("button", {
+            className: outcome === "approved" || outcome === "done" ? "glosa-primary-button" : "glosa-secondary-button",
+            type: "button",
+            textContent: label,
+            "data-label": label,
+          });
+          button.addEventListener("click", () => void submit(outcome, button));
+          actions.append(button);
+        }
       }
 
-      list.append(node("li", { className: "glosa-attention-item" }, [
+      const children = [
         node("div", { className: "glosa-attention-meta" }, [
           node("span", { textContent: STATUS_LABELS[entry.status] ?? entry.status }),
-          ...(entry.target ? [node("code", { textContent: entry.target })] : []),
+          ...(targetPath ? [node("code", { textContent: targetPath })] : []),
         ]),
-        node("p", { className: "glosa-attention-message", textContent: entry.message ?? "A session requested your attention." }),
-        response,
+        node("p", {
+          className: "glosa-attention-message",
+          textContent: entry.message ?? "A session requested your attention.",
+        }),
+        ...(entry.approval_mode === true ? [] : [response]),
         actions,
         status,
-      ]));
+      ];
+      list.append(node("li", { className: "glosa-attention-item" }, children));
     }
     tray.append(list);
   }
@@ -140,10 +224,16 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
     try {
       const result = await dataAccess.getInbox(slug);
       entries = result.attention ?? [];
+      onEntriesChange(entries);
       if (open) {
-        await Promise.all(entries.filter((entry) => entry.status === "open" || entry.status === "delivered").map((entry) => dataAccess.markAttentionSeen(slug, entry.id)));
+        await Promise.all(
+          entries
+            .filter((entry) => entry.status === "open" || entry.status === "delivered")
+            .map((entry) => dataAccess.markAttentionSeen(slug, entry.id)),
+        );
         const seen = await dataAccess.getInbox(slug);
         entries = seen.attention ?? [];
+        onEntriesChange(entries);
       }
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Attention requests could not be loaded.";
@@ -186,6 +276,7 @@ export function mountAttentionTray(host, { dataAccess, overlayHost = host }) {
       slug = nextSlug;
       open = false;
       entries = [];
+      onEntriesChange(entries);
       render();
       void refresh();
     },

@@ -8,7 +8,7 @@
 //
 // Kept in lockstep with the daemon's CONTRACT_VERSION (packages/daemon/src/contract.ts) — bump
 // alongside a real wire-contract change, not on every daemon restart.
-export const CONTRACT_VERSION = "1.2";
+export const CONTRACT_VERSION = "1.3";
 
 // P3.3 — the class-R viewer (workspace/artifact sidebar + Preview/Annotate/Edit). A static
 // top-level import, same as every other module here: no dynamic `import()` needed since this
