@@ -435,7 +435,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     {
       title: "Present an artifact",
       description:
-        "Register/open an absolute file path and return a ready SPA URL. Never launches a browser. mode preview is preview-locked; annotate/edit select an unlocked initial mode. Uses the MCP host session when available, otherwise session_id.",
+        "Register/open an absolute file path and return a ready SPA URL. Never launches a browser. mode preview is preview-locked and session-independent; annotate/edit select an unlocked initial mode and bind the MCP host session or explicit session_id.",
       inputSchema: presentInputSchema,
       outputSchema: presentOutputSchema,
       annotations: {
@@ -445,11 +445,11 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ path, mode, session_id: requestedSession }) => {
       const hostSession = deps.sessionId?.();
-      if (hostSession && requestedSession && requestedSession !== hostSession) {
+      const previewLock = mode === "preview";
+      if (!previewLock && hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
       }
-      const bindSessionId = hostSession ?? requestedSession;
-      const previewLock = mode === "preview";
+      const bindSessionId = previewLock ? undefined : (hostSession ?? requestedSession);
       const result = await runOpenPresentation(
         path,
         undefined,

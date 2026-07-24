@@ -73,9 +73,11 @@ glosa init
 glosa open
 ```
 
-`glosa init` installs workspace-local hooks and MCP configuration. `glosa open` starts or reuses the
-singleton daemon and opens a paired browser tab. Run `glosa doctor` to verify the integration, or
-`glosa --help` to see every command.
+`glosa init` installs workspace-local hooks and MCP configuration for feedback delivery (hooks,
+routing, and optional Channels). A durable global MCP entry can run preview-only `glosa_present`
+without workspace init — read-only preview URLs do not require hooks. `glosa open` starts or reuses
+the singleton daemon and opens a paired browser tab. Run `glosa doctor` to verify the
+workspace-installed integration, or `glosa --help` to see every command.
 
 > [!NOTE]
 > A durable global install is required for `glosa init`: generated hooks must keep working after the

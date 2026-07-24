@@ -98,10 +98,17 @@ configured Claude root after realpath confinement.
 Routing precedence is fixed:
 
 1. explicit `POST /w/:slug/session-binding`, `glosa session bind`, `glosa_session_bind`,
-   `glosa open --bind <session-id>`, or `glosa_present` (host session or explicit `session_id`);
-   open/present binding failures are nonfatal warnings that preserve the presentation URL;
+   `glosa open --bind <session-id>`, or `glosa_present` with `mode:"annotate"` or `mode:"edit"`
+   (host session or explicit `session_id`); open/present binding failures are nonfatal warnings that
+   preserve the presentation URL;
 2. generic cwd-ancestor matching;
 3. park the entry until a session is registered and bound.
+
+`glosa_present` with `mode:"preview"` is session-independent: it registers the artifact and returns
+a preview-locked URL but never binds a session. A durable global or non-workspace MCP entry may use
+preview-only presentation without `glosa init`; init remains required for workspace delivery
+integration (hooks, feedback routing, and Channels). `glosa doctor` verifies workspace-installed
+integration only.
 
 Bindings are session-scoped. An external integration restores them after session registration rather
 than persisting workflow-specific state inside glosa. Two live sessions bound to one workspace require

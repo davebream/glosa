@@ -603,7 +603,7 @@ describe("official TypeScript MCP SDK contract", () => {
     await expect(running).resolves.toBeUndefined();
   });
 
-  test("glosa_present returns a p= URL, never launches a browser, never returns durable t=", async () => {
+  test("glosa_present preview returns a p= URL without binding, never launches a browser, never returns durable t=", async () => {
     const mkdtemp = await import("node:fs").then((fs) => fs.mkdtempSync);
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -635,7 +635,7 @@ describe("official TypeScript MCP SDK contract", () => {
       try {
         const result = await callTool(connected.client, {
           name: "glosa_present",
-          arguments: { path: file, mode: "preview" },
+          arguments: { path: file, mode: "preview", session_id: "explicit-session" },
         });
         expect(result.isError).not.toBe(true);
         const body = structured(result) as {
@@ -644,15 +644,74 @@ describe("official TypeScript MCP SDK contract", () => {
           surface: string;
           mode: string;
           bound_session?: string;
+          warnings?: Array<{ code: string; message: string }>;
         };
         expect(body.url).toContain("p=ephemeral-present-token");
+        expect(body.url).toContain("lock=preview");
         expect(body.url).not.toContain("t=");
         expect(body.preview).toBe(true);
         expect(body.surface).toBe("document");
         expect(body.mode).toBe("preview");
-        expect(body.bound_session).toBe("host-session");
+        expect(body.bound_session).toBeUndefined();
+        expect(body.warnings?.some((w) => w.code === "bind-failed")).not.toBe(true);
+        expect(body.warnings?.some((w) => w.code === "preview-bind-conflict")).not.toBe(true);
         expect(calls.some((c) => c.startsWith("open:"))).toBe(true);
         expect(calls).toContain("mint");
+        expect(calls.some((c) => c.startsWith("bind:"))).toBe(false);
+      } finally {
+        await connected.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("glosa_present annotate binds the host session and returns bound_session", async () => {
+    const mkdtemp = await import("node:fs").then((fs) => fs.mkdtempSync);
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { writeFileSync, rmSync } = await import("node:fs");
+    const dir = mkdtemp(join(tmpdir(), "glosa-present-annotate-"));
+    const file = join(dir, "note.md");
+    writeFileSync(file, "# hi\n");
+    try {
+      const calls: string[] = [];
+      const api: Partial<GlosaApiClient> = {
+        port: 4646,
+        openWorkspace: async (path) => {
+          calls.push(`open:${path}`);
+          return { slug: "note-abc", path: dir, focus: "note.md", kind: "loose-file" };
+        },
+        mintPresentationToken: async () => {
+          calls.push("mint");
+          return { token: "ephemeral-annotate-token", expires_in_s: 60 };
+        },
+        bindSession: async (path, sessionId) => {
+          calls.push(`bind:${path}:${sessionId}`);
+          return { bound: true, session_id: sessionId };
+        },
+      };
+      const connected = await connect({
+        ...deps(new HookClient(), api),
+        sessionId: () => "host-session",
+      });
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_present",
+          arguments: { path: file, mode: "annotate" },
+        });
+        expect(result.isError).not.toBe(true);
+        const body = structured(result) as {
+          url: string;
+          mode: string;
+          preview: boolean;
+          bound_session?: string;
+        };
+        expect(body.url).toContain("p=ephemeral-annotate-token");
+        expect(body.url).not.toContain("lock=preview");
+        expect(body.mode).toBe("annotate");
+        expect(body.preview).toBe(false);
+        expect(body.bound_session).toBe("host-session");
         expect(calls.some((c) => c.startsWith("bind:"))).toBe(true);
       } finally {
         await connected.close();
