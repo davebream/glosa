@@ -290,6 +290,17 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
     expect(OPAQUE_SANDBOX_HANDSHAKE_TARGET_ORIGIN).toBe("*");
   });
 
+  test("reading-only preview uses an empty sandbox while retaining the isolated capability URL", async () => {
+    const container = dom.document.createElement("div");
+    dom.document.body.append(container);
+    const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
+    mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "notes.html", interactive: false });
+    await Promise.resolve();
+    const iframe = container.querySelector("iframe")!;
+    expect(iframe.getAttribute("sandbox")).toBe("");
+    expect(iframe.src).toBe("http://127.0.0.1:4647/doc/tok/notes.html");
+  });
+
   test("unmount() removes the iframe from the container", async () => {
     const container = dom.document.createElement("div");
     dom.document.body.append(container);

@@ -236,6 +236,38 @@ button {
   display: none;
 }
 
+/* Preview is a reading canvas at every width: the navigator becomes an explicit drawer instead
+   of reserving a persistent desktop column. */
+.glosa-app[data-mode="preview"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "main";
+}
+
+.glosa-app[data-mode="preview"] .glosa-nav-toggle {
+  display: inline-flex;
+}
+
+.glosa-app[data-mode="preview"] .glosa-sidebar {
+  position: fixed;
+  inset: var(--topbar-height) auto 0 0;
+  width: min(var(--nav-width), 85vw);
+  z-index: var(--z-drawer);
+  transform: translateX(-100%);
+  transition: transform var(--dur-base) var(--ease-out);
+  box-shadow: 2px 0 8px oklch(0.24 0.01 110 / 0.12);
+}
+
+.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-sidebar { transform: translateX(0); }
+.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-backdrop {
+  display: block;
+  position: fixed;
+  inset: var(--topbar-height) 0 0;
+  z-index: calc(var(--z-drawer) - 1);
+  background: oklch(0.24 0.01 110 / 0.25);
+}
+
 /* The contextual margin is an overlay INSIDE the manuscript's scroll container (viewer.js puts
    it there), so cards scroll glued to their anchors; at annotate widths the manuscript shifts
    left to clear it (brief §7.2). */
@@ -1107,6 +1139,13 @@ button {
   width: 100%;
 }
 
+.glosa-classf { flex-direction: column; }
+.glosa-classf-status { margin: var(--space-3) auto var(--space-2); color: var(--muted); font-size: var(--text-sm); }
+.glosa-classf-status[data-error="true"] { color: var(--danger); font-weight: 600; }
+.glosa-classf-interactive { align-self: center; margin-bottom: var(--space-3); padding: var(--space-1) var(--space-3); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); }
+.glosa-classf-frame { flex: 1; display: flex; min-height: 0; }
+.glosa-classf-frame iframe { flex: 1; }
+
 .glosa-classf[role="alert"] {
   align-items: center;
   justify-content: center;
@@ -1799,6 +1838,11 @@ button {
   margin: 0 0 var(--space-2);
 }
 
+.glosa-context-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.glosa-context-close { padding: var(--space-1) var(--space-2); color: var(--muted); border-radius: 6px; }
+.glosa-context-close:hover { background: var(--surface-sunken); color: var(--ink); }
+.glosa-shortcuts { grid-area: main; z-index: var(--z-sticky); padding: var(--space-6); background: var(--bg); }
+
 .glosa-history-status {
   color: var(--muted);
   font-size: var(--text-xs);
@@ -2336,10 +2380,11 @@ button {
     display: block;
   }
 
-  .glosa-tools-menu .glosa-attention-trigger,
-  .glosa-tools-menu .glosa-history-toggle,
-  .glosa-tools-menu .glosa-conversation-toggle,
-  .glosa-tools-menu .glosa-appearance-trigger {
+.glosa-tools-menu .glosa-attention-trigger,
+.glosa-tools-menu .glosa-history-toggle,
+.glosa-tools-menu .glosa-conversation-toggle,
+.glosa-tools-menu .glosa-shortcuts-toggle,
+.glosa-tools-menu .glosa-appearance-trigger {
     width: 100%;
     height: auto;
     min-height: 2.5rem;

@@ -178,13 +178,14 @@ export function mountApp(root, {
   const toolsTrigger = el("button", {
     className: "glosa-tools-trigger",
     type: "button",
-    title: "More tools",
-    "aria-label": "More tools",
+    title: "More",
+    "aria-label": "More",
     "aria-expanded": "false",
     "aria-controls": "glosa-tools-menu",
   });
   toolsTrigger.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg>';
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg><span class="glosa-visually-hidden">More</span>';
+  const shortcutsToggle = el("button", { className: "glosa-shortcuts-toggle", type: "button", textContent: "Keyboard shortcuts", "aria-expanded": "false", "aria-controls": "glosa-shortcuts" });
   const stopAppearance = appearance
     ? mountAppearanceControl(appearanceHost, appearance, { overlayHost: topbarOverlays, returnFocus: toolsTrigger })
     : null;
@@ -193,13 +194,14 @@ export function mountApp(root, {
     className: "glosa-tools-menu",
     role: "group",
     "aria-label": "Workspace tools",
-  }, [attentionHost, historyToggle, conversationToggle, appearanceHost]);
+  }, [attentionHost, historyToggle, conversationToggle, appearanceHost, shortcutsToggle]);
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
   const toolControls = () => [
     attentionHost.querySelector(".glosa-attention-trigger"),
     historyToggle,
     conversationToggle,
     appearanceHost.querySelector(".glosa-appearance-trigger"),
+    shortcutsToggle,
   ].filter((control) => control && !control.disabled);
 
   function setToolsOpen(open, { restoreFocus = false } = {}) {
@@ -268,13 +270,7 @@ export function mountApp(root, {
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>',
     onClick: () => artifactNavigator?.collapseAll(),
   });
-  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
-    el("h2", { textContent: "Artifacts" }),
-    el("div", { className: "glosa-tree-tools", role: "group", "aria-label": "Artifact tree" }, [
-      expandArtifacts,
-      collapseArtifacts,
-    ]),
-  ]);
+  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [el("h2", { textContent: "Artifacts" })]);
   const artifactListEmpty = el("p", {
     className: "glosa-sidebar-empty",
     textContent: "Markdown, HTML, and text files in this workspace appear here.",
@@ -317,6 +313,7 @@ export function mountApp(root, {
     hidden: true,
     "aria-labelledby": "glosa-conversation-toggle",
   });
+  const shortcutsEl = el("section", { id: "glosa-shortcuts", className: "glosa-shortcuts", hidden: true, "aria-labelledby": "glosa-shortcuts-toggle" });
 
   // --- contextual margin (annotation cards + the ONE composer) ---
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
@@ -372,6 +369,7 @@ export function mountApp(root, {
     mainEl,
     historyEl,
     conversationEl,
+    shortcutsEl,
   );
 
   if (surface === "document") {
@@ -401,8 +399,9 @@ export function mountApp(root, {
   let annotatableFocusIndex = 0;
   let stopStream = null;
   let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
+  let classFInteractive = false;
 
-  const compactNav = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches;
+  const compactNav = () => modeState?.mode === "preview" || (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches);
   const compactComposer = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1279px)").matches;
 
   function focusPreview() {
@@ -635,18 +634,31 @@ export function mountApp(root, {
     classFEl.setAttribute("role", "region");
     classFEl.setAttribute("aria-label", "Artifact preview");
     classFEl.setAttribute("data-path", currentArtifact.source_path);
-    stopClassFViewer = mountClassFViewer(classFEl, {
+    classFEl.textContent = "";
+    const interactive = modeState.mode !== "preview" || classFInteractive;
+    const frameHost = el("div", { className: "glosa-classf-frame" });
+    const status = el("p", { className: "glosa-classf-status", role: "status", textContent: interactive ? "Interactive preview" : "Reading-only preview of external content" });
+    const openInteractive = el("button", {
+      className: "glosa-classf-interactive",
+      type: "button",
+      textContent: "Open interactive preview",
+      hidden: interactive,
+      onClick: () => { classFInteractive = true; mountClassFArtifact(true); },
+    });
+    classFEl.append(status, openInteractive, frameHost);
+    stopClassFViewer = mountClassFViewer(frameHost, {
       dataAccess,
       slug: currentSlug,
       artifactPath: currentArtifact.source_path,
+      interactive,
       onSelection: (target) => {
         if (modeState.mode !== "annotate") return;
         openComposer({ body: "", intent: "content", target });
       },
       onError: (message) => {
-        classFEl.setAttribute("role", "alert");
-        classFEl.removeAttribute("aria-label");
-        classFEl.textContent = `This preview couldn't be opened. ${message}`;
+        status.setAttribute("data-error", "true");
+        status.textContent = `This preview couldn't be opened. ${message}`;
+        openInteractive.hidden = interactive;
       },
     });
   }
@@ -1130,8 +1142,11 @@ export function mountApp(root, {
       return;
     }
     modeState = next;
+    if (modeState.mode !== "preview") classFInteractive = true;
     renderModeBar();
     renderContent();
+    void renderHistory();
+    if (conversationVisible) void renderConversation();
     onFocusChange?.({ slug: currentSlug, artifact: currentArtifact?.source_path ?? null, mode: modeState.mode });
     if (modeState.mode === "edit" && previousMode !== "edit") mainEl.scrollTop = 0;
   }
@@ -1301,6 +1316,13 @@ export function mountApp(root, {
   if (typeof window !== "undefined") window.addEventListener("resize", onResize);
 
   let historyVisible = false;
+  let shortcutsVisible = false;
+
+  function closeContextSurfaces(except = null) {
+    if (except !== "history") { historyVisible = false; historyEl.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); }
+    if (except !== "conversation") { setConversationVisible(false); }
+    if (except !== "shortcuts") { shortcutsVisible = false; shortcutsEl.hidden = true; shortcutsToggle.setAttribute("aria-expanded", "false"); }
+  }
 
   async function renderHistory() {
     if (!historyVisible || !currentSlug) return;
@@ -1308,7 +1330,8 @@ export function mountApp(root, {
     try {
       const mountHistoryPane = await loadHistoryPane();
       if (!historyVisible || currentSlug !== slug) return;
-      mountHistoryPane(historyEl, { dataAccess, slug, path: currentArtifact?.source_path });
+      mountHistoryPane(historyEl, { dataAccess, slug, path: currentArtifact?.source_path, canRestore: modeState.mode === "edit", onClose: () => { historyVisible = false; historyEl.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); toolsTrigger.focus({ preventScroll: true }); } });
+      queueMicrotask(() => historyEl.querySelector("h3")?.focus({ preventScroll: true }));
     } catch {
       if (!historyVisible || currentSlug !== slug) return;
       historyEl.setAttribute("role", "alert");
@@ -1318,7 +1341,7 @@ export function mountApp(root, {
 
   historyToggle.addEventListener("click", () => {
     const nextVisible = !historyVisible;
-    if (nextVisible && conversationVisible) setConversationVisible(false);
+    if (nextVisible) closeContextSurfaces("history");
     historyVisible = nextVisible;
     historyEl.hidden = !historyVisible;
     historyToggle.setAttribute("aria-expanded", String(historyVisible));
@@ -1348,9 +1371,10 @@ export function mountApp(root, {
       stopConversation = mountConversationPane(conversationEl, {
         dataAccess,
         slug,
+        readOnly: modeState.mode === "preview",
         onClose: () => {
           setConversationVisible(false);
-          conversationToggle.focus({ preventScroll: true });
+          toolsTrigger.focus({ preventScroll: true });
         },
       });
     } catch {
@@ -1362,12 +1386,22 @@ export function mountApp(root, {
 
   conversationToggle.addEventListener("click", () => {
     const nextVisible = !conversationVisible;
-    if (nextVisible && historyVisible) {
-      historyVisible = false;
-      historyEl.hidden = true;
-      historyToggle.setAttribute("aria-expanded", "false");
-    }
+    if (nextVisible) closeContextSurfaces("conversation");
     setConversationVisible(nextVisible);
+  });
+
+  shortcutsToggle.addEventListener("click", () => {
+    const nextVisible = !shortcutsVisible;
+    if (nextVisible) closeContextSurfaces("shortcuts");
+    shortcutsVisible = nextVisible;
+    shortcutsEl.hidden = !nextVisible;
+    shortcutsToggle.setAttribute("aria-expanded", String(nextVisible));
+    if (nextVisible) {
+      shortcutsEl.textContent = "";
+      const close = el("button", { type: "button", className: "glosa-context-close", textContent: "Close keyboard shortcuts", onClick: () => { shortcutsVisible = false; shortcutsEl.hidden = true; shortcutsToggle.setAttribute("aria-expanded", "false"); toolsTrigger.focus({ preventScroll: true }); } });
+      shortcutsEl.append(el("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }), el("p", { textContent: "⌘/Ctrl+1 Preview · ⌘/Ctrl+2 Annotate · ⌘/Ctrl+3 Edit" }), close);
+      queueMicrotask(() => shortcutsEl.querySelector("h3")?.focus({ preventScroll: true }));
+    }
   });
 
   function markCurrent(listEl, key) {
@@ -1379,6 +1413,7 @@ export function mountApp(root, {
   async function openArtifact(path) {
     const returnToReading = compactNav() && root.getAttribute("data-nav-open") === "true";
     loading = true;
+    classFInteractive = false;
     composer = null;
     renderContent();
     try {

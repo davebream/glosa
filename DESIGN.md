@@ -172,6 +172,8 @@ The top bar owns one quiet, icon-only appearance control at its far edge. Its na
 
 **The Reading Measure Rule.** Manuscript prose stays between 65ch and 75ch with generous line-height. Operational panels may be denser; writing never becomes a data table.
 
+**The Preview Boundary Rule.** Preview keeps only artifact access, the mode switch, and More in persistent chrome. Navigation, version comparison, agent context, appearance, and shortcuts open as contextual surfaces; anything that changes an artifact or sends feedback requires an explicit Annotate or Edit transition.
+
 **The No Display Labels Rule.** Buttons, tabs, chips, paths, and state labels never use expressive display typography.
 
 ## 4. Elevation
