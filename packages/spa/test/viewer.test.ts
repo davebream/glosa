@@ -241,7 +241,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const trigger = root.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
-    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(5);
+    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(7);
+    expect((menu.querySelector(".glosa-tools-copy-source") as any).hidden).toBe(true);
+    expect((menu.querySelector(".glosa-tools-print") as any).hidden).toBe(true);
 
     trigger.click();
     await Promise.resolve();
@@ -263,6 +265,70 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement as any).toBe(trigger);
 
     unmount();
+  });
+
+  test("Class-R tools copy the raw source, print the rendered manuscript, and report clipboard failures", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const writes: string[] = [];
+    let printCalls = 0;
+    Object.defineProperty(dom.window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => { writes.push(text); } },
+    });
+    Object.defineProperty(dom.window, "print", { configurable: true, value: () => { printCalls += 1; } });
+
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const copy = root.querySelector(".glosa-tools-copy-source") as any;
+    const printButton = root.querySelector(".glosa-tools-print") as any;
+    expect(copy.hidden).toBe(false);
+    expect(printButton.hidden).toBe(false);
+
+    copy.click();
+    await Promise.resolve();
+    expect(writes).toEqual(["# Title\n\nBody.\n"]);
+    expect(root.querySelector(".glosa-tools-status")?.textContent).toBe("Source copied.");
+
+    printButton.click();
+    expect(printCalls).toBe(1);
+
+    Object.defineProperty(dom.window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async () => { throw new Error("denied"); } },
+    });
+    copy.click();
+    await Promise.resolve();
+    const status = root.querySelector(".glosa-tools-status") as any;
+    expect(status.hidden).toBe(false);
+    expect(status.getAttribute("data-error")).toBe("true");
+    expect(status.textContent).toContain("Couldn't copy source");
+  });
+
+  test("Class-F artifacts do not offer copy or print tools", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, {
+      dataAccess: fakeDataAccess({
+        getArtifacts: async () => [{ path: "preview.html", class: "F" }],
+        getArtifact: async (_slug: string, path: string) => ({
+          source_path: path,
+          source_sha256: "sha-html",
+          class: "F",
+          content: "",
+          rendered_html: "",
+        }),
+      }),
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect((root.querySelector(".glosa-tools-copy-source") as any).hidden).toBe(true);
+    expect((root.querySelector(".glosa-tools-print") as any).hidden).toBe(true);
   });
 
   test("a closed compact navigator is inert and returns to the focus order only while open", async () => {
