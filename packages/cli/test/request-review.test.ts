@@ -6,7 +6,10 @@ import { printRequestReviewResult, runRequestReview, type RequestReviewDeps } fr
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { captureStdout } from "./test-utils.ts";
 
-function makeDeps(client: FakeGlosaApiClient = new FakeGlosaApiClient()): { deps: RequestReviewDeps; client: FakeGlosaApiClient } {
+function makeDeps(client: FakeGlosaApiClient = new FakeGlosaApiClient()): {
+  deps: RequestReviewDeps;
+  client: FakeGlosaApiClient;
+} {
   const deps: RequestReviewDeps = {
     createClient: async () => client as unknown as GlosaApiClient,
     now: () => 0,
@@ -27,7 +30,9 @@ describe("glosa request-review", () => {
 
   test("daemon unreachable -> exit 3", async () => {
     const deps: RequestReviewDeps = {
-      createClient: async () => { throw daemonUnreachable(); },
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
       now: () => 0,
       sleep: async () => {},
       pollIntervalMs: 1,
@@ -49,6 +54,34 @@ describe("glosa request-review", () => {
     });
   });
 
+  test("--require-approval sends the opt-in flag while preserving custom task context", async () => {
+    const client = new FakeGlosaApiClient();
+    const { deps } = makeDeps(client);
+    const result = await runRequestReview(
+      {
+        dir: "/repo",
+        path: "notes.md",
+        message: "Check the citations",
+        action: "proofread",
+        requireApproval: true,
+      },
+      deps,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.calls[0]).toEqual({
+      method: "createAttentionRequest",
+      args: [
+        "/repo",
+        {
+          message: "Check the citations",
+          action: "proofread",
+          targetPath: "notes.md",
+          approvalMode: true,
+        },
+      ],
+    });
+  });
+
   test("--wait: polls until a terminal attention status lands, then reports the verdict", async () => {
     const client = new FakeGlosaApiClient();
     client.attentionRequestResult = { id: "inb-1", slug: "ws-1", status: "open" };
@@ -62,7 +95,9 @@ describe("glosa request-review", () => {
     const deps: RequestReviewDeps = {
       createClient: async () => client as unknown as GlosaApiClient,
       now: () => now,
-      sleep: async () => { now += 1000; },
+      sleep: async () => {
+        now += 1000;
+      },
       pollIntervalMs: 1000,
     };
     const result = await runRequestReview({ dir: "/repo", path: "notes.md", waitMs: 60_000 }, deps);
@@ -83,7 +118,9 @@ describe("glosa request-review", () => {
     const deps: RequestReviewDeps = {
       createClient: async () => client as unknown as GlosaApiClient,
       now: () => now,
-      sleep: async () => { now += 5000; },
+      sleep: async () => {
+        now += 5000;
+      },
       pollIntervalMs: 5000,
     };
     const result = await runRequestReview({ dir: "/repo", path: "notes.md", waitMs: 10_000 }, deps);
@@ -94,11 +131,28 @@ describe("glosa request-review", () => {
   test("workspace creation fails at the API level -> exit 4 (not_a_workspace)", async () => {
     const client = new FakeGlosaApiClient();
     client.createAttentionRequest = async () => {
-      throw apiError(400, { type: "https://glosa.local/errors/invalid-path", title: "path does not resolve to a real directory" });
+      throw apiError(400, {
+        type: "https://glosa.local/errors/invalid-path",
+        title: "path does not resolve to a real directory",
+      });
     };
     const { deps } = makeDeps(client);
     const result = await runRequestReview({ dir: "/nowhere", path: "notes.md" }, deps);
     expect(result.exitCode).toBe(4);
+  });
+
+  test("duplicate active approval -> exit 8 (approval-conflict)", async () => {
+    const client = new FakeGlosaApiClient();
+    client.createAttentionRequest = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/approval-conflict",
+        title: "an approval request is already active for this artifact",
+      });
+    };
+    const { deps } = makeDeps(client);
+    const result = await runRequestReview({ dir: "/repo", path: "notes.md", requireApproval: true }, deps);
+    expect(result.exitCode).toBe(8);
+    expect(result.error).toMatchObject({ code: "approval-conflict", kind: "conflict" });
   });
 
   test("--json envelope has exactly the documented top-level keys", async () => {
@@ -106,7 +160,9 @@ describe("glosa request-review", () => {
     const result = await runRequestReview({ dir: "/repo", path: "notes.md" }, deps);
     const out = captureStdout(() => printRequestReviewResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "request-review", exit_code: 0 });
   });
 });

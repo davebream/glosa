@@ -62,7 +62,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.contract_version).toBe("1.2");
+    expect(body.contract_version).toBe("1.3");
     expect(body.daemon_version).toBe(APP_VERSION);
     expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists

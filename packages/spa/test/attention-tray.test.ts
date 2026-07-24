@@ -9,14 +9,19 @@ async function flush(count = 8) {
 
 describe("attention tray", () => {
   let dom: DomEnv;
-  beforeEach(() => { dom = installDom(); });
+  beforeEach(() => {
+    dom = installDom();
+  });
   afterEach(() => dom.teardown());
 
   test("shows a workspace badge, marks requests seen on open, and renders action-aware controls", async () => {
     const calls: unknown[] = [];
     let status = "open";
     const dataAccess = {
-      getInbox: async (slug: string) => ({ pending_count: 1, attention: [{ id: "a1", status, message: "Review this", action: "review", target: "draft.md" }] }),
+      getInbox: async (slug: string) => ({
+        pending_count: 1,
+        attention: [{ id: "a1", status, message: "Review this", action: "review", target: "draft.md" }],
+      }),
       markAttentionSeen: async (slug: string, id: string) => {
         calls.push(["seen", slug, id]);
         status = "seen";
@@ -34,7 +39,9 @@ describe("attention tray", () => {
     (host.querySelector(".glosa-attention-trigger") as any).click();
     await flush();
     expect(calls).toEqual([["seen", "ws-one", "a1"]]);
-    expect(Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent)).toEqual(["Approve", "Request changes"]);
+    expect(
+      Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent),
+    ).toEqual(["Approve", "Request changes"]);
     expect(host.textContent).toContain("Seen");
   });
 
@@ -43,7 +50,10 @@ describe("attention tray", () => {
     dom.document.body.append(host);
     const tray = mountAttentionTray(host, {
       dataAccess: {
-        getInbox: async () => ({ pending_count: 1, attention: [{ id: "a1", status: "seen", message: "Continue", action: null, target: null }] }),
+        getInbox: async () => ({
+          pending_count: 1,
+          attention: [{ id: "a1", status: "seen", message: "Continue", action: null, target: null }],
+        }),
         markAttentionSeen: async () => ({}),
         respondToAttention: async () => ({}),
       },
@@ -53,10 +63,55 @@ describe("attention tray", () => {
     const trigger = host.querySelector(".glosa-attention-trigger") as any;
     trigger.click();
     await flush();
-    expect(Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent)).toEqual(["Done"]);
-    host.querySelector(".glosa-attention-tray")?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(
+      Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent),
+    ).toEqual(["Done"]);
+    host
+      .querySelector(".glosa-attention-tray")
+      ?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect((host.querySelector(".glosa-attention-tray") as any).hidden).toBe(true);
     expect(dom.document.activeElement).toBe(trigger);
+  });
+
+  test("approval-mode requests navigate to the artifact and never render terminal response controls", async () => {
+    const opened: string[] = [];
+    const entry = {
+      id: "approval-1",
+      status: "seen",
+      message: "Check citations",
+      action: "proofread",
+      target_path: "draft.md",
+      approval_mode: true,
+    };
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const tray = mountAttentionTray(host, {
+      dataAccess: {
+        getInbox: async () => ({ pending_count: 1, attention: [entry] }),
+        markAttentionSeen: async () => ({}),
+        respondToAttention: async () => {
+          throw new Error("approval must not be completed from the tray");
+        },
+      },
+      getCurrentArtifact: () => null,
+      onOpenArtifact: async (path: string) => {
+        opened.push(path);
+        return true;
+      },
+    });
+    tray.setWorkspace("ws-one");
+    await flush();
+    (host.querySelector(".glosa-attention-trigger") as any).click();
+    await flush();
+
+    expect(host.querySelector(".glosa-attention-response")).toBeNull();
+    expect(
+      Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent),
+    ).toEqual(["Open artifact"]);
+    (host.querySelector(".glosa-primary-button") as any).click();
+    await flush();
+    expect(opened).toEqual(["draft.md"]);
+    expect((host.querySelector(".glosa-attention-tray") as any).hidden).toBe(true);
   });
 
   test("successful response keeps keyboard focus inside the refreshed tray", async () => {
@@ -87,7 +142,9 @@ describe("attention tray", () => {
     expect(host.textContent).toContain("No requests need your attention.");
     const close = host.querySelector(".glosa-attention-close") as any;
     expect(dom.document.activeElement).toBe(close);
-    host.querySelector(".glosa-attention-tray")?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    host
+      .querySelector(".glosa-attention-tray")
+      ?.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(dom.document.activeElement).toBe(trigger);
   });
 
@@ -96,9 +153,14 @@ describe("attention tray", () => {
     dom.document.body.append(host);
     const tray = mountAttentionTray(host, {
       dataAccess: {
-        getInbox: async () => ({ pending_count: 1, attention: [{ id: "a1", status: "seen", message: "Review", action: "review", target: null }] }),
+        getInbox: async () => ({
+          pending_count: 1,
+          attention: [{ id: "a1", status: "seen", message: "Review", action: "review", target: null }],
+        }),
         markAttentionSeen: async () => ({}),
-        respondToAttention: async () => { throw new Error("disk full"); },
+        respondToAttention: async () => {
+          throw new Error("disk full");
+        },
       },
     });
     tray.setWorkspace("ws-one");

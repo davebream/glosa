@@ -46,10 +46,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     sessions: [],
   };
 
-  async openWorkspace(
-    path: string,
-    opts?: OpenWorkspaceOptions,
-  ): Promise<OpenWorkspaceResult> {
+  async openWorkspace(path: string, opts?: OpenWorkspaceOptions): Promise<OpenWorkspaceResult> {
     this.calls.push({ method: "openWorkspace", args: opts === undefined ? [path] : [path, opts] });
     return this.openWorkspaceResult;
   }
@@ -74,7 +71,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
 
   async createAttentionRequest(
     path: string,
-    opts: { message?: string; action?: string; targetPath?: string },
+    opts: { message?: string; action?: string; targetPath?: string; approvalMode?: boolean },
   ): Promise<AttentionRequestResult> {
     this.calls.push({ method: "createAttentionRequest", args: [path, opts] });
     return this.attentionRequestResult;
