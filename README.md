@@ -75,7 +75,7 @@ mapping outranks the `--registry` flag, and bun has no scoped-registry flag at a
 Install from the published tarball URL, which resolves without consulting any registry configuration:
 
 ```sh
-bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.3.tgz
+bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.4.tgz
 ```
 
 Or, with npm, use the scoped form — which does beat a scope mapping:

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-07-25
+
 ### Added
 
 - `glosa update` upgrades an existing installation in place. It resolves and verifies the release
@@ -19,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   documented workaround failed in exactly the situation it claimed to fix.
 - Detected package-runner caches under a custom `BUN_INSTALL` root, which were previously mistaken
   for durable installs.
+- Pinned the transitive `brace-expansion` dependency to clear the OSV release-security advisory.
 
 ## [0.1.0-alpha.3] - 2026-07-24
 
@@ -75,7 +78,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.0...v0.1.0-alpha.1
