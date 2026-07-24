@@ -91,10 +91,7 @@ describe("morphArtifactContent — idiomorph (happy-dom)", () => {
     // node wholesale, this property would be gone.
     (firstP as unknown as { _scrollMarker: string })._scrollMarker = "keep-me";
 
-    morphArtifactContent(
-      container,
-      '<p data-line="0">Hello world</p><p data-line="1">Second paragraph EDITED</p>',
-    );
+    morphArtifactContent(container, '<p data-line="0">Hello world</p><p data-line="1">Second paragraph EDITED</p>');
 
     const firstPAfter = container.querySelector('[data-line="0"]')!;
     expect(firstPAfter).toBe(firstP); // same object reference — not rebuilt
@@ -106,10 +103,7 @@ describe("morphArtifactContent — idiomorph (happy-dom)", () => {
     dom.document.body.innerHTML = '<div id="c"><p data-line="0">Only paragraph</p></div>';
     const container = dom.document.getElementById("c")!;
 
-    morphArtifactContent(
-      container,
-      '<p data-line="0">Only paragraph</p><p data-line="1">A new second paragraph</p>',
-    );
+    morphArtifactContent(container, '<p data-line="0">Only paragraph</p><p data-line="1">A new second paragraph</p>');
 
     expect(container.querySelectorAll("p")).toHaveLength(2);
     expect(container.querySelector('[data-line="1"]')!.textContent).toBe("A new second paragraph");
@@ -172,7 +166,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       // P4.1 — the class-F viewer's data-access surface. Not exercised by this file's own tests
       // (none of them open a class-F artifact); stubbed only so mountApp's `dataAccess` shape,
       // inferred from the real createDataAccess() default, is satisfied.
-      mintClassFCapability: async () => ({ url: "http://127.0.0.1:4647/doc/tok/x.html", nonce: "n", expires_in_s: 600 }),
+      mintClassFCapability: async () => ({
+        url: "http://127.0.0.1:4647/doc/tok/x.html",
+        nonce: "n",
+        expires_in_s: 600,
+      }),
       // P4.2 — the conversation pane's data-access surface. Not exercised by every test in this
       // file (only the "Conversation" toggle test below opens it); stubbed here so mountApp's
       // `dataAccess` shape, inferred from the real createDataAccess() default, is satisfied
@@ -241,7 +239,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const trigger = root.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
-    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(7);
+    expect(
+      menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance"),
+    ).toHaveLength(7);
     expect((menu.querySelector(".glosa-tools-copy-source") as any).hidden).toBe(true);
     expect((menu.querySelector(".glosa-tools-print") as any).hidden).toBe(true);
 
@@ -274,9 +274,18 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     let printCalls = 0;
     Object.defineProperty(dom.window.navigator, "clipboard", {
       configurable: true,
-      value: { writeText: async (text: string) => { writes.push(text); } },
+      value: {
+        writeText: async (text: string) => {
+          writes.push(text);
+        },
+      },
     });
-    Object.defineProperty(dom.window, "print", { configurable: true, value: () => { printCalls += 1; } });
+    Object.defineProperty(dom.window, "print", {
+      configurable: true,
+      value: () => {
+        printCalls += 1;
+      },
+    });
 
     mountApp(root, { dataAccess: fakeDataAccess() });
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -298,7 +307,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     Object.defineProperty(dom.window.navigator, "clipboard", {
       configurable: true,
-      value: { writeText: async () => { throw new Error("denied"); } },
+      value: {
+        writeText: async () => {
+          throw new Error("denied");
+        },
+      },
     });
     copy.click();
     await Promise.resolve();
@@ -391,6 +404,136 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(da.put).toEqual([{ path: "notes.md", content: "# Title\n\nEdited.\n" }]);
+  });
+
+  test("matching approval request renders the contextual strip and clean confirmation approves without saving", async () => {
+    const responses: unknown[] = [];
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess({
+      getInbox: async () => ({
+        pending_count: 1,
+        attention: [
+          {
+            id: "approval-1",
+            status: "seen",
+            message: "Check the citations",
+            action: "proofread",
+            target_path: "notes.md",
+            approval_mode: true,
+          },
+        ],
+      }),
+      respondToAttention: async (_slug: string, _id: string, body: unknown) => {
+        responses.push(body);
+        return {
+          status: "done",
+          detail: {
+            outcome: "approved",
+            target_path: "notes.md",
+            revision_id: "sha-1",
+            completed_at: "2026-07-24T12:00:00.000Z",
+          },
+        };
+      },
+    });
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    const strip = root.querySelector(".glosa-approval-strip") as any;
+    expect(strip.hidden).toBe(false);
+    expect(strip.textContent).toContain("Final approval requested");
+    expect(strip.textContent).toContain("Check the citations");
+
+    (strip.querySelector(".glosa-approval-button") as any).click();
+    await Promise.resolve();
+    expect(dom.document.querySelector(".glosa-dialog h2")?.textContent).toBe("Approve this revision?");
+    (dom.document.querySelector(".glosa-dialog .glosa-btn-ghost") as any).click();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(da.put).toEqual([]);
+    expect(responses).toEqual([]);
+
+    (strip.querySelector(".glosa-approval-button") as any).click();
+    await Promise.resolve();
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click();
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+
+    expect(da.put).toEqual([]);
+    expect(responses).toEqual([{ outcome: "approved", revisionId: "sha-1" }]);
+    expect(strip.textContent).toContain("Revision sha-1 is approved");
+    expect(strip.querySelector("button")).toBeNull();
+  });
+
+  test("dirty final approval saves and re-fetches before submitting the resulting revision", async () => {
+    const sequence: string[] = [];
+    let revision = "a".repeat(64);
+    let content = "# Title\n";
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess({
+      getInbox: async () => ({
+        pending_count: 1,
+        attention: [
+          {
+            id: "approval-1",
+            status: "seen",
+            action: "review",
+            target_path: "notes.md",
+            approval_mode: true,
+          },
+        ],
+      }),
+      getArtifact: async (_slug: string, path: string) => {
+        sequence.push(`get:${revision}`);
+        return {
+          source_path: path,
+          source_sha256: revision,
+          class: "R",
+          content,
+          rendered_html: `<h1 data-line="0">${content}</h1>`,
+        };
+      },
+      putArtifact: async (_slug: string, _path: string, nextContent: string) => {
+        sequence.push("put");
+        content = nextContent;
+        revision = "b".repeat(64);
+        return { source_path: "notes.md", source_sha256: revision };
+      },
+      respondToAttention: async (_slug: string, _id: string, body: any) => {
+        sequence.push(`respond:${body.revisionId}`);
+        return {
+          status: "done",
+          detail: {
+            outcome: "approved",
+            target_path: "notes.md",
+            revision_id: body.revisionId,
+            completed_at: "2026-07-24T12:00:00.000Z",
+          },
+        };
+      },
+    });
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    (root.querySelector('[data-mode="edit"]') as any).click();
+    (root.querySelector(".glosa-face-source") as any).click();
+    const editor = root.querySelector(".glosa-edit-area") as any;
+    editor.value = "# Revised\n";
+    editor.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    (root.querySelector(".glosa-approval-button") as any).click();
+    await Promise.resolve();
+    expect(dom.document.querySelector(".glosa-dialog p")?.textContent).toContain("pending edits will be saved");
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click();
+    for (let i = 0; i < 16; i++) await Promise.resolve();
+
+    expect(sequence.slice(-3)).toEqual(["put", `get:${"b".repeat(64)}`, `respond:${"b".repeat(64)}`]);
+    expect(root.querySelector(".glosa-approval-strip")?.textContent).toContain(
+      `Revision ${"b".repeat(12)} is approved`,
+    );
   });
 
   test("Annotate mode: a text selection opens the composer; submitting it posts a well-formed annotation record", async () => {
@@ -601,9 +744,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(root.getAttribute("data-preview-lock")).toBe("true");
-    const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map(
-      (el) => (el as any).dataset.mode,
-    );
+    const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map((el) => (el as any).dataset.mode);
     expect(modes).toEqual(["preview"]);
     expect(root.getAttribute("data-mode")).toBe("preview");
   });

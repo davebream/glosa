@@ -239,9 +239,7 @@ describe("A1 §5 route catalog", () => {
     ctx.presentationTokenStore = new PresentationTokenStore();
     fetchFn = createApiFetch(ctx);
 
-    const mint = await fetchFn(
-      stateChangingReq("/api/presentation-token/mint", { method: "POST", body: "{}" }),
-    );
+    const mint = await fetchFn(stateChangingReq("/api/presentation-token/mint", { method: "POST", body: "{}" }));
     expect(mint.status).toBe(200);
     const minted = await mint.json();
     expect(minted.token).toMatch(/^[0-9a-f]{64}$/);
@@ -1212,7 +1210,7 @@ describe("A1 §5 route catalog", () => {
     expect(await response.json()).toEqual({
       id: "att-response",
       status: "done",
-      detail: { to: "done", outcome: "approved", response: "Looks good" },
+      detail: { outcome: "approved", response: "Looks good" },
     });
     const retry = await fetchFn(
       stateChangingReq(`/w/${slug}/inbox/att-response/response`, {
@@ -1223,7 +1221,7 @@ describe("A1 §5 route catalog", () => {
     expect(await retry.json()).toEqual({
       id: "att-response",
       status: "done",
-      detail: { to: "done", outcome: "approved", response: "Looks good" },
+      detail: { outcome: "approved", response: "Looks good" },
     });
     expect(bus.state.entries["att-response"]?.status).toBe("done");
   });
@@ -1254,6 +1252,133 @@ describe("A1 §5 route catalog", () => {
       }),
     );
     expect(await generic.json()).toMatchObject({ status: "done", detail: { outcome: "done" } });
+  });
+
+  test("approval mode stores a normalized target, exposes it in inbox, and records an exact revision verdict", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\r\n");
+    const create = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({
+          path: root,
+          target_path: "./notes.md",
+          action: "proofread",
+          message: "Check the citations",
+          approval_mode: true,
+        }),
+      }),
+    );
+    expect(create.status).toBe(201);
+    const created = await create.json();
+    expect(ctx.getWorkspaceBus(root).readEntry(created.id)?.payload).toEqual({
+      kind: "attention_request",
+      action: "proofread",
+      message: "Check the citations",
+      target_path: "notes.md",
+      approval_mode: true,
+    });
+
+    const inbox = await fetchFn(req(`/w/${slug}/inbox`));
+    expect(await inbox.json()).toEqual({
+      pending_count: 1,
+      attention: [
+        {
+          id: created.id,
+          created_at: expect.any(String),
+          status: "open",
+          message: "Check the citations",
+          action: "proofread",
+          target: "notes.md",
+          target_path: "notes.md",
+          approval_mode: true,
+        },
+      ],
+    });
+
+    const artifact = await (await fetchFn(req(`/w/${slug}/artifacts/notes.md`))).json();
+    const approve = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", revision_id: artifact.source_sha256 }),
+      }),
+    );
+    expect(approve.status).toBe(200);
+    const approved = await approve.json();
+    expect(approved).toEqual({
+      id: created.id,
+      status: "done",
+      detail: {
+        outcome: "approved",
+        target_path: "notes.md",
+        revision_id: artifact.source_sha256,
+        completed_at: expect.any(String),
+      },
+    });
+    expect(new Date(approved.detail.completed_at).toISOString()).toBe(approved.detail.completed_at);
+
+    writeFileSync(join(root, "notes.md"), "# Edited later\n");
+    const retry = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", revision_id: artifact.source_sha256 }),
+      }),
+    );
+    expect(await retry.json()).toEqual(approved);
+    const status = await fetchFn(
+      req(`/api/workspaces/entry-status?path=${encodeURIComponent(root)}&entry=${encodeURIComponent(created.id)}`),
+    );
+    expect((await status.json()).detail).toEqual(approved.detail);
+
+    const next = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, target_path: "notes.md", approval_mode: true }),
+      }),
+    );
+    expect(next.status).toBe(201);
+  });
+
+  test("approval creation is atomic per target and revision mismatch leaves the winner open", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\n");
+    const createRequest = () =>
+      fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({
+            path: root,
+            target_path: "notes.md",
+            approval_mode: true,
+          }),
+        }),
+      );
+    const attempts = await Promise.all([createRequest(), createRequest()]);
+    expect(attempts.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect((await attempts.find((response) => response.status === 409)!.json()).type).toContain("approval-conflict");
+
+    const winner = await attempts.find((response) => response.status === 201)!.json();
+    const wrongOutcome = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${winner.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "changes_requested", revision_id: "0".repeat(64) }),
+      }),
+    );
+    expect(wrongOutcome.status).toBe(400);
+    const responseText = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${winner.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", revision_id: "0".repeat(64), response: "no" }),
+      }),
+    );
+    expect(responseText.status).toBe(400);
+    const mismatch = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${winner.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved", revision_id: "0".repeat(64) }),
+      }),
+    );
+    expect(mismatch.status).toBe(409);
+    expect((await mismatch.json()).type).toContain("artifact-revision-changed");
+    expect(ctx.getWorkspaceBus(root).state.entries[winner.id]?.status).toBe("open");
   });
 
   // --- POST /w/:slug/capability/:artifactPath (5.13/§7, P4.1) — the class-F capability mint ---

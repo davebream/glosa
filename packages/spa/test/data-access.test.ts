@@ -105,14 +105,23 @@ describe("createDataAccess — request shape", () => {
     await da.getInbox("ws");
     await da.markAttentionSeen("ws", "att 1");
     await da.respondToAttention("ws", "att 1", { outcome: "changes_requested", response: "Please revise" });
+    await da.respondToAttention("ws", "att 2", { outcome: "approved", revisionId: "a".repeat(64) });
 
     expect(calls.map(([path]) => path)).toEqual([
       "/w/ws/inbox",
       "/w/ws/inbox/att%201/seen",
       "/w/ws/inbox/att%201/response",
+      "/w/ws/inbox/att%202/response",
     ]);
     expect(calls[1]![1].method).toBe("POST");
-    expect(JSON.parse(calls[2]![1].body as string)).toEqual({ outcome: "changes_requested", response: "Please revise" });
+    expect(JSON.parse(calls[2]![1].body as string)).toEqual({
+      outcome: "changes_requested",
+      response: "Please revise",
+    });
+    expect(JSON.parse(calls[3]![1].body as string)).toEqual({
+      outcome: "approved",
+      revision_id: "a".repeat(64),
+    });
   });
 
   test("conversation compose and reconnect status carry stable message/session identity", async () => {
@@ -126,10 +135,7 @@ describe("createDataAccess — request shape", () => {
     await da.sendComposerMessage("ws", "exact text", { messageId: "m-1", sessionHint: "session-a" });
     await da.getComposerMessageStatus("ws", "m-1");
 
-    expect(calls.map(([path]) => path)).toEqual([
-      "/w/ws/transcript/compose",
-      "/w/ws/transcript/compose/m-1",
-    ]);
+    expect(calls.map(([path]) => path)).toEqual(["/w/ws/transcript/compose", "/w/ws/transcript/compose/m-1"]);
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({
       text: "exact text",
       message_id: "m-1",
@@ -351,10 +357,7 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
       requests.push(init);
       call += 1;
       if (call === 1) {
-        return streamResponse([
-          'id: 7\nevent: journal\ndata: {"n":1}\n\n',
-          "event: bye\ndata: \n\n",
-        ]);
+        return streamResponse(['id: 7\nevent: journal\ndata: {"n":1}\n\n', "event: bye\ndata: \n\n"]);
       }
       return streamResponse(['id: 8\nevent: journal\ndata: {"n":2}\n\n']);
     };

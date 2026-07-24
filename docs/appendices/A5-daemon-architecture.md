@@ -55,7 +55,7 @@
   text, byte count, provider, and target session. Pending entries survive restart; in-memory
   reservations may retry at least once. Journal/API errors use bounded stable codes, never exception
   text, tokens, transcript paths, or canonical workspace paths.
-- Common entries terminal: applied/rejected/stale. Attention terminal: done/expired/stale. Event with guard `from`≠current → ignored on replay (idempotent). Duplicate resolve on terminal = no-op. `done.detail` is `{outcome:"done"|"approved"|"changes_requested", response?:string}`; review actions accept the two review outcomes, while generic actions accept `done`. A terminal retry returns the original detail without appending.
+- Common entries terminal: applied/rejected/stale. Attention terminal: done/expired/stale. Event with guard `from`≠current → ignored on replay (idempotent). Duplicate resolve on terminal = no-op. Ordinary `done.detail` is `{outcome:"done"|"approved"|"changes_requested", response?:string}`; review actions accept the two review outcomes, while generic actions accept `done`. Approval-mode attention stores exactly `{outcome:"approved",target_path,revision_id,completed_at}` after validating the current `source_sha256`. Creation is serialized with an atomic non-terminal uniqueness check on workspace+target_path. A terminal retry returns the original detail without appending.
 - Replay: fold in order; skip torn final line; malformed completed line → quarantine (not fatal); delivery_attempt never mutates; guarded transitions only when !isTerminal(cur). `--wait` callers resolve when fold reaches done/expired, payload in done.detail.
 
 ## F10/F11 — anchoring resolution contract

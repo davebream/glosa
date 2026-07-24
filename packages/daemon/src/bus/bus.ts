@@ -53,6 +53,37 @@ export interface PreparedDelivery {
   has_more: boolean;
 }
 
+export interface StandardAttentionVerdict {
+  outcome: "done" | "approved" | "changes_requested";
+  response?: string;
+}
+
+export interface ApprovalVerdict {
+  outcome: "approved";
+  target_path: string;
+  revision_id: string;
+  completed_at: string;
+}
+
+export type AttentionVerdict = StandardAttentionVerdict | ApprovalVerdict;
+
+export interface AttentionRequestPayload {
+  kind: "attention_request";
+  message?: string;
+  action: string;
+  path?: string;
+  target_path?: string;
+  approval_mode?: true;
+}
+
+export class ApprovalConflictError extends Error {
+  readonly code = "APPROVAL_CONFLICT";
+
+  constructor(readonly targetPath: string) {
+    super(`an approval request is already active for ${targetPath}`);
+  }
+}
+
 export class WorkspaceAdoptedError extends Error {
   constructor(readonly targetRegistrationId: string) {
     super(`workspace has been adopted by ${targetRegistrationId}`);
@@ -258,6 +289,30 @@ export class WorkspaceBus {
     return this.mutex.runExclusive(this.mutexKey, () => this.createEntryLocked(id, payload, fields));
   }
 
+  /** Creates an attention request while enforcing approval-mode uniqueness in the same critical
+   * section as the immutable inbox write. The check cannot race another request for this
+   * workspace: both the scan and createEntryLocked() share the workspace mutex. */
+  createAttentionRequest(id: string, payload: AttentionRequestPayload): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      if (payload.approval_mode === true && payload.target_path) {
+        for (const [entryId, state] of Object.entries(this.state.entries)) {
+          if (state.kind !== "attention" || isTerminal("attention", state.status)) continue;
+          try {
+            const existing = readInboxEntry(this.workspace, entryId) as Record<string, unknown> | null;
+            if (existing?.approval_mode === true && existing.target_path === payload.target_path) {
+              throw new ApprovalConflictError(payload.target_path);
+            }
+          } catch (error) {
+            if (error instanceof ApprovalConflictError) throw error;
+            // An unreadable immutable entry remains journal-authoritative, but cannot safely be
+            // identified as a path-scoped approval request. Reconciliation handles corruption.
+          }
+        }
+      }
+      this.createEntryLocked(id, payload);
+    });
+  }
+
   private createEntryLocked(
     id: string,
     payload: unknown,
@@ -302,7 +357,7 @@ export class WorkspaceBus {
         event: "entry_adopted",
         by: "daemon",
         idem,
-        detail,
+        detail: { ...detail },
       };
       appendEvent(this.writer, event);
       applyEvent(this.state, event, this.reducer);
@@ -421,8 +476,7 @@ export class WorkspaceBus {
    * mutex section. A retry after `done` returns the original detail and appends nothing. */
   completeAttention(
     entryId: string,
-    outcome: "done" | "approved" | "changes_requested",
-    response?: string,
+    detail?: AttentionVerdict,
   ): Promise<{ status: string; detail: Record<string, unknown> | null }> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
@@ -431,13 +485,14 @@ export class WorkspaceBus {
       if (state.status === "done") {
         return { status: state.status, detail: (state.detail as Record<string, unknown> | undefined) ?? null };
       }
+      if (!detail) throw new Error("attention verdict is required");
       if (isTerminal("attention", state.status)) throw new Error(`attention request is already ${state.status}`);
       if (state.status === "open") this.appendAttentionTransitionLocked(entryId, "delivered", { by: "daemon" });
       if (this.state.entries[entryId]?.status === "delivered")
         this.appendAttentionTransitionLocked(entryId, "seen", { by: "human" });
       this.appendAttentionTransitionLocked(entryId, "done", {
         by: "human",
-        detail: { outcome, ...(response !== undefined ? { response } : {}) },
+        detail: { ...detail },
       });
       const final = this.state.entries[entryId] as typeof state;
       return { status: final.status, detail: (final.detail as Record<string, unknown> | undefined) ?? null };

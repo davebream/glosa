@@ -8,17 +8,20 @@
 // attention-request/entry-status/deferred in two scenarios against one shared real daemon
 // (separate workspace dirs keep the scenarios independent).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureToken, lockPath, readLock } from "@glosa/daemon";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
+import { runRequestReview } from "../src/request-review.ts";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
 import { randomPort } from "../../daemon/test/helpers.ts";
 
 let home: string;
 let client: GlosaApiClient;
+let token: string;
 const dirsToClean: string[] = [];
 
 function freshWorkspaceDir(): string {
@@ -36,7 +39,7 @@ beforeAll(async () => {
   // `<home>/token` exactly once, at its own boot — the token must exist on disk BEFORE the
   // daemon's first-ever spawn (which `createHttpGlosaClient()` below triggers via `ensureDaemon`),
   // or every authed call in this file would 401 for this daemon's entire process lifetime.
-  ensureToken(home);
+  token = ensureToken(home);
   // Lazily spawns a real `glosa __daemon` subprocess via `ensureDaemon` — the SAME mechanism
   // `glosa open` uses in production; nothing here pre-spawns a daemon by hand.
   client = await createHttpGlosaClient();
@@ -89,7 +92,9 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     // entry-1 is now terminal ("applied"). A `deferred` fired on it must NOT come back as a bare
     // 200 `{to: "deferred"}` that a client reading only `to` could misread as a real re-defer —
     // it must 409, the same honest-conflict signal LEASE_HELD/NO_ACTIVE_LEASE already use above.
-    await expect(client.resolveEntry(workspaceDir, "entry-1", "deferred", "sess-real-1", "too late")).rejects.toMatchObject({
+    await expect(
+      client.resolveEntry(workspaceDir, "entry-1", "deferred", "sess-real-1", "too late"),
+    ).rejects.toMatchObject({
       status: 409,
     });
 
@@ -101,7 +106,10 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     const workspaceDir = freshWorkspaceDir();
     await client.openWorkspace(workspaceDir);
 
-    const review = await client.createAttentionRequest(workspaceDir, { message: "please look", targetPath: "notes.md" });
+    const review = await client.createAttentionRequest(workspaceDir, {
+      message: "please look",
+      targetPath: "notes.md",
+    });
     expect(review.status).toBe("open");
 
     const status1 = await client.getEntryStatus(workspaceDir, review.id);
@@ -114,5 +122,76 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
 
     const unknown = await client.getEntryStatus(workspaceDir, "nope-does-not-exist");
     expect(unknown).toBeNull();
+  }, 20000);
+
+  test("request-review approval mode creates, approves, and returns the typed verdict through --wait", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    const content = "# Ready for approval\n";
+    writeFileSync(join(workspaceDir, "draft.md"), content);
+    const opened = await client.openWorkspace(workspaceDir);
+
+    let createdId: string | undefined;
+    const observingClient: GlosaApiClient = {
+      ...client,
+      createAttentionRequest: async (path, opts) => {
+        const created = await client.createAttentionRequest(path, opts);
+        createdId = created.id;
+        return created;
+      },
+    };
+    const waiting = runRequestReview(
+      {
+        dir: workspaceDir,
+        path: "draft.md",
+        action: "proofread",
+        requireApproval: true,
+        waitMs: 5000,
+      },
+      {
+        createClient: async () => observingClient,
+        now: () => Date.now(),
+        sleep: (ms) => Bun.sleep(Math.min(ms, 10)),
+        pollIntervalMs: 10,
+      },
+    );
+
+    for (let attempt = 0; attempt < 100 && !createdId; attempt += 1) {
+      await Bun.sleep(5);
+    }
+    expect(createdId).toBeTruthy();
+
+    const revisionId = createHash("sha256").update(content).digest("hex");
+    const response = await fetch(
+      `http://127.0.0.1:${client.port}/w/${encodeURIComponent(opened.slug)}/inbox/${encodeURIComponent(createdId!)}/response`,
+      {
+        method: "POST",
+        headers: {
+          Host: `127.0.0.1:${client.port}`,
+          Origin: `http://127.0.0.1:${client.port}`,
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ outcome: "approved", revision_id: revisionId }),
+      },
+    );
+    expect(response.status).toBe(200);
+
+    const result = await waiting;
+    expect(result).toMatchObject({
+      ok: true,
+      exitCode: 0,
+      data: {
+        id: createdId,
+        slug: opened.slug,
+        status: "done",
+        detail: {
+          outcome: "approved",
+          target_path: "draft.md",
+          revision_id: revisionId,
+        },
+      },
+    });
+    const detail = result.data.detail;
+    expect(detail && "completed_at" in detail ? Date.parse(detail.completed_at) : Number.NaN).not.toBeNaN();
   }, 20000);
 });

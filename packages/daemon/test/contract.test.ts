@@ -9,8 +9,8 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.2) → ok", () => {
-    expect(checkContractVersion("1.2")).toEqual({ status: "ok" });
+  test("exact match (1.3) → ok", () => {
+    expect(checkContractVersion("1.3")).toEqual({ status: "ok" });
   });
 
   test("previous minor (1.1) → stale-minor", () => {

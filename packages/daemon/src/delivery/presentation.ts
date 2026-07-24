@@ -184,7 +184,13 @@ function attentionPresentation(
   payload: Record<string, unknown>,
   opts: BuildPresentationOptions,
 ): DeliverableEntry {
-  const path = typeof payload.path === "string" ? payload.path : undefined;
+  const path =
+    typeof payload.target_path === "string"
+      ? payload.target_path
+      : typeof payload.path === "string"
+        ? payload.path
+        : undefined;
+  const approvalMode = payload.approval_mode === true;
   const action = typeof payload.action === "string" ? payload.action : undefined;
   const message = typeof payload.message === "string" ? payload.message : "";
   const offset = decodePresentationCursor(opts.cursor, id);
@@ -205,6 +211,7 @@ function attentionPresentation(
   const detail = {
     ...(path ? { path } : {}),
     ...(action ? { action } : {}),
+    ...(approvalMode ? { approval_mode: true } : {}),
     ...(message ? { message: sliced.value } : {}),
   };
   return {

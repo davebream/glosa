@@ -23,6 +23,8 @@ export type ProblemSlug =
   // check (not in A1 §5, this route isn't either). 409 when the caller's `If-Match` source_sha256
   // no longer matches what's on disk.
   | "conflict"
+  | "approval-conflict"
+  | "artifact-revision-changed"
   // P3.5 addition — `POST /w/:slug/restore`'s dirty-worktree guard (A6 §F31). 409 when the
   // artifact has changes since its latest checkpoint and the caller didn't pass `force`. Not
   // built via `problem()` below (see `restoreConflictResponse`) because it carries the

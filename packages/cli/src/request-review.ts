@@ -9,14 +9,27 @@
 // (`done|expired|stale`, A5 §F23) and reports the verdict in `data`; without it, returns
 // immediately after creating the entry. Review requests default to action `review`; the terminal
 // journal detail carries the structured outcome and optional response.
-import { type ApiError, type EntryStatus, type GlosaApiClient, isApiError } from "./api-client.ts";
-import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
+import {
+  type ApiError,
+  type AttentionVerdict,
+  type EntryStatus,
+  type GlosaApiClient,
+  isApiError,
+} from "./api-client.ts";
+import {
+  type CommandEnvelope,
+  EXIT_CODES,
+  daemonUnreachableEnvelope,
+  printJsonEnvelope,
+  usageEnvelope,
+} from "./envelope.ts";
 
 export interface RequestReviewArgs {
   dir: string;
   path?: string;
   message?: string;
   action?: string;
+  requireApproval?: boolean;
   waitMs?: number; // undefined = don't wait
 }
 
@@ -24,7 +37,7 @@ export interface RequestReviewData {
   id?: string;
   slug?: string;
   status?: string;
-  detail?: Record<string, unknown> | null;
+  detail?: AttentionVerdict | null;
 }
 
 export interface RequestReviewDeps {
@@ -45,7 +58,10 @@ export function realRequestReviewDeps(createClient: () => Promise<GlosaApiClient
 
 const ATTENTION_TERMINALS: ReadonlySet<string> = new Set(["done", "expired", "stale"]);
 
-export async function runRequestReview(args: RequestReviewArgs, deps: RequestReviewDeps): Promise<CommandEnvelope<RequestReviewData>> {
+export async function runRequestReview(
+  args: RequestReviewArgs,
+  deps: RequestReviewDeps,
+): Promise<CommandEnvelope<RequestReviewData>> {
   if (!args.path) return usageEnvelope("request-review", "request-review: missing <path>");
 
   let client: GlosaApiClient;
@@ -57,16 +73,26 @@ export async function runRequestReview(args: RequestReviewArgs, deps: RequestRev
 
   let created: { id: string; slug: string; status: string };
   try {
-    created = await client.createAttentionRequest(args.dir, { message: args.message, action: args.action ?? "review", targetPath: args.path });
+    created = await client.createAttentionRequest(args.dir, {
+      message: args.message,
+      action: args.action ?? "review",
+      targetPath: args.path,
+      ...(args.requireApproval ? { approvalMode: true } : {}),
+    });
   } catch (err) {
     if (isApiError(err)) {
+      const conflict = err.status === 409;
       return {
         ok: false,
         command: "request-review",
-        exitCode: EXIT_CODES.NOT_A_WORKSPACE,
+        exitCode: conflict ? EXIT_CODES.ENTRY_ERROR : EXIT_CODES.NOT_A_WORKSPACE,
         data: {},
         warnings: [],
-        error: { code: "not-a-workspace", kind: "not_a_workspace", message: (err as ApiError).problem?.title ?? err.message },
+        error: {
+          code: conflict ? "approval-conflict" : "not-a-workspace",
+          kind: conflict ? "conflict" : "not_a_workspace",
+          message: (err as ApiError).problem?.title ?? err.message,
+        },
       };
     }
     return { ...daemonUnreachableEnvelope("request-review", (err as Error).message), data: {} };
@@ -127,6 +153,9 @@ export function printRequestReviewResult(result: CommandEnvelope<RequestReviewDa
     return;
   }
   const outcome = typeof result.data.detail?.outcome === "string" ? `: ${result.data.detail.outcome}` : "";
-  const response = typeof result.data.detail?.response === "string" ? ` — ${result.data.detail.response}` : "";
+  const response =
+    result.data.detail && "response" in result.data.detail && typeof result.data.detail.response === "string"
+      ? ` — ${result.data.detail.response}`
+      : "";
   process.stdout.write(`glosa request-review: ${result.data.id} (${result.data.status}${outcome})${response}\n`);
 }

@@ -12,19 +12,19 @@
   color-scheme: light;
 
   /* Palette (OKLCH; hue 110 = editorial sage/olive; brief §5). */
-  --bg: oklch(1 0 0);                       /* reading surface — pure white paper */
-  --surface: oklch(0.972 0.004 110);        /* control surface — topbar, navigator, panels */
+  --bg: oklch(1 0 0); /* reading surface — pure white paper */
+  --surface: oklch(0.972 0.004 110); /* control surface — topbar, navigator, panels */
   --surface-sunken: oklch(0.945 0.006 110); /* segmented-control track, hover beds */
-  --ink: oklch(0.24 0.01 110);              /* primary text — ~16:1 on bg */
-  --muted: oklch(0.46 0.012 110);           /* secondary text — ~7:1 on bg */
-  --faint: oklch(0.62 0.01 110);            /* disabled/tertiary, large glyphs only */
+  --ink: oklch(0.24 0.01 110); /* primary text — ~16:1 on bg */
+  --muted: oklch(0.46 0.012 110); /* secondary text — ~7:1 on bg */
+  --faint: oklch(0.62 0.01 110); /* disabled/tertiary, large glyphs only */
   --border: oklch(0.9 0.005 110);
   --border-strong: oklch(0.82 0.008 110);
-  --primary: oklch(0.5 0.1 110);            /* workbench accent — actions, selection, focus */
+  --primary: oklch(0.5 0.1 110); /* workbench accent — actions, selection, focus */
   --focus: var(--primary);
   --primary-hover: oklch(0.44 0.1 110);
   --on-primary: oklch(0.99 0 0);
-  --anchor-wash: oklch(0.94 0.032 120);     /* annotation anchor highlight — calm sage, not highlighter */
+  --anchor-wash: oklch(0.94 0.032 120); /* annotation anchor highlight — calm sage, not highlighter */
   --danger: oklch(0.5 0.16 25);
   --warn: oklch(0.55 0.12 75);
   --ok: oklch(0.52 0.1 150);
@@ -35,12 +35,12 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
-  --text-xs: 0.75rem;    /* 12 — state labels, timestamps */
-  --text-sm: 0.8125rem;  /* 13 — chrome default, annotations */
-  --text-base: 0.9375rem;/* 15 — panel body */
-  --text-md: 1.0625rem;  /* 17 — manuscript body (serif) */
-  --text-lg: 1.1875rem;  /* 19 — panel titles */
-  --text-xl: 1.375rem;   /* 22 — screen headlines */
+  --text-xs: 0.75rem; /* 12 — state labels, timestamps */
+  --text-sm: 0.8125rem; /* 13 — chrome default, annotations */
+  --text-base: 0.9375rem; /* 15 — panel body */
+  --text-md: 1.0625rem; /* 17 — manuscript body (serif) */
+  --text-lg: 1.1875rem; /* 19 — panel titles */
+  --text-xl: 1.375rem; /* 22 — screen headlines */
 
   /* Spacing, 4pt base. */
   --space-1: 0.25rem;
@@ -259,7 +259,9 @@ button {
   box-shadow: 2px 0 8px oklch(0.24 0.01 110 / 0.12);
 }
 
-.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-sidebar { transform: translateX(0); }
+.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-sidebar {
+  transform: translateX(0);
+}
 .glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-backdrop {
   display: block;
   position: fixed;
@@ -416,7 +418,9 @@ button {
   place-items: center;
   border-radius: 8px;
   color: var(--muted);
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-appearance-trigger-label {
@@ -526,7 +530,9 @@ button {
   color: var(--muted);
   font-weight: 500;
   text-transform: capitalize;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-modebar button:hover {
@@ -555,7 +561,9 @@ button {
   border-radius: 6px;
   color: var(--muted);
   font-weight: 500;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-history-toggle svg,
@@ -832,7 +840,9 @@ button {
   place-items: center;
   border-radius: 5px;
   color: var(--muted);
-  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
 }
 
 .glosa-tree-tool:hover {
@@ -912,7 +922,9 @@ button {
   color: var(--ink);
   cursor: default;
   user-select: none;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-tree-row:hover {
@@ -1017,6 +1029,90 @@ button {
   display: flex;
   flex-direction: column;
   position: relative; /* the margin overlay and its anchor-aligned cards position against this */
+}
+
+.glosa-approval-strip {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.glosa-approval-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.glosa-approval-copy strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.glosa-approval-copy span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.glosa-approval-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.glosa-approval-button {
+  min-height: 2.75rem;
+}
+
+.glosa-approval-status {
+  max-width: 34rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: right;
+  text-wrap: pretty;
+}
+
+.glosa-approval-status[data-error],
+.glosa-approval-strip[data-state="error"] .glosa-approval-status {
+  color: var(--danger);
+}
+
+@media (max-width: 639px) {
+  .glosa-approval-strip {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .glosa-approval-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .glosa-approval-status {
+    max-width: none;
+    text-align: left;
+  }
+
+  .glosa-approval-button {
+    justify-content: center;
+  }
 }
 
 .glosa-content {
@@ -1163,12 +1259,34 @@ button {
   width: 100%;
 }
 
-.glosa-classf { flex-direction: column; }
-.glosa-classf-status { margin: var(--space-3) auto var(--space-2); color: var(--muted); font-size: var(--text-sm); }
-.glosa-classf-status[data-error="true"] { color: var(--danger); font-weight: 600; }
-.glosa-classf-interactive { align-self: center; margin-bottom: var(--space-3); padding: var(--space-1) var(--space-3); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); }
-.glosa-classf-frame { flex: 1; display: flex; min-height: 0; }
-.glosa-classf-frame iframe { flex: 1; }
+.glosa-classf {
+  flex-direction: column;
+}
+.glosa-classf-status {
+  margin: var(--space-3) auto var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.glosa-classf-status[data-error="true"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+.glosa-classf-interactive {
+  align-self: center;
+  margin-bottom: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.glosa-classf-frame {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.glosa-classf-frame iframe {
+  flex: 1;
+}
 
 .glosa-classf[role="alert"] {
   align-items: center;
@@ -1225,13 +1343,26 @@ button {
   animation: glosa-pulse 1.6s var(--ease-out) infinite;
 }
 
-.glosa-skeleton > i:nth-child(1) { width: 55%; height: 1.6em; margin-bottom: var(--space-4); }
-.glosa-skeleton > i:nth-child(4) { width: 82%; }
-.glosa-skeleton > i:nth-child(7) { width: 64%; }
+.glosa-skeleton > i:nth-child(1) {
+  width: 55%;
+  height: 1.6em;
+  margin-bottom: var(--space-4);
+}
+.glosa-skeleton > i:nth-child(4) {
+  width: 82%;
+}
+.glosa-skeleton > i:nth-child(7) {
+  width: 64%;
+}
 
 @keyframes glosa-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 /* ---------- 8. Editor ---------- */
@@ -1302,7 +1433,9 @@ button {
   border-radius: 999px;
   color: var(--muted);
   font-size: var(--text-xs);
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
 }
 
@@ -1342,7 +1475,9 @@ button {
   color: var(--muted);
   font-size: var(--text-xs);
   min-width: 1.75rem;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-rich-toolbar button:hover {
@@ -1389,7 +1524,8 @@ button {
 
 .glosa-btn,
 .glosa-save,
-.glosa-composer-send {
+.glosa-composer-send,
+.glosa-approval-button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -1399,30 +1535,36 @@ button {
   background: var(--bg);
   color: var(--ink);
   font-weight: 500;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-btn:hover,
 .glosa-save:hover,
-.glosa-composer-send:hover {
+.glosa-composer-send:hover,
+.glosa-approval-button:hover {
   background: var(--surface);
 }
 
 .glosa-save,
-.glosa-composer-send {
+.glosa-composer-send,
+.glosa-approval-button {
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);
 }
 
 .glosa-save:hover,
-.glosa-composer-send:hover {
+.glosa-composer-send:hover,
+.glosa-approval-button:hover {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
 }
 
 .glosa-save:disabled,
-.glosa-composer-send:disabled {
+.glosa-composer-send:disabled,
+.glosa-approval-button:disabled {
   background: var(--surface-sunken);
   border-color: var(--border);
   color: var(--faint);
@@ -1560,8 +1702,15 @@ button {
 }
 
 @keyframes glosa-flash {
-  0%, 40% { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent); }
-  100% { border-color: var(--border); box-shadow: none; }
+  0%,
+  40% {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
 }
 
 .glosa-margin-title {
@@ -1747,7 +1896,9 @@ button {
   color: var(--muted);
   font-size: var(--text-xs);
   white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
 }
 
@@ -1862,10 +2013,27 @@ button {
   margin: 0 0 var(--space-2);
 }
 
-.glosa-context-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.glosa-context-close { padding: var(--space-1) var(--space-2); color: var(--muted); border-radius: 6px; }
-.glosa-context-close:hover { background: var(--surface-sunken); color: var(--ink); }
-.glosa-shortcuts { grid-area: main; z-index: var(--z-sticky); padding: var(--space-6); background: var(--bg); }
+.glosa-context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.glosa-context-close {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  border-radius: 6px;
+}
+.glosa-context-close:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+.glosa-shortcuts {
+  grid-area: main;
+  z-index: var(--z-sticky);
+  padding: var(--space-6);
+  background: var(--bg);
+}
 
 .glosa-history-status {
   color: var(--muted);
@@ -2085,7 +2253,9 @@ button {
   color: var(--muted);
   font-size: var(--text-lg);
   line-height: 1;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-conv-close:hover {
@@ -2404,13 +2574,13 @@ button {
     display: block;
   }
 
-.glosa-tools-menu .glosa-attention-trigger,
-.glosa-tools-menu .glosa-history-toggle,
-.glosa-tools-menu .glosa-conversation-toggle,
-.glosa-tools-menu .glosa-tools-copy-source,
-.glosa-tools-menu .glosa-tools-print,
-.glosa-tools-menu .glosa-shortcuts-toggle,
-.glosa-tools-menu .glosa-appearance-trigger {
+  .glosa-tools-menu .glosa-attention-trigger,
+  .glosa-tools-menu .glosa-history-toggle,
+  .glosa-tools-menu .glosa-conversation-toggle,
+  .glosa-tools-menu .glosa-tools-copy-source,
+  .glosa-tools-menu .glosa-tools-print,
+  .glosa-tools-menu .glosa-shortcuts-toggle,
+  .glosa-tools-menu .glosa-appearance-trigger {
     width: 100%;
     height: auto;
     min-height: 2.5rem;
@@ -2480,7 +2650,6 @@ button {
     z-index: calc(var(--z-drawer) - 1);
     background: oklch(0.24 0.01 110 / 0.25);
   }
-
 }
 
 /* Until the annotation rail has room beside the manuscript, the composer is a viewport-bound
@@ -2587,8 +2756,14 @@ button {
 }
 
 @keyframes glosa-tray-up {
-  from { transform: translateY(24px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* In the 1024–1279 band the navigator stays while annotation cards flow below the manuscript;
@@ -2656,6 +2831,7 @@ button {
   .glosa-sidebar,
   .glosa-backdrop,
   .glosa-banner,
+  .glosa-approval-strip,
   .glosa-annotate-instructions,
   .glosa-empty,
   .glosa-skeleton,
@@ -2685,15 +2861,28 @@ button {
     -webkit-print-color-adjust: exact;
   }
 
-  .glosa-content blockquote { color: #4b5448 !important; }
-  .glosa-content hr { border-color: #c8cec5 !important; }
+  .glosa-content blockquote {
+    color: #4b5448 !important;
+  }
+  .glosa-content hr {
+    border-color: #c8cec5 !important;
+  }
   .glosa-content code,
   .glosa-content pre,
-  .glosa-content th { background: #f3f5f1 !important; }
-  .glosa-content pre { border-color: #c8cec5 !important; }
+  .glosa-content th {
+    background: #f3f5f1 !important;
+  }
+  .glosa-content pre {
+    border-color: #c8cec5 !important;
+  }
   .glosa-content th,
-  .glosa-content td { border-color: #c8cec5 !important; }
-  .glosa-content a { color: #365c25 !important; text-decoration-color: #78966c !important; }
+  .glosa-content td {
+    border-color: #c8cec5 !important;
+  }
+  .glosa-content a {
+    color: #365c25 !important;
+    text-decoration-color: #78966c !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2711,6 +2900,7 @@ button {
   .glosa-btn,
   .glosa-save,
   .glosa-composer-send,
+  .glosa-approval-button,
   .glosa-conv-composer {
     transition: none;
   }

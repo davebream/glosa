@@ -7,9 +7,9 @@ import { APP_VERSION } from "./build-id.ts";
 import { parseProtocolVersion } from "./protocol.ts";
 
 /** `contract_version` in the handshake body and the version `X-Contract-Version` is compared
- * against. API v1.2 adds presentation surfaces/tokens and open-fragment fields without changing
+ * against. API v1.3 adds artifact-scoped approval requests and revision-bound verdicts without changing
  * daemon lifecycle compatibility, so this is deliberately independent of `PROTOCOL_VERSION`. */
-export const CONTRACT_VERSION = "1.2";
+export const CONTRACT_VERSION = "1.3";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

@@ -194,7 +194,7 @@ the entry survives.
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.2: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.3: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, presentation-token mint/redeem) — schemas, status codes, 1 MiB body cap,
@@ -277,7 +277,7 @@ the entry survives.
 ### R8 — CLI + install  (detail: A6 full)
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent hook/MCP merge with
   ownership manifest, backups, uninstall — prints the correct channels dev command, never `--channels`),
-  `resolve`, `apply-begin`, `request-review [--wait]`, `metadata set|show|clear`, `session bind`,
+  `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `metadata set|show|clear`, `session bind`,
   `token rotate|revoke`, `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
   internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`); a workspace is usable SPA-only without
@@ -292,6 +292,12 @@ the entry survives.
   `request-review` defaults to action `review` and shows **Approve** / **Request changes**. The terminal
   `done.detail` is `{outcome:done|approved|changes_requested,response?}` with a bounded optional response;
   `request-review --wait` returns that structure.
+- `request-review --require-approval` opts one existing tracked artifact into explicit final approval.
+  Its immutable request payload carries normalized `target_path` plus `approval_mode:true`; at most one
+  non-terminal approval request may exist for that workspace/path. The matching artifact alone shows
+  the final-approval action. Confirmation saves pending editor changes first, then terminal `done.detail`
+  is exactly `{outcome:"approved",target_path,revision_id:source_sha256,completed_at}`. Later edits do not
+  mutate or revoke that revision-bound verdict.
 
 ## 4. Non-functional  (detail: A6 §F30)
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
