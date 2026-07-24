@@ -7,10 +7,19 @@
 // HARD RULE: static imports only. The package directory is replaced underneath this process while
 // the installer runs, so a lazy `await import(...)` on the post-spawn path can hit a file that no
 // longer exists. Do not copy index.ts's mid-handler `await import` pattern here.
+import { accessSync, constants, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { type DaemonLock, glosaHome, isPidAlive, lockPath, readLock } from "../../daemon/src/index.ts";
+import type { CommandError, CommandWarning } from "./envelope.ts";
 import { isEphemeralPackageRunnerPath } from "./init.ts";
-import type { CommandWarning } from "./envelope.ts";
+import { CLI_VERSION } from "./version.ts";
 
 const PKG = "@davebream/glosa";
+export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
+const REGISTRY_TIMEOUT_MS = 10_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 // ---------------------------------------------------------------------------------------------
 // Install classification
@@ -396,5 +405,454 @@ export function decideAction(
     updateAvailable: false,
     exitCode: 0,
     warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The injected seam
+// ---------------------------------------------------------------------------------------------
+
+/** Every flag the command accepts, in one place. `json` lives here, not only in the printer,
+ *  because `runUpdate` branches on it to choose inherit-vs-piped installer stdio and to suppress
+ *  the pre-spawn block. Omitting it from the gunshi handler would make the whole --json path
+ *  unreachable in the shipped command while every test of it still passed. */
+export interface UpdateOptions {
+  json?: boolean;
+  quiet?: boolean;
+  check?: boolean;
+  force?: boolean;
+  channel?: string;
+  to?: string;
+  registry?: string;
+  allowOffsiteTarball?: boolean;
+}
+
+export type FetchResult =
+  | { ok: true; status: number; body: unknown }
+  | {
+      ok: false;
+      kind: "timeout" | "network" | "http" | "malformed" | "too-large";
+      status?: number;
+      message: string;
+    };
+
+export type DownloadResult =
+  | {
+      ok: true;
+      /** ABSOLUTE path. `bun add --global ./rel.tgz` fails with `ENOENT extracting tarball` —
+       *  measured. Only an absolute path works. */
+      path: string;
+      bytes: number;
+      /** Base64 sha512 of the bytes actually received, for comparison against dist.integrity. */
+      sha512: string;
+    }
+  | { ok: false; kind: "timeout" | "network" | "http" | "too-large" | "io"; message: string };
+
+export interface UpdateDeps {
+  platform: () => NodeJS.Platform;
+  /** From `import.meta.url` — already symlink-resolved by Bun. There is deliberately NO `realpath`
+   *  dep: it would provably return its own argument. */
+  packageRoot: () => string;
+  pathExists: (p: string) => boolean;
+  /** EACCES preflight. */
+  isWritable: (p: string) => boolean;
+  env: (name: string) => string | undefined;
+  /** The full environment handed to the installer, minus what `buildInstallerEnv` scrubs. */
+  envAll: () => Record<string, string | undefined>;
+  /** CLI_VERSION, injectable. */
+  currentVersion: () => string;
+  which: (cmd: string) => string | null;
+  /** doctor.ts:38's signature — trimmed stdout, or null if it could not be spawned / exited non-zero. */
+  runVersionProbe: (cmd: string[]) => string | null;
+  readDaemonLock: () => DaemonLock | null;
+  /** Discriminated result, never a raw Response — this is what makes the failure taxonomy testable
+   *  without standing up a server. */
+  fetchPackument: (url: string, timeoutMs: number) => Promise<FetchResult>;
+  downloadTarball: (url: string, timeoutMs: number) => Promise<DownloadResult>;
+  cleanupDownload: (path: string) => void;
+  /** Full argv + env so a test asserts the exact command line and the ANTHROPIC_API_KEY scrub. */
+  spawnInstaller: (
+    argv: string[],
+    env: Record<string, string | undefined>,
+    onOutput: ((chunk: string) => void) | null,
+  ) => Promise<{ exitCode: number }>;
+  /** The pre-spawn recovery block is emitted mid-run by `runUpdate`, so it needs a stdout writer on
+   *  the seam — `printUpdateResult` only runs after `runUpdate` has already returned. */
+  writeStdout: (s: string) => void;
+  writeStderr: (s: string) => void;
+  /** Awaited before the spawn so the pre-spawn block survives a terminal killed mid-install. */
+  flushStdout: () => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Registry fetch
+// ---------------------------------------------------------------------------------------------
+
+const MAX_PACKUMENT_BYTES = 4 * 1024 * 1024;
+const MAX_TARBALL_BYTES = 64 * 1024 * 1024;
+
+function isTimeout(err: unknown): boolean {
+  const name = (err as Error)?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+
+/** Split out from the `fetch` call so a test can hand it a `Response` directly — in particular to
+ *  prove the size cap fires mid-stream instead of after the whole body is buffered. */
+export async function readPackumentResponse(res: Response): Promise<FetchResult> {
+  if (!res.ok) return { ok: false, kind: "http", status: res.status, message: res.statusText };
+  const reader = res.body?.getReader();
+  if (!reader) return { ok: false, kind: "malformed", message: "registry response had no body" };
+  // Stream-and-cap. `await res.text()` would buffer the WHOLE body first and only then check the
+  // size, so an unbounded body would OOM the process before the `too-large` branch could run —
+  // making that branch unreachable for exactly the input it exists to defend against.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength; // BYTES, not UTF-16 code units
+      if (total > MAX_PACKUMENT_BYTES) {
+        await reader.cancel();
+        return { ok: false, kind: "too-large", message: `registry response exceeded ${MAX_PACKUMENT_BYTES} bytes` };
+      }
+      chunks.push(value);
+    }
+  } catch (err) {
+    return { ok: false, kind: isTimeout(err) ? "timeout" : "network", message: (err as Error).message };
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.byteLength;
+  }
+  try {
+    return { ok: true, status: res.status, body: JSON.parse(new TextDecoder().decode(buf)) };
+  } catch {
+    return { ok: false, kind: "malformed", message: "registry response is not JSON" };
+  }
+}
+
+async function realFetchPackument(url: string, timeoutMs: number): Promise<FetchResult> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        // Abbreviated packument — a few KB instead of the full multi-MB document.
+        accept: "application/vnd.npm.install-v1+json",
+        // STATIC user-agent. Never include CLI_VERSION: that would make every update check a
+        // version beacon, which the invariant-5 carve-out explicitly forbids.
+        "user-agent": "glosa-update",
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    return { ok: false, kind: isTimeout(err) ? "timeout" : "network", message: (err as Error).message };
+  }
+  return readPackumentResponse(res);
+}
+
+/** Each failure kind gets its own `error.code` — none collapse into a generic "network error".
+ *  Exit 70 does NOT imply `kind: "internal"`: a disconnected laptop is a network problem, and
+ *  reporting it as an internal glosa error is how a non-bug gets filed as one. */
+export function fetchFailureToError(
+  f: Extract<FetchResult, { ok: false }>,
+  registry: string,
+): { exitCode: number; error: CommandError } {
+  if (f.kind === "timeout" || f.kind === "network") {
+    return {
+      exitCode: 70,
+      error: {
+        code: "registry-unreachable",
+        kind: "network",
+        message:
+          f.kind === "timeout"
+            ? `${registry} did not respond within ${REGISTRY_TIMEOUT_MS}ms`
+            : `could not reach ${registry}: ${f.message}`,
+        hint: "Check your network connection or proxy, then retry. Use --registry to point at a different registry.",
+      },
+    };
+  }
+  if (f.kind === "http") {
+    const authed = f.status === 401 || f.status === 403;
+    return {
+      exitCode: 70,
+      error: {
+        code: "registry-http-error",
+        kind: "registry",
+        message: authed
+          ? `${registry} requires authentication (HTTP ${f.status})`
+          : `${registry} returned HTTP ${f.status ?? "?"} ${f.message}`,
+        hint: authed
+          ? "glosa resolves releases over a plain HTTPS request that deliberately sends no .npmrc credentials. Point --registry at an unauthenticated mirror, or install manually."
+          : "Check the --registry value, then retry.",
+      },
+    };
+  }
+  return {
+    exitCode: 70,
+    error: {
+      code: "registry-malformed-response",
+      kind: "registry",
+      message:
+        f.kind === "too-large"
+          ? `${registry} returned an implausibly large response: ${f.message}`
+          : `${registry} did not return a package document: ${f.message}`,
+      hint: "A captive portal or proxy error page usually causes this. Confirm you can reach the registry in a browser.",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tarball download + integrity
+// ---------------------------------------------------------------------------------------------
+
+/** `dist.integrity` is `sha512-<base64>`. A missing or non-sha512 value is a REFUSAL, never a
+ *  pass — the whole point is that the bytes we install are the bytes the registry published.
+ *
+ *  Not a constant-time comparison, and it does not claim to be: the digest is public, so timing is
+ *  not a threat here. */
+export function verifyIntegrity(expected: string | null, actualSha512Base64: string): Checked<true> {
+  if (!expected) {
+    return { ok: false, reason: "registry did not publish a dist.integrity digest for this version" };
+  }
+  const dash = expected.indexOf("-");
+  const algo = dash === -1 ? expected : expected.slice(0, dash);
+  const digest = dash === -1 ? "" : expected.slice(dash + 1);
+  if (algo !== "sha512") {
+    return { ok: false, reason: `dist.integrity uses ${algo}, which glosa does not verify` };
+  }
+  if (digest.length !== actualSha512Base64.length || digest !== actualSha512Base64) {
+    return { ok: false, reason: "downloaded tarball does not match the registry's published sha512" };
+  }
+  return { ok: true, value: true };
+}
+
+async function realDownloadTarball(url: string, timeoutMs: number): Promise<DownloadResult> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "user-agent": "glosa-update" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    return { ok: false, kind: isTimeout(err) ? "timeout" : "network", message: (err as Error).message };
+  }
+  if (!res.ok) return { ok: false, kind: "http", message: `HTTP ${res.status} ${res.statusText}` };
+
+  // mkdtempSync creates the directory 0700. A fixed path under a world-writable /tmp would let
+  // another local user swap the tarball between verification and install (TOCTOU).
+  let dir: string;
+  try {
+    dir = mkdtempSync(join(tmpdir(), "glosa-update-"));
+  } catch (err) {
+    return { ok: false, kind: "io", message: (err as Error).message };
+  }
+  const path = join(dir, `glosa-${Date.now()}.tgz`);
+  const hasher = new Bun.CryptoHasher("sha512");
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body?.getReader();
+  if (!reader) return { ok: false, kind: "network", message: "tarball response had no body" };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_TARBALL_BYTES) {
+        await reader.cancel();
+        rmSync(dir, { recursive: true, force: true });
+        return { ok: false, kind: "too-large", message: `tarball exceeded ${MAX_TARBALL_BYTES} bytes` };
+      }
+      hasher.update(value);
+      chunks.push(value);
+    }
+    await Bun.write(path, new Blob(chunks as BlobPart[]));
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    return { ok: false, kind: isTimeout(err) ? "timeout" : "network", message: (err as Error).message };
+  }
+  return { ok: true, path, bytes: total, sha512: hasher.digest("base64") };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Installer command line
+// ---------------------------------------------------------------------------------------------
+
+export function resolvePackageManager(
+  c: InstallClassification,
+  which: (cmd: string) => string | null,
+): { ok: true; path: string } | { ok: false; cmd: string } {
+  const cmd = c.kind === "bun-global" ? "bun" : "npm";
+  const path = which(cmd);
+  return path ? { ok: true, path } : { ok: false, cmd };
+}
+
+/** `--prefix=<p>` uses the equals form deliberately: a prefix path beginning with `-` would
+ *  otherwise be read by npm's own argv parser as a flag. `--` closes the remaining gap before the
+ *  positional. Bun.spawn's array form already prevents shell splitting. */
+export function buildInstallerArgv(c: InstallClassification, pmPath: string, tarballPath: string): string[] {
+  if (c.kind === "bun-global") return [pmPath, "add", "--global", "--", tarballPath];
+  return [pmPath, "install", "--global", `--prefix=${c.installDir}`, "--", tarballPath];
+}
+
+/** Process env minus ANTHROPIC_API_KEY (invariant 5; lifecycle.ts:568's buildChildEnv is the
+ *  precedent) plus only the prefix pin. Deliberately NOT scrubbing npm_config_registry /
+ *  BUN_CONFIG_REGISTRY: a corporate mirror is usually intentional, and installing from a verified
+ *  local file already bypasses registry redirection for glosa itself. */
+export function buildInstallerEnv(
+  base: Record<string, string | undefined>,
+  c: InstallClassification,
+): Record<string, string | undefined> {
+  const env = { ...base };
+  delete env.ANTHROPIC_API_KEY;
+  // BUN_INSTALL_GLOBAL_DIR, not BUN_INSTALL: bun honors the former in preference to
+  // BUN_INSTALL-derived defaults, so pinning it survives a user who already sets either. Note it
+  // pins the PACKAGE dir only — the bin symlink still follows BUN_INSTALL, which is what we want
+  // for a real upgrade and is why `binPathFor` derives the two differently.
+  if (c.kind === "bun-global" && c.installDir) env.BUN_INSTALL_GLOBAL_DIR = c.installDir;
+  return env;
+}
+
+async function realSpawnInstaller(
+  argv: string[],
+  env: Record<string, string | undefined>,
+  onOutput: ((chunk: string) => void) | null,
+): Promise<{ exitCode: number }> {
+  if (!onOutput) {
+    // Human mode: the installer owns the TTY so its progress bars show.
+    const proc = Bun.spawn({ cmd: argv, env, stdio: ["inherit", "inherit", "inherit"] });
+    return { exitCode: await proc.exited };
+  }
+  const proc = Bun.spawn({ cmd: argv, env, stdout: "pipe", stderr: "pipe" });
+  const decoder = new TextDecoder();
+  // Read BOTH streams: npm writes progress to stdout, so forwarding only stderr would lose the
+  // progress the forwarding exists to provide.
+  const pump = async (stream: ReadableStream<Uint8Array> | null) => {
+    if (!stream) return;
+    for await (const chunk of stream) onOutput(decoder.decode(chunk, { stream: true }));
+  };
+  await Promise.all([pump(proc.stdout as ReadableStream<Uint8Array>), pump(proc.stderr as ReadableStream<Uint8Array>)]);
+  return { exitCode: await proc.exited };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Verification: probe the installed binary
+// ---------------------------------------------------------------------------------------------
+
+/** NOT `join(installDir, "bin", "glosa")` for both kinds — that is wrong for bun and would make
+ *  the fallback probe always fail. bun's PACKAGE dir is BUN_INSTALL_GLOBAL_DIR
+ *  (`~/.bun/install/global`) while its BIN dir follows BUN_INSTALL (`~/.bun/bin`). Verified. */
+export function binPathFor(c: InstallClassification): string | null {
+  if (!c.installDir) return null;
+  if (c.kind === "bun-global") {
+    const suffix = "/install/global";
+    const root = c.installDir.endsWith(suffix) ? c.installDir.slice(0, -suffix.length) : c.installDir;
+    return join(root, "bin", "glosa");
+  }
+  return join(c.installDir, "bin", "glosa");
+}
+
+export interface ProbeInterpretation {
+  matched: boolean | null;
+  reportedVersion: string | null;
+  path: string;
+  exitCode: number;
+  code?: "update-unverified" | "update-unverified-probe-failed";
+  message?: string;
+  hint?: string;
+}
+
+/** `runVersionProbe` returns null both when the binary is missing AND when it exits non-zero, so
+ *  "probe returned null" must NOT be reported as a version mismatch we never observed. Two codes,
+ *  same exit 9. Output is parsed, not string-compared: index.ts:810 renders `glosa <version>`. */
+export function interpretProbe(output: string | null, target: string, path: string): ProbeInterpretation {
+  const m = output === null ? null : /^glosa\s+(\S+)$/m.exec(output.trim());
+  if (!m || !Bun.semver.satisfies(m[1] as string, m[1] as string)) {
+    return {
+      matched: null,
+      reportedVersion: null,
+      path,
+      exitCode: 9,
+      code: "update-unverified-probe-failed",
+      message: `the installer reported success, but \`${path} --version\` produced no usable version`,
+      hint: `The install directory may not be on your PATH. Run \`${path} --version\` yourself to check.`,
+    };
+  }
+  const reported = m[1] as string;
+  if (reported === target) return { matched: true, reportedVersion: reported, path, exitCode: 0 };
+  return {
+    matched: false,
+    reportedVersion: reported,
+    path,
+    exitCode: 9,
+    code: "update-unverified",
+    message: `installed ${target}, but ${path} still reports ${reported}`,
+    hint: "Another glosa earlier on your PATH is shadowing the upgraded one. Note that a shell alias or function cannot be detected here — check with `type glosa`.",
+  };
+}
+
+/** A lock file is not liveness: `readLock` returns any parseable file, and a crashed daemon leaves
+ *  one behind. Without the `isPidAlive` gate, `daemon_running` is true for a dead daemon and — far
+ *  worse — the forced-downgrade path prints `kill <pid>` for a pid the OS may have recycled. */
+export function readDaemonLockWith(read: () => DaemonLock | null, alive: (pid: number) => boolean): DaemonLock | null {
+  const lock = read();
+  if (!lock) return null;
+  return alive(lock.pid) ? lock : null;
+}
+
+export function realUpdateDeps(): UpdateDeps {
+  return {
+    platform: () => process.platform,
+    packageRoot: () => join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+    pathExists: (p) => {
+      try {
+        accessSync(p, constants.F_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    isWritable: (p) => {
+      try {
+        accessSync(p, constants.W_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    env: (name) => Bun.env[name],
+    envAll: () => ({ ...Bun.env }),
+    currentVersion: () => CLI_VERSION,
+    which: (cmd) => Bun.which(cmd, { PATH: Bun.env.PATH ?? "" }),
+    runVersionProbe: (cmd) => {
+      try {
+        const proc = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe" });
+        if (!proc.success) return null;
+        return proc.stdout.toString("utf8").trim();
+      } catch {
+        return null;
+      }
+    },
+    // NEVER ensureDaemon() — that would start a daemon as a side effect of asking whether one runs.
+    readDaemonLock: () => readDaemonLockWith(() => readLock(lockPath(glosaHome())), isPidAlive),
+    fetchPackument: realFetchPackument,
+    downloadTarball: realDownloadTarball,
+    cleanupDownload: (p) => {
+      try {
+        rmSync(dirname(p), { recursive: true, force: true });
+      } catch {
+        /* best effort — a leftover temp dir is not worth failing an otherwise-successful update */
+      }
+    },
+    spawnInstaller: realSpawnInstaller,
+    writeStdout: (s) => {
+      process.stdout.write(s);
+    },
+    writeStderr: (s) => {
+      process.stderr.write(s);
+    },
+    flushStdout: () => new Promise((resolve) => process.stdout.write("", () => resolve())),
   };
 }

@@ -4,14 +4,23 @@
 // redaction, target resolution) are table-tested directly.
 import { describe, expect, test } from "bun:test";
 import {
+  binPathFor,
+  buildInstallerArgv,
+  buildInstallerEnv,
   classifyInstall,
   createLineRedactor,
   decideAction,
   deriveChannel,
+  fetchFailureToError,
+  interpretProbe,
   parseRegistryUrl,
+  readDaemonLockWith,
+  readPackumentResponse,
   redact,
+  resolvePackageManager,
   resolveTarget,
   validateTarballUrl,
+  verifyIntegrity,
 } from "../src/update.ts";
 
 const BUN = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
@@ -369,5 +378,242 @@ describe("decideAction", () => {
   test("no newer-stable warning when latest is not ahead of the target", () => {
     const d = decideAction("0.1.0-alpha.2", "0.1.0-alpha.3", { force: false, dryRun: false, latest: "0.1.0-alpha.0" });
     expect(d.warnings.map((w) => w.code)).not.toContain("newer-stable-available");
+  });
+});
+
+describe("readPackumentResponse", () => {
+  test("parses a good body", async () => {
+    const r = await readPackumentResponse(new Response(JSON.stringify(PACKUMENT), { status: 200 }));
+    expect(r).toMatchObject({ ok: true, status: 200 });
+  });
+
+  test("a non-2xx is `http` with its status", async () => {
+    const r = await readPackumentResponse(new Response("nope", { status: 401, statusText: "Unauthorized" }));
+    expect(r).toMatchObject({ ok: false, kind: "http", status: 401 });
+  });
+
+  test("a non-JSON body (captive portal / proxy error page) is `malformed`", async () => {
+    const r = await readPackumentResponse(new Response("<html>proxy error</html>", { status: 200 }));
+    expect(r).toMatchObject({ ok: false, kind: "malformed" });
+  });
+
+  // The branch a naive `await res.text()` implementation makes unreachable: it would buffer the
+  // whole body and OOM before ever checking the size.
+  test("an unbounded body is cut off at the cap instead of being buffered whole", async () => {
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled++;
+        c.enqueue(new Uint8Array(1024 * 1024));
+      },
+    });
+    const r = await readPackumentResponse(new Response(body, { status: 200 }));
+    expect(r).toMatchObject({ ok: false, kind: "too-large" });
+    expect(pulled).toBeLessThan(64); // proves it stopped early rather than reading forever
+  });
+});
+
+describe("fetchFailureToError", () => {
+  test.each([
+    ["timeout", undefined, "registry-unreachable", "network"],
+    ["network", undefined, "registry-unreachable", "network"],
+    ["http", 404, "registry-http-error", "registry"],
+    ["http", 401, "registry-http-error", "registry"],
+    ["http", 500, "registry-http-error", "registry"],
+    ["malformed", undefined, "registry-malformed-response", "registry"],
+    ["too-large", undefined, "registry-malformed-response", "registry"],
+  ] as const)("%s/%s -> %s (%s)", (kind, status, code, errKind) => {
+    const e = fetchFailureToError({ ok: false, kind, status, message: "x" }, REG);
+    expect(e.error.code).toBe(code);
+    expect(e.error.kind).toBe(errKind);
+    expect(e.exitCode).toBe(70);
+    expect(e.error.hint).toBeTruthy(); // hint is mandatory on every non-zero envelope
+  });
+
+  test("401/403 names the real cause instead of a generic HTTP error", () => {
+    const e = fetchFailureToError({ ok: false, kind: "http", status: 401, message: "Unauthorized" }, "https://mirror.corp");
+    expect(e.error.message.toLowerCase()).toContain("authenticat");
+    expect(e.error.hint).toContain(".npmrc");
+  });
+
+  test("no failure kind is described as an internal glosa error", () => {
+    for (const kind of ["timeout", "network", "http", "malformed", "too-large"] as const) {
+      expect(fetchFailureToError({ ok: false, kind, message: "x" }, REG).error.kind).not.toBe("internal");
+    }
+  });
+});
+
+describe("verifyIntegrity", () => {
+  const REAL = `sha512-${GOOD_SHA}`;
+
+  test("accepts the real published digest for the real bytes", () => {
+    expect(verifyIntegrity(REAL, GOOD_SHA).ok).toBe(true);
+  });
+
+  test("refuses a single flipped byte", () => {
+    expect(verifyIntegrity(REAL, `${GOOD_SHA.slice(0, -2)}XX`).ok).toBe(false);
+  });
+
+  test("refuses an algorithm we do not verify rather than silently passing", () => {
+    expect(verifyIntegrity("sha1-abc", "abc").ok).toBe(false);
+    expect(verifyIntegrity("md5-abc", "abc").ok).toBe(false);
+    expect(verifyIntegrity("noalgo", "noalgo").ok).toBe(false);
+  });
+
+  test("a packument with NO integrity field is refused, not waved through", () => {
+    expect(verifyIntegrity(null, GOOD_SHA).ok).toBe(false);
+    expect(verifyIntegrity("", GOOD_SHA).ok).toBe(false);
+  });
+
+  test("a truncated digest is rejected, never treated as a prefix match", () => {
+    expect(verifyIntegrity(REAL, GOOD_SHA.slice(0, 20)).ok).toBe(false);
+  });
+});
+
+describe("resolvePackageManager", () => {
+  test.each([
+    ["bun-global", "bun"],
+    ["npm-global", "npm"],
+  ] as const)("%s resolves %s", (kind, cmd) => {
+    const c = { kind } as never;
+    expect(resolvePackageManager(c, () => `/p/${cmd}`)).toEqual({ ok: true, path: `/p/${cmd}` });
+    expect(resolvePackageManager(c, () => null)).toEqual({ ok: false, cmd });
+  });
+});
+
+const TGZ = "/var/folders/ab/glosa-update-x1/glosa-0.1.0-alpha.3.tgz";
+
+describe("buildInstallerArgv", () => {
+  test("bun-global", () => {
+    expect(buildInstallerArgv(classifyInstall(BUN), "/opt/homebrew/bin/bun", TGZ)).toEqual([
+      "/opt/homebrew/bin/bun",
+      "add",
+      "--global",
+      "--",
+      TGZ,
+    ]);
+  });
+
+  test("npm-global uses the equals form so a leading-dash prefix cannot be read as a flag", () => {
+    expect(buildInstallerArgv(classifyInstall(NPM), "/usr/bin/npm", TGZ)).toEqual([
+      "/usr/bin/npm",
+      "install",
+      "--global",
+      "--prefix=/usr/local",
+      "--",
+      TGZ,
+    ]);
+    expect(buildInstallerArgv({ kind: "npm-global", installDir: "/-oops" } as never, "/usr/bin/npm", TGZ)).toEqual([
+      "/usr/bin/npm",
+      "install",
+      "--global",
+      "--prefix=/-oops",
+      "--",
+      TGZ,
+    ]);
+  });
+
+  test("the tarball is always the last argument and always absolute", () => {
+    for (const c of [classifyInstall(BUN), classifyInstall(NPM)]) {
+      const argv = buildInstallerArgv(c, "/bin/pm", TGZ);
+      expect(argv.at(-1)).toBe(TGZ);
+      expect(argv.at(-1)?.startsWith("/")).toBe(true);
+    }
+  });
+});
+
+describe("buildInstallerEnv", () => {
+  const BASE = {
+    PATH: "/usr/bin",
+    HOME: "/Users/x",
+    ANTHROPIC_API_KEY: "sk-ant-should-never-appear",
+    BUN_INSTALL: "/Users/x/.bun",
+  };
+
+  test("ANTHROPIC_API_KEY is scrubbed (invariant 5)", () => {
+    const env = buildInstallerEnv(BASE, classifyInstall(BUN));
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain("sk-ant-should-never-appear");
+  });
+
+  test("bun-global pins BUN_INSTALL_GLOBAL_DIR and leaves an existing BUN_INSTALL alone", () => {
+    const env = buildInstallerEnv(BASE, classifyInstall(BUN));
+    expect(env.BUN_INSTALL_GLOBAL_DIR).toBe("/Users/x/.bun/install/global");
+    expect(env.BUN_INSTALL).toBe("/Users/x/.bun");
+  });
+
+  test("npm-global adds no env pin — the prefix travels as a flag", () => {
+    const env = buildInstallerEnv(BASE, classifyInstall(NPM));
+    expect(env.BUN_INSTALL_GLOBAL_DIR).toBeUndefined();
+    expect(env.npm_config_prefix).toBeUndefined();
+  });
+
+  test("a corporate mirror config is deliberately preserved", () => {
+    const env = buildInstallerEnv({ ...BASE, npm_config_registry: "https://mirror.corp/npm" }, classifyInstall(NPM));
+    expect(env.npm_config_registry).toBe("https://mirror.corp/npm");
+  });
+});
+
+describe("binPathFor", () => {
+  // bun's PACKAGE dir and BIN dir are governed by different env vars, so the derivations differ.
+  test("bun-global strips /install/global before appending /bin", () => {
+    expect(binPathFor(classifyInstall(BUN))).toBe("/Users/x/.bun/bin/glosa");
+  });
+
+  test("npm-global appends /bin to the prefix", () => {
+    expect(binPathFor(classifyInstall(NPM))).toBe("/usr/local/bin/glosa");
+  });
+
+  test("a refused kind has no bin path", () => {
+    expect(binPathFor(classifyInstall(VOLTA_PATH))).toBeNull();
+  });
+});
+
+describe("interpretProbe", () => {
+  test("a matching version verifies", () => {
+    expect(interpretProbe("glosa 0.1.0-alpha.3", "0.1.0-alpha.3", "/usr/local/bin/glosa")).toMatchObject({
+      matched: true,
+      exitCode: 0,
+      reportedVersion: "0.1.0-alpha.3",
+    });
+  });
+
+  test("parses `glosa <version>`, never a bare string compare", () => {
+    expect(interpretProbe("glosa 0.1.0-alpha.3\n", "0.1.0-alpha.3", "/p").matched).toBe(true);
+  });
+
+  test("the old version still on PATH is a shadow, named by path", () => {
+    const r = interpretProbe("glosa 0.1.0-alpha.2", "0.1.0-alpha.3", "/usr/local/bin/glosa");
+    expect(r).toMatchObject({ matched: false, exitCode: 9, code: "update-unverified" });
+    expect(r.message).toContain("/usr/local/bin/glosa");
+    expect(r.message).toContain("0.1.0-alpha.2");
+    // Bun.which cannot see shell aliases or functions by construction — say so rather than pretend.
+    expect(r.hint).toContain("alias");
+  });
+
+  test("a probe that could not run is a DIFFERENT code — never claim an unobserved mismatch", () => {
+    const r = interpretProbe(null, "0.1.0-alpha.3", "/usr/local/bin/glosa");
+    expect(r).toMatchObject({ matched: null, exitCode: 9, code: "update-unverified-probe-failed" });
+    expect(r.message).not.toContain("0.1.0-alpha.2");
+    expect(r.hint).toContain("PATH");
+  });
+
+  test("unparseable output is treated as probe-failed, not as a mismatch", () => {
+    expect(interpretProbe("command not found", "0.1.0-alpha.3", "/p").code).toBe("update-unverified-probe-failed");
+    expect(interpretProbe("glosa not-a-version", "0.1.0-alpha.3", "/p").code).toBe("update-unverified-probe-failed");
+  });
+});
+
+describe("readDaemonLockWith", () => {
+  test("a lock file for a dead pid is NOT a running daemon", () => {
+    expect(readDaemonLockWith(() => ({ pid: 999999, port: 4646 }) as never, () => false)).toBeNull();
+  });
+
+  test("a lock file for a live pid is a running daemon", () => {
+    expect(readDaemonLockWith(() => ({ pid: 8510, port: 4646 }) as never, () => true)).toMatchObject({ pid: 8510 });
+  });
+
+  test("no lock file at all is not a running daemon", () => {
+    expect(readDaemonLockWith(() => null, () => true)).toBeNull();
   });
 });
