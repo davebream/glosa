@@ -1,6 +1,6 @@
 {
   "name": "@davebream/glosa",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
   "author": "Dawid Leszczyński",

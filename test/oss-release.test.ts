@@ -24,7 +24,7 @@ function walk(dir: string): string[] {
 describe("OSS release metadata", () => {
   test("the root package is the sole public macOS artifact", () => {
     expect(rootPackage.name).toBe("@davebream/glosa");
-    expect(rootPackage.version).toBe("0.1.0-alpha.1");
+    expect(rootPackage.version).toBe("0.1.0-alpha.2");
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
     expect(rootPackage.bin).toEqual({ glosa: "packages/cli/src/main.ts" });

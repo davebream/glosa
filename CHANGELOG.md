@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-07-24
+
+### Added
+
+- Durable loose-file-to-directory workspace adoption with preserved historical lineages.
+- Read-only presentation surfaces, including source copy, print, and session-independent preview actions.
+- Revision-bound artifact approval and canonical URL focus for review workflows.
+
+### Changed
+
+- Made Preview a reading-only canvas and improved responsive workspace review behavior.
+- Consolidated provider naming and legacy integration traces around the generic provider boundary.
+
+### Fixed
+
+- Completed open-surface lifecycle handling and annotation-flow reliability.
+
 ## [0.1.0-alpha.1] - 2026-07-23
 
 ### Added
@@ -36,6 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.0...v0.1.0-alpha.1
 [0.1.0-alpha.0]: https://github.com/davebream/glosa/releases/tag/v0.1.0-alpha.0
