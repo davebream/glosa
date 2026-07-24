@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import rootPackage from "../package.json" with { type: "json" };
 import { CLI_VERSION } from "../packages/cli/src/version.ts";
@@ -24,7 +24,7 @@ function walk(dir: string): string[] {
 describe("OSS release metadata", () => {
   test("the root package is the sole public macOS artifact", () => {
     expect(rootPackage.name).toBe("@davebream/glosa");
-    expect(rootPackage.version).toBe("0.1.0-alpha.2");
+    expect(rootPackage.version).toBe("0.1.0-alpha.3");
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
     expect(rootPackage.bin).toEqual({ glosa: "packages/cli/src/main.ts" });
