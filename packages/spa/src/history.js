@@ -78,7 +78,7 @@ function el(tag, props = {}, children = []) {
  * single `dataAccess` instance, passes it in). Returns a `refresh()` the caller can invoke after
  * an SSE artifact-change event so the timeline picks up new checkpoints.
  */
-export function mountHistoryPane(container, { dataAccess, slug, path }) {
+export function mountHistoryPane(container, { dataAccess, slug, path, canRestore = false, onClose = () => {} }) {
   container.textContent = "";
   const list = el("ul", { className: "glosa-history-list" });
   const diffPane = el("div", { className: "glosa-diff-pane" });
@@ -95,7 +95,8 @@ export function mountHistoryPane(container, { dataAccess, slug, path }) {
     onClick: () => void compareSelected(),
   });
   compareCurrentButton.disabled = true;
-  container.append(el("h3", { textContent: "Version history" }), status, compareCurrentButton, list, diffPane);
+  const closeButton = el("button", { type: "button", className: "glosa-context-close", textContent: "Close version history", onClick: () => onClose?.() });
+  container.append(el("header", { className: "glosa-context-header" }, [el("h3", { tabIndex: -1, textContent: "Version history" }), closeButton]), status, compareCurrentButton, list, diffPane);
 
   let selected = [];
   let rows = [];
@@ -189,7 +190,15 @@ export function mountHistoryPane(container, { dataAccess, slug, path }) {
       const restoreBtn = el("button", {
         type: "button",
         textContent: "Restore this version",
-        onClick: () => void restoreTo(row.checkpoint_id, false),
+        onClick: async () => {
+          const proceed = await confirmDialog({
+            title: "Restore this version?",
+            body: `Restoring the version from ${timestampLabel} replaces the current artifact content.`,
+            confirmLabel: "Restore version",
+            danger: true,
+          });
+          if (proceed) void restoreTo(row.checkpoint_id, false);
+        },
       });
       restoreBtn.disabled = !path;
       list.append(
@@ -204,7 +213,7 @@ export function mountHistoryPane(container, { dataAccess, slug, path }) {
           }),
           el("span", { className: "glosa-history-kind", textContent: kindLabel }),
           el("time", { dateTime: row.at, textContent: timestampLabel }),
-          restoreBtn,
+          ...(canRestore ? [restoreBtn] : []),
         ]),
       );
     }

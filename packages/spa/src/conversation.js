@@ -118,7 +118,7 @@ function renderItem(item) {
  * — this module never constructs its own, per R6's ONE-data-access-module invariant. Returns
  * `unmount()`, which tears down the SSE subscription.
  */
-export function mountConversationPane(container, { dataAccess, slug, onClose = () => {} }) {
+export function mountConversationPane(container, { dataAccess, slug, readOnly = false, onClose = () => {} }) {
   container.textContent = "";
 
   const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
@@ -141,8 +141,8 @@ export function mountConversationPane(container, { dataAccess, slug, onClose = (
   const closeButton = el("button", {
     className: "glosa-conv-close",
     type: "button",
-    title: "Close conversation",
-    "aria-label": "Close conversation",
+    title: readOnly ? "Close agent context" : "Close conversation",
+    "aria-label": readOnly ? "Close agent context" : "Close conversation",
     textContent: "×",
     onClick: () => onClose?.(),
   });
@@ -154,7 +154,7 @@ export function mountConversationPane(container, { dataAccess, slug, onClose = (
 
   const header = el("header", { className: "glosa-conv-header" }, [
     el("div", { className: "glosa-conv-heading" }, [
-      el("h3", { textContent: "Conversation" }),
+      el("h3", { textContent: readOnly ? "Agent context" : "Conversation" }),
       el("p", { textContent: "Read-only session mirror" }),
     ]),
     closeButton,
@@ -174,7 +174,7 @@ export function mountConversationPane(container, { dataAccess, slug, onClose = (
     ]),
   ]);
 
-  container.append(header, feed, composer);
+  container.append(header, feed, ...(readOnly ? [] : [composer]));
 
   let events = [];
   let mirrorAvailable = true;

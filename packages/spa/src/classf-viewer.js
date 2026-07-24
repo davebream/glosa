@@ -146,12 +146,16 @@ export function createMessageRouter({ bucket, onSelection, onMark, onReady, onEr
  * bridge's own precomputed offsets rather than a DOM `Selection`, since the selection happened
  * inside the foreign document, not this one). Returns `unmount()`.
  */
-export function mountClassFViewer(container, { dataAccess, slug, artifactPath, onSelection, onReady, onError } = {}) {
+/**
+ * @param {any} container
+ * @param {{dataAccess: any, slug?: string, artifactPath?: string, interactive?: boolean, onSelection?: Function, onReady?: Function, onError?: Function}} options
+ */
+export function mountClassFViewer(container, { dataAccess, slug, artifactPath, interactive = true, onSelection, onReady, onError } = {}) {
   const iframe = document.createElement("iframe");
   // `setAttribute`, not the `.sandbox`/`.referrerPolicy` IDL properties — more portable across
   // DOM implementations (including the happy-dom harness this module is unit-tested against) and
   // matches exactly what A3 §2 specifies as the literal iframe markup.
-  iframe.setAttribute("sandbox", "allow-scripts");
+  iframe.setAttribute("sandbox", interactive ? "allow-scripts" : "");
   iframe.setAttribute("referrerpolicy", "no-referrer");
   iframe.setAttribute("title", "Artifact preview");
   container.textContent = "";
@@ -175,6 +179,11 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, o
   async function connect() {
     const { url, nonce } = await dataAccess.mintClassFCapability(slug, artifactPath);
     if (cancelled) return;
+    if (!interactive) {
+      iframe.src = url;
+      onReady?.();
+      return;
+    }
     // Captured NOW, before `load` fires — A3 §2 check 1's "at creation" (here: at src-assignment
     // time, the earliest this window handle exists).
     const iframeWindow = iframe.contentWindow;
