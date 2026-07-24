@@ -360,6 +360,30 @@ button {
   gap: var(--space-2);
 }
 
+.glosa-tools-copy-source,
+.glosa-tools-print {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.glosa-tools-copy-source:hover,
+.glosa-tools-print:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-tools-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.glosa-tools-status[data-error="true"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
 .glosa-tools-trigger {
   display: none;
 }
@@ -2383,6 +2407,8 @@ button {
 .glosa-tools-menu .glosa-attention-trigger,
 .glosa-tools-menu .glosa-history-toggle,
 .glosa-tools-menu .glosa-conversation-toggle,
+.glosa-tools-menu .glosa-tools-copy-source,
+.glosa-tools-menu .glosa-tools-print,
 .glosa-tools-menu .glosa-shortcuts-toggle,
 .glosa-tools-menu .glosa-appearance-trigger {
     width: 100%;
@@ -2409,6 +2435,10 @@ button {
 
   .glosa-tools-menu .glosa-attention-badge {
     margin-left: auto;
+  }
+
+  .glosa-tools-menu .glosa-tools-status {
+    padding: var(--space-2) var(--space-3);
   }
 
   .glosa-appearance-menu {
@@ -2598,6 +2628,73 @@ button {
 }
 
 /* ---------- 14. Reduced motion ---------- */
+
+/* Native print/PDF uses the rendered Class-R manuscript, never the application workbench. Literal
+   colors deliberately bypass dark-theme custom properties so the exported page remains readable. */
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    background: #ffffff;
+  }
+
+  body,
+  .glosa-app,
+  .glosa-main,
+  .glosa-content {
+    background: #ffffff !important;
+    color: #20251f !important;
+  }
+
+  .glosa-app,
+  .glosa-main {
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  .glosa-topbar,
+  .glosa-sidebar,
+  .glosa-backdrop,
+  .glosa-banner,
+  .glosa-annotate-instructions,
+  .glosa-empty,
+  .glosa-skeleton,
+  .glosa-classf,
+  .glosa-edit-wrap,
+  .glosa-margin,
+  .glosa-markers,
+  .glosa-history,
+  .glosa-conversation,
+  .glosa-shortcuts,
+  .glosa-dialog-backdrop,
+  .glosa-dialog {
+    display: none !important;
+  }
+
+  .glosa-content {
+    display: block !important;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    font-family: ui-serif, "Iowan Old Style", Georgia, serif;
+    font-size: 12pt;
+    line-height: 1.55;
+    text-wrap: wrap;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .glosa-content blockquote { color: #4b5448 !important; }
+  .glosa-content hr { border-color: #c8cec5 !important; }
+  .glosa-content code,
+  .glosa-content pre,
+  .glosa-content th { background: #f3f5f1 !important; }
+  .glosa-content pre { border-color: #c8cec5 !important; }
+  .glosa-content th,
+  .glosa-content td { border-color: #c8cec5 !important; }
+  .glosa-content a { color: #365c25 !important; text-decoration-color: #78966c !important; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .glosa-app,
