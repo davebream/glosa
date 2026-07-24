@@ -695,6 +695,28 @@ export function resolvePackageManager(
   return path ? { ok: true, path } : { ok: false, cmd };
 }
 
+/** bun ONLY. `bun add --global <tarball>` fails outright when the package is already installed
+ *  globally under a different resolution:
+ *
+ *      error: Package "@davebream/glosa@0.1.0-alpha.0" has a dependency loop
+ *        Resolution: "@davebream/glosa@/tmp/.../glosa-….tgz"
+ *        Dependency: "@davebream/glosa@0.1.0-alpha.0"
+ *      error: An internal error occurred (DependencyLoop)
+ *
+ *  Measured against bun 1.2.7. It reproduces with an absolute tarball URL exactly as it does with a
+ *  local path, so this is not a consequence of installing from a verified local file — every
+ *  non-registry spec hits it, and the upgrade silently leaves the old version in place. Removing the
+ *  package first clears the recorded resolution and the install then succeeds.
+ *
+ *  npm has no such problem: `npm install --global --prefix=<p> <tarball>` upgrades in place.
+ *
+ *  The cost is a window in which glosa is uninstalled. That is why the recovery command is printed
+ *  and flushed BEFORE any of this runs. */
+export function buildPreInstallArgv(c: InstallClassification, pmPath: string): string[] | null {
+  if (c.kind !== "bun-global") return null;
+  return [pmPath, "remove", "--global", PKG];
+}
+
 /** `--prefix=<p>` uses the equals form deliberately: a prefix path beginning with `-` would
  *  otherwise be read by npm's own argv parser as a flag. `--` closes the remaining gap before the
  *  positional. Bun.spawn's array form already prevents shell splitting. */
@@ -940,6 +962,16 @@ export function formatPreSpawnBlock(data: UpdateData, recoveryCommand: string): 
     "If this install fails partway through, recover with:",
     `  ${recoveryCommand}`,
   ];
+  if (data.install_kind === "bun-global") {
+    // bun cannot install over its own recorded resolution, so the old copy is removed first. Say so
+    // plainly: for a few seconds there is no glosa on PATH, and if the machine dies in that window
+    // the recovery command above is the only way back.
+    lines.splice(
+      4,
+      0,
+      "  note:        bun requires the old copy to be removed first, so glosa is briefly uninstalled",
+    );
+  }
   if (data.daemon_running && data.daemon_pid !== null) {
     lines.push("", `A glosa daemon is running (pid ${data.daemon_pid}). Run \`glosa open\` afterwards to restart it.`);
     if (data.comparison === "older") {
@@ -960,6 +992,14 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   const dryRun = Boolean(opts.check);
   const data = emptyData(currentVersion, dryRun);
   const warnings: CommandWarning[] = [];
+
+  // ---- 0. daemon liveness. Read FIRST, not lazily before the spawn, so `daemon_running` is
+  // never a confident `false` that merely means "we returned before checking". It is a local,
+  // side-effect-free file read plus a pid probe, so it costs nothing and breaks no ordering
+  // contract (the ordering that matters is platform -> argv -> classify -> network).
+  const daemonLock = deps.readDaemonLock();
+  data.daemon_running = daemonLock !== null;
+  data.daemon_pid = daemonLock?.pid ?? null;
 
   // ---- 1. platform (exit 5), before anything can touch the network -------------------------
   if (deps.platform() !== "darwin") {
@@ -1080,10 +1120,6 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   data.would_install = decision.wouldInstall;
   warnings.push(...decision.warnings);
 
-  const daemonLock = deps.readDaemonLock();
-  data.daemon_running = daemonLock !== null;
-  data.daemon_pid = daemonLock?.pid ?? null;
-
   if (!decision.shouldInstall) {
     data.action = decision.action;
     return { ok: true, command: "update", exitCode: EXIT_CODES.OK, data, warnings };
@@ -1155,11 +1191,17 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
     // ---- 10. spawn the installer (exit 70) --------------------------------------------------
     const env = buildInstallerEnv(deps.envAll(), classification);
     const argv = buildInstallerArgv(classification, pm.path, downloaded.path);
+    // bun cannot install over its own recorded resolution (see buildPreInstallArgv). Its exit code
+    // is deliberately ignored: "it was not installed" is a fine state to proceed from, and the only
+    // outcome that matters is whether the install below succeeds.
+    const preArgv = buildPreInstallArgv(classification, pm.path);
     // In --json mode A6 §F26 allows exactly one JSON object on stdout, but a silent multi-minute
     // wait is unacceptable — so installer output is forwarded to stderr, REDACTED and line-buffered
     // as it arrives (npm echoes the effective registry URL, which frequently carries credentials).
     const redactor = opts.json ? createLineRedactor((s) => deps.writeStderr(s)) : null;
-    const { exitCode: installerExit } = await deps.spawnInstaller(argv, env, redactor ? (c) => redactor.push(c) : null);
+    const onOutput = redactor ? (c: string) => redactor.push(c) : null;
+    if (preArgv) await deps.spawnInstaller(preArgv, env, onOutput);
+    const { exitCode: installerExit } = await deps.spawnInstaller(argv, env, onOutput);
     redactor?.flush();
     data.installer_exit_code = installerExit;
     if (installerExit !== 0) {

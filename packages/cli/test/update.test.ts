@@ -7,6 +7,7 @@ import {
   binPathFor,
   buildInstallerArgv,
   buildInstallerEnv,
+  buildPreInstallArgv,
   classifyInstall,
   createLineRedactor,
   decideAction,
@@ -1084,5 +1085,114 @@ describe("printUpdateResult", () => {
     const out = captureStdout(() => printUpdateResult(r, false));
     expect(out).toContain("0.1.0-alpha.2");
     expect(out).toContain("0.1.0-alpha.3");
+  });
+});
+
+describe("runUpdate — daemon liveness is reported on EVERY path", () => {
+  // `daemon_running: false` must mean "we checked and none is running", never "we returned before
+  // checking". Same honesty rule as install_kind's nullability.
+  test.each([
+    ["platform refusal", () => runUpdate({}, makeDeps({ platform: () => "linux", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
+    ["unmanaged install", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH, readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
+    ["invalid registry", () => runUpdate({ registry: "http://evil" }, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
+    ["registry unreachable", () => runUpdate({}, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never, fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }) }).deps)],
+    ["--check", () => runUpdate({ check: true }, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
+  ])("%s still reports the live daemon", async (_label, run) => {
+    const r = await run();
+    expect(r.data.daemon_running).toBe(true);
+    expect(r.data.daemon_pid).toBe(8510);
+  });
+
+  test("no daemon means false everywhere, not null", async () => {
+    const r = await runUpdate({ check: true }, makeDeps().deps);
+    expect(r.data.daemon_running).toBe(false);
+    expect(r.data.daemon_pid).toBeNull();
+  });
+});
+
+describe("buildPreInstallArgv — bun cannot install over its own recorded resolution", () => {
+  // Measured against bun 1.2.7: `bun add --global <tarball>` over an existing install fails with
+  // `DependencyLoop` and silently leaves the OLD version in place. It reproduces identically with an
+  // absolute tarball URL, so it is not a consequence of installing from a local file.
+  test("bun-global removes the package first", () => {
+    expect(buildPreInstallArgv(classifyInstall(BUN), "/p/bun")).toEqual([
+      "/p/bun",
+      "remove",
+      "--global",
+      "@davebream/glosa",
+    ]);
+  });
+
+  test("npm-global needs no pre-step — npm upgrades in place", () => {
+    expect(buildPreInstallArgv(classifyInstall(NPM), "/p/npm")).toBeNull();
+  });
+});
+
+describe("runUpdate — bun pre-install removal", () => {
+  test("bun-global spawns remove then add, in that order", async () => {
+    const seen: string[][] = [];
+    const h = makeDeps({
+      spawnInstaller: async (argv) => {
+        seen.push(argv);
+        return { exitCode: 0 };
+      },
+    });
+    await runUpdate({}, h.deps);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual(["/p/bun", "remove", "--global", "@davebream/glosa"]);
+    expect(seen[1]).toEqual(["/p/bun", "add", "--global", "--", TGZ_PATH]);
+  });
+
+  test("npm-global spawns exactly one command", async () => {
+    const seen: string[][] = [];
+    const h = makeDeps({
+      packageRoot: () => NPM,
+      spawnInstaller: async (argv) => {
+        seen.push(argv);
+        return { exitCode: 0 };
+      },
+    });
+    await runUpdate({}, h.deps);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.[1]).toBe("install");
+  });
+
+  // "It was not installed" is a fine state to proceed from; only the install's exit code matters.
+  test("a failing remove does not abort the update", async () => {
+    let call = 0;
+    const h = makeDeps({
+      spawnInstaller: async () => {
+        call++;
+        return { exitCode: call === 1 ? 1 : 0 };
+      },
+    });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(0);
+    expect(r.data.action).toBe("updated");
+  });
+
+  test("a failing ADD is still fatal, and reports the add's exit code", async () => {
+    let call = 0;
+    const h = makeDeps({
+      spawnInstaller: async () => {
+        call++;
+        return { exitCode: call === 1 ? 0 : 7 };
+      },
+    });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(70);
+    expect(r.data.installer_exit_code).toBe(7);
+  });
+
+  test("the human pre-spawn block warns that glosa is briefly uninstalled", async () => {
+    const h = makeDeps();
+    await runUpdate({}, h.deps);
+    expect(h.stdout).toContain("briefly uninstalled");
+  });
+
+  test("npm's pre-spawn block carries no such warning", async () => {
+    const h = makeDeps({ packageRoot: () => NPM });
+    await runUpdate({}, h.deps);
+    expect(h.stdout).not.toContain("briefly uninstalled");
   });
 });

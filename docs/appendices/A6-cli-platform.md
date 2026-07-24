@@ -82,6 +82,16 @@
   for a mirror that legitimately rewrites tarball URLs; it widens *where*, never *how* (https stays
   mandatory), it is **never** readable from the environment, and it is refused at exit 2 unless an
   explicit non-default registry is also configured.
+- **bun requires a remove-then-add sequence; npm does not.** `bun add --global <tarball>` fails with
+  `error: An internal error occurred (DependencyLoop)` whenever the package is already installed
+  globally under a different recorded resolution, and it silently leaves the old version in place.
+  Measured against bun 1.2.7, and it reproduces identically with an absolute tarball **URL**, so it
+  is not a consequence of installing from a verified local file — every non-registry spec hits it.
+  `glosa update` therefore runs `bun remove --global @davebream/glosa` first and ignores that step's
+  exit code ("it was not installed" is a fine state to proceed from). The cost is a window in which
+  glosa is uninstalled, which is why the recovery command is printed and flushed before any of it
+  runs, and why the human pre-spawn block says so explicitly. `npm install --global --prefix=<p>
+  <tarball>` upgrades in place and needs no pre-step.
 - **Verification executes the truth.** After a successful install glosa spawns `glosa --version` and
   compares the parsed version to the target. This deliberately replaces reading
   `<packageRoot>/package.json`, which would prove *a directory* changed rather than that the user's
