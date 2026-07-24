@@ -388,6 +388,74 @@ describe("ensureDaemon — client", () => {
     }
   }, 25000);
 
+  test("retries when a replacement changes ownership between the lock read and handshake", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const divergentBuild = `${APP_VERSION}-${BUILD_ID.endsWith("0000000000000000") ? "1111111111111111" : "0000000000000000"}`;
+    const daemon = spawnVersionedDaemon(home, port, divergentBuild);
+    const realFetch = globalThis.fetch;
+    let releaseDelayedHandshake!: () => void;
+    const delayedHandshake = new Promise<void>((resolve) => {
+      releaseDelayedHandshake = resolve;
+    });
+    let notifyDelayedHandshake!: () => void;
+    const delayedHandshakeObserved = new Promise<void>((resolve) => {
+      notifyDelayedHandshake = resolve;
+    });
+    let intercepted = false;
+    let replacementPid: number | null = null;
+    try {
+      expect((await waitForHandshake(port))?.build_id).toBe(divergentBuild);
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+      globalThis.fetch = ((input, init) => {
+        if (!intercepted && String(input) === `http://127.0.0.1:${port}/api/handshake`) {
+          intercepted = true;
+          notifyDelayedHandshake();
+          return delayedHandshake.then(() => realFetch(input, init));
+        }
+        return realFetch(input, init);
+      }) as typeof fetch;
+
+      const delayedClient = ensureDaemon();
+      await delayedHandshakeObserved;
+      const replacementClient = ensureDaemon();
+      expect(await waitUntil(() => lockOf(home)?.build_id === BUILD_ID, 5000)).toBe(true);
+      releaseDelayedHandshake();
+
+      const results = await Promise.all([delayedClient, replacementClient]);
+      expect(results.every((result) => result.ok)).toBe(true);
+      if (results[0]?.ok && results[1]?.ok) {
+        replacementPid = results[0].pid;
+        expect(results[0].instanceId).toBe(results[1].instanceId);
+        expect(results[0].pid).toBe(results[1].pid);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      const pid = replacementPid;
+      if (typeof pid === "number") {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // already stopped
+        }
+        await waitUntil(() => lockOf(home) === null, 5000);
+      }
+      try {
+        daemon.kill("SIGKILL");
+      } catch {
+        // already stopped
+      }
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 25000);
+
   test("port authority: reads lock.port, not GLOSA_PORT, when they differ", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
