@@ -42,7 +42,10 @@ check remain incomplete. This is not yet approved for a live document week.
    hooks/MCP (channels for Claude; blocking gate + turn-boundary + MCP-pull cross-agent) (R4).
 5. **Local-first, zero telemetry, zero external runtime calls.** Manuscripts may hold special-category
    personal data; class-F network egress is CSP-blocked (A3). Scrub `ANTHROPIC_API_KEY` from every
-   spawned child env.
+   spawned child env. **The daemon and SPA runtime make no outbound network calls at all.** The single
+   documented exception is `glosa update` (A6 §F33): explicitly invoked only — **never** a background
+   or passive check — and it sends no identifying data (static `User-Agent`, no version beacon, no
+   cache file that could become a heartbeat).
 6. **The SPA reaches the daemon through ONE data-access module** (so a future hosted shell is a deploy,
    not a refactor) (R6).
 
