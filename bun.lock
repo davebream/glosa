@@ -33,7 +33,6 @@
       },
       "dependencies": {
         "@glosa/daemon": "workspace:*",
-        "@glosa/providers-claude-code": "workspace:*",
         "@gunshi/plugin-completion": "0.37.1",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "gunshi": "0.37.1",

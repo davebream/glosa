@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Actionable, provider-neutral inbox presentation (R3/R4, issue #18).
+
+import type { DeliverableEntry, PresentationRetrieval } from "../agent-provider/interface.ts";
 import type { Resolution } from "../anchoring.ts";
-import type { DeliverableEntry, PresentationRetrieval } from "../providers/interface.ts";
 
 export const MAX_ENTRY_PRESENTATION_BYTES = 16 * 1024;
 export const MAX_BATCH_PRESENTATION_BYTES = 32 * 1024;
@@ -30,7 +31,8 @@ export function decodePresentationCursor(cursor: string | undefined, expectedId:
   if (!cursor) return 0;
   try {
     const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
-    if (value.v !== 1 || value.id !== expectedId || !Number.isInteger(value.offset) || (value.offset as number) < 0) return 0;
+    if (value.v !== 1 || value.id !== expectedId || !Number.isInteger(value.offset) || (value.offset as number) < 0)
+      return 0;
     return value.offset as number;
   } catch {
     return 0;
@@ -46,7 +48,9 @@ function retrieval(id: string, cursor?: string): PresentationRetrieval {
 }
 
 function recordOf(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function stringOf(value: unknown): string | null {
@@ -60,7 +64,11 @@ export interface BuildPresentationOptions {
   maxBytes?: number;
 }
 
-function annotationPresentation(id: string, payload: Record<string, unknown>, opts: BuildPresentationOptions): DeliverableEntry | null {
+function annotationPresentation(
+  id: string,
+  payload: Record<string, unknown>,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
   const artifactPath = stringOf(payload.artifact_path);
   const body = stringOf(payload.body);
   const intent = stringOf(payload.intent);
@@ -108,23 +116,26 @@ function splitDiffHunks(diff: string): { header: string; hunks: string[] } {
   return { header: lines.shift() ?? "", hunks: lines.filter(Boolean) };
 }
 
-function humanEditPresentation(id: string, payload: Record<string, unknown>, opts: BuildPresentationOptions): DeliverableEntry | null {
+function humanEditPresentation(
+  id: string,
+  payload: Record<string, unknown>,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
   const before = stringOf(payload.checkpoint_before);
   const after = stringOf(payload.checkpoint_after);
   const rawFiles = Array.isArray(payload.files) ? payload.files : null;
   if (!before || !after || !rawFiles) return null;
   const files = rawFiles
     .map(recordOf)
-    .filter((file): file is Record<string, unknown> => file !== null && typeof file.path === "string" && typeof file.diff === "string");
+    .filter(
+      (file): file is Record<string, unknown> =>
+        file !== null && typeof file.path === "string" && typeof file.diff === "string",
+    );
   if (files.length === 0) return null;
 
   const maxBytes = opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES;
   const paths = files.map((file) => file.path as string);
-  const fixed = [
-    `glosa human_edit ${id}`,
-    `checkpoints: ${before}..${after}`,
-    `files: ${paths.join(", ")}`,
-  ].join("\n");
+  const fixed = [`glosa human_edit ${id}`, `checkpoints: ${before}..${after}`, `files: ${paths.join(", ")}`].join("\n");
   const chunks: Array<{ path: string; diff: string }> = [];
   for (const file of files) {
     const parsed = splitDiffHunks(file.diff as string);
@@ -168,12 +179,21 @@ function humanEditPresentation(id: string, payload: Record<string, unknown>, opt
   };
 }
 
-function attentionPresentation(id: string, payload: Record<string, unknown>, opts: BuildPresentationOptions): DeliverableEntry {
+function attentionPresentation(
+  id: string,
+  payload: Record<string, unknown>,
+  opts: BuildPresentationOptions,
+): DeliverableEntry {
   const path = typeof payload.path === "string" ? payload.path : undefined;
   const action = typeof payload.action === "string" ? payload.action : undefined;
   const message = typeof payload.message === "string" ? payload.message : "";
   const offset = decodePresentationCursor(opts.cursor, id);
-  const fixed = [`glosa attention_request ${id}`, ...(path ? [`artifact: ${path}`] : []), ...(action ? [`action: ${action}`] : []), "message:"].join("\n");
+  const fixed = [
+    `glosa attention_request ${id}`,
+    ...(path ? [`artifact: ${path}`] : []),
+    ...(action ? [`action: ${action}`] : []),
+    "message:",
+  ].join("\n");
   const maxBytes = opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES;
   const sliced = truncateUtf8(message.slice(offset), Math.max(0, maxBytes - utf8Bytes(fixed) - 512));
   const cursor = sliced.omitted > 0 ? encodeCursor(id, offset + sliced.value.length) : undefined;
@@ -226,7 +246,11 @@ function conversationPresentation(
   };
 }
 
-export function buildDeliveryPresentation(id: string, payloadInput: unknown, opts: BuildPresentationOptions): DeliverableEntry | null {
+export function buildDeliveryPresentation(
+  id: string,
+  payloadInput: unknown,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
   const payload = recordOf(payloadInput);
   if (!payload) return null;
   if (payload.kind === "annotation") return annotationPresentation(id, payload, opts);

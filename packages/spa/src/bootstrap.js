@@ -2,7 +2,7 @@
 // @glosa/spa — bootstrap module, served byte-for-byte as `/app/bootstrap.js` (packages/daemon/src/
 // http.ts's static allowlist). Hand-written plain JS, deliberately — glosa's "no build step"
 // invariant (docs/requirements.md) means no bundle/transpile step exists between this file and
-// what the browser executes, so it can't be TypeScript. `scrubToken`/`selectScreen` are pure and
+// what the browser executes, so it can't be TypeScript. `scrubSecrets`/`selectScreen` are pure and
 // take their environment as parameters, so `bun test` exercises them directly by importing this
 // file — no browser, no fakes-vs-reality gap between test and prod.
 //
@@ -54,12 +54,6 @@ export function readRoute(loc) {
   };
 }
 
-/** @deprecated Prefer `readRoute` — kept as a thin alias for existing tests/callers. */
-export function readFocus(loc) {
-  const route = readRoute(loc);
-  return { slug: route.slug, artifact: route.artifact };
-}
-
 /**
  * The FIRST thing bootstrap does (A3 §3/F24): read pairing secrets (`t=` durable or `p=`
  * presentation) out of the URL fragment, stash the durable token in sessionStorage — never
@@ -87,11 +81,6 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
     history.replaceState(null, "", loc.pathname + loc.search + nextHash);
   }
   return durable || storage.getItem("glosa_token");
-}
-
-/** @deprecated Prefer `scrubSecrets`. */
-export function scrubToken(loc, storage, history) {
-  return scrubSecrets(loc, storage, history);
 }
 
 /**
@@ -211,6 +200,6 @@ async function main() {
   }
 }
 
-// Guarded so importing this module (bun test, importing scrubToken/selectScreen directly) never
+// Guarded so importing this module (bun test, importing scrubSecrets/selectScreen directly) never
 // tries to touch a real window/document — only an actual browser load runs main().
 if (typeof window !== "undefined") main();

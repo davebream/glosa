@@ -42,7 +42,7 @@ boundary and recovery path.
 The SPA reflects the current workspace and open artifact into the address-bar fragment
 (`#w=<slug>&a=<artifact>`) via `history.replaceState` as the user navigates, not only on load. This
 makes reload/refresh restore the view and makes the URL shareable, so focus lives in one place
-instead of duplicated UI state. The deep-link is no longer one-shot: `readFocus` seeds the initial
+instead of duplicated UI state. The deep-link is no longer one-shot: `readRoute` seeds the initial
 view and `writeFocus` keeps it current thereafter.
 
 Three constraints hold this inside the security boundary:
@@ -52,7 +52,7 @@ Three constraints hold this inside the security boundary:
   fragment.
 - **The written fragment carries only `w`/`a`, never `t=`.** `focusHash` is rebuilt from scratch on
   every call and reads only slug/artifact, so live-reflecting focus can never re-expose the pairing
-  token that `scrubToken` strips on load (A3 §3/F24). This is structural, not a runtime filter.
+  token that `scrubSecrets` strips on load (A3 §3/F24). This is structural, not a runtime filter.
 - **`replaceState`, not `pushState`.** Reflecting focus does not spawn a history entry per artifact;
   it mutates the current one.
 

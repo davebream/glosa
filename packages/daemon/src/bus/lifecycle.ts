@@ -25,16 +25,17 @@
 //   2. DELIVERY ATTEMPTS — `delivery_attempt` NEVER touches `status`. It's folded onto its own
 //      list on the entry (`deliveryAttempts`), so re-nudging a `delivered` entry (or, per A5
 //      §F23, even one still `pending`) records an attempt without moving the state machine.
+
+import type { JournalEvent } from "./journal.ts";
 import type { DerivedEntryState, DerivedState, Reducer } from "./replay.ts";
 import { defaultReducer } from "./replay.ts";
-import type { JournalEvent } from "./journal.ts";
 
 export type EntryKind = "common" | "attention" | "conversation";
 
 // A5 §F23's authoritative delivery_attempt vocabulary, verbatim:
 // `{via:channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|
 // transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. The single canonical
-// definition — `bus.ts`'s `recordDeliveryAttempt`, `providers/interface.ts`'s `DeliveryResult`,
+// definition — `bus.ts`'s `recordDeliveryAttempt`, `agent-provider/interface.ts`'s `DeliveryResult`,
 // and every call site all import these three types from here rather than each declaring their
 // own, which is what a P4.3 review caught: a provider-local `DeliveryOutcome` had drifted to
 // `"delivered"|"failed"`, free text riding in `reason`, and no `via` distinguishing gate/stop/

@@ -7,8 +7,8 @@
 // confinement combinatorics live in confine-path.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { tokenPath } from "../src/token.ts";
 import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
+import { tokenPath } from "../src/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "integration-test-token-0123456789abcdef";
@@ -167,7 +167,11 @@ describe("daemon HTTP pipeline — real subprocess", () => {
   it("unauthorized/foreign POST is rejected BEFORE the 404 — an invalid Bearer never reaches the handler", async () => {
     const res = await fetch(apiUrl("/w/some-slug/session-binding"), {
       method: "POST",
-      headers: { Authorization: "Bearer wrong", Origin: `http://127.0.0.1:${port}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: "Bearer wrong",
+        Origin: `http://127.0.0.1:${port}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ session_id: "x" }),
     });
     expect(res.status).toBe(401);
@@ -309,7 +313,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
-    expect(body).toContain("<div id=\"app\">");
+    expect(body).toContain('<div id="app">');
   });
 
   it("GET / carries the SPA CSP (script-src 'self', frame-ancestors 'none') + nosniff", async () => {
@@ -331,7 +335,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
     expect(res.headers.get("Content-Security-Policy")).toContain("script-src 'self'");
     const body = await res.text();
-    expect(body).toContain("export function scrubToken");
+    expect(body).toContain("export function scrubSecrets");
   });
 
   it("GET /app assets revalidate by ETag instead of retransferring unchanged source", async () => {

@@ -9,9 +9,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RewakeCoordinator, RewakeLeaseStore } from "@glosa/providers-claude-code";
-import { runHook, type HookDeps } from "../src/hook.ts";
-import type { DaemonHookClient, DrainedEntry, DrainOptions, DrainResult, RegisterSessionInput, RegisterSessionResult } from "../src/daemon-client.ts";
+import { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
+import type {
+  DaemonHookClient,
+  DrainedEntry,
+  DrainOptions,
+  DrainResult,
+  RegisterSessionInput,
+  RegisterSessionResult,
+} from "../src/daemon-client.ts";
+import { type HookDeps, runHook } from "../src/hook.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -138,7 +145,11 @@ describe("glosa hook session-end", () => {
     await runHook("session-start", SESSION_START_INPUT, deps);
     expect(leases.isActive("sess-1")).toBe(true);
 
-    const outcome = await runHook("session-end", { session_id: "sess-1", cwd: "/repo", hook_event_name: "SessionEnd" }, deps);
+    const outcome = await runHook(
+      "session-end",
+      { session_id: "sess-1", cwd: "/repo", hook_event_name: "SessionEnd" },
+      deps,
+    );
     expect(outcome.exitCode).toBe(0);
     expect(client.calls.some((c) => c.method === "deregister" && c.args[0] === "sess-1")).toBe(true);
     expect(leases.isActive("sess-1")).toBe(false);
@@ -205,7 +216,10 @@ describe("glosa hook rewake-watch", () => {
   test("finds a pending entry immediately -> exit 2 with the F07 stderr shape, releases its own lease", async () => {
     const { deps, client, leases } = makeDeps(freshDir());
     leases.tryAcquire("sess-1", 9001);
-    client.pendingDrain = { drained: [actionable("inb-9", "annotation", "glosa annotation inb-9\nretrieve: glosa inbox get inb-9")], count: 1 };
+    client.pendingDrain = {
+      drained: [actionable("inb-9", "annotation", "glosa annotation inb-9\nretrieve: glosa inbox get inb-9")],
+      count: 1,
+    };
 
     const outcome = await runHook(
       "rewake-watch",
@@ -238,7 +252,11 @@ describe("glosa hook rewake-watch", () => {
 describe("glosa hook notification", () => {
   test("heartbeats the session, exit 0", async () => {
     const { deps, client } = makeDeps(freshDir());
-    const outcome = await runHook("notification", { session_id: "sess-1", cwd: "/repo", hook_event_name: "Notification" }, deps);
+    const outcome = await runHook(
+      "notification",
+      { session_id: "sess-1", cwd: "/repo", hook_event_name: "Notification" },
+      deps,
+    );
     expect(outcome.exitCode).toBe(0);
     expect(client.calls[0]).toMatchObject({ method: "heartbeat", args: ["sess-1"] });
   });
@@ -274,7 +292,10 @@ describe("glosa hook — Codex provider", () => {
   test("SessionStart registers provider codex and does not arm Claude's rewake watcher", async () => {
     const { deps, client, leases } = makeDeps(freshDir());
     await runHook("session-start", SESSION_START_INPUT, deps, 1, "codex");
-    expect(client.calls[0]).toMatchObject({ method: "register", args: [expect.objectContaining({ provider: "codex" })] });
+    expect(client.calls[0]).toMatchObject({
+      method: "register",
+      args: [expect.objectContaining({ provider: "codex" })],
+    });
     expect(leases.isActive("sess-1")).toBe(false);
   });
 });

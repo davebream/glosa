@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// P1.4 — scrubToken/selectScreen are the security-load-bearing pure functions in bootstrap.js
+// P1.4 — scrubSecrets/selectScreen are the security-load-bearing pure functions in bootstrap.js
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, focusHash, readFocus, readRoute, scrubSecrets, scrubToken, selectScreen, writeFocus } from "../src/bootstrap.js";
+import { CONTRACT_VERSION, focusHash, readRoute, scrubSecrets, selectScreen, writeFocus } from "../src/bootstrap.js";
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -29,29 +29,36 @@ function fakeHistory(): { calls: Array<[unknown, string, string]>; replaceState:
   };
 }
 
-describe("readFocus — the CLI deep-link half of the fragment", () => {
-  test("#t=…&w=<slug>&a=<artifact> yields both; URL-encoding is undone", () => {
+describe("readRoute — the CLI deep-link half of the fragment", () => {
+  test("#t=…&w=<slug>&a=<artifact> yields slug/artifact; URL-encoding is undone", () => {
     const loc = { hash: "#t=SECRET&w=essays-abc&a=07%2Fmanuscript.md" };
-    expect(readFocus(loc)).toEqual({ slug: "essays-abc", artifact: "07/manuscript.md" });
+    const route = readRoute(loc);
+    expect(route.slug).toBe("essays-abc");
+    expect(route.artifact).toBe("07/manuscript.md");
   });
 
-  test("a plain #t=<token> fragment yields nulls (directory open)", () => {
-    expect(readFocus({ hash: "#t=SECRET" })).toEqual({ slug: null, artifact: null });
+  test("a plain #t=<token> fragment yields null slug/artifact (directory open)", () => {
+    const route = readRoute({ hash: "#t=SECRET" });
+    expect(route.slug).toBeNull();
+    expect(route.artifact).toBeNull();
   });
 
-  test("no fragment at all yields nulls", () => {
-    expect(readFocus({ hash: "" })).toEqual({ slug: null, artifact: null });
+  test("no fragment at all yields null slug/artifact", () => {
+    const route = readRoute({ hash: "" });
+    expect(route.slug).toBeNull();
+    expect(route.artifact).toBeNull();
   });
 });
 
-describe("focusHash — the inverse of readFocus", () => {
+describe("focusHash — the inverse of readRoute slug/artifact", () => {
   test("slug + artifact → #w=&a= with artifact path URL-encoded, w before a", () => {
     expect(focusHash({ slug: "essays-abc", artifact: "07/manuscript.md" })).toBe("#w=essays-abc&a=07%2Fmanuscript.md");
   });
 
-  test("round-trips through readFocus", () => {
+  test("round-trips through readRoute slug/artifact projection", () => {
     const focus = { slug: "essays-abc", artifact: "07/manuscript.md" };
-    expect(readFocus({ hash: focusHash(focus) })).toEqual(focus);
+    const route = readRoute({ hash: focusHash(focus) });
+    expect({ slug: route.slug, artifact: route.artifact }).toEqual(focus);
   });
 
   test("slug only (no artifact) → #w= alone", () => {
@@ -118,9 +125,7 @@ describe("readRoute — surface/mode/lock + secrets", () => {
       durableToken: "SECRET",
       presentationToken: null,
     });
-    expect(readRoute({ hash: "#p=PRESENT&w=x&a=y&surface=workspace&mode=preview" }).presentationToken).toBe(
-      "PRESENT",
-    );
+    expect(readRoute({ hash: "#p=PRESENT&w=x&a=y&surface=workspace&mode=preview" }).presentationToken).toBe("PRESENT");
   });
 });
 
@@ -161,15 +166,13 @@ describe("scrubSecrets — preserves non-secret route state", () => {
     expect(url).toContain("surface=document");
     expect(url).toContain("mode=edit");
   });
-});
 
-describe("scrubToken", () => {
   test("#t=<token> present: stashed in sessionStorage under glosa_token", () => {
     const loc = { hash: "#t=SECRET", pathname: "/", search: "" };
     const session = fakeStorage();
     const history = fakeHistory();
 
-    const result = scrubToken(loc, session, history as unknown as History);
+    const result = scrubSecrets(loc, session, history as unknown as History);
 
     expect(result).toBe("SECRET");
     expect(session.getItem("glosa_token")).toBe("SECRET");
@@ -181,7 +184,7 @@ describe("scrubToken", () => {
     const local = fakeStorage();
     const history = fakeHistory();
 
-    scrubToken(loc, session, history as unknown as History);
+    scrubSecrets(loc, session, history as unknown as History);
 
     expect(local.getItem("glosa_token")).toBeNull();
   });
@@ -191,7 +194,7 @@ describe("scrubToken", () => {
     const session = fakeStorage();
     const history = fakeHistory();
 
-    scrubToken(loc, session, history as unknown as History);
+    scrubSecrets(loc, session, history as unknown as History);
 
     expect(history.calls.length).toBe(1);
     const [, , url] = history.calls[0]!;
@@ -206,7 +209,7 @@ describe("scrubToken", () => {
     session.setItem("glosa_token", "already-stored");
     const history = fakeHistory();
 
-    const result = scrubToken(loc, session, history as unknown as History);
+    const result = scrubSecrets(loc, session, history as unknown as History);
 
     expect(result).toBe("already-stored");
     expect(history.calls.length).toBe(0);
@@ -217,8 +220,8 @@ describe("scrubToken", () => {
     const session = fakeStorage();
     const history = fakeHistory();
 
-    expect(() => scrubToken(loc, session, history as unknown as History)).not.toThrow();
-    expect(scrubToken(loc, session, history as unknown as History)).toBeNull();
+    expect(() => scrubSecrets(loc, session, history as unknown as History)).not.toThrow();
+    expect(scrubSecrets(loc, session, history as unknown as History)).toBeNull();
   });
 });
 

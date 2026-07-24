@@ -4,8 +4,9 @@
 // interface + one real HTTP-backed implementation, so every hook handler in hook.ts depends on
 // the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes the handlers
 // testable with an in-memory fake instead of a live daemon subprocess.
+
+import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
 import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
-import type { DeliverableEntry } from "../../daemon/src/providers/interface.ts";
 
 export interface RegisterSessionInput {
   session_id: string;
@@ -33,7 +34,7 @@ export interface DrainResult {
 /** A5 §F23's turn-boundary/watcher `via` values — exactly the ones `POST /api/sessions/:id/drain`
  * accepts (never `channel`/`mcp_pull`, which have their own separate delivery paths). The caller
  * MUST say which hook is actually surfacing this drain right now — `deliver()`'s own proactive
- * `"gate"`/`"attempted"` queuing record (providers/interface.ts) is a SEPARATE, earlier event from
+ * `"gate"`/`"attempted"` queuing record (agent-provider/interface.ts) is a SEPARATE, earlier event from
  * this route's `"presented"` confirmation once the drain genuinely happens. */
 export type DrainVia = "gate" | "stop" | "userprompt" | "asyncRewake" | "mcp_pull";
 
@@ -118,10 +119,9 @@ export async function createHttpDaemonClient(): Promise<DaemonHookClient> {
       });
     },
     async acknowledgeConversation(sessionId, messageId, outcome) {
-      await call(
-        `/api/sessions/${encodeURIComponent(sessionId)}/conversation/${encodeURIComponent(messageId)}/ack`,
-        { outcome },
-      );
+      await call(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/${encodeURIComponent(messageId)}/ack`, {
+        outcome,
+      });
     },
     async openConversationPush(sessionId, onEntry, signal) {
       const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {

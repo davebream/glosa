@@ -3,35 +3,36 @@
 // client-side "find or spawn" helper (ensureDaemon). See docs/appendices/A5-daemon-architecture.md
 // §F13 and docs/requirements.md R1. Three roles, one binary: this module is used by the daemon
 // role (bootDaemon, never imported by the SPA) and by every client role (ensureDaemon).
-import { closeSync, openSync, appendFileSync, readFileSync } from "node:fs";
+
 import { randomUUID } from "node:crypto";
+import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { AdapterRegistry } from "./adapters/interface.ts";
+import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
+import { resumePendingAdoptions } from "./adoption.ts";
+import { type AgentProvider, AgentProviderRegistry } from "./agent-provider/interface.ts";
+import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
+import { BUILD_ID, parseBuildId } from "./build-id.ts";
+import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
+import { CapabilityStore } from "./capability.ts";
+import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
+import { createApiFetch, createClassFFetch } from "./http.ts";
 import {
+  type DaemonLock,
   isPidAlive,
   readLock,
   reclaimStaleLock,
   removeLockIfOwned,
   writeLockExclusive,
-  type DaemonLock,
 } from "./lock.ts";
-import { fetchHandshake, pollHandshake, probePortBound, type HandshakeResponse } from "./handshake.ts";
-import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
-import { createApiFetch, createClassFFetch } from "./http.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { internalErrorResponse } from "./problem.ts";
-import { TokenAuthority } from "./token.ts";
-import { CapabilityStore } from "./capability.ts";
 import { PresentationTokenStore } from "./presentation-token.ts";
-import { WorkspaceIndex } from "./registry/workspace-index.ts";
+import { internalErrorResponse } from "./problem.ts";
+import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
-import { resumePendingAdoptions } from "./adoption.ts";
-import { BUILD_ID, parseBuildId } from "./build-id.ts";
-import { AdapterRegistry } from "./adapters/interface.ts";
-import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { AgentProviderRegistry, type AgentProvider } from "./providers/interface.ts";
-import { SessionPushRegistry } from "./providers/push-registry.ts";
+import { WorkspaceIndex } from "./registry/workspace-index.ts";
+import { TokenAuthority } from "./token.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
