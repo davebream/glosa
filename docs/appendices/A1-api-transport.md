@@ -96,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.2", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.3", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -195,10 +195,19 @@ read from the inbox entry; status and terminal detail are derived only from jour
   "pending_count": 2,
   "attention": [{
     "id": "inb-…", "created_at": "…", "status": "delivered",
-    "message": "Please review this draft", "action": "review", "target": "draft.md"
+    "message": "Please review this draft", "action": "review",
+    "target": "draft.md", "target_path": "draft.md", "approval_mode": false
   }]
 }
 ```
+`target` remains a compatibility alias. New consumers use `target_path`; legacy immutable entries
+that stored `path` are projected into both fields. `approval_mode` is always a boolean.
+
+`POST /api/workspaces/attention-request` accepts the existing workspace `path`, optional `message`,
+`action`, and `target_path`, plus optional `approval_mode`. `approval_mode:true` requires
+`target_path` to resolve to an existing tracked artifact; the daemon stores its normalized relative
+path and permits at most one non-terminal approval-mode request per workspace/path. A duplicate
+returns **409 approval-conflict**. Omitting the flag preserves ordinary review behavior.
 
 ### 5.10 `POST /w/:slug/inbox/:id/seen`
 Bearer required, Origin-gated. Advances a delivered attention request to `seen`. If presentation and
@@ -219,6 +228,23 @@ terminal result and appends no journal event.
 - **200** `{ "id":"inb-…", "status":"done", "detail":{...} }`
 - **400 validation-failed** for an invalid action/outcome pair or oversized response.
 - **404 not-found** for an unknown id or a non-attention entry.
+
+Approval-mode requests instead accept exactly:
+```json
+{ "outcome": "approved", "revision_id": "<source_sha256>" }
+```
+The daemon verifies that `revision_id` still identifies the target artifact, then stores and returns
+this exact terminal detail:
+```json
+{
+  "outcome": "approved",
+  "target_path": "draft.md",
+  "revision_id": "<source_sha256>",
+  "completed_at": "<ISO-8601 timestamp>"
+}
+```
+Mismatch returns **409 artifact-revision-changed** without completing the request. Terminal retries
+return the original detail without re-validating the later working tree or appending a journal event.
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Explicitly binds a registered session to the artifact workspace. This
