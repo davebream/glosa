@@ -20,6 +20,7 @@ const PUBLIC_COMMANDS = [
   "metadata",
   "session",
   "token",
+  "update",
 ] as const;
 
 let dirs: string[] = [];
@@ -243,5 +244,60 @@ describe("internal protocol compatibility", () => {
         stderr: `glosa: command not yet implemented: ${command}\n`,
       });
     }
+  });
+});
+
+describe("glosa update — command boundary", () => {
+  // Runs from this source checkout, so classifyInstall sees the repo's own .git and refuses at
+  // exit 2 BEFORE any network call. That is what makes these safe to run in CI: they exercise the
+  // full gunshi -> runUpdate -> printUpdateResult path without an outbound request.
+  test("refuses to self-update a source checkout, with a copy-pasteable manual command", () => {
+    const r = runCli(["update", "--check", "--json"]);
+    expect(r.exitCode).toBe(2);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed).toMatchObject({
+      glosa_json: 1,
+      ok: false,
+      command: "update",
+      exit_code: 2,
+      error: { code: "update-unmanaged-install" },
+    });
+    expect(parsed.data.install_kind).toBe("source-checkout");
+    expect(parsed.data.manual_command).toBe("git pull && bun install");
+  });
+
+  // The defect this catches is invisible to every unit test: if the handler never passes `json`
+  // into runUpdate, the --json path is unreachable in the shipped command while all its tests pass.
+  test("--json reaches runUpdate, producing exactly one JSON object on stdout", () => {
+    const r = runCli(["update", "--check", "--json"]);
+    expect(r.stdout.trimEnd().split("\n")).toHaveLength(1);
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
+  });
+
+  test("human mode writes the refusal to stderr, not stdout", () => {
+    const r = runCli(["update", "--check"]);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("git pull && bun install");
+    expect(r.stdout).toBe("");
+  });
+
+  test("mutually exclusive --to and --channel is a usage error", () => {
+    const r = runCli(["update", "--to", "0.1.0-alpha.3", "--channel", "alpha", "--json"]);
+    expect(r.exitCode).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ command: "update", error: { code: "usage" } });
+  });
+
+  test("a plaintext registry is refused before anything reaches the network", () => {
+    const r = runCli(["update", "--registry", "http://127.0.0.1:4873", "--check", "--json"]);
+    expect(r.exitCode).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe("update-invalid-registry");
+  });
+
+  // `update` declares zero positionals, so assertNoSurplusPositionals rejects this at the gunshi
+  // boundary. The command attribution only works because "update" is in PUBLIC_COMMANDS.
+  test("a surplus positional is a usage error attributed to `update`", () => {
+    const r = runCli(["update", "0.1.0-alpha.3", "--json"]);
+    expect(r.exitCode).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ command: "update", error: { code: "usage" } });
   });
 });

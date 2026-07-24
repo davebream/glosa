@@ -19,9 +19,31 @@ import {
   redact,
   resolvePackageManager,
   resolveTarget,
+  printUpdateResult,
+  runUpdate,
+  type UpdateData,
+  type UpdateDeps,
   validateTarballUrl,
   verifyIntegrity,
 } from "../src/update.ts";
+import type { CommandEnvelope } from "../src/envelope.ts";
+import { captureStdout } from "./test-utils.ts";
+
+function captureStderr(fn: () => void): string {
+  const orig = process.stderr.write.bind(process.stderr);
+  let out = "";
+  // biome-ignore lint: test-only stderr capture
+  (process.stderr.write as any) = (chunk: string) => {
+    out += chunk;
+    return true;
+  };
+  try {
+    fn();
+  } finally {
+    process.stderr.write = orig;
+  }
+  return out;
+}
 
 const BUN = "/Users/x/.bun/install/global/node_modules/@davebream/glosa";
 const NPM = "/usr/local/lib/node_modules/@davebream/glosa";
@@ -615,5 +637,452 @@ describe("readDaemonLockWith", () => {
 
   test("no lock file at all is not a running daemon", () => {
     expect(readDaemonLockWith(() => null, () => true)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The shared harness. Defined ONCE, here, before any test that needs `runUpdate` — the pure-helper
+// tests above deliberately gate on nothing that does not exist yet.
+// ---------------------------------------------------------------------------------------------
+
+interface Calls {
+  fetchPackument: number;
+  downloadTarball: number;
+  cleanupDownload: number;
+  spawnInstaller: number;
+  runVersionProbe: number;
+  flushStdout: number;
+}
+interface Harness {
+  deps: UpdateDeps;
+  calls: Calls;
+  /** Exactly what the last spawnInstaller call received — what the wiring assertions inspect. */
+  spawned: { argv: string[]; env: Record<string, string | undefined> } | null;
+  stdout: string;
+  stderr: string;
+}
+
+const TGZ_PATH = "/tmp/glosa-update-x/glosa-0.1.0-alpha.3.tgz";
+const BROKEN_PACKUMENT = { "dist-tags": { broken: "9.9.9" }, versions: PACKUMENT.versions };
+
+function makeDeps(overrides: Partial<UpdateDeps> = {}): Harness {
+  const calls: Calls = {
+    fetchPackument: 0,
+    downloadTarball: 0,
+    cleanupDownload: 0,
+    spawnInstaller: 0,
+    runVersionProbe: 0,
+    flushStdout: 0,
+  };
+  const h: Harness = { deps: {} as UpdateDeps, calls, spawned: null, stdout: "", stderr: "" };
+  const base: UpdateDeps = {
+    platform: () => "darwin",
+    packageRoot: () => BUN,
+    pathExists: () => false,
+    isWritable: () => true,
+    env: () => undefined,
+    envAll: () => ({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant-should-never-appear" }),
+    currentVersion: () => "0.1.0-alpha.2",
+    which: (cmd) => `/p/${cmd}`,
+    runVersionProbe: () => {
+      calls.runVersionProbe++;
+      return "glosa 0.1.0-alpha.3";
+    },
+    readDaemonLock: () => null,
+    fetchPackument: async () => {
+      calls.fetchPackument++;
+      return { ok: true, status: 200, body: PACKUMENT };
+    },
+    downloadTarball: async () => {
+      calls.downloadTarball++;
+      return { ok: true, path: TGZ_PATH, bytes: 1, sha512: GOOD_SHA };
+    },
+    cleanupDownload: () => {
+      calls.cleanupDownload++;
+    },
+    spawnInstaller: async (argv, env) => {
+      calls.spawnInstaller++;
+      h.spawned = { argv, env };
+      return { exitCode: 0 };
+    },
+    writeStdout: (s) => {
+      h.stdout += s;
+    },
+    writeStderr: (s) => {
+      h.stderr += s;
+    },
+    flushStdout: async () => {
+      calls.flushStdout++;
+    },
+  };
+  // Wrap overridden counters so a caller-supplied stub still increments its counter.
+  const wrapped: UpdateDeps = { ...base, ...overrides };
+  if (overrides.fetchPackument) {
+    wrapped.fetchPackument = async (u, t) => {
+      calls.fetchPackument++;
+      return (overrides.fetchPackument as UpdateDeps["fetchPackument"])(u, t);
+    };
+  }
+  if (overrides.downloadTarball) {
+    wrapped.downloadTarball = async (u, t) => {
+      calls.downloadTarball++;
+      return (overrides.downloadTarball as UpdateDeps["downloadTarball"])(u, t);
+    };
+  }
+  if (overrides.spawnInstaller) {
+    wrapped.spawnInstaller = async (argv, env, onOut) => {
+      calls.spawnInstaller++;
+      h.spawned = { argv, env };
+      return (overrides.spawnInstaller as UpdateDeps["spawnInstaller"])(argv, env, onOut);
+    };
+  }
+  if (overrides.runVersionProbe) {
+    wrapped.runVersionProbe = (cmd) => {
+      calls.runVersionProbe++;
+      return (overrides.runVersionProbe as UpdateDeps["runVersionProbe"])(cmd);
+    };
+  }
+  h.deps = wrapped;
+  return h;
+}
+
+describe("runUpdate — evaluation order", () => {
+  test("non-darwin exits 5 before any network call", async () => {
+    const h = makeDeps({ platform: () => "linux" });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(5);
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("an invalid registry exits 2 before any network call", async () => {
+    const h = makeDeps();
+    const r = await runUpdate({ registry: "http://evil" }, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.code).toBe("update-invalid-registry");
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("--to with --channel exits 2 before any network call", async () => {
+    const h = makeDeps();
+    const r = await runUpdate({ to: "0.1.0-alpha.0", channel: "alpha" }, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("--allow-offsite-tarball against the default registry exits 2", async () => {
+    const h = makeDeps();
+    const r = await runUpdate({ allowOffsiteTarball: true }, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.code).toBe("update-suspicious-flag-combo");
+    expect(r.error?.hint).toContain("--registry");
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("an unmanaged install exits 2 before any network call, with a copy-pasteable command", async () => {
+    const h = makeDeps({ packageRoot: () => VOLTA_PATH });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.code).toBe("update-unmanaged-install");
+    expect(r.data.install_kind).toBe("volta");
+    expect(r.data.manual_command).toBe("volta install @davebream/glosa");
+    expect(h.calls.fetchPackument).toBe(0);
+  });
+
+  test("a source checkout is refused — .git beats the managed marker", async () => {
+    const h = makeDeps({ pathExists: () => true });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.data.install_kind).toBe("source-checkout");
+    expect(r.data.manual_command).toBe("git pull && bun install");
+  });
+
+  test("--check resolves the release but never downloads or spawns", async () => {
+    const h = makeDeps();
+    const r = await runUpdate({ check: true }, h.deps);
+    expect(r.exitCode).toBe(0);
+    expect(r.data.action).toBe("checked");
+    expect(r.data.update_available).toBe(true);
+    expect(h.calls.fetchPackument).toBe(1);
+    expect(h.calls.downloadTarball).toBe(0);
+    expect(h.calls.spawnInstaller).toBe(0);
+  });
+
+  test("GLOSA_UPDATE_REGISTRY is honoured, and the flag beats it", async () => {
+    const envOnly = makeDeps({ env: (n) => (n === "GLOSA_UPDATE_REGISTRY" ? "https://mirror.corp" : undefined) });
+    expect((await runUpdate({ check: true }, envOnly.deps)).data.registry).toBe("https://mirror.corp");
+    const flagWins = makeDeps({ env: (n) => (n === "GLOSA_UPDATE_REGISTRY" ? "https://mirror.corp" : undefined) });
+    expect((await runUpdate({ check: true, registry: "https://other.corp" }, flagWins.deps)).data.registry).toBe(
+      "https://other.corp",
+    );
+  });
+
+  // Channel is per-invocation intent, not a machine property: an env-pinned channel would silently
+  // change what a bare `glosa update` installs.
+  test("there is no GLOSA_UPDATE_CHANNEL — the channel is derived from the running version", async () => {
+    const h = makeDeps({ env: (n) => (n === "GLOSA_UPDATE_CHANNEL" ? "nightly" : undefined) });
+    const r = await runUpdate({ check: true }, h.deps);
+    expect(r.data.channel).toBe("alpha");
+    expect(r.data.channel_source).toBe("derived");
+  });
+});
+
+describe("runUpdate — envelope invariants", () => {
+  const KEYS = [
+    "action",
+    "update_available",
+    "current_version",
+    "target_version",
+    "latest_version",
+    "comparison",
+    "channel",
+    "channel_source",
+    "install_kind",
+    "install_dir",
+    "registry",
+    "tarball_url",
+    "integrity_verified",
+    "dry_run",
+    "would_install",
+    "daemon_running",
+    "daemon_pid",
+    "installer_exit_code",
+    "probe",
+    "manual_command",
+  ].sort();
+
+  // EVERY terminal state, including the ones that return before classification or after the
+  // network — those are exactly where a fabricated or missing key hides.
+  const SCENARIOS: Array<[string, () => Promise<CommandEnvelope<UpdateData>>]> = [
+    ["updated", () => runUpdate({}, makeDeps().deps)],
+    ["checked", () => runUpdate({ check: true }, makeDeps().deps)],
+    ["already-current", () => runUpdate({}, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps)],
+    ["downgrade-refused", () => runUpdate({ to: "0.1.0-alpha.0" }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps)],
+    ["refused-volta", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH }).deps)],
+    ["platform", () => runUpdate({}, makeDeps({ platform: () => "linux" }).deps)],
+    ["invalid-registry", () => runUpdate({ registry: "http://evil" }, makeDeps().deps)],
+    ["flag-combo", () => runUpdate({ allowOffsiteTarball: true }, makeDeps().deps)],
+    ["registry-timeout", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }) }).deps)],
+    ["registry-http", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "http", status: 401, message: "x" }) }).deps)],
+    ["registry-malformed", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "malformed", message: "x" }) }).deps)],
+    ["unknown-channel", () => runUpdate({ channel: "nightly" }, makeDeps().deps)],
+    ["registry-inconsistent", () => runUpdate({ channel: "broken" }, makeDeps({ fetchPackument: async () => ({ ok: true, status: 200, body: BROKEN_PACKUMENT }) }).deps)],
+    ["installer-not-found", () => runUpdate({}, makeDeps({ which: () => null }).deps)],
+    ["permission-denied", () => runUpdate({}, makeDeps({ packageRoot: () => NPM, isWritable: () => false }).deps)],
+    ["download-failed", () => runUpdate({}, makeDeps({ downloadTarball: async () => ({ ok: false, kind: "network", message: "x" }) }).deps)],
+    ["integrity-mismatch", () => runUpdate({}, makeDeps({ downloadTarball: async () => ({ ok: true, path: TGZ_PATH, bytes: 1, sha512: "WRONG" }) }).deps)],
+    ["installer-failed", () => runUpdate({}, makeDeps({ spawnInstaller: async () => ({ exitCode: 1 }) }).deps)],
+    ["probe-mismatch", () => runUpdate({}, makeDeps({ runVersionProbe: () => "glosa 0.1.0-alpha.2" }).deps)],
+    ["probe-failed", () => runUpdate({}, makeDeps({ runVersionProbe: () => null }).deps)],
+  ];
+
+  test.each(SCENARIOS)("%s carries the full data key set", async (_label, run) => {
+    expect(Object.keys((await run()).data).sort()).toEqual(KEYS);
+  });
+
+  // The platform check runs before classifyInstall, so install_kind has no honest value yet.
+  // A fabricated "unknown" would be a lie a consumer branching on install_kind would act on.
+  test("install_kind is null, not fabricated, when we exited before classifying", async () => {
+    const r = await runUpdate({}, makeDeps({ platform: () => "linux" }).deps);
+    expect(r.exitCode).toBe(5);
+    expect(r.data.install_kind).toBeNull();
+  });
+
+  test("every non-zero envelope has a hint and an honest kind", async () => {
+    for (const [label, run] of SCENARIOS) {
+      const r = await run();
+      if (r.ok) continue;
+      expect(r.error?.hint, `${label}/${r.error?.code} needs a hint`).toBeTruthy();
+      expect(r.error?.kind, `${label} must not claim an internal glosa error`).not.toBe("internal");
+    }
+  });
+
+  test.each([
+    ["registry-unreachable", "network", 70],
+    ["registry-http-error", "registry", 70],
+    ["installer-permission-denied", "permission", 70],
+    ["installer-not-found", "environment", 70],
+    ["tarball-integrity-mismatch", "integrity", 70],
+    ["update-unmanaged-install", "usage", 2],
+    ["update-unverified", "verification", 9],
+    ["update-unverified-probe-failed", "verification", 9],
+  ] as const)("%s reports kind %s at exit %s", async (code, kind, exit) => {
+    const all = await Promise.all(SCENARIOS.map(([, run]) => run()));
+    const r = all.find((e) => e.error?.code === code);
+    expect(r, `no scenario produced ${code}`).toBeDefined();
+    expect(r?.error?.kind).toBe(kind);
+    expect(r?.exitCode).toBe(exit);
+  });
+
+  test("an unknown channel lists the available tags in the hint", async () => {
+    const r = await runUpdate({ channel: "nightly" }, makeDeps().deps);
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.hint).toContain("alpha");
+    expect(r.error?.hint).toContain("latest");
+  });
+
+  test("a byte-mutated tarball refuses to install and still cleans up", async () => {
+    const h = makeDeps({ downloadTarball: async () => ({ ok: true, path: TGZ_PATH, bytes: 1, sha512: "WRONG" }) });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(70);
+    expect(r.error?.code).toBe("tarball-integrity-mismatch");
+    expect(r.data.integrity_verified).toBe(false);
+    expect(h.calls.spawnInstaller).toBe(0);
+    expect(h.calls.cleanupDownload).toBe(1);
+  });
+
+  test("the temp tarball is cleaned up on success too", async () => {
+    const h = makeDeps();
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(0);
+    expect(r.data.integrity_verified).toBe(true);
+    expect(h.calls.cleanupDownload).toBe(1);
+  });
+
+  test("a non-zero installer exit is 70/installer-failed and skips the probe", async () => {
+    const h = makeDeps({ spawnInstaller: async () => ({ exitCode: 1 }) });
+    const r = await runUpdate({}, h.deps);
+    expect(r.exitCode).toBe(70);
+    expect(r.error?.code).toBe("installer-failed");
+    expect(r.data.installer_exit_code).toBe(1);
+    expect(h.calls.runVersionProbe).toBe(0);
+    expect(h.calls.cleanupDownload).toBe(1);
+  });
+
+  test("the probe result reaches data even when it disagrees", async () => {
+    const r = await runUpdate({}, makeDeps({ runVersionProbe: () => "glosa 0.1.0-alpha.2" }).deps);
+    expect(r.exitCode).toBe(9);
+    expect(r.data.probe).toMatchObject({ reported_version: "0.1.0-alpha.2", matched: false });
+  });
+});
+
+describe("runUpdate — installer wiring", () => {
+  // Task 11's pure tests prove buildInstallerArgv/Env are correct. Nothing there proves runUpdate
+  // USES them: an implementation that computed both and then called spawnInstaller(rawArgv,
+  // Bun.env) would pass every pure test while leaking ANTHROPIC_API_KEY.
+  test("the argv handed to spawnInstaller matches buildInstallerArgv exactly", async () => {
+    const h = makeDeps();
+    await runUpdate({}, h.deps);
+    expect(h.spawned?.argv).toEqual(buildInstallerArgv(classifyInstall(BUN), "/p/bun", TGZ_PATH));
+  });
+
+  test("npm-global gets the npm argv, with the equals-form prefix", async () => {
+    const h = makeDeps({ packageRoot: () => NPM });
+    await runUpdate({}, h.deps);
+    expect(h.spawned?.argv).toEqual(["/p/npm", "install", "--global", "--prefix=/usr/local", "--", TGZ_PATH]);
+  });
+
+  test("ANTHROPIC_API_KEY never reaches the spawned installer", async () => {
+    const h = makeDeps();
+    await runUpdate({}, h.deps);
+    expect(h.spawned?.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(JSON.stringify(h.spawned?.env)).not.toContain("sk-ant");
+  });
+
+  test("the bun global dir pin reaches the spawned installer", async () => {
+    const h = makeDeps();
+    await runUpdate({}, h.deps);
+    expect(h.spawned?.env.BUN_INSTALL_GLOBAL_DIR).toBe("/Users/x/.bun/install/global");
+  });
+
+  test("the tarball handed to the installer is the DOWNLOADED file, not the registry URL", async () => {
+    const h = makeDeps();
+    await runUpdate({}, h.deps);
+    expect(h.spawned?.argv.at(-1)).toBe(TGZ_PATH);
+    expect(h.spawned?.argv.join(" ")).not.toContain("https://");
+  });
+});
+
+describe("runUpdate — daemon and installer-output forwarding", () => {
+  test("a live daemon produces a machine-readable warning, not just prose", async () => {
+    const h = makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never });
+    const r = await runUpdate({}, h.deps);
+    expect(r.data).toMatchObject({ daemon_running: true, daemon_pid: 8510 });
+    expect(r.warnings.map((w) => w.code)).toContain("daemon-restart-required");
+  });
+
+  test("a forced downgrade with a live daemon puts the pid and kill line in the PRE-SPAWN block", async () => {
+    const h = makeDeps({
+      currentVersion: () => "0.1.0-alpha.3",
+      readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never,
+    });
+    await runUpdate({ force: true, to: "0.1.0-alpha.0" }, h.deps);
+    expect(h.stdout).toContain("kill 8510"); // written by runUpdate, before spawnInstaller
+    expect(h.calls.flushStdout).toBeGreaterThan(0);
+  });
+
+  test("--json forwards installer output to stderr, redacted, and writes nothing to stdout", async () => {
+    const h = makeDeps({
+      spawnInstaller: async (_argv, _env, onOutput) => {
+        onOutput?.("npm ERR! //registry.corp/:_authTok");
+        onOutput?.("en=npm_LeakedSecretValue999\n");
+        return { exitCode: 0 };
+      },
+    });
+    const r = await runUpdate({ json: true }, h.deps);
+    expect(h.stderr).not.toContain("npm_LeakedSecretValue999");
+    expect(h.stderr).toContain("[redacted]");
+    expect(h.stdout).toBe(""); // the pre-spawn block is suppressed in --json mode
+    const out = captureStdout(() => printUpdateResult(r, true));
+    expect(out.trimEnd().split("\n")).toHaveLength(1); // A6 §F26: exactly one JSON object
+    expect(() => JSON.parse(out)).not.toThrow();
+  });
+
+  test("the recovery command is on stdout before the installer runs, in human mode", async () => {
+    const h = makeDeps({
+      spawnInstaller: async () => {
+        throw new Error("killed mid-install");
+      },
+    });
+    await runUpdate({}, h.deps).catch(() => {});
+    expect(h.stdout).toContain("bun add --global");
+    expect(h.calls.flushStdout).toBeGreaterThan(0);
+  });
+});
+
+describe("printUpdateResult", () => {
+  test("--json emits exactly one object with the full envelope key set", async () => {
+    const r = await runUpdate({}, makeDeps().deps);
+    const out = captureStdout(() => printUpdateResult(r, true));
+    expect(out.trimEnd().split("\n")).toHaveLength(1);
+    const parsed = JSON.parse(out);
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
+    expect(parsed).toMatchObject({ glosa_json: 1, command: "update", ok: true, exit_code: 0 });
+  });
+
+  test("--check --quiet prints only the target version — the no-jq scripting hook", async () => {
+    const r = await runUpdate({ check: true }, makeDeps().deps);
+    expect(captureStdout(() => printUpdateResult(r, false, { quiet: true }))).toBe("0.1.0-alpha.3\n");
+  });
+
+  test("--check --quiet prints nothing when already current", async () => {
+    const r = await runUpdate({ check: true }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps);
+    expect(captureStdout(() => printUpdateResult(r, false, { quiet: true }))).toBe("");
+  });
+
+  test("--quiet --json still emits the one JSON object", async () => {
+    const r = await runUpdate({}, makeDeps().deps);
+    expect(() => JSON.parse(captureStdout(() => printUpdateResult(r, true, { quiet: true })))).not.toThrow();
+  });
+
+  test("a refused kind prints the manual command verbatim", async () => {
+    const r = await runUpdate({}, makeDeps({ pathExists: () => true }).deps);
+    const err = captureStderr(() => printUpdateResult(r, false));
+    expect(err).toContain("git pull && bun install");
+  });
+
+  test("a reshim hint reaches the user as a machine-readable warning", async () => {
+    const h = makeDeps({ packageRoot: () => "/Users/x/.asdf/installs/nodejs/22.0.0/lib/node_modules/@davebream/glosa" });
+    const r = await runUpdate({ check: true }, h.deps);
+    expect(r.warnings.map((w) => w.code)).toContain("reshim-required");
+    expect(captureStdout(() => printUpdateResult(r, false))).toContain("asdf reshim nodejs");
+  });
+
+  test("human mode names both versions on a successful update", async () => {
+    const r = await runUpdate({}, makeDeps().deps);
+    const out = captureStdout(() => printUpdateResult(r, false));
+    expect(out).toContain("0.1.0-alpha.2");
+    expect(out).toContain("0.1.0-alpha.3");
   });
 });

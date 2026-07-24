@@ -12,7 +12,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type DaemonLock, glosaHome, isPidAlive, lockPath, readLock } from "../../daemon/src/index.ts";
-import type { CommandError, CommandWarning } from "./envelope.ts";
+import {
+  type CommandEnvelope,
+  type CommandError,
+  type CommandWarning,
+  EXIT_CODES,
+  printJsonEnvelope,
+} from "./envelope.ts";
 import { isEphemeralPackageRunnerPath } from "./init.ts";
 import { CLI_VERSION } from "./version.ts";
 
@@ -855,4 +861,386 @@ export function realUpdateDeps(): UpdateDeps {
     },
     flushStdout: () => new Promise((resolve) => process.stdout.write("", () => resolve())),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------------------------
+
+export interface UpdateData {
+  action: "updated" | "already-current" | "checked" | "downgrade-refused" | "refused";
+  update_available: boolean;
+  current_version: string;
+  target_version: string | null;
+  latest_version: string | null;
+  comparison: "newer" | "same" | "older" | null;
+  channel: string | null;
+  channel_source: "flag" | "env" | "derived" | "default" | null;
+  /** Nullable: the platform and argv gates run BEFORE classification, so those envelopes have no
+   *  honest kind to report. Never fabricate "unknown" there — "unknown" is a real classification
+   *  result meaning "we looked and did not recognize this layout". */
+  install_kind: InstallKind | null;
+  install_dir: string | null;
+  registry: string | null;
+  tarball_url: string | null;
+  integrity_verified: boolean;
+  dry_run: boolean;
+  would_install: boolean;
+  daemon_running: boolean;
+  daemon_pid: number | null;
+  installer_exit_code: number | null;
+  probe: { path: string; reported_version: string | null; matched: boolean | null } | null;
+  manual_command: string | null;
+}
+
+function emptyData(currentVersion: string, dryRun: boolean): UpdateData {
+  return {
+    action: "refused",
+    update_available: false,
+    current_version: currentVersion,
+    target_version: null,
+    latest_version: null,
+    comparison: null,
+    channel: null,
+    channel_source: null,
+    install_kind: null,
+    install_dir: null,
+    registry: null,
+    tarball_url: null,
+    integrity_verified: false,
+    dry_run: dryRun,
+    would_install: false,
+    daemon_running: false,
+    daemon_pid: null,
+    installer_exit_code: null,
+    probe: null,
+    manual_command: null,
+  };
+}
+
+function fail(
+  data: UpdateData,
+  warnings: CommandWarning[],
+  exitCode: number,
+  error: CommandError,
+): CommandEnvelope<UpdateData> {
+  return { ok: false, command: "update", exitCode, data, warnings, error };
+}
+
+/** The pre-spawn block: printed and flushed BEFORE the installer runs, because a failed install
+ *  partway through 115 transitive dependencies can leave the user with no working `glosa` AND no
+ *  working `glosa update`. It has to survive a terminal that scrolls and a process killed mid-swap. */
+export function formatPreSpawnBlock(data: UpdateData, recoveryCommand: string): string {
+  const lines = [
+    `glosa update: ${data.current_version} → ${data.target_version} (${data.install_kind})`,
+    `  install dir: ${data.install_dir}`,
+    `  tarball:     ${data.tarball_url}`,
+    `  verified:    sha512 matches the registry's published digest`,
+    "",
+    "If this install fails partway through, recover with:",
+    `  ${recoveryCommand}`,
+  ];
+  if (data.daemon_running && data.daemon_pid !== null) {
+    lines.push("", `A glosa daemon is running (pid ${data.daemon_pid}). Run \`glosa open\` afterwards to restart it.`);
+    if (data.comparison === "older") {
+      // A newer daemon is never downgraded by design (lifecycle.ts:414, A6:52 -> exit 10), and
+      // there is no `glosa stop`, so after a forced downgrade the daemon is un-restartable and the
+      // user's only recovery is a pid they were never shown.
+      lines.push(
+        "You are installing an OLDER version. The running daemon will refuse to be replaced by it;",
+        `stop it first with:  kill ${data.daemon_pid}`,
+      );
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<CommandEnvelope<UpdateData>> {
+  const currentVersion = deps.currentVersion();
+  const dryRun = Boolean(opts.check);
+  const data = emptyData(currentVersion, dryRun);
+  const warnings: CommandWarning[] = [];
+
+  // ---- 1. platform (exit 5), before anything can touch the network -------------------------
+  if (deps.platform() !== "darwin") {
+    return fail(data, warnings, EXIT_CODES.PLATFORM_UNSUPPORTED, {
+      code: "platform-unsupported",
+      kind: "platform",
+      message: `${deps.platform()} is not supported — glosa v1 is macOS-only`,
+      hint: "See A6 §F30. Linux and Windows are out of scope for v1.",
+    });
+  }
+
+  // ---- 2. argv validation (exit 2), still before the network --------------------------------
+  if (opts.to !== undefined && opts.channel !== undefined) {
+    return fail(data, warnings, EXIT_CODES.USAGE, {
+      code: "usage",
+      kind: "usage",
+      message: "--to and --channel are mutually exclusive",
+      hint: "Use --to to pin an exact version, or --channel to follow a release tag.",
+    });
+  }
+  const registryFromFlag = opts.registry;
+  const registryFromEnv = deps.env("GLOSA_UPDATE_REGISTRY");
+  const registryRaw = registryFromFlag ?? registryFromEnv ?? DEFAULT_REGISTRY;
+  const usingDefaultRegistry = registryFromFlag === undefined && registryFromEnv === undefined;
+  // --allow-offsite-tarball is a security downgrade, so it must never be reachable from the
+  // environment, and it must not be usable while still pointed at the default registry: that
+  // combination cannot distinguish "expected corporate mirror rewrite" from "the default
+  // registry's response was tampered with".
+  if (opts.allowOffsiteTarball && usingDefaultRegistry) {
+    return fail(data, warnings, EXIT_CODES.USAGE, {
+      code: "update-suspicious-flag-combo",
+      kind: "usage",
+      message: "--allow-offsite-tarball has no legitimate use against the default registry",
+      hint: "Pair it with an explicit --registry (or GLOSA_UPDATE_REGISTRY) naming the mirror you expect to serve the tarball.",
+    });
+  }
+  const parsedRegistry = parseRegistryUrl(registryRaw);
+  if (!parsedRegistry.ok) {
+    return fail(data, warnings, EXIT_CODES.USAGE, {
+      code: "update-invalid-registry",
+      kind: "usage",
+      message: parsedRegistry.reason,
+      hint: "glosa installs and executes whatever this URL serves, so only https: is accepted.",
+    });
+  }
+  data.registry = parsedRegistry.value.origin;
+
+  // ---- 3. install classification (exit 2), still before the network -------------------------
+  const root = deps.packageRoot();
+  const classification = classifyInstall(root, deps.pathExists(join(root, ".git")));
+  data.install_kind = classification.kind;
+  data.install_dir = classification.installDir;
+  data.manual_command = classification.manualCommand;
+  if (!classification.managed) {
+    return fail(data, warnings, EXIT_CODES.USAGE, {
+      code: "update-unmanaged-install",
+      kind: "usage",
+      message: `this glosa install (${classification.kind}) cannot upgrade itself`,
+      hint: `Upgrade it manually: ${classification.manualCommand}`,
+    });
+  }
+  if (classification.reshimHint) {
+    warnings.push({
+      code: "reshim-required",
+      message: `This install sits behind a version-manager shim — run \`${classification.reshimHint}\` after the update.`,
+    });
+  }
+
+  // ---- 4. resolve the release over the network (exit 70) ------------------------------------
+  const channelSource: UpdateData["channel_source"] =
+    opts.to !== undefined ? null : opts.channel !== undefined ? "flag" : "derived";
+  const channel = opts.to !== undefined ? null : (opts.channel ?? deriveChannel(currentVersion));
+  data.channel = channel;
+  data.channel_source = channelSource;
+
+  const packumentUrl = `${parsedRegistry.value.origin}${parsedRegistry.value.pathname.replace(/\/$/, "")}/${PKG}`;
+  const fetched = await deps.fetchPackument(packumentUrl, REGISTRY_TIMEOUT_MS);
+  if (!fetched.ok) {
+    const { exitCode, error } = fetchFailureToError(fetched, data.registry);
+    return fail(data, warnings, exitCode, error);
+  }
+
+  const resolved = resolveTarget(fetched.body, opts.to !== undefined ? { version: opts.to } : { channel: channel as string });
+  if (!resolved.ok) {
+    const isUsage = resolved.code === "update-unknown-channel" || resolved.code === "update-unknown-version";
+    const tagList = resolved.availableTags?.length ? ` Available channels: ${resolved.availableTags.join(", ")}.` : "";
+    return fail(data, warnings, isUsage ? EXIT_CODES.USAGE : EXIT_CODES.INTERNAL, {
+      code: resolved.code,
+      kind: isUsage ? "usage" : "registry",
+      message: resolved.message,
+      hint: isUsage
+        ? `Pick a published target.${tagList}`
+        : "The registry's dist-tags and published versions disagree — this usually follows an `npm unpublish`. Retry later or pin an exact version with --to.",
+    });
+  }
+  data.target_version = resolved.version;
+  data.latest_version = resolved.latest;
+
+  const tarball = validateTarballUrl(resolved.tarball, data.registry, resolved.version, Boolean(opts.allowOffsiteTarball));
+  if (!tarball.ok) {
+    return fail(data, warnings, EXIT_CODES.INTERNAL, {
+      code: "update-offsite-tarball-refused",
+      kind: "integrity",
+      message: tarball.reason,
+      hint: "If this registry is a mirror that legitimately rewrites tarball URLs, re-run with --allow-offsite-tarball.",
+    });
+  }
+  data.tarball_url = tarball.value.toString();
+
+  // ---- 5. decide (exit 0 for every outcome) -------------------------------------------------
+  const decision = decideAction(currentVersion, resolved.version, {
+    force: Boolean(opts.force),
+    dryRun,
+    latest: resolved.latest,
+  });
+  data.comparison = decision.comparison;
+  data.update_available = decision.updateAvailable;
+  data.would_install = decision.wouldInstall;
+  warnings.push(...decision.warnings);
+
+  const daemonLock = deps.readDaemonLock();
+  data.daemon_running = daemonLock !== null;
+  data.daemon_pid = daemonLock?.pid ?? null;
+
+  if (!decision.shouldInstall) {
+    data.action = decision.action;
+    return { ok: true, command: "update", exitCode: EXIT_CODES.OK, data, warnings };
+  }
+
+  // ---- 6. resolve the package manager (exit 70) ---------------------------------------------
+  const pm = resolvePackageManager(classification, deps.which);
+  if (!pm.ok) {
+    return fail(data, warnings, EXIT_CODES.INTERNAL, {
+      code: "installer-not-found",
+      kind: "environment",
+      message: `this is a ${classification.kind} install, but \`${pm.cmd}\` is not on PATH`,
+      hint: `Install ${pm.cmd}, or upgrade manually with: ${classification.manualCommand ?? `bun add --global ${PKG}@alpha`}`,
+    });
+  }
+
+  // ---- 7. EACCES preflight — the most likely npm failure on macOS ---------------------------
+  if (classification.kind === "npm-global" && classification.installDir) {
+    const libDir = join(classification.installDir, "lib", "node_modules");
+    if (!deps.isWritable(libDir)) {
+      return fail(data, warnings, EXIT_CODES.INTERNAL, {
+        code: "installer-permission-denied",
+        kind: "permission",
+        message: `${libDir} is not writable`,
+        hint: `Either re-run with sudo, or move your npm prefix somewhere you own: npm config set prefix ~/.npm-global`,
+      });
+    }
+  }
+
+  if (daemonLock) {
+    warnings.push({
+      code: "daemon-restart-required",
+      message: `A glosa daemon (pid ${daemonLock.pid}) is running the old build — run \`glosa open\` to restart it.`,
+    });
+  }
+
+  // ---- 8. pre-spawn block, flushed before anything can replace this process's own files ------
+  const recoveryCommand =
+    classification.kind === "bun-global"
+      ? `bun add --global ${data.tarball_url}`
+      : `npm install --global --prefix=${classification.installDir} ${data.tarball_url}`;
+  if (!opts.json) {
+    deps.writeStdout(formatPreSpawnBlock(data, recoveryCommand));
+    await deps.flushStdout();
+  }
+
+  // ---- 9. download + verify (exit 70) -------------------------------------------------------
+  const downloaded = await deps.downloadTarball(data.tarball_url, DOWNLOAD_TIMEOUT_MS);
+  if (!downloaded.ok) {
+    return fail(data, warnings, EXIT_CODES.INTERNAL, {
+      code: "tarball-download-failed",
+      kind: downloaded.kind === "io" ? "internal" : "network",
+      message: `could not download ${data.tarball_url}: ${downloaded.message}`,
+      hint: "Check your network connection, then retry.",
+    });
+  }
+  try {
+    const integrity = verifyIntegrity(resolved.integrity, downloaded.sha512);
+    if (!integrity.ok) {
+      return fail(data, warnings, EXIT_CODES.INTERNAL, {
+        code: "tarball-integrity-mismatch",
+        kind: "integrity",
+        message: integrity.reason,
+        hint: "glosa refused to install these bytes. Retry; if it persists, the registry or the path to it may be compromised.",
+      });
+    }
+    data.integrity_verified = true;
+
+    // ---- 10. spawn the installer (exit 70) --------------------------------------------------
+    const env = buildInstallerEnv(deps.envAll(), classification);
+    const argv = buildInstallerArgv(classification, pm.path, downloaded.path);
+    // In --json mode A6 §F26 allows exactly one JSON object on stdout, but a silent multi-minute
+    // wait is unacceptable — so installer output is forwarded to stderr, REDACTED and line-buffered
+    // as it arrives (npm echoes the effective registry URL, which frequently carries credentials).
+    const redactor = opts.json ? createLineRedactor((s) => deps.writeStderr(s)) : null;
+    const { exitCode: installerExit } = await deps.spawnInstaller(argv, env, redactor ? (c) => redactor.push(c) : null);
+    redactor?.flush();
+    data.installer_exit_code = installerExit;
+    if (installerExit !== 0) {
+      return fail(data, warnings, EXIT_CODES.INTERNAL, {
+        code: "installer-failed",
+        kind: "installer",
+        message: `${pm.path} exited ${installerExit}`,
+        hint: `Recover with: ${recoveryCommand}`,
+      });
+    }
+  } finally {
+    deps.cleanupDownload(downloaded.path);
+  }
+
+  // ---- 11. verify by probing the installed binary (exit 9) ----------------------------------
+  // Execute the truth. Reading <packageRoot>/package.json would prove A DIRECTORY changed, not
+  // that the user's `glosa` changed.
+  const probePath = deps.which("glosa") ?? binPathFor(classification) ?? "glosa";
+  const probe = interpretProbe(deps.runVersionProbe([probePath, "--version"]), resolved.version, probePath);
+  data.probe = { path: probe.path, reported_version: probe.reportedVersion, matched: probe.matched };
+  if (probe.exitCode !== 0) {
+    return fail(data, warnings, EXIT_CODES.DEGRADED, {
+      code: probe.code as string,
+      kind: "verification",
+      message: probe.message as string,
+      hint: probe.hint as string,
+    });
+  }
+
+  data.action = "updated";
+  return { ok: true, command: "update", exitCode: EXIT_CODES.OK, data, warnings };
+}
+
+export function printUpdateResult(
+  result: CommandEnvelope<UpdateData>,
+  json: boolean,
+  opts: { quiet?: boolean } = {},
+): void {
+  // --quiet never suppresses the one JSON object.
+  if (json) {
+    printJsonEnvelope(result);
+    return;
+  }
+
+  const d = result.data;
+  // `--check --quiet` prints ONLY the target version — the no-jq scripting hook, reusing the
+  // convention `glosa open --url` already sets (A6:85-87).
+  if (opts.quiet && d.dry_run) {
+    if (d.update_available && d.target_version) process.stdout.write(`${d.target_version}\n`);
+    return;
+  }
+
+  if (!result.ok) {
+    process.stderr.write(`glosa update: ${result.error?.message ?? "failed"}\n`);
+    if (result.error?.hint) process.stderr.write(`${result.error.hint}\n`);
+    return;
+  }
+
+  if (!opts.quiet) {
+    switch (d.action) {
+      case "updated":
+        process.stdout.write(`glosa update: updated ${d.current_version} → ${d.target_version}\n`);
+        break;
+      case "already-current":
+        process.stdout.write(`glosa update: already on ${d.current_version}\n`);
+        break;
+      case "checked":
+        process.stdout.write(
+          d.update_available
+            ? `glosa update: ${d.target_version} is available (installed ${d.current_version})\n`
+            : `glosa update: already on ${d.current_version}; nothing to install\n`,
+        );
+        break;
+      case "downgrade-refused":
+        process.stdout.write(
+          `glosa update: refused to downgrade ${d.current_version} → ${d.target_version}; re-run with --force\n`,
+        );
+        break;
+      default:
+        break;
+    }
+    for (const w of result.warnings) process.stdout.write(`glosa update: ${w.message}\n`);
+  }
 }
