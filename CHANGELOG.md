@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `glosa update` upgrades an existing installation in place. It resolves and verifies the release
+  independently of local npm or bun registry configuration, so a private scope mapping no longer
+  breaks the upgrade path. `glosa update --check` reports what would change without installing.
+
+### Fixed
+
+- Corrected the install command in the README and in `glosa init`'s durable-install hint. Both
+  recommended a `--registry` flag that a scope-level `.npmrc` mapping silently overrides, so the
+  documented workaround failed in exactly the situation it claimed to fix.
+- Detected package-runner caches under a custom `BUN_INSTALL` root, which were previously mistaken
+  for durable installs.
+
 ## [0.1.0-alpha.3] - 2026-07-24
 
 ### Fixed

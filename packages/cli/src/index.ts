@@ -35,6 +35,7 @@ const PUBLIC_COMMANDS = new Set([
   "metadata",
   "session",
   "token",
+  "update",
 ]);
 
 type GlobalValues = {
@@ -585,6 +586,51 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
   );
 
+  const update = lazyHandler(
+    {
+      name: "update",
+      description: "Upgrade this glosa installation",
+      args: {
+        ...GLOBAL_ARGS,
+        check: { type: "boolean", description: "Report what would change without installing" },
+        "dry-run": { type: "boolean", description: "Alias for --check" },
+        force: { type: "boolean", description: "Install the resolved target regardless of version comparison" },
+        channel: { type: "string", description: "Release channel (dist-tag) to follow" },
+        to: { type: "string", description: "Install this exact version" },
+        registry: { type: "string", description: "Registry to resolve the release from" },
+        "allow-offsite-tarball": {
+          type: "boolean",
+          description: "Accept a tarball hosted off the configured registry",
+        },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      // ONE import, ALL THREE symbols. Nothing may `await import` after this point — the package
+      // directory is replaced underneath this process while the installer runs, so a later lazy
+      // import can resolve to a file that no longer exists.
+      const { runUpdate, printUpdateResult, realUpdateDeps } = await import("./update.ts");
+      const result = await runUpdate(
+        {
+          // `json` is not only a printer concern: runUpdate branches on it to choose inherited vs
+          // piped-and-redacted installer stdio, and to suppress the pre-spawn block. Omitting it
+          // here would make the whole --json path unreachable in the shipped command.
+          json: Boolean(values.json),
+          quiet: Boolean(values.quiet),
+          check: Boolean(values.check || values["dry-run"]),
+          force: Boolean(values.force),
+          channel: values.channel as string | undefined,
+          to: values.to as string | undefined,
+          registry: values.registry as string | undefined,
+          allowOffsiteTarball: Boolean(values["allow-offsite-tarball"]),
+        },
+        realUpdateDeps(),
+      );
+      printUpdateResult(result, Boolean(values.json), { quiet: Boolean(values.quiet) });
+      setExitCode(result.exitCode);
+    },
+  );
+
   const hook = lazyHandler(
     {
       name: "hook",
@@ -691,6 +737,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
     metadata,
     session,
     token,
+    update,
     hook,
     mcp,
     __daemon: daemon,

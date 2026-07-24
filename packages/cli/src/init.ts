@@ -47,12 +47,17 @@ export class DurableGlosaInstallRequiredError extends Error {
   }
 }
 
-function isEphemeralPackageRunnerPath(path: string): boolean {
+/** Exported because `glosa update` classifies the same set of paths and must not carry a second,
+ * driftable copy of this list. NOTE the blast radius: this is also the gate inside
+ * `defaultResolveGlosaBin` that blocks `glosa init` entirely, so widening it widens both commands. */
+export function isEphemeralPackageRunnerPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
   return (
     normalized.includes("/.npm/_npx/") ||
     normalized.includes("/_npx/") ||
-    normalized.includes("/.bun/install/cache/") ||
+    // NOT `/.bun/install/cache/` — that hardcodes the default BUN_INSTALL root and misses every
+    // user who points BUN_INSTALL somewhere else.
+    normalized.includes("/install/cache/") ||
     normalized.includes("/.pnpm/dlx/")
   );
 }
@@ -647,7 +652,7 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
         code: "durable-install-required",
         kind: "usage",
         message: err.message,
-        hint: "install with `bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/`, then re-run `glosa init`",
+        hint: "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`; if your npm config maps the @davebream scope to another registry, install from the published tarball URL instead — see the README's Quick start",
       },
     };
   }

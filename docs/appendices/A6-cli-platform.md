@@ -47,6 +47,108 @@
   durable token state was preserved. The command does not emit `3`: it is a local credential-state
   operation and does not require a live daemon.
 
+## F33 — `glosa update` self-update
+
+- **The one documented exception to invariant 5's "zero external runtime calls".** The daemon and SPA
+  runtime still make no outbound requests at all. `glosa update` is **explicitly invoked only** —
+  never a background or passive check, never a startup probe — and sends no identifying data: a
+  static `User-Agent` of `glosa-update`, no version beacon, and no cache file that could become a
+  heartbeat. **`glosa update` never prompts**; the absence of a confirmation is a CI-safety contract.
+- **Environment resilience is the point.** The release is resolved with a plain HTTPS `fetch` that
+  reads no npm or bun configuration, so a scope mapping such as
+  `@davebream:registry=https://npm.pkg.github.com` cannot redirect it. A scope mapping outranks the
+  `--registry` flag, and bun has no scoped-registry flag at all, which is why name-based resolution
+  through a package manager is not used.
+- **Install detection.** `bun-global` (`…/install/global/node_modules/@davebream/glosa`, pinned with
+  `BUN_INSTALL_GLOBAL_DIR`) and `npm-global` (`…/lib/node_modules/@davebream/glosa`, pinned with
+  `--prefix=`) are upgradeable. `ephemeral`, `source-checkout`, `project-local`, `volta`, `pnpm`,
+  `yarn`, and `unknown` are refused at exit 2 with an exact copy-pasteable manual command in
+  `data.manual_command`. Volta is matched **before** the `/lib/node_modules/` marker: its layout
+  matches, but writing there bypasses the shim, so a naive classification would report success while
+  `glosa --version` still printed the old version. A `.git` marker at the package root beats every
+  other signal.
+- **Integrity.** glosa downloads the tarball itself into a mode-0700 temp directory, hashes it with
+  sha512, and compares against the `dist.integrity` digest from the packument before handing the
+  installer a local absolute path. A missing or non-sha512 digest is a **refusal**, never a pass.
+  Honest limits, which this spec states rather than papers over: the digest is trusted from the
+  packument response *including any redirects that response followed*, and glosa does not verify npm
+  provenance attestations or `dist.signatures`. This defends against a redirected or misconfigured
+  registry and against corruption in transit — **not** against a registry compromised at the point of
+  publication, where the digest and the bytes would both come from the attacker.
+- **Tarball origin pinning.** The resolved `dist.tarball` must share hostname and effective port with
+  the **configured** registry (not the response URL, so a cross-origin redirect cannot move the
+  target), and its path must match `/@davebream/glosa/-/glosa-<resolved-version>.tgz`. Comparison is
+  via the URL parser, never string containment. `--allow-offsite-tarball` overrides the origin check
+  for a mirror that legitimately rewrites tarball URLs; it widens *where*, never *how* (https stays
+  mandatory), it is **never** readable from the environment, and it is refused at exit 2 unless an
+  explicit non-default registry is also configured.
+- **bun requires a remove-then-add sequence; npm does not.** `bun add --global <tarball>` fails with
+  `error: An internal error occurred (DependencyLoop)` whenever the package is already installed
+  globally under a different recorded resolution, and it silently leaves the old version in place.
+  Measured against bun 1.2.7, and it reproduces identically with an absolute tarball **URL**, so it
+  is not a consequence of installing from a verified local file — every non-registry spec hits it.
+  `glosa update` therefore runs `bun remove --global @davebream/glosa` first and ignores that step's
+  exit code ("it was not installed" is a fine state to proceed from). The cost is a window in which
+  glosa is uninstalled, which is why the recovery command is printed and flushed before any of it
+  runs, and why the human pre-spawn block says so explicitly. `npm install --global --prefix=<p>
+  <tarball>` upgrades in place and needs no pre-step.
+- **Verification executes the truth.** After a successful install glosa spawns `glosa --version` and
+  compares the parsed version to the target. This deliberately replaces reading
+  `<packageRoot>/package.json`, which would prove *a directory* changed rather than that the user's
+  `glosa` changed, and which reads a stale path under Volta or any content-addressed store. Note
+  `Bun.which` cannot see shell aliases or functions by construction, so the resolved binary path is
+  printed rather than pretending otherwise.
+- **Flags and environment.** `--registry` > `GLOSA_UPDATE_REGISTRY` > `https://registry.npmjs.org`,
+  mirroring the `--port`/`GLOSA_PORT` precedence. There is deliberately **no `GLOSA_UPDATE_CHANNEL`**:
+  a registry is a machine property, but a channel is per-invocation intent, and an env-pinned channel
+  would silently change what a bare `glosa update` installs. `--to` and `--channel` are mutually
+  exclusive. `--check --force` is legal and means "show me what `--force` would install".
+- **`--check` never exits non-zero when an update is available.** Availability lives in
+  `data.update_available` and `data.action`. This sentence is normative: without it someone will
+  later "improve" the command into a non-zero exit and silently break the append-only exit contract.
+- **`data` carries the same key set in every mode and every terminal state**: `action`
+  (`updated|already-current|checked|downgrade-refused|refused`), `update_available`,
+  `current_version`, `target_version`, `latest_version`, `comparison`, `channel`, `channel_source`,
+  `install_kind`, `install_dir`, `registry`, `tarball_url`, `integrity_verified`, `dry_run`,
+  `would_install`, `daemon_running`, `daemon_pid`, `installer_exit_code`, `probe`, `manual_command`.
+  `install_kind` is `null` — never a fabricated `"unknown"` — on envelopes that return before
+  classification, because `"unknown"` is a real result meaning "we looked and did not recognize this
+  layout". Machine-readable warning codes: `daemon-restart-required`, `newer-stable-available`,
+  `reshim-required`, `downgrade-refused`.
+- **`--json` output.** Exactly one JSON object on stdout (§F26). Installer stdout and stderr are
+  forwarded to **stderr** as they arrive, line-buffered and redacted per A3 §61 — npm echoes the
+  effective registry URL, which frequently carries `//host/:_authToken` or basic-auth userinfo, and a
+  regex over a raw chunk would let a credential split across two chunks through. Only
+  `installer_exit_code` enters `data`. `--check --quiet` prints only the target version (empty when
+  already current), reusing the plain-output convention `open --url` sets.
+- **Running daemon.** `update` reads the daemon lock and gates it on `isPidAlive` — a lock file alone
+  is not liveness, and a stale pid would otherwise produce a `kill <pid>` naming a recycled process.
+  It never calls `ensureDaemon`, which would *start* a daemon as a side effect of asking whether one
+  runs. A live daemon yields `data.daemon_running`, `data.daemon_pid`, and a
+  `daemon-restart-required` warning naming `glosa open`; normal upgrades self-heal because
+  `decideDaemonBuild` restarts an older or same-version-different-hash daemon. **The forced-downgrade
+  case is the wedge:** a newer daemon is never downgraded by design (§F30, exit 10) and there is no
+  `glosa stop`, so `update` prints the pid and the `kill` command in the pre-spawn block. There is a
+  narrow window during the package-directory swap in which an in-flight `glosa hook …` child can
+  fail.
+- **Recovery output precedes the spawn.** The versions, install kind, install dir, tarball URL, exact
+  recovery command, and any daemon pid line are written and flushed **before** the installer starts,
+  because a failure partway through ~115 transitive dependencies can leave the user with no working
+  `glosa` *and* no working `glosa update`.
+- Exit codes reuse §F26's stable set — **no new codes** — with `error.code` as the discriminator, the
+  same pattern this appendix already uses for `token`'s two distinct exit-70 failures. `0` updated /
+  already current / `--check` / downgrade-refused. `2` usage, `update-unmanaged-install` (matching the
+  `durable-install-required` precedent in `glosa init`), `update-unknown-channel`,
+  `update-unknown-version`, `update-invalid-registry`, `update-suspicious-flag-combo`. `5` non-Darwin.
+  `9` `update-unverified` (the probe reported a different version) or `update-unverified-probe-failed`
+  (the probe produced no usable version — these are distinct so glosa never describes a mismatch it
+  did not observe). `70` `registry-unreachable`, `registry-http-error`, `registry-malformed-response`,
+  `registry-inconsistent`, `update-offsite-tarball-refused`, `tarball-download-failed`,
+  `tarball-integrity-mismatch`, `installer-not-found`, `installer-permission-denied`,
+  `installer-failed`. Exit `3` is never emitted: it means *glosa's own daemon* is unreachable, which
+  has nothing to do with a registry. Exit 70 does **not** imply `kind:"internal"` — a disconnected
+  laptop is `network`, an EACCES is `permission`, a missing package manager is `environment`.
+
 ## F30 — platform
 - **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (channel floor; asyncRewake works from 2.1.0 but the channel push needs 2.1.80; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
 - API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
@@ -69,6 +171,7 @@
 |---|---|---|---|
 | `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). | 0;2;3;5 |
 | `init` | `[dir]` `--print/--force/--uninstall/--restore-backup` | §F26 merge/uninstall | 0;2;6;9;5 |
+| `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |
 | `request-review` | `<path> [--message] [--action] [--require-approval] [--wait <dur>]` | create attention_request; approval mode binds final approval to the saved artifact revision; --wait blocks to resolution | 0(verdict in data);7 timeout;8 approval conflict;3;4;2 |
