@@ -186,6 +186,10 @@ export function mountApp(root, {
   toolsTrigger.innerHTML =
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg><span class="glosa-visually-hidden">More</span>';
   const shortcutsToggle = el("button", { className: "glosa-shortcuts-toggle", type: "button", textContent: "Keyboard shortcuts", "aria-expanded": "false", "aria-controls": "glosa-shortcuts" });
+  const copySourceButton = el("button", { className: "glosa-tools-copy-source", type: "button", textContent: "Copy source", hidden: true });
+  const printArtifactButton = el("button", { className: "glosa-tools-print", type: "button", textContent: "Print / Save as PDF", hidden: true });
+  const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
+  let toolsStatusArtifactPath = null;
   const stopAppearance = appearance
     ? mountAppearanceControl(appearanceHost, appearance, { overlayHost: topbarOverlays, returnFocus: toolsTrigger })
     : null;
@@ -194,15 +198,65 @@ export function mountApp(root, {
     className: "glosa-tools-menu",
     role: "group",
     "aria-label": "Workspace tools",
-  }, [attentionHost, historyToggle, conversationToggle, appearanceHost, shortcutsToggle]);
+  }, [attentionHost, historyToggle, conversationToggle, copySourceButton, printArtifactButton, appearanceHost, shortcutsToggle, toolsStatus]);
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
   const toolControls = () => [
     attentionHost.querySelector(".glosa-attention-trigger"),
     historyToggle,
     conversationToggle,
+    copySourceButton,
+    printArtifactButton,
     appearanceHost.querySelector(".glosa-appearance-trigger"),
     shortcutsToggle,
-  ].filter((control) => control && !control.disabled);
+  ].filter((control) => control && !control.disabled && !control.hidden);
+
+  function setToolsStatus(message, { error = false } = {}) {
+    toolsStatus.hidden = !message;
+    toolsStatus.textContent = message;
+    if (error) toolsStatus.setAttribute("data-error", "true");
+    else toolsStatus.removeAttribute("data-error");
+  }
+
+  function renderArtifactTools() {
+    const artifactPath = currentArtifact?.class === "R" ? currentArtifact.source_path : null;
+    const available = artifactPath !== null;
+    copySourceButton.hidden = !available;
+    printArtifactButton.hidden = !available;
+    if (toolsStatusArtifactPath !== artifactPath) {
+      toolsStatusArtifactPath = artifactPath;
+      setToolsStatus("");
+    }
+  }
+
+  async function copyArtifactSource() {
+    if (currentArtifact?.class !== "R") return;
+    try {
+      const clipboard = typeof navigator === "undefined" ? null : navigator.clipboard;
+      if (!clipboard?.writeText) throw new Error("Clipboard access isn't available in this browser.");
+      await clipboard.writeText(currentArtifact.content ?? "");
+      setToolsStatus("Source copied.");
+    } catch {
+      setToolsStatus("Couldn't copy source. Try again while this tab is focused.", { error: true });
+    }
+  }
+
+  function printArtifact() {
+    if (currentArtifact?.class !== "R") return;
+    // Edit mode hides the manuscript canvas, so materialize the current rendered snapshot before
+    // the print stylesheet reveals it. Unsaved source edits intentionally do not enter the export.
+    if (contentEl.getAttribute("data-path") !== currentArtifact.source_path) {
+      contentEl.innerHTML = currentArtifact.rendered_html ?? "";
+      contentEl.setAttribute("data-path", currentArtifact.source_path);
+    }
+    if (typeof window.print !== "function") {
+      setToolsStatus("Printing isn't available in this browser.", { error: true });
+      return;
+    }
+    window.print();
+  }
+
+  copySourceButton.addEventListener("click", () => void copyArtifactSource());
+  printArtifactButton.addEventListener("click", printArtifact);
 
   function setToolsOpen(open, { restoreFocus = false } = {}) {
     tools.setAttribute("data-open", String(open));
@@ -568,6 +622,7 @@ export function mountApp(root, {
   function renderContent() {
     root.setAttribute("data-mode", modeState.mode);
     const isClassF = currentArtifact?.class === "F";
+    renderArtifactTools();
     const isEdit = modeState.mode === "edit" && !isClassF;
     if (isEdit && !sourceFace && !richEditor) void mountRichFace(currentArtifact?.content ?? "");
     if (!isEdit) teardownRichFace();
