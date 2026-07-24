@@ -241,7 +241,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const trigger = root.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
-    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(4);
+    expect(menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance")).toHaveLength(5);
 
     trigger.click();
     await Promise.resolve();
@@ -471,8 +471,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(pane.hidden).toBe(false);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(openedForSlugs).toEqual(["ws-1"]);
-    // conversation.js's own mount renders its composer/status scaffolding into the pane.
-    expect(pane.querySelector(".glosa-conv-composer-input")).not.toBeNull();
+    // Preview exposes the transcript as read-only agent context; composition requires Annotate.
+    expect(pane.querySelector(".glosa-conv-composer-input")).toBeNull();
+    expect(pane.textContent).toContain("Agent context");
 
     historyToggle.click();
     expect(pane.hidden).toBe(true);
@@ -487,11 +488,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(pane.hidden).toBe(false);
 
     const close = pane.querySelector(".glosa-conv-close") as any;
-    expect(close.getAttribute("aria-label")).toBe("Close conversation");
+    expect(close.getAttribute("aria-label")).toBe("Close agent context");
     close.click();
     expect(pane.hidden).toBe(true);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(dom.document.activeElement).toBe(toggle);
+    expect(dom.document.activeElement).toBe(root.querySelector(".glosa-tools-trigger") as any);
   });
 
   test("document surface hides navigator chrome", async () => {

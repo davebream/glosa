@@ -173,7 +173,7 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
     expect(diffPane.innerHTML).toContain("d2h-file-wrapper");
   });
 
-  test("restore button calls dataAccess.restore with the row's checkpoint_id and the open artifact's path", async () => {
+  test("read-only history omits restore controls", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const calls: Array<{ path: string; to: string; force?: boolean }> = [];
@@ -187,10 +187,7 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
     mountHistoryPane(root, { dataAccess, slug: "ws-1", path: "notes.md" });
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const buttons = Array.from(root.querySelectorAll(".glosa-history-row button")) as any[];
-    buttons[0]!.click();
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-
-    expect(calls).toEqual([{ path: "notes.md", to: "c2", force: false }]);
+    expect(root.querySelectorAll(".glosa-history-row button")).toHaveLength(0);
+    expect(calls).toEqual([]);
   });
 });
