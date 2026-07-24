@@ -201,7 +201,9 @@ export const presentInputSchema = z
       ),
     session_id: sessionId
       .optional()
-      .describe("Session to bind when the MCP host does not provide one; ignored when the host session is available."),
+      .describe(
+        "Session to bind for annotate/edit when the MCP host does not provide one; ignored for mode preview.",
+      ),
   })
   .strict();
 
@@ -214,10 +216,16 @@ export const presentOutputSchema = z
     surface: z.enum(["document", "workspace"]),
     mode: z.enum(["preview", "annotate", "edit"]),
     preview: z.boolean().describe("True when the visit is preview-locked."),
-    bound_session: z.string().min(1).optional().describe("Session id when binding succeeded."),
+    bound_session: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Session id when annotate/edit binding succeeded; omitted for mode preview."),
     state_dir: z.string().min(1).optional().describe("Redirected state directory when applicable."),
     warnings: z
       .array(z.object({ code: z.string(), message: z.string() }).strict())
-      .describe("Nonfatal warnings such as bind-failed or preview-bind-conflict."),
+      .describe(
+        "Nonfatal warnings such as bind-failed or preview-bind-conflict; omitted for mode preview.",
+      ),
   })
   .strict();
