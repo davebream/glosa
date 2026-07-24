@@ -1,6 +1,6 @@
 {
   "name": "@davebream/glosa",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
   "author": "Dawid Leszczyński",
@@ -83,6 +83,7 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "@hono/node-server": "2.0.10"
+    "@hono/node-server": "2.0.10",
+    "tar": "7.5.22"
   }
 }
