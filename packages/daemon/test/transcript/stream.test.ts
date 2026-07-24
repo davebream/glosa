@@ -6,25 +6,25 @@
 // is asserted here too rather than split into a separate file, since standing up the harness is
 // identical either way.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, statSync, symlinkSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../../src/http.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../../src/registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { canonicalize } from "../../src/registry/slug.ts";
-import { parseSseStream, type ParsedSseEvent } from "../../src/sse.ts";
-import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
-import { randomPort } from "../helpers.ts";
 import {
-  AgentProviderRegistry,
   type AgentProvider,
+  AgentProviderRegistry,
   type DeliverableEntry,
   type DeliveryResult,
   type SessionBinding,
-} from "../../src/providers/interface.ts";
+} from "../../src/agent-provider/interface.ts";
+import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
+import { CapabilityStore } from "../../src/capability.ts";
+import { type ApiContext, createApiFetch } from "../../src/http.ts";
+import { SessionRegistry } from "../../src/registry/session-registry.ts";
+import { canonicalize } from "../../src/registry/slug.ts";
+import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { type ParsedSseEvent, parseSseStream } from "../../src/sse.ts";
+import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
+import { randomPort } from "../helpers.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";
 
@@ -140,13 +140,18 @@ async function connect(
   return { res, reader, disconnect };
 }
 
-async function readEvents(reader: ReadableStreamDefaultReader<Uint8Array>, count: number, timeoutMs = 5000): Promise<ParsedSseEvent[]> {
+async function readEvents(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  count: number,
+  timeoutMs = 5000,
+): Promise<ParsedSseEvent[]> {
   const iterator = parseSseStream(reader)[Symbol.asyncIterator]();
   const timeout = Bun.sleep(timeoutMs).then(() => "timeout" as const);
   const events: ParsedSseEvent[] = [];
   while (events.length < count) {
     const result = await Promise.race([iterator.next(), timeout]);
-    if (result === "timeout") throw new Error(`timed out waiting for ${count} event(s) — got ${events.length}: ${JSON.stringify(events)}`);
+    if (result === "timeout")
+      throw new Error(`timed out waiting for ${count} event(s) — got ${events.length}: ${JSON.stringify(events)}`);
     if (result.done) throw new Error(`stream ended early — got ${events.length}/${count} event(s)`);
     events.push(result.value);
   }
@@ -189,7 +194,10 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
   test("a transcript_path OUTSIDE $CLAUDE_CONFIG_DIR is refused — 400 invalid-path, never opened", async () => {
     const outsidePath = join(mkdtempSync(join(tmpdir(), "glosa-outside-")), "evil.jsonl");
-    writeFileSync(outsidePath, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n");
+    writeFileSync(
+      outsidePath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n",
+    );
     await h.sessionRegistry.register({
       session_id: "s1",
       provider: "claude-code",
@@ -207,7 +215,10 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
   test("a symlink under CLAUDE_CONFIG_DIR pointing OUTSIDE it is also refused (realpath confinement, same as F24)", async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "glosa-outside-target-"));
     const outsideFile = join(outsideDir, "real.jsonl");
-    writeFileSync(outsideFile, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n");
+    writeFileSync(
+      outsideFile,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n",
+    );
     const linkPath = join(h.claudeConfigDir, "sneaky.jsonl");
     symlinkSync(outsideFile, linkPath);
 
@@ -280,15 +291,28 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
   test("reconnect via Last-Event-ID resumes from the exact byte offset — no duplicate, no loss", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess2.jsonl");
-    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "line one" } }) + "\n");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "line one" } }) + "\n",
+    );
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
     const { reader: reader1, disconnect: disconnect1 } = await connect(h);
     const first = await readEvent(reader1);
     expect(JSON.parse(first.data).content).toBe("line one");
     await disconnect1();
 
-    writeTranscriptLine(transcriptPath, { type: "assistant", uuid: "a1", message: { role: "assistant", content: "line two" } });
+    writeTranscriptLine(transcriptPath, {
+      type: "assistant",
+      uuid: "a1",
+      message: { role: "assistant", content: "line two" },
+    });
 
     const { reader: reader2, disconnect: disconnect2 } = await connect(h, { "Last-Event-ID": first.id! });
     const second = await readEvent(reader2);
@@ -299,7 +323,13 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
   test("live push: a connected client sees a new transcript event as soon as it's appended to the file", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess-live.jsonl");
     writeFileSync(transcriptPath, "");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
     const { reader, disconnect } = await connect(h);
     // Give the chokidar watcher a moment to attach before the first write.
@@ -325,8 +355,17 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
   // it, and is exercised deterministically below.
   test("reconnecting with a cursor whose offset now exceeds the (truncated) file's size → resync_required, not a crash or silent replay", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess-clear.jsonl");
-    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "before clear" } }) + "\n");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "before clear" } }) + "\n",
+    );
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
     const { reader: reader1, disconnect: disconnect1 } = await connect(h);
     const first = await readEvent(reader1);
@@ -342,8 +381,17 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
   test("reconnecting after the transcript was rotated to a NEW inode (a /resume-like file swap) → resync_required", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess-rotate.jsonl");
-    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "old file" } }) + "\n");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "old file" } }) + "\n",
+    );
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
     const { reader: reader1, disconnect: disconnect1 } = await connect(h);
     const first = await readEvent(reader1);
@@ -352,7 +400,10 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
     // Simulate a rotation: replace the file's inode entirely (unlink + recreate), matching how a
     // real `/resume`-triggered file swap changes identity even if the path stays the same.
     rmSync(transcriptPath);
-    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "u2", message: { role: "user", content: "new file" } }) + "\n");
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u2", message: { role: "user", content: "new file" } }) + "\n",
+    );
 
     const { reader: reader2, disconnect: disconnect2 } = await connect(h, { "Last-Event-ID": first.id! });
     const ev = await readEvent(reader2);
@@ -362,8 +413,17 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
   test("an out-of-range/undecodable Last-Event-ID is tolerated as absent — 200, fresh read from 0, never a 500", async () => {
     const transcriptPath = join(h.claudeConfigDir, "sess-garbage-cursor.jsonl");
-    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n");
-    await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, transcript_path: transcriptPath, source: "startup" });
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }) + "\n",
+    );
+    await h.sessionRegistry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: h.root,
+      transcript_path: transcriptPath,
+      source: "startup",
+    });
 
     const { reader, disconnect } = await connect(h, { "Last-Event-ID": "not-a-real-cursor!!" });
     const ev = await readEvent(reader);
@@ -378,17 +438,23 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
   });
 
   test("foreign Origin → 403 (authed-read rejects a foreign, non-absent Origin)", async () => {
-    const res = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}`, Origin: "http://evil.example.com" } });
+    const res = await fetch(transcriptStreamUrl(h), {
+      headers: { Authorization: `Bearer ${TOKEN}`, Origin: "http://evil.example.com" },
+    });
     expect(res.status).toBe(403);
   });
 
   test("X-Contract-Version major mismatch → 409, never reaches the transcript handler", async () => {
-    const res = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "99.0" } });
+    const res = await fetch(transcriptStreamUrl(h), {
+      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "99.0" },
+    });
     expect(res.status).toBe(409);
   });
 
   test("unknown slug → 404 (workspace resolution runs before session lookup)", async () => {
-    const res = await fetch(`http://127.0.0.1:${h.port}/w/does-not-exist/transcript/stream`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(`http://127.0.0.1:${h.port}/w/does-not-exist/transcript/stream`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
     expect(res.status).toBe(404);
   });
 });
@@ -408,7 +474,12 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
   function composeReq(body: unknown, extraHeaders: Record<string, string> = {}) {
     return fetch(`http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", Origin: `http://127.0.0.1:${h.port}`, ...extraHeaders },
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+        Origin: `http://127.0.0.1:${h.port}`,
+        ...extraHeaders,
+      },
       body: JSON.stringify(body),
     });
   }
@@ -490,7 +561,10 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
   });
 
   test("multiple live bindings require a valid hint and expose only safe candidates", async () => {
-    for (const [session_id, provider] of [["s1", "claude-code"], ["s2", "codex"]] as const) {
+    for (const [session_id, provider] of [
+      ["s1", "claude-code"],
+      ["s2", "codex"],
+    ] as const) {
       await h.sessionRegistry.register({
         session_id,
         provider,
@@ -590,10 +664,9 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       body: JSON.stringify({ outcome: "presented" }),
     });
     expect(ack.status).toBe(200);
-    const status = await fetch(
-      `http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose/${MESSAGE_ID}`,
-      { headers: { Authorization: `Bearer ${TOKEN}` } },
-    );
+    const status = await fetch(`http://127.0.0.1:${h.port}/w/${h.slug}/transcript/compose/${MESSAGE_ID}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ message_id: MESSAGE_ID, delivered: true, state: "presented" });
     expect((await composeReq({ message_id: MESSAGE_ID, text: "ack me" })).status).toBe(200);

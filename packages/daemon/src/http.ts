@@ -12,73 +12,71 @@
 // journal SSE stream (§5.5), with the real thing (`handleStream`/stream.ts); P4.1 replaced
 // another, the class-F capability mint (`handleMintCapability`) plus the class-F listener's own
 // serve route (`createClassFFetch`/classf-serve.ts).
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILD_ID } from "./build-id.ts";
-import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
-import { checkContractVersion, CONTRACT_VERSION, DAEMON_VERSION } from "./contract.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { confinePath } from "./confine-path.ts";
-import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
-import { PROTOCOL_VERSION } from "./protocol.ts";
-import { resolveTrackedFiles } from "./matcher.ts";
-import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import {
   type AdapterRegistry,
+  type AdapterSessionHint,
   classifyWithAdapter,
   derivedFromSourcePath,
   isArtifactStale,
   orderWithAdapter,
   resolveManifest,
-  type AdapterSessionHint,
 } from "./adapters/interface.ts";
 import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
+import { adoptLooseLineages } from "./adoption.ts";
 import {
-  resolve as resolveAnchor,
+  type AgentProviderRegistry,
+  type DeliverableEntry,
+  type DeliveryResult,
+  recordDelivery,
+  type SessionBinding,
+} from "./agent-provider/interface.ts";
+import type { SessionPushRegistry } from "./agent-provider/push-registry.ts";
+import {
   type ClassFArtifact,
   type ClassRArtifact,
   type Resolution,
   type ResolveCtx,
+  resolve as resolveAnchor,
 } from "./anchoring.ts";
+import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
+import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
+import { BUILD_ID } from "./build-id.ts";
+import { WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
+import { readInboxEntry } from "./bus/inbox.ts";
+import type { JournalEvent } from "./bus/journal.ts";
+import { type DeliveryVia, isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
+import { journalPath } from "./bus/paths.ts";
+import { createEmptyState, type DerivedState, foldEvents } from "./bus/replay.ts";
+import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "./checkpoints.ts";
-import { adoptLooseLineages } from "./adoption.ts";
-import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
-import { createJournalStreamResponse } from "./stream.ts";
-import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
-import {
-  PRESENTATION_TOKEN_TTL_MS,
-  type PresentationTokenStore,
-} from "./presentation-token.ts";
 import { serveClassFDocument } from "./classf-serve.ts";
-import { confineTranscriptPath } from "./transcript/root.ts";
-import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import {
-  AdoptionError,
-  WorkspaceOpenError,
-  type WorkspaceEntry,
-  type WorkspaceIndex,
-} from "./registry/workspace-index.ts";
+import { confinePath } from "./confine-path.ts";
+import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
+import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+import { buildDeliveryPresentation } from "./delivery/presentation.ts";
+import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
+import { resolveTrackedFiles } from "./matcher.ts";
+import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presentation-token.ts";
+import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
+import { PROTOCOL_VERSION } from "./protocol.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
-import { WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
-import { journalPath } from "./bus/paths.ts";
-import { readInboxEntry } from "./bus/inbox.ts";
-import { createEmptyState, foldEvents, type DerivedState } from "./bus/replay.ts";
-import { isTerminal, lifecycleReducer, type DeliveryVia } from "./bus/lifecycle.ts";
-import type { JournalEvent } from "./bus/journal.ts";
-import { buildDeliveryPresentation } from "./delivery/presentation.ts";
 import {
-  type AgentProviderRegistry,
-  recordDelivery,
-  type DeliverableEntry,
-  type DeliveryResult,
-  type SessionBinding,
-} from "./providers/interface.ts";
-import type { SessionPushRegistry } from "./providers/push-registry.ts";
+  AdoptionError,
+  type WorkspaceEntry,
+  type WorkspaceIndex,
+  WorkspaceOpenError,
+} from "./registry/workspace-index.ts";
+import { createJournalStreamResponse } from "./stream.ts";
 import type { TokenSource } from "./token.ts";
+import { confineTranscriptPath } from "./transcript/root.ts";
+import { createTranscriptStreamResponse } from "./transcript/stream.ts";
 import type { WorkspaceTarget } from "./workspace.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4

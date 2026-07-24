@@ -7,23 +7,14 @@
 //   - the "inbox file atomically first, then entry_created" ordering that module 4 (inbox.ts)
 //     requires but can't enforce by itself, since it spans both inbox.ts and journal.ts.
 // This is what the HTTP layer (later tasks) and this task's concurrency tests call.
-import { JournalWriter, appendEvent, type EventBy, type JournalEvent } from "./journal.ts";
+
+import { mkdirSync } from "node:fs";
+import type { DeliverableEntry } from "../agent-provider/interface.ts";
+import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
+import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, runGit, safePathspec } from "../git/shadow.ts";
+import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
 import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
-import { journalPath, workspaceBusDir } from "./paths.ts";
-import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
-import {
-  isTerminal,
-  lifecycleReducer,
-  type DeliveryAttemptRecord,
-  type DeliveryOutcome,
-  type DeliveryReason,
-  type DeliveryVia,
-} from "./lifecycle.ts";
-import { reconcileWorkspace, type ReconcileResult } from "./reconcile.ts";
-import { countJournalLines } from "./tail.ts";
-import { workspaceRegistrationId, workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
-import { KeyedMutex } from "./mutex.ts";
-import { ulid as defaultUlid } from "./ulid.ts";
+import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./journal.ts";
 import {
   APPLY_LEASE_TTL_MS,
   isLeaseExpired,
@@ -31,10 +22,20 @@ import {
   leaseSessionMismatchError,
   noActiveLeaseError,
 } from "./lease.ts";
-import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, runGit, safePathspec } from "../git/shadow.ts";
-import { mkdirSync } from "node:fs";
-import type { DeliverableEntry } from "../providers/interface.ts";
-import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
+import {
+  type DeliveryAttemptRecord,
+  type DeliveryOutcome,
+  type DeliveryReason,
+  type DeliveryVia,
+  isTerminal,
+  lifecycleReducer,
+} from "./lifecycle.ts";
+import { KeyedMutex } from "./mutex.ts";
+import { journalPath, workspaceBusDir } from "./paths.ts";
+import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
+import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { countJournalLines } from "./tail.ts";
+import { ulid as defaultUlid } from "./ulid.ts";
 
 const DELIVERY_RESERVATION_TTL_MS = 30_000;
 

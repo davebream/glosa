@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — R7's content-adapter interface + the registry the daemon holds (the generic/
 // domain boundary, AGENTS.md invariant #1: generic core, domain in adapters). Mirrors
-// providers/interface.ts's own framing verbatim: this is the seam EXTERNAL code (a package living
+// agent-provider/interface.ts's own framing verbatim: this is the seam EXTERNAL code (a package living
 // in ITS OWN repo, outside glosa entirely, or this repo's own neutral fixture adapter under
 // test/fixtures/) registers domain facts through at runtime. The core (http.ts, anchoring.ts,
 // registry/*) imports and calls ONLY the shapes in this file — never a concrete adapter package;
@@ -23,10 +23,10 @@
 // workspaces.
 import { readFileSync } from "node:fs";
 import picomatch from "picomatch";
+import type { ChunkManifest } from "../anchoring.ts";
 import { confinePath } from "../confine-path.ts";
 import { loadMatcherConfig } from "../matcher.ts";
-import type { ChunkManifest } from "../anchoring.ts";
-import { workspaceBusPath, workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
+import { type WorkspaceTarget, workspaceBusPath, workspaceWorktree } from "../workspace.ts";
 
 /** The subset of a live session an adapter needs to decide a `workspace_binding` — mirrors
  * `SessionRecord`'s own identity fields (registry/session-registry.ts) without importing that
@@ -157,8 +157,8 @@ export class AdapterRegistry {
   }
 }
 
-export { WorkspaceMetadataRegistry } from "./workspace-metadata.ts";
 export type { WorkspaceMetadataArtifact, WorkspaceMetadataDescriptor } from "./workspace-metadata.ts";
+export { WorkspaceMetadataRegistry } from "./workspace-metadata.ts";
 
 // -------------------------------------------------------------------------------------------
 // Generic behaviors the core computes from an adapter's answers (R7) — ZERO domain knowledge

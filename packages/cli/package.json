@@ -6,11 +6,14 @@
   "license": "Apache-2.0",
   "description": "glosa command-line interface (open/init/resolve/apply-begin/request-review/doctor/status).",
   "main": "src/main.ts",
-  "bin": { "glosa": "src/main.ts" },
-  "exports": { ".": "./src/index.ts" },
+  "bin": {
+    "glosa": "src/main.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@glosa/daemon": "workspace:*",
-    "@glosa/providers-claude-code": "workspace:*",
     "@gunshi/plugin-completion": "0.37.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "gunshi": "0.37.1",

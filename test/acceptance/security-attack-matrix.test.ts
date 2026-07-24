@@ -14,15 +14,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/auth.ts";
-import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/csp.ts";
-import { confinePath } from "../../packages/daemon/src/confine-path.ts";
-import { bridgeShouldAcceptInit } from "../../packages/daemon/src/classf-bridge.ts";
 import { renderMarkdown } from "../../packages/daemon/src/artifact-render.ts";
-import { checkEventSource, checkNonce, isTrustedInitEvent, validateBridgeMessage } from "../../packages/spa/src/classf-viewer.js";
-import { scrubToken } from "../../packages/spa/src/bootstrap.js";
+import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/auth.ts";
+import { bridgeShouldAcceptInit } from "../../packages/daemon/src/classf-bridge.ts";
+import { confinePath } from "../../packages/daemon/src/confine-path.ts";
+import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/csp.ts";
+import { scrubSecrets } from "../../packages/spa/src/bootstrap.js";
+import {
+  checkEventSource,
+  checkNonce,
+  isTrustedInitEvent,
+  validateBridgeMessage,
+} from "../../packages/spa/src/classf-viewer.js";
 import { mountConversationPane } from "../../packages/spa/src/conversation.js";
-import { installDom, type DomEnv } from "../../packages/spa/test/dom-env.ts";
+import { type DomEnv, installDom } from "../../packages/spa/test/dom-env.ts";
 
 const SPA_PORT = 4646;
 const CLASSF_PORT = 4647;
@@ -77,9 +82,13 @@ describe("A3 §5 attack #3 — forged postMessage", () => {
 
     expect(isTrustedInitEvent({ source: realWin, data: { type: "glosa:init", nonce } }, realWin, nonce)).toBe(true);
     // Right nonce, wrong source (a 3rd window impersonating the iframe's message shape).
-    expect(isTrustedInitEvent({ source: attackerWin, data: { type: "glosa:init", nonce } }, realWin, nonce)).toBe(false);
+    expect(isTrustedInitEvent({ source: attackerWin, data: { type: "glosa:init", nonce } }, realWin, nonce)).toBe(
+      false,
+    );
     // Right source object, wrong/missing nonce.
-    expect(isTrustedInitEvent({ source: realWin, data: { type: "glosa:init", nonce: "wrong" } }, realWin, nonce)).toBe(false);
+    expect(isTrustedInitEvent({ source: realWin, data: { type: "glosa:init", nonce: "wrong" } }, realWin, nonce)).toBe(
+      false,
+    );
     expect(checkEventSource({ source: attackerWin }, realWin)).toBe(false);
     expect(checkNonce({ nonce: "wrong" }, nonce)).toBe(false);
   });
@@ -91,7 +100,14 @@ describe("A3 §5 attack #3 — forged postMessage", () => {
   });
 
   test("post-handshake messages are schema-validated (zod-shaped) — an attacker with port2 access still can't send an arbitrary payload", () => {
-    expect(validateBridgeMessage({ type: "selection", seq: 1, quote: { exact: "x", prefix: "", suffix: "" }, range: { start: 0, end: 1 } }).ok).toBe(true);
+    expect(
+      validateBridgeMessage({
+        type: "selection",
+        seq: 1,
+        quote: { exact: "x", prefix: "", suffix: "" },
+        range: { start: 0, end: 1 },
+      }).ok,
+    ).toBe(true);
     expect(validateBridgeMessage({ type: "selection", seq: "not-a-number" }).ok).toBe(false);
     expect(validateBridgeMessage({ type: "eval", code: "alert(1)" }).ok).toBe(false); // unknown type
   });
@@ -299,7 +315,7 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
     const calls: Array<[unknown, string, string]> = [];
     const history = { replaceState: (s: unknown, t: string, u?: string | URL | null) => calls.push([s, t, String(u)]) };
 
-    const result = scrubToken(loc, session, history as unknown as History);
+    const result = scrubSecrets(loc, session, history as unknown as History);
 
     expect(result).toBe("SUPERSECRET");
     expect(session.getItem("glosa_token")).toBe("SUPERSECRET");

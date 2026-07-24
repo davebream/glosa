@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { SessionPushRegistry } from "../../src/providers/push-registry.ts";
-import type { DeliverableEntry } from "../../src/providers/interface.ts";
+import type { DeliverableEntry } from "../../src/agent-provider/interface.ts";
+import { SessionPushRegistry } from "../../src/agent-provider/push-registry.ts";
 
 function conversation(id: string, target: string): DeliverableEntry {
   const message = `message ${id}`;

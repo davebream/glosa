@@ -5,14 +5,21 @@
 // exit code. Nothing here writes the transcript or any glosa state file directly — the daemon API
 // (or, for the rewake lease, the coordinator's own lease file — a CLI-local watcher-liveness
 // concern, not workspace state) is the only thing that ever gets mutated.
+
+import type { AgentProvider } from "../../daemon/src/agent-provider/interface.ts";
+import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
+import type { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
 import { ClaudeCodeProvider } from "../../providers/claude-code/src/index.ts";
 import { CodexProvider } from "../../providers/codex/src/index.ts";
-import type { RewakeCoordinator, RewakeLeaseStore } from "../../providers/claude-code/src/index.ts";
-import type { AgentProvider } from "../../daemon/src/providers/interface.ts";
 import type { DaemonHookClient } from "./daemon-client.ts";
-import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 
-export type HookEvent = "session-start" | "rewake-watch" | "session-end" | "user-prompt-submit" | "stop" | "notification";
+export type HookEvent =
+  | "session-start"
+  | "rewake-watch"
+  | "session-end"
+  | "user-prompt-submit"
+  | "stop"
+  | "notification";
 
 export interface HookDeps {
   daemonClient: DaemonHookClient;
@@ -55,7 +62,12 @@ function usageError(message: string): HookOutcome {
   return { exitCode: 2, stdout: "", stderr: message };
 }
 
-async function handleSessionStart(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
+async function handleSessionStart(
+  input: unknown,
+  deps: HookDeps,
+  providerId: string,
+  provider: AgentProvider,
+): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("session-start: hook input missing session_id/cwd");
 
@@ -80,7 +92,12 @@ async function handleSessionStart(input: unknown, deps: HookDeps, providerId: st
   };
 }
 
-async function handleSessionEnd(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
+async function handleSessionEnd(
+  input: unknown,
+  deps: HookDeps,
+  providerId: string,
+  provider: AgentProvider,
+): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("session-end: hook input missing session_id/cwd");
   await deps.daemonClient.deregister(session.session_id);
@@ -110,7 +127,12 @@ async function handleUserPromptSubmit(input: unknown, deps: HookDeps, provider: 
   };
 }
 
-async function handleStop(input: unknown, deps: HookDeps, providerId: string, provider: AgentProvider): Promise<HookOutcome> {
+async function handleStop(
+  input: unknown,
+  deps: HookDeps,
+  providerId: string,
+  provider: AgentProvider,
+): Promise<HookOutcome> {
   const session = provider.detectSession(input);
   if (!session) return usageError("stop: hook input missing session_id/cwd");
   await deps.daemonClient.heartbeat(session.session_id);
@@ -161,7 +183,9 @@ async function handleRewakeWatch(input: unknown, deps: HookDeps, watcherPid: num
         exitCode: 2,
         stdout: "",
         stderr: formatPresentationBatch(drained.drained),
-        ...(drained.delivery_id ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } } : {}),
+        ...(drained.delivery_id
+          ? { delivery: { sessionId: session.session_id, deliveryId: drained.delivery_id } }
+          : {}),
       };
     }
     if (i < attempts - 1) await sleep(intervalMs);

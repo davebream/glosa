@@ -5,7 +5,7 @@
 // shell only ever has to change what this one module does, never anything that calls it.
 //
 // Every request carries `Authorization: Bearer <sessionStorage.glosa_token>` (the token
-// bootstrap.js's `scrubToken` already stashed there, P1.4) — same-origin `fetch`, nothing fancier,
+// bootstrap.js's `scrubSecrets` already stashed there, P1.4) — same-origin `fetch`, nothing fancier,
 // per R6's "same-origin fetch today" v1 scope.
 const TOKEN_KEY = "glosa_token";
 
