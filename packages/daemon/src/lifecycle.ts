@@ -5,7 +5,7 @@
 // role (bootDaemon, never imported by the SPA) and by every client role (ensureDaemon).
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AdapterRegistry } from "./adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
@@ -478,6 +478,20 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
     const identityError = malformedLockBuildIdentity(lockFile);
     if (identityError) return { ok: false, reason: identityError, logPath: logPath(home) };
     if (!lock) {
+      // A daemon can be alive briefly without a lock while a concurrent replacement is still
+      // settling. Re-probing the seed port prevents every client from spawning a losing contender
+      // into an already occupied port; ownership is unknowable, so this remains fail-closed.
+      const hs = await fetchHandshake(preferredPort, HANDSHAKE_TIMEOUT_MS);
+      if (hs) {
+        return {
+          ok: false,
+          reason: `glosa daemon answered on port ${preferredPort} ${
+            existsSync(lockFile) ? "with an unusable lock" : "without a lock"
+          }; cannot safely establish ownership`,
+          logPath: logPath(home),
+        };
+      }
+
       const spawnFailure = await spawnAndWait(home, preferredPort);
       if (spawnFailure) return spawnFailure;
       continue;
