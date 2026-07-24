@@ -488,7 +488,14 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
       const hs = await pollHandshake(lock.port, HANDSHAKE_POLL_MS);
       if (hs) {
         const mismatch = daemonPeerMismatchReason(lock, hs);
-        if (mismatch) return { ok: false, reason: mismatch, logPath: logPath(home) };
+        if (mismatch) {
+          // The lock can legitimately roll over while this client is awaiting the handshake: a
+          // concurrent client may have replaced an older daemon. Only retry when that ownership
+          // change is observable; an unchanged mismatched lock remains fail-closed.
+          const currentLock = readLock(lockFile);
+          if (!currentLock || currentLock.instance_id !== lock.instance_id) continue;
+          return { ok: false, reason: mismatch, logPath: logPath(home) };
+        }
 
         const decision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
         if (decision.action === "use") return { ok: true, ...toConnection(lock.port, hs) };
