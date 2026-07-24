@@ -206,7 +206,7 @@ the entry survives.
   (same-origin fetch today). This is a v1 build constraint, not future scope: it is what makes a future
   hosted-shell/Electron topology a config change rather than a refactor (the L0→L3 distribution ladder).
   No SPA component talks to the daemon except through that module.
-- **Three modes per artifact**: **Preview** (rendered, read-only), **Annotate** (margin comments on the
+- **Three modes per artifact**: **Preview** (rendered, reading-only canvas: navigation and read-only context are progressive disclosures; annotation, restore, and agent composition require an explicit mode transition), **Annotate** (margin comments on the
   rendered view — extends the existing annotate.js Preview/Annotate toggle), **Edit** (modify source,
   save → re-render). v1 editor is deliberately minimal (source editing + save; fancy live-preview/
   inline-annotate-while-editing deferred). Human edits in glosa → attributed `human` by construction.
