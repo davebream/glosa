@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   CHANNEL_COMMAND,
   defaultResolveGlosaBin,
+  isEphemeralPackageRunnerPath,
   runInit,
   runUninstall,
   type GlosaBinResolution,
@@ -479,9 +480,52 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("durable-install-required");
     expect(result.error?.hint).toBe(
-      "install with `bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/`, then re-run `glosa init`",
+      "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`; " +
+        "if your npm config maps the @davebream scope to another registry, install from the published " +
+        "tarball URL instead — see the README's Quick start",
     );
     expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
+  });
+
+  test("a package-runner cache under a CUSTOM BUN_INSTALL root is still ephemeral", async () => {
+    const dir = freshDir();
+    const result = await runInit({
+      dir,
+      glosaRoot: "/opt/bunroot/install/cache/@davebream/glosa@0.1.0-alpha.0",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("durable-install-required");
+    expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
+  });
+});
+
+describe("isEphemeralPackageRunnerPath", () => {
+  test.each([
+    ["/Users/x/.bun/install/cache/@davebream/glosa@0.1.0-alpha.0", true],
+    // A custom BUN_INSTALL root — the hardcoded `/.bun/install/cache/` marker missed these.
+    ["/opt/bunroot/install/cache/@davebream/glosa@0.1.0-alpha.0", true],
+    ["/Users/x/.npm/_npx/abc123/node_modules/@davebream/glosa", true],
+    ["/tmp/_npx/abc/node_modules/@davebream/glosa", true],
+    ["/Users/x/.pnpm/dlx/abc/node_modules/@davebream/glosa", true],
+    ["/Users/x/.bun/install/global/node_modules/@davebream/glosa", false],
+    ["/usr/local/lib/node_modules/@davebream/glosa", false],
+  ])("%s -> %s", (path, expected) => {
+    expect(isEphemeralPackageRunnerPath(path)).toBe(expected);
+  });
+
+  // `isEphemeralPackageRunnerPath` gates `glosa init` via `defaultResolveGlosaBin`, so widening the
+  // matcher has blast radius beyond `glosa update`. Prove no durable shape is newly refused.
+  test("widening the cache matcher does not newly block glosa init for durable installs", () => {
+    for (const durable of [
+      "/Users/x/.bun/install/global/node_modules/@davebream/glosa",
+      "/usr/local/lib/node_modules/@davebream/glosa",
+      "/Users/x/proj/node_modules/@davebream/glosa",
+      "/Users/x/code/glosa",
+    ]) {
+      expect(isEphemeralPackageRunnerPath(durable), `${durable} must stay durable`).toBe(false);
+      expect(() => defaultResolveGlosaBin(durable)).not.toThrow();
+    }
   });
 });
 

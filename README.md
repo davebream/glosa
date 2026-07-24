@@ -58,12 +58,35 @@ open at once, and feedback waits durably when no matching agent session is live.
 Install the alpha CLI globally:
 
 ```sh
-bun add --global @davebream/glosa@alpha --registry=https://registry.npmjs.org/
+bun add --global @davebream/glosa@alpha
 ```
 
-The explicit registry keeps a scope-level `.npmrc` mapping for `@davebream` from redirecting this
-public package to another registry. Do not use the `davebream/glosa` GitHub shorthand: it installs
-the repository's moving default branch rather than the published alpha.
+Do not use the `davebream/glosa` GitHub shorthand: it installs the repository's moving default branch
+rather than the published alpha.
+
+<details>
+<summary>If your npm config maps the <code>@davebream</code> scope to another registry</summary>
+
+glosa is published to the public npm registry. A scope mapping in `~/.npmrc` — for example
+`@davebream:registry=https://npm.pkg.github.com` — redirects the install and produces a 404. A scope
+mapping outranks the `--registry` flag, and bun has no scoped-registry flag at all, so
+`--registry=https://registry.npmjs.org/` does **not** fix this.
+
+Install from the published tarball URL, which resolves without consulting any registry configuration:
+
+```sh
+bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.3.tgz
+```
+
+Or, with npm, use the scoped form — which does beat a scope mapping:
+
+```sh
+npm install -g --@davebream:registry=https://registry.npmjs.org/ @davebream/glosa@alpha
+```
+
+After the first install, `glosa update` handles this automatically.
+
+</details>
 
 Set up the agent integration once in a writing workspace, then open it:
 
@@ -78,6 +101,18 @@ routing, and optional Channels). A durable global MCP entry can run preview-only
 without workspace init — read-only preview URLs do not require hooks. `glosa open` starts or reuses
 the singleton daemon and opens a paired browser tab. Run `glosa doctor` to verify the
 workspace-installed integration, or `glosa --help` to see every command.
+
+### Updating
+
+```sh
+glosa update           # upgrade in place
+glosa update --check   # report what would change, install nothing
+```
+
+`glosa update` resolves the release over a plain HTTPS request that reads no npm configuration, verifies
+the downloaded tarball against the registry's published sha512, and installs it through whichever package
+manager owns your glosa install. It is the only part of glosa that makes an outbound network request, it
+runs only when you invoke it, and it sends no identifying data.
 
 > [!NOTE]
 > A durable global install is required for `glosa init`: generated hooks must keep working after the
