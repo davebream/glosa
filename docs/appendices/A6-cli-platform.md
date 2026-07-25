@@ -5,9 +5,44 @@
 - Stable exit codes (append-only, `1` reserved/never emitted): 0 ok · 2 usage · 3 daemon_unreachable · 4 not_a_workspace · 5 platform_unsupported · 6 foreign_config_conflict · 7 review_timeout · 8 entry_error · 9 degraded · 10 protocol_mismatch · 11 restore_conflict · 12 lease_conflict · 70 internal.
 
 ## F26 — `glosa init` merge/ownership/uninstall
-- Touches only `<ws>/.claude/settings.json` (Claude hooks), `<ws>/.mcp.json` (Claude MCP),
-  `<ws>/.codex/hooks.json` (Codex hooks), `<ws>/.codex/config.toml` (Codex MCP), and
-  `<ws>/.claude/.glosa-init.json` (glosa's authoritative ownership manifest).
+- **Purpose and lazy boundary.** `glosa init` installs agent delivery integration; it is not a
+  prerequisite for opening or previewing an artifact. `glosa open` creates the `.glosa/` scaffold
+  and opens the browser without invoking init, prompting for init, or writing agent configuration.
+  Preview-only `glosa_present` is likewise init-free and session-independent. Annotate/Edit remain
+  usable as local UI acts without init; when no delivery integration is available the SPA may show
+  a non-blocking setup action, but it never performs configuration writes itself.
+- **Scope.** `--scope workspace|user` is explicit and defaults to `workspace`.
+  `workspace` writes provider project configuration under `<ws>`; `user` writes provider user
+  configuration and is available across workspaces. User scope is never inferred because its hooks
+  run for every project and have a wider overhead/trust surface. For the v1 providers the target
+  files are:
+
+  | Scope | Claude Code provider | Codex provider |
+  |---|---|---|
+  | `workspace` | `<ws>/.claude/settings.json` (hooks), `<ws>/.mcp.json` (MCP) | `<ws>/.codex/hooks.json` (hooks), `<ws>/.codex/config.toml` (MCP) |
+  | `user` | `~/.claude/settings.json` (hooks), `~/.claude.json` (user-scoped MCP entry) | `~/.codex/hooks.json` (hooks), `~/.codex/config.toml` (MCP) |
+
+- **Provider targeting.** `--agent claude-code|codex` is repeatable; `--agent all` is the convenience
+  form for both v1 providers and cannot be combined with another `--agent`. Explicit values are
+  authoritative. On install with no `--agent`, provider-owned local probes inspect only executable
+  presence and existing provider configuration. Exactly one detected provider is selected without a
+  prompt. Multiple or zero detections produce one provider-selection prompt on a TTY; non-TTY and
+  `--json` runs exit 2 with an exact `--agent` hint instead of guessing. `--print/--dry-run` never
+  changes the selected target set. Detection never launches an agent, reads a transcript, or performs
+  network access. Uninstall does not detect providers: omitting `--agent` means all providers owned by
+  the selected scope, as defined below.
+- **Provider boundary.** Each package in `packages/providers/*` owns its supported scopes, local
+  detection probe, target paths, desired hook/MCP nodes, ownership signatures, and activation help.
+  The generic CLI consumes provider installation plans and owns only selection, transactional
+  application/rollback, backup retention, and manifest persistence. Adding a provider does not add a
+  provider branch to the CLI core.
+- **Manifest and overlap.** One authoritative manifest per scope records `scope`, selected provider
+  IDs, and per-file ownership: workspace `<ws>/.glosa/init-manifest.json`; user
+  `~/.glosa/init-manifest.json`. A legacy `<ws>/.claude/.glosa-init.json` is read and atomically
+  migrated on the first scoped init/uninstall. Re-running init with another provider extends the
+  manifest transactionally. Because both Claude Code and Codex combine hook layers, an owned
+  installation of the same provider at the other scope would run duplicate hooks; init refuses that
+  overlap with exact uninstall/reinstall commands, and `--force` does not bypass this guard.
 - Ownership dual mechanism (JSON has no comments): manifest records per-file `{path, created, backup, inserted:[{pointer, sha256}]}`; in-band signature fallback = hook commands begin literal `glosa hook ` and MCP key literally `glosa`. Never inject marker keys into Claude schemas.
 - GLOSA_BIN resolution (recorded in manifest): persist the current process's absolute Bun executable plus `run --silent <glosaRoot>/packages/cli/src/main.ts`. Pinning both the runtime and entrypoint keeps hooks working when Claude Code supplies a narrower PATH than the launching shell and avoids relying on the installed script's `#!/usr/bin/env bun` lookup. The same form supports the published package and maintainers running a checkout. Stored so uninstall matches + doctor detects drift. `npx`/`bunx` are one-shot launchers, not persisted hook commands: users running `init` need a durable global or project-local installation, and an obvious package-cache invocation is rejected before any configuration write. `glosa --build-id` prints only the identity and exits without starting a daemon; `glosa --version` remains the root package version.
 - Hook entries written: SessionStart (matcher `startup|resume|clear|compact`) → `glosa hook session-start` (timeout 10) + `glosa hook rewake-watch` (`asyncRewake:true`, default command-hook timeout); SessionEnd → `glosa hook session-end` (timeout 5); UserPromptSubmit → `glosa hook user-prompt-submit` (10); Stop → `glosa hook stop` (10); Notification → `glosa hook notification` (5). Roles: session-start registers {session_id,cwd,transcript_path,source} + drains parked; rewake-watch = rung-2 (rearmed by stop hook via per-session lease, since asyncRewake is one-shot); user-prompt-submit = rung-3 additionalContext; stop = rung-3 drain (≤8) + rewake rearm; session-end releases lease; notification = hook-fed attention state (preferred over transcript permission heuristic). Omitting `timeout` is deliberate: Claude Code 2.1.217 rejects an explicit zero despite its schema diagnostic, while the documented default is ten minutes.
@@ -22,8 +57,15 @@
   Installation participates in the same backup/rollback/foreign-entry rules as Claude configuration.
 - Optional Channel command printed (F06 LOCKED): `claude --dangerously-load-development-channels server:glosa` — NEVER `--channels`. MCP consent or organization policy may block it; hook/MCP fallback is the required compatibility path and doctor must not treat unavailable Channels as a failure.
 - Merge algo (transactional, per file, order settings→mcp→manifest): parse (absent→create; invalid JSON→abort exit6 touch nothing); backup `<file>.glosa-backup-<UTC-ISO>` (skip if identical to newest; retain 5); idempotent inserts by identity (hook = exact command string; MCP = key glosa; foreign non-glosa siblings untouched; foreign glosa-key differs & not-owned→exit6 unless --force); atomic temp+fsync+rename preserving indent; update manifest. Second init unchanged → no backup, exit0 data.changed:false. Mid-run failure → restore this-run backups, exit nonzero (no half-install).
-- Flags: `--print/--dry-run` (unified-diff, no write), `--force`, `--uninstall`, `--restore-backup`, `--json`.
-- Uninstall: per recorded node, re-hash current node vs recorded — match→remove + prune empty parents; mismatch (externally edited)→leave + warn + exit9. created:true file now empty→delete. Atomic per file; backups retained; manifest deleted on clean removal. Reminder to relaunch Claude without the dev flag.
+- Flags: `--scope workspace|user`, repeatable `--agent claude-code|codex|all`,
+  `--print/--dry-run` (unified-diff, no write), `--force`, `--uninstall`,
+  `--restore-backup`, `--json`.
+- Uninstall: `--uninstall --agent <id>` removes only that provider from the selected scope; omitting
+  `--agent` removes every glosa-owned provider in that scope, preserving the pre-targeting behavior.
+  Per recorded node, re-hash current node vs recorded — match→remove + prune empty parents; mismatch
+  (externally edited)→leave + warn + exit9. created:true file now empty→delete. Atomic per file;
+  backups retained; manifest deleted when its last provider is removed cleanly. Reminder to relaunch
+  Claude without the dev flag when Claude Code integration is removed.
 
 ## F24/F26 — `glosa token` rotation and revocation
 
@@ -170,7 +212,7 @@
 | cmd | args | does | exit |
 |---|---|---|---|
 | `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). | 0;2;3;5 |
-| `init` | `[dir]` `--print/--force/--uninstall/--restore-backup` | §F26 merge/uninstall | 0;2;6;9;5 |
+| `init` | `[dir]` `--scope workspace\|user` `[--agent claude-code\|codex\|all]...` `--print/--force/--uninstall/--restore-backup` | §F26 targeted merge/uninstall; provider prompt only for an unresolved TTY selection | 0;2;6;9;5 |
 | `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |

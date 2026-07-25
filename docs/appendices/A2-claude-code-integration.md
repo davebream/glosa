@@ -106,9 +106,11 @@ Routing precedence is fixed:
 
 `glosa_present` with `mode:"preview"` is session-independent: it registers the artifact and returns
 a preview-locked URL but never binds a session. A durable global or non-workspace MCP entry may use
-preview-only presentation without `glosa init`; init remains required for workspace delivery
-integration (hooks, feedback routing, and Channels). `glosa doctor` verifies workspace-installed
-integration only.
+preview-only presentation without `glosa init`. `glosa open` is equally init-free: it registers and
+opens the artifact, creates only glosa workspace state, and never installs agent configuration.
+Init is required only for provider delivery integration (hooks, feedback routing, conversation
+delivery, and optional Channels) and may be installed at workspace or user scope. `glosa doctor`
+reports the effective provider installation and its scope.
 
 Bindings are session-scoped. An external integration restores them after session registration rather
 than persisting workflow-specific state inside glosa. Two live sessions bound to one workspace require
@@ -116,7 +118,9 @@ an explicit hint or user choice; glosa never guesses and never auto-switches the
 
 ## F15 — hook registration
 
-`glosa init` owns only its signed entries and merges them transactionally:
+`glosa init` owns only its signed entries and merges them transactionally. Provider selection and
+scope orchestration are generic CLI concerns; the Claude Code provider owns the Claude-specific
+target paths, probe, hook/MCP nodes, and activation help described here:
 
 | Claude event | glosa role |
 |---|---|
