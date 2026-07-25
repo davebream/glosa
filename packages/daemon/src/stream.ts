@@ -10,10 +10,10 @@ import { relative, sep } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 import { encodeSseFrame } from "./sse.ts";
 import { readJournalEventsSince } from "./bus/tail.ts";
-import { resolveTrackedFiles } from "./matcher.ts";
+import { buildWatchIgnored, loadMatcherConfig, resolveTrackedFiles } from "./matcher.ts";
 import { classifyArtifactPath, sourceSha256 } from "./artifact-render.ts";
 import { isTerminal } from "./bus/lifecycle.ts";
-import { workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
+import { workspaceBusPath, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -44,21 +44,30 @@ function toRelPosixPath(root: string, absPath: string): string {
 }
 
 /** A minimal, best-effort artifact-change watcher (P3.2 — the journal cursor/reconnect mechanics
- * above are the correctness bar this task owns; this half is advisory). chokidar v4 dropped glob
+ * above are the correctness bar this task owns; this half is advisory). chokidar v4+ dropped glob
  * support (matcher.ts's own docstring), so it watches the raw workspace root and every raw fs
  * event is re-checked against `resolveMatchedFiles` — the ONE canonical matcher — before deciding
- * whether it's a tracked artifact worth pushing. `.glosa/**` is pruned at the chokidar level
- * (never even watched): this daemon's own shadow-git checkpoints (A4 §F21) live under there, and
- * without this exclude every checkpoint would re-trigger the watcher it's feeding, a self-loop
- * with no artifact behind it. */
+ * whether it's a tracked artifact worth pushing. The `ignored` predicate is built from that SAME
+ * canonical include/exclude config (`buildWatchIgnored`), so the watcher's scope can't drift from
+ * the walk's: excluded subtrees (`.glosa/**` — this daemon's own shadow-git checkpoints, A4 §F21,
+ * whose churn would otherwise self-loop the watcher — plus `node_modules`, `.git`, every dotdir)
+ * are never watched or descended into, and only glosa-supported artifact files are watched. Without
+ * this the watcher held live watches over the ENTIRE root (a real repo is thousands of dirs) — a
+ * multi-second watch-establishment and a permanent event firehose from files glosa never tracks.
+ *
+ * The `error` handler is load-bearing, not decoration: chokidar's `FSWatcher` is an `EventEmitter`,
+ * and an `error` event with NO listener throws — with no process-level `uncaughtException` handler
+ * in the daemon, that unhandled throw would take down the whole singleton daemon (every workspace
+ * with it). This watcher is advisory, so a watch error must be swallowed here, never propagated. */
 function startArtifactWatcher(workspace: WorkspaceTarget, onChange: (relPath: string) => void): FSWatcher {
   const root = workspaceWorktree(workspace);
   const watcher = watch(root, {
     ignoreInitial: true,
-    ignored: (path: string) => relative(root, path).split(sep)[0] === ".glosa",
+    ignored: buildWatchIgnored(root, loadMatcherConfig(root, workspaceBusPath(workspace))),
   });
   const handle = (absPath: string) => onChange(toRelPosixPath(root, absPath));
   watcher.on("add", handle).on("change", handle).on("unlink", handle);
+  watcher.on("error", () => {});
   return watcher;
 }
 

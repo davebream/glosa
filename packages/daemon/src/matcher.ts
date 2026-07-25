@@ -5,7 +5,7 @@
 // produces. Built on picomatch (zero-dep, fs-free — A4 §F20 sanctions it by name; pure JS, no
 // native addon).
 import { existsSync, lstatSync, readFileSync, readdirSync, type Stats } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import picomatch from "picomatch";
 import { workspaceBusPath, workspaceTracking, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
 
@@ -186,6 +186,47 @@ export function resolveMatchedFiles(
   skippedSymlinks.sort(byteCompare);
 
   return { tracked, oversize, skippedSymlinks };
+}
+
+/** Builds the chokidar `ignored` predicate for the artifact watcher (stream.ts) FROM the same
+ * canonical include/exclude config the walk uses — so the watcher's scope can't drift from
+ * `resolveMatchedFiles`' scope (the whole reason A4 §F20 forbids each consumer holding its own
+ * glob). Returns `true` for "don't watch / don't descend". Without this the watcher would crawl and
+ * hold live watches over the ENTIRE workspace root — `node_modules`, `.git`, every dotdir — which on
+ * a real repo is thousands of directories: a ~15s watch-establishment and a permanent event firehose
+ * from files glosa doesn't track. Mirrors the walk's pruning exactly:
+ *   - excluded subtrees (`.glosa/**`, `**‍/node_modules/**`, `.*​/**` — the last covers `.git` and
+ *     every other dotdir) are pruned whole: the dir itself and everything under it is ignored.
+ *   - a surviving directory is always descended into (returns false) — the include globs only ever
+ *     match FILES (`**‍/*.md`), so testing a dir path against them would wrongly hide it.
+ *   - a surviving regular file is watched only when it matches an include glob (a glosa artifact
+ *     extension); everything else is ignored.
+ * chokidar passes `stats` for entries it has already stat'd; when it hasn't yet (`stats` undefined),
+ * we DON'T ignore, so an unstat'd directory is still descended into and re-decided once stat'd. */
+export function buildWatchIgnored(
+  root: string,
+  config: MatcherConfig = loadMatcherConfig(root),
+): (absPath: string, stats?: Stats) => boolean {
+  const isIncluded = picomatch(config.artifacts.include, { nocase: false });
+  const isExcluded = picomatch(config.artifacts.exclude, { nocase: false });
+  const dirPrunePatterns = config.artifacts.exclude
+    .filter((g) => g.endsWith("/**"))
+    .map((g) => g.slice(0, -"/**".length));
+  const isPrunedDir = dirPrunePatterns.length > 0 ? picomatch(dirPrunePatterns, { nocase: false }) : () => false;
+
+  return (absPath, stats) => {
+    if (absPath === root) return false; // never ignore the watched root itself
+    const rel = toNfcPosixPath(
+      relative(root, absPath)
+        .split(sep)
+        .filter((s) => s.length > 0),
+    );
+    if (rel === "") return false;
+    if (isPrunedDir(rel) || isExcluded(rel)) return true; // excluded subtree — dir + everything under it
+    if (stats?.isDirectory()) return false; // surviving dir: descend (include globs match files, not dirs)
+    if (stats?.isFile()) return !isIncluded(rel); // surviving file: watch only supported artifact extensions
+    return false; // not yet stat'd — let chokidar descend/stat and re-decide
+  };
 }
 
 /** The one tracked-file resolver used by production consumers. Plain strings retain the legacy
