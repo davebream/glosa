@@ -352,31 +352,132 @@ button {
   gap: var(--space-2);
 }
 
-.glosa-tools,
-.glosa-tools-menu {
+/* Secondary actions live behind ONE quiet "More" trigger at every width (DESIGN.md's Preview
+   Boundary Rule): persistent chrome is artifact access, the mode switch, and More — nothing
+   else. History, conversation, attention, copy/print, appearance, and shortcuts are one press
+   away, never a flat row competing with the manuscript. */
+.glosa-tools {
   display: flex;
   align-items: center;
 }
 
-.glosa-tools-menu {
-  gap: var(--space-2);
-}
-
-.glosa-tools-copy-source,
-.glosa-tools-print {
-  padding: var(--space-1) var(--space-2);
+.glosa-tools-trigger {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
   border-radius: 6px;
   color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
-.glosa-tools-copy-source:hover,
-.glosa-tools-print:hover {
+.glosa-tools-trigger svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  fill: currentColor;
+}
+
+.glosa-tools-trigger:hover,
+.glosa-tools-trigger[aria-expanded="true"] {
   background: var(--surface-sunken);
   color: var(--ink);
 }
 
+/* Waiting attention entries surface as a dot on the trigger — the signal survives the collapse. */
+.glosa-tools:has(.glosa-attention-badge:not([hidden])) .glosa-tools-trigger::after {
+  content: "";
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.glosa-tools-menu {
+  display: none;
+  position: fixed;
+  z-index: var(--z-tray);
+  top: calc(var(--topbar-height) + var(--space-1));
+  right: var(--space-4);
+  width: 13rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+}
+
+.glosa-tools[data-open="true"] .glosa-tools-menu {
+  display: flex;
+}
+
+.glosa-tools-menu .glosa-attention,
+.glosa-tools-menu .glosa-appearance {
+  display: block;
+}
+
+.glosa-tools-menu .glosa-attention-trigger,
+.glosa-tools-menu .glosa-history-toggle,
+.glosa-tools-menu .glosa-conversation-toggle,
+.glosa-tools-menu .glosa-tools-copy-source,
+.glosa-tools-menu .glosa-tools-print,
+.glosa-tools-menu .glosa-shortcuts-toggle,
+.glosa-tools-menu .glosa-appearance-trigger {
+  width: 100%;
+  height: auto;
+  min-height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 6px;
+  text-align: left;
+  color: var(--muted);
+}
+
+.glosa-tools-menu .glosa-attention-trigger:hover,
+.glosa-tools-menu .glosa-history-toggle:hover,
+.glosa-tools-menu .glosa-conversation-toggle:hover,
+.glosa-tools-menu .glosa-tools-copy-source:hover,
+.glosa-tools-menu .glosa-tools-print:hover,
+.glosa-tools-menu .glosa-shortcuts-toggle:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-tools-menu .glosa-appearance {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.glosa-tools-menu .glosa-appearance-trigger-label {
+  display: inline;
+}
+
+/* The 44px halo is for the lone top-bar form of this trigger; inside a menu row it would
+   swallow clicks meant for the neighboring rows. */
+.glosa-tools-menu .glosa-appearance-trigger::before {
+  inset: 0;
+}
+
+.glosa-tools-menu .glosa-attention-badge {
+  margin-left: auto;
+}
+
 .glosa-tools-status {
   margin: 0;
+  padding: var(--space-2) var(--space-3);
   color: var(--muted);
   font-size: var(--text-xs);
 }
@@ -386,28 +487,15 @@ button {
   font-weight: 600;
 }
 
-.glosa-tools-trigger {
-  display: none;
-}
-
-.glosa-tools-trigger svg {
-  width: 1.125rem;
-  height: 1.125rem;
-  fill: currentColor;
-}
-
 .glosa-topbar-overlays {
   display: contents;
 }
 
-/* Appearance is the quiet utility at the far edge of the approved top bar. The trigger stays
-   icon-only; the native popover carries the full, explicit System / Light / Dark vocabulary. */
+/* Appearance lives inside the More menu as a labeled row; its native popover carries the full,
+   explicit System / Light / Dark vocabulary. */
 .glosa-appearance {
   display: flex;
   align-items: center;
-  margin-left: var(--space-1);
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--border);
 }
 
 .glosa-appearance-trigger {
@@ -567,7 +655,10 @@ button {
 }
 
 .glosa-history-toggle svg,
-.glosa-conversation-toggle svg {
+.glosa-conversation-toggle svg,
+.glosa-tools-copy-source svg,
+.glosa-tools-print svg,
+.glosa-shortcuts-toggle svg {
   width: 1rem;
   height: 1rem;
   flex: 0 0 auto;
@@ -2520,95 +2611,8 @@ button {
     padding-inline: var(--space-2);
   }
 
-  .glosa-tools-trigger {
-    position: relative;
-    width: 2rem;
-    height: 2rem;
-    display: grid;
-    place-items: center;
-    border-radius: 6px;
-    color: var(--muted);
-  }
-
-  .glosa-tools-trigger:hover,
-  .glosa-tools-trigger[aria-expanded="true"] {
-    background: var(--surface-sunken);
-    color: var(--ink);
-  }
-
-  .glosa-tools:has(.glosa-attention-badge:not([hidden])) .glosa-tools-trigger::after {
-    content: "";
-    position: absolute;
-    top: 0.2rem;
-    right: 0.2rem;
-    width: 0.4rem;
-    height: 0.4rem;
-    border: 1px solid var(--surface);
-    border-radius: 999px;
-    background: var(--primary);
-  }
-
   .glosa-tools-menu {
-    display: none;
-    position: fixed;
-    z-index: var(--z-tray);
-    top: calc(var(--topbar-height) + var(--space-1));
     right: var(--space-2);
-    width: 13rem;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
-    padding: var(--space-1);
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--surface);
-    box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
-  }
-
-  .glosa-tools[data-open="true"] .glosa-tools-menu {
-    display: flex;
-  }
-
-  .glosa-tools-menu .glosa-attention,
-  .glosa-tools-menu .glosa-appearance {
-    display: block;
-  }
-
-  .glosa-tools-menu .glosa-attention-trigger,
-  .glosa-tools-menu .glosa-history-toggle,
-  .glosa-tools-menu .glosa-conversation-toggle,
-  .glosa-tools-menu .glosa-tools-copy-source,
-  .glosa-tools-menu .glosa-tools-print,
-  .glosa-tools-menu .glosa-shortcuts-toggle,
-  .glosa-tools-menu .glosa-appearance-trigger {
-    width: 100%;
-    height: auto;
-    min-height: 2.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border-radius: 6px;
-    text-align: left;
-  }
-
-  .glosa-tools-menu .glosa-appearance {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .glosa-tools-menu .glosa-appearance-trigger-label {
-    display: inline;
-  }
-
-  .glosa-tools-menu .glosa-attention-badge {
-    margin-left: auto;
-  }
-
-  .glosa-tools-menu .glosa-tools-status {
-    padding: var(--space-2) var(--space-3);
   }
 
   .glosa-appearance-menu {

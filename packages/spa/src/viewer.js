@@ -201,22 +201,28 @@ export function mountApp(
   const shortcutsToggle = el("button", {
     className: "glosa-shortcuts-toggle",
     type: "button",
-    textContent: "Keyboard shortcuts",
+    "aria-label": "Keyboard shortcuts",
     "aria-expanded": "false",
     "aria-controls": "glosa-shortcuts",
   });
+  shortcutsToggle.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5.5" width="15" height="9.5" rx="1.5"/><path d="M5.5 8.5h.01M8.5 8.5h.01M11.5 8.5h.01M14.5 8.5h.01M6.5 12h7"/></svg><span>Keyboard shortcuts</span>';
   const copySourceButton = el("button", {
     className: "glosa-tools-copy-source",
     type: "button",
-    textContent: "Copy source",
+    "aria-label": "Copy source",
     hidden: true,
   });
+  copySourceButton.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5"/><path d="M4.5 12.5H4A1.5 1.5 0 0 1 2.5 11V4A1.5 1.5 0 0 1 4 2.5h7A1.5 1.5 0 0 1 12.5 4v.5"/></svg><span>Copy source</span>';
   const printArtifactButton = el("button", {
     className: "glosa-tools-print",
     type: "button",
-    textContent: "Print / Save as PDF",
+    "aria-label": "Print / Save as PDF",
     hidden: true,
   });
+  printArtifactButton.innerHTML =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 7.5v-4h8v4M6 14.5H4.5A1.5 1.5 0 0 1 3 13V9a1.5 1.5 0 0 1 1.5-1.5h11A1.5 1.5 0 0 1 17 9v4a1.5 1.5 0 0 1-1.5 1.5H14"/><rect x="6" y="12" width="8" height="5" rx="1"/></svg><span>Print / Save as PDF</span>';
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
   let toolsStatusArtifactPath = null;
   const stopAppearance = appearance
@@ -315,7 +321,10 @@ export function mountApp(
     setToolsOpen(tools.getAttribute("data-open") !== "true", { restoreFocus: true });
   });
   toolsMenu.addEventListener("click", (event) => {
-    if (event.target instanceof Element && event.target.closest(".glosa-history-toggle, .glosa-conversation-toggle")) {
+    if (
+      event.target instanceof Element &&
+      event.target.closest(".glosa-history-toggle, .glosa-conversation-toggle, .glosa-shortcuts-toggle")
+    ) {
       setToolsOpen(false, { restoreFocus: true });
     }
   });
