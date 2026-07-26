@@ -352,6 +352,51 @@ button {
   gap: var(--space-2);
 }
 
+/* issue #81 — the ambient wiring badge: honest state signal, Metadata typography, flat (no
+   elevation). Same category of persistent chrome as the connection banner — an admitted
+   exception to the Preview Boundary Rule's minimal-chrome list (see DESIGN.md). The leading ●
+   is part of the textContent; color carries state with the label as the primary channel. */
+.glosa-wiring-badge {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+}
+
+.glosa-wiring-badge[data-state="live"] {
+  color: var(--ok);
+}
+
+.glosa-wiring-badge[data-state="wired"] {
+  color: var(--warn);
+}
+
+.glosa-wiring-badge[data-state="unwired"] {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.glosa-wiring-badge[data-state="unwired"]:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.glosa-wiring-badge:disabled {
+  cursor: default;
+  opacity: 1; /* disabled here means "informational", not "unavailable" — keep full contrast */
+}
+
+/* Narrow widths: collapse to the dot alone; the full state stays in aria-label/title. */
+@media (max-width: 1023px) {
+  .glosa-wiring-badge {
+    max-width: 1.5em;
+    overflow: hidden;
+  }
+}
+
 /* Secondary actions live behind ONE quiet "More" trigger at every width (DESIGN.md's Preview
    Boundary Rule): persistent chrome is artifact access, the mode switch, and More — nothing
    else. History, conversation, attention, copy/print, appearance, and shortcuts are one press

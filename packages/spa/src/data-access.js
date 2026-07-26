@@ -333,6 +333,19 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify(record),
       });
     },
+    /** `GET /w/:slug/wiring` (A1 §5.18, authed read) — the 3-state delivery-wiring signal the
+     * topbar badge renders: `live` (delivery reaches a session) / `wired` (init installed, no
+     * bound session) / `unwired` (init never ran), plus `pending_count`. 404 against a daemon
+     * that predates contract 1.4 — callers hide the badge on any failure. */
+    getWiringStatus(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/wiring`);
+    },
+    /** `POST /w/:slug/init` (A1 §5.19, state-changing) — the consent-gated init trigger: runs
+     * `glosa init` daemon-side for a directory workspace AFTER the user's explicit dialog click.
+     * 409 carries the child's conflict code+hint; 400 for loose-file workspaces. */
+    triggerInit(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/init`, { method: "POST" });
+    },
     /** `POST /w/:slug/annotations/:id/withdraw` — terminal `rejected` transition (never a delete;
      * the journal is append-only). 409 once the entry is already terminal. */
     withdrawAnnotation(slug, id) {
