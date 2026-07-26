@@ -11,7 +11,7 @@ import {
   tokenPath,
 } from "../../daemon/src/index.ts";
 import { join } from "node:path";
-import { checkManifestDrift } from "./init.ts";
+import { checkScopedManifestDrift } from "./scoped-init.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
@@ -191,19 +191,33 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   }
 
   // 9. hooks (manifest hash match / drift)
-  const { manifest, drifted } = checkManifestDrift(dir);
+  const { manifest, manifests, drifted } = checkScopedManifestDrift(dir, { glosaHomeDir: deps.glosaHome() });
   if (!manifest) {
     checks.push(check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"));
   } else if (drifted.length > 0) {
     checks.push(check("hooks", "fail", `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``));
   } else {
-    checks.push(check("hooks", "pass", "hooks manifest matches what glosa init installed"));
+    const installed = manifests.flatMap((item) =>
+      Object.keys(item.providers).map((provider) => `${provider} (${item.scope})`),
+    );
+    checks.push(check("hooks", "pass", `hooks manifest matches: ${installed.join(", ")}`));
   }
 
-  // 10. mcp (.mcp.json has the glosa entry)
+  // 10. MCP follows the effective scoped/provider manifest rather than assuming workspace Claude.
+  const hasOwnedMcp = manifests.some((item) =>
+    Object.values(item.providers).some((provider) => provider?.files.mcp !== undefined),
+  );
+  const ownedMcpPaths = manifests.flatMap((item) =>
+    Object.values(item.providers)
+      .map((provider) => provider?.files.mcp?.path)
+      .filter((path): path is string => typeof path === "string"),
+  );
+  const mcpDrifted = drifted.some((detail) => ownedMcpPaths.some((path) => detail.startsWith(path)));
   const mcpPath = join(dir, ".mcp.json");
-  if (!existsSync(mcpPath)) {
-    checks.push(check("mcp", "warn", `${mcpPath} does not exist — run \`glosa init\``));
+  if (hasOwnedMcp && manifest) {
+    checks.push(check("mcp", mcpDrifted ? "fail" : "pass", `configured through ${manifests.length} scoped manifest(s)`));
+  } else if (!existsSync(mcpPath)) {
+    checks.push(check("mcp", "warn", "no provider MCP integration is installed — run `glosa init`"));
   } else {
     try {
       const parsed = JSON.parse(readFileSync(mcpPath, "utf8"));

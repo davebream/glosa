@@ -23,6 +23,16 @@ export type {
   SessionBinding,
 } from "./agent-provider/interface.ts";
 export { AgentProviderRegistry, recordDelivery } from "./agent-provider/interface.ts";
+export type {
+  DesiredInstallHook,
+  InitScope,
+  InstallBin,
+  InstallRoots,
+  ProviderDetectionDeps,
+  ProviderId,
+  ProviderInstallDescriptor,
+  ProviderInstallTarget,
+} from "./agent-provider/install.ts";
 export { SessionPushRegistry } from "./agent-provider/push-registry.ts";
 export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./auth.ts";
 export { authorizeRequest, isForeignOrigin } from "./auth.ts";

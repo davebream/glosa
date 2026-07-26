@@ -20,13 +20,17 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
-import { CLI_VERSION } from "./version.ts";
+import type {
+  DesiredInstallHook,
+  ProviderInstallDescriptor,
+} from "../../daemon/src/index.ts";
+import { claudeCodeInstallDescriptor } from "../../providers/claude-code/src/index.ts";
+import { codexInstallDescriptor } from "../../providers/codex/src/index.ts";
 
 export { CLI_VERSION } from "./version.ts";
 
@@ -76,10 +80,6 @@ export function defaultResolveGlosaBin(glosaRoot: string): GlosaBinResolution {
   return fallback;
 }
 
-function binCommandString(bin: GlosaBinResolution, ...extraArgs: string[]): string {
-  return [bin.command, ...bin.args, ...extraArgs].join(" ");
-}
-
 /** F06 LOCKED — never `--channels`. */
 export const CHANNEL_COMMAND = "claude --dangerously-load-development-channels server:glosa";
 
@@ -95,7 +95,7 @@ function detectIndent(raw: string): string {
   return m ? (m[1] as string) : "  ";
 }
 
-interface ParsedFile {
+export interface ParsedFile {
   obj: Json;
   raw: string | null; // null = file didn't exist
   indent: string;
@@ -106,7 +106,7 @@ export interface InvalidJsonError extends Error {
   path: string;
 }
 
-function parseJsonFile(path: string): ParsedFile {
+export function parseJsonFile(path: string): ParsedFile {
   if (!existsSync(path)) return { obj: {}, raw: null, indent: "  " };
   const raw = readFileSync(path, "utf8");
   try {
@@ -131,7 +131,7 @@ function resolvePointer(root: Json, pointer: string): { found: true; value: Json
   return { found: true, value: cur };
 }
 
-function sha256Of(node: Json): string {
+export function sha256Of(node: Json): string {
   return createHash("sha256").update(JSON.stringify(node)).digest("hex");
 }
 
@@ -147,7 +147,7 @@ function sha256Of(node: Json): string {
  * permission tricks, which are unreliable when the test runner itself has root. */
 export type WriteFileAtomic = (path: string, content: string) => void;
 
-function writeAtomic(path: string, content: string): void {
+export function writeAtomic(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmpPath = join(dirname(path), `.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
   const fd = openSync(tmpPath, "w");
@@ -168,7 +168,7 @@ function writeAtomic(path: string, content: string): void {
   }
 }
 
-function writeJsonAtomic(path: string, obj: Json, indent: string, write: WriteFileAtomic = writeAtomic): void {
+export function writeJsonAtomic(path: string, obj: Json, indent: string, write: WriteFileAtomic = writeAtomic): void {
   write(path, `${JSON.stringify(obj, null, indent)}\n`);
 }
 
@@ -191,7 +191,7 @@ function backupsFor(path: string): string[] {
  * newest backup already on record (A6 §F26: "skip if identical to newest"). Prunes down to the 5
  * most recent afterward. Returns `null` only when there was nothing on disk to back up (a file
  * glosa is about to CREATE for the first time has no "before" state). */
-function takeBackup(path: string, currentContent: string, now: Date, write: WriteFileAtomic = writeAtomic): string | null {
+export function takeBackup(path: string, currentContent: string, now: Date, write: WriteFileAtomic = writeAtomic): string | null {
   const existing = backupsFor(path);
   const newest = existing[existing.length - 1];
   if (newest !== undefined && readFileSync(newest, "utf8") === currentContent) return newest;
@@ -213,55 +213,22 @@ function takeBackup(path: string, currentContent: string, now: Date, write: Writ
 // The desired hook/MCP shape (A6 §F26's exact hook entries + matchers).
 // ---------------------------------------------------------------------------------------------
 
-interface DesiredHook {
-  event: string;
-  matcher?: string;
-  /** The stable identity a hook is recognized/reconciled BY — one of the literal `glosa hook
-   * <role>` suffixes (session-start/rewake-watch/session-end/user-prompt-submit/stop/
-   * notification). Never derived from `command` at read time (that would defeat the whole point
-   * — `command` is exactly what CHANGES across a GLOSA_BIN swap). */
-  role: string;
-  command: string;
-  timeout?: number;
-  asyncRewake?: boolean;
+function hooksFromDescriptor(
+  descriptor: ProviderInstallDescriptor,
+  bin: GlosaBinResolution,
+): DesiredInstallHook[] {
+  const target = descriptor
+    .targets("workspace", { workspace: "/", home: "/", glosaHome: "/" }, bin)
+    .find((item) => item.kind === "hooks-json");
+  return target?.kind === "hooks-json" ? target.hooks : [];
 }
 
-function desiredHooks(bin: GlosaBinResolution): DesiredHook[] {
-  const SESSION_START_MATCHER = "startup|resume|clear|compact";
-  return [
-    {
-      event: "SessionStart",
-      matcher: SESSION_START_MATCHER,
-      role: "session-start",
-      command: binCommandString(bin, "hook", "session-start"),
-      timeout: 10,
-    },
-    {
-      event: "SessionStart",
-      matcher: SESSION_START_MATCHER,
-      role: "rewake-watch",
-      command: binCommandString(bin, "hook", "rewake-watch"),
-      asyncRewake: true,
-    },
-    { event: "SessionEnd", role: "session-end", command: binCommandString(bin, "hook", "session-end"), timeout: 5 },
-    { event: "UserPromptSubmit", role: "user-prompt-submit", command: binCommandString(bin, "hook", "user-prompt-submit"), timeout: 10 },
-    { event: "Stop", role: "stop", command: binCommandString(bin, "hook", "stop"), timeout: 10 },
-    { event: "Notification", role: "notification", command: binCommandString(bin, "hook", "notification"), timeout: 5 },
-  ];
+function desiredHooks(bin: GlosaBinResolution): DesiredInstallHook[] {
+  return hooksFromDescriptor(claudeCodeInstallDescriptor, bin);
 }
 
-function desiredCodexHooks(bin: GlosaBinResolution): DesiredHook[] {
-  return [
-    { event: "SessionStart", role: "session-start", command: binCommandString(bin, "hook", "session-start", "--provider", "codex"), timeout: 10 },
-    { event: "SessionEnd", role: "session-end", command: binCommandString(bin, "hook", "session-end", "--provider", "codex"), timeout: 5 },
-    {
-      event: "UserPromptSubmit",
-      role: "user-prompt-submit",
-      command: binCommandString(bin, "hook", "user-prompt-submit", "--provider", "codex"),
-      timeout: 10,
-    },
-    { event: "Stop", role: "stop", command: binCommandString(bin, "hook", "stop", "--provider", "codex"), timeout: 10 },
-  ];
+function desiredCodexHooks(bin: GlosaBinResolution): DesiredInstallHook[] {
+  return hooksFromDescriptor(codexInstallDescriptor, bin);
 }
 
 /** A6 §F26's in-band ownership signature — EXTENDED (P4.3 review fix) to recognize legacy bare
@@ -271,7 +238,8 @@ function desiredCodexHooks(bin: GlosaBinResolution): DesiredHook[] {
  * deliberate — this is what lets a REINSTALL at a different glosaRoot still recognize its own
  * prior hooks. Returns the recognized `<role>` suffix, or `null` for anything else (a foreign
  * tool's command never matches either form). */
-const HOOK_ROLE_RE = /^(?:(?:\S*\/)?glosa hook (\S+)|(?:\S*\/)?bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))(?: --provider codex)?$/;
+const HOOK_ROLE_RE =
+  /^(?:(?:\S*\/)?glosa hook (\S+)|(?:\S*\/)?bun run --silent \S*packages\/cli\/src\/main\.ts hook (\S+))(?: --provider \S+)?$/;
 
 function hookRoleOf(command: unknown): string | null {
   if (typeof command !== "string") return null;
@@ -303,7 +271,7 @@ interface MergeResult {
  * yet). Any hook whose command does NOT match glosa's in-band signature is never inspected beyond
  * that one `hookRoleOf` check, so a foreign sibling — even sitting in the same matcher-group — is
  * never at risk of being read as ours or mutated. */
-function mergeSettingsHooks(root: Json, hooks: DesiredHook[]): MergeResult {
+export function mergeSettingsHooks(root: Json, hooks: DesiredInstallHook[]): MergeResult {
   const inserted: InsertedNode[] = [];
   let changed = false;
   root.hooks ??= {};
@@ -378,7 +346,7 @@ interface McpMergeResult extends MergeResult {
 /** Idempotent-by-key insert. `owned` (from the manifest, not the file itself — files carry no
  * marker) is what lets a repeat init recognize "this `glosa` entry is ours, safe to reconcile"
  * versus "someone else's `glosa`-named server, don't touch it without `--force`" (A6 §F26). */
-function mergeMcp(root: Json, bin: GlosaBinResolution, opts: { force: boolean; owned: boolean }): McpMergeResult {
+export function mergeMcp(root: Json, bin: GlosaBinResolution, opts: { force: boolean; owned: boolean }): McpMergeResult {
   root.mcpServers ??= {};
   const servers = root.mcpServers as Json;
   const desired = desiredMcpEntry(bin);
@@ -607,7 +575,7 @@ function unifiedDiff(path: string, before: string | null, after: string): string
   const header = `--- ${before === null ? "/dev/null" : path}\n+++ ${path}\n`;
   const removed = beforeLines.map((l) => `-${l}`).join("\n");
   const added = afterLines.map((l) => `+${l}`).join("\n");
-  return header + (removed.length > 0 ? `${removed}\n` : "") + `${added}\n`;
+  return `${header + (removed.length > 0 ? `${removed}\n` : "")}${added}\n`;
 }
 
 /** The exported entry point — just the whole-transaction lock (P4.3 concurrency review fix #6)
