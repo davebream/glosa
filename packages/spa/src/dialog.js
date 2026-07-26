@@ -15,6 +15,66 @@ let dialogId = 0;
  * @param {{title: string, body?: string, confirmLabel?: string, danger?: boolean}} opts
  * @returns {Promise<boolean>}
  */
+/**
+ * Single-button informational variant of confirmDialog (issue #81) — for telling, not asking:
+ * a mandatory Cancel next to pure information reads wrong. Same native <dialog> + window.alert
+ * fallback scaffolding; resolves when dismissed (button, Esc, or backdrop).
+ *
+ * @param {{title: string, body?: string, dismissLabel?: string}} opts
+ * @returns {Promise<void>}
+ */
+export function noticeDialog({ title, body, dismissLabel = "Got it" }) {
+  const dialog = document.createElement("dialog");
+  if (typeof dialog.showModal !== "function") {
+    if (typeof window !== "undefined" && window.alert) window.alert(body ? `${title}\n\n${body}` : title);
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const id = `glosa-dialog-${++dialogId}`;
+    dialog.className = "glosa-dialog";
+    const heading = document.createElement("h2");
+    heading.id = `${id}-title`;
+    heading.textContent = title;
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.append(heading);
+    if (body) {
+      const p = document.createElement("p");
+      p.id = `${id}-description`;
+      p.textContent = body;
+      dialog.setAttribute("aria-describedby", p.id);
+      dialog.append(p);
+    }
+    const actions = document.createElement("div");
+    actions.className = "glosa-dialog-actions";
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "glosa-save";
+    dismiss.textContent = dismissLabel;
+    dismiss.addEventListener("click", () => dialog.close("dismiss"));
+    actions.append(dismiss);
+    dialog.append(actions);
+
+    dialog.addEventListener("click", (e) => {
+      if (e.target === dialog) dialog.close("dismiss");
+    });
+    dialog.addEventListener("close", () => {
+      resolve();
+      dialog.remove();
+      queueMicrotask(() => {
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+          previousFocus.focus({ preventScroll: true });
+        }
+      });
+    });
+
+    document.body.append(dialog);
+    dialog.showModal();
+    dismiss.focus();
+  });
+}
+
 export function confirmDialog({ title, body, confirmLabel = "Continue", danger = false }) {
   const dialog = document.createElement("dialog");
   if (typeof dialog.showModal !== "function") {
