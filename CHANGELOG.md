@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-07-26
+
 ### Added
 
 - The workbench top bar now shows an ambient wiring badge: `Live → session` when annotations
@@ -31,8 +33,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Workspace garbage collection can no longer remove a registration whose bus still holds pending
   (undelivered) entries — parked annotations now block removal indefinitely, and an unreadable
   journal counts as pending rather than removable. `glosa forget` remains an explicit override.
-
-### Added
 
 - `GET /api/status` reports `orphaned_state`: home-state buses (`~/.glosa/state/<id>`) holding
   pending entries with no live registration. `glosa doctor` gained matching `pending-delivery`
@@ -136,7 +136,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.5...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.3...v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
