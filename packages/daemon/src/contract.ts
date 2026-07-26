@@ -8,8 +8,10 @@ import { parseProtocolVersion } from "./protocol.ts";
 
 /** `contract_version` in the handshake body and the version `X-Contract-Version` is compared
  * against. API v1.3 adds artifact-scoped approval requests and revision-bound verdicts without changing
- * daemon lifecycle compatibility, so this is deliberately independent of `PROTOCOL_VERSION`. */
-export const CONTRACT_VERSION = "1.3";
+ * daemon lifecycle compatibility, so this is deliberately independent of `PROTOCOL_VERSION`.
+ * v1.4 (issue #80) additively adds `GET /w/:slug/wiring`, `POST /w/:slug/init`, and the
+ * `wiring`/`orphaned_state` fields on `GET /api/status` — N/N-1 safe per A1 §3. */
+export const CONTRACT_VERSION = "1.4";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

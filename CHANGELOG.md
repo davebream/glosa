@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The workbench top bar now shows an ambient wiring badge: `Live → session` when annotations
+  will be delivered, `Wired — no session bound` when the integration is installed but no session
+  is listening (restart/resume needed), and `Off — annotations stay local` when `glosa init`
+  never ran — with a queued-entry count when work is waiting. The badge stays hidden until the
+  state is actually observed and never claims a connection it hasn't seen.
+- The first annotation in an un-wired workspace offers to set up agent feedback in place: one
+  explicit click runs `glosa init` through the daemon and a follow-up notice states the remaining
+  restart/resume step. Declining — or the setup failing — never blocks the annotation: it is
+  saved locally either way, and the fallback notice shows the terminal command.
+
+- Per-workspace wiring status API (`GET /w/:slug/wiring`): a three-state signal — `live`
+  (delivery would reach a session), `wired` (init installed, restart/resume needed), `unwired`
+  (init never ran) — plus pending-entry count, with the same value surfaced on `GET /api/status`.
+- Consent-gated init trigger (`POST /w/:slug/init`): on an explicit client request the daemon
+  runs `glosa init` for a registered directory workspace (CSRF-protected state-changing route;
+  scrubbed child env, 30s timeout, single-flighted per workspace) and reports whether a session
+  restart is still required. API contract bumped to 1.4 (additive).
+
 ### Fixed
 
 - Workspace garbage collection can no longer remove a registration whose bus still holds pending

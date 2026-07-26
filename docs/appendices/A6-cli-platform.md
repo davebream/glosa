@@ -13,7 +13,9 @@
   bypass; see the command-surface row) — configuration is only ever written after an explicit yes.
   Preview-only `glosa_present` is likewise init-free and session-independent. Annotate/Edit remain
   usable as local UI acts without init; when no delivery integration is available the SPA may show
-  a non-blocking setup action, but it never performs configuration writes itself.
+  a non-blocking setup action, but it never performs configuration writes itself — on the user's
+  explicit consent it asks the daemon, which invokes `glosa init <dir> --json` as a child
+  (A1 §5.19, directory workspaces only; env scrubbed, timeout-bounded, single-flighted).
 - **Scope.** `--scope workspace|user` is explicit and defaults to `workspace`.
   `workspace` writes provider project configuration under `<ws>`; `user` writes provider user
   configuration and is available across workspaces. User scope is never inferred because its hooks

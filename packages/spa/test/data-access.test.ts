@@ -143,6 +143,27 @@ describe("createDataAccess — request shape", () => {
     });
   });
 
+  test("wiring reads and the init trigger stay inside the single data-access module (issue #81)", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchFn = async (path: string, init?: RequestInit) => {
+      calls.push([path, init]);
+      if (path.endsWith("/wiring")) return jsonResponse(200, { state: "wired", pending_count: 0 });
+      return jsonResponse(200, { ok: true, restart_required: true });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage({ glosa_token: "tok-w" }) });
+
+    const wiring = await da.getWiringStatus("ws slug");
+    expect(wiring).toEqual({ state: "wired", pending_count: 0 });
+    expect(calls[0]![0]).toBe("/w/ws%20slug/wiring");
+    expect(new Headers(calls[0]![1]?.headers).get("Authorization")).toBe("Bearer tok-w");
+
+    const triggered = await da.triggerInit("ws slug");
+    expect(triggered).toEqual({ ok: true, restart_required: true });
+    expect(calls[1]![0]).toBe("/w/ws%20slug/init");
+    expect(calls[1]![1]?.method).toBe("POST");
+    expect(new Headers(calls[1]![1]?.headers).get("Authorization")).toBe("Bearer tok-w");
+  });
+
   test("putArtifact PUTs the content with an If-Match header when given", async () => {
     let captured: { path: string; init: RequestInit } | null = null;
     const fetchFn = async (path: string, init: RequestInit) => {

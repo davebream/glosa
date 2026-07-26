@@ -500,6 +500,10 @@ function defaultGlosaRoot(): string {
   return join(dirname(new URL(import.meta.url).pathname), "..", "..", "..");
 }
 
+// NOTE: the manifest path literal below (`.claude/.glosa-init.json`) is duplicated by the
+// daemon's read-only probe (packages/daemon/src/init-probe.ts) — the daemon cannot import this
+// module (dependency direction is cli→daemon). Both packages pin the literal with a test; change
+// one and the other's test fails.
 function paths(dir: string) {
   const claudeDir = join(dir, ".claude");
   const codexDir = join(dir, ".codex");

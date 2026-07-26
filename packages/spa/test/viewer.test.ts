@@ -178,6 +178,16 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       openTranscriptStream: () => () => {}, // returns a no-op stop()
       sendComposerMessage: async () => ({ accepted: true, delivered: false }),
       getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
+      // issue #81 — the wiring badge's data-access surface. Default "wired" keeps every
+      // pre-existing test dialog-free; badge-specific tests override per case.
+      getWiringStatus: async () => ({
+        state: "wired",
+        init: { manifest_present: true, manifest_invalid: false },
+        sessions: { bound_live: 0, routable_live: 0 },
+        pending_count: 0,
+        kind: "directory",
+      }),
+      triggerInit: async () => ({ ok: true, changed: true, warnings: [], restart_required: true }),
       ...overrides,
     };
   }
@@ -747,5 +757,183 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map((el) => (el as any).dataset.mode);
     expect(modes).toEqual(["preview"]);
     expect(root.getAttribute("data-mode")).toBe("preview");
+  });
+
+  // --- issue #81: the wiring badge + point-of-action init consent dialog ---
+
+  const flush = async (n = 8) => {
+    for (let i = 0; i < n; i++) await Promise.resolve();
+  };
+
+  function wiringOf(state: string, extra: Record<string, unknown> = {}) {
+    return async () => ({
+      state,
+      init: { manifest_present: state !== "unwired", manifest_invalid: false },
+      sessions: { bound_live: state === "live" ? 1 : 0, routable_live: state === "live" ? 1 : 0 },
+      pending_count: 0,
+      kind: "directory",
+      ...extra,
+    });
+  }
+
+  test("badge renders each observed state; hidden until first success and on failure (never green unobserved)", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let response: (() => Promise<unknown>) | null = null; // null = reject
+    const da = fakeDataAccess({
+      getWiringStatus: async () => {
+        if (!response) throw new Error("no route (pre-1.4 daemon)");
+        return response();
+      },
+    });
+    mountApp(root, { dataAccess: da });
+    await flush();
+
+    // Fetch failing (old daemon) -> badge hidden, nothing claimed.
+    const badge = root.querySelector(".glosa-wiring-badge") as any;
+    expect(badge.hidden).toBe(true);
+
+    // The stream's journal frame triggers a refetch — now observing "unwired".
+    response = wiringOf("unwired");
+    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
+    await flush();
+    expect(badge.hidden).toBe(false);
+    expect(badge.getAttribute("data-state")).toBe("unwired");
+    expect(badge.textContent).toContain("Off — annotations stay local");
+    expect(badge.disabled).toBe(false); // Off is the one actionable state
+
+    response = wiringOf("wired", { pending_count: 2 });
+    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
+    await flush();
+    expect(badge.getAttribute("data-state")).toBe("wired");
+    expect(badge.textContent).toContain("Wired — no session bound");
+    expect(badge.textContent).toContain("2 queued");
+    expect(badge.disabled).toBe(true);
+
+    response = wiringOf("live");
+    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
+    await flush();
+    expect(badge.getAttribute("data-state")).toBe("live");
+    expect(badge.textContent).toContain("Live → session");
+
+    // A later failure resets to hidden — the badge never keeps a stale green claim.
+    response = null;
+    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
+    await flush();
+    expect(badge.hidden).toBe(true);
+  });
+
+  /** Mounts, opens notes.md, enters Annotate, selects "Title", types a note, clicks send.
+   * Returns the root — callers then interact with whatever dialog the submit produced. */
+  async function driveAnnotationSubmit(da: ReturnType<typeof fakeDataAccess>) {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: da });
+    await flush();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    await flush();
+    (root.querySelector('[data-mode="annotate"]') as any).click();
+
+    const content = root.querySelector(".glosa-content")!;
+    const textNode = content.querySelector("h1")!.firstChild!;
+    const range = dom.document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 5);
+    const selection = dom.window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
+    await flush();
+
+    const composerInput = root.querySelector(".glosa-composer-input") as any;
+    composerInput.value = "tighten this";
+    (root.querySelector(".glosa-composer-send") as any).click();
+    await flush();
+    return root;
+  }
+
+  test("first annotation in an unwired workspace offers wiring; DECLINING never blocks the save; asked once per workspace", async () => {
+    const da = fakeDataAccess({ getWiringStatus: wiringOf("unwired") });
+    const root = await driveAnnotationSubmit(da);
+
+    const dialog = dom.document.querySelector(".glosa-dialog h2");
+    expect(dialog?.textContent).toBe("This workspace isn't wired for agent feedback");
+    (dom.document.querySelector(".glosa-dialog .glosa-btn-ghost") as any).click(); // Cancel
+    await flush();
+    expect((da as any).posted).toHaveLength(1); // the save happened regardless
+
+    // Second annotation, same workspace + session -> no second dialog.
+    (root.querySelector('[data-mode="annotate"]') as any).click();
+    const content = root.querySelector(".glosa-content")!;
+    const textNode = content.querySelector("h1")!.firstChild!;
+    const range = dom.document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 5);
+    const selection = dom.window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
+    await flush();
+    (root.querySelector(".glosa-composer-input") as any).value = "again";
+    (root.querySelector(".glosa-composer-send") as any).click();
+    await flush();
+    expect(dom.document.querySelector(".glosa-dialog")).toBeNull();
+    expect((da as any).posted).toHaveLength(2);
+  });
+
+  test("ACCEPTING wires via triggerInit and shows the restart notice; save still proceeds", async () => {
+    const triggered: string[] = [];
+    const da = fakeDataAccess({
+      getWiringStatus: wiringOf("unwired"),
+      triggerInit: async (slug: string) => {
+        triggered.push(slug);
+        return { ok: true, changed: true, warnings: [], restart_required: true };
+      },
+    });
+    await driveAnnotationSubmit(da);
+
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Wire it now"
+    await flush();
+    expect(triggered).toEqual(["ws-1"]);
+    const notice = dom.document.querySelector(".glosa-dialog h2");
+    expect(notice?.textContent).toBe("Wired — one step left");
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Got it"
+    await flush();
+    expect((da as any).posted).toHaveLength(1);
+  });
+
+  test("triggerInit FAILING falls back to the terminal command notice; save still proceeds", async () => {
+    const da = fakeDataAccess({
+      getWiringStatus: wiringOf("unwired"),
+      triggerInit: async () => {
+        throw new Error("init child timed out");
+      },
+    });
+    await driveAnnotationSubmit(da);
+
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Wire it now"
+    await flush();
+    const notice = dom.document.querySelector(".glosa-dialog h2");
+    expect(notice?.textContent).toBe("Couldn't set up agent feedback");
+    expect(dom.document.querySelector(".glosa-dialog p")?.textContent).toContain("glosa init");
+    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click();
+    await flush();
+    expect((da as any).posted).toHaveLength(1);
+  });
+
+  test("wired and live workspaces never prompt; unknown wiring never prompts", async () => {
+    for (const getWiringStatus of [
+      wiringOf("wired"),
+      wiringOf("live"),
+      async () => {
+        throw new Error("no route");
+      },
+    ]) {
+      const da = fakeDataAccess({ getWiringStatus });
+      await driveAnnotationSubmit(da);
+      expect(dom.document.querySelector(".glosa-dialog")).toBeNull();
+      expect((da as any).posted).toHaveLength(1);
+      dom.document.body.textContent = ""; // clean mount root between iterations
+    }
   });
 });
