@@ -30,7 +30,7 @@
   new directory state atomically by same-filesystem rename. The index lifecycle is
   `active → adopting → adopted`; a source is never made writable again, and a restart resumes the
   same plan rather than beginning a second migration.
-- GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND present:false ≥ grace (or `glosa forget <slug>`). Conservative.
+- GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND the registration's bus holds zero journal-derived pending entries AND present:false ≥ grace (or `glosa forget <slug>`, which stays forceful). Conservative on every axis: an unreadable journal counts as "has pending" — never remove on uncertainty. Deterministic registration ids (sha256 of kind+canonical path) make same-path re-open reclaim a surviving home-redirected bus, so parked entries in `~/.glosa/state/<id>` outlive an accidental removal; `GET /api/status` additionally reports `orphaned_state` (state dirs with pending entries and no registration) so doctor can surface them.
 
 ## F23 — inbox/attention lifecycle
 - Inbox files **immutable**; status field frozen `pending`, non-authoritative. **Authoritative status = journal replay fold** (overrides R3's cross-file rewrite per F04). `resolve` appends ONE journal line, never rewrites the entry.

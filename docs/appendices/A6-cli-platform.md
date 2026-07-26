@@ -223,7 +223,7 @@
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>]` | explicitly bind a registered session to the artifact workspace | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
-| `doctor` | `[dir] --json` | 13 enumerated checks | 0(warns ok);9 any FAIL;5 |
+| `doctor` | `[dir] --json` | 15 enumerated checks | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
@@ -239,7 +239,7 @@
   but is not hard-blocked.
 - Preview lock is an **affordance expressing intent ("not for review")**, not access control: the
   annotation API continues to accept authenticated POSTs for the artifact.
-- doctor 13 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
+- doctor 15 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), pending-delivery(WARN when entries are queued for this workspace but the hooks check is not passing; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
 
 ## Metadata and binding output
 

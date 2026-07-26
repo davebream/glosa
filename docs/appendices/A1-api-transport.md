@@ -111,6 +111,14 @@ No POST route to create workspaces in v1 — workspace creation is CLI-only (`gl
 R8); the registry is read-only from the SPA's perspective. (If a future need arises to open a
 new workspace from the SPA, that's an additive route — not required for v1.)
 
+### 5.2b `GET /api/status`
+Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
+`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention}], sessions:[…],
+orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive, issue #79) lists
+`~/.glosa/state/<id>` buses whose journal still derives pending entries but whose registration is
+gone — stranded user work recoverable by re-opening the original path (deterministic registration
+ids reclaim the surviving bus). A scan failure degrades to `[]`; the route never fails over it.
+
 ### 5.3 `GET /w/:slug/artifacts`
 Bearer required. Sidebar listing, natural-sort order in the no-adapter case (adapter pack may
 reorder, R7).

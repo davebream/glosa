@@ -26,6 +26,7 @@ import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fsyncContainingDir } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
+import { peekJournalAt, pendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../home.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceKind, WorkspaceLocation, WorkspaceTracking } from "../workspace.ts";
@@ -288,6 +289,15 @@ export interface WorkspaceIndexDeps {
    * for the snippet — so a hard-removed workspace's open `WorkspaceBus` (journal fd, mutex slot,
    * in-memory state) is evicted in step, not leaked. */
   onHardRemove?: (canonicalPath: string) => void | Promise<void>;
+  /** Does this registration's bus still hold journal-derived pending (non-terminal) entries?
+   * Consulted only by GC's hard-remove check (issue #79): parked user work — e.g. annotations
+   * created in a workspace that was never `glosa init`'d, waiting for delivery — must never be
+   * erased just because the workspace path went missing. This matters most for home-redirected
+   * buses (`~/.glosa/state/<id>`), where removing the registration orphans the bus with the work
+   * still inside. Defaults to a read-only journal fold (`bus/peek.ts`) against the entry's own
+   * `bus_path`; ANY fold failure counts as "has pending" — fail-safe, never remove on
+   * uncertainty. `forget()` deliberately bypasses this (explicit user command stays forceful). */
+  hasPendingWork?: (entry: WorkspaceEntry) => boolean;
   slug?: SlugDeps;
 }
 
@@ -307,6 +317,7 @@ export class WorkspaceIndex {
   private readonly canCreateLocalBus: (canonicalPath: string) => boolean;
   private readonly slugDeps: SlugDeps;
   private hasLiveSession: (canonicalPath: string) => boolean;
+  private readonly hasPendingWork: (entry: WorkspaceEntry) => boolean;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
   // default `() => false` predicate is indistinguishable from "genuinely wired to say never" once
@@ -338,6 +349,15 @@ export class WorkspaceIndex {
         }
       });
     this.onHardRemove = deps.onHardRemove ?? (() => {});
+    this.hasPendingWork =
+      deps.hasPendingWork ??
+      ((entry) => {
+        try {
+          return pendingCount(peekJournalAt(entry.bus_path).state) > 0;
+        } catch {
+          return true; // fail-safe: an unreadable journal is treated as "work still parked here"
+        }
+      });
     this.slugDeps = deps.slug ?? {};
   }
 
@@ -986,6 +1006,7 @@ export class WorkspaceIndex {
 
         if (!this.liveSessionPredicateWired) continue; // unwired -> conservative, soft-delete only (see gc()'s docstring)
         if (this.hasLiveSession(canonicalPath)) continue; // conservative: never remove under a live session
+        if (this.hasPendingWork(entry)) continue; // conservative: parked entries block removal indefinitely (issue #79); re-examined every pass, normal grace logic resumes once they reach a terminal status
         const absentSince = entry.absent_since ? new Date(entry.absent_since).getTime() : now.getTime();
         if (now.getTime() - absentSince >= this.gcGraceMs) {
           delete index.workspaces[registrationId];
