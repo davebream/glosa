@@ -5,9 +5,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { printOpenResult, runOpen, type OpenDeps } from "../src/open.ts";
+import type { InitResult, OwnershipManifest } from "../src/init.ts";
+import { maybeOfferInit, printOpenResult, runOpen, type OpenDeps } from "../src/open.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
-import { captureStdout } from "./test-utils.ts";
+import { captureStderr, captureStdout } from "./test-utils.ts";
+
+/** A "wired" drift result so existing cases stay warning-free by default. */
+const WIRED = { manifest: {} as OwnershipManifest, drifted: [] as string[] };
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -36,6 +40,7 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
     dirExists: () => true,
     fileExists: () => false,
     isRegularFile: () => false,
+    checkManifestDrift: () => WIRED,
     ...overrides,
   };
   return { deps, client, browserCalls };
@@ -319,5 +324,180 @@ describe("glosa open", () => {
       preview: false,
     });
     expect(browserCalls).toHaveLength(0);
+  });
+
+  // --- un-wired/drifted visibility (issue #78) ---
+
+  test("un-init'd workspace -> not-initialized warning, exit stays 0 (A6: open works without init)", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, drifted: [] }) });
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.ok).toBe(true);
+    const warning = result.warnings.find((w) => w.code === "not-initialized");
+    expect(warning).toBeDefined();
+    expect(warning?.message).toContain("`glosa init");
+    expect(warning?.message).toContain("restart or /resume");
+  });
+
+  test("drifted workspace -> init-drifted warning, exit stays 0", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({
+      checkManifestDrift: () => ({ manifest: {} as OwnershipManifest, drifted: ["/x/.mcp.json/mcpServers/glosa"] }),
+    });
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    expect(result.exitCode).toBe(0);
+    const warning = result.warnings.find((w) => w.code === "init-drifted");
+    expect(warning).toBeDefined();
+    expect(warning?.message).toContain("1 node(s) changed");
+    expect(warning?.message).toContain("re-run `glosa init");
+  });
+
+  test("drift probe throwing never breaks open", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({
+      checkManifestDrift: () => {
+        throw new Error("probe exploded");
+      },
+    });
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+    expect(result.exitCode).toBe(0);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  test("not-initialized warning is printed to stderr in human mode", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, drifted: [] }) });
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    const err = captureStderr(() => captureStdout(() => printOpenResult(result, false)));
+    expect(err).toContain("glosa open: warning:");
+    expect(err).toContain("not wired for agent feedback");
+  });
+
+  test("--json envelope carries the not-initialized warning code", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, drifted: [] }) });
+    const result = await runOpen(dir, deps, { launchBrowser: false });
+
+    const out = captureStdout(() => printOpenResult(result, true));
+    const parsed = JSON.parse(out);
+    expect(parsed.warnings.map((w: { code: string }) => w.code)).toContain("not-initialized");
+  });
+});
+
+describe("maybeOfferInit (consented wiring offer)", () => {
+  function unwiredResult(dir: string) {
+    return {
+      ok: true as const,
+      command: "open",
+      exitCode: 0,
+      data: { slug: "s", path: dir, url: "http://127.0.0.1:4646/#x" },
+      warnings: [{ code: "not-initialized", message: "..." }],
+    };
+  }
+  function makeOffer(overrides: Partial<Parameters<typeof maybeOfferInit>[1]> = {}) {
+    const calls: { confirmed: number; initDirs: string[]; stderr: string[] } = {
+      confirmed: 0,
+      initDirs: [],
+      stderr: [],
+    };
+    const opts: Parameters<typeof maybeOfferInit>[1] = {
+      json: false,
+      isTTY: () => true,
+      confirm: async () => {
+        calls.confirmed += 1;
+        return true;
+      },
+      runInit: async (o) => {
+        calls.initDirs.push(o.dir);
+        return { ok: true, exitCode: 0, changed: true, data: {}, warnings: [] } as unknown as InitResult;
+      },
+      stderr: (t) => calls.stderr.push(t),
+      ...overrides,
+    };
+    return { opts, calls };
+  }
+
+  test("TTY + yes -> runInit with the workspace dir + restart line on stderr", async () => {
+    const { opts, calls } = makeOffer();
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.confirmed).toBe(1);
+    expect(calls.initDirs).toEqual(["/ws/a"]);
+    expect(calls.stderr.join("")).toContain("restart or /resume");
+  });
+
+  test("TTY + no -> init never runs", async () => {
+    const { opts, calls } = makeOffer({ confirm: async () => false });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.initDirs).toHaveLength(0);
+  });
+
+  test("non-TTY -> confirm never called", async () => {
+    const { opts, calls } = makeOffer({ isTTY: () => false });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.confirmed).toBe(0);
+    expect(calls.initDirs).toHaveLength(0);
+  });
+
+  test("--json -> never prompts", async () => {
+    const { opts, calls } = makeOffer({ json: true });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.confirmed).toBe(0);
+    expect(calls.initDirs).toHaveLength(0);
+  });
+
+  test("--init runs without confirm, even non-TTY", async () => {
+    const { opts, calls } = makeOffer({ initFlag: true, isTTY: () => false });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.confirmed).toBe(0);
+    expect(calls.initDirs).toEqual(["/ws/a"]);
+  });
+
+  test("--no-init suppresses everything, even with --init absent and TTY", async () => {
+    const { opts, calls } = makeOffer({ noInitFlag: true });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.confirmed).toBe(0);
+    expect(calls.initDirs).toHaveLength(0);
+  });
+
+  test("no not-initialized warning -> nothing happens (drift excluded by design)", async () => {
+    const { opts, calls } = makeOffer();
+    const result = {
+      ...unwiredResult("/ws/a"),
+      warnings: [{ code: "init-drifted", message: "..." }],
+    };
+    await maybeOfferInit(result, opts);
+    expect(calls.confirmed).toBe(0);
+  });
+
+  test("runInit failure is reported on stderr, never throws", async () => {
+    const { opts, calls } = makeOffer({
+      runInit: async () =>
+        ({
+          ok: false,
+          exitCode: 6,
+          changed: false,
+          data: {},
+          warnings: [],
+          error: { code: "mcp-key-conflict", kind: "conflict", message: "foreign glosa key", hint: "use --force" },
+        }) as unknown as InitResult,
+    });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    const err = calls.stderr.join("");
+    expect(err).toContain("init failed: foreign glosa key");
+    expect(err).toContain("hint: use --force");
+  });
+
+  test("runInit throwing is caught and reported", async () => {
+    const { opts, calls } = makeOffer({
+      runInit: async () => {
+        throw new Error("disk full");
+      },
+    });
+    await maybeOfferInit(unwiredResult("/ws/a"), opts);
+    expect(calls.stderr.join("")).toContain("init failed: disk full");
   });
 });

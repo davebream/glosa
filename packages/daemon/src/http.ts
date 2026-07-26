@@ -48,10 +48,9 @@ import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { BUILD_ID } from "./build-id.ts";
 import { ApprovalConflictError, type AttentionVerdict, WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
 import { readInboxEntry } from "./bus/inbox.ts";
-import type { JournalEvent } from "./bus/journal.ts";
-import { type DeliveryVia, isTerminal, lifecycleReducer } from "./bus/lifecycle.ts";
-import { journalPath } from "./bus/paths.ts";
-import { createEmptyState, type DerivedState, foldEvents } from "./bus/replay.ts";
+import { type DeliveryVia, isTerminal } from "./bus/lifecycle.ts";
+import { hasOpenAttention, peekJournal, pendingCount } from "./bus/peek.ts";
+import type { DerivedState } from "./bus/replay.ts";
 import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
 import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "./checkpoints.ts";
@@ -65,6 +64,8 @@ import { resolveTrackedFiles } from "./matcher.ts";
 import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presentation-token.ts";
 import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
+import { glosaHome } from "./home.ts";
+import { type OrphanedState, scanOrphanedHomeState } from "./registry/orphan-scan.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
 import {
@@ -170,6 +171,10 @@ export interface ApiContext {
   pushRegistry?: SessionPushRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
+  /** GLOSA_HOME for the orphaned-state scan in `GET /api/status` (issue #79). Optional and
+   * defaulted to `glosaHome()` at the use site so every hand-built test context keeps compiling;
+   * production wires the boot-time home (lifecycle.ts) so a custom `GLOSA_HOME` is honored. */
+  home?: string;
 }
 
 /** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
@@ -327,43 +332,9 @@ function handleListWorkspaces(ctx: ApiContext): Response {
   return Response.json(body);
 }
 
-/** A passive, read-only fold over a workspace's journal — deliberately NOT `WorkspaceBus`/
- * `reconcileWorkspace`: those self-heal and checkpoint (real writes, incl. spawning git), which
- * would make a plain GET (workspace listing, inbox summary) have write side effects. This just
- * parses whatever's already durably on disk and folds it with the same production reducer
- * (`lifecycleReducer`) — a malformed line is silently skipped here rather than quarantined; the
- * durable quarantine still happens the first time any WRITE path (`resolveBus` below) reconciles
- * this workspace for real. */
-function peekJournal(root: WorkspaceTarget): { state: DerivedState; createdAt: Map<string, string> } {
-  const path = journalPath(root);
-  const createdAt = new Map<string, string>();
-  if (!existsSync(path)) return { state: createEmptyState(), createdAt };
-
-  const raw = readFileSync(path, "utf8");
-  const events: JournalEvent[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.length === 0) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue; // not this read-only peek's job to quarantine — see docstring above
-    }
-    if (typeof parsed !== "object" || parsed === null) continue;
-    const p = parsed as Record<string, unknown>;
-    if (p.v !== 1 || typeof p.event !== "string" || typeof p.event_id !== "string") continue;
-    const event = p as unknown as JournalEvent;
-    events.push(event);
-    if (event.event === "entry_created" && typeof event.entry === "string" && !createdAt.has(event.entry)) {
-      createdAt.set(event.entry, event.at);
-    }
-  }
-  return { state: foldEvents(events, lifecycleReducer), createdAt };
-}
-
-function hasOpenAttention(state: DerivedState): boolean {
-  return Object.values(state.entries).some((e) => e.kind === "attention" && !isTerminal("attention", e.status));
-}
+// peekJournal / hasOpenAttention / pendingCount moved to bus/peek.ts (issue #79) so the
+// workspace-index GC pending-work guard and the orphaned-home-state scanner share the exact same
+// read-only fold these handlers use — the docstring rationale lives there now.
 
 /** Routes that need the LIVE bus (annotations, diff) reconcile the first time they touch a given
  * `WorkspaceBus` INSTANCE, then reuse its already-reconciled in-memory `bus.state` on every later
@@ -1915,15 +1886,11 @@ async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promis
 function handleStatusAggregate(ctx: ApiContext): Response {
   const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
     const { state } = peekJournal(e);
-    const pendingCount = Object.values(state.entries).filter((entry) => {
-      const kind = entry.kind === "attention" ? "attention" : "common";
-      return !isTerminal(kind, entry.status);
-    }).length;
     return {
       slug: e.slug,
       path: e.worktree_path,
       last_seen: e.last_seen,
-      pending_count: pendingCount,
+      pending_count: pendingCount(state),
       has_attention: hasOpenAttention(state),
     };
   });
@@ -1935,6 +1902,14 @@ function handleStatusAggregate(ctx: ApiContext): Response {
     last_active_at: s.last_active_at,
     liveness: ctx.sessionRegistry.liveness(s.session_id),
   }));
+  // Additive (contract-minor-safe) orphan report — see registry/orphan-scan.ts. Never throws;
+  // a scan failure degrades to an empty list rather than breaking the whole status aggregate.
+  let orphanedState: OrphanedState[] = [];
+  try {
+    orphanedState = scanOrphanedHomeState(ctx.home ?? glosaHome(), ctx.workspaceIndex);
+  } catch {
+    // reporting-only surface — status must stay available even if the home dir is unreadable
+  }
   return Response.json({
     daemon: {
       instance_id: ctx.instanceId,
@@ -1946,6 +1921,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
     },
     workspaces,
     sessions,
+    orphaned_state: orphanedState,
   });
 }
 

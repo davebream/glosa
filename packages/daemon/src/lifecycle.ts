@@ -172,6 +172,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     providerRegistry: backend.providerRegistry,
     pushRegistry: backend.pushRegistry,
     shutdownSignal: shutdownController.signal,
+    home,
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 

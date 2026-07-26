@@ -105,6 +105,11 @@ function printInitResult(result: InitResult, json: boolean): void {
   if (result.data.activation_help.length > 0) {
     process.stdout.write(`\nActivation help:\n${result.data.activation_help.map((line) => `  ${line}`).join("\n")}\n`);
   }
+  if (result.data.providers.includes("claude-code")) {
+    process.stdout.write(
+      "\nRestart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
+    );
+  }
 }
 
 function printUninstallResult(result: UninstallResult, json: boolean): void {
@@ -134,7 +139,8 @@ function normalizeInitAgents(values: unknown): { agents?: ProviderId[]; error?: 
   if (values === undefined) return {};
   const raw = Array.isArray(values) ? values.map(String) : [String(values)];
   const unique = [...new Set(raw)];
-  if (unique.includes("all") && unique.length > 1) return { error: "--agent all cannot be combined with another --agent" };
+  if (unique.includes("all") && unique.length > 1)
+    return { error: "--agent all cannot be combined with another --agent" };
   if (unique.some((value) => value !== "all" && value !== "claude-code" && value !== "codex")) {
     return { error: `--agent must be claude-code, codex, or all` };
   }
@@ -147,9 +153,7 @@ export async function promptInitAgents(
 ): Promise<ProviderId[]> {
   const prompt = createInterface({ input, output });
   try {
-    const answer = await prompt.question(
-      "Select agent integration: [1] Claude Code  [2] Codex  [3] all\nChoice: ",
-    );
+    const answer = await prompt.question("Select agent integration: [1] Claude Code  [2] Codex  [3] all\nChoice: ");
     if (answer.trim() === "1") return ["claude-code"];
     if (answer.trim() === "2") return ["codex"];
     if (answer.trim() === "3") return ["claude-code", "codex"];
@@ -261,6 +265,14 @@ function createSubCommands(setExitCode: (code: number) => void) {
           type: "boolean",
           description: "Store directory state under GLOSA_HOME instead of beside it",
         },
+        init: {
+          type: "boolean",
+          description: "Wire the workspace (run `glosa init`) without prompting",
+        },
+        "no-init": {
+          type: "boolean",
+          description: "Never prompt to wire the workspace",
+        },
       },
     },
     async (context) => {
@@ -277,6 +289,11 @@ function createSubCommands(setExitCode: (code: number) => void) {
         setExitCode(2);
         return;
       }
+      if (values.init && values["no-init"]) {
+        process.stderr.write("glosa open: --init and --no-init are mutually exclusive\n");
+        setExitCode(2);
+        return;
+      }
       const result = await openModule.runOpen(
         (values.target as string | undefined) ?? process.cwd(),
         openModule.realOpenDeps(createHttpGlosaClient),
@@ -290,6 +307,13 @@ function createSubCommands(setExitCode: (code: number) => void) {
         },
       );
       openModule.printOpenResult(result, Boolean(values.json), Boolean(values.quiet) || urlOnly);
+      // Consent-gated wiring offer AFTER the warning + URL print so the prompt reads as a
+      // follow-up to the not-initialized warning. Never changes open's exit code.
+      await openModule.maybeOfferInit(result, {
+        initFlag: Boolean(values.init),
+        noInitFlag: Boolean(values["no-init"]),
+        json: Boolean(values.json),
+      });
       setExitCode(result.exitCode);
     },
   );

@@ -5,6 +5,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, printJsonEnvelope } from "./envelope.ts";
+import type { InitResult } from "./init.ts";
 import {
   type OpenPresentationData,
   type OpenPresentationDeps,
@@ -63,6 +64,68 @@ export async function runOpen(
 ): Promise<CommandEnvelope<OpenPresentationData>> {
   const { focus, surface = "auto", ...rest } = options;
   return runOpenPresentation(target, focus, surface, deps, rest);
+}
+
+export interface OfferInitOptions {
+  /** `--init`: run init without prompting (CI-safe). */
+  initFlag?: boolean;
+  /** `--no-init`: never prompt, never run. */
+  noInitFlag?: boolean;
+  /** `--json` active — never prompt (A6: non-TTY never auto-enables --json; the inverse holds
+   * too: a machine-readable invocation gets no interactive side channel). */
+  json: boolean;
+  /** Defaults to `process.stdin.isTTY` (the readStdin precedent in index.ts). */
+  isTTY?: () => boolean;
+  /** Defaults to confirm.ts's `confirmOnTty`. */
+  confirm?: (question: string) => Promise<boolean>;
+  /** Defaults to init.ts's real `runInit` (programmatic, idempotent-by-content). */
+  runInit?: (opts: { dir: string }) => Promise<InitResult>;
+  /** Defaults to `process.stderr.write`. */
+  stderr?: (text: string) => void;
+}
+
+/**
+ * Post-`open` consented wiring offer (issue #78). Fires only when the open succeeded with a
+ * `not-initialized` warning: on a TTY without `--json` it asks once; `--init` skips the question;
+ * `--no-init` (or non-TTY, or `--json`) does nothing. Drifted workspaces are deliberately
+ * excluded — re-init over drift can require `--force`, which `open` never runs on the user's
+ * behalf. Init failure is reported but never alters `open`'s own exit code.
+ */
+export async function maybeOfferInit(
+  result: CommandEnvelope<OpenPresentationData>,
+  options: OfferInitOptions,
+): Promise<void> {
+  if (!result.ok || !result.data.path) return;
+  if (!result.warnings.some((w) => w.code === "not-initialized")) return;
+  if (options.noInitFlag) return;
+
+  const stderr = options.stderr ?? ((text: string) => process.stderr.write(text));
+  let consented = Boolean(options.initFlag);
+  if (!consented) {
+    const isTTY = options.isTTY ?? (() => Boolean(process.stdin.isTTY));
+    if (options.json || !isTTY()) return;
+    const confirm =
+      options.confirm ?? (async (q: string) => (await import("./confirm.ts")).confirmOnTty(q));
+    consented = await confirm("Wire this workspace for agent feedback? (runs `glosa init`)");
+  }
+  if (!consented) return;
+
+  const runInit =
+    options.runInit ?? (async (o: { dir: string }) => (await import("./init.ts")).runInit(o));
+  try {
+    const initResult = await runInit({ dir: result.data.path });
+    if (initResult.ok) {
+      stderr("glosa open: wired — hooks + MCP entry installed.\n");
+      stderr(
+        "glosa open: restart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
+      );
+    } else {
+      stderr(`glosa open: init failed: ${initResult.error?.message ?? "unknown error"}\n`);
+      if (initResult.error?.hint) stderr(`  hint: ${initResult.error.hint}\n`);
+    }
+  } catch (err) {
+    stderr(`glosa open: init failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
 }
 
 export function printOpenResult(result: CommandEnvelope<OpenPresentationData>, json: boolean, quiet = false): void {

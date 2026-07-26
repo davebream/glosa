@@ -279,10 +279,12 @@ the entry survives.
   provider-targeted hook/MCP merge with workspace-default or explicit user scope, ownership manifest,
   backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
+  `token rotate|revoke`, `doctor` (15 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
   internal `mcp`, `hook <event>`. `open`
-  auto-creates the `.glosa/` scaffold (distinct from `init`), never invokes or prompts for init, and
-  supports an init-free Preview first run. Preview-only `glosa_present` is also init-free.
+  auto-creates the `.glosa/` scaffold (distinct from `init`), never auto-invokes init, and
+  supports an init-free Preview first run — but surfaces the un-wired state honestly: a
+  `not-initialized`/`init-drifted` warning (exit 0) plus, on a TTY without `--json`, a one-question
+  consented init offer (`--init`/`--no-init` bypass; A6). Preview-only `glosa_present` is also init-free.
   Provider selection uses explicit repeatable `--agent` flags or provider-owned local detection;
   ambiguity gets one TTY prompt and fails with an exact flag hint in non-interactive/JSON mode.
   Agent-specific detection, config paths, and desired nodes remain in `packages/providers/*`; the

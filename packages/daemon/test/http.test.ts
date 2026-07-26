@@ -106,6 +106,30 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(await res.json()).toEqual([]);
   });
 
+  it("GET /api/status reports orphaned home-state buses with pending entries (issue #79)", async () => {
+    // Seed an orphan BEFORE the request: a state dir with a pending journal and no registration.
+    const orphanId = "cd".repeat(32);
+    const busDir = `${home}/state/${orphanId}`;
+    mkdirSync(busDir, { recursive: true });
+    writeFileSync(
+      `${busDir}/journal.ndjson`,
+      `${JSON.stringify({
+        v: 1,
+        event_id: "01TESTEVENT0000000000000001",
+        at: "2026-07-26T00:00:00.000Z",
+        entry: "inb-1",
+        event: "entry_created",
+        by: "daemon",
+        detail: { kind: "annotation" },
+      })}\n`,
+    );
+
+    const res = await fetch(apiUrl("/api/status"), { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.orphaned_state).toEqual([{ registration_id: orphanId, pending_count: 1 }]);
+  });
+
   it("authed GET /api/workspaces with foreign Origin but valid Bearer → 403 (reads reject foreign)", async () => {
     const res = await fetch(apiUrl("/api/workspaces"), {
       headers: { Authorization: `Bearer ${TOKEN}`, Origin: "http://evil.example.com" },

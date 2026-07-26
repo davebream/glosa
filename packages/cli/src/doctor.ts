@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Twelve enumerated checks — A6's own
-// command-surface table names exactly 12 (platform, bun, git, claude-code, browser, daemon+proto,
-// token/pairing, workspace, hooks, mcp, optional Channel status, transcript-root).
-import { existsSync, readFileSync, statSync } from "node:fs";
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Fifteen enumerated checks — A6's own
+// command-surface table names exactly 15 (platform, bun, git, claude-code, browser, daemon+proto,
+// token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
+// Channel status, transcript-root).
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import {
   claudeConfigDir,
   protocolCompatible,
@@ -12,7 +13,7 @@ import {
 } from "../../daemon/src/index.ts";
 import { join } from "node:path";
 import { checkScopedManifestDrift } from "./scoped-init.ts";
-import type { GlosaApiClient } from "./api-client.ts";
+import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -121,13 +122,23 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 4. claude-code (WARN if absent, never fail — A6 §F30)
   const claudePath = deps.which("claude");
   if (!claudePath) {
-    checks.push(check("claude-code", "warn", "claude not found on PATH — required for the live agent integration, not for glosa itself"));
+    checks.push(
+      check(
+        "claude-code",
+        "warn",
+        "claude not found on PATH — required for the live agent integration, not for glosa itself",
+      ),
+    );
   } else {
     const claudeVersionOut = deps.runVersionProbe([claudePath, "--version"]);
     const claudeOk = meetsFloor(claudeVersionOut, "2.1.80");
     checks.push(
       claudeOk === false
-        ? check("claude-code", "warn", `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`)
+        ? check(
+            "claude-code",
+            "warn",
+            `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`,
+          )
         : check("claude-code", "pass", claudeVersionOut ?? `found at ${claudePath}`),
     );
   }
@@ -138,19 +149,37 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   const openPath = deps.which("open");
   checks.push(
     openPath
-      ? check("browser", "pass", "macOS `open` launcher is available (does not verify a specific browser/version floor)")
-      : check("browser", "warn", "macOS `open` launcher not found — `glosa open` will not be able to launch a browser automatically"),
+      ? check(
+          "browser",
+          "pass",
+          "macOS `open` launcher is available (does not verify a specific browser/version floor)",
+        )
+      : check(
+          "browser",
+          "warn",
+          "macOS `open` launcher not found — `glosa open` will not be able to launch a browser automatically",
+        ),
   );
 
-  // 6. daemon+proto
+  // 6. daemon+proto — `status` is hoisted for the pending-delivery/orphaned-state checks below,
+  // which reuse this one aggregate call instead of re-fetching (and SKIP when it failed).
+  let status: StatusSummary | null = null;
   try {
     const client = await deps.createClient();
-    const status = await client.getStatus();
+    status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
     checks.push(
       compatible
-        ? check("daemon+proto", "pass", `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`)
-        : check("daemon+proto", "fail", `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`),
+        ? check(
+            "daemon+proto",
+            "pass",
+            `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`,
+          )
+        : check(
+            "daemon+proto",
+            "fail",
+            `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
+          ),
     );
   } catch (err) {
     checks.push(check("daemon+proto", "fail", `daemon unreachable: ${(err as Error).message}`));
@@ -172,11 +201,21 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 8. workspace (.glosa + baseline checkpoint + matcher non-empty tracked set)
   const glosaDir = join(dir, ".glosa");
   if (!existsSync(glosaDir)) {
-    checks.push(check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``));
+    checks.push(
+      check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
+    );
   } else {
     const shadowGitDir = join(glosaDir, "shadow.git");
     const headOut = existsSync(shadowGitDir)
-      ? deps.runVersionProbe(["git", `--git-dir=${shadowGitDir}`, `--work-tree=${dir}`, "rev-parse", "--verify", "-q", "HEAD"])
+      ? deps.runVersionProbe([
+          "git",
+          `--git-dir=${shadowGitDir}`,
+          `--work-tree=${dir}`,
+          "rev-parse",
+          "--verify",
+          "-q",
+          "HEAD",
+        ])
       : null;
     if (!headOut) {
       checks.push(check("workspace", "fail", `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve)`));
@@ -193,9 +232,17 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 9. hooks (manifest hash match / drift)
   const { manifest, manifests, drifted } = checkScopedManifestDrift(dir, { glosaHomeDir: deps.glosaHome() });
   if (!manifest) {
-    checks.push(check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"));
+    checks.push(
+      check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"),
+    );
   } else if (drifted.length > 0) {
-    checks.push(check("hooks", "fail", `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``));
+    checks.push(
+      check(
+        "hooks",
+        "fail",
+        `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``,
+      ),
+    );
   } else {
     const installed = manifests.flatMap((item) =>
       Object.keys(item.providers).map((provider) => `${provider} (${item.scope})`),
@@ -214,15 +261,24 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   );
   const mcpDrifted = drifted.some((detail) => ownedMcpPaths.some((path) => detail.startsWith(path)));
   const mcpPath = join(dir, ".mcp.json");
+  const scopedClaudeMcp = manifests.flatMap((item) => {
+    const ownedMcp = item.providers["claude-code"]?.files.mcp;
+    return ownedMcp === undefined ? [] : [ownedMcp.path];
+  });
+  let mcpDefined =
+    scopedClaudeMcp.length > 0 && !drifted.some((detail) => scopedClaudeMcp.some((path) => detail.startsWith(path)));
   if (hasOwnedMcp && manifest) {
-    checks.push(check("mcp", mcpDrifted ? "fail" : "pass", `configured through ${manifests.length} scoped manifest(s)`));
+    checks.push(
+      check("mcp", mcpDrifted ? "fail" : "pass", `configured through ${manifests.length} scoped manifest(s)`),
+    );
   } else if (!existsSync(mcpPath)) {
     checks.push(check("mcp", "warn", "no provider MCP integration is installed — run `glosa init`"));
   } else {
     try {
       const parsed = JSON.parse(readFileSync(mcpPath, "utf8"));
+      mcpDefined = Boolean(parsed?.mcpServers?.glosa);
       checks.push(
-        parsed?.mcpServers?.glosa
+        mcpDefined
           ? check("mcp", "pass", `${mcpPath} has a "glosa" MCP server entry`)
           : check("mcp", "warn", `${mcpPath} has no "glosa" MCP server entry — run \`glosa init\``),
       );
@@ -231,17 +287,106 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     }
   }
 
-  // 11. Channels are an optional Claude capability. The registry does not expose a durable
+  // 11. mcp-enabled — the enabled-but-undefined trap (issue #78): a settings layer force-enables
+  // an MCP server named "glosa" via enabledMcpjsonServers while .mcp.json defines no such server.
+  // The workspace LOOKS half-configured (Claude Code shows the enablement) but the server can
+  // never load. Invalid/absent settings layers are tolerated — this check only ever reads.
+  const enablingLayers: string[] = [];
+  for (const settingsFile of [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")]) {
+    if (!existsSync(settingsFile)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(settingsFile, "utf8"));
+      const enabled = parsed?.enabledMcpjsonServers;
+      if (Array.isArray(enabled) && enabled.includes("glosa")) enablingLayers.push(settingsFile);
+    } catch {
+      // invalid JSON in a settings layer is the hooks/mcp checks' concern, not this one's
+    }
+  }
+  if (enablingLayers.length > 0 && !mcpDefined) {
+    checks.push(
+      check(
+        "mcp-enabled",
+        "warn",
+        `${enablingLayers.join(", ")} enables an MCP server named "glosa" via enabledMcpjsonServers, but .mcp.json does not define it — run \`glosa init\` to reinstall the entry, or remove "glosa" from enabledMcpjsonServers`,
+      ),
+    );
+  } else if (enablingLayers.length > 0) {
+    checks.push(check("mcp-enabled", "pass", `enabledMcpjsonServers references "glosa" and .mcp.json defines it`));
+  } else {
+    checks.push(check("mcp-enabled", "pass", `no settings layer force-enables an undefined glosa MCP server`));
+  }
+
+  // 12. pending-delivery (issue #79) — entries queued in THIS workspace's bus while delivery
+  // wiring is absent. Reuses check 6's status aggregate; daemon-down -> SKIP (a warn would just
+  // repeat check 6's fail). The hooks verdict above is the wiring signal: annotations queue
+  // regardless of init, but only init-installed hooks ever drain them.
+  const hooksCheck = checks.find((c) => c.name === "hooks");
+  if (!status) {
+    checks.push(check("pending-delivery", "skip", "daemon unreachable — pending-annotation count not checked"));
+  } else {
+    let canonicalDir = dir;
+    try {
+      canonicalDir = realpathSync(dir);
+    } catch {
+      // nonexistent dir — fall back to the literal path; no workspace row will match either way
+    }
+    const ws = status.workspaces.find((w) => w.path === canonicalDir || w.path === dir);
+    const pending = ws?.pending_count ?? 0;
+    if (pending > 0 && hooksCheck?.status !== "pass") {
+      checks.push(
+        check(
+          "pending-delivery",
+          "warn",
+          `${pending} annotation(s) are queued for this workspace but delivery is not wired — they will sit until \`glosa init\` runs and a Claude Code session restarts`,
+        ),
+      );
+    } else if (pending > 0) {
+      checks.push(check("pending-delivery", "pass", `${pending} pending annotation(s); delivery wiring present`));
+    } else {
+      checks.push(check("pending-delivery", "pass", "no annotations queued for this workspace"));
+    }
+  }
+
+  // 13. orphaned-state (issue #79) — home-state buses (`~/.glosa/state/<id>`) holding pending
+  // entries with no live registration: user work stranded by a removed registration. Recovery is
+  // re-opening the original path (deterministic registration ids reclaim the surviving bus).
+  if (!status) {
+    checks.push(check("orphaned-state", "skip", "daemon unreachable — orphaned home-state not checked"));
+  } else {
+    const orphans = status.orphaned_state ?? [];
+    const totalPending = orphans.reduce((sum, o) => sum + o.pending_count, 0);
+    checks.push(
+      orphans.length === 0
+        ? check("orphaned-state", "pass", "no orphaned home-state buses with pending entries")
+        : check(
+            "orphaned-state",
+            "warn",
+            `${totalPending} pending annotation(s) in ${orphans.length} orphaned home-state dir(s) — re-open the original file/directory with \`glosa open <path>\` to recover, or \`glosa status --json\` for registration ids`,
+          ),
+    );
+  }
+
+  // 14. Channels are an optional Claude capability. The registry does not expose a durable
   // registration handshake, so doctor reports the capability as unverified without degrading the
   // hook/MCP compatibility result.
-  checks.push(check("channel", "skip", "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path"));
+  checks.push(
+    check(
+      "channel",
+      "skip",
+      "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path",
+    ),
+  );
 
-  // 12. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
+  // 15. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();
   checks.push(
     existsSync(configDir)
       ? check("transcript-root", "pass", `${configDir} exists`)
-      : check("transcript-root", "warn", `${configDir} does not exist yet — Claude Code may not have run on this machine`),
+      : check(
+          "transcript-root",
+          "warn",
+          `${configDir} does not exist yet — Claude Code may not have run on this machine`,
+        ),
   );
 
   return checks;

@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Workspace garbage collection can no longer remove a registration whose bus still holds pending
+  (undelivered) entries — parked annotations now block removal indefinitely, and an unreadable
+  journal counts as pending rather than removable. `glosa forget` remains an explicit override.
+
+### Added
+
+- `GET /api/status` reports `orphaned_state`: home-state buses (`~/.glosa/state/<id>`) holding
+  pending entries with no live registration. `glosa doctor` gained matching `pending-delivery`
+  and `orphaned-state` checks that warn when annotations are queued without delivery wiring or
+  stranded in an orphaned state dir, with the recovery hint (re-open the original path — the
+  deterministic registration id reclaims the surviving bus).
+
+### Added
+
+- `glosa open` now tells you when a workspace is not wired for agent feedback: an un-init'd
+  workspace gets a `not-initialized` warning (drifted config gets `init-drifted`) naming the exact
+  fix and the session-restart step, and on a TTY `open` offers to run `glosa init` after a single
+  explicit yes (`--init` runs it without asking, `--no-init` silences the offer). Exit codes and
+  the init-free SPA-only contract are unchanged.
+- `glosa doctor` gained an `mcp-enabled` check that catches the enabled-but-undefined trap: a
+  `.claude/settings*.json` layer force-enabling an MCP server named `glosa` that `.mcp.json` never
+  defines.
+
+### Changed
+
+- `glosa init` success output now states the remaining step explicitly: restart or `/resume` the
+  Claude Code session so it loads glosa — until then annotations are queued, not delivered.
+
 ## [0.1.0-alpha.5] - 2026-07-25
 
 ### Changed

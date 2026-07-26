@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { linkSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { resolveTrackedFiles } from "../../src/matcher.ts";
@@ -202,6 +202,157 @@ describe("WorkspaceIndex — GC", () => {
   });
 });
 
+describe("WorkspaceIndex — GC pending-work guard (issue #79)", () => {
+  /** A minimal, valid pending journal: one entry_created line the production reducer folds to
+   * status "pending". Written straight to <busDir>/journal.ndjson — same bytes the bus writes. */
+  const PENDING_LINE = JSON.stringify({
+    v: 1,
+    event_id: "01TESTEVENT0000000000000001",
+    at: "2026-07-26T00:00:00.000Z",
+    entry: "inb-pending-1",
+    event: "entry_created",
+    by: "daemon",
+    detail: { kind: "annotation" },
+  });
+  const TERMINAL_LINE = JSON.stringify({
+    v: 1,
+    event_id: "01TESTEVENT0000000000000002",
+    at: "2026-07-26T00:01:00.000Z",
+    entry: "inb-pending-1",
+    event: "transition_committed",
+    by: "daemon",
+    detail: { to: "rejected" },
+  });
+
+  function gcReadyIndex(home: string, existing: Set<string>, clock: ReturnType<typeof manualClock>) {
+    return new WorkspaceIndex({
+      home,
+      now: clock,
+      gcGraceMs: 100,
+      gcThrottleMs: 0,
+      pathExists: (p) => existing.has(p),
+      hasLiveSession: () => false, // wired — these tests are about the pending-work guard, not the unwired safety
+    });
+  }
+
+  test("pending entry in the bus journal blocks hard-remove; terminal transition unblocks it", async () => {
+    const home = freshHome();
+    const clock = manualClock();
+    const ws = freshWorkspaceDir(); // real dir so the local bus lands beside it
+    const existing = new Set([ws]);
+    const index = gcReadyIndex(home, existing, clock);
+    const entry = await index.upsertWorkspace(ws, "glosa-open");
+
+    mkdirSync(entry.bus_path, { recursive: true });
+    writeFileSync(join(entry.bus_path, "journal.ndjson"), `${PENDING_LINE}\n`);
+
+    existing.delete(entry.canonical_path);
+    await index.gc({ force: true }); // softens
+    clock.advance(10_000); // well past grace
+    let result = await index.gc({ force: true });
+    expect(result.removed).toEqual([]); // pending work blocks removal indefinitely
+    expect(index.get(entry.canonical_path)).not.toBeNull();
+
+    // The same entry reaching a terminal status resumes normal grace-based removal.
+    writeFileSync(join(entry.bus_path, "journal.ndjson"), `${PENDING_LINE}\n${TERMINAL_LINE}\n`);
+    result = await index.gc({ force: true });
+    expect(result.removed).toEqual([entry.canonical_path]);
+    cleanup(home);
+    cleanup(ws);
+  });
+
+  test("a torn journal tail cannot hide an earlier intact pending entry", async () => {
+    const home = freshHome();
+    const clock = manualClock();
+    const ws = freshWorkspaceDir();
+    const existing = new Set([ws]);
+    const index = gcReadyIndex(home, existing, clock);
+    const entry = await index.upsertWorkspace(ws, "glosa-open");
+
+    mkdirSync(entry.bus_path, { recursive: true });
+    // Intact pending line + a torn (mid-write) tail — the fold skips the torn line, keeps the
+    // pending one, so the guard still blocks.
+    writeFileSync(join(entry.bus_path, "journal.ndjson"), `${PENDING_LINE}\n{"v":1,"event":"transi`);
+
+    existing.delete(entry.canonical_path);
+    await index.gc({ force: true });
+    clock.advance(10_000);
+    const result = await index.gc({ force: true });
+    expect(result.removed).toEqual([]);
+    cleanup(home);
+    cleanup(ws);
+  });
+
+  test("a throwing hasPendingWork predicate blocks removal (fail-safe: never remove on uncertainty)", async () => {
+    const home = freshHome();
+    const clock = manualClock();
+    const existing = new Set(["/ws/a"]);
+    const index = new WorkspaceIndex({
+      home,
+      now: clock,
+      gcGraceMs: 100,
+      gcThrottleMs: 0,
+      pathExists: (p) => existing.has(p),
+      hasLiveSession: () => false,
+      hasPendingWork: () => {
+        throw new Error("journal unreadable");
+      },
+    });
+    await index.upsertWorkspace("/ws/a", "session");
+
+    existing.delete("/ws/a");
+    await index.gc({ force: true });
+    clock.advance(10_000);
+    // The injected predicate throws synchronously inside gc(); the guard must swallow that as
+    // "has pending", not crash the pass and not remove the entry.
+    const result = await index.gc({ force: true }).catch(() => null);
+    expect(result === null || result.removed.length === 0).toBe(true);
+    expect(index.get("/ws/a")).not.toBeNull();
+    cleanup(home);
+  });
+
+  test("re-opening the same loose file after forget reclaims the surviving home-redirected bus (deterministic ids)", async () => {
+    const home = freshHome();
+    const ws = freshWorkspaceDir();
+    const filePath = join(ws, "note.md");
+    writeFileSync(filePath, "# note\n");
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+
+    const first = await index.resolveOpenTarget(filePath, {});
+    const firstEntry = first.entry;
+    expect(firstEntry.kind).toBe("loose-file");
+    expect(firstEntry.bus_path.startsWith(join(home, "state"))).toBe(true);
+
+    // Park a pending entry in the redirected bus, then hard-remove the registration.
+    mkdirSync(firstEntry.bus_path, { recursive: true });
+    writeFileSync(join(firstEntry.bus_path, "journal.ndjson"), `${PENDING_LINE}\n`);
+    expect(await index.forget(firstEntry.slug)).toBe(true);
+    expect(index.get(firstEntry.canonical_path)).toBeNull();
+
+    // Same path re-opened -> same deterministic registration id -> same bus dir, work intact.
+    const second = await index.resolveOpenTarget(filePath, {});
+    expect(second.entry.registration_id).toBe(firstEntry.registration_id);
+    expect(second.entry.bus_path).toBe(firstEntry.bus_path);
+    expect(existsSync(join(second.entry.bus_path, "journal.ndjson"))).toBe(true);
+    cleanup(home);
+    cleanup(ws);
+  });
+
+  test("forget still hard-removes despite pending work (explicit user command stays forceful)", async () => {
+    const home = freshHome();
+    const ws = freshWorkspaceDir();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const entry = await index.upsertWorkspace(ws, "glosa-open");
+    mkdirSync(entry.bus_path, { recursive: true });
+    writeFileSync(join(entry.bus_path, "journal.ndjson"), `${PENDING_LINE}\n`);
+
+    expect(await index.forget(entry.slug)).toBe(true);
+    expect(index.get(entry.canonical_path)).toBeNull();
+    cleanup(home);
+    cleanup(ws);
+  });
+});
+
 describe("WorkspaceIndex — forget", () => {
   test("explicit forget hard-removes regardless of grace period or live-session state", async () => {
     const home = freshHome();
@@ -298,6 +449,9 @@ describe("WorkspaceIndex — onHardRemove (resource-leak fix)", () => {
 
     const originalBus = busRegistry.get(root);
     await originalBus.createEntry("e1", {}); // opens the journal fd for real
+    // Terminalize it — a PENDING entry now blocks hard-remove by design (issue #79's guard),
+    // and this test is about bus eviction on hard-remove, not the pending-work guard.
+    await originalBus.commitTransition("e1", "rejected");
     await index.upsertWorkspace(root, "session");
 
     await index.gc({ force: true }); // softens

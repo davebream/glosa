@@ -207,7 +207,13 @@ describe("Gunshi command surface", () => {
     });
   });
 
-  test("manual parser functions are gone", () => {
+  test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
+  const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
+  expect(r.exitCode).toBe(2);
+  expect(r.stderr).toContain("--init and --no-init are mutually exclusive");
+});
+
+test("manual parser functions are gone", () => {
     const source = readFileSync(join(import.meta.dir, "../src/index.ts"), "utf8");
     expect(source).not.toContain("parseInitArgs");
     expect(source).not.toContain("extractGlobalFlags");

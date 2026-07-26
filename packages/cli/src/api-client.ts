@@ -67,6 +67,11 @@ export interface SessionStatusSummary {
   liveness: "alive" | "stale";
 }
 
+export interface OrphanedStateSummary {
+  registration_id: string;
+  pending_count: number;
+}
+
 export interface StatusSummary {
   daemon: {
     instance_id: string;
@@ -78,6 +83,9 @@ export interface StatusSummary {
   };
   workspaces: WorkspaceStatusSummary[];
   sessions: SessionStatusSummary[];
+  /** Additive (issue #79): home-state buses with pending entries and no live registration.
+   * Optional so this client keeps accepting N-1 daemons that predate the field. */
+  orphaned_state?: OrphanedStateSummary[];
 }
 
 export interface StandardAttentionVerdict {

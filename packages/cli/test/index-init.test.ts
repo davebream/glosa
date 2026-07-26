@@ -46,6 +46,23 @@ describe("run(['init', ...])", () => {
     expect(parsed.data.channel_command).toBe("claude --dangerously-load-development-channels server:glosa");
   });
 
+  test("fresh install human output ends with the restart/resume instruction (issue #78)", async () => {
+    const dir = freshDir();
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code"]));
+    expect(exitCode).toBe(0);
+    expect(out).toContain("installed hooks + MCP entry");
+    expect(out).toContain("Restart or /resume your Claude Code session");
+    expect(out).toContain("annotations are queued, not delivered");
+  });
+
+  test("'already up to date' output stays stable — no restart line on changed:false", async () => {
+    const dir = freshDir();
+    await run(["init", dir, "--agent", "claude-code"]);
+    const { out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code"]));
+    expect(out).toContain("already up to date");
+    expect(out).not.toContain("Restart or /resume");
+  });
+
   test("--print writes a diff to stdout and creates nothing", async () => {
     const dir = freshDir();
     const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--print"]));
@@ -90,9 +107,7 @@ describe("run(['init', ...])", () => {
     const dir = freshDir();
     const { exitCode, out } = await captureStdout(() => run(["init", dir, "--json"]));
     expect(exitCode).toBe(2);
-    expect(JSON.parse(out).error.message).toContain(
-      "pass --agent claude-code, --agent codex, or --agent all",
-    );
+    expect(JSON.parse(out).error.message).toContain("pass --agent claude-code, --agent codex, or --agent all");
   });
 
   test("invalid scope is a usage error", async () => {
