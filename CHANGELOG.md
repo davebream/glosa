@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `glosa open` now tells you when a workspace is not wired for agent feedback: an un-init'd
+  workspace gets a `not-initialized` warning (drifted config gets `init-drifted`) naming the exact
+  fix and the session-restart step, and on a TTY `open` offers to run `glosa init` after a single
+  explicit yes (`--init` runs it without asking, `--no-init` silences the offer). Exit codes and
+  the init-free SPA-only contract are unchanged.
+- `glosa doctor` gained an `mcp-enabled` check that catches the enabled-but-undefined trap: a
+  `.claude/settings*.json` layer force-enabling an MCP server named `glosa` that `.mcp.json` never
+  defines.
+
+### Changed
+
+- `glosa init` success output now states the remaining step explicitly: restart or `/resume` the
+  Claude Code session so it loads glosa — until then annotations are queued, not delivered.
+
 ## [0.1.0-alpha.5] - 2026-07-25
 
 ### Changed

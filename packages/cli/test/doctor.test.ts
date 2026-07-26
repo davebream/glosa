@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 12 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 13 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -158,6 +158,42 @@ describe("glosa doctor", () => {
     expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(12);
+    expect(parsed.data.checks).toHaveLength(13);
+  });
+
+  test("mcp-enabled: no settings layers -> pass; enabled+defined -> pass; enabled-but-undefined -> WARN", async () => {
+    const { deps } = makeDeps();
+    const dir = freshDir();
+
+    // No settings layers at all — nothing force-enables an undefined server.
+    const bare = await runDoctor(dir, deps);
+    expect(findCheck(bare.data.checks, "mcp-enabled")?.status).toBe("pass");
+
+    // Init installs the .mcp.json entry; a local layer enabling "glosa" is then consistent.
+    await runInit({ dir });
+    writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["glosa"] }));
+    const consistent = await runDoctor(dir, deps);
+    expect(findCheck(consistent.data.checks, "mcp-enabled")?.status).toBe("pass");
+
+    // Drop the .mcp.json definition while the enablement stays — the half-wired trap.
+    const mcpPath = join(dir, ".mcp.json");
+    const mcp = JSON.parse(await Bun.file(mcpPath).text());
+    delete mcp.mcpServers.glosa;
+    writeFileSync(mcpPath, JSON.stringify(mcp, null, 2));
+
+    const trapped = await runDoctor(dir, deps);
+    const trap = findCheck(trapped.data.checks, "mcp-enabled");
+    expect(trap?.status).toBe("warn");
+    expect(trap?.detail).toContain("settings.local.json");
+    expect(trap?.detail).toContain("does not define it");
+  });
+
+  test("mcp-enabled: invalid settings layer JSON is tolerated (check still runs)", async () => {
+    const { deps } = makeDeps();
+    const dir = freshDir();
+    await runInit({ dir });
+    writeFileSync(join(dir, ".claude", "settings.local.json"), "{not json");
+    const result = await runDoctor(dir, deps);
+    expect(findCheck(result.data.checks, "mcp-enabled")?.status).toBe("pass");
   });
 });
