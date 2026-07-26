@@ -17,6 +17,12 @@ import {
   runUninstall,
   type GlosaBinResolution,
 } from "../src/init.ts";
+import {
+  detectInstallProviders,
+  runScopedInit,
+  runScopedUninstall,
+  scopedManifestPaths,
+} from "../src/scoped-init.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -702,5 +708,184 @@ describe("glosa uninstall", () => {
     expect(readFileSync(settingsPathOf(dir), "utf8")).toBe(settingsBefore);
     expect(readFileSync(mcpPathOf(dir), "utf8")).toBe(mcpBefore);
     expect(readFileSync(manifestPathOf(dir), "utf8")).toBe(manifestBefore);
+  });
+});
+
+describe("glosa init — scoped and targeted onboarding (#82)", () => {
+  test("workspace is the default scope and a single agent touches only its own targets", async () => {
+    const dir = freshDir();
+    const result = await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+
+    expect(result.ok).toBe(true);
+    expect(result.data.scope).toBe("workspace");
+    expect(result.data.providers).toEqual(["claude-code"]);
+    expect(existsSync(settingsPathOf(dir))).toBe(true);
+    expect(existsSync(mcpPathOf(dir))).toBe(true);
+    expect(existsSync(codexHooksPathOf(dir))).toBe(false);
+    expect(existsSync(codexConfigPathOf(dir))).toBe(false);
+
+    const manifest = readJson(scopedManifestPaths(dir).workspace);
+    expect(manifest).toMatchObject({
+      version: 2,
+      scope: "workspace",
+      providers: { "claude-code": { files: { hooks: expect.any(Object), mcp: expect.any(Object) } } },
+    });
+    expect(manifest.providers.codex).toBeUndefined();
+  });
+
+  test("explicit user scope writes provider config and manifest beneath the supplied test home", async () => {
+    const dir = freshDir();
+    const home = freshDir();
+    const glosaHome = join(home, ".glosa");
+    const result = await runScopedInit({
+      dir,
+      scope: "user",
+      agents: ["codex"],
+      homeDir: home,
+      glosaHomeDir: glosaHome,
+      resolveGlosaBin: () => BIN_A,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(home, ".codex", "hooks.json"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(glosaHome, "init-manifest.json"))).toBe(true);
+    expect(existsSync(codexHooksPathOf(dir))).toBe(false);
+  });
+
+  test("provider-owned local probes select executables or existing provider config only", () => {
+    const dir = freshDir();
+    const home = freshDir();
+    expect(detectInstallProviders(dir, { homeDir: home, which: (name) => (name === "claude" ? "/bin/claude" : null) })).toEqual([
+      "claude-code",
+    ]);
+
+    mkdirSync(join(dir, ".codex"), { recursive: true });
+    writeFileSync(join(dir, ".codex", "config.toml"), "");
+    expect(detectInstallProviders(dir, { homeDir: home, which: () => null })).toEqual(["codex"]);
+  });
+
+  test("the same provider is refused across scopes and --force cannot bypass the guard", async () => {
+    const dir = freshDir();
+    const home = freshDir();
+    const glosaHome = join(home, ".glosa");
+    await runScopedInit({
+      dir,
+      scope: "user",
+      agents: ["claude-code"],
+      homeDir: home,
+      glosaHomeDir: glosaHome,
+      resolveGlosaBin: () => BIN_A,
+    });
+    const result = await runScopedInit({
+      dir,
+      agents: ["claude-code"],
+      force: true,
+      homeDir: home,
+      glosaHomeDir: glosaHome,
+      resolveGlosaBin: () => BIN_A,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.error?.code).toBe("cross-scope-duplicate");
+    expect(result.error?.hint).toContain("--scope user --agent claude-code --uninstall");
+    expect(existsSync(settingsPathOf(dir))).toBe(false);
+  });
+
+  test("concurrent cross-scope attempts serialize and exactly one provider installation wins", async () => {
+    const dir = freshDir();
+    const home = freshDir();
+    const glosaHome = join(home, ".glosa");
+    const paths = scopedManifestPaths(dir, { homeDir: home, glosaHomeDir: glosaHome });
+    mkdirSync(glosaHome, { recursive: true });
+    writeFileSync(
+      `${paths.user}.lock`,
+      JSON.stringify({ pid: process.pid, started: new Date().toISOString() }),
+    );
+    setTimeout(() => rmSync(`${paths.user}.lock`, { force: true }), 25);
+
+    const [workspace, user] = await Promise.all([
+      runScopedInit({
+        dir,
+        agents: ["claude-code"],
+        homeDir: home,
+        glosaHomeDir: glosaHome,
+        resolveGlosaBin: () => BIN_A,
+      }),
+      runScopedInit({
+        dir,
+        scope: "user",
+        agents: ["claude-code"],
+        homeDir: home,
+        glosaHomeDir: glosaHome,
+        resolveGlosaBin: () => BIN_A,
+      }),
+    ]);
+
+    expect([workspace.exitCode, user.exitCode].sort()).toEqual([0, 2]);
+    expect([workspace.error?.code, user.error?.code]).toContain("cross-scope-duplicate");
+    const manifests = [paths.workspace, paths.user].filter(existsSync);
+    expect(manifests).toHaveLength(1);
+    expect(readJson(manifests[0] as string).providers["claude-code"]).toBeDefined();
+  });
+
+  test("a later provider extends the manifest and targeted uninstall preserves the other provider", async () => {
+    const dir = freshDir();
+    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    await runScopedInit({ dir, agents: ["codex"], resolveGlosaBin: () => BIN_A });
+
+    const removed = await runScopedUninstall({ dir, agents: ["codex"] });
+    expect(removed.ok).toBe(true);
+    expect(existsSync(settingsPathOf(dir))).toBe(true);
+    expect(existsSync(codexHooksPathOf(dir))).toBe(false);
+    const manifest = readJson(scopedManifestPaths(dir).workspace);
+    expect(manifest.providers["claude-code"]).toBeDefined();
+    expect(manifest.providers.codex).toBeUndefined();
+  });
+
+  test("the first scoped operation atomically migrates the legacy manifest", async () => {
+    const dir = freshDir();
+    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    expect(existsSync(manifestPathOf(dir))).toBe(true);
+
+    const result = await runScopedInit({ dir, agents: ["claude-code", "codex"], resolveGlosaBin: () => BIN_A });
+    expect(result.ok).toBe(true);
+    expect(existsSync(manifestPathOf(dir))).toBe(false);
+    const manifest = readJson(scopedManifestPaths(dir).workspace);
+    expect(Object.keys(manifest.providers).sort()).toEqual(["claude-code", "codex"]);
+  });
+
+  test("--print keeps the scoped target set but writes nothing", async () => {
+    const dir = freshDir();
+    const result = await runScopedInit({
+      dir,
+      agents: ["codex"],
+      print: true,
+      resolveGlosaBin: () => BIN_A,
+    });
+    expect(result.changed).toBe(true);
+    expect(result.diff).toContain(join(dir, ".codex", "hooks.json"));
+    expect(existsSync(join(dir, ".codex"))).toBe(false);
+    expect(existsSync(join(dir, ".claude"))).toBe(false);
+    expect(existsSync(join(dir, ".glosa"))).toBe(false);
+    expect(existsSync(scopedManifestPaths(dir).workspace)).toBe(false);
+  });
+
+  test("a scoped mid-run write failure rolls back earlier provider files and the manifest", async () => {
+    const dir = freshDir();
+    const result = await runScopedInit({
+      dir,
+      agents: ["claude-code"],
+      resolveGlosaBin: () => BIN_A,
+      writeFileAtomic(path, content) {
+        if (path === mcpPathOf(dir)) throw new Error("injected MCP write failure");
+        mkdirSync(join(path, ".."), { recursive: true });
+        writeFileSync(path, content);
+      },
+    });
+    expect(result.exitCode).toBe(70);
+    expect(existsSync(settingsPathOf(dir))).toBe(false);
+    expect(existsSync(mcpPathOf(dir))).toBe(false);
+    expect(existsSync(scopedManifestPaths(dir).workspace)).toBe(false);
   });
 });

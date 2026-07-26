@@ -12,7 +12,7 @@ import {
   tokenPath,
 } from "../../daemon/src/index.ts";
 import { join } from "node:path";
-import { checkManifestDrift } from "./init.ts";
+import { checkScopedManifestDrift } from "./scoped-init.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
@@ -122,13 +122,23 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 4. claude-code (WARN if absent, never fail — A6 §F30)
   const claudePath = deps.which("claude");
   if (!claudePath) {
-    checks.push(check("claude-code", "warn", "claude not found on PATH — required for the live agent integration, not for glosa itself"));
+    checks.push(
+      check(
+        "claude-code",
+        "warn",
+        "claude not found on PATH — required for the live agent integration, not for glosa itself",
+      ),
+    );
   } else {
     const claudeVersionOut = deps.runVersionProbe([claudePath, "--version"]);
     const claudeOk = meetsFloor(claudeVersionOut, "2.1.80");
     checks.push(
       claudeOk === false
-        ? check("claude-code", "warn", `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`)
+        ? check(
+            "claude-code",
+            "warn",
+            `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`,
+          )
         : check("claude-code", "pass", claudeVersionOut ?? `found at ${claudePath}`),
     );
   }
@@ -139,8 +149,16 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   const openPath = deps.which("open");
   checks.push(
     openPath
-      ? check("browser", "pass", "macOS `open` launcher is available (does not verify a specific browser/version floor)")
-      : check("browser", "warn", "macOS `open` launcher not found — `glosa open` will not be able to launch a browser automatically"),
+      ? check(
+          "browser",
+          "pass",
+          "macOS `open` launcher is available (does not verify a specific browser/version floor)",
+        )
+      : check(
+          "browser",
+          "warn",
+          "macOS `open` launcher not found — `glosa open` will not be able to launch a browser automatically",
+        ),
   );
 
   // 6. daemon+proto — `status` is hoisted for the pending-delivery/orphaned-state checks below,
@@ -152,8 +170,16 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
     checks.push(
       compatible
-        ? check("daemon+proto", "pass", `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`)
-        : check("daemon+proto", "fail", `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`),
+        ? check(
+            "daemon+proto",
+            "pass",
+            `daemon reachable, protocol ${status.daemon.protocol_version} compatible with client ${PROTOCOL_VERSION}`,
+          )
+        : check(
+            "daemon+proto",
+            "fail",
+            `daemon protocol ${status.daemon.protocol_version} is incompatible with this client's ${PROTOCOL_VERSION}`,
+          ),
     );
   } catch (err) {
     checks.push(check("daemon+proto", "fail", `daemon unreachable: ${(err as Error).message}`));
@@ -175,11 +201,21 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 8. workspace (.glosa + baseline checkpoint + matcher non-empty tracked set)
   const glosaDir = join(dir, ".glosa");
   if (!existsSync(glosaDir)) {
-    checks.push(check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``));
+    checks.push(
+      check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
+    );
   } else {
     const shadowGitDir = join(glosaDir, "shadow.git");
     const headOut = existsSync(shadowGitDir)
-      ? deps.runVersionProbe(["git", `--git-dir=${shadowGitDir}`, `--work-tree=${dir}`, "rev-parse", "--verify", "-q", "HEAD"])
+      ? deps.runVersionProbe([
+          "git",
+          `--git-dir=${shadowGitDir}`,
+          `--work-tree=${dir}`,
+          "rev-parse",
+          "--verify",
+          "-q",
+          "HEAD",
+        ])
       : null;
     if (!headOut) {
       checks.push(check("workspace", "fail", `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve)`));
@@ -194,20 +230,49 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   }
 
   // 9. hooks (manifest hash match / drift)
-  const { manifest, drifted } = checkManifestDrift(dir);
+  const { manifest, manifests, drifted } = checkScopedManifestDrift(dir, { glosaHomeDir: deps.glosaHome() });
   if (!manifest) {
-    checks.push(check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"));
+    checks.push(
+      check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"),
+    );
   } else if (drifted.length > 0) {
-    checks.push(check("hooks", "fail", `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``));
+    checks.push(
+      check(
+        "hooks",
+        "fail",
+        `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``,
+      ),
+    );
   } else {
-    checks.push(check("hooks", "pass", "hooks manifest matches what glosa init installed"));
+    const installed = manifests.flatMap((item) =>
+      Object.keys(item.providers).map((provider) => `${provider} (${item.scope})`),
+    );
+    checks.push(check("hooks", "pass", `hooks manifest matches: ${installed.join(", ")}`));
   }
 
-  // 10. mcp (.mcp.json has the glosa entry)
+  // 10. MCP follows the effective scoped/provider manifest rather than assuming workspace Claude.
+  const hasOwnedMcp = manifests.some((item) =>
+    Object.values(item.providers).some((provider) => provider?.files.mcp !== undefined),
+  );
+  const ownedMcpPaths = manifests.flatMap((item) =>
+    Object.values(item.providers)
+      .map((provider) => provider?.files.mcp?.path)
+      .filter((path): path is string => typeof path === "string"),
+  );
+  const mcpDrifted = drifted.some((detail) => ownedMcpPaths.some((path) => detail.startsWith(path)));
   const mcpPath = join(dir, ".mcp.json");
-  let mcpDefined = false;
-  if (!existsSync(mcpPath)) {
-    checks.push(check("mcp", "warn", `${mcpPath} does not exist — run \`glosa init\``));
+  const scopedClaudeMcp = manifests.flatMap((item) => {
+    const ownedMcp = item.providers["claude-code"]?.files.mcp;
+    return ownedMcp === undefined ? [] : [ownedMcp.path];
+  });
+  let mcpDefined =
+    scopedClaudeMcp.length > 0 && !drifted.some((detail) => scopedClaudeMcp.some((path) => detail.startsWith(path)));
+  if (hasOwnedMcp && manifest) {
+    checks.push(
+      check("mcp", mcpDrifted ? "fail" : "pass", `configured through ${manifests.length} scoped manifest(s)`),
+    );
+  } else if (!existsSync(mcpPath)) {
+    checks.push(check("mcp", "warn", "no provider MCP integration is installed — run `glosa init`"));
   } else {
     try {
       const parsed = JSON.parse(readFileSync(mcpPath, "utf8"));
@@ -304,14 +369,24 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 14. Channels are an optional Claude capability. The registry does not expose a durable
   // registration handshake, so doctor reports the capability as unverified without degrading the
   // hook/MCP compatibility result.
-  checks.push(check("channel", "skip", "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path"));
+  checks.push(
+    check(
+      "channel",
+      "skip",
+      "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path",
+    ),
+  );
 
   // 15. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();
   checks.push(
     existsSync(configDir)
       ? check("transcript-root", "pass", `${configDir} exists`)
-      : check("transcript-root", "warn", `${configDir} does not exist yet — Claude Code may not have run on this machine`),
+      : check(
+          "transcript-root",
+          "warn",
+          `${configDir} does not exist yet — Claude Code may not have run on this machine`,
+        ),
   );
 
   return checks;

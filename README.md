@@ -88,19 +88,20 @@ After the first install, `glosa update` handles this automatically.
 
 </details>
 
-Set up the agent integration once in a writing workspace, then open it:
+Open a writing workspace first; install agent delivery only when you want feedback routed back:
 
 ```sh
 cd /path/to/your/workspace
-glosa init
 glosa open
+glosa init --agent claude-code
 ```
 
-`glosa init` installs workspace-local hooks and MCP configuration for feedback delivery (hooks,
-routing, and optional Channels). A durable global MCP entry can run preview-only `glosa_present`
-without workspace init — read-only preview URLs do not require hooks. `glosa open` starts or reuses
-the singleton daemon and opens a paired browser tab. Run `glosa doctor` to verify the
-workspace-installed integration, or `glosa --help` to see every command.
+`glosa init` defaults to workspace scope and accepts repeatable `--agent claude-code|codex` flags
+(`--agent all` installs both). Without a flag it selects one locally detected provider or prompts
+once when interactive; scripts and `--json` callers must resolve ambiguity explicitly. Use
+`--scope user` for a user-wide integration. Preview-only `glosa open` and `glosa_present` do not
+require init or an agent session. Run `glosa doctor` to verify effective provider installations,
+or `glosa --help` to see every command.
 
 ### Updating
 
