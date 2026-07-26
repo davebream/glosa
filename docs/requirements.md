@@ -279,7 +279,7 @@ the entry survives.
   provider-targeted hook/MCP merge with workspace-default or explicit user scope, ownership manifest,
   backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (13 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
+  `token rotate|revoke`, `doctor` (15 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
   internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`), never auto-invokes init, and
   supports an init-free Preview first run — but surfaces the un-wired state honestly: a
