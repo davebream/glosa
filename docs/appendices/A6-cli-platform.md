@@ -7,7 +7,10 @@
 ## F26 — `glosa init` merge/ownership/uninstall
 - **Purpose and lazy boundary.** `glosa init` installs agent delivery integration; it is not a
   prerequisite for opening or previewing an artifact. `glosa open` creates the `.glosa/` scaffold
-  and opens the browser without invoking init, prompting for init, or writing agent configuration.
+  and opens the browser without invoking init or writing agent configuration. It is never silent
+  about the gap: an un-init'd workspace produces a `not-initialized` warning, and on a TTY (no
+  `--json`) `open` may additionally offer a one-question consented init (`--init`/`--no-init`
+  bypass; see the command-surface row) — configuration is only ever written after an explicit yes.
   Preview-only `glosa_present` is likewise init-free and session-independent. Annotate/Edit remain
   usable as local UI acts without init; when no delivery integration is available the SPA may show
   a non-blocking setup action, but it never performs configuration writes itself.
@@ -211,7 +214,7 @@
 ## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version --build-id)
 | cmd | args | does | exit |
 |---|---|---|---|
-| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). | 0;2;3;5 |
+| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url] [--init\|--no-init]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Un-init'd/drifted workspaces get `not-initialized`/`init-drifted` warnings (exit stays 0); on a TTY without `--json`, `not-initialized` additionally offers a one-question consented `glosa init` (`--init` skips the question, `--no-init` suppresses the offer; both together = exit 2). | 0;2;3;5 |
 | `init` | `[dir]` `--scope workspace\|user` `[--agent claude-code\|codex\|all]...` `--print/--force/--uninstall/--restore-backup` | §F26 targeted merge/uninstall; provider prompt only for an unresolved TTY selection | 0;2;6;9;5 |
 | `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
@@ -225,7 +228,7 @@
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
 | `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
-- `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery).
+- `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery) — but never silently: `open` emits a `not-initialized` warning (or `init-drifted` when glosa-owned config nodes changed since init) naming the fix command and the session-restart step, with exit code 0 preserved. The consented TTY init offer never fires for drift (re-init over drift can require `--force`, which `open` never runs on the user's behalf), never fires non-TTY or under `--json`, and an internal probe failure never breaks `open`.
 - `open --url` performs the same token, daemon, registration, optional file deep-link, surface/mode,
   and bind work without invoking the macOS browser launcher. Plain success output is exactly the URL
   plus a newline; `--json` retains the F26 envelope with
@@ -236,7 +239,7 @@
   but is not hard-blocked.
 - Preview lock is an **affordance expressing intent ("not for review")**, not access control: the
   annotation API continues to accept authenticated POSTs for the artifact.
-- doctor 12 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
+- doctor 13 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
 
 ## Metadata and binding output
 

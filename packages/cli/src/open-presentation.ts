@@ -6,6 +6,7 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { GlosaApiClient, OpenWorkspaceResult } from "./api-client.ts";
 import { isApiError } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope } from "./envelope.ts";
+import { type ManifestDriftResult, checkManifestDrift } from "./init.ts";
 
 export type OpenSurface = "document" | "workspace";
 export type PresentationMode = "preview" | "annotate" | "edit";
@@ -66,6 +67,10 @@ export interface OpenPresentationDeps {
   fileExists: (path: string) => boolean;
   /** True when the path exists as a regular non-symlink file. Defaults to `fileExists`. */
   isRegularFile?: (path: string) => boolean;
+  /** Read-only init-manifest probe used for the `not-initialized`/`init-drifted` warnings.
+   * Defaults to init.ts's real `checkManifestDrift` so open's verdict can never disagree with
+   * `glosa doctor`'s. Injectable for tests. */
+  checkManifestDrift?: (dir: string) => ManifestDriftResult;
 }
 
 /**
@@ -266,6 +271,33 @@ export async function runOpenPresentation(
       };
     }
     return { ...daemonUnreachableEnvelope("open", (err as Error).message), data: {} };
+  }
+
+  // Un-wired/drifted visibility (issue #78): a workspace can be opened+annotated WITHOUT init
+  // (A6 — SPA-only, no agent delivery), but that state must never be silent — annotations queue
+  // in the bus and are only delivered through init-installed hooks. Advisory only: exit stays 0,
+  // and an internal probe failure never breaks `open`.
+  try {
+    const drift = (deps.checkManifestDrift ?? checkManifestDrift)(opened.path);
+    if (drift.manifest === null) {
+      warnings.push({
+        code: "not-initialized",
+        message:
+          "this workspace is not wired for agent feedback — annotations are saved locally but will never be delivered to a session.\n" +
+          `  fix: run \`glosa init ${opened.path}\`\n` +
+          "  then: restart or /resume your Claude Code session so it loads glosa.",
+      });
+    } else if (drift.drifted.length > 0) {
+      warnings.push({
+        code: "init-drifted",
+        message:
+          `glosa's agent integration has drifted since \`glosa init\` (${drift.drifted.length} node(s) changed) — delivery may be broken.\n` +
+          `  fix: re-run \`glosa init ${opened.path}\`\n` +
+          "  then: restart or /resume your Claude Code session.",
+      });
+    }
+  } catch {
+    // Visibility must never make `open` fragile — skip the warning on probe failure.
   }
 
   let boundSession: string | undefined;

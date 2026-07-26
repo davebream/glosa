@@ -103,6 +103,9 @@ function printInitResult(result: InitResult, json: boolean): void {
   process.stdout.write(`  codex hooks: ${result.data.files.codex_hooks.path}\n`);
   process.stdout.write(`  codex mcp:   ${result.data.files.codex_config.path}\n`);
   process.stdout.write(`\nActivate channels for this session with:\n  ${result.data.channel_command}\n`);
+  process.stdout.write(
+    "\nRestart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
+  );
 }
 
 function printUninstallResult(result: UninstallResult, json: boolean): void {
@@ -228,6 +231,14 @@ function createSubCommands(setExitCode: (code: number) => void) {
           type: "boolean",
           description: "Store directory state under GLOSA_HOME instead of beside it",
         },
+        init: {
+          type: "boolean",
+          description: "Wire the workspace (run `glosa init`) without prompting",
+        },
+        "no-init": {
+          type: "boolean",
+          description: "Never prompt to wire the workspace",
+        },
       },
     },
     async (context) => {
@@ -244,6 +255,11 @@ function createSubCommands(setExitCode: (code: number) => void) {
         setExitCode(2);
         return;
       }
+      if (values.init && values["no-init"]) {
+        process.stderr.write("glosa open: --init and --no-init are mutually exclusive\n");
+        setExitCode(2);
+        return;
+      }
       const result = await openModule.runOpen(
         (values.target as string | undefined) ?? process.cwd(),
         openModule.realOpenDeps(createHttpGlosaClient),
@@ -257,6 +273,13 @@ function createSubCommands(setExitCode: (code: number) => void) {
         },
       );
       openModule.printOpenResult(result, Boolean(values.json), Boolean(values.quiet) || urlOnly);
+      // Consent-gated wiring offer AFTER the warning + URL print so the prompt reads as a
+      // follow-up to the not-initialized warning. Never changes open's exit code.
+      await openModule.maybeOfferInit(result, {
+        initFlag: Boolean(values.init),
+        noInitFlag: Boolean(values["no-init"]),
+        json: Boolean(values.json),
+      });
       setExitCode(result.exitCode);
     },
   );

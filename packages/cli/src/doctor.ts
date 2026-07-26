@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Twelve enumerated checks — A6's own
-// command-surface table names exactly 12 (platform, bun, git, claude-code, browser, daemon+proto,
-// token/pairing, workspace, hooks, mcp, optional Channel status, transcript-root).
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Thirteen enumerated checks — A6's own
+// command-surface table names exactly 13 (platform, bun, git, claude-code, browser, daemon+proto,
+// token/pairing, workspace, hooks, mcp, mcp-enabled, optional Channel status, transcript-root).
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   claudeConfigDir,
@@ -202,13 +202,15 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
 
   // 10. mcp (.mcp.json has the glosa entry)
   const mcpPath = join(dir, ".mcp.json");
+  let mcpDefined = false;
   if (!existsSync(mcpPath)) {
     checks.push(check("mcp", "warn", `${mcpPath} does not exist — run \`glosa init\``));
   } else {
     try {
       const parsed = JSON.parse(readFileSync(mcpPath, "utf8"));
+      mcpDefined = Boolean(parsed?.mcpServers?.glosa);
       checks.push(
-        parsed?.mcpServers?.glosa
+        mcpDefined
           ? check("mcp", "pass", `${mcpPath} has a "glosa" MCP server entry`)
           : check("mcp", "warn", `${mcpPath} has no "glosa" MCP server entry — run \`glosa init\``),
       );
@@ -217,12 +219,41 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     }
   }
 
-  // 11. Channels are an optional Claude capability. The registry does not expose a durable
+  // 11. mcp-enabled — the enabled-but-undefined trap (issue #78): a settings layer force-enables
+  // an MCP server named "glosa" via enabledMcpjsonServers while .mcp.json defines no such server.
+  // The workspace LOOKS half-configured (Claude Code shows the enablement) but the server can
+  // never load. Invalid/absent settings layers are tolerated — this check only ever reads.
+  const enablingLayers: string[] = [];
+  for (const settingsFile of [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")]) {
+    if (!existsSync(settingsFile)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(settingsFile, "utf8"));
+      const enabled = parsed?.enabledMcpjsonServers;
+      if (Array.isArray(enabled) && enabled.includes("glosa")) enablingLayers.push(settingsFile);
+    } catch {
+      // invalid JSON in a settings layer is the hooks/mcp checks' concern, not this one's
+    }
+  }
+  if (enablingLayers.length > 0 && !mcpDefined) {
+    checks.push(
+      check(
+        "mcp-enabled",
+        "warn",
+        `${enablingLayers.join(", ")} enables an MCP server named "glosa" via enabledMcpjsonServers, but .mcp.json does not define it — run \`glosa init\` to reinstall the entry, or remove "glosa" from enabledMcpjsonServers`,
+      ),
+    );
+  } else if (enablingLayers.length > 0) {
+    checks.push(check("mcp-enabled", "pass", `enabledMcpjsonServers references "glosa" and .mcp.json defines it`));
+  } else {
+    checks.push(check("mcp-enabled", "pass", `no settings layer force-enables an undefined glosa MCP server`));
+  }
+
+  // 12. Channels are an optional Claude capability. The registry does not expose a durable
   // registration handshake, so doctor reports the capability as unverified without degrading the
   // hook/MCP compatibility result.
   checks.push(check("channel", "skip", "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path"));
 
-  // 12. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
+  // 13. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();
   checks.push(
     existsSync(configDir)
