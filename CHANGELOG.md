@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Per-workspace wiring status API (`GET /w/:slug/wiring`): a three-state signal — `live`
+  (delivery would reach a session), `wired` (init installed, restart/resume needed), `unwired`
+  (init never ran) — plus pending-entry count, with the same value surfaced on `GET /api/status`.
+- Consent-gated init trigger (`POST /w/:slug/init`): on an explicit client request the daemon
+  runs `glosa init` for a registered directory workspace (CSRF-protected state-changing route;
+  scrubbed child env, 30s timeout, single-flighted per workspace) and reports whether a session
+  restart is still required. API contract bumped to 1.4 (additive).
+
 ### Fixed
 
 - Workspace garbage collection can no longer remove a registration whose bus still holds pending

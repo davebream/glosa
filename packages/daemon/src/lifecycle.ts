@@ -19,6 +19,7 @@ import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
 import { createApiFetch, createClassFFetch } from "./http.ts";
+import { createInitRunner } from "./init-runner.ts";
 import {
   type DaemonLock,
   isPidAlive,
@@ -173,6 +174,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     pushRegistry: backend.pushRegistry,
     shutdownSignal: shutdownController.signal,
     home,
+    // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
+    runWorkspaceInit: createInitRunner({ home, port }),
   });
   const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
 
