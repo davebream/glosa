@@ -69,7 +69,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   | Tokenless handshake `GET /api/handshake` | No | Reject if Origin present+foreign; allow self/absent. Body non-sensitive `{contract_version,daemon_version,paired}`. |
   | Presentation redeem `POST /api/presentation-token/redeem` | No (redeems for Bearer) | Reject if Origin missing OR foreign; also reject `Sec-Fetch-Site: cross-site`. Returns the durable pairing token once. |
   | Authed reads (GET: artifact, SSE, diff, transcript, inbox) | Yes (401) | Reject only if Origin present+foreign; absent allowed (Bearer is the gate). |
-  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
+  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token, workspace init `POST /w/:slug/init` — mutates USER CONFIG via a consent-gated `glosa init` child, A1 §5.19) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
   | Navigation (top GET: `/` SPA shell, `/doc/<cap>/...` class-F) | No (nav can't carry headers) | Origin checks inapplicable; SPA shell is static+non-sensitive, self-auths via fragment post-load; class-F gated by PATH CAPABILITY not headers. |
 - Resolves the doc contradiction: "every request validated" = the Host check unconditionally; Origin check is route-class-scoped.
 

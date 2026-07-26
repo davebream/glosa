@@ -65,6 +65,8 @@ import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presen
 import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
 import { PROTOCOL_VERSION } from "./protocol.ts";
 import { glosaHome } from "./home.ts";
+import { probeInitManifest } from "./init-probe.ts";
+import type { InitRunner } from "./init-runner.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "./registry/orphan-scan.ts";
 import type { SessionRegistry } from "./registry/session-registry.ts";
 import { canonicalize } from "./registry/slug.ts";
@@ -175,6 +177,11 @@ export interface ApiContext {
    * defaulted to `glosaHome()` at the use site so every hand-built test context keeps compiling;
    * production wires the boot-time home (lifecycle.ts) so a custom `GLOSA_HOME` is honored. */
   home?: string;
+  /** The consent-gated `glosa init` shell-out behind `POST /w/:slug/init` (issue #80, A1 §5.19).
+   * Optional: absent → the route answers 503 (same posture as an absent providerRegistry), so
+   * hand-built test contexts keep compiling and narrow tests can inject a fake. Production wires
+   * `createInitRunner` in lifecycle.ts. */
+  runWorkspaceInit?: InitRunner;
 }
 
 /** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
@@ -1883,6 +1890,123 @@ async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promis
  * in a single round trip, and every piece it needs (`workspaceIndex`, `sessionRegistry`, each
  * workspace's own journal) already lives on `ctx` — there's nothing a second daemon endpoint would
  * add except more network round trips for the CLI to fail independently on. */
+export type WiringState = "live" | "wired" | "unwired";
+
+interface WiringBody {
+  state: WiringState;
+  init: { manifest_present: boolean; manifest_invalid: boolean };
+  sessions: { bound_live: number; routable_live: number };
+  pending_count: number;
+  kind: WorkspaceEntry["kind"];
+}
+
+/** The 3-state wiring signal behind the SPA badge (issue #80, A1 §5.18): `live` = init manifest
+ * present AND at least one session the delivery router would actually reach (`forWorkspace` —
+ * the same predicate delivery routing uses, so "live" means delivery genuinely lands);
+ * `wired` = manifest present but no routable session (restart/resume needed); `unwired` = init
+ * never ran. `pending_count` rides along so the badge can say "N queued". NEVER includes a
+ * filesystem path (A1 §5.14's rule for SPA-facing workspace routes). */
+function computeWiring(ctx: ApiContext, entry: WorkspaceEntry): WiringBody {
+  const probe = probeInitManifest(entry.worktree_path);
+  const boundLive = ctx.sessionRegistry.explicitlyBoundForWorkspace(entry.canonical_path).length;
+  const routableLive = ctx.sessionRegistry.forWorkspace(entry.canonical_path).length;
+  let pending = 0;
+  try {
+    pending = pendingCount(peekJournal(entry).state);
+  } catch {
+    // a torn/unreadable journal must not break a status read; 0 is the honest floor here
+  }
+  const state: WiringState = probe.manifest_present ? (routableLive > 0 ? "live" : "wired") : "unwired";
+  return {
+    state,
+    init: probe,
+    sessions: { bound_live: boundLive, routable_live: routableLive },
+    pending_count: pending,
+    kind: entry.kind,
+  };
+}
+
+/** `GET /w/:slug/wiring` (authed-read, issue #80). */
+function handleWiring(ctx: ApiContext, slug: string, pathname: string): Response {
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  return Response.json(computeWiring(ctx, resolved.entry));
+}
+
+/** `POST /w/:slug/init` (state-changing, issue #80) — runs `glosa init` for a registered
+ * workspace on the client's explicit consent (the SPA's dialog click). CSRF safety is the
+ * state-changing route class (Bearer + Origin + Sec-Fetch-Site); the workspace dir comes from
+ * the registry entry, never the request. Loose-file workspaces are rejected: their worktree is
+ * the CONTAINING directory, and silently writing `.claude/` config into a directory the user
+ * may not consider a project would be a surprising mutation — the SPA shows the copyable
+ * terminal command instead. */
+async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
+  if (!resolved.ok) return resolved.response;
+  const entry = resolved.entry;
+  if (!ctx.runWorkspaceInit) {
+    return problem(503, "internal", "workspace init is unavailable", undefined, url.pathname);
+  }
+  if (entry.kind !== "directory") {
+    return problem(400, "validation-failed", "init applies to directory workspaces", undefined, url.pathname);
+  }
+  let force = false;
+  const raw = await req.text();
+  if (raw.length > 0) {
+    try {
+      const body = JSON.parse(raw) as Record<string, unknown> | null;
+      // Forwarded ONLY on an explicit true — --force overwrites a foreign glosa MCP key, so it
+      // must be a deliberate client re-confirmation, never a default.
+      force = body?.force === true;
+    } catch {
+      return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+    }
+  }
+
+  const result = await ctx.runWorkspaceInit(entry.worktree_path, entry.registration_id, { force });
+  switch (result.kind) {
+    case "completed": {
+      const envelope = result.envelope;
+      if (envelope.exit_code === 0) {
+        const wiring = computeWiring(ctx, entry);
+        // The F26 init envelope reports change per target file (`data.files.<name>.changed`) —
+        // "anything changed" is the aggregate the SPA cares about ("wired now" vs "was already").
+        const files =
+          typeof envelope.data === "object" && envelope.data !== null
+            ? (envelope.data as { files?: Record<string, { changed?: boolean }> }).files
+            : undefined;
+        const changed = files ? Object.values(files).some((f) => f?.changed === true) : true;
+        return Response.json({
+          ok: true,
+          changed,
+          warnings: envelope.warnings,
+          wiring,
+          // Post-init the hooks only take effect at the next SessionStart — this is the field
+          // the SPA turns into "restart or /resume your Claude Code session".
+          restart_required: wiring.sessions.routable_live === 0,
+        });
+      }
+      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 =
+      // durable-install-required (ephemeral runner cache). Both are honest 409 conflicts with
+      // the child's own error code + hint in detail — see A6 §F26's stable exit-code table.
+      if (envelope.exit_code === 6 || envelope.exit_code === 2) {
+        const err = envelope.error;
+        const detail = err ? `${err.code}: ${err.message}${err.hint ? ` — ${err.hint}` : ""}` : `init exited ${envelope.exit_code}`;
+        return problem(409, "conflict", "glosa init reported a conflict", detail, url.pathname);
+      }
+      const failDetail = envelope.error ? `${envelope.error.code}: ${envelope.error.message}` : `init exited ${envelope.exit_code}`;
+      return problem(500, "internal", "glosa init failed", failDetail, url.pathname);
+    }
+    case "timeout":
+      return problem(500, "internal", "glosa init timed out", undefined, url.pathname);
+    case "spawn-failed":
+      return problem(500, "internal", `could not spawn glosa init: ${result.message}`, undefined, url.pathname);
+    case "bad-output":
+      return problem(500, "internal", result.message, undefined, url.pathname);
+  }
+}
+
 function handleStatusAggregate(ctx: ApiContext): Response {
   const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
     const { state } = peekJournal(e);
@@ -1892,6 +2016,9 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       last_seen: e.last_seen,
       pending_count: pendingCount(state),
       has_attention: hasOpenAttention(state),
+      // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
+      // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
+      wiring: computeWiring(ctx, e).state,
     };
   });
   const sessions = ctx.sessionRegistry.list().map((s) => ({
@@ -2448,6 +2575,15 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/diff$/))) {
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: (req) => handleDiff(ctx, slug, req) };
+  }
+  // issue #80: the SPA wiring badge's read + the consent-gated init trigger (A1 §5.18/§5.19).
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/wiring$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleWiring(ctx, slug, pathname) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/init$/))) {
+    const slug = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceInit(ctx, slug, req) };
   }
   // P3.5: full checkpoint history (A6 §F31).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/checkpoints$/))) {

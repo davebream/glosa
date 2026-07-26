@@ -96,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.3", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.4", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -113,11 +113,44 @@ new workspace from the SPA, that's an additive route — not required for v1.)
 
 ### 5.2b `GET /api/status`
 Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
-`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention}], sessions:[…],
-orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive, issue #79) lists
-`~/.glosa/state/<id>` buses whose journal still derives pending entries but whose registration is
-gone — stranded user work recoverable by re-opening the original path (deterministic registration
-ids reclaim the surviving bus). A scan failure degrades to `[]`; the route never fails over it.
+`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, wiring}],
+sessions:[…], orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive,
+issue #79) lists `~/.glosa/state/<id>` buses whose journal still derives pending entries but whose
+registration is gone — stranded user work recoverable by re-opening the original path
+(deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
+route never fails over it. `wiring` (additive, issue #80) is the same 3-state value §5.18 serves.
+
+### 5.18 `GET /w/:slug/wiring`
+Bearer required (authed read; issue #80). The SPA wiring badge's per-workspace signal:
+```json
+{ "state": "live" | "wired" | "unwired",
+  "init": { "manifest_present": true, "manifest_invalid": false },
+  "sessions": { "bound_live": 1, "routable_live": 1 },
+  "pending_count": 3, "kind": "directory" }
+```
+`live` = init manifest present AND ≥1 session the delivery router (`forWorkspace`, R2 precedence)
+would actually reach; `wired` = manifest present, no routable session (restart/resume needed);
+`unwired` = init never ran. **The response never includes a filesystem path** (§5.14's rule).
+Poll-oriented: freshness comes from client polling + refetch after `POST /w/:slug/init` (which
+returns a fresh wiring object). **404 not-found** — unknown `:slug`.
+
+### 5.19 `POST /w/:slug/init`
+State-changing (Bearer + Origin + `Sec-Fetch-Site` enforced by route class; issue #80). Runs
+`glosa init` for a registered **directory** workspace on the client's explicit consent — consent
+is the client's (the SPA's dialog click); this route's job is to be unforgeable. The workspace dir
+comes from the registry entry, never the request. Body optional: `{ "force"?: true }` — forwarded
+to `--force` only on an explicit true (it overwrites a foreign glosa MCP key). The daemon spawns
+the CLI as a child (`glosa init <dir> --json`, env scrubbed of `ANTHROPIC_API_KEY`/`GIT_*`,
+30s timeout, single-flighted per workspace) and maps the F26 envelope:
+- **200** `{ok:true, changed, warnings, wiring:<§5.18 object>, restart_required}` —
+  `restart_required` is true when no routable live session exists (hooks load at SessionStart).
+- **400 validation-failed** — loose-file workspace (its worktree is the *containing* directory;
+  writing `.claude/` config there would be a surprising mutation — the client shows the terminal
+  command instead) or invalid body JSON. **404** unknown slug. **409 conflict** — child exit 6
+  (foreign-config conflict; detail carries the child's `error.code` + hint so the client may
+  re-confirm with `force:true`) or exit 2 (`durable-install-required`). **500 internal** — other
+  child failures, timeout, spawn failure, unparseable child output; the raw child stdout is never
+  echoed beyond the parsed envelope fields. **503** — runner not wired (narrow test contexts).
 
 ### 5.3 `GET /w/:slug/artifacts`
 Bearer required. Sidebar listing, natural-sort order in the no-adapter case (adapter pack may

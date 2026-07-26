@@ -1480,4 +1480,222 @@ describe("A1 §5 route catalog", () => {
     const res = await fetchFn(req(`/w/${slug}/inbox`, { headers: { Origin: "http://evil.example.com" } }));
     expect(res.status).toBe(403);
   });
+
+  // --- GET /w/:slug/wiring + POST /w/:slug/init (issue #80, A1 §5.18/§5.19) ---
+
+  describe("GET /w/:slug/wiring", () => {
+    test("unknown slug → 404; no Bearer → 401; foreign Origin → 403 (authed-read class)", async () => {
+      expect((await fetchFn(req("/w/nope/wiring"))).status).toBe(404);
+      const bare = new Request(`http://127.0.0.1:${PORT}/w/${slug}/wiring`, {
+        headers: { Host: `127.0.0.1:${PORT}` },
+      });
+      expect((await fetchFn(bare)).status).toBe(401);
+      expect(
+        (await fetchFn(req(`/w/${slug}/wiring`, { headers: { Origin: "http://evil.example.com" } }))).status,
+      ).toBe(403);
+    });
+
+    test("unwired → wired → live → back to wired on lease expiry; response never leaks a path", async () => {
+      // No init manifest anywhere -> unwired.
+      let res = await fetchFn(req(`/w/${slug}/wiring`));
+      expect(res.status).toBe(200);
+      let body = await res.json();
+      expect(body.state).toBe("unwired");
+      expect(body.kind).toBe("directory");
+      expect(body.init).toEqual({ manifest_present: false, manifest_invalid: false });
+
+      // Manifest present, no session -> wired.
+      mkdirSync(join(root, ".claude"), { recursive: true });
+      writeFileSync(join(root, ".claude", ".glosa-init.json"), JSON.stringify({ v: 1, files: {} }));
+      body = await (await fetchFn(req(`/w/${slug}/wiring`))).json();
+      expect(body.state).toBe("wired");
+      expect(body.sessions).toEqual({ bound_live: 0, routable_live: 0 });
+
+      // A live explicitly-bound session -> live (counted in both session counters).
+      await sessionRegistry.register({
+        session_id: "sess-wiring-1",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "hook",
+      });
+      body = await (await fetchFn(req(`/w/${slug}/wiring`))).json();
+      expect(body.state).toBe("live");
+      expect(body.sessions.bound_live).toBe(1);
+      expect(body.sessions.routable_live).toBe(1);
+
+      // Expired lease -> not routable -> back to wired.
+      await sessionRegistry.register({
+        session_id: "sess-wiring-1",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "hook",
+        lease_expiry: new Date(Date.now() - 1000).toISOString(),
+      });
+      body = await (await fetchFn(req(`/w/${slug}/wiring`))).json();
+      expect(body.state).toBe("wired");
+
+      // A1 §5.14's rule: SPA-facing workspace responses never carry the canonical path.
+      expect(JSON.stringify(body)).not.toContain(root);
+    });
+
+    test("pending_count reflects journal-derived pending entries", async () => {
+      const bus = busRegistry.get(root);
+      await bus.createEntry("inb-w1", { kind: "annotation" });
+      const body = await (await fetchFn(req(`/w/${slug}/wiring`))).json();
+      expect(body.pending_count).toBe(1);
+    });
+
+    test("invalid manifest JSON → wired with manifest_invalid:true (init ran; doctor owns the diagnosis)", async () => {
+      mkdirSync(join(root, ".claude"), { recursive: true });
+      writeFileSync(join(root, ".claude", ".glosa-init.json"), "{not json");
+      const body = await (await fetchFn(req(`/w/${slug}/wiring`))).json();
+      expect(body.state).toBe("wired");
+      expect(body.init).toEqual({ manifest_present: true, manifest_invalid: true });
+    });
+  });
+
+  describe("POST /w/:slug/init", () => {
+    const okEnvelope = (overrides: Record<string, unknown> = {}) => ({
+      kind: "completed" as const,
+      envelope: {
+        glosa_json: 1 as const,
+        ok: true,
+        command: "init",
+        exit_code: 0,
+        data: { files: { settings: { changed: true } } },
+        warnings: [],
+        error: null,
+        ...overrides,
+      },
+    });
+
+    test("security: no Bearer → 401; missing Origin → 403; foreign Origin → 403 (state-changing class)", async () => {
+      ctx.runWorkspaceInit = async () => okEnvelope();
+      const bare = new Request(`http://127.0.0.1:${PORT}/w/${slug}/init`, {
+        method: "POST",
+        headers: { Host: `127.0.0.1:${PORT}` },
+      });
+      expect((await fetchFn(bare)).status).toBe(401);
+      // Bearer but NO Origin — state-changing rejects (unlike authed-read).
+      expect((await fetchFn(req(`/w/${slug}/init`, { method: "POST" }))).status).toBe(403);
+      expect(
+        (
+          await fetchFn(
+            req(`/w/${slug}/init`, { method: "POST", headers: { Origin: "http://evil.example.com" } }),
+          )
+        ).status,
+      ).toBe(403);
+    });
+
+    test("unknown slug → 404; runner absent → 503", async () => {
+      ctx.runWorkspaceInit = async () => okEnvelope();
+      expect((await fetchFn(stateChangingReq("/w/nope/init", { method: "POST" }))).status).toBe(404);
+      ctx.runWorkspaceInit = undefined;
+      expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(503);
+    });
+
+    test("exit 0 → 200 with fresh wiring + restart_required; dir comes from the registry, force only when sent", async () => {
+      const calls: { dir: string; regId: string; force?: boolean }[] = [];
+      ctx.runWorkspaceInit = async (dir, regId, opts) => {
+        calls.push({ dir, regId, force: opts?.force });
+        // Simulate the child actually installing the manifest, like the real runInit would.
+        mkdirSync(join(root, ".claude"), { recursive: true });
+        writeFileSync(join(root, ".claude", ".glosa-init.json"), JSON.stringify({ v: 1, files: {} }));
+        return okEnvelope();
+      };
+
+      const res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toMatchObject({ ok: true, changed: true, restart_required: true });
+      expect(body.wiring.state).toBe("wired");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.dir).toBe(root); // registry entry's worktree, never the client's input
+      expect(calls[0]?.force).toBe(false);
+
+      // With a routable live session, restart is no longer required.
+      await sessionRegistry.register({
+        session_id: "sess-init-1",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "hook",
+      });
+      const res2 = await fetchFn(
+        stateChangingReq(`/w/${slug}/init`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: true }),
+        }),
+      );
+      const body2 = await res2.json();
+      expect(body2.restart_required).toBe(false);
+      expect(body2.wiring.state).toBe("live");
+      expect(calls[1]?.force).toBe(true);
+    });
+
+    test("exit 6 (conflict) and exit 2 (durable-install-required) → 409 with the child's code + hint in detail", async () => {
+      ctx.runWorkspaceInit = async () =>
+        okEnvelope({
+          ok: false,
+          exit_code: 6,
+          error: { code: "mcp-key-conflict", kind: "conflict", message: "foreign glosa key", hint: "re-run with --force" },
+        });
+      let res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
+      expect(res.status).toBe(409);
+      let problemBody = await res.json();
+      expect(problemBody.detail).toContain("mcp-key-conflict");
+      expect(problemBody.detail).toContain("re-run with --force");
+
+      ctx.runWorkspaceInit = async () =>
+        okEnvelope({
+          ok: false,
+          exit_code: 2,
+          error: { code: "durable-install-required", kind: "usage", message: "ephemeral runner cache", hint: "bun install -g" },
+        });
+      res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
+      expect(res.status).toBe(409);
+      problemBody = await res.json();
+      expect(problemBody.detail).toContain("durable-install-required");
+    });
+
+    test("timeout / spawn-failed / bad-output / other exits → 500 with honest detail; bad body JSON → 400", async () => {
+      ctx.runWorkspaceInit = async () => ({ kind: "timeout" as const });
+      expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
+
+      ctx.runWorkspaceInit = async () => ({ kind: "spawn-failed" as const, message: "ENOENT" });
+      expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
+
+      ctx.runWorkspaceInit = async () => ({ kind: "bad-output" as const, message: "no envelope" });
+      expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
+
+      ctx.runWorkspaceInit = async () => okEnvelope({ ok: false, exit_code: 70, error: { code: "internal", kind: "internal", message: "boom" } });
+      expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
+
+      ctx.runWorkspaceInit = async () => okEnvelope();
+      const res = await fetchFn(
+        stateChangingReq(`/w/${slug}/init`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{not json",
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    test("loose-file workspace → 400 (init applies to directory workspaces)", async () => {
+      const looseDir = mkdtempSync(join(tmpdir(), "glosa-routes-loose-"));
+      writeFileSync(join(looseDir, "note.md"), "# note\n");
+      const opened = await workspaceIndex.resolveOpenTarget(join(looseDir, "note.md"), {});
+      ctx.runWorkspaceInit = async () => okEnvelope();
+
+      const res = await fetchFn(stateChangingReq(`/w/${opened.entry.slug}/init`, { method: "POST" }));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.detail ?? body.title).toContain("directory");
+      rmSync(looseDir, { recursive: true, force: true });
+    });
+  });
 });
