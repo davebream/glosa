@@ -24,21 +24,24 @@ describe("probeInitManifest", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("valid manifest at the pinned literal path → present:true, invalid:false", () => {
+  test("valid workspace v2 manifest at the pinned literal path → present:true, invalid:false", () => {
     const dir = freshDir();
     // The literal path IS the cross-package contract — keep it inline, not behind a helper.
-    mkdirSync(join(dir, ".claude"), { recursive: true });
-    writeFileSync(join(dir, ".claude", ".glosa-init.json"), JSON.stringify({ v: 1, files: { settings: {} } }));
+    mkdirSync(join(dir, ".glosa"), { recursive: true });
+    writeFileSync(
+      join(dir, ".glosa", "init-manifest.json"),
+      JSON.stringify({ version: 2, scope: "workspace", providers: {} }),
+    );
     expect(probeInitManifest(dir)).toEqual({ manifest_present: true, manifest_invalid: false });
     rmSync(dir, { recursive: true, force: true });
   });
 
   test("invalid JSON and wrong-shape manifests → present:true, invalid:true", () => {
     const dir = freshDir();
-    mkdirSync(join(dir, ".claude"), { recursive: true });
-    writeFileSync(join(dir, ".claude", ".glosa-init.json"), "{not json");
+    mkdirSync(join(dir, ".glosa"), { recursive: true });
+    writeFileSync(join(dir, ".glosa", "init-manifest.json"), "{not json");
     expect(probeInitManifest(dir)).toEqual({ manifest_present: true, manifest_invalid: true });
-    writeFileSync(join(dir, ".claude", ".glosa-init.json"), JSON.stringify({ v: 1 })); // no files map
+    writeFileSync(join(dir, ".glosa", "init-manifest.json"), JSON.stringify({ version: 2, scope: "workspace" })); // no providers map
     expect(probeInitManifest(dir)).toEqual({ manifest_present: true, manifest_invalid: true });
     rmSync(dir, { recursive: true, force: true });
   });

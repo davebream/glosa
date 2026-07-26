@@ -67,7 +67,16 @@ export function createInitRunner(deps: InitRunnerDeps): InitRunner {
     let child: ReturnType<typeof Bun.spawn>;
     try {
       child = spawn({
-        cmd: [process.execPath, mainPath, "init", dir, "--json", ...(opts.force === true ? ["--force"] : [])],
+        cmd: [
+          process.execPath,
+          mainPath,
+          "init",
+          dir,
+          "--agent",
+          "claude-code",
+          "--json",
+          ...(opts.force === true ? ["--force"] : []),
+        ],
         env,
         stdin: "ignore",
         stdout: "pipe",
@@ -98,7 +107,9 @@ export function createInitRunner(deps: InitRunnerDeps): InitRunner {
       }
       return { kind: "completed", envelope };
     } catch (err) {
-      return timedOut ? { kind: "timeout" } : { kind: "spawn-failed", message: err instanceof Error ? err.message : String(err) };
+      return timedOut
+        ? { kind: "timeout" }
+        : { kind: "spawn-failed", message: err instanceof Error ? err.message : String(err) };
     } finally {
       clearTimeout(timer);
     }

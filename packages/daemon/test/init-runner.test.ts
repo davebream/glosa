@@ -29,7 +29,7 @@ const OK_ENVELOPE: InitRunEnvelope = {
 };
 
 describe("createInitRunner — unit (injected spawn)", () => {
-  test("argv shape: [execPath, …cli/src/main.ts, init, <dir>, --json]; dir is a discrete element; --force only when sent", async () => {
+  test("argv explicitly targets Claude Code: [execPath, …cli/src/main.ts, init, <dir>, --agent claude-code, --json]; dir is a discrete element; --force only when sent", async () => {
     const spawns: string[][] = [];
     const runner = createInitRunner({
       home: "/tmp/fake-home",
@@ -45,8 +45,8 @@ describe("createInitRunner — unit (injected spawn)", () => {
 
     expect(spawns[0]?.[0]).toBe(process.execPath);
     expect(spawns[0]?.[1]?.endsWith(join("cli", "src", "main.ts"))).toBe(true);
-    expect(spawns[0]?.slice(2)).toEqual(["init", "/ws/with spaces/dir", "--json"]);
-    expect(spawns[1]?.slice(2)).toEqual(["init", "/ws/other", "--json", "--force"]);
+    expect(spawns[0]?.slice(2)).toEqual(["init", "/ws/with spaces/dir", "--agent", "claude-code", "--json"]);
+    expect(spawns[1]?.slice(2)).toEqual(["init", "/ws/other", "--agent", "claude-code", "--json", "--force"]);
   });
 
   test("env: ANTHROPIC_API_KEY and GIT_* scrubbed; GLOSA_HOME/GLOSA_PORT pinned", async () => {
@@ -162,35 +162,31 @@ describe("createInitRunner — unit (injected spawn)", () => {
 });
 
 describe("createInitRunner — real subprocess integration", () => {
-  test(
-    "real `glosa init <dir> --json` lands a manifest; second run reports changed:false",
-    async () => {
-      const home = mkdtempSync(join(tmpdir(), "glosa-init-runner-home-"));
-      const ws = mkdtempSync(join(tmpdir(), "glosa-init-runner-ws-"));
-      const runner = createInitRunner({ home, port: 4646 });
+  test("real `glosa init <dir> --json` lands a manifest; second run reports changed:false", async () => {
+    const home = mkdtempSync(join(tmpdir(), "glosa-init-runner-home-"));
+    const ws = mkdtempSync(join(tmpdir(), "glosa-init-runner-ws-"));
+    const runner = createInitRunner({ home, port: 4646 });
 
-      type FilesData = { files?: Record<string, { changed?: boolean }> };
-      const anyChanged = (data: unknown) =>
-        Object.values((data as FilesData).files ?? {}).some((f) => f?.changed === true);
+    type FilesData = { files?: Record<string, { changed?: boolean }> };
+    const anyChanged = (data: unknown) =>
+      Object.values((data as FilesData).files ?? {}).some((f) => f?.changed === true);
 
-      const first = await runner(ws, "reg-real");
-      expect(first.kind).toBe("completed");
-      if (first.kind === "completed") {
-        expect(first.envelope.exit_code).toBe(0);
-        expect(anyChanged(first.envelope.data)).toBe(true);
-      }
-      // The pinned cross-package manifest path (see init-probe.test.ts).
-      expect(existsSync(join(ws, ".claude", ".glosa-init.json"))).toBe(true);
+    const first = await runner(ws, "reg-real");
+    expect(first.kind).toBe("completed");
+    if (first.kind === "completed") {
+      expect(first.envelope.exit_code).toBe(0);
+      expect(anyChanged(first.envelope.data)).toBe(true);
+    }
+    // The pinned cross-package workspace manifest path (see init-probe.test.ts).
+    expect(existsSync(join(ws, ".glosa", "init-manifest.json"))).toBe(true);
 
-      const second = await runner(ws, "reg-real");
-      expect(second.kind).toBe("completed");
-      if (second.kind === "completed") {
-        expect(second.envelope.exit_code).toBe(0);
-        expect(anyChanged(second.envelope.data)).toBe(false);
-      }
-      rmSync(home, { recursive: true, force: true });
-      rmSync(ws, { recursive: true, force: true });
-    },
-    20_000,
-  );
+    const second = await runner(ws, "reg-real");
+    expect(second.kind).toBe("completed");
+    if (second.kind === "completed") {
+      expect(second.envelope.exit_code).toBe(0);
+      expect(anyChanged(second.envelope.data)).toBe(false);
+    }
+    rmSync(home, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }, 20_000);
 });
