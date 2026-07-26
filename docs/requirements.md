@@ -275,13 +275,19 @@ the entry survives.
   viewer/annotation/editor behavior. Without a descriptor, HTML remains opaque Preview+Annotate.
 
 ### R8 — CLI + install  (detail: A6 full)
-- Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent hook/MCP merge with
-  ownership manifest, backups, uninstall — prints the correct channels dev command, never `--channels`),
+- Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent,
+  provider-targeted hook/MCP merge with workspace-default or explicit user scope, ownership manifest,
+  backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `metadata set|show|clear`, `session bind`,
   `token rotate|revoke`, `doctor` (12 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
   internal `mcp`, `hook <event>`. `open`
-  auto-creates the `.glosa/` scaffold (distinct from `init`); a workspace is usable SPA-only without
-  `init`.
+  auto-creates the `.glosa/` scaffold (distinct from `init`), never invokes or prompts for init, and
+  supports an init-free Preview first run. Preview-only `glosa_present` is also init-free.
+  Provider selection uses explicit repeatable `--agent` flags or provider-owned local detection;
+  ambiguity gets one TTY prompt and fails with an exact flag hint in non-interactive/JSON mode.
+  Agent-specific detection, config paths, and desired nodes remain in `packages/providers/*`; the
+  generic CLI only orchestrates the transaction. Provider delivery integration may be installed at
+  workspace or user scope, and a workspace remains usable SPA-only without either.
 
 ### R9 — attention model  (detail: A5 §F23)
 - Agents **knock, never barge**: `attention_request` entries retain their immutable `message`, `action`,

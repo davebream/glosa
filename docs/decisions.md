@@ -64,3 +64,40 @@ land in Preview rather than the source editor — modes are acts, not defaults.
 
 A change that needs integration-specific code belongs outside this repository. A change belongs in
 glosa only when it strengthens a generic contract that remains useful with zero adapters loaded.
+
+## Agent onboarding is scoped, targeted, and lazy
+
+Research snapshot: 2026-07-25. The comparison uses first-party documentation and the current Sentry
+Wizard source rather than assuming the examples in issue #65 remained unchanged.
+
+| Tool | Scope model | Target detection/selection | Interaction pattern |
+|---|---|---|---|
+| Claude Code | MCP has explicit `local` (private project), `project` (shared `.mcp.json`), and `user` scopes; settings also have user, shared-project, and local-project layers. | Single-agent tool, so no agent selection. | `claude mcp add` is flag-driven; `--scope` is explicit and no setup wizard is required. |
+| Codex | Personal defaults live in `~/.codex/config.toml`; trusted repositories may add `.codex/config.toml`. Hooks follow the same user/project split. `codex mcp add` currently writes the user config; project scope is configured in the project file. | Single-agent tool, so no agent selection. | CLI add is flag-driven. Authentication may prompt, but scope selection is not a wizard. |
+| Sentry Wizard | Mutates the selected project; it has no user/global configuration scope. | The integration is supplied with `--integration` or selected from a prompt. Contrary to the original issue snapshot, the current dispatcher does not auto-detect the framework. | Interactive by default where choices are missing; explicit flags support scripted runs. `--quiet` prevents fallback questions in legacy flows, and a narrower `--non-interactive` mode exists for agentic Apple setup. |
+| glosa (decision) | `workspace` (default) or explicit `user`. | Repeated `--agent` flags are authoritative. Provider-owned, local-only probes may resolve an omitted target when exactly one provider is present; ambiguous selection gets one TTY prompt or a usage error in non-interactive mode. | Flags are the complete automation surface. Prompts fill only an unresolved provider choice and never occur in `--json` or non-TTY mode. |
+
+Sources:
+
+- [Claude Code MCP scopes](https://docs.anthropic.com/en/docs/claude-code/mcp#installation-scope)
+  and [settings precedence](https://docs.anthropic.com/en/docs/claude-code/settings#settings-files)
+- [Codex configuration layers](https://learn.chatgpt.com/docs/config-file/config-basic)
+  and [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp)
+- [Sentry Wizard options](https://github.com/getsentry/sentry-wizard/blob/3aaa362582cf848da7c1ba7936356af8ef9e8721/README.md#options),
+  [CLI flags](https://github.com/getsentry/sentry-wizard/blob/3aaa362582cf848da7c1ba7936356af8ef9e8721/bin.ts),
+  and [integration selection](https://github.com/getsentry/sentry-wizard/blob/3aaa362582cf848da7c1ba7936356af8ef9e8721/src/run.ts)
+
+The resulting glosa design is:
+
+- `glosa open` is the first-run path. It creates workspace state and opens Preview without installing
+  hooks or agent configuration. Preview-only `glosa_present` remains session-independent.
+- `glosa init` installs delivery integration only when the user wants feedback routing, hooks,
+  conversation delivery, or optional Channels. It never runs implicitly from `open`.
+- `--scope workspace` is the compatibility-preserving default. `--scope user` is an explicit choice
+  because user hooks run in every project and therefore have a wider overhead and trust surface.
+- Agent detection is advisory and local-only: provider executables and existing provider config may
+  inform a default, but glosa never launches an agent, reads a transcript, or performs network
+  discovery during init.
+- Provider-specific config paths, detection, desired nodes, and activation help come from
+  `packages/providers/*`. The generic CLI owns selection, transaction/rollback, backups, and the
+  ownership manifest; it does not gain Claude Code or Codex branches.
