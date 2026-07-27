@@ -5,7 +5,7 @@
 // Constructs the backend directly (no port binds, no subprocess) — see http.test.ts/http-routes.
 // test.ts for the routes that consume this wiring end-to-end.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBackend } from "../src/lifecycle.ts";
@@ -50,11 +50,13 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
 
   test("onHardRemove is wired: a real GC hard-remove evicts the workspace's open WorkspaceBus", async () => {
     const backend = buildBackend(home, { gcGraceMs: 0, gcThrottleMs: 0 });
-    await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
 
     const bus = backend.busRegistry.get(root);
     expect(backend.busRegistry.has(root)).toBe(true);
     await bus.reconcile();
+    backend.artifactWatcherRegistry.subscribe(entry, () => {});
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("directories");
 
     rmSync(root, { recursive: true, force: true }); // path missing, AND no live session this time
     await backend.workspaceIndex.gc({ force: true }); // pass 1: soften
@@ -62,5 +64,32 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
 
     expect(backend.workspaceIndex.get(root)).toBeNull(); // gone from the index
     expect(backend.busRegistry.has(root)).toBe(false); // AND its bus was evicted, not leaked
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBeNull();
+  });
+
+  test("adoption sealing and daemon resource shutdown close shared artifact watchers", async () => {
+    const backend = buildBackend(home);
+    const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    backend.artifactWatcherRegistry.subscribe(entry, () => {});
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("directories");
+
+    await backend.sealAdoptionSources([entry], "adopt-test", "target-registration");
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBeNull();
+
+    const secondRoot = mkdtempSync(join(tmpdir(), "glosa-backend-second-"));
+    try {
+      writeFileSync(join(secondRoot, "note.md"), "# second\n");
+      const secondEntry = await backend.workspaceIndex.upsertWorkspace(secondRoot, "glosa-open");
+      backend.artifactWatcherRegistry.subscribe(secondEntry, () => {});
+      backend.busRegistry.get(secondEntry);
+      expect(backend.artifactWatcherRegistry.modeFor(secondEntry)).toBe("directories");
+      expect(backend.busRegistry.has(secondEntry)).toBe(true);
+
+      await backend.closeWorkspaceResources();
+      expect(backend.artifactWatcherRegistry.modeFor(secondEntry)).toBeNull();
+      expect(backend.busRegistry.has(secondEntry)).toBe(false);
+    } finally {
+      rmSync(secondRoot, { recursive: true, force: true });
+    }
   });
 });

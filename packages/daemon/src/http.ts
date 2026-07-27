@@ -36,6 +36,7 @@ import {
   type SessionBinding,
 } from "./agent-provider/interface.ts";
 import type { SessionPushRegistry } from "./agent-provider/push-registry.ts";
+import type { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
 import {
   type ClassFArtifact,
   type ClassRArtifact,
@@ -171,6 +172,8 @@ export interface ApiContext {
    * the supported zero-provider core and yields an honest delivery-unavailable response. */
   providerRegistry?: AgentProviderRegistry;
   pushRegistry?: SessionPushRegistry;
+  /** Daemon-owned shared artifact watcher. Optional only for narrow route/stream tests. */
+  artifactWatcherRegistry?: ArtifactWatcherRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
   /** GLOSA_HOME for the orphaned-state scan in `GET /api/status` (issue #79). Optional and
@@ -1992,10 +1995,14 @@ async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request):
       // the child's own error code + hint in detail — see A6 §F26's stable exit-code table.
       if (envelope.exit_code === 6 || envelope.exit_code === 2) {
         const err = envelope.error;
-        const detail = err ? `${err.code}: ${err.message}${err.hint ? ` — ${err.hint}` : ""}` : `init exited ${envelope.exit_code}`;
+        const detail = err
+          ? `${err.code}: ${err.message}${err.hint ? ` — ${err.hint}` : ""}`
+          : `init exited ${envelope.exit_code}`;
         return problem(409, "conflict", "glosa init reported a conflict", detail, url.pathname);
       }
-      const failDetail = envelope.error ? `${envelope.error.code}: ${envelope.error.message}` : `init exited ${envelope.exit_code}`;
+      const failDetail = envelope.error
+        ? `${envelope.error.code}: ${envelope.error.message}`
+        : `init exited ${envelope.exit_code}`;
       return problem(500, "internal", "glosa init failed", failDetail, url.pathname);
     }
     case "timeout":
@@ -2081,6 +2088,9 @@ async function handleStream(
     shutdownSignal: lifecycleSignal(ctx, authSignal),
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
+      : undefined,
+    subscribeArtifacts: ctx.artifactWatcherRegistry
+      ? (listener) => ctx.artifactWatcherRegistry!.subscribe(resolved.entry, listener)
       : undefined,
   });
 }

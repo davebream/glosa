@@ -1824,6 +1824,25 @@ export function mountApp(
     return artifacts;
   }
 
+  async function refreshArtifactIndex() {
+    const selectedPath = currentArtifact?.source_path ?? null;
+    const artifacts = await refreshArtifactList();
+    if (!selectedPath || artifacts.some((artifact) => artifact.path === selectedPath)) return;
+
+    const replacement = artifacts[0]?.path;
+    if (replacement) {
+      await openArtifact(replacement);
+      return;
+    }
+
+    currentArtifact = null;
+    artifactNavigator.setCurrent(null, { reveal: false });
+    onFocusChange?.({ slug: currentSlug, artifact: null, mode: modeState.mode });
+    setEmpty("No artifacts yet.", el("p", { className: "glosa-empty-hint", textContent: "Add a document to begin." }));
+    renderModeBar();
+    renderContent();
+  }
+
   async function refreshCurrentArtifact() {
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(currentSlug, currentArtifact.source_path, { render: "html" });
@@ -1901,8 +1920,7 @@ export function mountApp(
       if (result?.restart_required !== false) {
         await noticeDialog({
           title: "Wired — one step left",
-          body:
-            "Restart or /resume your Claude Code session so it loads glosa. Until then annotations queue locally — the badge stays amber until a session binds.",
+          body: "Restart or /resume your Claude Code session so it loads glosa. Until then annotations queue locally — the badge stays amber until a session binds.",
         });
       } else {
         await noticeDialog({
@@ -1955,6 +1973,7 @@ export function mountApp(
         if (frame.event === "artifact" && currentArtifact && frame.data?.path === currentArtifact.source_path) {
           void refreshCurrentArtifact();
         }
+        if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") applyJournalEvent(frame.data);
         if (frame.event === "journal" || frame.event === "metadata") void attentionTray.refresh();
         if (frame.event === "metadata") {

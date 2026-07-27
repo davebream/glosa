@@ -45,3 +45,12 @@ test(".glosa/ subtree is pruned — a symlink inside it is not discovered", () =
   const res = resolveMatchedFiles(root);
   expect(res.skippedSymlinks).toEqual([]);
 });
+
+test("the canonical scan returns only readable directories it actually descended into", () => {
+  makeDir(root, "docs/deep");
+  makeDir(root, "node_modules/pkg");
+  makeDir(root, ".someagent/worktrees/w1");
+
+  const res = resolveMatchedFiles(root);
+  expect(res.directories.map((directory) => directory.path)).toEqual(["", "docs", "docs/deep"]);
+});

@@ -24,6 +24,7 @@ import { canonicalize } from "../src/registry/slug.ts";
 import { parseSseStream, type ParsedSseEvent } from "../src/sse.ts";
 import { randomPort, waitForHandshake } from "./helpers.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
+import type { ArtifactWatcherEvent } from "../src/artifact-watcher.ts";
 
 const TOKEN = "stream-test-token-0123456789abcdef";
 
@@ -380,6 +381,38 @@ describe("GET /w/:slug/stream — SSE protocol (A1 §8)", () => {
 });
 
 describe("createJournalStreamResponse — heartbeat (A1 §8.3)", () => {
+  test("shared artifact subscriptions become advisory SSE frames and unsubscribe on teardown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "glosa-stream-artifacts-"));
+    const bus = new WorkspaceBus(root, {});
+    await bus.reconcile();
+    let listener: ((event: ArtifactWatcherEvent) => void) | null = null;
+    let unsubscribed = 0;
+    const response = createJournalStreamResponse(root, bus, new Request("http://127.0.0.1:1/w/x/stream"), undefined, {
+      subscribeArtifacts: (nextListener) => {
+        listener = nextListener;
+        return () => {
+          unsubscribed += 1;
+        };
+      },
+    });
+    const reader = response.body!.getReader();
+    await readEvent(reader); // snapshot
+
+    listener!({
+      type: "artifact_index",
+      data: { changes: [{ type: "file_tracked", path: "new.md" }] },
+    });
+    const event = await readEvent(reader);
+    expect(event.event).toBe("artifact_index");
+    expect(JSON.parse(event.data)).toEqual({
+      changes: [{ type: "file_tracked", path: "new.md" }],
+    });
+
+    await reader.cancel();
+    expect(unsubscribed).toBe(1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test("emits `event: heartbeat` frames with no id at the configured interval; parseSseStream drops them", async () => {
     const root = mkdtempSync(join(tmpdir(), "glosa-stream-heartbeat-"));
     const bus = new WorkspaceBus(root, {});
@@ -388,7 +421,6 @@ describe("createJournalStreamResponse — heartbeat (A1 §8.3)", () => {
     const req = new Request("http://127.0.0.1:1/w/x/stream");
     const response = createJournalStreamResponse(root, bus, req, undefined, {
       heartbeatMs: 40,
-      watchArtifacts: false,
     });
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -414,13 +446,10 @@ describe("createJournalStreamResponse — heartbeat (A1 §8.3)", () => {
     const bus = new WorkspaceBus(root, {});
     await bus.reconcile();
     const shutdown = new AbortController();
-    const response = createJournalStreamResponse(
-      root,
-      bus,
-      new Request("http://127.0.0.1:1/w/x/stream"),
-      undefined,
-      { heartbeatMs: 60_000, watchArtifacts: false, shutdownSignal: shutdown.signal },
-    );
+    const response = createJournalStreamResponse(root, bus, new Request("http://127.0.0.1:1/w/x/stream"), undefined, {
+      heartbeatMs: 60_000,
+      shutdownSignal: shutdown.signal,
+    });
     const reader = response.body!.getReader();
     const events = parseSseStream(reader)[Symbol.asyncIterator]();
 
