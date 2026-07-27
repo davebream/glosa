@@ -63,6 +63,10 @@ export interface OpenPresentationDeps {
   glosaHome: () => string;
   openBrowser: (url: string) => void;
   platform: () => NodeJS.Platform;
+  /** The CLIENT's working directory, used to resolve relative open targets before the daemon
+   * call. The daemon is a persistent singleton whose own cwd is arbitrary, so a relative target
+   * must be absolutized here, not there. Defaults to `process.cwd`; injectable for tests. */
+  cwd?: () => string;
   dirExists: (dir: string) => boolean;
   fileExists: (path: string) => boolean;
   /** True when the path exists as a regular non-symlink file. Defaults to `fileExists`. */
@@ -81,13 +85,16 @@ export function classifyOpenTarget(
   target: string,
   focus: string | undefined,
   override: OpenSurfaceOverride,
-  deps: Pick<OpenPresentationDeps, "dirExists" | "fileExists" | "isRegularFile">,
+  deps: Pick<OpenPresentationDeps, "dirExists" | "fileExists" | "isRegularFile" | "cwd">,
 ): ClassifiedOpenTarget {
   const isRegularFile = deps.isRegularFile ?? deps.fileExists;
   const wantsDirectory = target.endsWith("/") || target.endsWith("\\");
-  const normalizedTarget = wantsDirectory && (target.endsWith("/") || target.endsWith("\\"))
-    ? target.replace(/[/\\]+$/, "") || target
-    : target;
+  const stripped = wantsDirectory ? target.replace(/[/\\]+$/, "") || target : target;
+  // Absolutize relative targets against the CLIENT's cwd — the raw string is sent to the daemon,
+  // whose own cwd is arbitrary, so a bare relative target (e.g. `.`) would otherwise register
+  // whatever directory the daemon started in. This makes `openPath` genuinely absolute (its
+  // documented contract). Trailing-slash intent is already captured in `wantsDirectory` above.
+  const normalizedTarget = isAbsolute(stripped) ? stripped : resolvePath((deps.cwd ?? process.cwd)(), stripped);
 
   if (focus !== undefined) {
     if (override === "document") {

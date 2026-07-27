@@ -29,6 +29,7 @@ export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenD
       Bun.spawn({ cmd: ["open", url], stdout: "ignore", stderr: "ignore" });
     },
     platform: () => process.platform,
+    cwd: () => process.cwd(),
     dirExists: (dir) => {
       try {
         return existsSync(dir) && lstatSync(dir).isDirectory();

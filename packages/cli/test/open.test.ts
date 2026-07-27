@@ -501,3 +501,32 @@ describe("maybeOfferInit (consented wiring offer)", () => {
     expect(calls.stderr.join("")).toContain("init failed: disk full");
   });
 });
+
+describe("glosa open — relative target resolution", () => {
+  // The daemon is a persistent singleton whose own cwd is arbitrary (whatever process happened
+  // to spawn it). A relative target sent raw would be resolved by the daemon against THAT cwd,
+  // registering the wrong directory. The client must resolve relative targets against its own
+  // cwd before the daemon call so `openPath` is genuinely absolute (its documented contract).
+  function openWorkspacePath(client: FakeGlosaApiClient): unknown {
+    return client.calls.find((c) => c.method === "openWorkspace")?.args[0];
+  }
+
+  test("a bare `.` target resolves against the client cwd, not the daemon cwd", async () => {
+    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
+    const result = await runOpen(".", deps);
+    expect(result.ok).toBe(true);
+    expect(openWorkspacePath(client)).toBe("/client/work/dir");
+  });
+
+  test("a nested relative target (with trailing slash) resolves against the client cwd", async () => {
+    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
+    await runOpen("docs/plans/", deps);
+    expect(openWorkspacePath(client)).toBe("/client/work/dir/docs/plans");
+  });
+
+  test("an absolute target is passed through unchanged regardless of client cwd", async () => {
+    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
+    await runOpen("/abs/workspace", deps);
+    expect(openWorkspacePath(client)).toBe("/abs/workspace");
+  });
+});
