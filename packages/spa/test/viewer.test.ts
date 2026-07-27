@@ -215,6 +215,37 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(content.innerHTML).toContain("Title");
   });
 
+  test("artifact_index refreshes the navigator and replaces a removed current artifact", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let artifacts = [{ path: "notes.md", class: "R" }];
+    const da = fakeDataAccess({
+      getArtifacts: async () => artifacts,
+    });
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (
+      root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as unknown as {
+        click(): void;
+      }
+    ).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    artifacts = [{ path: "fresh.md", class: "R" }];
+    da.stream.handlers?.onEvent?.({
+      event: "artifact_index",
+      data: { changes: [{ type: "file_untracked", path: "notes.md", reason: "deleted" }] },
+    });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    const labels = Array.from(root.querySelectorAll(".glosa-artifact-list .glosa-tree-label")).map(
+      (element) => element.textContent,
+    );
+    expect(labels).toEqual(["fresh.md"]);
+    expect(dom.document.title).toBe("ws-1 — fresh.md");
+  });
+
   test("workspace switcher hides at <=1 workspace (MCP/CLI scope), appears and lists all at >=2", async () => {
     const solo = dom.document.createElement("div");
     dom.document.body.append(solo);

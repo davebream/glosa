@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — P3.2: `GET /w/:slug/stream` (A1 §5.5, full protocol A1 §8). Builds the SSE
 // Response — first-connect snapshot, reconnect resume from a journal-line cursor, live push via
-// `WorkspaceBus`'s in-process notifier, best-effort artifact-change push via a chokidar watcher,
-// and a 15s heartbeat with the response's own idle-timeout disabled (A1 §8.3). Deliberately does
+// `WorkspaceBus`'s in-process notifier, best-effort artifact invalidations from the daemon-owned
+// shared watcher registry, and a 15s heartbeat with the response's own idle-timeout disabled
+// (A1 §8.3). Deliberately does
 // NOT import http.ts (which imports THIS module for the route wiring) — http.ts owns slug ->
 // workspace resolution and hands this module an already-reconciled `WorkspaceBus`.
 import { readFileSync } from "node:fs";
-import { relative, sep } from "node:path";
-import { watch, type FSWatcher } from "chokidar";
 import { encodeSseFrame } from "./sse.ts";
 import { readJournalEventsSince } from "./bus/tail.ts";
-import { buildWatchIgnored, loadMatcherConfig, resolveTrackedFiles } from "./matcher.ts";
+import { resolveTrackedFiles } from "./matcher.ts";
 import { classifyArtifactPath, sourceSha256 } from "./artifact-render.ts";
 import { isTerminal } from "./bus/lifecycle.ts";
-import { workspaceBusPath, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
+import type { ArtifactWatcherEvent } from "./artifact-watcher.ts";
+import type { WorkspaceTarget } from "./workspace.ts";
 import type { WorkspaceBus } from "./bus/bus.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -39,44 +39,12 @@ function buildSnapshotData(root: WorkspaceTarget, bus: WorkspaceBus): unknown {
   return { artifacts, inbox: { pending_count: attention.length, attention } };
 }
 
-function toRelPosixPath(root: string, absPath: string): string {
-  return relative(root, absPath).split(sep).join("/").normalize("NFC");
-}
-
-/** A minimal, best-effort artifact-change watcher (P3.2 — the journal cursor/reconnect mechanics
- * above are the correctness bar this task owns; this half is advisory). chokidar v4+ dropped glob
- * support (matcher.ts's own docstring), so it watches the raw workspace root and every raw fs
- * event is re-checked against `resolveMatchedFiles` — the ONE canonical matcher — before deciding
- * whether it's a tracked artifact worth pushing. The `ignored` predicate is built from that SAME
- * canonical include/exclude config (`buildWatchIgnored`), so the watcher's scope can't drift from
- * the walk's: excluded subtrees (`.glosa/**` — this daemon's own shadow-git checkpoints, A4 §F21,
- * whose churn would otherwise self-loop the watcher — plus `node_modules`, `.git`, every dotdir)
- * are never watched or descended into, and only glosa-supported artifact files are watched. Without
- * this the watcher held live watches over the ENTIRE root (a real repo is thousands of dirs) — a
- * multi-second watch-establishment and a permanent event firehose from files glosa never tracks.
- *
- * The `error` handler is load-bearing, not decoration: chokidar's `FSWatcher` is an `EventEmitter`,
- * and an `error` event with NO listener throws — with no process-level `uncaughtException` handler
- * in the daemon, that unhandled throw would take down the whole singleton daemon (every workspace
- * with it). This watcher is advisory, so a watch error must be swallowed here, never propagated. */
-function startArtifactWatcher(workspace: WorkspaceTarget, onChange: (relPath: string) => void): FSWatcher {
-  const root = workspaceWorktree(workspace);
-  const watcher = watch(root, {
-    ignoreInitial: true,
-    ignored: buildWatchIgnored(root, loadMatcherConfig(root, workspaceBusPath(workspace))),
-  });
-  const handle = (absPath: string) => onChange(toRelPosixPath(root, absPath));
-  watcher.on("add", handle).on("change", handle).on("unlink", handle);
-  watcher.on("error", () => {});
-  return watcher;
-}
-
 export interface StreamOptions {
   /** Test-only override — production always uses the real 15s (A1 §8.3). */
   heartbeatMs?: number;
-  /** Test-only escape hatch to skip standing up a chokidar watcher per connection when a test
-   * only cares about journal/cursor mechanics. Defaults to on. */
-  watchArtifacts?: boolean;
+  /** Production injects the daemon-owned shared watcher registry. Optional for narrow stream tests
+   * that exercise only journal/cursor mechanics. */
+  subscribeArtifacts?: (listener: (event: ArtifactWatcherEvent) => void) => () => void;
   shutdownSignal?: AbortSignal;
   subscribeMetadata?: (listener: () => void) => () => void;
 }
@@ -109,7 +77,7 @@ export function createJournalStreamResponse(
 
   let closed = false;
   let unsubscribe: (() => void) | null = null;
-  let watcher: FSWatcher | null = null;
+  let unsubscribeArtifacts: (() => void) | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let shutdownListener: (() => void) | null = null;
   let unsubscribeMetadata: (() => void) | null = null;
@@ -119,8 +87,8 @@ export function createJournalStreamResponse(
     closed = true;
     unsubscribe?.();
     unsubscribeMetadata?.();
+    unsubscribeArtifacts?.();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (watcher) void watcher.close();
     if (shutdownListener) opts.shutdownSignal?.removeEventListener("abort", shutdownListener);
   };
 
@@ -211,28 +179,20 @@ export function createJournalStreamResponse(
         heartbeatTimer = setInterval(() => send(encodeSseFrame({ event: "heartbeat" })), heartbeatMs);
         heartbeatTimer.unref?.();
 
-        if (opts.watchArtifacts !== false) {
-          watcher = startArtifactWatcher(root, (relPath) => {
-            const { tracked } = resolveTrackedFiles(root);
-            const match = tracked.find((f) => f.path === relPath);
-            if (!match) return; // deleted, excluded, or grew past the oversize threshold — nothing to push
+        unsubscribeArtifacts =
+          opts.subscribeArtifacts?.((event) => {
             send(
               encodeSseFrame({
-                event: "artifact",
+                event: event.type,
                 // No `id` — best-effort/live-only, no durable log to replay from on reconnect
                 // (unlike journal events); same "advisory, doesn't advance the cursor" posture as
                 // heartbeat (sse.ts's SseFrame docstring).
-                data: {
-                  path: match.path,
-                  class: classifyArtifactPath(match.path),
-                  source_sha256: sourceSha256(readFileSync(match.rawPath)),
-                },
+                data: event.data,
               }),
             );
-          });
-        }
+          }) ?? null;
       } catch (err) {
-        teardown(); // unsubscribe + clear heartbeat + close watcher — nothing leaks past this throw
+        teardown(); // unsubscribe + clear heartbeat — nothing leaks past this throw
         controller.error(err);
       }
     },

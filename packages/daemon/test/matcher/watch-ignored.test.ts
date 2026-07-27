@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The chokidar `ignored` predicate the artifact watcher (stream.ts) uses must share the walk's
+// The chokidar `ignored` predicate the shared artifact watcher uses must share the walk's
 // canonical include/exclude scope: excluded subtrees (`.glosa`, `node_modules`, `.git`, dotdirs)
 // are never watched or descended into, surviving directories ARE descended into, and only
 // glosa-supported artifact files are watched. Proven with real on-disk paths + real lstat so the
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { buildWatchIgnored } from "../../src/matcher.ts";
-import { cleanupWorkspace, freshWorkspace, makeDir, writeFile } from "./helpers.ts";
+import { cleanupWorkspace, freshWorkspace, makeDir, makeSymlink, writeFile } from "./helpers.ts";
 
 let root: string;
 beforeEach(() => {
@@ -18,7 +18,7 @@ afterEach(() => {
   cleanupWorkspace(root);
 });
 
-/** Mirrors how stream.ts calls it: absolute path + the real lstat chokidar would have. */
+/** Mirrors how artifact-watcher.ts calls it: absolute path + the real lstat chokidar would have. */
 function ignored(rel: string): boolean {
   const abs = join(root, rel);
   return buildWatchIgnored(root)(abs, lstatSync(abs));
@@ -68,6 +68,17 @@ test("surviving files: supported artifact extensions watched, everything else ig
   expect(ignored("notes.txt")).toBe(false);
   expect(ignored("code.ts")).toBe(true);
   expect(ignored("package.json")).toBe(true);
+});
+
+test("oversize artifact-shaped files are not watched", () => {
+  writeFile(root, "growing.txt", 2 * 1024 * 1024 + 1);
+  expect(ignored("growing.txt")).toBe(true);
+});
+
+test("symlinks are ignored even when their names look like artifacts", () => {
+  const target = writeFile(root, "target.md", "target");
+  makeSymlink(target, join(root, "linked.md"));
+  expect(ignored("linked.md")).toBe(true);
 });
 
 test("not-yet-stat'd entries (stats undefined) are not ignored — chokidar descends and re-decides", () => {
