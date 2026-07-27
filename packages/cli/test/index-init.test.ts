@@ -7,7 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run } from "../src/index.ts";
+import { PassThrough, Readable } from "node:stream";
+import { promptInitAgents, run } from "../src/index.ts";
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -38,7 +39,7 @@ function captureStdout(fn: () => Promise<number>): Promise<{ exitCode: number; o
 describe("run(['init', ...])", () => {
   test("fresh install via the CLI prints a --json envelope with ok:true, exit_code:0", async () => {
     const dir = freshDir();
-    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--json"]));
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "all", "--json"]));
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(out);
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "init", exit_code: 0 });
@@ -47,7 +48,7 @@ describe("run(['init', ...])", () => {
 
   test("fresh install human output ends with the restart/resume instruction (issue #78)", async () => {
     const dir = freshDir();
-    const { exitCode, out } = await captureStdout(() => run(["init", dir]));
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code"]));
     expect(exitCode).toBe(0);
     expect(out).toContain("installed hooks + MCP entry");
     expect(out).toContain("Restart or /resume your Claude Code session");
@@ -56,15 +57,15 @@ describe("run(['init', ...])", () => {
 
   test("'already up to date' output stays stable — no restart line on changed:false", async () => {
     const dir = freshDir();
-    await run(["init", dir]);
-    const { out } = await captureStdout(() => run(["init", dir]));
+    await run(["init", dir, "--agent", "claude-code"]);
+    const { out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code"]));
     expect(out).toContain("already up to date");
     expect(out).not.toContain("Restart or /resume");
   });
 
   test("--print writes a diff to stdout and creates nothing", async () => {
     const dir = freshDir();
-    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--print"]));
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--print"]));
     expect(exitCode).toBe(0);
     expect(out).toContain("+++");
   });
@@ -79,8 +80,53 @@ describe("run(['init', ...])", () => {
 
   test("install then uninstall round-trips to exit 0", async () => {
     const dir = freshDir();
-    await run(["init", dir]);
+    await run(["init", dir, "--agent", "all"]);
     const exitCode = await run(["init", dir, "--uninstall"]);
     expect(exitCode).toBe(0);
+  });
+
+  test("repeatable --agent installs only the selected providers", async () => {
+    const dir = freshDir();
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--agent", "claude-code", "--agent", "codex", "--json"]),
+    );
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).data.providers).toEqual(["claude-code", "codex"]);
+  });
+
+  test("--agent all cannot be combined with another agent", async () => {
+    const dir = freshDir();
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--agent", "all", "--agent", "codex", "--json"]),
+    );
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(out).error.message).toContain("cannot be combined");
+  });
+
+  test("ambiguous --json invocation exits 2 with the exact agent hint", async () => {
+    const dir = freshDir();
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--json"]));
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(out).error.message).toContain("pass --agent claude-code, --agent codex, or --agent all");
+  });
+
+  test("invalid scope is a usage error", async () => {
+    const dir = freshDir();
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--scope", "global", "--agent", "codex", "--json"]),
+    );
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(out).error.message).toContain("--scope must be workspace or user");
+  });
+
+  test("the TTY fallback asks exactly once and supports selecting all", async () => {
+    const output = new PassThrough();
+    let rendered = "";
+    output.on("data", (chunk) => {
+      rendered += chunk.toString();
+    });
+    const selected = await promptInitAgents(Readable.from(["3\n"]), output);
+    expect(selected).toEqual(["claude-code", "codex"]);
+    expect(rendered.match(/Select agent integration/g)).toHaveLength(1);
   });
 });

@@ -16,10 +16,11 @@ import {
   type GunshiParams,
 } from "gunshi";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
 import type { HookDeps } from "./hook.ts";
-import type { InitResult, UninstallResult } from "./init.ts";
+import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const DESCRIPTION = "Writing-first workspace for AI coding agents";
@@ -98,20 +99,23 @@ function printInitResult(result: InitResult, json: boolean): void {
     return;
   }
   process.stdout.write("glosa init: installed hooks + MCP entry\n");
-  process.stdout.write(`  settings: ${result.data.files.settings.path}\n`);
-  process.stdout.write(`  mcp:      ${result.data.files.mcp.path}\n`);
-  process.stdout.write(`  codex hooks: ${result.data.files.codex_hooks.path}\n`);
-  process.stdout.write(`  codex mcp:   ${result.data.files.codex_config.path}\n`);
-  process.stdout.write(`\nActivate channels for this session with:\n  ${result.data.channel_command}\n`);
-  process.stdout.write(
-    "\nRestart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
-  );
+  process.stdout.write(`  scope:     ${result.data.scope}\n`);
+  process.stdout.write(`  providers: ${result.data.providers.join(", ")}\n`);
+  for (const file of Object.values(result.data.files)) process.stdout.write(`  ${file.path}\n`);
+  if (result.data.activation_help.length > 0) {
+    process.stdout.write(`\nActivation help:\n${result.data.activation_help.map((line) => `  ${line}`).join("\n")}\n`);
+  }
+  if (result.data.providers.includes("claude-code")) {
+    process.stdout.write(
+      "\nRestart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
+    );
+  }
 }
 
 function printUninstallResult(result: UninstallResult, json: boolean): void {
   if (json) {
     process.stdout.write(
-      `${JSON.stringify({ glosa_json: 1, ok: result.ok, command: "init", exit_code: result.exitCode, data: { removed: result.removed }, warnings: result.warnings, error: result.error ?? null })}\n`,
+      `${JSON.stringify({ glosa_json: 1, ok: result.ok, command: "init", exit_code: result.exitCode, data: { ...result.data, removed: result.removed }, warnings: result.warnings, error: result.error ?? null })}\n`,
     );
     return;
   }
@@ -127,6 +131,36 @@ function printUninstallResult(result: UninstallResult, json: boolean): void {
       ? `glosa init --uninstall: removed ${result.removed.length} node(s)\n`
       : "glosa init --uninstall: nothing to remove\n",
   );
+}
+
+const INIT_AGENT_HINT = "pass --agent claude-code, --agent codex, or --agent all";
+
+function normalizeInitAgents(values: unknown): { agents?: ProviderId[]; error?: string } {
+  if (values === undefined) return {};
+  const raw = Array.isArray(values) ? values.map(String) : [String(values)];
+  const unique = [...new Set(raw)];
+  if (unique.includes("all") && unique.length > 1)
+    return { error: "--agent all cannot be combined with another --agent" };
+  if (unique.some((value) => value !== "all" && value !== "claude-code" && value !== "codex")) {
+    return { error: `--agent must be claude-code, codex, or all` };
+  }
+  return { agents: unique.includes("all") ? ["claude-code", "codex"] : (unique as ProviderId[]) };
+}
+
+export async function promptInitAgents(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stderr,
+): Promise<ProviderId[]> {
+  const prompt = createInterface({ input, output });
+  try {
+    const answer = await prompt.question("Select agent integration: [1] Claude Code  [2] Codex  [3] all\nChoice: ");
+    if (answer.trim() === "1") return ["claude-code"];
+    if (answer.trim() === "2") return ["codex"];
+    if (answer.trim() === "3") return ["claude-code", "codex"];
+    throw new ArgsValidationError(`invalid provider selection; ${INIT_AGENT_HINT}`);
+  } finally {
+    prompt.close();
+  }
 }
 
 function writeOutput(stream: NodeJS.WritableStream, value: string): Promise<void> {
@@ -287,11 +321,17 @@ function createSubCommands(setExitCode: (code: number) => void) {
   const init = lazyHandler(
     {
       name: "init",
-      description: "Install or remove glosa's Claude Code integration",
+      description: "Install or remove glosa agent integrations",
       toKebab: true,
       args: {
         ...GLOBAL_ARGS,
         dir: { type: "positional", required: false, description: "Workspace directory" },
+        scope: { type: "string", description: "Installation scope: workspace or user" },
+        agent: {
+          type: "string",
+          multiple: true,
+          description: "Agent provider: claude-code, codex, or all (repeatable)",
+        },
         print: { type: "boolean", description: "Print the planned diff without writing" },
         "dry-run": { type: "boolean", description: "Alias for --print" },
         force: { type: "boolean", description: "Replace conflicting glosa-owned configuration" },
@@ -305,16 +345,48 @@ function createSubCommands(setExitCode: (code: number) => void) {
     },
     async (context) => {
       const values = withGlobals(context);
-      const initModule = await import("./init.ts");
+      const initModule = await import("./scoped-init.ts");
       const dir = (values.dir as string | undefined) ?? process.cwd();
+      const scope = (values.scope as string | undefined) ?? "workspace";
+      if (scope !== "workspace" && scope !== "user") {
+        const message = "--scope must be workspace or user";
+        if (values.json) printJsonEnvelope(usageEnvelope("init", message));
+        else process.stderr.write(`glosa init: ${message}\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const normalized = normalizeInitAgents(values.agent);
+      if (normalized.error) {
+        if (values.json) printJsonEnvelope(usageEnvelope("init", normalized.error));
+        else process.stderr.write(`glosa init: ${normalized.error}\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
       if (values.uninstall) {
-        const result = await initModule.runUninstall({ dir });
+        const result = await initModule.runScopedUninstall({ dir, scope, agents: normalized.agents });
         printUninstallResult(result, Boolean(values.json));
         setExitCode(result.exitCode);
         return;
       }
-      const result = await initModule.runInit({
+      let agents = normalized.agents;
+      if (!agents) {
+        const detected = initModule.detectInstallProviders(dir);
+        if (detected.length === 1) {
+          agents = detected;
+        } else if (values.json || !process.stdin.isTTY) {
+          const message = `provider selection is ambiguous; ${INIT_AGENT_HINT}`;
+          if (values.json) printJsonEnvelope(usageEnvelope("init", message));
+          else process.stderr.write(`glosa init: ${message}\n`);
+          setExitCode(EXIT_CODES.USAGE);
+          return;
+        } else {
+          agents = await promptInitAgents();
+        }
+      }
+      const result = await initModule.runScopedInit({
         dir,
+        scope,
+        agents,
         print: Boolean(values.print) || Boolean(values["dry-run"]),
         force: Boolean(values.force),
       });
