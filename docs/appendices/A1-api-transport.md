@@ -432,6 +432,11 @@ data: <json>
    paint the view from scratch (artifact list + latest `source_sha256` per artifact for the
    artifact stream; the transcript-mirror's already-known entries for the transcript stream),
    then continues emitting live events from that cursor forward.
+   Live filesystem invalidations are advisory and carry no `id`: `event: artifact` contains an
+   upserted artifact's `{path,class,source_sha256}`, while `event: artifact_index` contains
+   `{changes:[{type:file_tracked,path}|{type:file_untracked,path,reason}]}` so clients can refresh
+   their artifact list after additions, deletions, or size-threshold crossings. Older clients may
+   ignore either event and recover from the next snapshot.
 2. **Reconnect** (network drop, daemon restart, tab backgrounded and resumed): client resends
    the fetch with `Last-Event-ID: <last cursor it saw>` (primary) — `?since=<cursor>` query
    param is the documented fallback for any client that can't set custom headers on a
