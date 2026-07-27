@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.1.0-alpha.6] - 2026-07-26
+## [0.1.0-alpha.6] - 2026-07-27
 
 ### Added
 
@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `glosa open` now resolves relative targets against the invoking client's working directory
+  before contacting the daemon, preventing an existing daemon from silently registering the same
+  relative path beneath its own unrelated working directory.
+- Artifact watching now uses one bounded, shared watcher per workspace instead of one recursive
+  workspace-root watcher per SSE connection. Canonical pruning keeps `node_modules`, `.git`,
+  dot-worktrees, symlinks, and unrelated files out of the watch set; oversized workspaces degrade
+  safely instead of driving the singleton daemon into an error, memory-growth, and respawn loop.
 - Workspace garbage collection can no longer remove a registration whose bus still holds pending
   (undelivered) entries — parked annotations now block removal indefinitely, and an unreadable
   journal counts as pending rather than removable. `glosa forget` remains an explicit override.
