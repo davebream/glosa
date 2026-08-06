@@ -146,8 +146,8 @@
     <script>
       const spec = JSON.parse(new URLSearchParams(location.search).get("spec"));
       const stage = document.getElementById("stage");
-      stage.style.width = spec.w + "px";
-      stage.style.height = spec.h + "px";
+      stage.style.width = `${spec.w}px`;
+      stage.style.height = `${spec.h}px`;
       if (spec.bg) stage.dataset.bg = spec.bg;
       if (spec.theme) stage.dataset.theme = spec.theme;
 
@@ -159,10 +159,10 @@
       };
 
       for (const w of spec.windows) {
-        const win = el("div", "win" + (w.kind === "terminal" ? " term" : ""));
-        win.style.left = w.x + "px";
-        win.style.top = w.y + "px";
-        win.style.width = w.w + "px";
+        const win = el("div", `win${w.kind === "terminal" ? " term" : ""}`);
+        win.style.left = `${w.x}px`;
+        win.style.top = `${w.y}px`;
+        win.style.width = `${w.w}px`;
         if (w.z != null) win.style.zIndex = String(w.z);
 
         const bar = el("div", "bar");
@@ -192,13 +192,13 @@
           const shot = el("div", "shot");
           const scale = w.scale ?? 1;
           const crop = w.crop ?? { x: 0, y: 0, w: w.imgW, h: w.imgH };
-          shot.style.width = Math.round(crop.w * scale) + "px";
-          shot.style.height = Math.round(crop.h * scale) + "px";
+          shot.style.width = `${Math.round(crop.w * scale)}px`;
+          shot.style.height = `${Math.round(crop.h * scale)}px`;
           const img = el("img");
           img.src = w.img;
-          img.style.width = Math.round(w.imgW * scale) + "px";
-          img.style.left = Math.round(-crop.x * scale) + "px";
-          img.style.top = Math.round(-crop.y * scale) + "px";
+          img.style.width = `${Math.round(w.imgW * scale)}px`;
+          img.style.left = `${Math.round(-crop.x * scale)}px`;
+          img.style.top = `${Math.round(-crop.y * scale)}px`;
           shot.append(img);
           win.append(shot);
         }
