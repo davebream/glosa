@@ -5,6 +5,13 @@
 document, the annotations, the revision, the version history, and the approval verdict all come from
 one recorded session against a throwaway workspace.
 
+Each image ships as a `-light.png` / `-dark.png` pair, wired up in the README with `<picture>` and
+`prefers-color-scheme` so GitHub serves the variant that matches the reader's theme. **Capture both
+themes from the same workspace state in one take** — glosa's own state (annotations, checkpoints,
+approval) is shared, and only the browser context's `colorScheme` differs. Recording the dark set in
+a separate session would let the agent rephrase its revision, and the two variants would then show
+different text to anyone toggling themes.
+
 Re-capture whenever the workspace chrome, the margin, the history pane, or the approval strip
 changes shape.
 
@@ -40,7 +47,9 @@ bun run packages/cli/src/main.ts doctor "$DEMO/impact-plan" --port 4747   # expe
 ```
 
 `open --url` prints the paired URL. Every capture below drives that URL in a headless Chromium at
-`deviceScaleFactor: 2`, viewport `1440x860`, `colorScheme: light`.
+`deviceScaleFactor: 2`, viewport `1440x860`, once with `colorScheme: light` and once with
+`colorScheme: dark`. glosa's appearance setting stays on **System**, so the browser's scheme decides
+the theme.
 
 ## 2. Record one real session
 
@@ -60,19 +69,33 @@ While it runs, in the browser: switch to **Annotate**, select the weak sentence,
 the comment, send it, and repeat for a second passage. Capture two frames here — the composer
 mid-write (this becomes the hero's right pane) and the margin with both cards saved.
 
-glosa delivers the queued comments through the session's Stop hook; the agent then edits the file.
-Keep a glosa tab open while that happens — the artifact watcher only runs while the workspace is
-being watched. The terminal pane of the hero is typeset from `session.jsonl`: the prompt, the tool
-lines, the `Stop hook feedback` block glosa injected, the edit, and the closing summary, wrapped to
-the pane width and trimmed with `[…]` where a paragraph was long.
+Run that pass twice, once per colour scheme, and **withdraw both entries with the card's Remove
+button at the end of the first pass** (`button.glosa-annotation-remove`). Otherwise the second pass
+starts with a non-empty queue and its wiring badge reads `Live → session · 2 queued` where the first
+read `Live → session`, which is a visible difference between the two variants. Keep the second pass's
+comments: those are the ones the agent applies.
+
+The comments then reach the session on their own — either injected at the turn boundary as
+`Stop hook feedback`, or fetched by the agent through `glosa_inbox_pull` when it decides to look.
+Whichever path the recorded run took is the one the hero's terminal pane should show. Keep a glosa tab
+open while the agent edits, because the artifact watcher only runs while the workspace is being
+watched.
+
+The terminal pane is typeset from `session.jsonl`: the prompt, the tool lines, the delivered
+annotation payload, the edit, and the closing summary — hard-wrapped to the pane width and trimmed
+with `[…]` where a paragraph ran long. Keep the wording verbatim; that pane is a transcript, not copy.
 
 ## 3. Capture the remaining states
 
 | Image | State to reach |
 |---|---|
-| `annotate.png` | Annotate mode, both margin cards saved, scrolled to the annotated section. |
-| `history.png` | Make one edit in **Edit → Source** and Save (that is the `human_edit` checkpoint), then open **⋯ → History**, select the oldest version, and press *Compare selected with current*. |
-| `approval.png` | Run `glosa request-review plans/first-90-days.md --wait 6m --require-approval --message "…"` from the workspace; the strip appears in the browser. Approving it returns the verdict to the waiting command. |
+| `annotate-*.png` | Annotate mode, both margin cards saved, scrolled to the annotated section. |
+| `history-*.png` | Make one edit in **Edit → Source** and Save (that is the `human_edit` checkpoint), then open **⋯ → History**, select the oldest version, and press *Compare selected with current*. |
+| `approval-*.png` | Run `glosa request-review plans/first-90-days.md --wait 6m --require-approval --message "…"` from the workspace; the strip appears in the browser. Shoot both themes first, then approve in the second one so the verdict returns to the waiting command. |
+
+The Edit-mode source pane needs a beat: the face toggle (`button.glosa-face-source`) only becomes
+clickable once the rich editor has mounted, so wait for it to be visible rather than sleeping a fixed
+interval.
 
 ## 4. Compose the frames
 
@@ -86,6 +109,7 @@ file://…/frame.html?spec=<encodeURIComponent(JSON.stringify(spec))>
 ```js
 {
   w: 1980, h: 960,                       // stage size in CSS px
+  theme: "dark",                         // omit for the light stage
   bg: "plain",                           // omit for the gradient backdrop
   windows: [
     { kind: "terminal", title: "impact-plan — claude", x: 34, y: 108, w: 800, lines: [...] },
@@ -100,10 +124,11 @@ file://…/frame.html?spec=<encodeURIComponent(JSON.stringify(spec))>
 `dot`, `tool`, `del`, `add`, and `glosa` (used for the delivered annotation block).
 
 Screenshot the `#stage` element at `deviceScaleFactor: 2`, then downsample to the widths committed
-here — 2000px for `hero.png`, 1600px for the capability cards:
+here — 2000px for the hero, 1600px for the capability cards. That is roughly twice the width GitHub
+renders them at:
 
 ```sh
-sips -s format png --resampleWidth 2000 stage-hero.png --out docs/assets/screens/hero.png
+sips -s format png --resampleWidth 2000 stage-hero-dark.png --out docs/assets/screens/hero-dark.png
 ```
 
 ## Cleanup

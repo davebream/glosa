@@ -25,7 +25,15 @@
 > suites pass, but the final maintainer-reviewed compatibility rehearsal and token-revocation check
 > are not yet approved for a live document week.
 
-![A Claude Code session in a terminal window beside glosa in a browser window. In glosa, the sentence "Improve checkout reliability." is selected in a 90-day plan and a margin comment reads "This phase has no measurable outcome. Give it a target I can check on day 60." In the terminal, the same comment arrives through glosa’s Stop hook and the agent rewrites the line with a day-60 target.](docs/assets/screens/hero.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/hero-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/hero-light.png">
+  <img
+    src="docs/assets/screens/hero-light.png"
+    alt="A Claude Code session in a terminal window beside glosa in a browser window. In glosa, the sentence &quot;Improve checkout reliability.&quot; is selected in a 90-day plan and a margin comment reads &quot;This phase has no measurable outcome. Give it a target I can check on day 60.&quot; In the terminal, the agent pulls that comment out of glosa and rewrites the line with a day-60 target."
+    width="1184"
+  >
+</picture>
 
 The agent keeps its terminal. The document gets a surface. A comment you write in the margin arrives
 in that session as anchored feedback — with the file, the line, and the anchor confidence.
@@ -51,7 +59,15 @@ open at once, and feedback waits durably when no matching agent session is live.
 
 ### Comments stay attached to the words they are about
 
-![Two annotation cards in glosa’s right margin, each quoting the passage it is attached to. Both cards read "Waiting for a session", the feedback intent "Change the words", and a Remove action. The underlined passages in the document show where each comment is anchored.](docs/assets/screens/annotate.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/annotate-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/annotate-light.png">
+  <img
+    src="docs/assets/screens/annotate-light.png"
+    alt="Two annotation cards in glosa&#39;s right margin, each quoting the passage it is attached to. Both cards read &quot;Waiting for a session&quot;, the feedback intent &quot;Change the words&quot;, and a Remove action. The underlined passages in the document show where each comment is anchored."
+    width="960"
+  >
+</picture>
 
 Each comment is stored against a durable source anchor — the quoted text plus its surrounding
 context — not a line number that the next revision invalidates. Entries wait in the workspace journal
@@ -59,7 +75,15 @@ until a matching agent session picks them up, so nothing is lost when no session
 
 ### Every revision is a version you can read and undo
 
-![glosa’s version history pane listing two versions of a plan: one labelled "You — You edited this version" and one labelled "Unknown change — Started tracking this version", each with a Restore action. Below them, a word-level diff shows the two review-driven edits.](docs/assets/screens/history.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/history-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/history-light.png">
+  <img
+    src="docs/assets/screens/history-light.png"
+    alt="glosa&#39;s version history pane listing two versions of a plan: one labelled &quot;You — You edited this version&quot; and one labelled &quot;Unknown change — Started tracking this version&quot;. Below them, a word-level diff shows the two review-driven edits."
+    width="960"
+  >
+</picture>
 
 History lives in a workspace-local shadow repository, so restoring an earlier version never touches
 your project's Git history. Attribution is deliberately conservative: edits made in glosa's own
@@ -68,7 +92,15 @@ editor are yours by construction, and a change glosa did not witness through an 
 
 ### An agent can stop and wait for your verdict
 
-![A strip across the top of the glosa document reading "Final approval requested — Sign off on the revised day 31–60 targets before I start the week-05 check-in", with a Final approval button.](docs/assets/screens/approval.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/approval-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/approval-light.png">
+  <img
+    src="docs/assets/screens/approval-light.png"
+    alt="A strip across the top of the glosa document reading &quot;Final approval requested — Sign off on the revised day 31–60 targets before I start the week-05 check-in&quot;, with a Final approval button."
+    width="960"
+  >
+</picture>
 
 `glosa request-review <path> --require-approval --wait 30m` blocks in the agent's terminal until you
 approve or reject that saved revision in the browser, then returns the verdict to the waiting

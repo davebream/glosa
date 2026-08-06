@@ -21,6 +21,14 @@
       }
       #stage[data-bg="plain"] { background: #efece4; }
 
+      /* Dark stage, for the README's prefers-color-scheme: dark sources. */
+      #stage[data-theme="dark"] {
+        background:
+          radial-gradient(120% 100% at 18% 0%, rgba(150, 144, 128, 0.2), rgba(0, 0, 0, 0) 55%),
+          linear-gradient(158deg, #2a2720 0%, #221f19 52%, #1b1913 100%);
+      }
+      #stage[data-theme="dark"][data-bg="plain"] { background: #262319; }
+
       .win {
         position: absolute;
         border-radius: var(--radius);
@@ -31,6 +39,13 @@
           0 2px 5px -1px rgba(30, 27, 22, 0.12),
           0 14px 28px -10px rgba(30, 27, 22, 0.22),
           0 40px 76px -24px rgba(30, 27, 22, 0.4);
+      }
+      #stage[data-theme="dark"] .win {
+        box-shadow:
+          0 0 0 0.5px rgba(255, 252, 245, 0.14),
+          0 2px 5px -1px rgba(0, 0, 0, 0.5),
+          0 14px 28px -10px rgba(0, 0, 0, 0.55),
+          0 40px 76px -24px rgba(0, 0, 0, 0.7);
       }
 
       /* ---- window chrome ------------------------------------------------ */
@@ -74,6 +89,18 @@
         white-space: nowrap;
       }
       .spacer { width: 52px; flex: none; }
+
+      /* dark-stage browser chrome (the terminal window is dark in both stages) */
+      #stage[data-theme="dark"] .win:not(.term) { background: #17150f; }
+      #stage[data-theme="dark"] .win:not(.term) .bar {
+        background: linear-gradient(180deg, #2b2825, #211f1c);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.5);
+      }
+      #stage[data-theme="dark"] .url span {
+        color: #b8b0a5;
+        background: rgba(0, 0, 0, 0.35);
+        border-color: rgba(255, 252, 245, 0.12);
+      }
 
       /* terminal variant */
       .win.term { background: #100f0d; }
@@ -122,6 +149,7 @@
       stage.style.width = spec.w + "px";
       stage.style.height = spec.h + "px";
       if (spec.bg) stage.dataset.bg = spec.bg;
+      if (spec.theme) stage.dataset.theme = spec.theme;
 
       const el = (tag, cls, html) => {
         const n = document.createElement(tag);
