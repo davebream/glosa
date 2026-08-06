@@ -25,14 +25,10 @@
 > suites pass, but the final maintainer-reviewed compatibility rehearsal and token-revocation check
 > are not yet approved for a live document week.
 
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/glosa-review-loop.png">
-  <img
-    src="docs/assets/glosa-review-loop.gif"
-    alt="Split-screen demo. Claude Code reviews a 90-day Staff Engineer plan while glosa shows nested Markdown and HTML artifacts, highlights a selected sentence, captures an anchored comment, and displays Claude's measurable revision."
-    width="1184"
-  >
-</picture>
+![A Claude Code session in a terminal window beside glosa in a browser window. In glosa, the sentence "Improve checkout reliability." is selected in a 90-day plan and a margin comment reads "This phase has no measurable outcome. Give it a target I can check on day 60." In the terminal, the same comment arrives through glosa’s Stop hook and the agent rewrites the line with a day-60 target.](docs/assets/screens/hero.png)
+
+The agent keeps its terminal. The document gets a surface. A comment you write in the margin arrives
+in that session as anchored feedback — with the file, the line, and the anchor confidence.
 
 Writing in a terminal is fine. Reviewing a long document there is not. glosa gives the document its
 own surface while the agent remains a normal interactive session in your terminal.
@@ -52,6 +48,31 @@ agent drafts -> glosa renders -> you annotate or edit -> feedback reaches the bo
 
 The workspace sidebar preserves directory nesting across mixed artifacts. Multiple workspaces can be
 open at once, and feedback waits durably when no matching agent session is live.
+
+### Comments stay attached to the words they are about
+
+![Two annotation cards in glosa’s right margin, each quoting the passage it is attached to. Both cards read "Waiting for a session", the feedback intent "Change the words", and a Remove action. The underlined passages in the document show where each comment is anchored.](docs/assets/screens/annotate.png)
+
+Each comment is stored against a durable source anchor — the quoted text plus its surrounding
+context — not a line number that the next revision invalidates. Entries wait in the workspace journal
+until a matching agent session picks them up, so nothing is lost when no session is running.
+
+### Every revision is a version you can read and undo
+
+![glosa’s version history pane listing two versions of a plan: one labelled "You — You edited this version" and one labelled "Unknown change — Started tracking this version", each with a Restore action. Below them, a word-level diff shows the two review-driven edits.](docs/assets/screens/history.png)
+
+History lives in a workspace-local shadow repository, so restoring an earlier version never touches
+your project's Git history. Attribution is deliberately conservative: edits made in glosa's own
+editor are yours by construction, and a change glosa did not witness through an apply lease stays
+`Unknown change` rather than being credited to anyone.
+
+### An agent can stop and wait for your verdict
+
+![A strip across the top of the glosa document reading "Final approval requested — Sign off on the revised day 31–60 targets before I start the week-05 check-in", with a Final approval button.](docs/assets/screens/approval.png)
+
+`glosa request-review <path> --require-approval --wait 30m` blocks in the agent's terminal until you
+approve or reject that saved revision in the browser, then returns the verdict to the waiting
+command. Without `--wait` the request parks in the inbox for later.
 
 ## Quick start
 
