@@ -20,6 +20,8 @@ export type {
   DeliveryResult,
   Liveness as ProviderLiveness,
   ProviderCapabilities,
+  ProviderConnectPrompt,
+  ProviderConnectTarget,
   SessionBinding,
 } from "./agent-provider/interface.ts";
 export { AgentProviderRegistry, recordDelivery } from "./agent-provider/interface.ts";

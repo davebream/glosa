@@ -24,6 +24,8 @@ import type {
   DeliveryResult,
   Liveness,
   ProviderCapabilities,
+  ProviderConnectPrompt,
+  ProviderConnectTarget,
   SessionBinding,
 } from "../../../daemon/src/index.ts";
 import { looksLikeCodexHookInput } from "./hook-types.ts";
@@ -45,6 +47,15 @@ export class CodexProvider implements AgentProvider {
   readonly id = "codex";
 
   constructor(private readonly deps: CodexProviderDeps) {}
+
+  connectPrompt(target: ProviderConnectTarget): ProviderConnectPrompt {
+    return {
+      display_name: "Codex",
+      instruction:
+        "Read CODEX_THREAD_ID from this Codex session's environment, then call " +
+        `glosa_session_bind with session_id set to that exact value and workspace set to ${JSON.stringify(target.path)}.`,
+    };
+  }
 
   /** Structural only — accepts anything carrying `session_id`/`cwd` (every Codex `*CommandInput`
    * struct carries exactly those two fields under those names, codex-contract.md §7), mirroring

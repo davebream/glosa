@@ -115,6 +115,7 @@ const SPA_ASSETS: Record<string, string> = {
   // bare-specifier import).
   "data-access.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
+  "agent-feedback.js": "text/javascript; charset=utf-8",
   "artifact-tree.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
   "vendor/idiomorph.js": "text/javascript; charset=utf-8",
@@ -2026,6 +2027,15 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
       // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
       wiring: computeWiring(ctx, e).state,
+      // Additive (issue #95): the SPA composes the generic workspace identity + CLI fallback
+      // around provider-owned agent instructions. No provider-specific text enters the core.
+      connect: {
+        providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
+          provider: provider.id,
+          ...provider.connectPrompt({ slug: e.slug, path: e.worktree_path }),
+        })),
+        cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+      },
     };
   });
   const sessions = ctx.sessionRegistry.list().map((s) => ({
