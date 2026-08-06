@@ -55,6 +55,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
       read("../src/classf-viewer.js"),
       read("../src/conversation.js"),
       read("../src/attention-tray.js"),
+      read("../src/agent-feedback.js"),
     ]) {
       const stripped = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
       expect(FETCH_REFERENCE_RE.test(stripped)).toBe(false);
@@ -62,7 +63,7 @@ describe("no SPA component calls fetch directly except data-access.js", () => {
   });
 });
 
-describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js import only from data-access.js, shared UI modules, each other's sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
+describe("viewer.js and its UI modules import only from data-access.js, their sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
   const ALLOWED_RELATIVE_IMPORTS = new Set([
     "./data-access.js",
     "./annotate.js",
@@ -74,6 +75,7 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
     "./artifact-tree.js",
     "./appearance.js",
     "./attention-tray.js",
+    "./agent-feedback.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",
@@ -129,6 +131,12 @@ describe("viewer.js/annotate.js/history.js/classf-viewer.js/conversation.js impo
 
   test("attention-tray.js imports nothing (all daemon access is caller-injected)", () => {
     const source = read("../src/attention-tray.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
+    expect(specifiers).toHaveLength(0);
+  });
+
+  test("agent-feedback.js imports nothing (aggregate status is caller-injected)", () => {
+    const source = read("../src/agent-feedback.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)];
     expect(specifiers).toHaveLength(0);
   });
