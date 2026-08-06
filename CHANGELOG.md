@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The SPA now has one compact, accessible Agent feedback control that reports explicit session
+  connection as connected, stale, or unbound while retaining queued-entry and feedback-off state.
+  Stale and unbound workspaces expose provider-owned, copyable reconnect prompts with a generic CLI
+  fallback; clipboard denial selects the prompt for manual copying.
+- Providers now supply current-session reconnect guidance through `connectPrompt`, and
+  `GET /api/status` exposes those additive prompts without changing binding persistence. The HTTP
+  contract is now 1.5 with same-major N-1 tolerance.
+- Real HTTP integration coverage proves `glosa open --bind <own-session-id>` registers and binds a
+  live session in one operation while preserving the existing nonfatal unknown-session behavior.
+
+### Changed
+
+- Agent feedback status refreshes on workspace selection, existing workspace-stream activity and
+  reconnect, window focus, and the 15-second poll. A failed status fetch clears any prior connected
+  claim rather than leaving stale green UI.
+
 ## [0.1.0-alpha.6] - 2026-07-27
 
 ### Added
