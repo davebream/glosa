@@ -35,6 +35,18 @@ describe("createDataAccess — request shape", () => {
     expect(headers.get("Authorization")).toBe("Bearer tok-123");
   });
 
+  test("getStatus reads aggregate connection data through the one data-access module", async () => {
+    const calls: string[] = [];
+    const fetchFn = async (path: string) => {
+      calls.push(path);
+      return jsonResponse(200, { workspaces: [], sessions: [] });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage() });
+
+    expect(await da.getStatus()).toEqual({ workspaces: [], sessions: [] });
+    expect(calls).toEqual(["/api/status"]);
+  });
+
   test("getArtifact with render:'html' appends ?render=html and URL-encodes the path", async () => {
     const calls: string[] = [];
     const fetchFn = async (path: string) => {

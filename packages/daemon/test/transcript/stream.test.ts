@@ -70,6 +70,7 @@ async function buildHarness(
   if (opts.withProvider !== false) {
     const provider: AgentProvider = {
       id: "claude-code",
+      connectPrompt: () => ({ display_name: "Claude Code", instruction: "Bind this test session." }),
       capabilities: () => ({ push: true, gate: true, boundaryDrain: true, mcpPull: true }),
       detectSession: () => null,
       deliver: async (session, deliverable) => {
