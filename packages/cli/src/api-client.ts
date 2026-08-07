@@ -56,6 +56,12 @@ export interface WorkspaceStatusSummary {
   last_seen: string;
   pending_count: number;
   has_attention: boolean;
+  wiring?: "live" | "wired" | "unwired";
+  /** Additive in contract 1.5; optional for N-1 daemon compatibility. */
+  connect?: {
+    providers: Array<{ provider: string; display_name: string; instruction: string }>;
+    cli_fallback: string;
+  };
 }
 
 export interface SessionStatusSummary {

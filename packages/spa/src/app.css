@@ -352,48 +352,233 @@ button {
   gap: var(--space-2);
 }
 
-/* issue #81 — the ambient wiring badge: honest state signal, Metadata typography, flat (no
-   elevation). Same category of persistent chrome as the connection banner — an admitted
-   exception to the Preview Boundary Rule's minimal-chrome list (see DESIGN.md). The leading ●
-   is part of the textContent; color carries state with the label as the primary channel. */
-.glosa-wiring-badge {
+/* Issue #95 — one honest agent-feedback signal. Connection state is the leading claim; wiring
+   and queue state remain visible suffixes. Flat metadata typography keeps this persistent
+   exception to the Preview Boundary Rule quieter than the manuscript controls. */
+.glosa-agent-feedback {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.glosa-agent-feedback-trigger {
   border: none;
   background: transparent;
   font: inherit;
   font-size: var(--text-xs);
   color: var(--muted);
-  white-space: nowrap;
+  line-height: 1.2;
+  text-align: left;
   padding: 0 var(--space-1);
 }
 
-.glosa-wiring-badge[data-state="live"] {
+.glosa-agent-feedback-trigger[data-state="connected"] {
   color: var(--ok);
 }
 
-.glosa-wiring-badge[data-state="wired"] {
+.glosa-agent-feedback-trigger[data-state="stale"] {
   color: var(--warn);
 }
 
-.glosa-wiring-badge[data-state="unwired"] {
+.glosa-agent-feedback-trigger[data-state="unbound"],
+.glosa-agent-feedback-trigger[data-state="unknown"] {
   color: var(--muted);
-  cursor: pointer;
 }
 
-.glosa-wiring-badge[data-state="unwired"]:hover {
+.glosa-agent-feedback-trigger:not(:disabled):hover,
+.glosa-agent-feedback-trigger[aria-expanded="true"] {
   color: var(--ink);
   text-decoration: underline;
 }
 
-.glosa-wiring-badge:disabled {
+.glosa-agent-feedback-trigger:disabled {
   cursor: default;
-  opacity: 1; /* disabled here means "informational", not "unavailable" — keep full contrast */
+  opacity: 1;
 }
 
-/* Narrow widths: collapse to the dot alone; the full state stays in aria-label/title. */
-@media (max-width: 1023px) {
-  .glosa-wiring-badge {
-    max-width: 1.5em;
-    overflow: hidden;
+.glosa-agent-feedback-popover {
+  position: fixed;
+  z-index: var(--z-tray);
+  top: calc(var(--topbar-height) + var(--space-1));
+  right: 3.75rem;
+  width: min(28rem, calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--topbar-height) - var(--space-8));
+  overflow-y: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+}
+
+.glosa-agent-feedback-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.glosa-agent-feedback-heading h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.glosa-agent-feedback-close {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.glosa-agent-feedback-close:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-agent-feedback-summary {
+  margin: var(--space-2) 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.glosa-agent-feedback-sessions {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.glosa-agent-feedback-sessions li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: var(--text-sm);
+}
+
+.glosa-agent-feedback-sessions code {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-agent-feedback-liveness {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.glosa-agent-feedback-liveness[data-liveness="alive"] {
+  color: var(--ok);
+}
+
+.glosa-agent-feedback-liveness[data-liveness="stale"] {
+  color: var(--warn);
+}
+
+.glosa-agent-feedback-provider-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.glosa-agent-feedback-provider,
+.glosa-agent-feedback-prompt {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.glosa-agent-feedback-provider {
+  min-height: 2.25rem;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.glosa-agent-feedback-prompt {
+  display: block;
+  min-height: 10rem;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.glosa-agent-feedback-provider:focus,
+.glosa-agent-feedback-prompt:focus {
+  border-color: var(--primary);
+  outline: 3px solid color-mix(in oklch, var(--primary) 18%, transparent);
+}
+
+.glosa-agent-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.glosa-agent-feedback-copy-status {
+  min-height: 1.2rem;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.glosa-agent-feedback-copy-status[data-error="true"] {
+  color: var(--danger);
+}
+
+.glosa-agent-feedback-wiring {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-agent-feedback-wiring p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.glosa-agent-feedback-wiring button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 639px) {
+  .glosa-agent-feedback-trigger {
+    max-width: 10rem;
+  }
+
+  .glosa-agent-feedback-popover {
+    right: var(--space-2);
+    width: calc(100vw - var(--space-4));
+  }
+
+  .glosa-agent-feedback-wiring {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

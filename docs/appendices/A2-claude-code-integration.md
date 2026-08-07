@@ -85,6 +85,7 @@ Providers register through the daemon API; no hook writes registry files directl
   "session_id": "opaque-provider-id",
   "provider": "claude-code",
   "cwd": "/workspace/agent-cwd",
+  "workspace_binding": "/workspace/explicit-review-target",
   "transcript_path": "/allowed/config-root/projects/example/session.jsonl",
   "source": "hook",
   "last_active_at": "ISO-8601",
@@ -115,6 +116,15 @@ reports the effective provider installation and its scope.
 Bindings are session-scoped. An external integration restores them after session registration rather
 than persisting workflow-specific state inside glosa. Two live sessions bound to one workspace require
 an explicit hint or user choice; glosa never guesses and never auto-switches the SPA workspace.
+The SPA reports connected/stale/unbound from explicit `workspace_binding` plus lease liveness only;
+cwd-ancestor routing remains a delivery fallback and is never presented as an explicit connection.
+
+Every provider implements the pure `connectPrompt({slug,path})` boundary and owns the words needed to
+discover the current provider session id. Claude Code guidance uses `CLAUDE_CODE_SESSION_ID`; other
+providers own their equivalent. The daemon and SPA wrap that instruction with generic workspace
+identity and `glosa session bind <current-session-id> --workspace <workspace-path>` fallback copy.
+The prompt asks the current agent session to bind itself; glosa never launches an agent, enumerates
+agent CLI processes, selects between candidate sessions, or persists a binding for later restoration.
 
 ## F15 — hook registration
 
