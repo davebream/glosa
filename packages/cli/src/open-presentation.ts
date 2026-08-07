@@ -6,7 +6,7 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { GlosaApiClient, OpenWorkspaceResult } from "./api-client.ts";
 import { isApiError } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope } from "./envelope.ts";
-import { type ManifestDriftResult, checkManifestDrift } from "./init.ts";
+import { type ManifestDriftResult, checkScopedManifestDrift } from "./scoped-init.ts";
 
 export type OpenSurface = "document" | "workspace";
 export type PresentationMode = "preview" | "annotate" | "edit";
@@ -40,6 +40,9 @@ export interface OpenPresentationData {
   path?: string;
   url?: string;
   focus?: string;
+  /** The registration kind the daemon resolved. `loose-file` means `path` is the file's containing
+   * directory, not a project root — callers must not offer to write agent config there (#96). */
+  kind?: "directory" | "loose-file";
   surface?: OpenSurface;
   mode?: PresentationMode;
   preview?: boolean;
@@ -63,13 +66,21 @@ export interface OpenPresentationDeps {
   glosaHome: () => string;
   openBrowser: (url: string) => void;
   platform: () => NodeJS.Platform;
+  /** The CLIENT's working directory, used to resolve relative open targets before the daemon
+   * call. The daemon is a persistent singleton whose own cwd is arbitrary, so a relative target
+   * must be absolutized here, not there. Defaults to `process.cwd`; injectable for tests. */
+  cwd?: () => string;
   dirExists: (dir: string) => boolean;
   fileExists: (path: string) => boolean;
   /** True when the path exists as a regular non-symlink file. Defaults to `fileExists`. */
   isRegularFile?: (path: string) => boolean;
   /** Read-only init-manifest probe used for the `not-initialized`/`init-drifted` warnings.
-   * Defaults to init.ts's real `checkManifestDrift` so open's verdict can never disagree with
-   * `glosa doctor`'s. Injectable for tests. */
+   * Defaults to scoped-init.ts's `checkScopedManifestDrift` — the SAME function `glosa doctor`'s
+   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. It previously
+   * defaulted to init.ts's legacy v1 probe, which only ever looked at `.claude/.glosa-init.json`;
+   * since `runScopedInit` writes `.glosa/init-manifest.json` and DELETES the legacy file after
+   * migrating it, every correctly-wired workspace reported `not-initialized` (issue #96).
+   * Injectable for tests. */
   checkManifestDrift?: (dir: string) => ManifestDriftResult;
 }
 
@@ -81,13 +92,16 @@ export function classifyOpenTarget(
   target: string,
   focus: string | undefined,
   override: OpenSurfaceOverride,
-  deps: Pick<OpenPresentationDeps, "dirExists" | "fileExists" | "isRegularFile">,
+  deps: Pick<OpenPresentationDeps, "dirExists" | "fileExists" | "isRegularFile" | "cwd">,
 ): ClassifiedOpenTarget {
   const isRegularFile = deps.isRegularFile ?? deps.fileExists;
   const wantsDirectory = target.endsWith("/") || target.endsWith("\\");
-  const normalizedTarget = wantsDirectory && (target.endsWith("/") || target.endsWith("\\"))
-    ? target.replace(/[/\\]+$/, "") || target
-    : target;
+  const stripped = wantsDirectory ? target.replace(/[/\\]+$/, "") || target : target;
+  // Absolutize relative targets against the CLIENT's cwd — the raw string is sent to the daemon,
+  // whose own cwd is arbitrary, so a bare relative target (e.g. `.`) would otherwise register
+  // whatever directory the daemon started in. This makes `openPath` genuinely absolute (its
+  // documented contract). Trailing-slash intent is already captured in `wantsDirectory` above.
+  const normalizedTarget = isAbsolute(stripped) ? stripped : resolvePath((deps.cwd ?? process.cwd)(), stripped);
 
   if (focus !== undefined) {
     if (override === "document") {
@@ -278,15 +292,30 @@ export async function runOpenPresentation(
   // in the bus and are only delivered through init-installed hooks. Advisory only: exit stays 0,
   // and an internal probe failure never breaks `open`.
   try {
-    const drift = (deps.checkManifestDrift ?? checkManifestDrift)(opened.path);
+    const probe = deps.checkManifestDrift ?? ((dir: string) => checkScopedManifestDrift(dir, { glosaHomeDir: home }));
+    const drift = probe(opened.path);
     if (drift.manifest === null) {
-      warnings.push({
-        code: "not-initialized",
-        message:
-          "this workspace is not wired for agent feedback — annotations are saved locally but will never be delivered to a session.\n" +
-          `  fix: run \`glosa init ${opened.path}\`\n` +
-          "  then: restart or /resume your Claude Code session so it loads glosa.",
-      });
+      // A loose-file registration's worktree is the file's CONTAINING directory, which can be
+      // `/private/tmp` or a parent holding several unrelated repos. A1 §5.19 already refuses to
+      // run init there through the daemon route ("writing `.claude/` config there would be a
+      // surprising mutation"); telling the user to run the same thing by hand contradicted that
+      // refusal (issue #96). Name the file's own status instead, and never a directory to wire.
+      warnings.push(
+        opened.kind === "loose-file"
+          ? {
+              code: "not-initialized",
+              message:
+                "this file is not inside a project glosa can wire — annotations are saved locally but will never be delivered to a session.\n" +
+                "  fix: move it into a git repository, then run `glosa open` on it again.",
+            }
+          : {
+              code: "not-initialized",
+              message:
+                "this workspace is not wired for agent feedback — annotations are saved locally but will never be delivered to a session.\n" +
+                `  fix: run \`glosa init ${opened.path}\`\n` +
+                "  then: restart or /resume your Claude Code session so it loads glosa.",
+            },
+      );
     } else if (drift.drifted.length > 0) {
       warnings.push({
         code: "init-drifted",
@@ -362,6 +391,7 @@ export async function runOpenPresentation(
       path: opened.path,
       url,
       ...(focusRel ? { focus: focusRel } : {}),
+      ...(opened.kind ? { kind: opened.kind } : {}),
       surface: classified.surface,
       mode,
       preview: previewLock,

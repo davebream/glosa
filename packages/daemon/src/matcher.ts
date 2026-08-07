@@ -88,9 +88,20 @@ export interface MatchedFile {
 export interface ResolveMatchedFilesResult {
   tracked: MatchedFile[];
   oversize: MatchedFile[];
+  /** Every readable, non-symlink directory the canonical matcher actually descended into.
+   * Paths retain their raw on-disk spelling so watcher setup never reconstructs an NFC path that
+   * may not exist byte-for-byte on APFS. The root is included as path "". */
+  directories: MatchedDirectory[];
   /** Diagnostic only — POSIX/NFC path of every symlink encountered (file or dir), root-relative.
    * Never matched, never descended into. */
   skippedSymlinks: string[];
+}
+
+export interface MatchedDirectory {
+  /** POSIX `/`-separated, root-relative and NFC-normalized. The root itself is "". */
+  path: string;
+  /** Absolute path using the filesystem's raw segment spelling. */
+  rawPath: string;
 }
 
 /** Byte-order comparator on the UTF-8 encoding of the NFC path — deliberately not
@@ -135,6 +146,7 @@ export function resolveMatchedFiles(
   const isPrunedDir = dirPrunePatterns.length > 0 ? picomatch(dirPrunePatterns, { nocase: false }) : () => false;
 
   const candidates: { path: string; rawPath: string; sizeBytes: number }[] = [];
+  const directories: MatchedDirectory[] = [];
   const skippedSymlinks: string[] = [];
 
   const walk = (absDir: string, relSegments: string[]): void => {
@@ -144,6 +156,7 @@ export function resolveMatchedFiles(
     } catch {
       return; // unreadable dir (permissions, or raced-away) — skip, don't fail the whole walk
     }
+    directories.push({ path: toNfcPosixPath(relSegments), rawPath: absDir });
     for (const name of names) {
       const absPath = join(absDir, name);
       const nextSegments = [...relSegments, name];
@@ -183,12 +196,13 @@ export function resolveMatchedFiles(
 
   tracked.sort((a, b) => byteCompare(a.path, b.path));
   oversize.sort((a, b) => byteCompare(a.path, b.path));
+  directories.sort((a, b) => byteCompare(a.path, b.path));
   skippedSymlinks.sort(byteCompare);
 
-  return { tracked, oversize, skippedSymlinks };
+  return { tracked, oversize, directories, skippedSymlinks };
 }
 
-/** Builds the chokidar `ignored` predicate for the artifact watcher (stream.ts) FROM the same
+/** Builds the chokidar `ignored` predicate for the shared artifact watcher FROM the same
  * canonical include/exclude config the walk uses — so the watcher's scope can't drift from
  * `resolveMatchedFiles`' scope (the whole reason A4 §F20 forbids each consumer holding its own
  * glob). Returns `true` for "don't watch / don't descend". Without this the watcher would crawl and
@@ -201,6 +215,7 @@ export function resolveMatchedFiles(
  *     match FILES (`**‍/*.md`), so testing a dir path against them would wrongly hide it.
  *   - a surviving regular file is watched only when it matches an include glob (a glosa artifact
  *     extension); everything else is ignored.
+ *   - symlinks are ignored exactly as they are by the canonical walk.
  * chokidar passes `stats` for entries it has already stat'd; when it hasn't yet (`stats` undefined),
  * we DON'T ignore, so an unstat'd directory is still descended into and re-decided once stat'd. */
 export function buildWatchIgnored(
@@ -223,8 +238,11 @@ export function buildWatchIgnored(
     );
     if (rel === "") return false;
     if (isPrunedDir(rel) || isExcluded(rel)) return true; // excluded subtree — dir + everything under it
+    if (stats?.isSymbolicLink()) return true;
     if (stats?.isDirectory()) return false; // surviving dir: descend (include globs match files, not dirs)
-    if (stats?.isFile()) return !isIncluded(rel); // surviving file: watch only supported artifact extensions
+    if (stats?.isFile()) {
+      return !isIncluded(rel) || stats.size > config.artifacts.maxFileBytes;
+    }
     return false; // not yet stat'd — let chokidar descend/stat and re-decide
   };
 }
@@ -252,7 +270,7 @@ export function resolveTrackedFiles(workspace: WorkspaceTarget): ResolveMatchedF
     }
   }
   tracked.sort((a, b) => byteCompare(a.path, b.path));
-  return { tracked, oversize: [], skippedSymlinks: [] };
+  return { tracked, oversize: [], directories: [], skippedSymlinks: [] };
 }
 
 export type CrossingEvent =

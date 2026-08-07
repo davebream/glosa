@@ -128,6 +128,26 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       put,
       withdrawn,
       getWorkspaces: async () => [{ slug: "ws-1", path: "/tmp/ws-1" }],
+      getStatus: async () => ({
+        workspaces: [
+          {
+            slug: "ws-1",
+            path: "/tmp/ws-1",
+            pending_count: 0,
+            connect: {
+              providers: [
+                {
+                  provider: "claude-code",
+                  display_name: "Claude Code",
+                  instruction: "Read CLAUDE_CODE_SESSION_ID, then bind this workspace.",
+                },
+              ],
+              cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+            },
+          },
+        ],
+        sessions: [],
+      }),
       getArtifacts: async () => [{ path: "notes.md", class: "R" }],
       getArtifact: async (_slug: string, path: string) => ({
         source_path: path,
@@ -213,6 +233,37 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     const content = root.querySelector(".glosa-content")!;
     expect(content.innerHTML).toContain("Title");
+  });
+
+  test("artifact_index refreshes the navigator and replaces a removed current artifact", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let artifacts = [{ path: "notes.md", class: "R" }];
+    const da = fakeDataAccess({
+      getArtifacts: async () => artifacts,
+    });
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (
+      root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as unknown as {
+        click(): void;
+      }
+    ).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    artifacts = [{ path: "fresh.md", class: "R" }];
+    da.stream.handlers?.onEvent?.({
+      event: "artifact_index",
+      data: { changes: [{ type: "file_untracked", path: "notes.md", reason: "deleted" }] },
+    });
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    const labels = Array.from(root.querySelectorAll(".glosa-artifact-list .glosa-tree-label")).map(
+      (element) => element.textContent,
+    );
+    expect(labels).toEqual(["fresh.md"]);
+    expect(dom.document.title).toBe("ws-1 — fresh.md");
   });
 
   test("workspace switcher hides at <=1 workspace (MCP/CLI scope), appears and lists all at >=2", async () => {
@@ -776,51 +827,107 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
   }
 
-  test("badge renders each observed state; hidden until first success and on failure (never green unobserved)", async () => {
+  test("combined control refreshes unbound/stale/connected without reload and resets green on failure", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
-    let response: (() => Promise<unknown>) | null = null; // null = reject
+    let wiringResponse: (() => Promise<unknown>) | null = null;
+    let statusResponse: (() => Promise<unknown>) | null = null;
+    const statusOf =
+      (sessions: unknown[], pendingCount = 0) =>
+      async () => ({
+        workspaces: [
+          {
+            slug: "ws-1",
+            path: "/tmp/ws-1",
+            pending_count: pendingCount,
+            connect: {
+              providers: [
+                { provider: "claude-code", display_name: "Claude Code", instruction: "Bind Claude." },
+                { provider: "codex", display_name: "Codex", instruction: "Bind Codex." },
+              ],
+              cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+            },
+          },
+        ],
+        sessions,
+      });
     const da = fakeDataAccess({
       getWiringStatus: async () => {
-        if (!response) throw new Error("no route (pre-1.4 daemon)");
-        return response();
+        if (!wiringResponse) throw new Error("status unavailable");
+        return wiringResponse();
+      },
+      getStatus: async () => {
+        if (!statusResponse) throw new Error("status unavailable");
+        return statusResponse();
       },
     });
     mountApp(root, { dataAccess: da });
     await flush();
 
-    // Fetch failing (old daemon) -> badge hidden, nothing claimed.
-    const badge = root.querySelector(".glosa-wiring-badge") as any;
-    expect(badge.hidden).toBe(true);
+    // Fetch failure is explicit and non-green; no previous claim survives.
+    const control = root.querySelector(".glosa-agent-feedback-trigger") as any;
+    expect(control.textContent).toBe("Agent feedback unavailable");
+    expect(control.getAttribute("data-state")).toBe("unknown");
+    expect(control.disabled).toBe(true);
 
-    // The stream's journal frame triggers a refetch — now observing "unwired".
-    response = wiringOf("unwired");
+    wiringResponse = wiringOf("unwired");
+    statusResponse = statusOf([]);
     (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
     await flush();
-    expect(badge.hidden).toBe(false);
-    expect(badge.getAttribute("data-state")).toBe("unwired");
-    expect(badge.textContent).toContain("Off — annotations stay local");
-    expect(badge.disabled).toBe(false); // Off is the one actionable state
+    expect(control.getAttribute("data-state")).toBe("unbound");
+    expect(control.textContent).toContain("Connect agent");
+    expect(control.textContent).toContain("feedback off");
+    expect(control.disabled).toBe(false);
 
-    response = wiringOf("wired", { pending_count: 2 });
+    wiringResponse = wiringOf("wired");
+    statusResponse = statusOf([
+      {
+        session_id: "stale-codex-session",
+        provider: "codex",
+        cwd: "/tmp/ws-1",
+        workspace_binding: "/tmp/ws-1",
+        last_active_at: "2026-08-06T10:00:00.000Z",
+        liveness: "stale",
+      },
+    ]);
+    (da as any).stream.handlers?.onEvent?.({ event: "artifact", data: { path: "other.md" } });
+    await flush();
+    expect(control.getAttribute("data-state")).toBe("stale");
+    expect(control.textContent).toContain("Agent stale");
+
+    statusResponse = statusOf(
+      [
+        {
+          session_id: "live-claude-session",
+          provider: "claude-code",
+          cwd: "/elsewhere",
+          workspace_binding: "/tmp/ws-1",
+          last_active_at: "2026-08-06T10:01:00.000Z",
+          liveness: "alive",
+        },
+        {
+          session_id: "cwd-only-session",
+          provider: "codex",
+          cwd: "/tmp/ws-1/subdir",
+          workspace_binding: null,
+          last_active_at: "2026-08-06T10:02:00.000Z",
+          liveness: "alive",
+        },
+      ],
+      2,
+    );
+    (da as any).stream.handlers?.onReconnect?.();
+    await flush();
+    expect(control.getAttribute("data-state")).toBe("connected");
+    expect(control.textContent).toContain("Agent connected");
+    expect(control.textContent).toContain("2 queued");
+
+    wiringResponse = null;
+    statusResponse = null;
     (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
     await flush();
-    expect(badge.getAttribute("data-state")).toBe("wired");
-    expect(badge.textContent).toContain("Wired — no session bound");
-    expect(badge.textContent).toContain("2 queued");
-    expect(badge.disabled).toBe(true);
-
-    response = wiringOf("live");
-    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
-    await flush();
-    expect(badge.getAttribute("data-state")).toBe("live");
-    expect(badge.textContent).toContain("Live → session");
-
-    // A later failure resets to hidden — the badge never keeps a stale green claim.
-    response = null;
-    (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
-    await flush();
-    expect(badge.hidden).toBe(true);
+    expect(control.getAttribute("data-state")).toBe("unknown");
+    expect(control.textContent).toBe("Agent feedback unavailable");
   });
 
   /** Mounts, opens notes.md, enters Annotate, selects "Title", types a note, clicks send.

@@ -10,6 +10,7 @@ function snapshot(tracked: string[], oversize: string[]): ResolveMatchedFilesRes
   return {
     tracked: tracked.map((path) => ({ path, rawPath: `/ws/${path}`, sizeBytes: 10 })),
     oversize: oversize.map((path) => ({ path, rawPath: `/ws/${path}`, sizeBytes: 999_999_999 })),
+    directories: [],
     skippedSymlinks: [],
   };
 }

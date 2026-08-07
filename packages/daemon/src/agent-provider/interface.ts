@@ -35,6 +35,19 @@ export interface ProviderCapabilities {
   mcpPull: boolean;
 }
 
+/** Provider-owned copy for the SPA's reconnect prompt. The generic daemon supplies only the
+ * workspace identity and CLI fallback; environment-variable names and agent vocabulary remain
+ * inside the provider package (R7 / issue #95). */
+export interface ProviderConnectTarget {
+  slug: string;
+  path: string;
+}
+
+export interface ProviderConnectPrompt {
+  display_name: string;
+  instruction: string;
+}
+
 /** `via`/`outcome` are A5 §F23's fixed vocabulary, imported from `lifecycle.ts` (the ONE place
  * that defines it) rather than redeclared here — a P4.3 review caught exactly this file
  * inventing its own `"delivered"|"failed"` outcome and free-text `via`/`reason` values, none of
@@ -105,6 +118,9 @@ export interface AgentProvider {
   /** `"claude-code"` | `"codex"` | ... — stable, used as the `provider` field on a
    * `SessionRegistry` record (A2 §F08). */
   id: string;
+  /** Human-facing reconnect guidance. Provider-specific identity discovery belongs here, never
+   * in the daemon or SPA. Pure — no I/O or binding side effect. */
+  connectPrompt(target: ProviderConnectTarget): ProviderConnectPrompt;
   /** From a raw hook/event payload → a `SessionBinding`, or `null` if the payload doesn't carry
    * enough to identify a session (malformed/foreign event). Pure — no I/O. */
   detectSession(hookEvent: unknown): SessionBinding | null;

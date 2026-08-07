@@ -5,7 +5,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import type { GlosaApiClient } from "./api-client.ts";
 import { type CommandEnvelope, printJsonEnvelope } from "./envelope.ts";
-import type { InitResult } from "./init.ts";
+import type { InitResult } from "./scoped-init.ts";
 import {
   type OpenPresentationData,
   type OpenPresentationDeps,
@@ -29,6 +29,7 @@ export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenD
       Bun.spawn({ cmd: ["open", url], stdout: "ignore", stderr: "ignore" });
     },
     platform: () => process.platform,
+    cwd: () => process.cwd(),
     dirExists: (dir) => {
       try {
         return existsSync(dir) && lstatSync(dir).isDirectory();
@@ -78,7 +79,11 @@ export interface OfferInitOptions {
   isTTY?: () => boolean;
   /** Defaults to confirm.ts's `confirmOnTty`. */
   confirm?: (question: string) => Promise<boolean>;
-  /** Defaults to init.ts's real `runInit` (programmatic, idempotent-by-content). */
+  /** Defaults to scoped-init.ts's `runScopedInit` (programmatic, idempotent-by-content) with the
+   * providers detected in the workspace — the SAME entry point `glosa init` itself runs. It used
+   * to default to init.ts's legacy v1 `runInit`, which writes the superseded
+   * `.claude/.glosa-init.json` ownership layout that neither `doctor` nor the daemon's wiring
+   * probe treats as authoritative any more (issue #96). */
   runInit?: (opts: { dir: string }) => Promise<InitResult>;
   /** Defaults to `process.stderr.write`. */
   stderr?: (text: string) => void;
@@ -89,13 +94,17 @@ export interface OfferInitOptions {
  * `not-initialized` warning: on a TTY without `--json` it asks once; `--init` skips the question;
  * `--no-init` (or non-TTY, or `--json`) does nothing. Drifted workspaces are deliberately
  * excluded — re-init over drift can require `--force`, which `open` never runs on the user's
- * behalf. Init failure is reported but never alters `open`'s own exit code.
+ * behalf. A `loose-file` registration is excluded too (issue #96): its `path` is the file's
+ * containing directory — possibly `/private/tmp` or a parent full of unrelated repos — and A1
+ * §5.19 already refuses to init one through the daemon route. Init failure is reported but never
+ * alters `open`'s own exit code.
  */
 export async function maybeOfferInit(
   result: CommandEnvelope<OpenPresentationData>,
   options: OfferInitOptions,
 ): Promise<void> {
   if (!result.ok || !result.data.path) return;
+  if (result.data.kind === "loose-file") return;
   if (!result.warnings.some((w) => w.code === "not-initialized")) return;
   if (options.noInitFlag) return;
 
@@ -111,7 +120,15 @@ export async function maybeOfferInit(
   if (!consented) return;
 
   const runInit =
-    options.runInit ?? (async (o: { dir: string }) => (await import("./init.ts")).runInit(o));
+    options.runInit ??
+    (async (o: { dir: string }) => {
+      const scoped = await import("./scoped-init.ts");
+      const detected = scoped.detectInstallProviders(o.dir);
+      // Nothing detected -> install the deep, required integration rather than erroring on an
+      // empty provider set; `glosa init` itself prompts here, and `open` must never prompt twice.
+      const agents = detected.length > 0 ? detected : (["claude-code"] as const);
+      return scoped.runScopedInit({ dir: o.dir, scope: "workspace", agents: [...agents] });
+    });
   try {
     const initResult = await runInit({ dir: result.data.path });
     if (initResult.ok) {

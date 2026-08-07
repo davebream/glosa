@@ -26,13 +26,17 @@
 > are not yet approved for a live document week.
 
 <picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/glosa-review-loop.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/hero-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/hero-light.png">
   <img
-    src="docs/assets/glosa-review-loop.gif"
-    alt="Split-screen demo. Claude Code reviews a 90-day Staff Engineer plan while glosa shows nested Markdown and HTML artifacts, highlights a selected sentence, captures an anchored comment, and displays Claude's measurable revision."
-    width="1184"
+    src="docs/assets/screens/hero-light.png"
+    alt="A Claude Code terminal in front of glosa in a browser window. In glosa, the sentence &quot;Improve checkout reliability.&quot; is highlighted in a 90-day plan and a margin comment reads &quot;This phase has no measurable outcome. Give it a target I can check on day 60.&quot; In the terminal, that comment arrives as a glosa annotation with its file, line, and anchor confidence, and the agent rewrites the line with a day-60 target."
+    width="830"
   >
 </picture>
+
+The agent keeps its terminal. The document gets a surface. A comment you write in the margin arrives
+in that session as anchored feedback — with the file, the line, and the anchor confidence.
 
 Writing in a terminal is fine. Reviewing a long document there is not. glosa gives the document its
 own surface while the agent remains a normal interactive session in your terminal.
@@ -52,6 +56,55 @@ agent drafts -> glosa renders -> you annotate or edit -> feedback reaches the bo
 
 The workspace sidebar preserves directory nesting across mixed artifacts. Multiple workspaces can be
 open at once, and feedback waits durably when no matching agent session is live.
+
+### Comments stay attached to the words they are about
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/annotate-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/annotate-light.png">
+  <img
+    src="docs/assets/screens/annotate-light.png"
+    alt="Two annotation cards in glosa&#39;s right margin, each quoting the passage it is attached to. Both cards read &quot;Waiting for a session&quot;, the feedback intent &quot;Change the words&quot;, and a Remove action. The underlined passages in the document show where each comment is anchored."
+    width="960"
+  >
+</picture>
+
+Each comment is stored against a durable source anchor — the quoted text plus its surrounding
+context — not a line number that the next revision invalidates. Entries wait in the workspace journal
+until a matching agent session picks them up, so nothing is lost when no session is running.
+
+### Every revision is a version you can read and undo
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/history-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/history-light.png">
+  <img
+    src="docs/assets/screens/history-light.png"
+    alt="glosa&#39;s version history pane listing two versions of a plan: one labelled &quot;You — You edited this version&quot; and one labelled &quot;Unknown change — Started tracking this version&quot;. Below them, a word-level diff shows the two review-driven edits."
+    width="960"
+  >
+</picture>
+
+History lives in a workspace-local shadow repository, so restoring an earlier version never touches
+your project's Git history. Attribution is deliberately conservative: edits made in glosa's own
+editor are yours by construction, and a change glosa did not witness through an apply lease stays
+`Unknown change` rather than being credited to anyone.
+
+### An agent can stop and wait for your verdict
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/approval-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/approval-light.png">
+  <img
+    src="docs/assets/screens/approval-light.png"
+    alt="A strip across the top of the glosa document reading &quot;Final approval requested — Sign off on the revised day 31–60 targets before I start the week-05 check-in&quot;, with a Final approval button."
+    width="960"
+  >
+</picture>
+
+`glosa request-review <path> --require-approval --wait 30m` blocks in the agent's terminal until you
+approve or reject that saved revision in the browser, then returns the verdict to the waiting
+command. Without `--wait` the request parks in the inbox for later.
 
 ## Quick start
 
@@ -75,7 +128,7 @@ mapping outranks the `--registry` flag, and bun has no scoped-registry flag at a
 Install from the published tarball URL, which resolves without consulting any registry configuration:
 
 ```sh
-bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.6.tgz
+bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.7.tgz
 ```
 
 Or, with npm, use the scoped form — which does beat a scope mapping:

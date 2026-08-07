@@ -319,6 +319,12 @@ export function createDataAccess(deps = {}) {
     getWorkspaces() {
       return requestJson("/api/workspaces");
     },
+    /** `GET /api/status` — machine-wide session/workspace data. The viewer derives explicit
+     * connected/stale/unbound state from `workspace_binding` + `liveness`; it never infers a
+     * binding from cwd fallback. */
+    getStatus() {
+      return requestJson("/api/status");
+    },
     getArtifacts(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts`);
     },

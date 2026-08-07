@@ -18,6 +18,8 @@ import type {
   DeliveryResult,
   Liveness,
   ProviderCapabilities,
+  ProviderConnectPrompt,
+  ProviderConnectTarget,
   SessionBinding,
 } from "../../../daemon/src/index.ts";
 import { looksLikeClaudeHookInput } from "./hook-types.ts";
@@ -61,6 +63,15 @@ export class ClaudeCodeProvider implements AgentProvider {
   readonly id = "claude-code";
 
   constructor(private readonly deps: ClaudeCodeProviderDeps) {}
+
+  connectPrompt(target: ProviderConnectTarget): ProviderConnectPrompt {
+    return {
+      display_name: "Claude Code",
+      instruction:
+        "Read CLAUDE_CODE_SESSION_ID from this Claude Code session's environment, then call " +
+        `glosa_session_bind with session_id set to that exact value and workspace set to ${JSON.stringify(target.path)}.`,
+    };
+  }
 
   /** Structural only — accepts anything carrying `session_id`/`cwd` (A2 §F08's SessionStart shape
    * and every other Claude hook event share that much), so a hook payload with extra/newer fields

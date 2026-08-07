@@ -6,7 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.1.0-alpha.6] - 2026-07-26
+## [0.1.0-alpha.7] - 2026-08-07
+
+### Added
+
+- The SPA now has one compact, accessible Agent feedback control that reports explicit session
+  connection as connected, stale, or unbound while retaining queued-entry and feedback-off state.
+  Stale and unbound workspaces expose provider-owned, copyable reconnect prompts with a generic CLI
+  fallback; clipboard denial selects the prompt for manual copying.
+- Providers now supply current-session reconnect guidance through `connectPrompt`, and
+  `GET /api/status` exposes those additive prompts without changing binding persistence. The HTTP
+  contract is now 1.5 with same-major N-1 tolerance.
+- Real HTTP integration coverage proves `glosa open --bind <own-session-id>` registers and binds a
+  live session in one operation while preserving the existing nonfatal unknown-session behavior.
+
+### Changed
+
+- Agent feedback status refreshes on workspace selection, existing workspace-stream activity and
+  reconnect, window focus, and the 15-second poll. A failed status fetch clears any prior connected
+  claim rather than leaving stale green UI.
+- `glosa open` resolves an unowned file inside a git repository to the repo root as a directory
+  workspace instead of registering a loose file over the file's containing directory, so `open`,
+  `doctor`, and `init` now agree on one workspace root; `open`'s wiring probe reads the same
+  scoped manifest `doctor` does, so a correctly-wired workspace no longer reports
+  `not-initialized`; and a `loose-file` registration's un-wired hint no longer suggests running
+  `glosa init` on its (possibly temp-directory or multi-repo-parent) worktree. `glosa init`/`glosa
+  doctor` resolve a bare cwd invocation to the enclosing git repository, and `glosa init` refuses
+  to write configuration into a temp directory or a bare multi-repo parent unless `--force` or an
+  interactive confirmation. `glosa init --print` now shows a real hunk-level diff instead of
+  rendering every change as a whole-file replacement, and reports "already up to date" rather than
+  printing nothing when there is nothing to change. (#96)
+
+## [0.1.0-alpha.6] - 2026-07-27
 
 ### Added
 
@@ -30,6 +61,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `glosa open` now resolves relative targets against the invoking client's working directory
+  before contacting the daemon, preventing an existing daemon from silently registering the same
+  relative path beneath its own unrelated working directory.
+- Artifact watching now uses one bounded, shared watcher per workspace instead of one recursive
+  workspace-root watcher per SSE connection. Canonical pruning keeps `node_modules`, `.git`,
+  dot-worktrees, symlinks, and unrelated files out of the watch set; oversized workspaces degrade
+  safely instead of driving the singleton daemon into an error, memory-growth, and respawn loop.
 - Workspace garbage collection can no longer remove a registration whose bus still holds pending
   (undelivered) entries — parked annotations now block removal indefinitely, and an unreadable
   journal counts as pending rather than removable. `glosa forget` remains an explicit override.
@@ -136,7 +174,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.6...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.7...HEAD
+[0.1.0-alpha.7]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.6...v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.4...v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.3...v0.1.0-alpha.4

@@ -50,6 +50,8 @@ Maintainers may close opaque bulk-generated contributions that the author cannot
 
 - Keep each pull request focused and explain user-visible behavior.
 - Add or update tests for changed behavior.
+- Re-capture the README screenshots when a change alters the workspace chrome, the annotation margin,
+  the history pane, or the approval strip; `docs/screenshots.md` is the recipe.
 - Update public documentation and `CHANGELOG.md` when appropriate.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit subjects.
 - Confirm that no secrets or private document content are included.

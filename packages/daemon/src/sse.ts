@@ -14,6 +14,7 @@ export type SseEventType =
   | "snapshot"
   | "journal"
   | "artifact"
+  | "artifact_index"
   | "metadata"
   | "heartbeat"
   | "resync_required"
@@ -75,9 +76,7 @@ function parseFrame(raw: string): ParsedSseEvent | null {
  * silently — a caller never has to special-case them (A1 §8.3: "the client's parser drops
  * heartbeat events silently"). Does NOT interpret `resync_required`/reconnect — that's the
  * caller's watchdog/reconnect-loop concern (also P3.3); this module only speaks the wire format. */
-export async function* parseSseStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<ParsedSseEvent> {
+export async function* parseSseStream(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<ParsedSseEvent> {
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {

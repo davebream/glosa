@@ -94,6 +94,12 @@ generic.**
   realpath→NFC→strip-slash; slugs remain display/routing labels with deterministic
   collision-lengthening (A4 §F25). Loose files and redirected directories store state beneath
   `~/.glosa/state/<full-sha256-registration-id>/` while retaining their original work-tree.
+  **A file with no owning registration resolves to its enclosing git repository as a `directory`
+  registration, not a `loose-file`, whenever that repo's own tracked-artifact rule would track the
+  file** (issue #96) — this is the same root `glosa init`/`glosa doctor` resolve to for that file,
+  so all three commands agree on one workspace boundary and never point a wiring hint at the
+  file's bare containing directory. `loose-file` remains the outcome for a file outside any git
+  repository, or one the enclosing repo's own matcher excludes (dot-dir, `node_modules`, > 2 MiB).
 - **Tracked-artifact rule** produces one normalized file LIST feeding watcher + sidebar + git
   pathspec identically. Directory registrations use the recursive picomatch policy: include
   `**/*.md,**/*.html,**/*.txt`; exclude dot-dirs, `node_modules`, files > 2 MiB; symlinks never

@@ -96,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.4", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.5", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -113,15 +113,35 @@ new workspace from the SPA, that's an additive route — not required for v1.)
 
 ### 5.2b `GET /api/status`
 Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
-`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, wiring}],
+`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, wiring, connect?}],
 sessions:[…], orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive,
 issue #79) lists `~/.glosa/state/<id>` buses whose journal still derives pending entries but whose
 registration is gone — stranded user work recoverable by re-opening the original path
 (deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
 route never fails over it. `wiring` (additive, issue #80) is the same 3-state value §5.18 serves.
 
+Contract 1.5 additively permits this workspace field (optional for N-1 clients):
+
+```json
+{
+  "connect": {
+    "providers": [
+      { "provider": "provider-id", "display_name": "Provider name", "instruction": "Provider-owned current-session binding guidance." }
+    ],
+    "cli_fallback": "glosa session bind <current-session-id> --workspace <workspace-path>"
+  }
+}
+```
+
+The provider package owns `display_name` and `instruction`; the daemon supplies only workspace
+identity and the generic CLI fallback. Reading this field has no registration or binding side effect.
+Session rows retain their existing `workspace_binding` and `liveness` fields. A client derives an
+explicit connection as follows: any alive row whose `workspace_binding` equals the workspace path is
+connected; otherwise any stale explicit row is stale; otherwise it is unbound. Cwd-ancestor routing
+does not count as an explicit connection.
+
 ### 5.18 `GET /w/:slug/wiring`
-Bearer required (authed read; issue #80). The SPA wiring badge's per-workspace signal:
+Bearer required (authed read; issue #80). The SPA's per-workspace integration-wiring signal:
 ```json
 { "state": "live" | "wired" | "unwired",
   "init": { "manifest_present": true, "manifest_invalid": false },
@@ -146,9 +166,13 @@ the CLI as a child (`glosa init <dir> --json`, env scrubbed of `ANTHROPIC_API_KE
   `restart_required` is true when no routable live session exists (hooks load at SessionStart).
 - **400 validation-failed** — loose-file workspace (its worktree is the *containing* directory;
   writing `.claude/` config there would be a surprising mutation — the client shows the terminal
-  command instead) or invalid body JSON. **404** unknown slug. **409 conflict** — child exit 6
-  (foreign-config conflict; detail carries the child's `error.code` + hint so the client may
-  re-confirm with `force:true`) or exit 2 (`durable-install-required`). **500 internal** — other
+  command instead; a file inside a git repository resolves to a `directory` registration and never
+  reaches this branch, see requirements.md R1 / issue #96) or invalid body JSON. **404** unknown
+  slug. **409 conflict** — child exit 6 (foreign-config conflict; detail carries the child's
+  `error.code` + hint so the client may re-confirm with `force:true`) or exit 2
+  (`durable-install-required`, or A6 §F26's `unsafe-init-target` — a directory workspace that is
+  itself under a temp root or a bare multi-repo parent; same re-confirm-with-`force:true` path).
+  **500 internal** — other
   child failures, timeout, spawn failure, unparseable child output; the raw child stdout is never
   echoed beyond the parsed envelope fields. **503** — runner not wired (narrow test contexts).
 
@@ -432,6 +456,11 @@ data: <json>
    paint the view from scratch (artifact list + latest `source_sha256` per artifact for the
    artifact stream; the transcript-mirror's already-known entries for the transcript stream),
    then continues emitting live events from that cursor forward.
+   Live filesystem invalidations are advisory and carry no `id`: `event: artifact` contains an
+   upserted artifact's `{path,class,source_sha256}`, while `event: artifact_index` contains
+   `{changes:[{type:file_tracked,path}|{type:file_untracked,path,reason}]}` so clients can refresh
+   their artifact list after additions, deletions, or size-threshold crossings. Older clients may
+   ignore either event and recover from the next snapshot.
 2. **Reconnect** (network drop, daemon restart, tab backgrounded and resumed): client resends
    the fetch with `Last-Event-ID: <last cursor it saw>` (primary) — `?since=<cursor>` query
    param is the documented fallback for any client that can't set custom headers on a

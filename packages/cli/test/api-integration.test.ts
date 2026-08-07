@@ -9,11 +9,13 @@
 // (separate workspace dirs keep the scenarios independent).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureToken, lockPath, readLock } from "@glosa/daemon";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
+import { createHttpDaemonClient } from "../src/daemon-client.ts";
+import { runOpen, type OpenDeps } from "../src/open.ts";
 import { runRequestReview } from "../src/request-review.ts";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
@@ -65,6 +67,46 @@ afterAll(async () => {
 });
 
 describe("GlosaApiClient — real daemon end-to-end", () => {
+  test("open --bind registers the workspace and binds a live session in one HTTP-backed operation; unknown sessions stay nonfatal", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    const sessionId = "live-open-bind-session";
+    const hookClient = await createHttpDaemonClient();
+    await hookClient.register({
+      session_id: sessionId,
+      provider: "codex",
+      cwd: workspaceDir,
+      source: "integration-test",
+    });
+    const deps: OpenDeps = {
+      createClient: async () => client,
+      ensureToken: () => token,
+      glosaHome: () => home,
+      openBrowser: () => {},
+      platform: () => "darwin",
+      dirExists: (path) => existsSync(path) && statSync(path).isDirectory(),
+      fileExists: (path) => existsSync(path),
+      isRegularFile: (path) => existsSync(path) && statSync(path).isFile(),
+      checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }),
+    };
+
+    const result = await runOpen(workspaceDir, deps, { bindSessionId: sessionId, launchBrowser: false });
+    expect(result).toMatchObject({ ok: true, exitCode: 0, data: { bound_session: sessionId } });
+    expect(result.data.url).toBeTruthy();
+
+    const aggregate = await client.getStatus();
+    expect(aggregate.sessions.find((candidate) => candidate.session_id === sessionId)).toMatchObject({
+      workspace_binding: realpathSync(workspaceDir),
+      liveness: "alive",
+    });
+
+    const unknownWorkspace = freshWorkspaceDir();
+    const unknown = await runOpen(unknownWorkspace, deps, { bindSessionId: "not-registered", launchBrowser: false });
+    expect(unknown).toMatchObject({ ok: true, exitCode: 0 });
+    expect(unknown.data.url).toBeTruthy();
+    expect(unknown.data.bound_session).toBeUndefined();
+    expect(unknown.warnings.some((warning) => warning.code === "bind-failed")).toBe(true);
+  }, 20000);
+
   test("open -> apply-begin -> 2nd apply-begin conflicts (409) -> resolve(applied) proves a real pre..post diff -> status reflects it", async () => {
     const workspaceDir = freshWorkspaceDir();
 

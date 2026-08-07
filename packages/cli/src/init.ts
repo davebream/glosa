@@ -31,6 +31,7 @@ import type {
 } from "../../daemon/src/index.ts";
 import { claudeCodeInstallDescriptor } from "../../providers/claude-code/src/index.ts";
 import { codexInstallDescriptor } from "../../providers/codex/src/index.ts";
+import { renderUnifiedDiff } from "./unified-diff.ts";
 
 export { CLI_VERSION } from "./version.ts";
 
@@ -573,20 +574,26 @@ function mergeCodexConfig(
   return { changed: true, conflict: false, content: `${base}${base ? "\n\n" : ""}${desired}\n`, block: desired };
 }
 
-function unifiedDiff(path: string, before: string | null, after: string): string {
-  const beforeLines = before === null ? [] : before.split("\n");
-  const afterLines = after.split("\n");
-  const header = `--- ${before === null ? "/dev/null" : path}\n+++ ${path}\n`;
-  const removed = beforeLines.map((l) => `-${l}`).join("\n");
-  const added = afterLines.map((l) => `+${l}`).join("\n");
-  return `${header + (removed.length > 0 ? `${removed}\n` : "")}${added}\n`;
-}
+/** Real hunk-level unified diff (issue #96) — this used to emit every before-line as `-` followed
+ * by every after-line as `+`, which made a single hook insert read as "the whole file replaced". */
+const unifiedDiff = renderUnifiedDiff;
 
-/** The exported entry point — just the whole-transaction lock (P4.3 concurrency review fix #6)
- * wrapped around the real implementation below. Two concurrent `runInit` calls for the SAME
- * workspace now serialize: the second one's read-merge-write only ever starts once the first's
- * has fully landed (including the manifest write), so neither can ever overwrite the other's
- * ownership records with a stale view. */
+/**
+ * @deprecated Superseded by `scoped-init.ts`'s `runScopedInit` (issue #82's scoped/targeted
+ * onboarding), which every live caller (`glosa init`'s CLI handler, `glosa open`'s consented
+ * wiring offer, the daemon's `POST /w/:slug/init` runner) uses today. Nothing in production calls
+ * this v1 function or `runUninstall`/`checkManifestDrift` below any more — they write the
+ * superseded `.claude/.glosa-init.json` layout, which `runScopedInit` reads once (to migrate) and
+ * then deletes (issue #96). Kept only because `packages/cli/test/init.test.ts` still exercises
+ * this file's merge primitives (`mergeSettingsHooks`, `mergeMcp`, `takeBackup`, ...), which
+ * `scoped-init.ts` imports and reuses directly — removing these three wrapper functions belongs in
+ * a follow-up that also retires the now-redundant parts of that test file.
+ *
+ * The whole-transaction lock (P4.3 concurrency review fix #6) wrapped around the real
+ * implementation below. Two concurrent `runInit` calls for the SAME workspace now serialize: the
+ * second one's read-merge-write only ever starts once the first's has fully landed (including the
+ * manifest write), so neither can ever overwrite the other's ownership records with a stale view.
+ */
 export async function runInit(opts: InitOptions): Promise<InitResult> {
   const now = opts.now ?? (() => new Date());
   const { manifestPath } = paths(opts.dir);
@@ -835,7 +842,11 @@ export interface UninstallOptions {
   writeFileAtomic?: WriteFileAtomic;
 }
 
-/** Transactional, same discipline as `runInit` (P4.3 review fix #4 — an earlier revision had no
+/**
+ * @deprecated See `runInit`'s docstring above — superseded by `scoped-init.ts`'s
+ * `runScopedUninstall`; no production caller uses this any more.
+ *
+ * Transactional, same discipline as `runInit` (P4.3 review fix #4 — an earlier revision had no
  * rollback here at all: a write failure on the SECOND file left the first one permanently
  * modified, with no structured error or exit code). Every file this run actually touches (a
  * content rewrite OR a delete) pushes an undo action BEFORE the mutation happens; any exception
@@ -924,6 +935,12 @@ async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResu
 // Read-only: reuses the EXACT same hash-compare `runUninstallLocked`/`uninstallFile` already do
 // before removing anything, just without ever touching disk — so doctor's drift verdict can never
 // silently disagree with what an actual `glosa init --uninstall` would do.
+//
+// @deprecated See `runInit`'s docstring above — `doctor` reads the manifest layout this checks
+// (`.claude/.glosa-init.json`) only as a legacy fallback via scoped-init.ts's
+// `checkScopedManifestDrift`; `glosa open`'s wiring probe used to default to THIS function, which
+// is exactly what made a `runScopedInit`-wired workspace report `not-initialized` (issue #96) —
+// it now defaults to `checkScopedManifestDrift` instead. No production caller uses this any more.
 // ---------------------------------------------------------------------------------------------
 
 export interface ManifestDriftResult {

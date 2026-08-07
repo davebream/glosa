@@ -27,6 +27,7 @@ import {
   type GlosaBinResolution,
   type WriteFileAtomic,
 } from "./init.ts";
+import { renderUnifiedDiff } from "./unified-diff.ts";
 
 export type { InitScope, ProviderId } from "../../daemon/src/index.ts";
 
@@ -330,17 +331,9 @@ function mergeToml(
   return { changed: true, conflict: false, content: `${base}${base ? "\n\n" : ""}${desired}\n`, block: desired };
 }
 
-function unifiedDiff(path: string, before: string | null, after: string): string {
-  const beforeLines = before === null ? [] : before.split("\n");
-  const afterLines = after.split("\n");
-  return [
-    `--- ${before === null ? "/dev/null" : path}`,
-    `+++ ${path}`,
-    ...beforeLines.map((line) => `-${line}`),
-    ...afterLines.map((line) => `+${line}`),
-    "",
-  ].join("\n");
-}
+/** Real hunk-level unified diff (issue #96) — see `renderUnifiedDiff`'s docstring for why the
+ * previous whole-file-replacement rendering was a problem and not just an aesthetic one. */
+const unifiedDiff = renderUnifiedDiff;
 
 function emptyData(scope: InitScope, providers: ProviderId[], bin: GlosaBinResolution): InitData {
   const activation = providers.flatMap((id) => [...(PROVIDER_BY_ID.get(id)?.activationHelp ?? [])]);

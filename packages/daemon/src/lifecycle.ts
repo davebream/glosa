@@ -12,6 +12,7 @@ import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
 import { resumePendingAdoptions } from "./adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "./agent-provider/interface.ts";
 import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
+import { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 import { CapabilityStore } from "./capability.ts";
@@ -34,6 +35,7 @@ import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
 import { SessionRegistry } from "./registry/session-registry.ts";
 import { WorkspaceIndex } from "./registry/workspace-index.ts";
 import { TokenAuthority } from "./token.ts";
+import type { WorkspaceTarget } from "./workspace.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -83,6 +85,13 @@ export interface DaemonBackend {
   metadataRegistry: WorkspaceMetadataRegistry;
   providerRegistry: AgentProviderRegistry;
   pushRegistry: SessionPushRegistry;
+  artifactWatcherRegistry: ArtifactWatcherRegistry;
+  sealAdoptionSources(
+    sources: readonly WorkspaceTarget[],
+    adoptionId: string,
+    targetRegistrationId: string,
+  ): Promise<void>;
+  closeWorkspaceResources(): Promise<void>;
 }
 
 export interface ProviderFactoryDeps {
@@ -106,6 +115,19 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
+  const artifactWatcherRegistry = new ArtifactWatcherRegistry({
+    warn: (message) => log(home, message),
+  });
+  const sealAdoptionSources = async (
+    sources: readonly WorkspaceTarget[],
+    adoptionId: string,
+    targetRegistrationId: string,
+  ): Promise<void> => {
+    await busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId);
+    await Promise.all(sources.map((source) => artifactWatcherRegistry.evict(source)));
+  };
+  const closeWorkspaceResources = () =>
+    Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]).then(() => {});
   adapterRegistry.register(metadataRegistry.adapter());
   for (const factory of opts.providerFactories ?? []) {
     providerRegistry.register(factory({ sessionRegistry, pushRegistry }));
@@ -116,7 +138,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   workspaceIndex.setLiveSessionPredicate((canonicalPath) => sessionRegistry.forWorkspace(canonicalPath).length > 0);
   // Hard-remove eviction: a workspace GC actually removes from the index must also drop its open
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
-  workspaceIndex.setOnHardRemove((canonicalPath) => busRegistry.evict(canonicalPath));
+  workspaceIndex.setOnHardRemove((canonicalPath) =>
+    Promise.all([busRegistry.evict(canonicalPath), artifactWatcherRegistry.evict(canonicalPath)]).then(() => {}),
+  );
 
   return {
     workspaceIndex,
@@ -126,6 +150,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     metadataRegistry,
     providerRegistry,
     pushRegistry,
+    artifactWatcherRegistry,
+    sealAdoptionSources,
+    closeWorkspaceResources,
   };
 }
 
@@ -164,14 +191,14 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     workspaceIndex: backend.workspaceIndex,
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
-    sealAdoptionSources: (sources, adoptionId, targetRegistrationId) =>
-      backend.busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+    sealAdoptionSources: backend.sealAdoptionSources,
     capabilityStore,
     presentationTokenStore,
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,
     pushRegistry: backend.pushRegistry,
+    artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
     home,
     // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
@@ -205,8 +232,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     await resumePendingAdoptions(
       backend.workspaceIndex,
       (workspace) => backend.busRegistry.get(workspace),
-      (sources, adoptionId, targetRegistrationId) =>
-        backend.busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+      backend.sealAdoptionSources,
     );
   } catch (error) {
     // A sealed adoption is deliberately fail-closed for its own target, but must not prevent a
@@ -243,7 +269,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
         shutdownController.abort();
         tokenAuthority.close();
       },
-      () => backend.busRegistry.closeAll(),
+      backend.closeWorkspaceResources,
     );
     if (!drained) {
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);

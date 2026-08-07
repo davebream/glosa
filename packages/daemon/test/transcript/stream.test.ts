@@ -70,6 +70,7 @@ async function buildHarness(
   if (opts.withProvider !== false) {
     const provider: AgentProvider = {
       id: "claude-code",
+      connectPrompt: () => ({ display_name: "Claude Code", instruction: "Bind this test session." }),
       capabilities: () => ({ push: true, gate: true, boundaryDrain: true, mcpPull: true }),
       detectSession: () => null,
       deliver: async (session, deliverable) => {
@@ -344,9 +345,9 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
 
   // NOTE: this exercises the RECONNECT-time truncation/rotation check (the same branch a live
   // chokidar `change` mid-stream would hit) rather than a live in-connection filesystem event —
-  // deliberately, matching stream.ts's own existing precedent (its journal/artifact suite always
-  // passes `watchArtifacts: false` for anything correctness-sensitive; see that file's own "best-
-  // effort" docstring). A directly-watched single file's `change` event for a truncate-to-empty
+  // deliberately, matching stream.ts's own existing precedent (its journal/artifact tests inject
+  // the shared watcher subscription only where filesystem behavior is under test). A directly-
+  // watched single file's `change` event for a truncate-to-empty
   // write was observed not to fire reliably from chokidar/fsevents in this sandboxed environment
   // even with multi-second waits (verified independently outside `bun test`), so asserting on it
   // here would make the suite flaky for a reason that has nothing to do with THIS module's own

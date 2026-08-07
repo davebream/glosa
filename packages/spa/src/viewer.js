@@ -18,6 +18,7 @@ import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { mountAttentionTray } from "./attention-tray.js";
+import { mountAgentFeedback } from "./agent-feedback.js";
 
 let historyPaneLoader;
 let conversationPaneLoader;
@@ -474,15 +475,12 @@ export function mountApp(
     [el("h2", { textContent: "Workspaces" }), sidebarList, artifactHeading, artifactList, artifactListEmpty],
   );
 
-  // issue #81: the ambient wiring badge — persistent state-signal chrome (same category as the
-  // connection banner, see DESIGN.md's Preview Boundary Rule addendum). A <button> because the
-  // Off state is actionable (opens the wire flow); Live/Wired render it inert.
-  const wiringBadge = el("button", {
-    className: "glosa-wiring-badge",
-    type: "button",
-    hidden: true,
-    "data-state": "unknown",
-    onClick: () => void wireWorkspace(),
+  // Issue #95: one compact status/control for explicit connection + integration wiring. The
+  // component receives only generic aggregate data; provider copy remains in provider packages.
+  const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
+  const agentFeedback = mountAgentFeedback(agentFeedbackHost, {
+    overlayHost: topbarOverlays,
+    onWire: wireWorkspace,
   });
 
   root.append(
@@ -491,7 +489,7 @@ export function mountApp(
       brandMark,
       el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
       modeBar,
-      el("div", { className: "glosa-topbar-actions" }, [wiringBadge, tools]),
+      el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
       topbarOverlays,
     ]),
     sidebarEl,
@@ -526,10 +524,11 @@ export function mountApp(
   let richEditorLoading = false;
   const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
   let composer = null; // {record} while the annotation composer is open
-  // issue #81 — wiring badge + point-of-action init consent. `wiring` is null until the first
-  // SUCCESSFUL fetch (the badge can never show a state — least of all green — it hasn't observed)
-  // and resets to null on any fetch failure (old daemon without the route → hidden, no dialog).
+  // Issue #81's point-of-action init consent remains. Issue #95 combines it with explicit session
+  // status; both bodies reset on any refresh failure so the control can never retain stale green.
   let wiring = null; // last observed GET /w/:slug/wiring body, or null = unknown
+  let status = null; // last observed GET /api/status body, or null = unknown
+  let agentFeedbackRefresh = 0; // latest request wins when poll/stream/focus refreshes overlap
   const wiringPromptedSlugs = new Set(); // once per workspace per SPA session, even after Cancel
   let annotatableFocusIndex = 0;
   let stopStream = null;
@@ -1824,6 +1823,25 @@ export function mountApp(
     return artifacts;
   }
 
+  async function refreshArtifactIndex() {
+    const selectedPath = currentArtifact?.source_path ?? null;
+    const artifacts = await refreshArtifactList();
+    if (!selectedPath || artifacts.some((artifact) => artifact.path === selectedPath)) return;
+
+    const replacement = artifacts[0]?.path;
+    if (replacement) {
+      await openArtifact(replacement);
+      return;
+    }
+
+    currentArtifact = null;
+    artifactNavigator.setCurrent(null, { reveal: false });
+    onFocusChange?.({ slug: currentSlug, artifact: null, mode: modeState.mode });
+    setEmpty("No artifacts yet.", el("p", { className: "glosa-empty-hint", textContent: "Add a document to begin." }));
+    renderModeBar();
+    renderContent();
+  }
+
   async function refreshCurrentArtifact() {
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(currentSlug, currentArtifact.source_path, { render: "html" });
@@ -1847,62 +1865,49 @@ export function mountApp(
     paintAnchorUnderlines();
   }
 
-  function renderWiringBadge() {
-    if (!wiring) {
-      wiringBadge.hidden = true;
-      wiringBadge.setAttribute("data-state", "unknown");
-      return;
-    }
-    const pending = (wiring.pending_count ?? 0) > 0 ? ` · ${wiring.pending_count} queued` : "";
-    const states = {
-      live: { label: `● Live → session${pending}`, actionable: false },
-      wired: { label: `● Wired — no session bound${pending}`, actionable: false },
-      unwired: { label: `● Off — annotations stay local${pending}`, actionable: true },
-    };
-    const view = states[wiring.state];
-    if (!view) {
-      wiringBadge.hidden = true;
-      return;
-    }
-    wiringBadge.hidden = false;
-    wiringBadge.setAttribute("data-state", wiring.state);
-    wiringBadge.textContent = view.label;
-    wiringBadge.setAttribute("aria-label", view.label.replace("● ", `Agent feedback: `));
-    wiringBadge.disabled = !view.actionable;
-    wiringBadge.title = view.actionable ? "Set up agent feedback for this workspace" : view.label.replace("● ", "");
+  function renderAgentFeedback() {
+    agentFeedback.setState({ slug: currentSlug, wiring, status });
   }
 
-  async function refreshWiring() {
+  async function refreshAgentFeedback() {
+    const refresh = ++agentFeedbackRefresh;
     if (!currentSlug) {
       wiring = null;
-      renderWiringBadge();
+      status = null;
+      renderAgentFeedback();
       return;
     }
     const slugAtFetch = currentSlug;
     try {
-      const fetched = await dataAccess.getWiringStatus(slugAtFetch);
-      if (currentSlug !== slugAtFetch) return; // workspace changed underneath the fetch
-      wiring = fetched;
+      const [fetchedWiring, fetchedStatus] = await Promise.all([
+        dataAccess.getWiringStatus(slugAtFetch),
+        dataAccess.getStatus(),
+      ]);
+      if (currentSlug !== slugAtFetch || refresh !== agentFeedbackRefresh) return;
+      wiring = fetchedWiring;
+      status = fetchedStatus;
     } catch {
-      // Old daemon (pre-1.4 → 404) or transient failure — hidden badge, never a stale claim.
-      if (currentSlug === slugAtFetch) wiring = null;
+      // Old daemon (pre-1.5) or transient failure — reset both, never retain a stale green claim.
+      if (currentSlug === slugAtFetch && refresh === agentFeedbackRefresh) {
+        wiring = null;
+        status = null;
+      }
     }
-    renderWiringBadge();
+    renderAgentFeedback();
   }
 
   /** The consent act (issue #81): runs `glosa init` daemon-side AFTER an explicit click. Shared
-   * by the badge's Off-state click and the first-annotation dialog. Failures fall back to the
+   * by the combined control's Off action and the first-annotation dialog. Failures fall back to the
    * copyable terminal command — this function never throws. */
   async function wireWorkspace() {
     if (!currentSlug) return;
     try {
       const result = await dataAccess.triggerInit(currentSlug);
-      await refreshWiring();
+      await refreshAgentFeedback();
       if (result?.restart_required !== false) {
         await noticeDialog({
           title: "Wired — one step left",
-          body:
-            "Restart or /resume your Claude Code session so it loads glosa. Until then annotations queue locally — the badge stays amber until a session binds.",
+          body: "Restart or resume your agent session so it loads glosa. Until then annotations queue locally — Agent feedback stays unbound until a session connects.",
         });
       } else {
         await noticeDialog({
@@ -1916,7 +1921,7 @@ export function mountApp(
         title: "Couldn't set up agent feedback",
         body: `Run \`glosa init\` in the workspace terminal instead${detail}.`,
       });
-      void refreshWiring();
+      void refreshAgentFeedback();
     }
   }
 
@@ -1949,20 +1954,22 @@ export function mountApp(
         void refreshArtifactList();
         void refreshCurrentArtifact();
         void attentionTray.refresh();
-        void refreshWiring();
+        void refreshAgentFeedback();
       },
       onEvent: (frame) => {
         if (frame.event === "artifact" && currentArtifact && frame.data?.path === currentArtifact.source_path) {
           void refreshCurrentArtifact();
         }
+        if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") applyJournalEvent(frame.data);
         if (frame.event === "journal" || frame.event === "metadata") void attentionTray.refresh();
         if (frame.event === "metadata") {
           void refreshArtifactList();
           void refreshCurrentArtifact();
         }
-        // journal frames move pending_count; metadata can accompany wiring-adjacent changes.
-        if (frame.event === "journal" || frame.event === "metadata") void refreshWiring();
+        // Any existing workspace-stream activity may coincide with a bind/heartbeat. No new SSE
+        // event is needed: refresh the aggregate through the same bounded status read.
+        void refreshAgentFeedback();
       },
     });
   }
@@ -1980,8 +1987,9 @@ export function mountApp(
     classFEl.removeAttribute("data-path");
     markCurrent(sidebarList, slug);
     wiring = null; // never carry the previous workspace's wiring claim across a switch
-    renderWiringBadge();
-    void refreshWiring();
+    status = null; // nor its explicit session claim
+    renderAgentFeedback();
+    void refreshAgentFeedback();
     await refreshArtifactList();
     renderModeBar();
     renderContent();
@@ -2056,18 +2064,18 @@ export function mountApp(
   renderContent();
   void refreshWorkspaces().catch(showWorkspaceError);
 
-  // Wiring freshness (issue #81): the badge tolerates seconds of staleness, so poll + refresh on
-  // window focus — session bind/lease-expiry has no push signal today (SSE piggyback deferred).
-  const wiringPollTimer = setInterval(() => void refreshWiring(), 15_000);
-  wiringPollTimer.unref?.(); // Bun/Node Timer in tests — never keeps the process alive; no-op in browsers
-  const onWindowFocus = () => void refreshWiring();
+  // Connection freshness: reuse issue #81's 15-second poll and focus refresh. Binding remains
+  // session-scoped and in memory; this is observation only, not a persistence or arbitration path.
+  const agentFeedbackPollTimer = setInterval(() => void refreshAgentFeedback(), 15_000);
+  agentFeedbackPollTimer.unref?.(); // Bun/Node Timer in tests — never keeps the process alive; no-op in browsers
+  const onWindowFocus = () => void refreshAgentFeedback();
   if (typeof window !== "undefined") window.addEventListener("focus", onWindowFocus);
 
   return () => {
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
-    clearInterval(wiringPollTimer);
+    clearInterval(agentFeedbackPollTimer);
     if (typeof window !== "undefined") window.removeEventListener("focus", onWindowFocus);
     teardownRichFace();
     stopStream?.();
@@ -2075,6 +2083,7 @@ export function mountApp(
     stopConversation?.();
     stopAppearance?.();
     attentionTray.destroy();
+    agentFeedback.destroy();
     artifactNavigator.destroy();
   };
 }

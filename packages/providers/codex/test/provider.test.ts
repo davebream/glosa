@@ -32,6 +32,17 @@ describe("CodexProvider — AgentProvider conformance", () => {
     expect(provider.id).toBe("codex");
   });
 
+  test("connectPrompt owns non-empty current-session guidance", () => {
+    const provider = new CodexProvider({ liveness: liveness() });
+    const prompt = provider.connectPrompt({ slug: "alpha", path: "/work/alpha with spaces" });
+
+    expect(prompt.display_name).toBe("Codex");
+    expect(prompt.instruction.length).toBeGreaterThan(0);
+    expect(prompt.instruction).toContain("CODEX_THREAD_ID");
+    expect(prompt.instruction).toContain("glosa_session_bind");
+    expect(prompt.instruction).toContain('"/work/alpha with spaces"');
+  });
+
   test("detectSession extracts session_id/workspace/transcript_path/source from a SessionStart payload", () => {
     const provider = new CodexProvider({ liveness: liveness() });
     const hookEvent = {

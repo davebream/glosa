@@ -21,6 +21,7 @@ import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { readFileSync } from "node:fs";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
+import { AgentProviderRegistry, type AgentProvider } from "../src/agent-provider/interface.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -99,6 +100,62 @@ describe("A1 §5 route catalog", () => {
     expect(await res.json()).toEqual([]);
     // recreate for afterEach's cleanup + other tests in this block sharing `root`
     mkdirSync(root, { recursive: true });
+  });
+
+  test("GET /api/status exposes provider-owned connect prompts and raw explicit binding state without mutating it", async () => {
+    const providerRegistry = new AgentProviderRegistry();
+    const provider: AgentProvider = {
+      id: "test-agent",
+      connectPrompt: (target) => ({
+        display_name: "Test Agent",
+        instruction: `Read TEST_SESSION_ID and bind ${target.slug} at ${target.path}.`,
+      }),
+      detectSession: () => null,
+      capabilities: () => ({ push: false, gate: false, boundaryDrain: false, mcpPull: true }),
+      deliver: async () => ({ via: "mcp_pull", outcome: "attempted" }),
+      liveness: () => "alive",
+      transcriptPath: () => null,
+    };
+    providerRegistry.register(provider);
+    ctx.providerRegistry = providerRegistry;
+
+    await sessionRegistry.register({
+      session_id: "cwd-only-live",
+      provider: "test-agent",
+      cwd: root,
+      source: "test",
+    });
+    await sessionRegistry.register({
+      session_id: "explicit-stale",
+      provider: "test-agent",
+      cwd: "/somewhere-else",
+      workspace_binding: root,
+      source: "test",
+      lease_expiry: "2020-01-01T00:00:00.000Z",
+    });
+
+    const res = await fetchFn(req("/api/status"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const workspace = body.workspaces.find((candidate: { slug: string }) => candidate.slug === slug);
+    expect(workspace.connect).toEqual({
+      providers: [
+        {
+          provider: "test-agent",
+          display_name: "Test Agent",
+          instruction: `Read TEST_SESSION_ID and bind ${slug} at ${root}.`,
+        },
+      ],
+      cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+    });
+    expect(body.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ session_id: "cwd-only-live", workspace_binding: null, liveness: "alive" }),
+        expect.objectContaining({ session_id: "explicit-stale", workspace_binding: root, liveness: "stale" }),
+      ]),
+    );
+    expect(sessionRegistry.get("cwd-only-live")?.workspace_binding).toBeUndefined();
+    expect(sessionRegistry.get("explicit-stale")?.workspace_binding).toBe(root);
   });
 
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
