@@ -30,8 +30,8 @@
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/screens/hero-light.png">
   <img
     src="docs/assets/screens/hero-light.png"
-    alt="A Claude Code session in a terminal window beside glosa in a browser window. In glosa, the sentence &quot;Improve checkout reliability.&quot; is selected in a 90-day plan and a margin comment reads &quot;This phase has no measurable outcome. Give it a target I can check on day 60.&quot; In the terminal, the agent pulls that comment out of glosa and rewrites the line with a day-60 target."
-    width="1184"
+    alt="A Claude Code terminal in front of glosa in a browser window. In glosa, the sentence &quot;Improve checkout reliability.&quot; is highlighted in a 90-day plan and a margin comment reads &quot;This phase has no measurable outcome. Give it a target I can check on day 60.&quot; In the terminal, that comment arrives as a glosa annotation with its file, line, and anchor confidence, and the agent rewrites the line with a day-60 target."
+    width="830"
   >
 </picture>
 

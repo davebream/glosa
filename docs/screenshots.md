@@ -106,29 +106,36 @@ needs no build step, no network, and no dependencies:
 file://…/frame.html?spec=<encodeURIComponent(JSON.stringify(spec))>
 ```
 
+The hero is deliberately small and sparse: one comment in the margin, the same comment arriving in
+the terminal, one diff. The browser pane crops the raw capture to the document and the composer —
+no sidebar, no app header — and the terminal pane carries only the prompt tail, the delivered
+annotation, and the applied edit, trimmed with `[…]`. This is the current hero spec:
+
 ```js
 {
-  w: 1980, h: 960,                       // stage size in CSS px
+  w: 1320, h: 668,                       // stage size in CSS px
   theme: "dark",                         // omit for the light stage
-  bg: "plain",                           // omit for the gradient backdrop
   windows: [
-    { kind: "terminal", title: "impact-plan — claude", x: 34, y: 108, w: 800, lines: [...] },
-    { kind: "browser", url: "127.0.0.1:4747 — impact-plan", x: 716, y: 58, w: 1210,
-      img: "file://…/raw-hero-glosa.png", imgW: 1440, imgH: 860, scale: 1210 / 1440,
-      crop: { x: 0, y: 0, w: 1440, h: 545 } }
+    { kind: "browser", url: "127.0.0.1:4747 — impact-plan", x: 292, y: 40, w: 1000,
+      img: "file://…/raw-hero-glosa.png", imgW: 1440, imgH: 860, scale: 1000 / 1178,
+      crop: { x: 262, y: 350, w: 1178, h: 500 } },   // sidebar and app header cropped out
+    { kind: "terminal", title: "impact-plan — claude", x: 28, y: 162, w: 640,
+      fontSize: 14, lines: [...] }                   // ~19 hard-wrapped lines, nothing more
   ]
 }
 ```
 
 `lines` entries are HTML strings; an empty string is a vertical gap. The classes are `dim`, `user`,
-`dot`, `tool`, `del`, `add`, and `glosa` (used for the delivered annotation block).
+`dot`, `tool`, `del`, `add`, and `glosa` (used for the delivered annotation block). `fontSize` sets
+the terminal's type size in CSS px (default 13).
 
-Screenshot the `#stage` element at `deviceScaleFactor: 2`, then downsample to the widths committed
-here — 2000px for the hero, 1600px for the capability cards. That is roughly twice the width GitHub
-renders them at:
+Screenshot the `#stage` element at `deviceScaleFactor: 2` (or set `document.documentElement.style.zoom = "2"`
+before shooting if the driver cannot change the scale factor — both scale the window chrome and type
+uniformly), then downsample to the widths committed here — 1660px for the hero, 1600px for the
+capability cards. That is roughly twice the width GitHub renders them at:
 
 ```sh
-sips -s format png --resampleWidth 2000 stage-hero-dark.png --out docs/assets/screens/hero-dark.png
+sips -s format png --resampleWidth 1660 stage-hero-dark.png --out docs/assets/screens/hero-dark.png
 ```
 
 ## Cleanup

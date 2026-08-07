@@ -137,7 +137,7 @@
       .tty .del { color: #d98a76; }
       .tty .add { color: #8fae72; }
       .tty .glosa { color: #b3b06a; }
-      .tty .spacer { height: 9px; display: block; }
+      .tty .spacer { height: 0.68em; display: block; }
       .tty b { font-weight: 600; }
     </style>
   </head>
@@ -180,6 +180,7 @@
 
         if (w.kind === "terminal") {
           const tty = el("div", "tty");
+          if (w.fontSize) tty.style.fontSize = `${w.fontSize}px`;
           for (const line of w.lines) {
             if (line === "") {
               tty.append(el("span", "spacer"));
