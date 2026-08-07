@@ -15,7 +15,8 @@ import {
   type CommandRunner,
   type GunshiParams,
 } from "gunshi";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
@@ -78,6 +79,53 @@ function lazyHandler<A extends Args>(
   return lazy<{ args: A; extensions: {} }>(async () => runner, definition);
 }
 
+/**
+ * The workspace root `init`/`doctor` operate on, plus anything worth telling the user about it
+ * (issue #96).
+ *
+ * With NO `dir` argument, the cwd is resolved to its enclosing git repository — the same root
+ * `glosa open` now resolves a file to, and the only root at which `.claude/settings.json` and
+ * `.mcp.json` actually take effect. Running `glosa init` from `<repo>/docs` used to wire
+ * `<repo>/docs/.claude/`, which Claude Code never reads.
+ *
+ * An EXPLICIT `dir` is always honoured literally — silently retargeting an argument the user
+ * typed would be worse than the bug — but a non-root directory inside a repo gets a warning
+ * naming the root, so the two commands can still be reconciled by hand.
+ */
+async function resolveCommandDir(
+  explicitDir: string | undefined,
+  cwd: string,
+): Promise<{ dir: string; warnings: { code: string; message: string }[] }> {
+  const { enclosingGitRoot } = await import("../../daemon/src/index.ts");
+  if (explicitDir === undefined) {
+    const root = enclosingGitRoot(cwd);
+    return { dir: root ?? cwd, warnings: [] };
+  }
+  const root = enclosingGitRoot(explicitDir);
+  // `enclosingGitRoot` returns a realpath'd absolute path, so `.`, `./sub`, and a symlinked
+  // checkout must be canonicalized the same way before the "is this already the root?" compare —
+  // otherwise `glosa init .` at a repo root would warn about itself.
+  const canonicalDir = (() => {
+    try {
+      return realpathSync(resolvePath(cwd, explicitDir));
+    } catch {
+      return resolvePath(cwd, explicitDir);
+    }
+  })();
+  if (root !== null && root !== canonicalDir) {
+    return {
+      dir: explicitDir,
+      warnings: [
+        {
+          code: "not-repository-root",
+          message: `${explicitDir} is inside the git repository ${root} but is not its root — agent configuration written here is not what Claude Code loads for the project. Did you mean \`${root}\`?`,
+        },
+      ],
+    };
+  }
+  return { dir: explicitDir, warnings: [] };
+}
+
 function printInitResult(result: InitResult, json: boolean): void {
   if (json) {
     process.stdout.write(
@@ -85,8 +133,23 @@ function printInitResult(result: InitResult, json: boolean): void {
     );
     return;
   }
+  // Command-level warnings (e.g. #96's "this dir isn't the repo root") sit alongside, not inside,
+  // the diff/changed/error branches below — print them first so they're never lost regardless of
+  // which of those branches returns early.
+  for (const warning of result.warnings) {
+    process.stderr.write(`glosa init: warning: ${warning.message}\n`);
+  }
+  // `--print` on an already-wired workspace produces `diff: ""`. Branching on `!== undefined`
+  // alone made that case write an empty string and exit 0 — `glosa init --print` said literally
+  // nothing, which reads as a broken command rather than as "nothing to change" (issue #96).
   if (result.diff !== undefined) {
-    process.stdout.write(result.diff);
+    if (result.diff.length > 0) process.stdout.write(result.diff);
+    else if (result.changed) {
+      // No file would change, but the run is still `changed` — a provider is being adopted into
+      // the manifest, or a legacy manifest is being migrated. Say which, rather than implying
+      // `init` would be a complete no-op.
+      process.stdout.write("glosa init: no file changes; only the glosa ownership manifest would be updated\n");
+    } else process.stdout.write("glosa init: already up to date, nothing to do\n");
     return;
   }
   if (!result.ok) {
@@ -346,7 +409,10 @@ function createSubCommands(setExitCode: (code: number) => void) {
     async (context) => {
       const values = withGlobals(context);
       const initModule = await import("./scoped-init.ts");
-      const dir = (values.dir as string | undefined) ?? process.cwd();
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(
+        values.dir as string | undefined,
+        process.cwd(),
+      );
       const scope = (values.scope as string | undefined) ?? "workspace";
       if (scope !== "workspace" && scope !== "user") {
         const message = "--scope must be workspace or user";
@@ -364,9 +430,45 @@ function createSubCommands(setExitCode: (code: number) => void) {
       }
       if (values.uninstall) {
         const result = await initModule.runScopedUninstall({ dir, scope, agents: normalized.agents });
-        printUninstallResult(result, Boolean(values.json));
+        printUninstallResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
         setExitCode(result.exitCode);
         return;
+      }
+      // Refuse to write agent config into a temp directory or a bare parent holding several
+      // unrelated git repos (issue #96) — this is what following `glosa open`'s pre-fix
+      // `not-initialized` hint into `/private/tmp` or a `~/code`-style parent would have done.
+      // Scope `user` writes under $HOME/$GLOSA_HOME regardless of `dir` (see the provider
+      // descriptors' `targets()`), so the guard only applies to `workspace` scope, where `dir`
+      // itself is the write target.
+      if (scope === "workspace" && !values.force) {
+        const { classifyInitTarget } = await import("../../daemon/src/index.ts");
+        const verdict = classifyInitTarget(dir);
+        if (verdict.risk !== "none") {
+          let proceed = false;
+          if (!values.json && process.stdin.isTTY) {
+            const { confirmOnTty } = await import("./confirm.ts");
+            proceed = await confirmOnTty(`${verdict.detail}\nWrite glosa's agent config into ${dir} anyway?`);
+          }
+          if (!proceed) {
+            const message = `${verdict.detail} — refusing to write agent config here`;
+            const hint = "pass --force to proceed anyway, or run `glosa init` against the intended project root";
+            if (values.json) {
+              printJsonEnvelope({
+                ok: false,
+                command: "init",
+                exitCode: EXIT_CODES.USAGE,
+                data: {},
+                warnings: dirWarnings,
+                error: { code: "unsafe-init-target", kind: "usage", message, hint },
+              });
+            } else {
+              for (const warning of dirWarnings) process.stderr.write(`glosa init: warning: ${warning.message}\n`);
+              process.stderr.write(`glosa init: ${message}\n  hint: ${hint}\n`);
+            }
+            setExitCode(EXIT_CODES.USAGE);
+            return;
+          }
+        }
       }
       let agents = normalized.agents;
       if (!agents) {
@@ -390,7 +492,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
         print: Boolean(values.print) || Boolean(values["dry-run"]),
         force: Boolean(values.force),
       });
-      printInitResult(result, Boolean(values.json));
+      printInitResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
       setExitCode(result.exitCode);
     },
   );
@@ -524,11 +626,13 @@ function createSubCommands(setExitCode: (code: number) => void) {
         import("../../daemon/src/index.ts"),
         import("./doctor.ts"),
       ]);
-      const result = await doctorModule.runDoctor(
-        (values.dir as string | undefined) ?? process.cwd(),
-        doctorModule.realDoctorDeps(createHttpGlosaClient, glosaHome),
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(
+        values.dir as string | undefined,
+        process.cwd(),
       );
-      doctorModule.printDoctorResult(result, Boolean(values.json));
+      const result = await doctorModule.runDoctor(dir, doctorModule.realDoctorDeps(createHttpGlosaClient, glosaHome));
+      const withDirWarnings = dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
+      doctorModule.printDoctorResult(withDirWarnings, Boolean(values.json));
       setExitCode(result.exitCode);
     },
   );

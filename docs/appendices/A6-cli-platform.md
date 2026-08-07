@@ -16,6 +16,22 @@
   a non-blocking setup action, but it never performs configuration writes itself — on the user's
   explicit consent it asks the daemon, which invokes `glosa init <dir> --json` as a child
   (A1 §5.19, directory workspaces only; env scrubbed, timeout-bounded, single-flighted).
+- **Workspace-root resolution and the risky-target guard (issue #96).** With no `dir` positional,
+  `init`/`doctor` resolve the cwd to its enclosing git repository — the same rule `glosa open`
+  applies when it resolves an unowned file (requirements.md R1) — rather than operating on the
+  literal cwd, so all three commands agree on one workspace boundary. An explicit `dir` is always
+  honoured literally (never silently retargeted); if it sits inside a repo without being that
+  repo's root, `init`/`doctor` report a `not-repository-root` warning naming the root, but proceed
+  against the given path. Before `--scope workspace` writes anything (`user` scope writes under
+  `$HOME`/`$GLOSA_HOME` regardless of `dir`, so the guard does not apply there), `init` classifies
+  the resolved target: a directory that is itself a git repository is always safe; otherwise, a
+  target under a temp root ($TMPDIR, `/tmp`, `/private/tmp`, `/private/var/folders`) or a bare
+  directory containing two or more immediate git-repo subdirectories is refused — exit 2,
+  `error.code: "unsafe-init-target"` — with a hint to pass `--force` or run `init` against the
+  intended project root. On a TTY without `--json`, the refusal instead asks a `[y/N]` confirmation
+  before proceeding. `--uninstall` is never subject to this guard — removing configuration is not
+  the risky direction. The daemon's `POST /w/:slug/init` route (A1 §5.19) surfaces this as the same
+  409-conflict, re-confirm-with-`force:true` shape it already uses for a foreign-config conflict.
 - **Scope.** `--scope workspace|user` is explicit and defaults to `workspace`.
   `workspace` writes provider project configuration under `<ws>`; `user` writes provider user
   configuration and is available across workspaces. User scope is never inferred because its hooks
@@ -63,7 +79,9 @@
 - Optional Channel command printed (F06 LOCKED): `claude --dangerously-load-development-channels server:glosa` — NEVER `--channels`. MCP consent or organization policy may block it; hook/MCP fallback is the required compatibility path and doctor must not treat unavailable Channels as a failure.
 - Merge algo (transactional, per file, order settings→mcp→manifest): parse (absent→create; invalid JSON→abort exit6 touch nothing); backup `<file>.glosa-backup-<UTC-ISO>` (skip if identical to newest; retain 5); idempotent inserts by identity (hook = exact command string; MCP = key glosa; foreign non-glosa siblings untouched; foreign glosa-key differs & not-owned→exit6 unless --force); atomic temp+fsync+rename preserving indent; update manifest. Second init unchanged → no backup, exit0 data.changed:false. Mid-run failure → restore this-run backups, exit nonzero (no half-install).
 - Flags: `--scope workspace|user`, repeatable `--agent claude-code|codex|all`,
-  `--print/--dry-run` (unified-diff, no write), `--force`, `--uninstall`,
+  `--print/--dry-run` (hunk-level unified diff with 3 lines of context — never a whole-file
+  replacement, issue #96 — no write; an already-wired target with nothing to change reports
+  "already up to date, nothing to do" rather than printing nothing), `--force`, `--uninstall`,
   `--restore-backup`, `--json`.
 - Uninstall: `--uninstall --agent <id>` removes only that provider from the selected scope; omitting
   `--agent` removes every glosa-owned provider in that scope, preserving the pre-targeting behavior.
@@ -216,8 +234,8 @@
 ## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version --build-id)
 | cmd | args | does | exit |
 |---|---|---|---|
-| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url] [--init\|--no-init]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Un-init'd/drifted workspaces get `not-initialized`/`init-drifted` warnings (exit stays 0); on a TTY without `--json`, `not-initialized` additionally offers a one-question consented `glosa init` (`--init` skips the question, `--no-init` suppresses the offer; both together = exit 2). | 0;2;3;5 |
-| `init` | `[dir]` `--scope workspace\|user` `[--agent claude-code\|codex\|all]...` `--print/--force/--uninstall/--restore-backup` | §F26 targeted merge/uninstall; provider prompt only for an unresolved TTY selection | 0;2;6;9;5 |
+| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url] [--init\|--no-init]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. An unowned file inside a git repository registers the repo root as a directory workspace, not a loose file over its containing directory (issue #96). Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Un-init'd/drifted workspaces get `not-initialized`/`init-drifted` warnings (exit stays 0) — for a `loose-file` registration the `not-initialized` message never suggests `glosa init` on its worktree, and the consented-init offer below never fires for one; on a TTY without `--json`, a `directory` registration's `not-initialized` additionally offers a one-question consented `glosa init` (`--init` skips the question, `--no-init` suppresses the offer; both together = exit 2). | 0;2;3;5 |
+| `init` | `[dir]` `--scope workspace\|user` `[--agent claude-code\|codex\|all]...` `--print/--force/--uninstall/--restore-backup` | §F26 targeted merge/uninstall; provider prompt only for an unresolved TTY selection; no `dir` resolves the cwd to its enclosing git repo, an explicit non-root `dir` warns and is still honoured; `--scope workspace` refuses a temp-root or bare multi-repo-parent target unless `--force` or TTY confirmation (`unsafe-init-target`) | 0;2;6;9;5 |
 | `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |

@@ -28,9 +28,10 @@ import { fsyncContainingDir } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, pendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../home.ts";
-import { resolveTrackedFiles } from "../matcher.ts";
+import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceKind, WorkspaceLocation, WorkspaceTracking } from "../workspace.ts";
 import { assignSlug, type SlugDeps } from "./slug.ts";
+import { enclosingGitRoot } from "./workspace-root.ts";
 
 export type WorkspaceSource = "session" | "glosa-open" | "discovered";
 
@@ -558,7 +559,12 @@ export class WorkspaceIndex {
    * artifact path for two-arg `glosa open <dir> <file>` — validated via confinement + tracked
    * membership after the directory registration is established. `focusFirst` selects the first
    * normalized tracked artifact only when no explicit focus was supplied; `requireFocus` turns an
-   * empty tracked list into a stable error for document presentations. */
+   * empty tracked list into a stable error for document presentations.
+   *
+   * A FILE that no registration owns resolves, in order: the registered directory that contains
+   * it -> a registered workspace that already tracks the same inode -> its enclosing git
+   * repository (issue #96, when the repo's matcher tracks the file) -> a loose-file registration
+   * over its containing directory. */
   resolveOpenTarget(
     rawPath: string,
     opts: { externalState?: boolean; focus?: string; focusFirst?: boolean; requireFocus?: boolean } = {},
@@ -585,36 +591,7 @@ export class WorkspaceIndex {
       const now = this.now().toISOString();
 
       if (leafStat.isDirectory()) {
-        const existing = Object.values(index.workspaces).find(
-          (entry) => entry.kind === "directory" && entry.canonical_path === canonical,
-        );
-        let entry: WorkspaceEntry;
-        if (existing) {
-          existing.last_seen = now;
-          existing.present = true;
-          delete existing.absent_since;
-          index.updated_at = now;
-          this.persist(index);
-          entry = existing;
-        } else {
-          const id = registrationId("directory", canonical);
-          const localBus = join(canonical, ".glosa");
-          let busPath = localBus;
-          if (opts.externalState && !existsSync(localBus)) {
-            busPath = redirectedBusPath(this.home, id);
-          } else if (!existsSync(localBus) && !this.canCreateLocalBus(canonical)) {
-            busPath = redirectedBusPath(this.home, id);
-          }
-          entry = this.createEntry(index, {
-            registration_id: id,
-            kind: "directory",
-            canonical_path: canonical,
-            worktree_path: canonical,
-            bus_path: busPath,
-            tracking: { mode: "matcher" },
-            source: "glosa-open",
-          });
-        }
+        const entry = this.upsertDirectoryForOpen(index, canonical, now, opts.externalState === true);
 
         if (opts.focus) {
           return { entry, focus: this.resolveFocusInEntry(entry, opts.focus) };
@@ -683,6 +660,27 @@ export class WorkspaceIndex {
         }
       }
 
+      // No registration owns this file yet. Before falling back to a loose-file registration —
+      // whose worktree is the file's CONTAINING DIRECTORY, and which is therefore what produced
+      // `glosa open /tmp/doc.md` -> "run `glosa init /private/tmp`" (issue #96) — prefer the
+      // file's enclosing git repository as a normal directory workspace. That is the same root
+      // `glosa init`/`glosa doctor` resolve to, and the only root at which `.claude/settings.json`
+      // actually takes effect, so all three commands now agree on one answer.
+      //
+      // Gated on the file being a TRACKED artifact of that repo: a file the repo's matcher
+      // excludes (dot-dir, `node_modules`, > 2 MiB) would otherwise stop working entirely —
+      // `resolveFocusInEntry`/the `owning` branch above reject an untracked file with
+      // `artifact-not-tracked`. Keeping it on the loose-file path preserves exactly today's
+      // behavior for those files instead of trading one bug for a regression.
+      const repoRoot = enclosingGitRoot(dirname(canonical));
+      if (repoRoot !== null) {
+        const repoFocus = relativeNfc(repoRoot, canonical);
+        if (resolveMatchedFiles(repoRoot).tracked.some((file) => file.path === repoFocus)) {
+          const entry = this.upsertDirectoryForOpen(index, repoRoot, now, opts.externalState === true);
+          return { entry, focus: repoFocus };
+        }
+      }
+
       const worktree = canonicalPath(dirname(canonical));
       const focus = relativeNfc(worktree, canonical);
       const id = registrationId("loose-file", canonical);
@@ -697,6 +695,50 @@ export class WorkspaceIndex {
         source: "glosa-open",
       });
       return { entry, focus };
+    });
+  }
+
+  /** Register-or-refresh `canonical` as a `directory` workspace, sourced `glosa-open`. Extracted
+   * from `resolveOpenTarget`'s directory branch (issue #96) because the file branch now reaches
+   * the SAME registration through the enclosing git repo: two copies of the bus-redirect ladder
+   * would be two places for `externalState`/`canCreateLocalBus` to drift apart.
+   *
+   * Caller MUST already hold the index mutex and pass the mutex's `now` — this both mutates and
+   * `persist()`s `index`, exactly as the inline block it replaces did. */
+  private upsertDirectoryForOpen(
+    index: WorkspaceIndexFile,
+    canonical: string,
+    now: string,
+    externalState: boolean,
+  ): WorkspaceEntry {
+    const existing = Object.values(index.workspaces).find(
+      (entry) => entry.kind === "directory" && entry.canonical_path === canonical,
+    );
+    if (existing) {
+      existing.last_seen = now;
+      existing.present = true;
+      delete existing.absent_since;
+      index.updated_at = now;
+      this.persist(index);
+      return existing;
+    }
+
+    const id = registrationId("directory", canonical);
+    const localBus = join(canonical, ".glosa");
+    let busPath = localBus;
+    if (externalState && !existsSync(localBus)) {
+      busPath = redirectedBusPath(this.home, id);
+    } else if (!existsSync(localBus) && !this.canCreateLocalBus(canonical)) {
+      busPath = redirectedBusPath(this.home, id);
+    }
+    return this.createEntry(index, {
+      registration_id: id,
+      kind: "directory",
+      canonical_path: canonical,
+      worktree_path: canonical,
+      bus_path: busPath,
+      tracking: { mode: "matcher" },
+      source: "glosa-open",
     });
   }
 

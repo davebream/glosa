@@ -166,9 +166,13 @@ the CLI as a child (`glosa init <dir> --json`, env scrubbed of `ANTHROPIC_API_KE
   `restart_required` is true when no routable live session exists (hooks load at SessionStart).
 - **400 validation-failed** — loose-file workspace (its worktree is the *containing* directory;
   writing `.claude/` config there would be a surprising mutation — the client shows the terminal
-  command instead) or invalid body JSON. **404** unknown slug. **409 conflict** — child exit 6
-  (foreign-config conflict; detail carries the child's `error.code` + hint so the client may
-  re-confirm with `force:true`) or exit 2 (`durable-install-required`). **500 internal** — other
+  command instead; a file inside a git repository resolves to a `directory` registration and never
+  reaches this branch, see requirements.md R1 / issue #96) or invalid body JSON. **404** unknown
+  slug. **409 conflict** — child exit 6 (foreign-config conflict; detail carries the child's
+  `error.code` + hint so the client may re-confirm with `force:true`) or exit 2
+  (`durable-install-required`, or A6 §F26's `unsafe-init-target` — a directory workspace that is
+  itself under a temp root or a bare multi-repo parent; same re-confirm-with-`force:true` path).
+  **500 internal** — other
   child failures, timeout, spawn failure, unparseable child output; the raw child stdout is never
   echoed beyond the parsed envelope fields. **503** — runner not wired (narrow test contexts).
 
