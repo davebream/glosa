@@ -84,6 +84,16 @@ export {
   isCwdAncestorOf,
   SessionRegistry,
 } from "./registry/session-registry.ts";
+export type { ClassifyInitTargetDeps, InitTargetRisk, InitTargetVerdict } from "./registry/workspace-root.ts";
+// issue #96 — the single workspace-root rule. The CLI's `init`/`doctor` cwd defaults and the
+// daemon's own open resolution must agree on what a path's workspace root is, so the rule lives
+// here (cli -> daemon is the only allowed dependency direction) rather than in two copies.
+export {
+  classifyInitTarget,
+  enclosingGitRoot,
+  isGitRepoRoot,
+  workspaceRootFor,
+} from "./registry/workspace-root.ts";
 export type { TokenMutationDeps, TokenSource } from "./token.ts";
 export {
   ensureToken,

@@ -412,6 +412,11 @@ export function printDoctorResult(result: CommandEnvelope<DoctorData>, json: boo
     printJsonEnvelope(result);
     return;
   }
+  // Command-level warnings (e.g. #96's "this directory isn't the repo root") sit outside the
+  // 15 enumerated checks, so they get their own line rather than a fake 16th check.
+  for (const warning of result.warnings) {
+    process.stderr.write(`glosa doctor: warning: ${warning.message}\n`);
+  }
   for (const c of result.data.checks) {
     process.stdout.write(`[${c.status.toUpperCase().padEnd(4)}] ${c.name}: ${c.detail}\n`);
   }

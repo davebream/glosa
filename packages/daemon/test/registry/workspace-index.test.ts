@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { resolveTrackedFiles } from "../../src/matcher.ts";
@@ -728,5 +737,112 @@ describe("WorkspaceIndex — v2 workspace contexts", () => {
 
     cleanup(home);
     cleanup(parent);
+  });
+});
+
+describe("WorkspaceIndex — enclosing-repo resolution (issue #96)", () => {
+  // Before this fix, `glosa open <repo>/sub/doc.md` on a file no registration owned created a
+  // `loose-file` registration whose worktree was the file's CONTAINING directory (`<repo>/sub`),
+  // not the repo. That disagreed with what `glosa doctor <repo>` and `glosa init <repo>` treat as
+  // the workspace root, and its wiring hint ("run `glosa init <repo>/sub`") could point at a
+  // system temp dir or a directory holding several unrelated repos. A file inside a git
+  // repository now resolves to a DIRECTORY registration rooted at the repo — the same root
+  // `doctor`/`init` use — as long as the repo's own matcher would track that file.
+
+  test("an unowned file inside a git repo registers the repo root as a directory, not a loose file", async () => {
+    const home = freshHome();
+    const repo = realpathSync(freshWorkspaceDir()); // realpath'd: macOS's $TMPDIR is itself a symlink
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "sub"));
+    const docPath = join(repo, "sub", "doc.md");
+    writeFileSync(docPath, "# doc\n");
+    const index = new WorkspaceIndex({ home });
+
+    const opened = await index.resolveOpenTarget(docPath);
+
+    expect(opened.entry.kind).toBe("directory");
+    expect(opened.entry.canonical_path).toBe(repo);
+    expect(opened.entry.worktree_path).toBe(repo);
+    expect(opened.focus).toBe("sub/doc.md");
+    // Same rule `doctor`/`init` resolve to: `.claude/settings.json` would land at the repo root,
+    // not at `<repo>/sub/.claude/settings.json`, which Claude Code never reads.
+    expect(opened.entry.bus_path).toBe(join(repo, ".glosa"));
+
+    cleanup(home);
+    cleanup(repo);
+  });
+
+  test("a second unowned file in the same repo reuses the same directory registration", async () => {
+    const home = freshHome();
+    const repo = freshWorkspaceDir();
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, "a.md"), "a");
+    writeFileSync(join(repo, "b.md"), "b");
+    const index = new WorkspaceIndex({ home });
+
+    const first = await index.resolveOpenTarget(join(repo, "a.md"));
+    const second = await index.resolveOpenTarget(join(repo, "b.md"));
+
+    expect(first.entry.registration_id).toBe(second.entry.registration_id);
+    expect(index.list().filter((e) => e.kind === "directory")).toHaveLength(1);
+
+    cleanup(home);
+    cleanup(repo);
+  });
+
+  test("a file the repo's own matcher excludes still falls back to a loose-file registration", async () => {
+    const home = freshHome();
+    const repo = realpathSync(freshWorkspaceDir());
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
+    const excluded = join(repo, "node_modules", "pkg", "readme.md");
+    writeFileSync(excluded, "excluded");
+    const index = new WorkspaceIndex({ home });
+
+    const opened = await index.resolveOpenTarget(excluded);
+
+    // Falls through to the existing loose-file path rather than newly failing
+    // `artifact-not-tracked` — opening a file the matcher would never track anyway must keep
+    // working exactly as it did before this fix.
+    expect(opened.entry.kind).toBe("loose-file");
+    expect(opened.entry.worktree_path).toBe(join(repo, "node_modules", "pkg"));
+
+    cleanup(home);
+    cleanup(repo);
+  });
+
+  test("a file outside any git repo still registers as a loose file over its containing directory", async () => {
+    const home = freshHome();
+    const dir = realpathSync(freshWorkspaceDir()); // no .git anywhere in its ancestry
+    const docPath = join(dir, "note.md");
+    writeFileSync(docPath, "note");
+    const index = new WorkspaceIndex({ home });
+
+    const opened = await index.resolveOpenTarget(docPath);
+
+    expect(opened.entry.kind).toBe("loose-file");
+    expect(opened.entry.worktree_path).toBe(dir);
+
+    cleanup(home);
+    cleanup(dir);
+  });
+
+  test("a nested git repo (e.g. a submodule) wins over its outer repo — the NEAREST enclosing root", async () => {
+    const home = freshHome();
+    const outer = realpathSync(freshWorkspaceDir());
+    mkdirSync(join(outer, ".git"));
+    const inner = join(outer, "vendor", "lib");
+    mkdirSync(join(inner, ".git"), { recursive: true });
+    const docPath = join(inner, "doc.md");
+    writeFileSync(docPath, "doc");
+    const index = new WorkspaceIndex({ home });
+
+    const opened = await index.resolveOpenTarget(docPath);
+
+    expect(opened.entry.canonical_path).toBe(inner);
+    expect(opened.focus).toBe("doc.md");
+
+    cleanup(home);
+    cleanup(outer);
   });
 });

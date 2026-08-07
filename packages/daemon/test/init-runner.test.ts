@@ -171,7 +171,15 @@ describe("createInitRunner — real subprocess integration", () => {
     const anyChanged = (data: unknown) =>
       Object.values((data as FilesData).files ?? {}).some((f) => f?.changed === true);
 
-    const first = await runner(ws, "reg-real");
+    // `force: true` because `ws` — like every fixture in this suite — lives under the system
+    // temp root and is not itself a git repo: exactly the target issue #96's risky-target guard
+    // refuses by default (`unsafe-init-target`, exit 2). That guard is real subprocess policy the
+    // daemon's own `POST /w/:slug/init` route relies on (a directory workspace under a temp root
+    // gets the SAME re-confirm-with-force treatment as a foreign-config conflict — see
+    // `handleWorkspaceInit`'s exit-2 branch in http.ts). This test's own concern is the round-trip
+    // subprocess plumbing, not that policy, so it exercises `createInitRunner`'s existing `force`
+    // forwarding — the same path a client's re-confirmation takes — rather than working around it.
+    const first = await runner(ws, "reg-real", { force: true });
     expect(first.kind).toBe("completed");
     if (first.kind === "completed") {
       expect(first.envelope.exit_code).toBe(0);
@@ -180,7 +188,7 @@ describe("createInitRunner — real subprocess integration", () => {
     // The pinned cross-package workspace manifest path (see init-probe.test.ts).
     expect(existsSync(join(ws, ".glosa", "init-manifest.json"))).toBe(true);
 
-    const second = await runner(ws, "reg-real");
+    const second = await runner(ws, "reg-real", { force: true });
     expect(second.kind).toBe("completed");
     if (second.kind === "completed") {
       expect(second.envelope.exit_code).toBe(0);

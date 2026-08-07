@@ -23,6 +23,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Agent feedback status refreshes on workspace selection, existing workspace-stream activity and
   reconnect, window focus, and the 15-second poll. A failed status fetch clears any prior connected
   claim rather than leaving stale green UI.
+- `glosa open` resolves an unowned file inside a git repository to the repo root as a directory
+  workspace instead of registering a loose file over the file's containing directory, so `open`,
+  `doctor`, and `init` now agree on one workspace root; `open`'s wiring probe reads the same
+  scoped manifest `doctor` does, so a correctly-wired workspace no longer reports
+  `not-initialized`; and a `loose-file` registration's un-wired hint no longer suggests running
+  `glosa init` on its (possibly temp-directory or multi-repo-parent) worktree. `glosa init`/`glosa
+  doctor` resolve a bare cwd invocation to the enclosing git repository, and `glosa init` refuses
+  to write configuration into a temp directory or a bare multi-repo parent unless `--force` or an
+  interactive confirmation. `glosa init --print` now shows a real hunk-level diff instead of
+  rendering every change as a whole-file replacement, and reports "already up to date" rather than
+  printing nothing when there is nothing to change. (#96)
 
 ## [0.1.0-alpha.6] - 2026-07-27
 

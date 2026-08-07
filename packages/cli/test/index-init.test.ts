@@ -4,15 +4,19 @@
 // LOGIC itself is covered exhaustively in init.test.ts — this only proves `index.ts` calls it
 // correctly and reports the right process exit code.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { promptInitAgents, run } from "../src/index.ts";
 
 let dirs: string[] = [];
+/** A `.git` marker makes this fixture read as a scratch git repo rather than a bare temp
+ * directory, so `glosa init`'s risky-target guard (issue #96) doesn't fire on every test here —
+ * the guard's own behavior is covered separately, below. */
 function freshDir(): string {
   const d = mkdtempSync(join(tmpdir(), "glosa-cli-init-test-"));
+  mkdirSync(join(d, ".git"));
   dirs.push(d);
   return d;
 }
@@ -128,5 +132,86 @@ describe("run(['init', ...])", () => {
     const selected = await promptInitAgents(Readable.from(["3\n"]), output);
     expect(selected).toEqual(["claude-code", "codex"]);
     expect(rendered.match(/Select agent integration/g)).toHaveLength(1);
+  });
+
+  test("--print on an already-wired workspace reports 'already up to date', not silence (issue #96)", async () => {
+    const dir = freshDir();
+    await run(["init", dir, "--agent", "claude-code"]);
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--print"]));
+    expect(exitCode).toBe(0);
+    expect(out).toContain("already up to date");
+    expect(out.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("glosa init — risky-target guard (issue #96)", () => {
+  test("a bare directory under a temp root (no .git) is refused with exit 2, code unsafe-init-target", async () => {
+    const d = mkdtempSync(join(tmpdir(), "glosa-cli-init-risky-")); // deliberately no .git marker
+    dirs.push(d);
+    const { exitCode, out } = await captureStdout(() => run(["init", d, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(2);
+    const parsed = JSON.parse(out);
+    expect(parsed.error.code).toBe("unsafe-init-target");
+    expect(parsed.error.message).toContain("temporary directory");
+    expect(parsed.error.hint).toContain("--force");
+  });
+
+  test("--force overrides the temp-dir refusal and writes normally", async () => {
+    const d = mkdtempSync(join(tmpdir(), "glosa-cli-init-risky-"));
+    dirs.push(d);
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", d, "--agent", "claude-code", "--force", "--json"]),
+    );
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).ok).toBe(true);
+  });
+
+  // Multi-repo-parent detection is exercised precisely (with injected `tempRoots: []` to isolate
+  // it from the temp-dir branch) in packages/daemon/test/registry/workspace-root.test.ts — every
+  // fixture reachable through `run()` here lives under `mkdtempSync(tmpdir())`, so it always hits
+  // the temp-dir branch first regardless of how many repos it contains, and cannot exercise the
+  // multi-repo branch in isolation.
+
+  test("a directory that IS itself a git repo is never flagged, even under a temp root", async () => {
+    const d = freshDir(); // freshDir() marks itself with .git
+    const { exitCode, out } = await captureStdout(() => run(["init", d, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).ok).toBe(true);
+  });
+
+  test("--uninstall is never subject to the guard — removing config is not the risky direction", async () => {
+    const d = mkdtempSync(join(tmpdir(), "glosa-cli-init-risky-")); // no .git — would refuse `init`
+    dirs.push(d);
+    const { exitCode, out } = await captureStdout(() => run(["init", d, "--uninstall", "--json"]));
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).ok).toBe(true);
+  });
+});
+
+describe("glosa init — workspace-root resolution (issue #96)", () => {
+  test("an explicit non-root dir inside a repo warns and names the root, but is still honoured literally", async () => {
+    const repo = freshDir();
+    const sub = join(repo, "sub");
+    mkdirSync(sub);
+    // `sub` isn't itself a repo, so under this fixture (always under $TMPDIR) it also trips the
+    // risky-target guard tested above — pass --force to isolate the not-repository-root WARNING
+    // from that separate refusal. A real `<repo>/sub` outside a temp root would never hit the
+    // guard in the first place (see workspace-root.test.ts's classifyInitTarget coverage).
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", sub, "--agent", "claude-code", "--force", "--json"]),
+    );
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(out);
+    expect(parsed.warnings.map((w: { code: string }) => w.code)).toContain("not-repository-root");
+    expect(parsed.warnings.find((w: { code: string }) => w.code === "not-repository-root").message).toContain(repo);
+    // The explicit argument is honoured, not silently retargeted to the repo root.
+    expect(existsSync(join(sub, ".claude", "settings.json"))).toBe(true);
+    expect(existsSync(join(repo, ".claude", "settings.json"))).toBe(false);
+  });
+
+  test("an explicit repo-root dir gets no not-repository-root warning", async () => {
+    const repo = freshDir();
+    const { out } = await captureStdout(() => run(["init", repo, "--agent", "claude-code", "--json"]));
+    expect(JSON.parse(out).warnings.map((w: { code: string }) => w.code)).not.toContain("not-repository-root");
   });
 });

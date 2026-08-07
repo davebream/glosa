@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/index.ts";
@@ -33,8 +33,12 @@ afterEach(() => {
   else Bun.env.GLOSA_PORT = originalPort;
 });
 
+/** A `.git` marker makes this fixture read as a scratch git repo rather than a bare temp
+ * directory, so `glosa init`'s risky-target guard (issue #96) doesn't fire on tests here that
+ * exercise `init` incidentally while testing flag-parsing surface, not the guard itself. */
 function freshDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "glosa-gunshi-test-"));
+  mkdirSync(join(dir, ".git"));
   dirs.push(dir);
   return dir;
 }
