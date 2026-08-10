@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Explicitly opening a regular non-symlink artifact now succeeds even when an already-registered
+  parent workspace excludes it: glosa creates or reuses a bounded loose-file registration while
+  leaving the parent's tracked list unchanged. Repeated paths and hardlink aliases retain one
+  history, and strict directory-focus and symlink behavior are unchanged.
+- A current daemon now recreates its own lock if that coordination file disappears after startup,
+  allowing hooks and CLI commands to recover silently after verifying the repaired lock/handshake
+  pair. Corrupt or mismatched locks remain fail-closed, and older lockless daemons receive exact
+  manual recovery guidance without being signalled automatically.
+
 ## [0.1.0-alpha.7] - 2026-08-07
 
 ### Added

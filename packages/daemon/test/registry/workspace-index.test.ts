@@ -632,15 +632,29 @@ describe("WorkspaceIndex — v2 workspace contexts", () => {
     cleanup(root);
   });
 
-  test("deepest directory registration owns a tracked file; exclusions and symlinks fail closed", async () => {
+  test("deepest directory owns tracked files while explicitly named exclusions open as bounded loose files", async () => {
     const home = freshHome();
     const outer = freshWorkspaceDir();
     const inner = join(outer, "nested");
-    const hidden = join(inner, ".hidden", "secret.md");
+    const hidden = join(inner, ".kombajn", "plans", "secret.md");
+    const hiddenAlias = join(inner, ".kombajn", "plans", "secret-alias.md");
+    const customExcluded = join(inner, "drafts", "excluded.md");
+    const oversized = join(inner, "oversized.md");
+    const unsupportedExtension = join(inner, "artifact.json");
+    const gitignored = join(inner, "gitignored.md");
     const tracked = join(inner, "note.md");
     const symlink = join(inner, "alias.md");
-    mkdirSync(join(inner, ".hidden"), { recursive: true });
+    mkdirSync(join(inner, ".kombajn", "plans"), { recursive: true });
+    mkdirSync(join(inner, "drafts"), { recursive: true });
+    mkdirSync(join(inner, ".glosa"), { recursive: true });
+    writeFileSync(join(inner, ".gitignore"), ".kombajn/\ngitignored.md\n");
+    writeFileSync(join(inner, ".glosa", "config.json"), JSON.stringify({ artifacts: { exclude: ["drafts/**"] } }));
     writeFileSync(hidden, "hidden");
+    linkSync(hidden, hiddenAlias);
+    writeFileSync(customExcluded, "excluded");
+    writeFileSync(oversized, Buffer.alloc(2 * 1024 * 1024 + 1));
+    writeFileSync(unsupportedExtension, "json");
+    writeFileSync(gitignored, "gitignored but matcher-visible");
     writeFileSync(tracked, "tracked");
     symlinkSync(tracked, symlink);
     const index = new WorkspaceIndex({ home });
@@ -650,7 +664,37 @@ describe("WorkspaceIndex — v2 workspace contexts", () => {
     const owned = await index.resolveOpenTarget(tracked);
     expect(owned.entry.registration_id).toBe(nested.entry.registration_id);
     expect(owned.focus).toBe("note.md");
-    await expect(index.resolveOpenTarget(hidden)).rejects.toMatchObject({ code: "artifact-not-tracked" });
+
+    // Git ignore state never drives glosa's matcher: a normal .md remains part of the directory.
+    const ignoredByGitOnly = await index.resolveOpenTarget(gitignored);
+    expect(ignoredByGitOnly.entry.registration_id).toBe(nested.entry.registration_id);
+
+    const hiddenLoose = await index.resolveOpenTarget(hidden);
+    const hiddenAgain = await index.resolveOpenTarget(hidden);
+    const hardlinkAlias = await index.resolveOpenTarget(hiddenAlias);
+    const customLoose = await index.resolveOpenTarget(customExcluded);
+    const oversizedLoose = await index.resolveOpenTarget(oversized);
+    const extensionLoose = await index.resolveOpenTarget(unsupportedExtension);
+    for (const opened of [hiddenLoose, customLoose, oversizedLoose, extensionLoose]) {
+      expect(opened.entry.kind).toBe("loose-file");
+      expect(opened.entry.bus_path).toBe(join(home, "state", opened.entry.registration_id));
+      expect(resolveTrackedFiles(opened.entry).tracked).toHaveLength(1);
+    }
+    expect(hiddenAgain.entry.registration_id).toBe(hiddenLoose.entry.registration_id);
+    expect(hardlinkAlias.entry.registration_id).toBe(hiddenLoose.entry.registration_id);
+    expect(hardlinkAlias.focus).toBe(hiddenLoose.focus);
+
+    const parentPaths = resolveTrackedFiles(nested.entry).tracked.map((file) => file.path);
+    expect(parentPaths).toContain("note.md");
+    expect(parentPaths).toContain("gitignored.md");
+    expect(parentPaths).not.toContain(".kombajn/plans/secret.md");
+    expect(parentPaths).not.toContain("drafts/excluded.md");
+    expect(parentPaths).not.toContain("oversized.md");
+    expect(parentPaths).not.toContain("artifact.json");
+
+    await expect(index.resolveOpenTarget(inner, { focus: hidden })).rejects.toMatchObject({
+      code: "artifact-not-tracked",
+    });
     await expect(index.resolveOpenTarget(symlink)).rejects.toBeInstanceOf(WorkspaceOpenError);
 
     cleanup(home);

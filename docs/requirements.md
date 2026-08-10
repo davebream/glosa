@@ -83,8 +83,12 @@ generic.**
   **`lock.port` is the authoritative port** (env `GLOSA_PORT` default 4646 only seeds a fresh spawn;
   class-F port = `GLOSA_PORT+1` = 4647). No entry point *becomes* the daemon in-process: a client with
   no live daemon **spawns a detached `glosa __daemon`** (unref + ignores SIGHUP/SIGINT) and acts as a
-  client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = passing
-  `/api/handshake`. Lock and handshake identity/PID/instance must agree before any signal is sent.
+  client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = a lock plus a
+  passing `/api/handshake`. A daemon that already established ownership may recreate its own
+  missing lock during handshake via the same O_EXCL+fsync path; clients proceed only after
+  re-reading a matching lock/handshake pair. Corrupt or mismatched locks are never overwritten,
+  lockless older daemons remain fail-closed with manual recovery guidance, and lock and handshake
+  identity/PID/instance must agree before any signal is sent.
   Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
   `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
 - **Workspace registration** separates an immutable registration ID, kind (`directory` or
@@ -100,6 +104,9 @@ generic.**
   so all three commands agree on one workspace boundary and never point a wiring hint at the
   file's bare containing directory. `loose-file` remains the outcome for a file outside any git
   repository, or one the enclosing repo's own matcher excludes (dot-dir, `node_modules`, > 2 MiB).
+  The same bounded fallback applies when an explicitly named file is excluded by an already-
+  registered owning directory; opening that directory still omits the file, and an explicit
+  directory focus remains constrained to the directory's tracked list.
 - **Tracked-artifact rule** produces one normalized file LIST feeding watcher + sidebar + git
   pathspec identically. Directory registrations use the recursive picomatch policy: include
   `**/*.md,**/*.html,**/*.txt`; exclude dot-dirs, `node_modules`, files > 2 MiB; symlinks never

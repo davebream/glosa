@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 import { AgentProviderRegistry, type AgentProvider } from "../src/agent-provider/interface.ts";
+import { resolveTrackedFiles } from "../src/matcher.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -211,7 +212,7 @@ describe("A1 §5 route catalog", () => {
     rmSync(looseRoot, { recursive: true, force: true });
   });
 
-  test("POST /api/workspaces/open refuses an excluded file inside the deepest owning workspace", async () => {
+  test("POST /api/workspaces/open presents an explicitly named excluded file as a loose document", async () => {
     const hiddenDir = join(root, ".hidden");
     const hiddenPath = join(hiddenDir, "secret.md");
     mkdirSync(hiddenDir);
@@ -223,9 +224,17 @@ describe("A1 §5 route catalog", () => {
         body: JSON.stringify({ path: hiddenPath }),
       }),
     );
-    expect(response.status).toBe(422);
-    expect((await response.json()).type).toContain("artifact-not-tracked");
-    expect(workspaceIndex.list()).toHaveLength(1);
+    expect(response.status).toBe(200);
+    const opened = await response.json();
+    expect(opened).toMatchObject({ kind: "loose-file", focus: "secret.md" });
+    const entry = workspaceIndex.getBySlug(opened.slug)!;
+    expect(entry.canonical_path).toBe(hiddenPath);
+    expect(entry.bus_path).toBe(join(home, "state", entry.registration_id));
+    expect(opened.state_dir).toBe(entry.bus_path);
+    expect(workspaceIndex.list()).toHaveLength(2);
+
+    const parent = workspaceIndex.get(root)!;
+    expect(resolveTrackedFiles(parent).tracked.map((file) => file.path)).not.toContain(".hidden/secret.md");
   });
 
   test("POST /api/workspaces/open forwards external_state for a fresh directory", async () => {
