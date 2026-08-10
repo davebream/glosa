@@ -561,10 +561,11 @@ export class WorkspaceIndex {
    * normalized tracked artifact only when no explicit focus was supplied; `requireFocus` turns an
    * empty tracked list into a stable error for document presentations.
    *
-   * A FILE that no registration owns resolves, in order: the registered directory that contains
-   * it -> a registered workspace that already tracks the same inode -> its enclosing git
-   * repository (issue #96, when the repo's matcher tracks the file) -> a loose-file registration
-   * over its containing directory. */
+   * A FILE resolves, in order: the registered directory that contains and tracks it -> a
+   * registered workspace that already tracks the same inode -> its enclosing git repository
+   * (issue #96, when the repo's matcher tracks the file) -> a loose-file registration over its
+   * containing directory. An explicitly named file that an owning directory excludes deliberately
+   * skips the enclosing-repo promotion and reaches the bounded loose-file fallback. */
   resolveOpenTarget(
     rawPath: string,
     opts: { externalState?: boolean; focus?: string; focusFirst?: boolean; requireFocus?: boolean } = {},
@@ -627,23 +628,24 @@ export class WorkspaceIndex {
         const matched = resolveTrackedFiles(owning).tracked.find(
           (file) => file.path === relativeNfc(owning.worktree_path, canonical),
         );
-        if (!matched) {
-          throw new WorkspaceOpenError(
-            "artifact-not-tracked",
-            "file is inside a registered workspace but excluded from its tracked artifact list",
-          );
+        if (matched) {
+          owning.last_seen = now;
+          owning.present = true;
+          delete owning.absent_since;
+          index.updated_at = now;
+          this.persist(index);
+          return { entry: owning, focus: matched.path };
         }
-        owning.last_seen = now;
-        owning.present = true;
-        delete owning.absent_since;
-        index.updated_at = now;
-        this.persist(index);
-        return { entry: owning, focus: matched.path };
       }
 
       const identity = bigintIdentity(canonical);
       for (const entry of Object.values(index.workspaces)) {
         if (!entry.present) continue;
+        // The deepest directory remains authoritative for normal workspace membership. When it
+        // explicitly excludes the named file, only an existing bounded registration may claim
+        // the inode; a shallower directory or unrelated matcher registration must not override
+        // that exclusion merely because the file is hardlinked elsewhere.
+        if (owning && entry.kind !== "loose-file") continue;
         for (const file of resolveTrackedFiles(entry).tracked) {
           try {
             if (sameIdentity(identity, bigintIdentity(file.rawPath))) {
@@ -669,15 +671,16 @@ export class WorkspaceIndex {
       //
       // Gated on the file being a TRACKED artifact of that repo: a file the repo's matcher
       // excludes (dot-dir, `node_modules`, > 2 MiB) would otherwise stop working entirely —
-      // `resolveFocusInEntry`/the `owning` branch above reject an untracked file with
-      // `artifact-not-tracked`. Keeping it on the loose-file path preserves exactly today's
-      // behavior for those files instead of trading one bug for a regression.
-      const repoRoot = enclosingGitRoot(dirname(canonical));
-      if (repoRoot !== null) {
-        const repoFocus = relativeNfc(repoRoot, canonical);
-        if (resolveMatchedFiles(repoRoot).tracked.some((file) => file.path === repoFocus)) {
-          const entry = this.upsertDirectoryForOpen(index, repoRoot, now, opts.externalState === true);
-          return { entry, focus: repoFocus };
+      // directory focus rejects an untracked file with `artifact-not-tracked`, while a direct
+      // file target deliberately reaches the bounded loose-file path below.
+      if (!owning) {
+        const repoRoot = enclosingGitRoot(dirname(canonical));
+        if (repoRoot !== null) {
+          const repoFocus = relativeNfc(repoRoot, canonical);
+          if (resolveMatchedFiles(repoRoot).tracked.some((file) => file.path === repoFocus)) {
+            const entry = this.upsertDirectoryForOpen(index, repoRoot, now, opts.externalState === true);
+            return { entry, focus: repoFocus };
+          }
         }
       }
 
