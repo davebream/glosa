@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Test-only helpers shared across the P1.2 daemon lifecycle suites. Every test gets its own
-// tmp GLOSA_HOME and a random high port so parallel test cases never collide, and nothing here
-// ever touches a real `~/.glosa`.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// tmp GLOSA_HOME and collision-free high port block, and nothing here ever touches a real
+// `~/.glosa`.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,30 +23,76 @@ export function cleanupHome(home: string): void {
   }
 }
 
-// A random base picked once per test-process invocation, then a monotonic per-call offset on
-// top of it (P1.3 review item 5). Two independent `Math.random()` calls could pick the same port
-// and cause a real, intermittent collision between two subprocess daemons in the same run — this
-// makes every call within one `bun test` invocation collision-free by construction, while still
-// varying the base across runs so repeated runs don't all fight over the exact same range.
-//
-// Step is 4, not 1: `bootDaemon` binds a second listener at `GLOSA_CLASSF_PORT ?? port + 1` by
-// default (A3 §0), and several tests (http.test.ts) derive that classF port the same way rather
-// than calling randomPort() again. With a step of 1, `port + 1` for call N is *always* exactly
-// the port randomPort() hands out to call N+1 — a guaranteed, not just probable, collision
-// between one test's classF listener and the next test's main port. A step of 4 keeps every
-// directly-issued port at the same offset (mod 4) as PORT_BASE while every `port + 1`/`port + 2`/
-// `port + 3` derivative falls on a different residue, so neither can ever coincide with a
-// directly-issued port.
-const PORT_BASE = 20000 + Math.floor(Math.random() * 20000); // random base in [20000, 40000)
-const PORT_STEP = 4;
-let portOffset = 0;
+// Every isolated Bun test module evaluates this file separately, so a module-local random range
+// is not enough: two workers can independently choose the same port. Reserve blocks atomically
+// in the shared temp directory instead. A block has four ports because the daemon claims
+// `port + 1` for Class-F and tests may derive up to `port + 3`.
+const PORT_MIN = 20_000;
+const PORT_MAX_EXCLUSIVE = 60_000;
+const PORT_BLOCK_SIZE = 4;
+const PORT_RESERVATION_ROOT = join(tmpdir(), "glosa-test-port-reservations");
+const ownedReservations = new Set<string>();
+let nextPort = PORT_MIN;
 
-/** A collision-free high port per call within this test run — including against any `port + N`
- * (N < PORT_STEP) derived from a previous call, e.g. a daemon's default class-F port. */
+function reservationPath(port: number): string {
+  return join(PORT_RESERVATION_ROOT, String(port));
+}
+
+function probePortBlock(port: number): boolean {
+  const probes: ReturnType<typeof Bun.serve>[] = [];
+  try {
+    for (let offset = 0; offset < PORT_BLOCK_SIZE; offset += 1) {
+      probes.push(
+        Bun.serve({
+          hostname: "127.0.0.1",
+          port: port + offset,
+          fetch: () => new Response(null, { status: 204 }),
+        }),
+      );
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    return false;
+  } finally {
+    for (const probe of probes) void probe.stop(true);
+  }
+}
+
+function reservePortBlock(port: number): boolean {
+  const reservation = reservationPath(port);
+  try {
+    mkdirSync(PORT_RESERVATION_ROOT, { recursive: true });
+    mkdirSync(reservation);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+
+  if (probePortBlock(port)) {
+    ownedReservations.add(reservation);
+    return true;
+  }
+
+  rmSync(reservation, { recursive: true, force: true });
+  return false;
+}
+
+process.once("exit", () => {
+  for (const reservation of ownedReservations) rmSync(reservation, { recursive: true, force: true });
+});
+
+/** A cross-process collision-free high port block. The returned port and its next three ports
+ * are reserved for this test process, including the daemon's default Class-F listener. */
 export function randomPort(): number {
-  const port = PORT_BASE + portOffset;
-  portOffset += PORT_STEP;
-  return port;
+  const blockCount = (PORT_MAX_EXCLUSIVE - PORT_MIN) / PORT_BLOCK_SIZE;
+  for (let attempt = 0; attempt < blockCount; attempt += 1) {
+    const port = nextPort;
+    nextPort += PORT_BLOCK_SIZE;
+    if (nextPort >= PORT_MAX_EXCLUSIVE) nextPort = PORT_MIN;
+    if (reservePortBlock(port)) return port;
+  }
+  throw new Error("no free glosa test port blocks remain");
 }
 
 /** Spawns the real `glosa __daemon` process (not detached — tests want a handle to control it).
