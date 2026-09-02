@@ -47,7 +47,13 @@ import {
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
 import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
 import { BUILD_ID } from "./build-id.ts";
-import { ApprovalConflictError, type AttentionVerdict, WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
+import {
+  ApprovalConflictError,
+  ApprovalUniquenessUnprovableError,
+  type AttentionVerdict,
+  WorkspaceAdoptedError,
+  type WorkspaceBus,
+} from "./bus/bus.ts";
 import { readInboxEntry } from "./bus/inbox.ts";
 import { type DeliveryVia, isTerminal } from "./bus/lifecycle.ts";
 import { hasOpenAttention, peekJournal, pendingCount } from "./bus/peek.ts";
@@ -1877,6 +1883,26 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
         "approval-conflict",
         "an approval request is already active for this artifact",
         undefined,
+        url.pathname,
+      );
+    }
+    // Uniqueness could not be checked because a live candidate's immutable payload is unreadable
+    // (R9 / A4 §F04). Answered separately from the 409 above so the caller is told what is
+    // actually true rather than a conflict the daemon cannot demonstrate — and, unlike the
+    // anonymous `internal` 500 this would otherwise fall through to, the detail names the entries
+    // to repair. Those ids are the caller's own workspace's, over an authenticated loopback
+    // request, so naming them discloses nothing the caller may not already read.
+    if (error instanceof ApprovalUniquenessUnprovableError) {
+      const named = error.entries.slice(0, 10);
+      const elided = error.entries.length - named.length;
+      const noun = error.entries.length === 1 ? "entry" : "entries";
+      return problem(
+        500,
+        "approval-uniqueness-unprovable",
+        "cannot prove this artifact has no open approval request",
+        `inbox ${noun} ${named.join(", ")}${elided > 0 ? ` (+${elided} more)` : ""} could not be read, so the ` +
+          `one-open-approval-per-artifact rule could not be checked; restore those payloads or resolve the ` +
+          `${noun}, then retry`,
         url.pathname,
       );
     }

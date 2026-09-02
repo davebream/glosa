@@ -24,6 +24,21 @@ export type ProblemSlug =
   // no longer matches what's on disk.
   | "conflict"
   | "approval-conflict"
+  // R9 addition, sibling of `approval-conflict` and deliberately NOT the same answer. Uniqueness
+  // ("at most one non-terminal approval request per workspace/path") is proven by reading the
+  // candidate entries' immutable inbox payloads (A4 §F04); when one of those reads fails, the
+  // daemon has proven neither that a conflict exists nor that none does.
+  //
+  // Status 500, not 409, and the choice is the point. 409 asserts a conflict with the current
+  // resource state — an assertion we cannot back, and one that sends the caller to "finish the
+  // existing approval" when there may be no existing approval and its payload is unreadable
+  // regardless. Nothing the client sent is wrong, so no 4xx fits; the daemon's own durable store
+  // is damaged and it is "incapable of performing the requested method" (RFC 9110 §15.6), which
+  // is 5xx by definition. Not 503 either: that promises the condition clears with time, and this
+  // one waits on a human. This is the same 500 an unhandled throw would already have produced —
+  // named and given an honest `detail` instead of the anonymous `internal` fallback, which by
+  // design carries none.
+  | "approval-uniqueness-unprovable"
   | "artifact-revision-changed"
   // P3.5 addition — `POST /w/:slug/restore`'s dirty-worktree guard (A6 §F31). 409 when the
   // artifact has changes since its latest checkpoint and the caller didn't pass `force`. Not

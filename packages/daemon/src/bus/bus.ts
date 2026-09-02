@@ -85,6 +85,37 @@ export class ApprovalConflictError extends Error {
   }
 }
 
+/** R9's "at most one non-terminal approval request per workspace/path" is proven by READING the
+ * candidate entries' immutable inbox payloads — the journal event carries only `detail.kind`, so
+ * `target_path`/`approval_mode` are only knowable from the file (A4 §F04). When a candidate's
+ * payload cannot be read, the scan has neither proven a conflict nor proven there is none, and
+ * those are different answers that must not collapse into the same one.
+ *
+ * Distinct from `ApprovalConflictError` on purpose, in the same spirit as `LEASE_EXPIRED` vs
+ * `NO_ACTIVE_LEASE` (A4 §F05) and `INDEX_LOCK_NOT_OWNED` (A4 §F21): reporting a definite conflict
+ * we cannot demonstrate would send the caller after an "existing request" that may not exist, and
+ * whose payload is unreadable anyway — so the advertised remedy (finish that approval) could be
+ * impossible to carry out. This error says only what is true — uniqueness is unprovable right now
+ * — and names the entries responsible so the remedy is actionable: make those payloads readable
+ * again, or drive them terminal through the journal (`glosa resolve`), after which they stop
+ * being candidates. Reconcile is deliberately NOT offered as the fix: its step-3 self-heal
+ * repairs a file with no `entry_created`, never an `entry_created` whose file is damaged. */
+export class ApprovalUniquenessUnprovableError extends Error {
+  readonly code = "APPROVAL_UNIQUENESS_UNPROVABLE";
+
+  constructor(
+    readonly targetPath: string,
+    readonly entries: readonly string[],
+  ) {
+    super(
+      `cannot prove ${targetPath} has no open approval request: inbox entr${entries.length === 1 ? "y" : "ies"} ` +
+        `${entries.join(", ")} could not be read — restore the payload(s) or resolve the entr${
+          entries.length === 1 ? "y" : "ies"
+        } so they leave the non-terminal set, then retry`,
+    );
+  }
+}
+
 export class WorkspaceAdoptedError extends Error {
   constructor(readonly targetRegistrationId: string) {
     super(`workspace has been adopted by ${targetRegistrationId}`);
@@ -292,23 +323,54 @@ export class WorkspaceBus {
 
   /** Creates an attention request while enforcing approval-mode uniqueness in the same critical
    * section as the immutable inbox write. The check cannot race another request for this
-   * workspace: both the scan and createEntryLocked() share the workspace mutex. */
+   * workspace: both the scan and createEntryLocked() share the workspace mutex.
+   *
+   * The scan produces one of THREE answers, and the middle one is the whole point (R9: "at most
+   * one non-terminal approval request may exist for that workspace/path"):
+   *   - a candidate's payload proves a same-path approval is open      -> ApprovalConflictError
+   *   - some candidate's payload could not be read at all              -> unprovable, fail closed
+   *   - every candidate was read and positively ruled out              -> create
+   *
+   * `readInboxEntry` collapses "missing", "unparseable" and "EACCES" all into `null` (its own
+   * contract: never throws). Reading that `null` as "not a match" would be a fail-OPEN on the
+   * exact invariant this block exists to hold — one truncated, half-written or unreadable entry
+   * file would make a live approval invisible and let a second one be created for the same path.
+   * Absence of evidence is not evidence of absence, the same reasoning `reclaimIndexLock` applies
+   * to a missing daemon lock (A4 §F21): a refused request is recoverable, a broken invariant is
+   * not. So an unreadable candidate goes on `unprovable` rather than being skipped.
+   *
+   * A PROVEN conflict outranks an unprovable one, so the loop finishes (or breaks on the proof)
+   * before deciding: a fact must never lose to a maybe just because the maybe was scanned first.
+   * The scan also collects EVERY unreadable candidate instead of throwing on the first, so one
+   * failed request tells the operator about all of the damage at once.
+   *
+   * Deliberately no try/catch: `readInboxEntry` cannot throw, and everything after it is property
+   * access on a value already narrowed to a plain object — so nothing here has a failure that
+   * warrants swallowing, and a throw that does escape is a programming error which must surface
+   * rather than be silently re-read as "no conflict" (the class of bug being fixed here). */
   createAttentionRequest(id: string, payload: AttentionRequestPayload): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       if (payload.approval_mode === true && payload.target_path) {
+        const unprovable: string[] = [];
+        let proven = false;
         for (const [entryId, state] of Object.entries(this.state.entries)) {
           if (state.kind !== "attention" || isTerminal("attention", state.status)) continue;
-          try {
-            const existing = readInboxEntry(this.workspace, entryId) as Record<string, unknown> | null;
-            if (existing?.approval_mode === true && existing.target_path === payload.target_path) {
-              throw new ApprovalConflictError(payload.target_path);
-            }
-          } catch (error) {
-            if (error instanceof ApprovalConflictError) throw error;
-            // An unreadable immutable entry remains journal-authoritative, but cannot safely be
-            // identified as a path-scoped approval request. Reconciliation handles corruption.
+          const existing = readInboxEntry(this.workspace, entryId);
+          // A non-object body (scalar, array, JSON `null`) is not an inbox payload this daemon
+          // ever wrote — inbox files are write-once, so any deviation is corruption, and a
+          // corrupted body cannot rule out what the entry originally was.
+          if (existing === null || typeof existing !== "object" || Array.isArray(existing)) {
+            unprovable.push(entryId);
+            continue;
+          }
+          const record = existing as Record<string, unknown>;
+          if (record.approval_mode === true && record.target_path === payload.target_path) {
+            proven = true;
+            break;
           }
         }
+        if (proven) throw new ApprovalConflictError(payload.target_path);
+        if (unprovable.length > 0) throw new ApprovalUniquenessUnprovableError(payload.target_path, unprovable);
       }
       this.createEntryLocked(id, payload);
     });

@@ -16,7 +16,7 @@ import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
-import { journalPath } from "../src/bus/paths.ts";
+import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { readFileSync } from "node:fs";
@@ -1446,6 +1446,39 @@ describe("A1 §5 route catalog", () => {
     expect(mismatch.status).toBe(409);
     expect((await mismatch.json()).type).toContain("artifact-revision-changed");
     expect(ctx.getWorkspaceBus(root).state.entries[winner.id]?.status).toBe("open");
+  });
+
+  test("an unreadable live approval entry answers 500 approval-uniqueness-unprovable, never a 201 or a bare conflict", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\n");
+    const request = () =>
+      fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({ path: root, target_path: "notes.md", approval_mode: true }),
+        }),
+      );
+    const first = await request();
+    expect(first.status).toBe(201);
+    const created = await first.json();
+
+    // The journal still says this entry is a live approval; its immutable payload no longer parses.
+    const bus = ctx.getWorkspaceBus(root);
+    writeFileSync(inboxEntryPath(bus.workspace, created.id), '{"kind":"attention_requ');
+
+    const second = await request();
+    expect(second.status).toBe(500);
+    expect(second.headers.get("Content-Type")).toBe("application/problem+json");
+    const body = await second.json();
+    expect(body.type).toContain("approval-uniqueness-unprovable");
+    // The 500 must stay a NAMED refusal, not collapse into the detail-free generic `internal`.
+    expect(body.type).not.toContain("errors/internal");
+    expect(body.detail).toContain(created.id);
+    expect(body.instance).toBe("/api/workspaces/attention-request");
+    // Fail closed means fail closed: no second approval entry was created for this target.
+    const attentionIds = Object.entries(bus.state.entries)
+      .filter(([, state]) => state.kind === "attention")
+      .map(([id]) => id);
+    expect(attentionIds).toEqual([created.id]);
   });
 
   // --- POST /w/:slug/capability/:artifactPath (5.13/§7, P4.1) — the class-F capability mint ---
