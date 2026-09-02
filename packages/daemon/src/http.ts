@@ -2037,9 +2037,13 @@ async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request):
           restart_required: wiring.sessions.routable_live === 0,
         });
       }
-      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 =
-      // durable-install-required (ephemeral runner cache). Both are honest 409 conflicts with
-      // the child's own error code + hint in detail — see A6 §F26's stable exit-code table.
+      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 = usage,
+      // which the child emits for durable-install-required (ephemeral runner cache), an unsafe
+      // init target (issue #96), and — because this child runs `init` with no `--agent` so the
+      // provider choice stays provider-owned (A6 §F26, AGENTS.md invariant 1) — a provider
+      // selection it refuses to guess at. Only the first is re-confirmable with force:true; the
+      // rest are still honest 409s because the child's own error code + hint ride in `detail`,
+      // which is what the SPA shows next to its "run `glosa init` in the terminal" fallback.
       if (envelope.exit_code === 6 || envelope.exit_code === 2) {
         const err = envelope.error;
         const detail = err

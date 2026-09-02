@@ -67,16 +67,15 @@ export function createInitRunner(deps: InitRunnerDeps): InitRunner {
     let child: ReturnType<typeof Bun.spawn>;
     try {
       child = spawn({
-        cmd: [
-          process.execPath,
-          mainPath,
-          "init",
-          dir,
-          "--agent",
-          "claude-code",
-          "--json",
-          ...(opts.force === true ? ["--force"] : []),
-        ],
+        // No `--agent`: AGENTS.md invariant 1 forbids the generic core from naming a producer, and
+        // A6 §F26 already owns the answer — "on install with no `--agent`, provider-owned local
+        // probes inspect only executable presence and existing provider configuration. Exactly one
+        // detected provider is selected without a prompt. Multiple or zero detections produce one
+        // provider-selection prompt on a TTY; non-TTY and `--json` runs exit 2 with an exact
+        // `--agent` hint instead of guessing." This child is both non-TTY and `--json`, so the
+        // ambiguous case surfaces as an honest 409 (see `handleWorkspaceInit`'s exit-2 branch)
+        // rather than a guess — a Codex-only user must never be handed Claude Code hooks.
+        cmd: [process.execPath, mainPath, "init", dir, "--json", ...(opts.force === true ? ["--force"] : [])],
         env,
         stdin: "ignore",
         stdout: "pipe",
