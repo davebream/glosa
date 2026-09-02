@@ -13,6 +13,8 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { appendEvent, type JournalWriter } from "../bus/journal.ts";
 import { shadowGitDir } from "../bus/paths.ts";
+import { currentDaemonIdentity, type DaemonIdentity } from "../daemon-identity.ts";
+import { readLock } from "../lock.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
@@ -127,16 +129,75 @@ export interface ReclaimIndexLockDeps {
   writer: JournalWriter;
   ulid: () => string;
   now?: () => Date;
+  /** Who is claiming the right to unlink, and where the daemon lock proving it lives. Omitted
+   * (the production case) means "use this process's ambient identity", which `lifecycle.ts`
+   * claims when it wins the singleton CAS — so no call site has to carry the id, and no test has
+   * to invent one. Pass `null` to assert explicitly that there is no identity. Supplying a value
+   * cannot WEAKEN the check: the on-disk lock is the authority and this is only the claim tested
+   * against it. */
+  identity?: DaemonIdentity | null;
 }
 
-/** If `index.lock` is present, unlinks it and records `git_index_lock_reclaimed`. Safe
- * unconditionally: the daemon-singleton invariant (A5 §F13) guarantees this process is the ONLY
- * git operator for this workspace, so a leftover lock can only be a stale remnant of a git
- * process that died mid-operation on a PREVIOUS run — never a concurrent live writer racing us
- * right now (A4 §F21). Call before the first git op of a session and again at reconcile. */
+export interface IndexLockNotOwnedError extends Error {
+  code: "INDEX_LOCK_NOT_OWNED";
+  indexLock: string;
+  /** The instance id we claimed to be, or `null` when this process has no daemon identity. */
+  claimed: string | null;
+  /** The instance id the daemon lock actually records, or `null` when there is no usable lock. */
+  onDisk: string | null;
+}
+
+function indexLockNotOwnedError(
+  indexLock: string,
+  claimed: string | null,
+  onDisk: string | null,
+): IndexLockNotOwnedError {
+  const err = new Error(
+    `refusing to reclaim ${indexLock}: this process cannot prove it is the singleton daemon ` +
+      `(claimed instance ${claimed ?? "<none>"}, daemon.lock records ${onDisk ?? "<none>"}) — ` +
+      `the lock may belong to a live git process, and deleting it would put two writers on one index`,
+  ) as IndexLockNotOwnedError;
+  err.code = "INDEX_LOCK_NOT_OWNED";
+  err.indexLock = indexLock;
+  err.claimed = claimed;
+  err.onDisk = onDisk;
+  return err;
+}
+
+/** If `index.lock` is present AND the singleton daemon lock proves this process is the only
+ * daemon, unlinks it and records `git_index_lock_reclaimed` (A4 §F21). Both halves of that "AND"
+ * are load-bearing and the second one is NOT an assumption this module may make on its own.
+ *
+ * `index.lock` is git's own guard against two processes writing one `.git/index`. Deleting one
+ * that a LIVE git process owns is precisely the corruption it exists to prevent, so the unlink is
+ * only ever safe under proof that no other operator exists — which is exactly what the daemon
+ * singleton lock (A5 §F13) is. This function is reachable from `bus.ts` (`applyBegin`,
+ * `resolveEntry`, `captureHumanEdit`, `humanEditCheckpoint`) and from `reconcile.ts`
+ * (`offlineCatchUp`), none of which are themselves gated on holding that lock — a second daemon
+ * that lost the CAS but kept running, a diagnostic or CLI path, or a test harness pointed at a
+ * live workspace all reach here. So the proof is checked HERE, at the unlink, rather than assumed
+ * from the caller.
+ *
+ * Unprovable ownership THROWS instead of unlinking, including when there is no daemon lock on
+ * disk at all. Absence of the lock is absence of evidence, not evidence of absence: it is
+ * indistinguishable from "a daemon is running against a different `GLOSA_HOME`" or "our own lock
+ * was just deleted underneath us", and failing an operation is strictly recoverable while
+ * corrupting a git index is not. This costs a legitimate no-daemon caller nothing in the normal
+ * case — with no `index.lock` on disk this returns `false` before any of it runs — and A4's
+ * cross-cutting invariant already requires non-daemon callers to fail loudly rather than write
+ * unsynchronized.
+ *
+ * Call before the first git op of a session and again at reconcile. */
 export function reclaimIndexLock(root: WorkspaceTarget, deps: ReclaimIndexLockDeps): boolean {
   const lockFile = indexLockPath(root);
   if (!existsSync(lockFile)) return false;
+
+  const identity = deps.identity === undefined ? currentDaemonIdentity() : deps.identity;
+  const onDisk = identity ? readLock(identity.lockFile) : null;
+  if (!identity || !onDisk || onDisk.instance_id !== identity.instanceId) {
+    throw indexLockNotOwnedError(lockFile, identity?.instanceId ?? null, onDisk?.instance_id ?? null);
+  }
+
   unlinkSync(lockFile);
   // Force fsync despite not being in journal.ts's lifecycle-critical set — this is a rare
   // startup/repair event (mirrors truncateTornTail's own reasoning for journal_tail_truncated),

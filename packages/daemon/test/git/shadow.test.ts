@@ -14,7 +14,16 @@ import {
   runGit,
 } from "../../src/git/shadow.ts";
 import { journalPath, shadowGitDir } from "../../src/bus/paths.ts";
-import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace, testWriter, writeFile } from "./helpers.ts";
+import {
+  claimTestDaemonIdentity,
+  cleanupWorkspace,
+  deterministicClock,
+  deterministicUlid,
+  dropDaemonIdentity,
+  freshWorkspace,
+  testWriter,
+  writeFile,
+} from "./helpers.ts";
 
 describe("initShadowRepo — deterministic init (A4 §F21)", () => {
   let root: string;
@@ -237,6 +246,7 @@ describe("index.lock reclaim", () => {
     root = freshWorkspace();
   });
   afterEach(() => {
+    dropDaemonIdentity(); // process-wide claim — never let it leak into the next test/file
     cleanupWorkspace(root);
   });
 
@@ -244,6 +254,9 @@ describe("index.lock reclaim", () => {
     const writer = testWriter(root);
     await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
 
+    // A4 §F21 gates the unlink on the singleton daemon lock proving we are the only git operator,
+    // so the happy path has to establish that proof before it can reclaim anything.
+    claimTestDaemonIdentity(root);
     mkdirSync(shadowGitDir(root), { recursive: true });
     writeFileSync(indexLockPath(root), "");
     expect(existsSync(indexLockPath(root))).toBe(true);
@@ -259,6 +272,110 @@ describe("index.lock reclaim", () => {
 
     const journalText = readFileSync(journalPath(root), "utf8");
     expect(journalText).toContain('"git_index_lock_reclaimed"');
+  });
+
+  test("refuses to unlink index.lock when singleton ownership is unproven (A4 §F21)", async () => {
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    // No daemon identity is claimed by this process, so nothing proves we are the only git
+    // operator for this workspace. F21 permits the unlink ONLY under that proof.
+    expect(() =>
+      reclaimIndexLock(root, { writer, ulid: deterministicUlid(999_000), now: deterministicClock(999_000) }),
+    ).toThrow(/index\.lock/);
+    expect(existsSync(indexLockPath(root))).toBe(true);
+
+    writer.close();
+    expect(readFileSync(journalPath(root), "utf8")).not.toContain('"git_index_lock_reclaimed"');
+  });
+
+  test("refuses when the daemon lock records a DIFFERENT instance — the second-daemon case", async () => {
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+
+    // The lock on disk belongs to the daemon that won the CAS; we are a second process that lost
+    // it and kept running. Its git may be operating on this very index right now.
+    const winner = claimTestDaemonIdentity(root, "gl-winner");
+    const loser = { instanceId: "gl-loser", lockFile: winner.lockFile };
+
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    expect(() =>
+      reclaimIndexLock(root, {
+        writer,
+        ulid: deterministicUlid(999_000),
+        now: deterministicClock(999_000),
+        identity: loser,
+      }),
+    ).toThrow(/cannot prove it is the singleton daemon/);
+    expect(existsSync(indexLockPath(root))).toBe(true);
+
+    writer.close();
+    expect(readFileSync(journalPath(root), "utf8")).not.toContain('"git_index_lock_reclaimed"');
+  });
+
+  test("refuses when the daemon lock is gone even though this process believes it is the daemon", async () => {
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+
+    const identity = claimTestDaemonIdentity(root);
+    unlinkSync(identity.lockFile); // no lock on disk == no proof, whatever we believe about ourselves
+
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    expect(() =>
+      reclaimIndexLock(root, { writer, ulid: deterministicUlid(999_000), now: deterministicClock(999_000) }),
+    ).toThrow(/cannot prove it is the singleton daemon/);
+    expect(existsSync(indexLockPath(root))).toBe(true);
+    writer.close();
+  });
+
+  test("an explicitly supplied matching identity reclaims without any ambient claim", async () => {
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+
+    const identity = claimTestDaemonIdentity(root, "gl-explicit");
+    dropDaemonIdentity(); // nothing ambient — the deps slot alone carries the claim
+
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    const reclaimed = reclaimIndexLock(root, {
+      writer,
+      ulid: deterministicUlid(999_000),
+      now: deterministicClock(999_000),
+      identity,
+    });
+    expect(reclaimed).toBe(true);
+    expect(existsSync(indexLockPath(root))).toBe(false);
+    writer.close();
+  });
+
+  test("reclaiming twice appends exactly one git_index_lock_reclaimed event", async () => {
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+
+    claimTestDaemonIdentity(root);
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    expect(reclaimIndexLock(root, { writer, ulid: deterministicUlid(999_000), now: deterministicClock(999_000) })).toBe(
+      true,
+    );
+    expect(reclaimIndexLock(root, { writer, ulid: deterministicUlid(999_100), now: deterministicClock(999_100) })).toBe(
+      false,
+    );
+    writer.close();
+
+    const events = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter((line) => line.includes('"git_index_lock_reclaimed"'));
+    expect(events).toHaveLength(1);
   });
 
   test("no index.lock present -> no-op, returns false", () => {

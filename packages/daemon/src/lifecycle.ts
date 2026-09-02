@@ -18,6 +18,7 @@ import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
 import { CapabilityStore } from "./capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
+import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
 import { createApiFetch, createClassFFetch } from "./http.ts";
 import { createInitRunner } from "./init-runner.ts";
@@ -247,6 +248,13 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // P1.2 had it. Class-F binds only once this process has already won the lock outright.
   await acquireLockOrExit(home, lockFile, record, server);
   mayRepairLock = true;
+  // This is the ONLY moment a glosa process may call itself the daemon: the O_EXCL CAS above has
+  // just proven it owns `<GLOSA_HOME>/daemon.lock`. `git/shadow.ts#reclaimIndexLock` needs that
+  // proof before it may unlink a stray `index.lock` (A4 §F21) — a process that never reaches this
+  // line has no identity to claim and therefore refuses to reclaim rather than risk deleting a
+  // lock a live `git` owns. `lockFile` is captured with the id so the proof is always read back
+  // from the home this process actually locked.
+  claimDaemonIdentity({ instanceId, lockFile });
 
   try {
     await resumePendingAdoptions(
@@ -296,6 +304,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
     }
     removeLockIfOwned(lockFile, instanceId);
+    // Dropped AFTER the lock file is gone, so the two can never disagree in the direction that
+    // matters: an identity outliving its lock only makes `reclaimIndexLock` fail closed, whereas
+    // a lock outliving its identity would be a claim with nothing behind it.
+    releaseDaemonIdentity();
     log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
     process.exit(0);
   };

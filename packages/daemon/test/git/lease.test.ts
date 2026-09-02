@@ -6,7 +6,7 @@
 // concurrent operations serialize through the same workspace mutex shadow-git shares with the
 // journal.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import type { JournalEvent } from "../../src/bus/journal.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
@@ -14,8 +14,17 @@ import { KeyedMutex } from "../../src/bus/mutex.ts";
 import { APPLY_LEASE_TTL_MS } from "../../src/bus/lease.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
-import { checkpoint, diffShas, headSha, initShadowRepo, runGit } from "../../src/git/shadow.ts";
-import { cleanupWorkspace, deterministicUlid, freshWorkspace, testWriter, writeFile } from "./helpers.ts";
+import { shadowGitDir } from "../../src/bus/paths.ts";
+import { checkpoint, diffShas, headSha, indexLockPath, initShadowRepo, runGit } from "../../src/git/shadow.ts";
+import {
+  claimTestDaemonIdentity,
+  cleanupWorkspace,
+  deterministicUlid,
+  dropDaemonIdentity,
+  freshWorkspace,
+  testWriter,
+  writeFile,
+} from "./helpers.ts";
 
 /** A settable clock (unlike `deterministicClock`'s auto-increment) so tests can fast-forward past
  * the 15-minute lease TTL without waiting on wall-clock time. */
@@ -481,5 +490,51 @@ describe("LEASE_EXPIRED — a lease past its TTL proves nothing, on either path 
     await expect(bus.applyBegin("e2", "sess-2")).rejects.toMatchObject({ code: "LEASE_HELD" });
     expect(journalEvents().some((e) => e.event === "apply_expired")).toBe(false);
     expect(bus.state.applyLease?.leaseId).toBe(leaseId);
+  });
+});
+
+// The reachability half of A4 §F21's ownership rule. `reclaimIndexLock` is not called from a
+// context that holds the daemon lock — `WorkspaceBus` reaches it on every apply-lease and
+// human-edit path, and nothing about constructing a bus proves this process is the singleton
+// daemon. A test harness, a CLI path, or a second daemon that lost the CAS all land here, so
+// these two tests pin the behavior at the call site rather than only at the primitive.
+describe("WorkspaceBus never reclaims an index.lock it cannot prove it owns (A4 §F21)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    dropDaemonIdentity();
+    cleanupWorkspace(root);
+  });
+
+  test("applyBegin fails loudly and leaves index.lock in place when no daemon lock proves ownership", async () => {
+    writeFile(root, "notes.md", "v1");
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
+    await bus.reconcile();
+
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    const err = await bus.applyBegin("e1", "sess-1").catch((e: Error) => e);
+    expect((err as { code?: string }).code).toBe("INDEX_LOCK_NOT_OWNED");
+    // The whole point: a lock a live `git` might own is still there for that `git` to release.
+    expect(existsSync(indexLockPath(root))).toBe(true);
+    await bus.close();
+  });
+
+  test("applyBegin reclaims normally once the singleton daemon lock proves ownership", async () => {
+    writeFile(root, "notes.md", "v1");
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
+    await bus.reconcile();
+
+    claimTestDaemonIdentity(root);
+    mkdirSync(shadowGitDir(root), { recursive: true });
+    writeFileSync(indexLockPath(root), "");
+
+    const { leaseId } = await bus.applyBegin("e1", "sess-1");
+    expect(leaseId).toBeTruthy();
+    expect(existsSync(indexLockPath(root))).toBe(false);
+    await bus.close();
   });
 });
