@@ -49,10 +49,11 @@ export type {
 export {
   APPLY_LEASE_TTL_MS,
   isLeaseExpired,
+  leaseExpiredError,
   leaseHeldError,
   leaseSessionMismatchError,
   noActiveLeaseError,
 } from "./lease.ts";
-export type { LeaseHeldError, LeaseSessionMismatchError, NoActiveLeaseError } from "./lease.ts";
+export type { LeaseExpiredError, LeaseHeldError, LeaseSessionMismatchError, NoActiveLeaseError } from "./lease.ts";
 export { WorkspaceBus } from "./bus.ts";
 export type { WorkspaceBusDeps } from "./bus.ts";

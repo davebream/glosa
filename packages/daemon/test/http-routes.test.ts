@@ -17,6 +17,7 @@ import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { journalPath } from "../src/bus/paths.ts";
+import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { readFileSync } from "node:fs";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
@@ -1762,6 +1763,79 @@ describe("A1 §5 route catalog", () => {
       const body = await res.json();
       expect(body.detail ?? body.title).toContain("directory");
       rmSync(looseDir, { recursive: true, force: true });
+    });
+  });
+
+  // --- POST /api/workspaces/resolve — apply-lease expiry (A4 §F05) ---
+
+  describe("POST /api/workspaces/resolve — an expired apply-lease (A4 §F05)", () => {
+    /** Puts the route in the LONG-LIVED-DAEMON condition this case is about. `resolveBus` calls
+     * `bus.reconcileOnce()`, and reconcile step 4 is the only OTHER code that closes out a
+     * dangling lease — leaving it unconsumed would let the route's own reconcile expire the lease
+     * before `resolveEntry` ever sees it, and the test would pass without exercising the resolve
+     * path at all. Consuming it here is what makes reconcile a no-op for the rest of the test,
+     * exactly as it is on a daemon that has been up for hours. */
+    async function busWithReconcileAlreadyConsumed(now: () => Date) {
+      const bus = busRegistry.get(root, { now });
+      await bus.reconcileOnce();
+      return bus;
+    }
+
+    test("resolve on a lease past its TTL → 409 problem+json telling the caller to re-run apply-begin, never a 200 with a session attribution", async () => {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      // The bus must be constructed with this test's clock BEFORE any route touches the root —
+      // `WorkspaceBusRegistry.get` only honours `deps` on first construction (see its docstring),
+      // and the 15-minute TTL is not something a test can wait out in wall-clock time.
+      let nowMs = 1_700_000_000_000;
+      const bus = await busWithReconcileAlreadyConsumed(() => new Date(nowMs));
+      const { leaseId, preSha } = await bus.applyBegin("entry-1", "sess-a");
+
+      nowMs += APPLY_LEASE_TTL_MS + 1_000;
+      writeFileSync(join(root, "notes.md"), "v2 — drift no lease ever covered\n");
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", outcome: "applied", session: "sess-a" }),
+        }),
+      );
+
+      expect(res.status).toBe(409);
+      expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+      const body = await res.json();
+      expect(body.type).toBe("https://glosa.local/errors/conflict");
+      // Distinct from the NO_ACTIVE_LEASE/LEASE_SESSION_MISMATCH 409 that shares this slug: the
+      // caller has to be told the lease EXPIRED and that a fresh apply-begin is the way forward.
+      expect(`${body.title} ${body.detail ?? ""}`).toContain("expired");
+      expect(`${body.title} ${body.detail ?? ""}`).toContain("apply-begin");
+
+      // The refusal is honest all the way down: nothing was attributed to sess-a, and the
+      // unproven interval is on record as `unknown`.
+      const journal = readFileSync(journalPath(root), "utf8");
+      expect(journal).toContain(`"apply_expired"`);
+      expect(journal).toContain(leaseId);
+      expect(journal).not.toContain(`"apply_end"`);
+      const head = await headSha(root);
+      expect(head).not.toBe(preSha);
+      expect(bus.state.entries["entry-1"]?.status).not.toBe("applied");
+    });
+
+    test("resolve with a live lease still succeeds through the same route (the 409 is expiry-specific, not a blanket refusal)", async () => {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      const bus = await busWithReconcileAlreadyConsumed(() => new Date());
+      await bus.applyBegin("entry-1", "sess-a");
+      writeFileSync(join(root, "notes.md"), "v2 — edited under a live lease\n");
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", outcome: "applied", session: "sess-a" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe("applied");
     });
   });
 });

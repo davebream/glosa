@@ -1713,6 +1713,21 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
     if (code === "NO_ACTIVE_LEASE" || code === "LEASE_SESSION_MISMATCH") {
       return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
     }
+    // A4 §F05 lease expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
+    // `entry_error`) as the two above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
+    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s LEASE_HELD. The
+    // recovery step goes in the TITLE, not just the detail, because `runResolve`'s
+    // `mapEntryFailure` (packages/cli/src/resolve.ts) surfaces `problem.title` as the CLI's
+    // error message and never reads `detail` — guidance parked in `detail` would never be seen.
+    if (code === "LEASE_EXPIRED") {
+      return problem(
+        409,
+        "conflict",
+        "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
+        "past its TTL the lease could no longer prove its pre..post interval, so that interval was recorded as unknown rather than attributed to the session",
+        url.pathname,
+      );
+    }
     throw err;
   }
 }

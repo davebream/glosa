@@ -56,6 +56,28 @@ describe("glosa resolve", () => {
     expect(result.error?.kind).toBe("entry_error");
   });
 
+  // A4 §F05: an apply-lease past its 15-minute TTL can no longer prove its interval, so the
+  // daemon refuses the resolve (409 `conflict`) instead of attributing unproven drift. A6 §F26
+  // keeps `resolve`'s exit set at 0;3;8;2 — so this is exit 8 like every other entry failure,
+  // NOT apply-begin's exit 12. What has to survive the trip is the recovery step: `runResolve`
+  // reports `problem.title` and never reads `detail`, so the title is where it must live.
+  test("expired apply-lease -> exit 8 (entry_error) and the message still tells the operator to re-run apply-begin", async () => {
+    const client = new FakeGlosaApiClient();
+    client.resolveEntryImpl = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/conflict",
+        title: "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
+        detail: "past its TTL the lease could no longer prove its pre..post interval",
+      });
+    };
+    const { deps } = makeClientDeps(client);
+    const result = await runResolve({ dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(8);
+    expect(result.error?.kind).toBe("entry_error");
+    expect(result.error?.message).toContain("expired");
+    expect(result.error?.message).toContain("apply-begin");
+  });
+
   test("applied: calls resolveEntry with the note threaded through, returns exit 0", async () => {
     const client = new FakeGlosaApiClient();
     const { deps } = makeClientDeps(client);

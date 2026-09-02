@@ -293,7 +293,8 @@ export interface CheckpointOptions {
   attribution: Attribution;
   /** Free-form `Glosa-Kind` trailer value — this module doesn't constrain the vocabulary, but
    * callers in this codebase use `baseline` (init only, via `commit()` directly, not this
-   * function), `pre_apply`/`post_apply` (lease boundaries), and `auto_checkpoint` (offline
+   * function), `pre_apply`/`post_apply` (lease boundaries), `apply_expired` (the unknown-attributed
+   * capture of an interval a lease died before proving, A4 §F05), and `auto_checkpoint` (offline
    * catch-up / any autonomous save outside a lease). */
   kind: string;
   entry?: string;

@@ -9,8 +9,11 @@ import type { ApplyLeaseState } from "./replay.ts";
 export const APPLY_LEASE_TTL_MS = 15 * 60 * 1000; // 15 minutes (A4 §F05)
 
 /** A lease with a past `expiresAt` is treated as gone for the purpose of "is one active right
- * now" — reconcile step 4 is what actually closes it out with an `apply_expired` event; this is
- * just the predicate both that step and `applyBegin`'s admission check share. */
+ * now". Reconcile step 4 closes out a dangling one at daemon STARTUP, but a daemon that stays up
+ * for days never reaches it — so `WorkspaceBus.applyBegin` and `WorkspaceBus.resolveEntry` share
+ * this same predicate and close the lease out inline (see `WorkspaceBus#expireLeaseLocked`).
+ * Every consumer of a lease must consult this: the TTL is precisely what bounds the window a
+ * lease can PROVE (A4 §F05), so a consumer that skips it is attributing unproven time. */
 export function isLeaseExpired(lease: ApplyLeaseState, now: Date): boolean {
   return new Date(lease.expiresAt).getTime() <= now.getTime();
 }
@@ -40,6 +43,31 @@ export interface LeaseSessionMismatchError extends Error {
   entry: string;
   leaseSession: string;
   callerSession: string;
+}
+
+export interface LeaseExpiredError extends Error {
+  code: "LEASE_EXPIRED";
+  entry: string;
+  leaseId: string;
+  expiresAt: string;
+}
+
+/** The lease's TTL is what BOUNDS the interval it can prove (A4 §F05: "Lease expiry ->
+ * apply_expired, diff->unknown"). Past `expires_at` there is no proof left, so a `resolve` that
+ * arrives late cannot be attributed to its holder no matter how genuine the caller is — the
+ * pre..post diff by then also spans however many hours of drift arrived from elsewhere while the
+ * session was stalled. Distinct from `NO_ACTIVE_LEASE` on purpose: the caller did everything
+ * right and simply needs to re-run `apply-begin` to open a fresh, provable window, and the
+ * message has to say so. */
+export function leaseExpiredError(entry: string, leaseId: string, expiresAt: string): LeaseExpiredError {
+  const err = new Error(
+    `resolve(${entry}): the apply-lease (lease_id=${leaseId}) expired at ${expiresAt} — its interval can no longer be proven and was recorded as unknown; re-run apply-begin and resolve again`,
+  ) as LeaseExpiredError;
+  err.code = "LEASE_EXPIRED";
+  err.entry = entry;
+  err.leaseId = leaseId;
+  err.expiresAt = expiresAt;
+  return err;
 }
 
 /** The lease IS the proof (A4 §F05) — a lease for `entry` held by session A resolved by a caller

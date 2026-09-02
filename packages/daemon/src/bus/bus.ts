@@ -18,6 +18,7 @@ import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./j
 import {
   APPLY_LEASE_TTL_MS,
   isLeaseExpired,
+  leaseExpiredError,
   leaseHeldError,
   leaseSessionMismatchError,
   noActiveLeaseError,
@@ -33,7 +34,7 @@ import {
 import { KeyedMutex } from "./mutex.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
 import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
-import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { applyEvent, type ApplyLeaseState, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 
@@ -772,12 +773,55 @@ export class WorkspaceBus {
     return { payload: readInboxEntry(this.workspace, id), status: state.status };
   }
 
+  /** The ONE way a lease dies without a `resolve` having proven anything, shared by `applyBegin`
+   * and `resolveEntry` so both provably do the same thing (A4 §F04 reconcile step 4 —
+   * "apply_begin w/o apply_end & expired -> apply_expired, interval->unknown" — and §F05's
+   * "Lease expiry -> apply_expired, diff->unknown").
+   *
+   * Reconcile implements exactly this at STARTUP, but startup is the one moment a long-lived
+   * daemon never reaches: a session can stall past the 15-minute TTL while the daemon stays up
+   * for days, so without an inline path the journal would hold an `apply_begin` no event ever
+   * closes, and the interval since `pre_sha` would keep accumulating drift no lease covers.
+   *
+   * Event first, then checkpoint — the same order reconcile uses (step 4 appends `apply_expired`,
+   * step 5 captures the drift as `unknown`): the journal records that the lease is dead BEFORE
+   * anything is committed under it, so a crash between the two recovers to "lease already
+   * expired, drift not yet captured", which reconcile's own step 5 then finishes. The reverse
+   * order would recover to "commit exists, lease still nominally open" — a window in which the
+   * next `resolve` could sweep an already-unknown-attributed commit into a session's diff. */
+  private async expireLeaseLocked(lease: ApplyLeaseState): Promise<string> {
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: lease.entry,
+      event: "apply_expired",
+      by: "daemon", // never `session:<id>` — a lease that expired proved nothing for its holder
+      detail: { lease_id: lease.leaseId },
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
+
+    // Captures whatever happened since `pre_sha` so nothing is silently lost — as `unknown`,
+    // which is what A4 §F05 says an interval with no live lease over it is. Idempotent when
+    // nothing actually drifted (`checkpoint` returns HEAD without committing).
+    return checkpoint(this.workspace, {
+      attribution: "unknown",
+      kind: "apply_expired",
+      entry: lease.entry,
+      lease: lease.leaseId,
+    });
+  }
+
   /** `apply-begin` (A4 §F05): under this workspace's ONE git+journal mutex (the same slot every
    * other write to this workspace goes through, so a checkpoint here can never race a concurrent
    * journal append) — reject `LEASE_HELD` if a lease is already active and not expired (2nd
-   * apply-begin never queues); else checkpoint the CURRENT state (attributed `unknown` — whatever
-   * drifted before this lease started isn't this session's doing) as `pre_sha`, then append
-   * `apply_begin` recording it plus a 15-minute expiry. */
+   * apply-begin never queues); if one is on record but EXPIRED, close it out honestly first
+   * (`expireLeaseLocked`) rather than silently overwriting `state.applyLease` and leaving its
+   * `apply_begin` dangling in the journal forever; then checkpoint the CURRENT state (attributed
+   * `unknown` — whatever drifted before this lease started isn't this session's doing) as
+   * `pre_sha`, and append `apply_begin` recording it plus a 15-minute expiry. */
   applyBegin(entry: string, sessionId: string): Promise<{ leaseId: string; preSha: string }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
@@ -785,7 +829,10 @@ export class WorkspaceBus {
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       const active = this.state.applyLease;
-      if (active && !isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
+      if (active) {
+        if (!isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
+        await this.expireLeaseLocked(active);
+      }
 
       const preSha = await checkpoint(this.workspace, { attribution: "unknown", kind: "pre_apply", entry });
 
@@ -816,9 +863,11 @@ export class WorkspaceBus {
    * `sessionId` directly: without the match check, any caller could resolve someone else's open
    * lease and have the edit attributed to themselves, which is exactly the forgery §F05 exists to
    * prevent. A mismatched `sessionId` throws `LEASE_SESSION_MISMATCH` rather than falsely
-   * attributing anything. Guarded (first-terminal-wins, illegal-from-status) transition rules
-   * belong to P2.5's `lifecycleReducer` — this just appends the events `resolve` is defined to
-   * produce and lets whichever reducer this bus is running fold them. */
+   * attributing anything. A lease past its TTL throws `LEASE_EXPIRED` for the same reason, after
+   * closing it out as `unknown` (see `expireLeaseLocked`). Guarded (first-terminal-wins,
+   * illegal-from-status) transition rules belong to P2.5's `lifecycleReducer` — this just appends
+   * the events `resolve` is defined to produce and lets whichever reducer this bus is running
+   * fold them. */
   resolveEntry(
     entry: string,
     outcome: "applied" | "rejected" | "stale",
@@ -832,6 +881,19 @@ export class WorkspaceBus {
       const lease = this.state.applyLease;
       if (!lease || lease.entry !== entry) throw noActiveLeaseError(entry);
       if (lease.session !== sessionId) throw leaseSessionMismatchError(entry, lease.session, sessionId);
+      // The TTL is what BOUNDS the proof (A4 §F05). Past `expires_at` the pre..post diff no
+      // longer describes "what this session did under a live lease" — it describes everything
+      // that reached the worktree since `pre_sha`, including however many hours of drift arrived
+      // by some other route while the session was stalled. Attributing that to `lease.session`
+      // would be exactly the forged provenance §F05 exists to prevent, so close the lease out as
+      // `unknown` and make the caller re-open a provable window. Deliberately AFTER the session
+      // check: a caller that doesn't hold this lease never gets to drive someone else's lease to
+      // expiry — the holder's own next `resolve`, the next `applyBegin`, or reconcile step 4 all
+      // reach the same place, so nothing is lost by refusing a non-holder first.
+      if (isLeaseExpired(lease, this.nowFn())) {
+        await this.expireLeaseLocked(lease);
+        throw leaseExpiredError(entry, lease.leaseId, lease.expiresAt);
+      }
 
       // Attribution comes from the LEASE's own recorded session (the proven identity), not the
       // `sessionId` parameter — they're equal here (just checked above), but using `lease.session`
