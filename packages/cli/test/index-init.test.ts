@@ -4,11 +4,19 @@
 // LOGIC itself is covered exhaustively in init.test.ts — this only proves `index.ts` calls it
 // correctly and reports the right process exit code.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { promptInitAgents, run } from "../src/index.ts";
+import { REAL_GLOSA_HOME, tempGlosaHome, useTempHome } from "./home.ts";
+
+// `run(["init", …])` has no injection seam for `rootsFor()`'s roots, so the user-scope ownership
+// manifest it consults is whatever `$GLOSA_HOME ?? ~/.glosa` resolves to. Without this, these
+// tests read the developer's own install state: a machine with a user-scope `codex` install
+// recorded there fails the two `--agent`-with-codex cases below on A6 §F26's (correct)
+// cross-scope-duplicate guard.
+useTempHome();
 
 let dirs: string[] = [];
 /** A `.git` marker makes this fixture read as a scratch git repo rather than a bare temp
@@ -141,6 +149,69 @@ describe("run(['init', ...])", () => {
     expect(exitCode).toBe(0);
     expect(out).toContain("already up to date");
     expect(out.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/** A minimal user-scope ownership manifest: `readManifest` only requires `version: 2`, and the
+ * cross-scope guard only asks whether `providers[<id>]` is present. */
+function seedUserScopeInstall(provider: "claude-code" | "codex"): void {
+  writeFileSync(
+    join(tempGlosaHome(), "init-manifest.json"),
+    `${JSON.stringify(
+      {
+        version: 2,
+        scope: "user",
+        glosa_bin: { command: "/usr/bin/false", args: [], mode: "path" },
+        providers: { [provider]: { files: {} } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+// The exit-2 refusal below is CORRECT behavior (A6 §F26): a provider installed at user scope AND
+// workspace scope runs every hook twice. It was previously only reachable through `runScopedInit`
+// directly (packages/cli/test/init.test.ts), never through the CLI boundary, which is why real
+// `~/.glosa` state leaking into `run(["init", …])` looked like a CLI bug rather than the guard
+// doing its job.
+describe("glosa init — cross-scope duplicate guard through the CLI (A6 §F26)", () => {
+  test("a user-scope install of the same provider refuses the workspace init with exit 2", async () => {
+    const dir = freshDir();
+    seedUserScopeInstall("claude-code");
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(2);
+    const parsed = JSON.parse(out);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.code).toBe("cross-scope-duplicate");
+    expect(parsed.error.kind).toBe("usage");
+    expect(parsed.error.message).toBe(
+      "claude-code is already installed at user scope; workspace scope would run duplicate hooks",
+    );
+    expect(parsed.error.hint).toBe(
+      "run `glosa init --scope user --agent claude-code --uninstall`, then " +
+        `\`glosa init ${dir} --scope workspace --agent claude-code\``,
+    );
+    // The refusal is total — nothing is half-written before the guard fires.
+    expect(existsSync(join(dir, ".claude", "settings.json"))).toBe(false);
+    expect(existsSync(join(dir, ".glosa", "init-manifest.json"))).toBe(false);
+  });
+
+  test("an empty user scope lets the same provider through — the real ~/.glosa is never consulted", async () => {
+    const dir = freshDir();
+    // If this were reading the real home, a developer with a user-scope install of either provider
+    // would get exit 2 here. Pinning it makes the outcome a property of the fixture, not the box.
+    expect(tempGlosaHome()).not.toBe(REAL_GLOSA_HOME);
+    const { exitCode } = await captureStdout(() => run(["init", dir, "--agent", "codex", "--json"]));
+    expect(exitCode).toBe(0);
+  });
+
+  test("a user-scope install of a DIFFERENT provider does not block this one", async () => {
+    const dir = freshDir();
+    seedUserScopeInstall("codex");
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).data.providers).toEqual(["claude-code"]);
   });
 });
 

@@ -23,6 +23,12 @@ import {
   runScopedUninstall,
   scopedManifestPaths,
 } from "../src/scoped-init.ts";
+import { useTempHome } from "./home.ts";
+
+// The scoped cases below that omit `homeDir`/`glosaHomeDir` otherwise resolve the developer's own
+// `~/.glosa` for the user-scope half of A6 §F26's cross-scope guard — so a real user-scope install
+// would make a workspace-scope `runScopedInit` here return exit 2 and pass for the wrong reason.
+useTempHome();
 
 let dirs: string[] = [];
 function freshDir(): string {
