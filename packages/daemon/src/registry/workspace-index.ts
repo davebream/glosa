@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fsyncContainingDir } from "../bus/io.ts";
+import { fsyncContainingDir, writeAllSync, type WriteSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, pendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../home.ts";
@@ -299,6 +299,12 @@ export interface WorkspaceIndexDeps {
    * `bus_path`; ANY fold failure counts as "has pending" — fail-safe, never remove on
    * uncertainty. `forget()` deliberately bypasses this (explicit user command stays forceful). */
   hasPendingWork?: (entry: WorkspaceEntry) => boolean;
+  /** The raw `write(2)` behind `persist()`'s temp-file write. Defaults to node:fs `writeSync`.
+   * Test-only, and deliberately NOT reachable from any config/env surface — production wiring
+   * (`lifecycle.ts`'s `buildBackend`) constructs this index with a fixed dep literal. The fault
+   * suite injects one that throws ENOSPC or returns a short count, which is the only way to
+   * exercise "a durable write failed" without a real full or read-only `~/.glosa`. */
+  write?: WriteSync;
   slug?: SlugDeps;
 }
 
@@ -319,6 +325,7 @@ export class WorkspaceIndex {
   private readonly slugDeps: SlugDeps;
   private hasLiveSession: (canonicalPath: string) => boolean;
   private readonly hasPendingWork: (entry: WorkspaceEntry) => boolean;
+  private readonly write: WriteSync;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
   // default `() => false` predicate is indistinguishable from "genuinely wired to say never" once
@@ -359,6 +366,7 @@ export class WorkspaceIndex {
           return true; // fail-safe: an unreadable journal is treated as "work still parked here"
         }
       });
+    this.write = deps.write ?? writeSync;
     this.slugDeps = deps.slug ?? {};
   }
 
@@ -445,6 +453,29 @@ export class WorkspaceIndex {
     return this.cache;
   }
 
+  /** The snapshot every MUTATOR works on: a detached deep copy of the last durable state.
+   *
+   * `load()` hands back `this.cache` by reference, so mutating it in place publishes the change to
+   * every reader (`get`/`getBySlug`/`list`/`pendingAdoptions`, and therefore every route and GC
+   * pass) BEFORE `persist()` has made it durable — and `persist()` genuinely can throw, on ENOSPC,
+   * EROFS, EMFILE, or a read-only `<GLOSA_HOME>`. Nothing then restored the cache, so a `forget()`
+   * whose write failed returned a 500 while memory had already lost the workspace, and the next
+   * successful `persist()` — handed that same still-mutated object — committed the deletion the
+   * user was told had failed. The same shape silently advanced GC hard-removes and the adoption
+   * phase machine (A5 §F19's `active -> adopting -> adopted`), whose whole point is that a crashed
+   * hand-off resumes from the phase that is actually ON DISK.
+   *
+   * Working on a copy makes `this.cache = index` at the end of `persist()` the single point where
+   * a mutation becomes visible, on disk and in memory at once: readers see the last durable state
+   * throughout, and a throw leaves both untouched. That is A4's "the daemon is the SOLE writer"
+   * rule applied to its own in-memory view — an uncommitted write is not state.
+   *
+   * Cost is a non-issue: `persist()` already `JSON.stringify`s this exact object on every single
+   * mutation, which is strictly more work than cloning it. */
+  private loadForMutation(): WorkspaceIndexFile {
+    return structuredClone(this.load());
+  }
+
   /** Renames the corrupt/invalid-shape `workspaces.json` aside to `<path>.corrupt.<ISO-ts>`
    * before `load()` falls back to a fresh empty index. Uses the real wall clock (`new
    * Date().toISOString()`), deliberately NOT the injected `now` — this is a diagnostic artifact's
@@ -486,7 +517,10 @@ export class WorkspaceIndex {
     const bytes = Buffer.from(JSON.stringify(index, null, 2), "utf8");
     const fd = openSync(tmpPath, "wx");
     try {
-      writeSync(fd, bytes);
+      // A4 §F04 — "writeSync may write fewer bytes": a bare single write would silently
+      // truncate the index into unparseable JSON, which the next load() would quarantine and
+      // replace with an empty index. Same offset-advancing loop journal.ts/inbox.ts already use.
+      writeAllSync(fd, bytes, this.write);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -503,7 +537,7 @@ export class WorkspaceIndex {
    * registration, `glosa open`, and discovery sweep funnels through. */
   upsertWorkspace(canonicalPath: string, source: WorkspaceSource): Promise<WorkspaceEntry> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const now = this.now().toISOString();
       const existing = Object.values(index.workspaces).find(
         (entry) => entry.kind === "directory" && entry.canonical_path === canonicalPath,
@@ -588,7 +622,7 @@ export class WorkspaceIndex {
         throw new WorkspaceOpenError("invalid-path", "path could not be canonicalized");
       }
 
-      const index = this.load();
+      const index = this.loadForMutation();
       const now = this.now().toISOString();
 
       if (leafStat.isDirectory()) {
@@ -826,7 +860,7 @@ export class WorkspaceIndex {
    * durable writes discoverable without treating the index as entry-status truth. */
   beginAdoption(target: WorkspaceEntry): Promise<AdoptionRecord | null> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const currentTarget = index.workspaces[target.registration_id];
       if (!currentTarget) throw new AdoptionError("adoption-blocked", "target workspace registration disappeared");
 
@@ -914,7 +948,7 @@ export class WorkspaceIndex {
 
   commitAdoption(adoptionId: string): Promise<AdoptionRecord> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const record = index.adoptions[adoptionId];
       if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
       const now = this.now().toISOString();
@@ -944,7 +978,7 @@ export class WorkspaceIndex {
     phase: Exclude<AdoptionPhase, "planned" | "committed">,
   ): Promise<AdoptionRecord> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const record = index.adoptions[adoptionId];
       if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
       if (record.phase === "committed") return record;
@@ -983,12 +1017,16 @@ export class WorkspaceIndex {
    * just a GC-driven one). Returns false if the slug is unknown. */
   forget(slug: string): Promise<boolean> {
     return this.mutex.runExclusive(async () => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const match = Object.values(index.workspaces).find((e) => e.slug === slug);
       if (!match) return false;
       delete index.workspaces[match.registration_id];
       index.updated_at = this.now().toISOString();
       this.persist(index);
+      // Deliberately AFTER persist, never before: eviction closes the bus's journal fd and drops
+      // its in-memory state, which is only safe once the removal is durable. A persist that throws
+      // rejects here with the registration still intact in memory and on disk (see
+      // `loadForMutation`), so this line is unreachable for a removal that did not actually happen.
       await this.onHardRemove(match.canonical_path);
       return true;
     });
@@ -1003,9 +1041,13 @@ export class WorkspaceIndex {
    *   - path missing, already `present:false` -> hard-remove only if there is no live session
    *     AND it's been absent for at least `gcGraceMs`. Conservative: a live session blocks
    *     removal indefinitely, no matter how long the path itself has been gone.
-   * Every hard-removed path fires `onHardRemove` (awaited before this call resolves) — the
-   * index write is already durable by the time it fires, so an eviction failure never leaves the
-   * on-disk index and the in-memory bus registry disagreeing about whether the workspace exists.
+   * Every hard-removed path fires `onHardRemove` (awaited before this call resolves), strictly
+   * AFTER the index write. That order is the correct one in both directions: the removal is
+   * durable before any bus is torn down, so an eviction failure leaves only the bus registry
+   * lagging (a leaked fd, recoverable) rather than the index claiming a workspace exists whose
+   * state was already destroyed; and a `persist()` that throws rejects before this loop runs, with
+   * every entry still intact in memory and on disk (see `loadForMutation`), so a workspace is
+   * never evicted on the strength of a removal that did not happen.
    *
    * Safety when NOBODY has wired a live-session predicate yet (`liveSessionPredicateWired` is
    * still false — neither the constructor nor `setLiveSessionPredicate` ever supplied one): GC
@@ -1021,7 +1063,7 @@ export class WorkspaceIndex {
       }
       this.lastGcAt = now.getTime();
 
-      const index = this.load();
+      const index = this.loadForMutation();
       const softened: string[] = [];
       const removed: string[] = [];
       let changed = false;

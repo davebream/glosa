@@ -9,6 +9,7 @@ import {
   realpathSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
@@ -888,5 +889,156 @@ describe("WorkspaceIndex — enclosing-repo resolution (issue #96)", () => {
 
     cleanup(home);
     cleanup(outer);
+  });
+});
+
+// A5 §F19 makes this file's on-disk bytes the durable truth and the daemon its sole writer, so a
+// `persist()` that failed must be indistinguishable from one that never ran — otherwise a caller
+// told "500, nothing happened" is lied to, and the next successful write silently commits the
+// mutation it was told had failed. `openSync`/`write`/`fsyncSync`/`renameSync` all really do throw
+// (ENOSPC, EROFS, EMFILE, a read-only `~/.glosa`); the injected `write` stands in for all of them
+// because it is the one step in the sequence a test can fail on demand.
+describe("WorkspaceIndex — a failed persist changes nothing", () => {
+  const enospc = (): never => {
+    const err: NodeJS.ErrnoException = new Error("ENOSPC: no space left on device, write");
+    err.code = "ENOSPC";
+    throw err;
+  };
+
+  /** `write` that fails only while `state.fail` is set, so a test can build its fixture normally
+   * and then break exactly one persist. */
+  function faultyWrite(state: { fail: boolean }) {
+    return (fd: number, buf: Buffer, offset: number, length: number): number =>
+      state.fail ? enospc() : writeSync(fd, buf, offset, length);
+  }
+
+  test("a forget() whose persist throws leaves the workspace readable in memory and on disk", async () => {
+    const home = freshHome();
+    const fault = { fail: false };
+    const evicted: string[] = [];
+    const index = new WorkspaceIndex({
+      home,
+      now: deterministicClock(),
+      onHardRemove: (path) => {
+        evicted.push(path);
+      },
+      write: faultyWrite(fault),
+    });
+    const entry = await index.upsertWorkspace("/ws/keep-me", "session");
+
+    fault.fail = true;
+    await expect(index.forget(entry.slug)).rejects.toThrow(/ENOSPC/);
+    fault.fail = false;
+
+    // The HTTP caller got a 500 and believes nothing happened — every reader must agree.
+    expect(index.getBySlug(entry.slug)).not.toBeNull();
+    expect(index.get("/ws/keep-me")).not.toBeNull();
+    expect(index.list()).toHaveLength(1);
+    expect(Object.keys(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).workspaces)).toHaveLength(1);
+    // Eviction must stay behind the durable write: tearing down the bus for a workspace that is
+    // still registered would destroy live journal/lease state nothing asked to remove.
+    expect(evicted).toEqual([]);
+    cleanup(home);
+  });
+
+  test("a later successful mutation never commits a deletion whose persist failed", async () => {
+    const home = freshHome();
+    const fault = { fail: false };
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), write: faultyWrite(fault) });
+    const doomed = await index.upsertWorkspace("/ws/doomed", "session");
+
+    fault.fail = true;
+    await expect(index.forget(doomed.slug)).rejects.toThrow(/ENOSPC/);
+    fault.fail = false;
+
+    await index.upsertWorkspace("/ws/unrelated", "session"); // succeeds — must not carry the deletion
+
+    const onDisk = JSON.parse(readFileSync(workspaceIndexPath(home), "utf8"));
+    expect(Object.keys(onDisk.workspaces)).toHaveLength(2);
+    expect(onDisk.workspaces[doomed.registration_id]).toBeDefined();
+    expect(index.getBySlug(doomed.slug)).not.toBeNull();
+    cleanup(home);
+  });
+
+  test("a GC hard-remove whose persist throws keeps the entry and never fires onHardRemove", async () => {
+    const home = freshHome();
+    const clock = manualClock();
+    const fault = { fail: false };
+    const evicted: string[] = [];
+    let onDisk = true;
+    const index = new WorkspaceIndex({
+      home,
+      now: clock,
+      gcGraceMs: 1_000,
+      gcThrottleMs: 0,
+      hasLiveSession: () => false,
+      pathExists: () => onDisk,
+      onHardRemove: (path) => {
+        evicted.push(path);
+      },
+      write: faultyWrite(fault),
+    });
+    await index.upsertWorkspace("/ws/gone", "session");
+
+    onDisk = false;
+    await index.gc({ force: true }); // softens to present:false, starts the grace clock
+    clock.advance(5_000);
+
+    fault.fail = true;
+    await expect(index.gc({ force: true })).rejects.toThrow(/ENOSPC/);
+    fault.fail = false;
+
+    expect(index.get("/ws/gone")).not.toBeNull();
+    expect(index.list()).toHaveLength(1);
+    expect(Object.keys(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).workspaces)).toHaveLength(1);
+    // The bus must not be evicted while the registration is still live — memory, disk, and the
+    // bus registry all still say the workspace exists.
+    expect(evicted).toEqual([]);
+    cleanup(home);
+  });
+
+  test("an adoption phase transition whose persist throws leaves the resumable phase unchanged", async () => {
+    const home = freshHome();
+    const root = realpathSync(freshWorkspaceDir());
+    writeFileSync(join(root, "notes.md"), "first\n");
+    const fault = { fail: false };
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), write: faultyWrite(fault) });
+
+    const loose = await index.resolveOpenTarget(join(root, "notes.md"));
+    mkdirSync(loose.entry.bus_path, { recursive: true }); // a durable source bus is what makes it adoptable
+    const directory = await index.resolveOpenTarget(root);
+    const record = await index.beginAdoption(directory.entry);
+    expect(record?.phase).toBe("planned");
+    const adoptionId = record?.adoption_id ?? "";
+
+    fault.fail = true;
+    await expect(index.markAdoptionSourcesSealed(adoptionId)).rejects.toThrow(/ENOSPC/);
+    fault.fail = false;
+
+    // A crash-resumable phase machine that advanced only in memory resumes from the wrong phase.
+    expect(index.getAdoption(adoptionId)?.phase).toBe("planned");
+    expect(index.pendingAdoptions().map((r) => r.phase)).toEqual(["planned"]);
+    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).adoptions[adoptionId].phase).toBe("planned");
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("a short write can never truncate the index (A4 §F04 — writeSync may write fewer bytes)", async () => {
+    const home = freshHome();
+    let short = false;
+    const index = new WorkspaceIndex({
+      home,
+      now: deterministicClock(),
+      write: (fd, buf, offset, length) => writeSync(fd, buf, offset, short ? Math.min(length, 8) : length),
+    });
+    await index.upsertWorkspace("/ws/a", "session");
+
+    short = true;
+    await index.upsertWorkspace("/ws/b", "session");
+
+    const raw = readFileSync(workspaceIndexPath(home), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(Object.keys(JSON.parse(raw).workspaces)).toHaveLength(2);
+    cleanup(home);
   });
 });
