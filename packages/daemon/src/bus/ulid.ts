@@ -31,7 +31,14 @@ export function createUlidGenerator(deps: UlidDeps = {}): UlidGenerator {
   let lastRandomDigits: number[] | null = null;
 
   return function ulid(): string {
-    const time = now();
+    // Clamp to a high-water mark rather than trusting the clock. `Date.now()` can go BACKWARDS — an
+    // NTP step, a manual clock change, a VM resuming from a snapshot — and an id minted from a
+    // rewound clock would sort before ids already in the journal, breaking the one property this
+    // whole module exists to provide. The ULID spec's monotonic factory clamps for the same reason.
+    // A regressed clock then looks exactly like a same-millisecond call, so it falls through to the
+    // increment-with-carry path below and stays strictly increasing; assigning `lastTime = time`
+    // (the clamped value, not `now()`) is what keeps the mark from retreating on the NEXT call.
+    const time = Math.max(now(), lastTime);
     const randomDigits =
       time === lastTime && lastRandomDigits !== null
         ? incrementDigits(lastRandomDigits)
