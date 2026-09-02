@@ -57,3 +57,81 @@ describe("KeyedMutex", () => {
     expect(bSawAHeld).toBe(true); // a different key ran while "a" was still busy
   });
 });
+
+// A4 "Loose-file adoption — seal and link" requires the daemon to hold "every source registration
+// mutex in stable lexical order". `runExclusiveMany` acquires by nesting `runExclusive`, i.e.
+// hold-and-wait, so that stable order is the ONLY thing keeping it deadlock-free — and it holds
+// only if the sort is a total order over the key set. These fixtures are the counterexample to
+// `localeCompare`: ICU collates canonically-equivalent strings as equal, `Array.prototype.sort` is
+// stable, so tied keys keep *insertion* order, which differs between callers. This is not a
+// contrived pair — A4 F20 notes "APFS returns NFD", and `workspaceRegistrationId` embeds the raw
+// path as `directory:<path>`, so two adoptions naming the same accented directory really can
+// arrive with one NFC key and one NFD key.
+const NFC_KEY = "directory:/tmp/glosa-café"; // "café" with precomposed U+00E9
+const NFD_KEY = "directory:/tmp/glosa-café"; // "café" as "e" + U+0301 COMBINING ACUTE ACCENT
+
+describe("KeyedMutex.runExclusiveMany", () => {
+  test("the NFC/NFD fixture keys tie under ICU collation but are ordered under byte comparison", () => {
+    expect(NFC_KEY).not.toBe(NFD_KEY);
+    // Ties in BOTH directions — this is what makes the comparator non-total, not merely asymmetric.
+    expect(NFC_KEY.localeCompare(NFD_KEY)).toBe(0);
+    expect(NFD_KEY.localeCompare(NFC_KEY)).toBe(0);
+    // A byte-exact comparator separates them deterministically ("e" U+0065 sorts before U+00E9).
+    expect(NFD_KEY < NFC_KEY).toBe(true);
+  });
+
+  test("two callers acquiring canonically-equivalent keys in opposite order both complete", async () => {
+    const mutex = new KeyedMutex<string>();
+    const completed: string[] = [];
+
+    // Both calls are issued synchronously and `runExclusive` claims its key's queue slot
+    // synchronously, so caller "a" owns whichever key sorts first for it and caller "b" owns
+    // whichever key sorts first for it before either body runs. If the sort preserved insertion
+    // order for the tied pair, those are two DIFFERENT keys and each caller then waits on the key
+    // the other already holds — a permanent wedge, since AsyncMutex has no timeout.
+    const a = mutex.runExclusiveMany([NFC_KEY, NFD_KEY], () => {
+      completed.push("a");
+    });
+    const b = mutex.runExclusiveMany([NFD_KEY, NFC_KEY], () => {
+      completed.push("b");
+    });
+
+    // Race against a bounded timer: a deadlock must surface as a FAILING assertion, never as a
+    // suite that hangs forever.
+    const outcome = await Promise.race([
+      Promise.all([a, b]).then(() => "both-completed" as const),
+      Bun.sleep(250).then(() => "deadlocked" as const),
+    ]);
+
+    expect(outcome).toBe("both-completed");
+    expect(completed.toSorted()).toEqual(["a", "b"]);
+  });
+
+  test("rejects a key set the comparator cannot order, instead of deadlocking on it", async () => {
+    const mutex = new KeyedMutex<unknown>();
+    // `1` and `"1"` both survive `new Set` dedup (SameValueZero says they differ) and so get
+    // SEPARATE mutex slots, yet `String()` renders both as "1". The byte-exact comparator ties
+    // them, the stable sort falls back to insertion order, and two callers passing them in
+    // opposite orders would wedge exactly as the NFC/NFD pair used to. No workspace caller can
+    // reach this — `workspaceRegistrationId` always returns a string — so it is a bug in the
+    // caller, and a loud rejection beats a silent permanent wedge.
+    const attempts = [
+      [1, "1"],
+      ["1", 1],
+    ].map((keys) =>
+      mutex
+        .runExclusiveMany(keys, () => "unreachable")
+        .then(
+          () => "resolved",
+          (error: unknown) => `rejected: ${String(error)}`,
+        ),
+    );
+    const [first, second] = await Promise.race([Promise.all(attempts), Bun.sleep(250).then(() => ["hung", "hung"])]);
+
+    expect(first).toMatch(/^rejected: .*indistinguishable keys/);
+    expect(second).toMatch(/^rejected: .*indistinguishable keys/);
+    // Rejection must happen before ANY key is acquired, so nothing is left locked behind it.
+    expect(await mutex.runExclusive(1, () => "released")).toBe("released");
+    expect(await mutex.runExclusive("1", () => "released")).toBe("released");
+  });
+});
