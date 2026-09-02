@@ -4,9 +4,11 @@
 // ("same root -> same instance, same shared mutex") rather than re-testing WorkspaceBus's
 // internal single-writer behavior, which concurrency.test.ts already covers.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { getWorkspaceBus, WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { journalPath } from "../../src/bus/paths.ts";
+import { WorkspaceIndex, type WorkspaceEntry } from "../../src/registry/workspace-index.ts";
+import { cleanup, freshHome, freshWorkspaceDir } from "../registry/helpers.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
 
 describe("WorkspaceBusRegistry", () => {
@@ -98,6 +100,80 @@ describe("WorkspaceBusRegistry", () => {
     await expect(busB.createEntry("after-close", {})).rejects.toThrow("closed");
     cleanupWorkspace(rootA);
     cleanupWorkspace(rootB);
+  });
+});
+
+// A registered directory reaches the registry in two shapes: the bare worktree string that
+// pre-`WorkspaceLocation` callers still pass, and the `WorkspaceLocation` the index persists.
+// A4's "in-process async mutex keyed by immutable registration ID" only serializes them together
+// if both shapes resolve to ONE registry key — otherwise the same `shadow.git` is behind two
+// buses, two `JournalWriter` fds, and two mutex slots.
+describe("WorkspaceBusRegistry — bare path and WorkspaceLocation are one workspace", () => {
+  async function registeredDirectory(): Promise<{ home: string; dir: string; entry: WorkspaceEntry }> {
+    const home = freshHome();
+    const dir = realpathSync(freshWorkspaceDir());
+    const index = new WorkspaceIndex({ home });
+    const entry = (await index.resolveOpenTarget(dir)).entry;
+    return { home, dir, entry };
+  }
+
+  test("get(worktree string) then get(location) returns the SAME instance", async () => {
+    const registry = new WorkspaceBusRegistry();
+    const { home, dir, entry } = await registeredDirectory();
+
+    const fromString = registry.get(entry.worktree_path);
+    const fromLocation = registry.get(entry);
+
+    expect(fromLocation).toBe(fromString);
+    await registry.closeAll();
+    cleanup(home);
+    cleanup(dir);
+  });
+
+  test("get(location) then get(worktree string) returns the SAME instance", async () => {
+    const registry = new WorkspaceBusRegistry();
+    const { home, dir, entry } = await registeredDirectory();
+
+    const fromLocation = registry.get(entry);
+    const fromString = registry.get(entry.worktree_path);
+
+    expect(fromString).toBe(fromLocation);
+    await registry.closeAll();
+    cleanup(home);
+    cleanup(dir);
+  });
+
+  test("has() answers for either shape, whichever one opened the bus", async () => {
+    const registry = new WorkspaceBusRegistry();
+    const { home, dir, entry } = await registeredDirectory();
+
+    registry.get(entry.worktree_path);
+
+    // `has()` carries no compensating fallback of its own, so it is the honest read of whether
+    // the two shapes really share one key — not of whether `get()` papers over a mismatch.
+    expect(registry.has(entry.worktree_path)).toBe(true);
+    expect(registry.has(entry)).toBe(true);
+
+    await registry.closeAll();
+    cleanup(home);
+    cleanup(dir);
+  });
+
+  test("evictRegistration(id) closes a bus that was opened under its bare worktree string", async () => {
+    const registry = new WorkspaceBusRegistry();
+    const { home, dir, entry } = await registeredDirectory();
+
+    const bus = registry.get(entry.worktree_path);
+    // `WorkspaceIndex`'s GC hands the registry a persisted sha256 registration id, never a path.
+    // If the string shape keyed the map differently, the GC'd workspace's journal fd and mutex
+    // slot would leak for the life of the daemon.
+    await registry.evictRegistration(entry.registration_id);
+
+    expect(registry.has(entry.worktree_path)).toBe(false);
+    await expect(bus.createEntry("after-evict", {})).rejects.toThrow("closed");
+    await registry.closeAll();
+    cleanup(home);
+    cleanup(dir);
   });
 });
 

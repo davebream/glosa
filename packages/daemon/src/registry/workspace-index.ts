@@ -7,7 +7,7 @@
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
 // never observe (or assign) a torn/duplicate slug.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   accessSync,
   closeSync,
@@ -29,7 +29,16 @@ import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, pendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../home.ts";
 import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
-import type { WorkspaceKind, WorkspaceLocation, WorkspaceTracking } from "../workspace.ts";
+// Aliased so every call site below reads unchanged: this file is the reference caller of the
+// registration-id derivation, but it no longer OWNS it. `workspace.ts` holds the single copy so
+// the bare-string target form (`workspaceRegistrationId`) cannot drift away from the sha256 that
+// reaches `~/.glosa/workspaces.json` — A4 keys the per-workspace mutex on that id.
+import {
+  registrationIdFor as registrationId,
+  type WorkspaceKind,
+  type WorkspaceLocation,
+  type WorkspaceTracking,
+} from "../workspace.ts";
 import { assignSlug, type SlugDeps } from "./slug.ts";
 import { enclosingGitRoot } from "./workspace-root.ts";
 
@@ -222,10 +231,6 @@ function isLegacyWorkspaceIndexShape(v: unknown): v is LegacyWorkspaceIndexFile 
     f.workspaces !== null &&
     Object.values(f.workspaces as Record<string, unknown>).every(isLegacyWorkspaceEntryShape)
   );
-}
-
-function registrationId(kind: WorkspaceKind, canonicalPath: string): string {
-  return createHash("sha256").update(`${kind}\0${canonicalPath}`).digest("hex");
 }
 
 function redirectedBusPath(home: string, id: string): string {

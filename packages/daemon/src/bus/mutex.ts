@@ -48,12 +48,16 @@ export class KeyedMutex<K> {
    *
    * `localeCompare` is NOT one: ICU collates distinct-but-canonically-equivalent strings (NFC vs
    * NFD, among others) as equal, and `Array.prototype.sort` is stable, so tied keys fall back to
-   * *insertion* order — which differs per caller. A4 F20 records that "APFS returns NFD", and
-   * `workspaceRegistrationId` embeds a raw path as `directory:<path>`, so two adoptions over the
-   * same accented directory really can present one NFC key and one NFD key, acquire `{A,B}` and
-   * `{B,A}`, and wedge those workspaces for the life of the daemon — `AsyncMutex` has no timeout
-   * and no deadlock detection. Compare byte-exact instead: `<`/`>` on strings is a total order,
-   * tie-free for every pair of distinct strings. */
+   * *insertion* order — which differs per caller. Two callers can then acquire `{A,B}` and
+   * `{B,A}` and wedge those keys for the life of the daemon, since `AsyncMutex` has no timeout and
+   * no deadlock detection. Compare byte-exact instead: `<`/`>` on strings is a total order,
+   * tie-free for every pair of distinct strings.
+   *
+   * `KeyedMutex` is generic, so this cannot lean on what its callers happen to pass. The workspace
+   * caller no longer reaches the hazard — `workspaceRegistrationId` returns a sha256 hex digest,
+   * and pure ASCII has no canonically-equivalent-but-distinct pairs — but it used to, when that id
+   * embedded a raw path: A4 F20 records that "APFS returns NFD", so two adoptions naming the same
+   * accented directory really did present one NFC key and one NFD key. */
   runExclusiveMany<T>(keys: readonly K[], fn: () => T | Promise<T>): Promise<T> {
     const sorted = [...new Set(keys)].sort((a, b) => {
       const left = String(a);

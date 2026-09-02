@@ -63,10 +63,12 @@ describe("KeyedMutex", () => {
 // hold-and-wait, so that stable order is the ONLY thing keeping it deadlock-free — and it holds
 // only if the sort is a total order over the key set. These fixtures are the counterexample to
 // `localeCompare`: ICU collates canonically-equivalent strings as equal, `Array.prototype.sort` is
-// stable, so tied keys keep *insertion* order, which differs between callers. This is not a
-// contrived pair — A4 F20 notes "APFS returns NFD", and `workspaceRegistrationId` embeds the raw
-// path as `directory:<path>`, so two adoptions naming the same accented directory really can
-// arrive with one NFC key and one NFD key.
+// stable, so tied keys keep *insertion* order, which differs between callers. This was not a
+// contrived pair: A4 F20 notes "APFS returns NFD", and `workspaceRegistrationId` used to embed the
+// raw path as `directory:<path>`, so two adoptions naming the same accented directory really did
+// arrive with one NFC key and one NFD key. That id is now a sha256 hex digest, which puts the
+// workspace caller out of reach of the hazard — but `KeyedMutex` is generic over its key type, so
+// its total-order guarantee has to hold for any string a caller passes, not just today's.
 const NFC_KEY = "directory:/tmp/glosa-café"; // "café" with precomposed U+00E9
 const NFD_KEY = "directory:/tmp/glosa-café"; // "café" as "e" + U+0301 COMBINING ACUTE ACCENT
 

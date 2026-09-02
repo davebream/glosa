@@ -26,24 +26,14 @@ export class WorkspaceBusRegistry {
    * reconfigure and reconfiguring a live one out from under existing callers would be worse than
    * ignoring the request. */
   get(canonicalRoot: WorkspaceTarget, deps: Omit<WorkspaceBusDeps, "mutex"> = {}): WorkspaceBus {
+    // ONE lookup, no shape-bridging fallbacks: `workspaceRegistrationId` now hashes a bare
+    // directory string into the SAME sha256 the index persists for that directory, so both shapes
+    // of one workspace land on this key. The two remap/reverse-scan fallbacks that used to sit
+    // here only ever repaired `get()`; `has()` and `evictRegistration()` had no equivalent and
+    // silently answered for the wrong key, and any `new WorkspaceBus(...)` built outside this
+    // registry got a second mutex slot regardless (A4 F21 allows ONE git mutex per workspace).
     const id = workspaceRegistrationId(canonicalRoot);
     let bus = this.buses.get(id);
-    if (!bus && typeof canonicalRoot !== "string" && canonicalRoot.kind === "directory") {
-      const legacyId = workspaceRegistrationId(canonicalRoot.worktree_path);
-      bus = this.buses.get(legacyId);
-      if (bus) {
-        this.buses.delete(legacyId);
-        this.buses.set(id, bus);
-      }
-    }
-    if (!bus && typeof canonicalRoot === "string") {
-      bus = [...this.buses.values()].find(
-        (candidate) =>
-          typeof candidate.workspace !== "string" &&
-          candidate.workspace.kind === "directory" &&
-          candidate.workspace.worktree_path === canonicalRoot,
-      );
-    }
     if (!bus) {
       bus = new WorkspaceBus(canonicalRoot, { ...deps, mutex: this.mutex });
       this.buses.set(id, bus);
