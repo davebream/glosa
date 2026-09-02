@@ -347,6 +347,164 @@ describe("checkpoint — empty union never self-stages the shadow repo", () => {
   });
 });
 
+describe("checkpoint — a stale index never leaks into a later checkpoint's attribution (A4 §F05/§F21)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    cleanupWorkspace(root);
+  });
+
+  /** Leaves the shadow index holding staged content that no checkpoint ever committed, using a
+   * real reachable failure: `commit()`'s trailer-injection guard fires AFTER `checkpoint()` has
+   * already run `git add -A -- <union>`. A SIGKILL between the two calls, or an ENOSPC inside
+   * `runGit`, reach the identical state — and nothing in the daemon ever cleans it
+   * (`reclaimIndexLock` removes `index.lock`, not staged content), so it also survives a restart. */
+  async function stageThenFail(target: string): Promise<void> {
+    let caught: unknown;
+    try {
+      await checkpoint(root, {
+        attribution: "unknown",
+        kind: "auto_checkpoint",
+        entry: "e-boom\nGlosa-Attribution: human",
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("TRAILER_INJECTION");
+    const staged = (await runGit(root, ["diff", "--cached", "--name-only"])).stdout
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(staged).toContain(target); // the index really is dirty with content nobody proved
+  }
+
+  test("watcher drift left staged by a failed checkpoint is never committed as `human` by the next path-scoped checkpoint", async () => {
+    writeFile(root, "drift-x.md", "x v1");
+    writeFile(root, "drift-y.md", "y v1");
+    writeFile(root, "human.md", "h v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    const baseline = await headSha(root);
+
+    // Autonomous watcher drift — nothing proves who wrote either of these (A4 §F05).
+    writeFile(root, "drift-x.md", "x v2");
+    writeFile(root, "drift-y.md", "y v2");
+    await stageThenFail("drift-x.md");
+    expect(await headSha(root)).toBe(baseline); // the failed checkpoint committed nothing
+
+    // Now the reviewer saves human.md in the glosa editor: captureHumanEdit's path-scoped
+    // checkpoint, whose `paths` exists precisely to keep unrelated drift out of a `human` commit.
+    writeFile(root, "human.md", "h v2");
+    const sha = await checkpoint(root, {
+      attribution: "human",
+      kind: "human_edit",
+      entry: "e1",
+      paths: ["human.md"],
+    });
+
+    expect(sha).not.toBe(baseline);
+    const committed = (await runGit(root, ["diff", "--name-only", baseline, sha])).stdout
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(committed).toEqual(["human.md"]); // NOT drift-x.md / drift-y.md
+    expect((await runGit(root, ["show", `${sha}:drift-x.md`])).stdout).toBe("x v1");
+    expect((await runGit(root, ["show", `${sha}:drift-y.md`])).stdout).toBe("y v1");
+  });
+
+  test("a scratch file staged by a failed checkpoint and then deleted is never committed by the next unscoped checkpoint", async () => {
+    writeFile(root, "keep.md", "keep v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+
+    // A brand-new tracked file the failed checkpoint stages as an addition...
+    writeFile(root, "scratch.md", "never proven, never committed");
+    await stageThenFail("scratch.md");
+    // ...and which then leaves the disk again. It is now in NEITHER the current tracked list (gone)
+    // NOR HEAD's tree (never committed), so `trackedUnion` excludes it and no `git add -A --
+    // <union>` can ever correct its stale index entry. Only resetting the index to HEAD does.
+    rmSync(`${root}/scratch.md`);
+
+    writeFile(root, "keep.md", "keep v2");
+    const sha = await checkpoint(root, { attribution: "human", kind: "human_edit" });
+
+    const tree = (await runGit(root, ["ls-tree", "-r", "--name-only", sha])).stdout
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(tree).toEqual(["keep.md"]); // scratch.md never enters the committed history
+  });
+});
+
+describe("checkpoint — the commit records the INDEX, never a re-read of the work-tree (A4 §F05)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    cleanupWorkspace(root);
+  });
+
+  // Identity supplied via `-c` rather than the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env `commit()` uses:
+  // `runGit`'s default env deliberately strips the entire `GIT_*` namespace, and hand-rebuilding it
+  // here would risk letting the ambient `GIT_INDEX_FILE` back in — this repo's own pre-commit hook
+  // runs `bun test` with it set, which would silently point these commits at the main repo's index.
+  const IDENTITY = ["-c", "user.name=glosa", "-c", "user.email=glosa@localhost"];
+
+  /** Pins the git behavior `checkpoint`'s commit call depends on, in the same shadow repo and under
+   * the same config the daemon uses. It characterizes system git rather than glosa code — there is
+   * no seam inside `checkpoint` between its `git add` and its `git commit` to write bytes through,
+   * and inventing one just to observe this would be a worse trade than pinning the property here.
+   * The second half is the one that matters: it makes the `--only` trap executable, so a future
+   * "let's scope the commit with a pathspec" edit has a red test pointing at the reason not to. */
+  test("`git commit` with no pathspec commits the staged bytes, while `git commit -- <path>` re-reads the work-tree", async () => {
+    writeFile(root, "notes.md", "v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+
+    // Exactly the divergence `checkpoint` would face if anything wrote to disk between its
+    // `git add` and its `git commit`: the index holds v2, the work-tree has moved on to v3.
+    writeFile(root, "notes.md", "v2");
+    await runGit(root, ["add", "-A", "--", "notes.md"]);
+    writeFile(root, "notes.md", "v3");
+
+    // What `checkpoint` does. No pathspec -> the commit IS the index, so it records exactly the
+    // bytes `git diff --cached` probed and the never-staged, never-probed v3 stays out.
+    await runGit(root, [...IDENTITY, "commit", "-m", "indexed"]);
+    expect((await runGit(root, ["show", "HEAD:notes.md"])).stdout).toBe("v2");
+
+    // And why that call must never grow a `-- <path>` "to scope the commit": that is git's `--only`
+    // mode, which rebuilds the commit from the WORK-TREE. v5 lands having been neither staged nor
+    // probed. Under a `human`/`session:<id>` trailer that is forged provenance (A4 §F05) — the same
+    // defect the index reset closes, one commit smaller and far harder to see.
+    writeFile(root, "notes.md", "v4");
+    await runGit(root, ["add", "-A", "--", "notes.md"]);
+    writeFile(root, "notes.md", "v5");
+    await runGit(root, [...IDENTITY, "commit", "-m", "scoped", "--", "notes.md"]);
+    expect((await runGit(root, ["show", "HEAD:notes.md"])).stdout).toBe("v5"); // NOT v4
+  });
+
+  test("checkpoint leaves the index equal to the commit it just made — nothing carried into the next one", async () => {
+    writeFile(root, "notes.md", "v1");
+    writeFile(root, "other.md", "o1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+
+    writeFile(root, "notes.md", "v2");
+    const sha = await checkpoint(root, { attribution: "human", kind: "human_edit", paths: ["notes.md"] });
+    expect((await runGit(root, ["show", `${sha}:notes.md`])).stdout).toBe("v2");
+
+    // index == HEAD afterwards: the commit consumed the whole staged set, so no residue can be
+    // carried into a later checkpoint's trailers. A partial-commit form (`--only`, or `--include`)
+    // would leave staged leftovers here, which is the state A4 §F05 attribution cannot survive.
+    const leftover = await runGit(root, ["diff", "--cached", "--quiet"], { allowExitCodes: [0, 1] });
+    expect(leftover.exitCode).toBe(0);
+  });
+});
+
 describe("trackedUnion — a filename containing a literal newline never poisons the union", () => {
   let root: string;
   beforeEach(() => {
