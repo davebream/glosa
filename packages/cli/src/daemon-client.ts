@@ -68,6 +68,10 @@ export interface DaemonUnreachableError extends Error {
   code: "DAEMON_UNREACHABLE";
 }
 
+export interface HttpDaemonClientOptions {
+  ensureTimeoutMs?: number;
+}
+
 function unreachableError(reason: string): DaemonUnreachableError {
   const err = new Error(`glosa daemon unreachable: ${reason}`) as DaemonUnreachableError;
   err.code = "DAEMON_UNREACHABLE";
@@ -78,8 +82,8 @@ function unreachableError(reason: string): DaemonUnreachableError {
  * authed `fetch` against the `/api/sessions/...` surface (http.ts's P4.3 additions). Every call
  * sets `Origin` to the daemon's own self-origin — these are trusted local-process calls, not
  * browser requests, but the state-changing route class still requires it (A3 §4). */
-export async function createHttpDaemonClient(): Promise<DaemonHookClient> {
-  const conn = await ensureDaemon();
+export async function createHttpDaemonClient(options: HttpDaemonClientOptions = {}): Promise<DaemonHookClient> {
+  const conn = await ensureDaemon({ timeoutMs: options.ensureTimeoutMs });
   if (!conn.ok) {
     throw unreachableError(
       conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,

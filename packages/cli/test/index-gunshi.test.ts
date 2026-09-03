@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILD_ID } from "../../daemon/src/lifecycle/build-id.ts";
+import { randomPort } from "../../daemon/test/helpers.ts";
+import { createHttpDaemonClient } from "../src/daemon-client.ts";
 import { run } from "../src/index.ts";
 import { CLI_VERSION } from "../src/version.ts";
 import { useTempHome } from "./home.ts";
@@ -48,12 +50,15 @@ function freshDir(): string {
   return dir;
 }
 
-function runCli(args: readonly string[]): { exitCode: number; stdout: string; stderr: string } {
+function runCli(
+  args: readonly string[],
+  options: { stdin?: string; env?: Record<string, string | undefined> } = {},
+): { exitCode: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync({
     cmd: [process.execPath, CLI_PATH, ...args],
     cwd: process.cwd(),
-    env: Bun.env,
-    stdin: "ignore",
+    env: { ...Bun.env, ...options.env },
+    stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -258,6 +263,68 @@ describe("internal protocol compatibility", () => {
         stdout: "",
         stderr: `glosa: command not yet implemented: ${command}\n`,
       });
+    }
+  });
+
+  test("a hook yields silently when daemon discovery exceeds its private budget", () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    try {
+      const started = performance.now();
+      const result = runCli(["hook", "notification"], {
+        env: { GLOSA_PORT: String(port) },
+        stdin: JSON.stringify({ session_id: "hook-session", cwd: process.cwd() }),
+      });
+
+      expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+      expect(performance.now() - started).toBeLessThan(5000);
+    } finally {
+      squatter.stop();
+    }
+  }, 7000);
+
+  test("malformed hook input stays visible even when daemon discovery would fail", () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    try {
+      const result = runCli(["hook", "notification"], {
+        env: { GLOSA_PORT: String(port) },
+        stdin: "{}",
+      });
+
+      expect(result).toEqual({
+        exitCode: 2,
+        stdout: "",
+        stderr: "notification: hook input missing session_id/cwd",
+      });
+    } finally {
+      squatter.stop();
+    }
+  });
+
+  test("an explicit daemon client keeps the actionable discovery error", async () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    Bun.env.GLOSA_PORT = String(port);
+    try {
+      await expect(createHttpDaemonClient({ ensureTimeoutMs: 100 })).rejects.toMatchObject({
+        code: "DAEMON_UNREACHABLE",
+        message: expect.stringContaining("100ms wall-clock budget"),
+      });
+    } finally {
+      squatter.stop();
     }
   });
 });

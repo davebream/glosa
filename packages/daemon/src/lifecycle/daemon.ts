@@ -44,6 +44,10 @@ const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
 const RESTART_LOCK_WAIT_MS = 5000;
 const ENSURE_MAX_PASSES = 8;
+const DEFAULT_ENSURE_TIMEOUT_MS = 12_000;
+const LOCK_REPAIR_INTERVAL_MS = 250;
+const PORT_FREE_CONFIRMATIONS = 3;
+const PORT_FREE_CONFIRMATION_INTERVAL_MS = 100;
 export const SHUTDOWN_DRAIN_MS = 3000;
 
 interface DrainableServer {
@@ -255,6 +259,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // P1.2 had it. Class-F binds only once this process has already won the lock outright.
   await acquireLockOrExit(home, lockFile, record, server);
   mayRepairLock = true;
+  const lockRepairTimer = setInterval(repairLockOwnership, LOCK_REPAIR_INTERVAL_MS);
+  lockRepairTimer.unref();
   // This is the ONLY moment a glosa process may call itself the daemon: the O_EXCL CAS above has
   // just proven it owns `<GLOSA_HOME>/daemon.lock`. `git/shadow.ts#reclaimIndexLock` needs that
   // proof before it may unlink a stray `index.lock` (A4 §F21) — a process that never reaches this
@@ -297,6 +303,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     if (shuttingDown) return;
     shuttingDown = true;
     mayRepairLock = false;
+    clearInterval(lockRepairTimer);
     // Calling stop(false) synchronously closes the listeners to new work while allowing active
     // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
     // long-lived responses from holding the drain open forever.
@@ -456,6 +463,97 @@ export interface DaemonConnection {
 
 export type EnsureDaemonResult = ({ ok: true } & DaemonConnection) | { ok: false; reason: string; logPath?: string };
 
+export interface EnsureDaemonOptions {
+  timeoutMs?: number;
+}
+
+type PortFreeConfirmation = "free" | "bound" | "ownership-changed" | "deadline";
+
+interface PortFreeConfirmationOptions {
+  deadline: number;
+  ownershipUnchanged: () => boolean;
+  probe?: typeof probePortBound;
+  sleep?: (ms: number) => Promise<unknown>;
+  now?: () => number;
+}
+
+function remainingMs(deadline: number, now: () => number = () => performance.now()): number {
+  return Math.max(0, Math.ceil(deadline - now()));
+}
+
+function sameLockInstance(current: DaemonLock | null, expected: DaemonLock): boolean {
+  return (
+    current !== null &&
+    current.instance_id === expected.instance_id &&
+    current.pid === expected.pid &&
+    current.port === expected.port &&
+    current.protocol_version === expected.protocol_version &&
+    current.build_id === expected.build_id &&
+    current.started_at === expected.started_at &&
+    current.host === expected.host &&
+    current.bun === expected.bun
+  );
+}
+
+/**
+ * A single refused TCP connect is only a momentary observation. Require a short stable sequence
+ * before a client is allowed to remove an ownership record or spawn a contender. Any ambiguity is
+ * fail-closed, and ownership is re-read around every asynchronous step.
+ */
+export async function confirmPortFree(
+  port: number,
+  options: PortFreeConfirmationOptions,
+): Promise<PortFreeConfirmation> {
+  const probe = options.probe ?? probePortBound;
+  const sleep = options.sleep ?? Bun.sleep;
+  const now = options.now ?? (() => performance.now());
+
+  for (let attempt = 0; attempt < PORT_FREE_CONFIRMATIONS; attempt += 1) {
+    if (!options.ownershipUnchanged()) return "ownership-changed";
+    const remaining = remainingMs(options.deadline, now);
+    if (remaining <= 0) return "deadline";
+    if (await probe(port, Math.min(HANDSHAKE_TIMEOUT_MS, remaining))) return "bound";
+    if (!options.ownershipUnchanged()) return "ownership-changed";
+
+    if (attempt < PORT_FREE_CONFIRMATIONS - 1) {
+      const beforeSleep = remainingMs(options.deadline, now);
+      if (beforeSleep <= 0) return "deadline";
+      await sleep(Math.min(PORT_FREE_CONFIRMATION_INTERVAL_MS, beforeSleep));
+    }
+  }
+
+  return remainingMs(options.deadline, now) > 0 ? "free" : "deadline";
+}
+
+function deadlineFailure(home: string, timeoutMs: number): Extract<EnsureDaemonResult, { ok: false }> {
+  return spawnFailed(home, `daemon discovery exceeded its ${timeoutMs}ms wall-clock budget; ownership is unverified`);
+}
+
+function locklessHandshakeResult(
+  home: string,
+  lockFile: string,
+  port: number,
+  hs: HandshakeResponse,
+): Extract<EnsureDaemonResult, { ok: false }> | null {
+  const repaired = readLock(lockFile);
+  if (repaired && repaired.port === port && daemonPeerMismatchReason(repaired, hs) === null) return null;
+
+  const buildDecision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
+  const manualRecovery =
+    buildDecision.action === "restart"
+      ? `; this daemon build cannot self-repair — verify PID ${hs.pid} with ` +
+        `\`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, stop it with ` +
+        `\`kill -TERM ${hs.pid}\`, then retry`
+      : "";
+  return {
+    ok: false,
+    reason: `glosa daemon answered on port ${port} ${
+      existsSync(lockFile) ? "with an unusable lock" : "without a lock"
+    }; cannot safely establish ownership${manualRecovery}`,
+    logPath: logPath(home),
+  };
+}
+
 export type DaemonBuildDecision =
   | { action: "use" }
   | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
@@ -513,12 +611,12 @@ function toConnection(port: number, hs: HandshakeResponse): DaemonConnection {
   };
 }
 
-async function waitForLockOwnershipChange(lockFile: string, instanceId: string): Promise<boolean> {
-  const deadline = Date.now() + RESTART_LOCK_WAIT_MS;
-  while (Date.now() < deadline) {
+async function waitForLockOwnershipChange(lockFile: string, instanceId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     const current = readLock(lockFile);
     if (!current || current.instance_id !== instanceId) return true;
-    await Bun.sleep(50);
+    await Bun.sleep(Math.min(50, remainingMs(deadline)));
   }
   return false;
 }
@@ -538,13 +636,20 @@ function malformedLockBuildIdentity(lockFile: string): string | null {
   }
 }
 
-export async function ensureDaemon(): Promise<EnsureDaemonResult> {
+export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<EnsureDaemonResult> {
   const home = ensureHomeDir(glosaHome());
   const lockFile = lockPath(home);
   const seedPort = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_ENSURE_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return spawnFailed(home, `invalid daemon discovery timeout: ${String(timeoutMs)}`);
+  }
+  const deadline = performance.now() + timeoutMs;
   let preferredPort = seedPort;
+  let spawnAttempted = false;
 
   for (let pass = 0; pass < ENSURE_MAX_PASSES; pass += 1) {
+    if (remainingMs(deadline) <= 0) return deadlineFailure(home, timeoutMs);
     const lock = readLock(lockFile);
     const identityError = malformedLockBuildIdentity(lockFile);
     if (identityError) return { ok: false, reason: identityError, logPath: logPath(home) };
@@ -552,40 +657,61 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
       // A daemon can be alive briefly without a lock while a concurrent replacement is still
       // settling. Re-probing the seed port prevents every client from spawning a losing contender
       // into an already occupied port; ownership is unknowable, so this remains fail-closed.
-      const hs = await fetchHandshake(preferredPort, HANDSHAKE_TIMEOUT_MS);
+      const hs = await fetchHandshake(preferredPort, Math.min(HANDSHAKE_TIMEOUT_MS, remainingMs(deadline)));
       if (hs) {
         // A current daemon repairs a missing lock from inside its own handshake handler. Trust it
         // only after the newly visible daemon-written record agrees with that handshake; the next
         // pass then applies the ordinary build/protocol decision using lock.port as authority.
-        const repaired = readLock(lockFile);
-        if (repaired && repaired.port === preferredPort && daemonPeerMismatchReason(repaired, hs) === null) {
-          continue;
-        }
-
-        const buildDecision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
-        const manualRecovery =
-          buildDecision.action === "restart"
-            ? `; this daemon build cannot self-repair — verify PID ${hs.pid} with ` +
-              `\`lsof -nP -iTCP:${preferredPort} -sTCP:LISTEN\`, stop it with ` +
-              `\`kill -TERM ${hs.pid}\`, then retry`
-            : "";
-        return {
-          ok: false,
-          reason: `glosa daemon answered on port ${preferredPort} ${
-            existsSync(lockFile) ? "with an unusable lock" : "without a lock"
-          }; cannot safely establish ownership${manualRecovery}`,
-          logPath: logPath(home),
-        };
+        const failure = locklessHandshakeResult(home, lockFile, preferredPort, hs);
+        if (!failure) continue;
+        return failure;
       }
 
-      const spawnFailure = await spawnAndWait(home, preferredPort);
+      // The daemon-owned watchdog may have repaired the record even when the response that
+      // triggered or overlapped that repair missed the one-second fetch budget.
+      if (existsSync(lockFile)) continue;
+
+      const portState = await confirmPortFree(preferredPort, {
+        deadline,
+        ownershipUnchanged: () => !existsSync(lockFile),
+      });
+      if (portState === "ownership-changed") continue;
+      if (portState === "deadline") return deadlineFailure(home, timeoutMs);
+      if (portState === "bound") {
+        const pollBudget = Math.min(HANDSHAKE_POLL_MS, remainingMs(deadline));
+        const peer =
+          pollBudget > 0 ? await pollHandshake(preferredPort, pollBudget, 100, () => existsSync(lockFile)) : null;
+        if (existsSync(lockFile)) continue;
+        if (peer) {
+          const failure = locklessHandshakeResult(home, lockFile, preferredPort, peer);
+          if (!failure) continue;
+          return failure;
+        }
+        if (remainingMs(deadline) <= 0) return deadlineFailure(home, timeoutMs);
+        return spawnFailed(
+          home,
+          `a process is bound to port ${preferredPort} but is not answering the glosa handshake; ` +
+            "ownership cannot be established safely, so no daemon was spawned",
+        );
+      }
+
+      // Re-read immediately before spawning: a watchdog or concurrent daemon may have repaired or
+      // created the lock after the last refused connection.
+      if (existsSync(lockFile)) continue;
+      if (spawnAttempted) {
+        return spawnFailed(home, "daemon ownership was not established after the single permitted spawn attempt");
+      }
+      spawnAttempted = true;
+      const spawnFailure = await spawnAndWait(home, preferredPort, deadline, timeoutMs);
       if (spawnFailure) return spawnFailure;
       continue;
     }
 
     preferredPort = lock.port;
-    if (isPidAlive(lock.pid)) {
-      const hs = await pollHandshake(lock.port, HANDSHAKE_POLL_MS);
+    const pidAlive = isPidAlive(lock.pid);
+    if (pidAlive) {
+      const pollBudget = Math.min(HANDSHAKE_POLL_MS, remainingMs(deadline));
+      const hs = pollBudget > 0 ? await pollHandshake(lock.port, pollBudget) : null;
       if (hs) {
         const mismatch = daemonPeerMismatchReason(lock, hs);
         if (mismatch) {
@@ -609,10 +735,13 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
             return { ok: false, reason: `could not stop stale glosa daemon: ${(err as Error).message}` };
           }
         }
-        if (!(await waitForLockOwnershipChange(lockFile, lock.instance_id))) {
+        const restartBudget = Math.min(RESTART_LOCK_WAIT_MS, remainingMs(deadline));
+        if (restartBudget <= 0) return deadlineFailure(home, timeoutMs);
+        if (!(await waitForLockOwnershipChange(lockFile, lock.instance_id, restartBudget))) {
+          if (remainingMs(deadline) <= 0) return deadlineFailure(home, timeoutMs);
           return {
             ok: false,
-            reason: `stale glosa daemon did not release its lock within ${RESTART_LOCK_WAIT_MS}ms`,
+            reason: `stale glosa daemon did not release its lock within ${restartBudget}ms`,
             logPath: logPath(home),
           };
         }
@@ -621,8 +750,14 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
 
       // Alive pid, no valid handshake within the ≤5s budget: a hung glosa daemon and a foreign
       // squatter on lock.port are indistinguishable from here. Only reclaim when the port is
-      // provably free, otherwise spawning could violate the singleton invariant.
-      if (await probePortBound(lock.port, HANDSHAKE_TIMEOUT_MS)) {
+      // stably free and the exact ownership record remains unchanged.
+      const portState = await confirmPortFree(lock.port, {
+        deadline,
+        ownershipUnchanged: () => sameLockInstance(readLock(lockFile), lock),
+      });
+      if (portState === "ownership-changed") continue;
+      if (portState === "deadline") return deadlineFailure(home, timeoutMs);
+      if (portState === "bound") {
         log(home, `lock pid ${lock.pid} alive, port ${lock.port} bound but not answering the glosa handshake`);
         return {
           ok: false,
@@ -633,8 +768,27 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
         };
       }
       log(home, `lock pid ${lock.pid} alive but port ${lock.port} is free — treating lock as stale`);
+    } else {
+      // A dead PID does not prove the recorded port is free: the PID may have exited while a
+      // replacement is binding, or another process may now own the port. Use the same stable,
+      // ownership-checked evidence required for the alive-but-unresponsive path.
+      const portState = await confirmPortFree(lock.port, {
+        deadline,
+        ownershipUnchanged: () => sameLockInstance(readLock(lockFile), lock),
+      });
+      if (portState === "ownership-changed") continue;
+      if (portState === "deadline") return deadlineFailure(home, timeoutMs);
+      if (portState === "bound") {
+        return spawnFailed(
+          home,
+          `daemon lock PID ${lock.pid} is not alive, but port ${lock.port} is bound; ` +
+            "ownership cannot be established safely, so the lock was retained and no daemon was spawned",
+        );
+      }
+      log(home, `lock pid ${lock.pid} is not alive and port ${lock.port} is stably free — treating lock as stale`);
     }
 
+    if (!sameLockInstance(readLock(lockFile), lock)) continue;
     removeLockIfOwned(lockFile, lock.instance_id);
   }
 
@@ -671,7 +825,12 @@ function spawnFailed(home: string, reason: string): Extract<EnsureDaemonResult, 
   };
 }
 
-async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
+async function spawnAndWait(
+  home: string,
+  port: number,
+  deadline: number,
+  timeoutMs: number,
+): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
   const mainPath = fileURLToPath(new URL("../../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
   const env = buildChildEnv(Bun.env, { home, port });
@@ -684,17 +843,22 @@ async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureD
   child.unref();
   closeSync(logFd); // child holds its own dup'd copy; safe to release ours
 
-  const hs = await pollHandshake(port, HANDSHAKE_POLL_MS, 100, () => child.exitCode !== null);
+  const pollBudget = Math.min(HANDSHAKE_POLL_MS, remainingMs(deadline));
+  if (pollBudget <= 0) return deadlineFailure(home, timeoutMs);
+  const hs = await pollHandshake(port, pollBudget, 100, () => child.exitCode !== null);
   if (hs) return null;
 
   // Child already gone: a peer may have won the bind race (exit 0), or this spawn lost to a
   // foreign squatter / crashed before serving. Do not burn the rest of the 5s poll budget.
   if (child.exitCode === 0) {
-    const peer = await fetchHandshake(port, HANDSHAKE_TIMEOUT_MS);
+    const peerBudget = Math.min(HANDSHAKE_TIMEOUT_MS, remainingMs(deadline));
+    const peer = peerBudget > 0 ? await fetchHandshake(port, peerBudget) : null;
     if (peer) return null;
   }
   if (child.exitCode !== null) {
-    if (await probePortBound(port, HANDSHAKE_TIMEOUT_MS)) {
+    const probeBudget = Math.min(HANDSHAKE_TIMEOUT_MS, remainingMs(deadline));
+    if (probeBudget <= 0) return deadlineFailure(home, timeoutMs);
+    if (await probePortBound(port, probeBudget)) {
       return spawnFailed(
         home,
         `a process is bound to port ${port} but is not answering the glosa handshake; the daemon could not bind`,
@@ -703,5 +867,6 @@ async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureD
     return spawnFailed(home, `daemon exited before becoming ready (exit ${child.exitCode})`);
   }
 
-  return spawnFailed(home, `daemon did not become ready within ${HANDSHAKE_POLL_MS}ms`);
+  if (remainingMs(deadline) <= 0) return deadlineFailure(home, timeoutMs);
+  return spawnFailed(home, `daemon did not become ready within ${pollBudget}ms`);
 }
