@@ -609,19 +609,83 @@ function removePointer(root: unknown, pointer: string): void {
   else if (parent !== null && typeof parent === "object") delete (parent as Record<string, unknown>)[last];
 }
 
-function pruneEmpty(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return false;
-  if (Array.isArray(value)) {
-    for (let index = value.length - 1; index >= 0; index--) {
-      if (pruneEmpty(value[index])) value.splice(index, 1);
+/** One node of the ancestor trie built from the pointers a single uninstall actually removed. */
+interface AncestorTrie {
+  children: Map<string, AncestorTrie>;
+}
+
+/** The ancestor paths of `pointers`, as a trie. The removed node's own last segment is dropped:
+ * it is already gone from the document, and only its PARENTS are prune candidates. */
+function ancestorTrie(pointers: string[]): AncestorTrie {
+  const root: AncestorTrie = { children: new Map() };
+  for (const pointer of pointers) {
+    const parts = pointer.split("/").filter(Boolean);
+    parts.pop();
+    let node = root;
+    for (const part of parts) {
+      let next = node.children.get(part);
+      if (next === undefined) {
+        next = { children: new Map() };
+        node.children.set(part, next);
+      }
+      node = next;
     }
-    return value.length === 0;
   }
-  const record = value as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (pruneEmpty(record[key])) delete record[key];
+  return root;
+}
+
+function isScalar(value: unknown): boolean {
+  return value === null || typeof value !== "object";
+}
+
+/** A6 §F26 uninstall: "match→remove + **prune empty parents**" — parents, not the document.
+ *
+ * WHY this is pointer-scoped rather than a generic "delete anything that recursively empties"
+ * walk: the generic form visited every key in the file, so any foreign key whose value happened
+ * to be an empty container was deleted along with glosa's own — a user's `permissions: {}` or
+ * `env: {}` in `.claude/settings.json` disappeared on uninstall. That breaks the same clause's
+ * "foreign non-glosa siblings untouched" rule, and it is data loss, not untidiness. Ownership in
+ * v2 is pointer-based (`inserted:[{pointer, sha256}]`), so the pointers are exactly the authority
+ * for which parents glosa is entitled to reconsider — nothing else in the document is even read.
+ * That generalises to any provider shape (Codex's `.codex/hooks.json` today) without the core
+ * learning a schema, which re-hardcoding v1's `hooks`/`mcpServers` key names would not.
+ *
+ * Residue rules, applied bottom-up so a child is settled before its parent is judged:
+ *  - an array is residue when it is empty;
+ *  - an object reached BY NAME is residue only when it has no keys left — its scalars are the
+ *    user's own settings and must survive (this is what protects `permissions`/`env`);
+ *  - an object that is an ELEMENT OF AN ARRAY is residue when everything left in it is a scalar.
+ *    Such an object has no name of its own; it exists only to hold the entries beneath it, and
+ *    its scalars select which entries those were. That is the Claude Code hook group
+ *    `{matcher, hooks:[…]}`: once glosa's hooks are gone and the group is empty, the matcher
+ *    describes an empty set, so the group is glosa's own scaffolding to remove — while a group
+ *    still holding a foreign hook keeps a non-empty `hooks` array and is therefore never touched.
+ *
+ * A non-empty container anywhere blocks its parent, and so does an EMPTY container that is not
+ * itself on a removed pointer's path — unlike v1's prune, which dropped a hook group purely
+ * because its `hooks` array had emptied, whatever else the group carried.
+ *
+ * The one deliberate exception to "never touch what glosa did not insert": an empty container
+ * that IS on the path goes, even if it happened to pre-exist (a user's literal `"hooks": {}`).
+ * "Prune empty parents" is precisely the authority to remove it, it carries no data, and the next
+ * `glosa init` recreates it — the same call v1 made. */
+function pruneRemovedAncestors(container: unknown, trie: AncestorTrie, containedInArray: boolean): boolean {
+  if (container === null || typeof container !== "object") return false;
+  const isArray = Array.isArray(container);
+  // Descending numeric order for arrays: splicing a low index first would shift every higher
+  // sibling down, so a later splice would hit the wrong element.
+  const keys = [...trie.children.keys()].sort(isArray ? (a, b) => Number(b) - Number(a) : undefined);
+  for (const key of keys) {
+    const child = isArray ? (container as unknown[])[Number(key)] : (container as Record<string, unknown>)[key];
+    if (child === undefined) continue;
+    if (!pruneRemovedAncestors(child, trie.children.get(key) as AncestorTrie, isArray)) continue;
+    if (isArray) (container as unknown[]).splice(Number(key), 1);
+    else delete (container as Record<string, unknown>)[key];
   }
-  return Object.keys(record).length === 0;
+  if (isArray) return (container as unknown[]).length === 0;
+  const values = Object.values(container as Record<string, unknown>);
+  if (values.length === 0) return true;
+  return containedInArray && values.every(isScalar);
 }
 
 function uninstallJson(
@@ -654,7 +718,10 @@ function uninstallJson(
   if (removable.length === 0) return { ...ownership, inserted: surviving };
   for (const node of [...removable].sort((a, b) => b.pointer.localeCompare(a.pointer)))
     removePointer(json, node.pointer);
-  pruneEmpty(json);
+  // Only the parents of what this run removed are reconsidered; the document root is passed as a
+  // named container so its own residue verdict is discarded — an emptied root is not deleted as a
+  // key, it is the `created:true` file-deletion clause immediately below (A6 §F26).
+  pruneRemovedAncestors(json, ancestorTrie(removable.map((node) => node.pointer)), false);
   undo.push(() => writeAtomic(ownership.path, before));
   if (ownership.created && json !== null && typeof json === "object" && Object.keys(json).length === 0) {
     safeUnlink(ownership.path);

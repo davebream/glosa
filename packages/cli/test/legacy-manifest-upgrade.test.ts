@@ -321,12 +321,12 @@ describe("legacy v1 init manifest — readable without the v1 writer", () => {
     expect(readFileSync(join(dir, ".codex", "config.toml"), "utf8")).toBe(LEGACY_CODEX_CONFIG);
   });
 
-  // KNOWN GAP, same root cause as the two `test.failing` cases in init.test.ts's scoped block:
-  // `scoped-init.ts`'s generic `pruneEmpty` leaves the hooks group's `matcher` behind, so the
-  // `created: true` settings.json is never deleted. Not migration-specific — a pure v2 install
-  // uninstalls the same way. Kept executable via `test.failing` so it turns the suite RED the
-  // moment the prune is fixed.
-  test.failing("`glosa init --uninstall` cleans up a v1 workspace that was never upgraded first", async () => {
+  // The same A6 §F26 "created:true file now empty→delete" clause the scoped block of init.test.ts
+  // pins, reached through a v1 manifest instead: the migrated ownership records must still carry
+  // enough to empty and delete every file v1 created, hook-group scaffolding included. Not
+  // migration-specific — a pure v2 install uninstalls through the same prune — but a v1 workspace
+  // is the case with no v2 install run to repair a lossy migration.
+  test("`glosa init --uninstall` cleans up a v1 workspace that was never upgraded first", async () => {
     const dir = freshDir();
     const legacyPath = writeLegacyWorkspace(dir);
 
