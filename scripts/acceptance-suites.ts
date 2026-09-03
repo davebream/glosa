@@ -53,6 +53,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/bus/lifecycle.test.ts",
     "packages/daemon/test/bus/reconcile-fault.test.ts",
     "packages/daemon/test/bus/reconcile-fault-lease.test.ts",
+    "packages/daemon/test/bus/real-daemon-fault.test.ts",
   ],
   concurrency: [
     "packages/daemon/test/bus/concurrency.test.ts",
@@ -79,6 +80,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/matcher/symlinks.test.ts",
     "packages/daemon/test/presentation-token.test.ts",
     "packages/daemon/test/token-lifecycle.test.ts",
+    "test/acceptance/browser-security-real-engine.test.ts",
   ],
   anchor: [
     "packages/daemon/test/anchoring/class-f.test.ts",
@@ -100,6 +102,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/adapters/adapter-topology.test.ts",
     "packages/daemon/test/registry/session-registry.test.ts",
     "packages/daemon/test/sessions-routes.test.ts",
+    "packages/daemon/test/provider-topology-real-subprocess.test.ts",
   ],
 };
 

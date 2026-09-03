@@ -8,6 +8,7 @@
 import { closeSync, existsSync, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { fsyncContainingDir, writeAllSync } from "./io.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
 
 export const MAX_EVENT_BYTES = 65536; // includes the trailing "\n"
 
@@ -114,7 +115,10 @@ export class JournalWriter {
   private fdValue: number | null = null;
   private closed = false;
 
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    readonly writeCheckpoint?: WorkspaceBusWriteCheckpointObserver,
+  ) {}
 
   /** Opens (creating parent dirs + the file itself if needed) on first use; fsyncs the
    * containing directory exactly once, only when this call is the one that created the file.
@@ -166,6 +170,7 @@ export function appendEvent(writer: JournalWriter, event: JournalEvent, opts: Ap
   const sizeBeforeWrite = fstatSync(fd).size;
   try {
     writeAllSync(fd, bytes);
+    writer.writeCheckpoint?.({ name: "journal:written", event });
   } catch (err) {
     try {
       ftruncateSync(fd, sizeBeforeWrite);
@@ -177,7 +182,10 @@ export function appendEvent(writer: JournalWriter, event: JournalEvent, opts: Ap
   }
 
   const shouldFsync = opts.fsync ?? LIFECYCLE_CRITICAL_EVENTS.has(event.event);
-  if (shouldFsync) fsyncSync(fd);
+  if (shouldFsync) {
+    fsyncSync(fd);
+    writer.writeCheckpoint?.({ name: "journal:fsynced", event });
+  }
 }
 
 export function isLifecycleCritical(type: EventType): boolean {

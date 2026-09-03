@@ -53,6 +53,7 @@ dropping out of it.
 | `fault` | `packages/daemon/test/bus/lifecycle.test.ts` |
 | `fault` | `packages/daemon/test/bus/reconcile-fault.test.ts` |
 | `fault` | `packages/daemon/test/bus/reconcile-fault-lease.test.ts` |
+| `fault` | `packages/daemon/test/bus/real-daemon-fault.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/concurrency.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/mutex.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/approval-uniqueness.test.ts` |
@@ -73,6 +74,7 @@ dropping out of it.
 | `security` | `packages/daemon/test/matcher/symlinks.test.ts` |
 | `security` | `packages/daemon/test/presentation-token.test.ts` |
 | `security` | `packages/daemon/test/token-lifecycle.test.ts` |
+| `security` | `test/acceptance/browser-security-real-engine.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-f.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-basic.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-never-feedback.test.ts` |
@@ -88,47 +90,55 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/adapters/adapter-topology.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/sessions-routes.test.ts` |
+| `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 
-### 1.3 Accepted fidelity gaps
+### 1.3 Fidelity layers and residual manual boundaries
 
-Three of the named suites sit a tier below the letter of `docs/requirements.md` §5. They are
-accepted for the alpha, not closed. What covers them is the manual rehearsal in §2–§4, and this
-section is the record of that; an accepted gap nobody wrote down is the failure mode this gate
-exists to avoid.
+The deterministic gate now crosses the three process boundaries that previously existed only in
+the manual rehearsal: a real production daemon process is killed through an injected composition
+seam and restarted, a real Chromium engine enforces the class-F CSP, and the production Codex
+provider participates in cross-directory routing over real HTTP. The attended rehearsal remains
+mandatory for live vendor sessions, Safari/browser interaction, and private real artifacts. This
+section states both layers so neither is mistaken for the other.
 
-| Suite | What §5 asks for | What the deterministic gate proves instead |
+| Suite | What §5 asks for | What the deterministic gate proves |
 |---|---|---|
-| `fault` | daemon killed at each write step, one legal recovered state | a real journal truncated at every byte offset of every record, replayed in-process through `reconcileWorkspace`; no process is killed |
-| `security` | the A3 §5 browser attacks | four of the eight run against real code; four assert only the CSP string glosa emits, with no user agent present to honor it |
-| `explicit-binding-topology` | agent cwd differs from the artifact workspace and routing still succeeds | the production route handler called in-process with real registries and a neutral fixture adapter; no daemon process, no real provider |
+| `fault` | daemon killed at each write step, one legal recovered state | exhaustive byte-offset journal truncation plus a real production daemon process, using an injected composition seam, SIGKILLed/restarted at five boundaries from inbox temp fsync through `entry_created` journal fsync |
+| `security` | the A3 §5 browser attacks | attacks #1/#2 run in installed Chromium against production class-F serving and prove opaque storage, `connect-src`/`img-src` violations, plus zero loopback fetch/WebSocket/image/form requests; the remaining attacks retain their function/socket tests |
+| `explicit-binding-topology` | agent cwd differs from the artifact workspace and routing still succeeds | a real daemon with the production Codex provider queues from a different cwd, is SIGKILLed/restarted, re-registers/binds, then Stop drains and acknowledges the durable message |
 
-**`fault`.** The byte sweep is exhaustive within its model and worth keeping. Its model is a
-truncated file, so it cannot see an unflushed page cache, an inbox temp file whose `rename` is
-interrupted, or a shadow-git repo left mid-commit. Nothing in `packages/*/src` offers a
-fault-injection point, so killing a daemon at a chosen write step is not constructible today
-without adding one. Note also that the headers of `packages/daemon/test/bus/reconcile-fault.test.ts`
-and `packages/daemon/test/bus/reconcile-fault-lease.test.ts` describe the method as killing the
-process at every write boundary. They truncate a file. Trust the code, not the comment.
+**`fault`.** The byte sweep remains exhaustive within its torn-journal model. The real-process layer
+uses an explicit injected composition dependency available only to its test daemon entrypoint; the
+packaged CLI exposes no fault flag, environment switch, route, or config. It covers temp-file fsync,
+immutable link publication, directory durability, journal write, and journal fsync, then proves a
+fresh daemon reclaims the stale lock, reconciles to zero-or-one legal entry, removes inert temp state,
+and accepts another durable write. These are five representative durability checkpoints, not every
+syscall or byte offset. SIGKILL is not a machine power cut, so it cannot prove kernel page cache
+survival, and this focused layer does not kill system Git inside every possible shadow-repo syscall.
+The exhaustive byte/lease and shadow-git suites remain the complementary deterministic evidence.
 
 **`security`.** Attacks #4 (symlink escape), #5 (leading-dash and control-character paths), #6
 (injected HTML) and #7(a)(b) (foreign-origin handshake, missing Bearer) exercise real functions
-against a real filesystem or real `Request` objects. Attacks #1, #2, #7(c) and #7(d) assert
-substrings of a Content-Security-Policy header. Attack #1 is the clearest case: A3 §5 asks for
-"assert storage empty + fetch throws", and the test asserts that the CSP string contains
-`sandbox allow-scripts`. No test in this repo launches a browser engine — `happy-dom` is a pure-JS
-DOM simulator, chosen because the no-build-step, no-compiled-addons invariant rules a real engine
-out of `bun test`. That makes the browser half a limit of the deterministic approach rather than
-missing work, and it is why the Browser security scenario in §4 is manual. Attack #8's
-rotate/revoke half is unimplemented and says so in the test.
+against a real filesystem or real `Request` objects. Attacks #1/#2 additionally launch an installed
+Chromium ≥111 with a throwaway profile against the production class-F listener; removing the CSP
+sandbox makes that test fail because storage becomes available. The gate fails clearly if no
+supported Chromium is installed; it never silently skips or downloads one. Safari remains a
+supported runtime browser, but Safari execution and interaction-heavy #3/#7(c)/#7(d) framing checks
+remain attended rehearsal evidence. For attack #2, Chromium reports `connect-src` and `img-src`
+violations. The remote form is attempted and reaches neither loopback nor navigation: the CSP
+`sandbox` omits `allow-forms`, so Chromium blocks it before evaluating `form-action` and emits no
+`form-action` violation event; the test separately asserts the production header still contains
+`form-action 'none'` as defense in depth. Attack #8 combines real HTTP token lifecycle coverage with
+the SPA's tab-storage behavior.
 
-**`explicit-binding-topology`.** `packages/daemon/test/adapters/adapter-topology.test.ts` drives
-`createApiFetch` with real `WorkspaceIndex`, `SessionRegistry` and `WorkspaceBusRegistry` instances
-over three real temporary directories, so the cwd-versus-workspace divergence is genuine and the
-routing decision is the production one. The adapter is a domain-neutral fixture rather than
-`packages/providers/claude-code` or `packages/providers/codex`, and nothing crosses a socket. The
-one binding test that does use a real daemon subprocess, `packages/cli/test/api-integration.test.ts`,
-registers with `cwd` equal to the workspace, so it does not exercise the divergence. Real daemon
-plus real provider plus divergent cwd exists only in §3–§4.
+**`explicit-binding-topology`.** The lower-level in-process adapter test remains because it isolates
+the routing decision. The real-process layer composes the actual `CodexProvider` in the normal daemon,
+crosses localhost HTTP, binds an agent cwd unrelated to the artifact workspace, persists the
+provider's `gate/attempted` result, kills the daemon before presentation, and proves Stop presents
+the exact message after restart. It is a controlled provider integration test, not a live Codex
+session. Real Claude/Codex hook hosts, models, Channels negotiation, credentials, and conversation
+UI remain explicit attended rehearsal work; the deterministic test never invokes a vendor CLI or
+network and never installs hooks/MCP.
 
 Beyond the named suites, these coverage groups must hold across the full run:
 

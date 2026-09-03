@@ -20,6 +20,8 @@ export class WorkspaceBusRegistry {
   // sure every bus in the process draws from the same keyed pool instead of each getting its own.
   private readonly mutex = new KeyedMutex<string>();
 
+  constructor(private readonly defaultDeps: Omit<WorkspaceBusDeps, "mutex"> = {}) {}
+
   /** Returns the SAME `WorkspaceBus` instance for `canonicalRoot` every time — constructed at
    * most once per root. `deps` (ulid/now/reducer) is only consulted on first construction; a
    * later call for an already-open root ignores it silently, since there is only ever one bus to
@@ -35,7 +37,7 @@ export class WorkspaceBusRegistry {
     const id = workspaceRegistrationId(canonicalRoot);
     let bus = this.buses.get(id);
     if (!bus) {
-      bus = new WorkspaceBus(canonicalRoot, { ...deps, mutex: this.mutex });
+      bus = new WorkspaceBus(canonicalRoot, { ...this.defaultDeps, ...deps, mutex: this.mutex });
       this.buses.set(id, bus);
     }
     return bus;

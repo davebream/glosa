@@ -38,6 +38,7 @@ import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
 import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
 
 const DELIVERY_RESERVATION_TTL_MS = 30_000;
 
@@ -164,6 +165,8 @@ export interface WorkspaceBusDeps {
   ulid?: () => string;
   now?: () => Date;
   reducer?: Reducer;
+  /** Explicit composition seam for subprocess durability tests. Production omits it. */
+  writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
 }
 
 export class WorkspaceBus {
@@ -176,6 +179,7 @@ export class WorkspaceBus {
   private readonly ulidFn: () => string;
   private readonly nowFn: () => Date;
   private readonly reducer: Reducer;
+  private readonly writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
   private readonly mutexKey: string;
   // P3.1 review fix: tracks whether THIS INSTANCE has reconciled — deliberately an instance field,
   // not something a caller tracks externally keyed by root string. A root string survives a
@@ -206,7 +210,8 @@ export class WorkspaceBus {
     this.root = workspaceWorktree(workspaceRoot);
     this.mutexKey = workspaceRegistrationId(workspaceRoot);
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
-    this.writer = new JournalWriter(journalPath(workspaceRoot));
+    this.writeCheckpoint = deps.writeCheckpoint;
+    this.writer = new JournalWriter(journalPath(workspaceRoot), this.writeCheckpoint);
     this.mutex = deps.mutex ?? new KeyedMutex<string>();
     this.ulidFn = deps.ulid ?? defaultUlid;
     this.nowFn = deps.now ?? (() => new Date());
@@ -413,7 +418,7 @@ export class WorkspaceBus {
     fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
   ): void {
     this.assertWritable();
-    writeInboxEntryOnce(this.workspace, id, payload);
+    writeInboxEntryOnce(this.workspace, id, payload, this.writeCheckpoint);
     const payloadRecord =
       payload !== null && typeof payload === "object" && !Array.isArray(payload)
         ? (payload as Record<string, unknown>)
@@ -448,7 +453,7 @@ export class WorkspaceBus {
   adoptEntry(id: string, payload: unknown, detail: Record<string, unknown>, idem: string): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
-      writeInboxEntryOnce(this.workspace, id, payload);
+      writeInboxEntryOnce(this.workspace, id, payload, this.writeCheckpoint);
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),

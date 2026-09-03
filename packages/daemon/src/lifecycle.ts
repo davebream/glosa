@@ -15,6 +15,7 @@ import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
 import { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "./bus/write-checkpoint.ts";
 import { CapabilityStore } from "./capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
 import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
@@ -107,12 +108,14 @@ export interface BuildBackendOptions {
   gcGraceMs?: number;
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
+  /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
+  writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
   const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
-  const busRegistry = new WorkspaceBusRegistry();
+  const busRegistry = new WorkspaceBusRegistry({ writeCheckpoint: opts.writeCheckpoint });
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
