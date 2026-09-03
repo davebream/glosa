@@ -73,7 +73,7 @@ export interface AdoptionRecord {
 
 export class AdoptionError extends Error {
   constructor(
-    readonly code: "adoption-conflict" | "adoption-blocked",
+    readonly code: "adoption-conflict" | "adoption-blocked" | "workspace-adopting",
     message: string,
   ) {
     super(message);
@@ -289,12 +289,12 @@ export interface WorkspaceIndexDeps {
    * write/search check; injectable for deterministic permission tests. Existing local buses are
    * authoritative and never consult this predicate. */
   canCreateLocalBus?: (canonicalPath: string) => boolean;
-  /** Fired once for each canonical path GC actually hard-removes (never for a soft `present:false`
+  /** Fired once for each registration GC actually hard-removes (never for a soft `present:false`
    * — only real removal from the index). Defaults to a no-op. Production wiring calls
    * `setOnHardRemove` once a `WorkspaceBusRegistry` exists — see `setOnHardRemove`'s own docstring
    * for the snippet — so a hard-removed workspace's open `WorkspaceBus` (journal fd, mutex slot,
    * in-memory state) is evicted in step, not leaked. */
-  onHardRemove?: (canonicalPath: string) => void | Promise<void>;
+  onHardRemove?: (entry: WorkspaceEntry) => void | Promise<void>;
   /** Does this registration's bus still hold journal-derived pending (non-terminal) entries?
    * Consulted only by GC's hard-remove check (issue #79): parked user work — e.g. annotations
    * created in a workspace that was never `glosa init`'d, waiting for delivery — must never be
@@ -337,7 +337,7 @@ export class WorkspaceIndex {
   // it's just a function, so GC needs this separate flag to tell "wired, and the answer is no"
   // apart from "nobody wired anything yet."
   private liveSessionPredicateWired: boolean;
-  private onHardRemove: (canonicalPath: string) => void | Promise<void>;
+  private onHardRemove: (entry: WorkspaceEntry) => void | Promise<void>;
   private cache: WorkspaceIndexFile | null = null;
   private lastGcAt = -Infinity;
 
@@ -385,14 +385,14 @@ export class WorkspaceIndex {
     this.liveSessionPredicateWired = true;
   }
 
-  /** Wires in the callback GC fires for each path it actually hard-removes. Production callers
+  /** Wires in the callback GC fires for each registration it actually hard-removes. Production callers
    * set this once, right after constructing both this index and a `WorkspaceBusRegistry`:
    *   const busRegistry = new WorkspaceBusRegistry();
-   *   index.setOnHardRemove((p) => busRegistry.evict(p));
+   *   index.setOnHardRemove((entry) => busRegistry.evict(entry));
    * Without this wired, a hard-removed workspace's `WorkspaceBus` (open journal fd, `KeyedMutex`
    * slot, in-memory state) would otherwise leak forever, and a later reuse of the same canonical
    * path would return that stale instance instead of a fresh one. */
-  setOnHardRemove(fn: (canonicalPath: string) => void | Promise<void>): void {
+  setOnHardRemove(fn: (entry: WorkspaceEntry) => void | Promise<void>): void {
     this.onHardRemove = fn;
   }
 
@@ -1035,7 +1035,7 @@ export class WorkspaceIndex {
       // its in-memory state, which is only safe once the removal is durable. A persist that throws
       // rejects here with the registration still intact in memory and on disk (see
       // `loadForMutation`), so this line is unreachable for a removal that did not actually happen.
-      await this.onHardRemove(match.canonical_path);
+      await this.onHardRemove(match);
       return true;
     });
   }
@@ -1074,6 +1074,7 @@ export class WorkspaceIndex {
       const index = this.loadForMutation();
       const softened: string[] = [];
       const removed: string[] = [];
+      const removedEntries: WorkspaceEntry[] = [];
       let changed = false;
 
       for (const [registrationId, entry] of Object.entries(index.workspaces)) {
@@ -1106,6 +1107,7 @@ export class WorkspaceIndex {
         if (now.getTime() - absentSince >= this.gcGraceMs) {
           delete index.workspaces[registrationId];
           removed.push(canonicalPath);
+          removedEntries.push(entry);
           changed = true;
         }
       }
@@ -1114,7 +1116,7 @@ export class WorkspaceIndex {
         index.updated_at = now.toISOString();
         this.persist(index);
       }
-      for (const canonicalPath of removed) await this.onHardRemove(canonicalPath);
+      for (const entry of removedEntries) await this.onHardRemove(entry);
       return { softened, removed };
     });
   }

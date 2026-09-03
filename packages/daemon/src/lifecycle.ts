@@ -9,7 +9,7 @@ import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "n
 import { fileURLToPath } from "node:url";
 import { AdapterRegistry } from "./adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { resumePendingAdoptions } from "./adoption.ts";
+import { AdoptionCoordinator, resumePendingAdoptions } from "./adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "./agent-provider/interface.ts";
 import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
 import { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
@@ -87,6 +87,7 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   pushRegistry: SessionPushRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
+  adoptionCoordinator: AdoptionCoordinator;
   sealAdoptionSources(
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -119,6 +120,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     warn: (message) => log(home, message),
   });
+  const adoptionCoordinator = new AdoptionCoordinator();
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -139,8 +141,8 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   workspaceIndex.setLiveSessionPredicate((canonicalPath) => sessionRegistry.forWorkspace(canonicalPath).length > 0);
   // Hard-remove eviction: a workspace GC actually removes from the index must also drop its open
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
-  workspaceIndex.setOnHardRemove((canonicalPath) =>
-    Promise.all([busRegistry.evict(canonicalPath), artifactWatcherRegistry.evict(canonicalPath)]).then(() => {}),
+  workspaceIndex.setOnHardRemove((entry) =>
+    Promise.all([busRegistry.evict(entry), artifactWatcherRegistry.evict(entry)]).then(() => {}),
   );
 
   return {
@@ -152,6 +154,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     providerRegistry,
     pushRegistry,
     artifactWatcherRegistry,
+    adoptionCoordinator,
     sealAdoptionSources,
     closeWorkspaceResources,
   };
@@ -222,6 +225,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
     sealAdoptionSources: backend.sealAdoptionSources,
+    adoptionCoordinator: backend.adoptionCoordinator,
     capabilityStore,
     presentationTokenStore,
     adapterRegistry: backend.adapterRegistry,
@@ -261,6 +265,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       backend.workspaceIndex,
       (workspace) => backend.busRegistry.get(workspace),
       backend.sealAdoptionSources,
+      backend.adoptionCoordinator,
     );
   } catch (error) {
     // A sealed adoption is deliberately fail-closed for its own target, but must not prevent a

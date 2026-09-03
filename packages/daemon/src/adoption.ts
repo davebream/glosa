@@ -8,6 +8,7 @@ import { WorkspaceBus, WorkspaceAdoptedError } from "./bus/bus.ts";
 import { fsyncContainingDir } from "./bus/io.ts";
 import { readInboxEntry } from "./bus/inbox.ts";
 import { isTerminal, type EntryKind } from "./bus/lifecycle.ts";
+import { KeyedMutex } from "./bus/mutex.ts";
 import { importLineage } from "./git/shadow.ts";
 import {
   AdoptionError,
@@ -23,6 +24,17 @@ type SealSources = (
   adoptionId: string,
   targetRegistrationId: string,
 ) => Promise<void>;
+
+/** One daemon-scoped coordinator owns each target's full seal/build/publish transaction. The
+ * durable index mutex protects individual phase writes; this lock protects the work between them,
+ * including the unpublished staging directory and its private WorkspaceBus. */
+export class AdoptionCoordinator {
+  private readonly mutex = new KeyedMutex<string>();
+
+  run<T>(targetRegistrationId: string, fn: () => T | Promise<T>): Promise<T> {
+    return this.mutex.runExclusive(targetRegistrationId, fn);
+  }
+}
 
 function stagedEntry(target: WorkspaceEntry, adoptionId: string): WorkspaceEntry {
   return {
@@ -43,10 +55,20 @@ function sourceEntries(record: AdoptionRecord, index: WorkspaceIndex): Workspace
   });
 }
 
-/** Completes any planned hand-off for `target`. Calls are idempotent: parallel opens share the
- * index claim, sealed sources are safe to re-seal with the same adoption id, and a published
- * target can be committed after a daemon restart without replaying payload copies. */
+/** Completes any planned hand-off for `target`. The supplied daemon coordinator serializes the
+ * full transaction for parallel opens. Durable phases make retries and daemon-restart recovery
+ * idempotent without replaying payload copies after the target is published. */
 export async function adoptLooseLineages(
+  index: WorkspaceIndex,
+  target: WorkspaceEntry,
+  getBus: GetBus,
+  sealSources: SealSources | undefined,
+  coordinator: AdoptionCoordinator,
+): Promise<void> {
+  return coordinator.run(target.registration_id, () => adoptLooseLineagesExclusive(index, target, getBus, sealSources));
+}
+
+async function adoptLooseLineagesExclusive(
   index: WorkspaceIndex,
   target: WorkspaceEntry,
   getBus: GetBus,
@@ -114,11 +136,13 @@ export async function adoptLooseLineages(
   if (existsSync(stage.bus_path)) rmSync(stage.bus_path, { recursive: true, force: true });
   mkdirSync(stage.bus_path, { recursive: true });
 
+  let stageBus: WorkspaceBus | undefined;
   try {
-    // A staging bus has no live public registration and can safely use a private mutex. Publishing
-    // is one same-filesystem rename, so an orphaned inbox payload is never visible to normal
-    // reconcile/self-heal.
-    const stageBus = new WorkspaceBus(stage);
+    // The daemon-scoped coordinator is held for this whole block, and ordinary routes reject the
+    // adopting target, so this unpublished staging bus is mechanically the only target writer.
+    // Publishing is one same-filesystem rename, so an orphaned inbox payload is never visible to
+    // normal reconcile/self-heal.
+    stageBus = new WorkspaceBus(stage);
     await stageBus.reconcileOnce();
 
     const lineageSources: Record<string, unknown>[] = [];
@@ -159,6 +183,7 @@ export async function adoptLooseLineages(
       }
     }
     await stageBus.close();
+    stageBus = undefined;
     renameSync(stage.bus_path, targetBusPath);
     fsyncContainingDir(targetBusPath);
     await index.markAdoptionTargetPublished(record.adoption_id);
@@ -166,6 +191,7 @@ export async function adoptLooseLineages(
   } catch (error) {
     // The sealed sources are intentionally retained. An incomplete stage is derived state and is
     // rebuilt from those immutable sources on the next open/startup attempt.
+    if (stageBus) await stageBus.close().catch(() => {});
     if (existsSync(stage.bus_path)) rmSync(stage.bus_path, { recursive: true, force: true });
     throw error;
   }
@@ -176,11 +202,12 @@ export async function adoptLooseLineages(
 export async function resumePendingAdoptions(
   index: WorkspaceIndex,
   getBus: GetBus,
-  sealSources?: SealSources,
+  sealSources: SealSources | undefined,
+  coordinator: AdoptionCoordinator,
 ): Promise<void> {
   for (const record of index.pendingAdoptions()) {
     const target = index.getWorkspaceByRegistration(record.target_registration_id);
     if (!target) continue;
-    await adoptLooseLineages(index, target, getBus, sealSources);
+    await adoptLooseLineages(index, target, getBus, sealSources, coordinator);
   }
 }

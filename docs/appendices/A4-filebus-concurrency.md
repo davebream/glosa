@@ -68,8 +68,11 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 
 ## Loose-file adoption — seal and link
 - When a directory workspace opens over contained loose-file registrations, the global index records
-  one durable adoption plan. The daemon holds every source registration mutex in stable lexical
-  order, preflights every apply lease, and only then appends lifecycle-critical
+  one durable adoption plan. A daemon-scoped mutex keyed by target registration ID holds the complete
+  seal/build/publish transaction, so parallel opens serialize before either can clean or write the
+  unpublished staging bus. Ordinary routes for that adopting target fail closed with
+  `409 workspace-adopting`. The daemon holds every source registration mutex in stable lexical order,
+  preflights every apply lease, and only then appends lifecycle-critical
   `adoption_sealed{adoption_id,target_registration_id}` events. Any live lease or existing target
   state fails closed before a source is sealed.
 - A sealed source is permanently read-only historical evidence: its immutable inbox, journal, and

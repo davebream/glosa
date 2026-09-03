@@ -381,7 +381,7 @@ describe("WorkspaceIndex — forget", () => {
     const index = new WorkspaceIndex({
       home,
       now: deterministicClock(),
-      onHardRemove: (p) => void removedPaths.push(p),
+      onHardRemove: (entry) => void removedPaths.push(entry.canonical_path),
     });
     const entry = await index.upsertWorkspace("/ws/a", "glosa-open");
 
@@ -405,9 +405,9 @@ describe("WorkspaceIndex — onHardRemove (resource-leak fix)", () => {
       gcThrottleMs: 0,
       pathExists: (p) => existing.has(p),
       hasLiveSession: () => false, // explicitly wired — this test is about the onHardRemove hook, not the unwired-default safety
-      onHardRemove: async (p) => {
+      onHardRemove: async (entry) => {
         await Bun.sleep(1); // prove gc() genuinely awaits this, not fire-and-forget
-        removedPaths.push(p);
+        removedPaths.push(entry.canonical_path);
         hookRanBeforeGcResolved = true;
       },
     });
@@ -432,7 +432,7 @@ describe("WorkspaceIndex — onHardRemove (resource-leak fix)", () => {
       now: clock,
       gcThrottleMs: 0,
       pathExists: (p) => existing.has(p),
-      onHardRemove: (p) => void removedPaths.push(p),
+      onHardRemove: (entry) => void removedPaths.push(entry.canonical_path),
     });
     await index.upsertWorkspace("/ws/a", "session");
 
@@ -919,8 +919,8 @@ describe("WorkspaceIndex — a failed persist changes nothing", () => {
     const index = new WorkspaceIndex({
       home,
       now: deterministicClock(),
-      onHardRemove: (path) => {
-        evicted.push(path);
+      onHardRemove: (entry) => {
+        evicted.push(entry.canonical_path);
       },
       write: faultyWrite(fault),
     });
@@ -973,8 +973,8 @@ describe("WorkspaceIndex — a failed persist changes nothing", () => {
       gcThrottleMs: 0,
       hasLiveSession: () => false,
       pathExists: () => onDisk,
-      onHardRemove: (path) => {
-        evicted.push(path);
+      onHardRemove: (entry) => {
+        evicted.push(entry.canonical_path);
       },
       write: faultyWrite(fault),
     });

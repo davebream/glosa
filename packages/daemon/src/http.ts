@@ -27,7 +27,7 @@ import {
   resolveManifest,
 } from "./adapters/interface.ts";
 import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { adoptLooseLineages } from "./adoption.ts";
+import { AdoptionCoordinator, adoptLooseLineages } from "./adoption.ts";
 import {
   type AgentProviderRegistry,
   type DeliverableEntry,
@@ -93,7 +93,7 @@ import { createJournalStreamResponse } from "./stream.ts";
 import type { TokenSource } from "./token.ts";
 import { confineTranscriptPath } from "./transcript/root.ts";
 import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import type { WorkspaceTarget } from "./workspace.ts";
+import { type WorkspaceTarget, workspaceRegistrationId } from "./workspace.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -174,6 +174,9 @@ export interface ApiContext {
     adoptionId: string,
     targetRegistrationId: string,
   ) => Promise<void>;
+  /** Serializes the complete loose-file adoption transaction per target. Optional only for
+   * hand-built contexts; production shares the backend's daemon-scoped coordinator. */
+  adoptionCoordinator?: AdoptionCoordinator;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
@@ -208,6 +211,7 @@ export interface ApiContext {
 }
 
 const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
+const contextAdoptionCoordinators = new WeakMap<ApiContext, AdoptionCoordinator>();
 
 function compositeRegistry(ctx: ApiContext): CompositeDeliveryRegistry {
   if (ctx.compositeDeliveryRegistry) return ctx.compositeDeliveryRegistry;
@@ -217,6 +221,16 @@ function compositeRegistry(ctx: ApiContext): CompositeDeliveryRegistry {
     contextCompositeRegistries.set(ctx, registry);
   }
   return registry;
+}
+
+function adoptionCoordinator(ctx: ApiContext): AdoptionCoordinator {
+  if (ctx.adoptionCoordinator) return ctx.adoptionCoordinator;
+  let coordinator = contextAdoptionCoordinators.get(ctx);
+  if (!coordinator) {
+    coordinator = new AdoptionCoordinator();
+    contextAdoptionCoordinators.set(ctx, coordinator);
+  }
+  return coordinator;
 }
 
 /** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
@@ -356,10 +370,20 @@ function serveSpaAsset(req: Request, pathname: string): Response {
 // workspace: routes resolve `:slug`... unknown slug → 404").
 // -------------------------------------------------------------------------------------------
 
+function isAdoptingTarget(entry: WorkspaceEntry | null): boolean {
+  return entry?.lifecycle?.state === "adopting" && entry.lifecycle.target_registration_id === entry.registration_id;
+}
+
 function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   const entry = ctx.workspaceIndex.getBySlug(slug);
   if (!entry)
     return { ok: false as const, response: problem(404, "not-found", "unknown workspace", undefined, pathname) };
+  if (isAdoptingTarget(entry)) {
+    return {
+      ok: false as const,
+      response: problem(409, "workspace-adopting", "workspace adoption is in progress", undefined, pathname),
+    };
+  }
   return { ok: true as const, entry };
 }
 
@@ -386,6 +410,10 @@ function handleListWorkspaces(ctx: ApiContext): Response {
  * + reopen and wrongly skip reconciling the fresh instance underneath it — see reconcileOnce's own
  * docstring in bus.ts). */
 async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
+  const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
+  if (isAdoptingTarget(indexed)) {
+    throw new AdoptionError("workspace-adopting", "workspace adoption is in progress");
+  }
   const bus = ctx.getWorkspaceBus(root);
   await bus.reconcileOnce();
   return bus;
@@ -1789,7 +1817,13 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
       ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
     });
     if (opened.entry.kind === "directory") {
-      await adoptLooseLineages(ctx.workspaceIndex, opened.entry, ctx.getWorkspaceBus, ctx.sealAdoptionSources);
+      await adoptLooseLineages(
+        ctx.workspaceIndex,
+        opened.entry,
+        ctx.getWorkspaceBus,
+        ctx.sealAdoptionSources,
+        adoptionCoordinator(ctx),
+      );
     }
     await resolveBus(ctx, opened.entry);
     const localBus = join(opened.entry.worktree_path, ".glosa");

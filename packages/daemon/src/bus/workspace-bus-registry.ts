@@ -70,22 +70,9 @@ export class WorkspaceBusRegistry {
    * bus's mutex, so any write already in flight for this root finishes first. */
   async close(canonicalRoot: WorkspaceTarget): Promise<void> {
     const id = workspaceRegistrationId(canonicalRoot);
-    const bus =
-      this.buses.get(id) ??
-      [...this.buses.values()].find(
-        (candidate) =>
-          (typeof canonicalRoot === "string" &&
-            typeof candidate.workspace !== "string" &&
-            (candidate.workspace.canonical_path === canonicalRoot ||
-              candidate.workspace.worktree_path === canonicalRoot)) ||
-          (typeof canonicalRoot !== "string" &&
-            typeof candidate.workspace !== "string" &&
-            candidate.workspace.registration_id === canonicalRoot.registration_id),
-      );
+    const bus = this.buses.get(id);
     if (!bus) return;
-    for (const [key, candidate] of this.buses) {
-      if (candidate === bus) this.buses.delete(key);
-    }
+    this.buses.delete(id);
     await bus.close();
   }
 
@@ -102,7 +89,7 @@ export class WorkspaceBusRegistry {
    * registry on its own — nothing wires the two together automatically — so production boot code
    * MUST connect them once, right after constructing both:
    *   const busRegistry = new WorkspaceBusRegistry();
-   *   const index = new WorkspaceIndex({ onHardRemove: (p) => busRegistry.evict(p) });
+   *   const index = new WorkspaceIndex({ onHardRemove: (entry) => busRegistry.evict(entry) });
    * Without that wiring, a hard-removed workspace's `WorkspaceBus` (open journal fd, `KeyedMutex`
    * slot, in-memory state) leaks for the life of the daemon process, and a later `get()` for the
    * same (now-reused) canonical path would return that stale instance instead of a fresh one. */

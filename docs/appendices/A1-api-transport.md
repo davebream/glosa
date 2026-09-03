@@ -537,7 +537,7 @@ data: <json>
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major mismatch; active metadata owned by another id | any route, `PUT .../metadata` |
+| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed) |
 | 413 | request body over 1 MiB | any POST |
 | 500 | unhandled daemon error | any route |
 

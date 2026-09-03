@@ -54,6 +54,7 @@ export type ProblemSlug =
   // callers can safely retry a live lease hand-off while treating existing local state as final.
   | "adoption-blocked"
   | "adoption-conflict"
+  | "workspace-adopting"
   | "workspace-adopted";
 
 export function problem(

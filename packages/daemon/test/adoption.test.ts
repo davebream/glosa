@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { adoptLooseLineages } from "../src/adoption.ts";
+import { AdoptionCoordinator, adoptLooseLineages } from "../src/adoption.ts";
 import { WorkspaceAdoptedError } from "../src/bus/bus.ts";
 import { readInboxEntry } from "../src/bus/inbox.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
@@ -19,6 +19,7 @@ describe("seal-and-link loose-file adoption", () => {
     writeFileSync(artifact, "first\n");
     const index = new WorkspaceIndex({ home, now: deterministicClock() });
     const registry = new WorkspaceBusRegistry();
+    const coordinator = new AdoptionCoordinator();
 
     const loose = await index.resolveOpenTarget(artifact);
     const sourceBus = registry.get(loose.entry);
@@ -41,6 +42,7 @@ describe("seal-and-link loose-file adoption", () => {
       (workspace) => registry.get(workspace),
       (sources, adoptionId, targetRegistrationId) =>
         registry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+      coordinator,
     );
 
     expect(existsSync(join(root, ".glosa"))).toBe(true);
@@ -82,6 +84,7 @@ describe("seal-and-link loose-file adoption", () => {
     mkdirSync(join(root, ".glosa"));
     const index = new WorkspaceIndex({ home, now: deterministicClock() });
     const registry = new WorkspaceBusRegistry();
+    const coordinator = new AdoptionCoordinator();
 
     const loose = await index.resolveOpenTarget(artifact);
     const sourceBus = registry.get(loose.entry);
@@ -89,7 +92,7 @@ describe("seal-and-link loose-file adoption", () => {
     const directory = await index.resolveOpenTarget(root);
 
     await expect(
-      adoptLooseLineages(index, directory.entry, (workspace) => registry.get(workspace)),
+      adoptLooseLineages(index, directory.entry, (workspace) => registry.get(workspace), undefined, coordinator),
     ).rejects.toMatchObject({ code: "adoption-conflict" });
     await sourceBus.createEntry("still-writable", { kind: "annotation" });
     expect(sourceBus.state.entries["still-writable"]?.status).toBe("pending");
@@ -104,6 +107,7 @@ describe("seal-and-link loose-file adoption", () => {
     writeFileSync(artifact, "note\n");
     const index = new WorkspaceIndex({ home, now: deterministicClock() });
     const registry = new WorkspaceBusRegistry();
+    const coordinator = new AdoptionCoordinator();
 
     const loose = await index.resolveOpenTarget(artifact);
     const sourceBus = registry.get(loose.entry);
@@ -119,11 +123,49 @@ describe("seal-and-link loose-file adoption", () => {
         (workspace) => registry.get(workspace),
         (sources, adoptionId, targetRegistrationId) =>
           registry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+        coordinator,
       ),
     ).rejects.toMatchObject({ code: "adoption-blocked" });
 
     expect(sourceBus.state.adoptionSeal).toBeNull();
     expect(existsSync(join(root, ".glosa"))).toBe(false);
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("serializes parallel adoption attempts for one target", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const artifact = join(root, "notes.md");
+    writeFileSync(artifact, "note\n");
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const registry = new WorkspaceBusRegistry();
+    const coordinator = new AdoptionCoordinator();
+
+    const loose = await index.resolveOpenTarget(artifact);
+    const sourceBus = registry.get(loose.entry);
+    await sourceBus.reconcileOnce();
+    await sourceBus.createEntry("source-pending", { kind: "annotation", body: "keep me" });
+    const directory = await index.resolveOpenTarget(root);
+    const runAdoption = () =>
+      adoptLooseLineages(
+        index,
+        directory.entry,
+        (workspace) => registry.get(workspace),
+        (sources, adoptionId, targetRegistrationId) =>
+          registry.sealForAdoption(sources, adoptionId, targetRegistrationId),
+        coordinator,
+      );
+
+    await expect(Promise.all([runAdoption(), runAdoption()])).resolves.toEqual([undefined, undefined]);
+
+    const targetBus = registry.get(directory.entry);
+    await targetBus.reconcileOnce();
+    expect(Object.keys(targetBus.state.lineages)).toHaveLength(1);
+    expect(Object.values(targetBus.state.entries).filter((entry) => entry.origin !== undefined)).toHaveLength(1);
+    expect(index.getWorkspaceByRegistration(directory.entry.registration_id)?.lifecycle?.state).toBe("active");
+
+    await registry.closeAll();
     cleanup(home);
     cleanup(root);
   });

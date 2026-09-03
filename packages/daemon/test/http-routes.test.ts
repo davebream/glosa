@@ -214,6 +214,42 @@ describe("A1 §5 route catalog", () => {
     rmSync(looseRoot, { recursive: true, force: true });
   });
 
+  test("POST /api/workspaces/open joins concurrent adoption of the same loose-file directory", async () => {
+    const adoptingRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-concurrent-adoption-")));
+    const artifact = join(adoptingRoot, "notes.md");
+    writeFileSync(artifact, "note\n");
+
+    try {
+      const looseResponse = await fetchFn(
+        stateChangingReq("/api/workspaces/open", {
+          method: "POST",
+          body: JSON.stringify({ path: artifact }),
+        }),
+      );
+      expect(looseResponse.status).toBe(200);
+
+      const openDirectory = () =>
+        fetchFn(
+          stateChangingReq("/api/workspaces/open", {
+            method: "POST",
+            body: JSON.stringify({ path: adoptingRoot }),
+          }),
+        );
+      const [first, second] = await Promise.all([openDirectory(), openDirectory()]);
+      expect([first.status, second.status]).toEqual([200, 200]);
+
+      const [firstBody, secondBody] = await Promise.all([first.json(), second.json()]);
+      expect(secondBody.slug).toBe(firstBody.slug);
+      const entry = workspaceIndex.getBySlug(firstBody.slug);
+      expect(entry?.kind).toBe("directory");
+      expect(entry?.lifecycle?.state).toBe("active");
+      expect(entry && existsSync(entry.bus_path)).toBe(true);
+    } finally {
+      await busRegistry.closeAll();
+      rmSync(adoptingRoot, { recursive: true, force: true });
+    }
+  });
+
   test("POST /api/workspaces/open presents an explicitly named excluded file as a loose document", async () => {
     const hiddenDir = join(root, ".hidden");
     const hiddenPath = join(hiddenDir, "secret.md");
@@ -393,6 +429,39 @@ describe("A1 §5 route catalog", () => {
       source_sha256: expect.any(String),
       stale: false,
     });
+  });
+
+  test("ordinary workspace routes fail closed while their target is being adopted", async () => {
+    const adoptingRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-adopting-ws-")));
+    try {
+      const artifact = join(adoptingRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      const loose = await workspaceIndex.resolveOpenTarget(artifact);
+      await busRegistry.get(loose.entry).reconcileOnce();
+      const directory = await workspaceIndex.resolveOpenTarget(adoptingRoot);
+      const record = await workspaceIndex.beginAdoption(directory.entry);
+      expect(record).not.toBeNull();
+
+      const response = await fetchFn(req(`/w/${directory.entry.slug}/artifacts`));
+      expect(response.status).toBe(409);
+      expect((await response.json()).type).toContain("workspace-adopting");
+      expect(busRegistry.has(directory.entry)).toBe(false);
+      expect(existsSync(directory.entry.bus_path)).toBe(false);
+
+      const rootAddressed = await fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({ path: adoptingRoot, message: "wait for adoption" }),
+        }),
+      );
+      expect(rootAddressed.status).toBe(409);
+      expect((await rootAddressed.json()).type).toContain("workspace-adopting");
+      expect(busRegistry.has(directory.entry)).toBe(false);
+      expect(existsSync(directory.entry.bus_path)).toBe(false);
+    } finally {
+      await busRegistry.closeAll();
+      rmSync(adoptingRoot, { recursive: true, force: true });
+    }
   });
 
   test("GET /w/:slug/artifacts on an unknown slug → 404 not-found", async () => {

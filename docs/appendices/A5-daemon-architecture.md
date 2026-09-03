@@ -36,8 +36,10 @@
   exception: it creates a durable adoption record, seals source histories in place, and publishes a
   new directory state atomically by same-filesystem rename. The index lifecycle is
   `active → adopting → adopted`; a source is never made writable again, and a restart resumes the
-  same plan rather than beginning a second migration.
-- GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND the registration's bus holds zero journal-derived pending entries AND present:false ≥ grace (or `glosa forget <slug>`, which stays forceful). Conservative on every axis: an unreadable journal counts as "has pending" — never remove on uncertainty. Deterministic registration ids (sha256 of kind+canonical path) make same-path re-open reclaim a surviving home-redirected bus, so parked entries in `~/.glosa/state/<id>` outlive an accidental removal; `GET /api/status` additionally reports `orphaned_state` (state dirs with pending entries and no registration) so doctor can surface them.
+  same plan rather than beginning a second migration. One daemon-scoped coordinator serializes the
+  entire transaction per target registration; parallel opens wait for that owner, while ordinary
+  routes for the adopting target return `409 workspace-adopting` and never construct its live bus.
+- GC (on start + throttled ≥60s): missing path → soft `present:false` (keeps slug for history); hard-remove only when gone AND no live session AND the registration's bus holds zero journal-derived pending entries AND present:false ≥ grace (or `glosa forget <slug>`, which stays forceful). Conservative on every axis: an unreadable journal counts as "has pending" — never remove on uncertainty. Resource eviction receives the removed registration, not an ambiguous path, and addresses the bus and watcher by immutable registration ID. Deterministic registration ids (sha256 of kind+canonical path) make same-path re-open reclaim a surviving home-redirected bus, so parked entries in `~/.glosa/state/<id>` outlive an accidental removal; `GET /api/status` additionally reports `orphaned_state` (state dirs with pending entries and no registration) so doctor can surface them.
 
 ## F23 — inbox/attention lifecycle
 - Inbox files **immutable**; status field frozen `pending`, non-authoritative. **Authoritative status = journal replay fold** (overrides R3's cross-file rewrite per F04). `resolve` appends ONE journal line, never rewrites the entry.
