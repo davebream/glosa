@@ -19,7 +19,7 @@ import {
   EXIT_CODES,
   printJsonEnvelope,
 } from "./envelope.ts";
-import { isEphemeralPackageRunnerPath } from "./init.ts";
+import { isEphemeralPackageRunnerPath } from "./init-io.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const PKG = "@davebream/glosa";

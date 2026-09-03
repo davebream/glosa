@@ -3,9 +3,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BUILD_ID } from "../../daemon/src/build-id.ts";
 import { run } from "../src/index.ts";
 import { CLI_VERSION } from "../src/version.ts";
-import { BUILD_ID } from "../../daemon/src/build-id.ts";
+import { useTempHome } from "./home.ts";
+
+// Scoped init checks the opposite-scope manifest even in print mode. Keep this command-boundary
+// suite independent of the developer's real user-scope installation.
+useTempHome();
 
 const CLI_PATH = join(import.meta.dir, "../src/main.ts");
 const PUBLIC_COMMANDS = [

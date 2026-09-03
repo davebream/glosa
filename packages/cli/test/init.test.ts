@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-// P4.3 — `glosa init`'s transactional merge/backup/uninstall (A6 §F26). Every test drives
-// `runInit`/`runUninstall` directly against a real tmp workspace dir (real fs, real JSON files) —
+// A6 §F26 — `glosa init`'s provider-declarative transactional merge/backup/uninstall. Every test
+// drives the public scoped APIs directly against a real temporary workspace directory —
 // no mocking of the merge logic itself, only of `resolveGlosaBin` (so hook command strings are
 // deterministic across a test run) and, for the mid-run-failure case, the atomic writer (so a
 // SPECIFIC file in the settings→mcp→manifest sequence can be made to fail without relying on OS
 // permission tricks a sandboxed/root test runner might bypass).
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  CHANNEL_COMMAND,
-  defaultResolveGlosaBin,
-  type GlosaBinResolution,
-  isEphemeralPackageRunnerPath,
-  runInit,
-  runUninstall,
-} from "../src/init.ts";
+import { defaultResolveGlosaBin, type GlosaBinResolution, isEphemeralPackageRunnerPath } from "../src/init-io.ts";
 import {
   detectInstallProviders,
   runScopedInit,
@@ -49,7 +51,7 @@ function mcpPathOf(dir: string): string {
   return join(dir, ".mcp.json");
 }
 function manifestPathOf(dir: string): string {
-  return join(dir, ".claude", ".glosa-init.json");
+  return join(dir, ".glosa", "init-manifest.json");
 }
 function codexHooksPathOf(dir: string): string {
   return join(dir, ".codex", "hooks.json");
@@ -68,6 +70,18 @@ function backupsFor(path: string): string[] {
 
 const BIN_A: GlosaBinResolution = { command: "glosa", args: [], mode: "path" };
 
+function runAllProvidersInit(
+  opts: Omit<Parameters<typeof runScopedInit>[0], "agents">,
+): ReturnType<typeof runScopedInit> {
+  return runScopedInit({ ...opts, agents: ["claude-code", "codex"] });
+}
+
+function runAllProvidersUninstall(
+  opts: Omit<Parameters<typeof runScopedUninstall>[0], "agents">,
+): ReturnType<typeof runScopedUninstall> {
+  return runScopedUninstall({ ...opts, agents: ["claude-code", "codex"] });
+}
+
 /** Every successful scoped setup goes through this assertion so replacing `runScopedInit` with a
  * no-op cannot leave a fixture accidentally green. */
 function expectScopedInitSuccess(result: ScopedInitResult): ScopedInitResult {
@@ -78,7 +92,7 @@ function expectScopedInitSuccess(result: ScopedInitResult): ScopedInitResult {
 
 /** The REAL bun-run fallback shape (A6 §F26) — a distinct `glosaRoot` per call so several of
  * these are still all mutually different commands while EACH ONE still matches glosa's in-band
- * hook signature (`hookRoleOf` in init.ts recognizes `bun run --silent .../packages/cli/src/
+ * hook signature (the neutral merge helper recognizes `bun run --silent .../packages/cli/src/
  * main.ts hook <role>` regardless of the specific root prefix). This is what a real GLOSA_BIN
  * change looks like — unlike an arbitrary/synthetic command string, which would never be
  * recognized as glosa's own and so could never be RECONCILED, only ever newly inserted. */
@@ -91,21 +105,21 @@ function bunRunBin(glosaRoot: string): GlosaBinResolution {
 }
 
 describe("glosa init — fresh install", () => {
-  test("creates settings.json + .mcp.json + .glosa-init.json with the exact F26 hook entries and prints the channel command", async () => {
+  test("creates every provider target plus the scoped manifest with the exact F26 hook entries", async () => {
     const dir = freshDir();
-    const result = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
     expect(result.changed).toBe(true);
-    expect(result.data.channel_command).toBe(CHANNEL_COMMAND);
+    expect(result.data.channel_command).toBe("claude --dangerously-load-development-channels server:glosa");
     expect(result.data.channel_command).not.toContain("--channels");
-    expect(result.data.files.settings.created).toBe(true);
-    expect(result.data.files.mcp.created).toBe(true);
-    expect(result.data.files.codex_hooks.created).toBe(true);
-    expect(result.data.files.codex_config.created).toBe(true);
-    expect(result.data.files.settings.backedUp).toBe(false); // nothing to back up — file didn't exist
-    expect(result.data.files.mcp.backedUp).toBe(false);
+    expect(result.data.files["claude-code:hooks"]!.created).toBe(true);
+    expect(result.data.files["claude-code:mcp"]!.created).toBe(true);
+    expect(result.data.files["codex:hooks"]!.created).toBe(true);
+    expect(result.data.files["codex:mcp"]!.created).toBe(true);
+    expect(result.data.files["claude-code:hooks"]!.backedUp).toBe(false); // nothing to back up — file didn't exist
+    expect(result.data.files["claude-code:mcp"]!.backedUp).toBe(false);
 
     const settings = readJson(settingsPathOf(dir));
     const sessionStartGroup = settings.hooks.SessionStart[0];
@@ -147,14 +161,17 @@ describe("glosa init — fresh install", () => {
     expect(codexConfig).toContain('args = ["mcp"]');
 
     const manifest = readJson(manifestPathOf(dir));
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
+    expect(manifest.scope).toBe("workspace");
     expect(manifest.glosa_bin).toEqual(BIN_A);
-    expect(manifest.files.settings.created).toBe(true);
-    expect(manifest.files.mcp.created).toBe(true);
-    expect(manifest.files.codex_hooks.created).toBe(true);
-    expect(manifest.files.codex_config.created).toBe(true);
-    expect(manifest.files.settings.inserted.length).toBe(6); // 2 SessionStart + 4 singles
-    expect(manifest.files.mcp.inserted).toEqual([{ pointer: "/mcpServers/glosa", sha256: expect.any(String) }]);
+    expect(manifest.providers["claude-code"].files.hooks.created).toBe(true);
+    expect(manifest.providers["claude-code"].files.mcp.created).toBe(true);
+    expect(manifest.providers.codex.files.hooks.created).toBe(true);
+    expect(manifest.providers.codex.files.mcp.created).toBe(true);
+    expect(manifest.providers["claude-code"].files.hooks.inserted.length).toBe(6); // 2 SessionStart + 4 singles
+    expect(manifest.providers["claude-code"].files.mcp.inserted).toEqual([
+      { pointer: "/mcpServers/glosa", sha256: expect.any(String) },
+    ]);
   });
 
   test("a foreign sibling hook under the same event is left completely untouched", async () => {
@@ -169,7 +186,7 @@ describe("glosa init — fresh install", () => {
       ),
     );
 
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     const settings = readJson(settingsPathOf(dir));
     const stopHooks = settings.hooks.Stop.flatMap((g: any) => g.hooks);
@@ -191,9 +208,9 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
       ),
     );
 
-    await runInit({ dir, resolveGlosaBin: () => BIN_A }); // path mode: "glosa hook <role>"
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A }); // path mode: "glosa hook <role>"
     const binB = bunRunBin("/opt/glosa");
-    const result = await runInit({ dir, resolveGlosaBin: () => binB });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => binB });
 
     expect(result.ok).toBe(true);
     expect(result.changed).toBe(true);
@@ -224,14 +241,14 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
     // The manifest's recorded pointers were updated too (not duplicated) — same count as a fresh
     // install, not double.
     const manifest = readJson(manifestPathOf(dir));
-    expect(manifest.files.settings.inserted).toHaveLength(6);
+    expect(manifest.providers["claude-code"].files.hooks.inserted).toHaveLength(6);
   });
 
   test("--force also reconciles drifted hooks (not just the MCP conflict path)", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     const binB = bunRunBin("/opt/glosa-2");
-    const result = await runInit({ dir, resolveGlosaBin: () => binB, force: true });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => binB, force: true });
 
     expect(result.changed).toBe(true);
     const settings = readJson(settingsPathOf(dir));
@@ -243,10 +260,10 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
 
   test("re-running with the SAME (already-reconciled) bin a second time is a true no-op", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     const binB = bunRunBin("/opt/glosa-3");
-    await runInit({ dir, resolveGlosaBin: () => binB });
-    const again = await runInit({ dir, resolveGlosaBin: () => binB });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => binB });
+    const again = await runAllProvidersInit({ dir, resolveGlosaBin: () => binB });
     expect(again.changed).toBe(false);
   });
 });
@@ -254,8 +271,8 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
 describe("glosa init — idempotency", () => {
   test("a second init with nothing new to add: changed:false, exit 0, no backup taken", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
-    const second = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
+    const second = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     expect(second.ok).toBe(true);
     expect(second.exitCode).toBe(0);
@@ -268,7 +285,7 @@ describe("glosa init — idempotency", () => {
 describe("glosa init — backups", () => {
   test("a genuine content change to an EXISTING file takes a backup; unrelated repeats retain at most 5", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A }); // run 0 — creates the file (no backup)
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A }); // run 0 — creates the file (no backup)
 
     // Seven more runs, each a REAL bun-run GLOSA_BIN with a distinct root — still recognized as
     // glosa's own by `hookRoleOf`'s signature match, but genuinely different command text each
@@ -277,9 +294,9 @@ describe("glosa init — backups", () => {
     for (let i = 1; i <= 7; i++) {
       const bin = bunRunBin(`/glosa-root-${i}`);
       const at = new Date(2026, 0, i, 0, 0, i); // distinct second per run -> distinct backup filenames
-      const result = await runInit({ dir, resolveGlosaBin: () => bin, now: () => at });
+      const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => bin, now: () => at });
       expect(result.changed).toBe(true);
-      expect(result.data.files.settings.backedUp).toBe(true);
+      expect(result.data.files["claude-code:hooks"]!.backedUp).toBe(true);
     }
 
     expect(backupsFor(settingsPathOf(dir))).toHaveLength(5); // retained cap (A6 §F26)
@@ -291,15 +308,15 @@ describe("glosa init — backups", () => {
 
   test("skip if identical to newest: re-running with the SAME bin after a real change takes no additional backup", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     const binB = bunRunBin("/glosa-root-b");
-    await runInit({ dir, resolveGlosaBin: () => binB, now: () => new Date(2026, 0, 1) });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => binB, now: () => new Date(2026, 0, 1) });
     const afterFirstChange = backupsFor(settingsPathOf(dir)).length;
     expect(afterFirstChange).toBe(1);
 
     // Same bin again — nothing new to merge, so this is the idempotent no-op path, not a backup
     // opportunity at all.
-    await runInit({ dir, resolveGlosaBin: () => binB, now: () => new Date(2026, 0, 2) });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => binB, now: () => new Date(2026, 0, 2) });
     expect(backupsFor(settingsPathOf(dir))).toHaveLength(afterFirstChange);
   });
 });
@@ -311,7 +328,7 @@ describe("glosa init — invalid JSON", () => {
     const malformed = "{ this is not valid json";
     writeFileSync(settingsPathOf(dir), malformed);
 
-    const result = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(6);
@@ -340,7 +357,7 @@ describe("glosa init — foreign MCP 'glosa' key", () => {
     writeForeignMcp(dir);
     const before = readFileSync(mcpPathOf(dir), "utf8");
 
-    const result = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(6);
@@ -352,11 +369,11 @@ describe("glosa init — foreign MCP 'glosa' key", () => {
     const dir = freshDir();
     writeForeignMcp(dir);
 
-    const result = await runInit({ dir, resolveGlosaBin: () => BIN_A, force: true });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A, force: true });
 
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
-    expect(result.data.files.mcp.backedUp).toBe(true);
+    expect(result.data.files["claude-code:mcp"]!.backedUp).toBe(true);
     const mcp = readJson(mcpPathOf(dir));
     expect(mcp.mcpServers.glosa).toEqual({ type: "stdio", command: "glosa", args: ["mcp"] });
     expect(backupsFor(mcpPathOf(dir))).toHaveLength(1);
@@ -369,12 +386,12 @@ describe("glosa init — Codex TOML merge", () => {
     mkdirSync(join(dir, ".codex"), { recursive: true });
     const foreign = '[mcp_servers.other]\ncommand = "other"\n';
     writeFileSync(codexConfigPathOf(dir), foreign);
-    const installed = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const installed = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     expect(installed.ok).toBe(true);
     expect(readFileSync(codexConfigPathOf(dir), "utf8")).toContain(foreign.trim());
     expect(readFileSync(codexConfigPathOf(dir), "utf8")).toContain("[mcp_servers.glosa]");
 
-    const removed = await runUninstall({ dir });
+    const removed = await runAllProvidersUninstall({ dir });
     expect(removed.ok).toBe(true);
     expect(readFileSync(codexConfigPathOf(dir), "utf8")).toBe(foreign);
   });
@@ -383,7 +400,7 @@ describe("glosa init — Codex TOML merge", () => {
 describe("glosa init — --print/--dry-run", () => {
   test("returns a unified diff and writes NOTHING to disk", async () => {
     const dir = freshDir();
-    const result = await runInit({ dir, print: true, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, print: true, resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(true);
     expect(result.changed).toBe(true);
@@ -397,7 +414,7 @@ describe("glosa init — --print/--dry-run", () => {
 
   test("an mcp-only change shows NO settings.json diff section (P4.3 review fix #3)", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A }); // baseline: both files installed, matching
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A }); // baseline: both files installed, matching
 
     // Force an mcp-only conflict resolution: pre-seed a foreign mcp entry, --force it — settings
     // stays byte-identical (already matches BIN_A), only .mcp.json actually changes.
@@ -405,7 +422,7 @@ describe("glosa init — --print/--dry-run", () => {
     mcp.mcpServers.glosa = { type: "stdio", command: "someone-else", args: [] };
     writeFileSync(mcpPathOf(dir), JSON.stringify(mcp, null, 2));
 
-    const result = await runInit({ dir, print: true, force: true, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, print: true, force: true, resolveGlosaBin: () => BIN_A });
 
     expect(result.changed).toBe(true); // mcp really is changing
     expect(result.diff).toContain(mcpPathOf(dir));
@@ -414,7 +431,7 @@ describe("glosa init — --print/--dry-run", () => {
 
   test("a settings-only change shows NO .mcp.json diff section", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     // Hand-remove ONE of glosa's own hooks so the next init has something to reconcile in
     // settings.json specifically — GLOSA_BIN itself stays the same, so .mcp.json (whose only
@@ -423,7 +440,7 @@ describe("glosa init — --print/--dry-run", () => {
     settings.hooks.Notification = [];
     writeFileSync(settingsPathOf(dir), JSON.stringify(settings, null, 2));
 
-    const result = await runInit({ dir, print: true, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, print: true, resolveGlosaBin: () => BIN_A });
 
     expect(result.changed).toBe(true);
     expect(result.diff).toContain(settingsPathOf(dir));
@@ -434,7 +451,7 @@ describe("glosa init — --print/--dry-run", () => {
 describe("glosa init — mid-run failure rolls back (no half-install)", () => {
   test("settings.json write succeeds, .mcp.json write fails -> settings.json is restored to its pre-run content, manifest untouched, exit != 0", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A }); // baseline install, run 0
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A }); // baseline install, run 0
 
     const settingsBefore = readFileSync(settingsPathOf(dir), "utf8");
     const mcpBefore = readFileSync(mcpPathOf(dir), "utf8");
@@ -442,7 +459,7 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
 
     const binV2: GlosaBinResolution = { command: "glosa-v2", args: [], mode: "path" }; // forces a real settings.json change
     const mcpTarget = mcpPathOf(dir);
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       resolveGlosaBin: () => binV2,
       writeFileAtomic: (path, content) => {
@@ -461,7 +478,7 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
 
   test("a late Codex config failure rolls back Claude and Codex writes as one transaction", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     const tracked = [
       settingsPathOf(dir),
       mcpPathOf(dir),
@@ -470,7 +487,7 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
       manifestPathOf(dir),
     ];
     const before = new Map(tracked.map((path) => [path, readFileSync(path, "utf8")]));
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       resolveGlosaBin: () => ({ command: "glosa-v3", args: [], mode: "path" }),
       writeFileAtomic: (path, content) => {
@@ -507,7 +524,7 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
 
   test("an npx package-cache invocation refuses to persist an ephemeral integration command", async () => {
     const dir = freshDir();
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       glosaRoot: "/Users/test/.npm/_npx/abc123/node_modules/@davebream/glosa",
     });
@@ -521,7 +538,7 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
 
   test("a bunx package-cache invocation refuses to persist an ephemeral integration command", async () => {
     const dir = freshDir();
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       glosaRoot: "/Users/test/.bun/install/cache/@davebream/glosa@0.1.0-alpha.0",
     });
@@ -533,19 +550,19 @@ describe("glosa init — GLOSA_BIN resolution (A6 §F26)", () => {
         "if your npm config maps the @davebream scope to another registry, install from the published " +
         "tarball URL instead — see the README's Quick start",
     );
-    expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
+    expect(existsSync(manifestPathOf(dir))).toBe(false);
   });
 
   test("a package-runner cache under a CUSTOM BUN_INSTALL root is still ephemeral", async () => {
     const dir = freshDir();
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       glosaRoot: "/opt/bunroot/install/cache/@davebream/glosa@0.1.0-alpha.0",
     });
 
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("durable-install-required");
-    expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
+    expect(existsSync(manifestPathOf(dir))).toBe(false);
   });
 });
 
@@ -579,16 +596,17 @@ describe("isEphemeralPackageRunnerPath", () => {
 });
 
 describe("glosa init — concurrent access (P4.3 concurrency review fix #6)", () => {
-  test("a runInit call WAITS while another process holds the whole-transaction lock, then proceeds with a fully-populated manifest — never an interleaved, corrupted one", async () => {
+  test("a runAllProvidersInit call WAITS while another process holds the whole-transaction lock, then proceeds with a fully-populated manifest — never an interleaved, corrupted one", async () => {
     const dir = freshDir();
     mkdirSync(join(dir, ".claude"), { recursive: true });
+    mkdirSync(join(dir, ".glosa"), { recursive: true });
     const lockPath = `${manifestPathOf(dir)}.lock`;
 
     // Simulate "process A" already mid-transaction, holding the lock.
     writeFileSync(lockPath, JSON.stringify({ pid: 999999, started: new Date().toISOString() }));
 
     // "Process B" (this real call) starts while the lock is held.
-    const resultPromise = runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const resultPromise = runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     // It must actually be BLOCKED, not racing ahead — nothing written yet.
     await Bun.sleep(50);
@@ -606,11 +624,11 @@ describe("glosa init — concurrent access (P4.3 concurrency review fix #6)", ()
     // interleaved process seeing a null/stale manifest mid-write and clobbering it with an
     // empty `inserted` array).
     const manifest = readJson(manifestPathOf(dir));
-    expect(manifest.files.settings.inserted).toHaveLength(6);
-    expect(manifest.files.mcp.inserted).toHaveLength(1);
+    expect(manifest.providers["claude-code"].files.hooks.inserted).toHaveLength(6);
+    expect(manifest.providers["claude-code"].files.mcp.inserted).toHaveLength(1);
 
     // Uninstall afterward cleanly removes everything — nothing was silently orphaned.
-    const uninstallResult = await runUninstall({ dir });
+    const uninstallResult = await runAllProvidersUninstall({ dir });
     expect(uninstallResult.ok).toBe(true);
     expect(existsSync(settingsPathOf(dir))).toBe(false);
     expect(existsSync(mcpPathOf(dir))).toBe(false);
@@ -620,10 +638,12 @@ describe("glosa init — concurrent access (P4.3 concurrency review fix #6)", ()
   test("a stale lock (older than 30s) is reclaimed rather than waited out indefinitely", async () => {
     const dir = freshDir();
     mkdirSync(join(dir, ".claude"), { recursive: true });
+    mkdirSync(join(dir, ".glosa"), { recursive: true });
     const lockPath = `${manifestPathOf(dir)}.lock`;
     writeFileSync(lockPath, JSON.stringify({ pid: 999999, started: new Date(2020, 0, 1).toISOString() }));
+    utimesSync(lockPath, new Date(2020, 0, 1), new Date(2020, 0, 1));
 
-    const result = await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    const result = await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(true);
     expect(existsSync(lockPath)).toBe(false); // released cleanly after this run
@@ -631,11 +651,11 @@ describe("glosa init — concurrent access (P4.3 concurrency review fix #6)", ()
 
   test("the lock is released even when the run fails (mid-run rollback path)", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
     const lockPath = `${manifestPathOf(dir)}.lock`;
     const mcpTarget = mcpPathOf(dir);
 
-    const result = await runInit({
+    const result = await runAllProvidersInit({
       dir,
       resolveGlosaBin: () => bunRunBin("/opt/glosa-lock-fail"),
       writeFileAtomic: (path, content) => {
@@ -652,9 +672,9 @@ describe("glosa init — concurrent access (P4.3 concurrency review fix #6)", ()
 describe("glosa uninstall", () => {
   test("clean removal: both files were created by glosa and end up empty -> both deleted, manifest deleted", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
-    const result = await runUninstall({ dir });
+    const result = await runAllProvidersUninstall({ dir });
 
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
@@ -674,9 +694,9 @@ describe("glosa uninstall", () => {
         2,
       ),
     );
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
-    await runUninstall({ dir });
+    await runAllProvidersUninstall({ dir });
 
     expect(existsSync(settingsPathOf(dir))).toBe(true);
     const settings = readJson(settingsPathOf(dir));
@@ -688,7 +708,7 @@ describe("glosa uninstall", () => {
 
   test("an externally-edited node is left in place, warned about, and the overall exit code is 9 — everything else still gets cleaned up", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     // Mutate the recorded "stop" hook's timeout by hand — its hash no longer matches what the
     // manifest recorded.
@@ -696,7 +716,7 @@ describe("glosa uninstall", () => {
     settings.hooks.Stop[0].hooks[0].timeout = 999;
     writeFileSync(settingsPathOf(dir), JSON.stringify(settings, null, 2));
 
-    const result = await runUninstall({ dir });
+    const result = await runAllProvidersUninstall({ dir });
 
     expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(9);
@@ -715,7 +735,7 @@ describe("glosa uninstall", () => {
 
   test("no manifest at all -> nothing to uninstall, exit 0 with a warning, never throws", async () => {
     const dir = freshDir();
-    const result = await runUninstall({ dir });
+    const result = await runAllProvidersUninstall({ dir });
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
     expect(result.warnings.some((w) => w.code === "no-manifest")).toBe(true);
@@ -739,14 +759,14 @@ describe("glosa uninstall", () => {
       mcpPathOf(dir),
       JSON.stringify({ mcpServers: { "some-other-server": { type: "stdio", command: "x", args: [] } } }, null, 2),
     );
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
 
     const settingsBefore = readFileSync(settingsPathOf(dir), "utf8");
     const mcpBefore = readFileSync(mcpPathOf(dir), "utf8");
     const manifestBefore = readFileSync(manifestPathOf(dir), "utf8");
 
     const mcpTarget = mcpPathOf(dir);
-    const result = await runUninstall({
+    const result = await runAllProvidersUninstall({
       dir,
       writeFileAtomic: (path, content) => {
         if (path === mcpTarget) throw new Error("simulated disk failure writing .mcp.json");
@@ -1023,14 +1043,36 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
 
   test("the first scoped operation atomically migrates the legacy manifest", async () => {
     const dir = freshDir();
-    await runInit({ dir, resolveGlosaBin: () => BIN_A });
-    expect(existsSync(manifestPathOf(dir))).toBe(true);
+    await runAllProvidersInit({ dir, resolveGlosaBin: () => BIN_A });
+    const scopedPath = manifestPathOf(dir);
+    const scoped = readJson(scopedPath);
+    const legacyPath = scopedManifestPaths(dir).legacy;
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(
+      legacyPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          glosa_bin: scoped.glosa_bin,
+          files: {
+            settings: scoped.providers["claude-code"].files.hooks,
+            mcp: scoped.providers["claude-code"].files.mcp,
+            codex_hooks: scoped.providers.codex.files.hooks,
+            codex_config: scoped.providers.codex.files.mcp,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    rmSync(scopedPath);
+    expect(existsSync(legacyPath)).toBe(true);
 
     const result = await runScopedInit({ dir, agents: ["claude-code", "codex"], resolveGlosaBin: () => BIN_A });
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
-    expect(existsSync(manifestPathOf(dir))).toBe(false);
-    const manifest = readJson(scopedManifestPaths(dir).workspace);
+    expect(existsSync(legacyPath)).toBe(false);
+    const manifest = readJson(scopedPath);
     expect(Object.keys(manifest.providers).sort()).toEqual(["claude-code", "codex"]);
   });
 

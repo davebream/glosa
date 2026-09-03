@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { journalPath, tokenPath, WorkspaceBus } from "@glosa/daemon";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
-import { runInit } from "../src/init.ts";
+import { runScopedInit } from "../src/scoped-init.ts";
 import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { captureStdout } from "./test-utils.ts";
 
@@ -219,11 +219,11 @@ describe("glosa doctor", () => {
     const before = await runDoctor(dir, deps);
     expect(findCheck(before.data.checks, "hooks")?.status).toBe("warn");
 
-    await runInit({ dir });
+    await runScopedInit({ dir, agents: ["claude-code"] });
     const afterInit = await runDoctor(dir, deps);
     expect(findCheck(afterInit.data.checks, "hooks")?.status).toBe("pass");
 
-    // Externally edit one of glosa's own hook entries — same "drift" `runUninstall` itself detects.
+    // Externally edit one of glosa's own hook entries — same drift scoped uninstall itself detects.
     const settingsPath = join(dir, ".claude", "settings.json");
     const settings = JSON.parse(await Bun.file(settingsPath).text());
     settings.hooks.SessionStart[0].hooks[0].timeout = 999;
@@ -284,7 +284,7 @@ describe("glosa doctor", () => {
     expect(strandedCheck?.detail).toContain("delivery is not wired");
 
     // After init the hooks check passes -> same queue is merely pending, not stranded.
-    await runInit({ dir });
+    await runScopedInit({ dir, agents: ["claude-code"] });
     const wired = await runDoctor(dir, deps);
     expect(findCheck(wired.data.checks, "pending-delivery")?.status).toBe("pass");
 
@@ -330,7 +330,7 @@ describe("glosa doctor", () => {
     expect(findCheck(bare.data.checks, "mcp-enabled")?.status).toBe("pass");
 
     // Init installs the .mcp.json entry; a local layer enabling "glosa" is then consistent.
-    await runInit({ dir });
+    await runScopedInit({ dir, agents: ["claude-code"] });
     writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["glosa"] }));
     const consistent = await runDoctor(dir, deps);
     expect(findCheck(consistent.data.checks, "mcp-enabled")?.status).toBe("pass");
@@ -351,7 +351,7 @@ describe("glosa doctor", () => {
   test("mcp-enabled: invalid settings layer JSON is tolerated (check still runs)", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
-    await runInit({ dir });
+    await runScopedInit({ dir, agents: ["claude-code"] });
     writeFileSync(join(dir, ".claude", "settings.local.json"), "{not json");
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "mcp-enabled")?.status).toBe("pass");

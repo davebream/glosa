@@ -74,8 +74,8 @@ export interface OpenPresentationDeps {
   isRegularFile?: (path: string) => boolean;
   /** Read-only init-manifest probe used for the `not-initialized`/`init-drifted` warnings.
    * Defaults to scoped-init.ts's `checkScopedManifestDrift` — the SAME function `glosa doctor`'s
-   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. It previously
-   * defaulted to init.ts's legacy v1 probe, which only ever looked at `.claude/.glosa-init.json`;
+   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. The removed
+   * legacy probe only looked at `.claude/.glosa-init.json`;
    * since `runScopedInit` writes `.glosa/init-manifest.json` and DELETES the legacy file after
    * migrating it, every correctly-wired workspace reported `not-initialized` (issue #96).
    * Injectable for tests. */

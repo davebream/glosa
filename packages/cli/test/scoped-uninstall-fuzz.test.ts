@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GlosaBinResolution } from "../src/init.ts";
+import type { GlosaBinResolution } from "../src/init-io.ts";
 import { runScopedInit, runScopedUninstall } from "../src/scoped-init.ts";
 import { useTempHome } from "./home.ts";
 

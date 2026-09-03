@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // A6 §F26 scoped, targeted, provider-declarative onboarding.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+
 import { createHash } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -14,20 +15,19 @@ import type {
 import { claudeCodeInstallDescriptor } from "../../providers/claude-code/src/index.ts";
 import { codexInstallDescriptor } from "../../providers/codex/src/index.ts";
 import {
-  CHANNEL_COMMAND,
   DurableGlosaInstallRequiredError,
   defaultResolveGlosaBin,
   detectIndent,
+  type GlosaBinResolution,
   mergeMcp,
   mergeSettingsHooks,
   parseJsonFile,
   sha256Of,
   takeBackup,
+  type WriteFileAtomic,
   writeAtomic,
   writeJsonAtomic,
-  type GlosaBinResolution,
-  type WriteFileAtomic,
-} from "./init.ts";
+} from "./init-io.ts";
 import { renderUnifiedDiff } from "./unified-diff.ts";
 
 export type { InitScope, ProviderId } from "../../daemon/src/index.ts";
@@ -344,7 +344,7 @@ function emptyData(scope: InitScope, providers: ProviderId[], bin: GlosaBinResol
     files: {},
     activation_help: activation,
     glosa_bin: bin,
-    ...(providers.includes("claude-code") ? { channel_command: CHANNEL_COMMAND } : {}),
+    ...(activation.length === 1 ? { channel_command: activation[0] } : {}),
   };
 }
 

@@ -82,8 +82,8 @@ export interface OfferInitOptions {
   /** Defaults to confirm.ts's `confirmOnTty`. */
   confirm?: (question: string) => Promise<boolean>;
   /** Defaults to scoped-init.ts's `runScopedInit` (programmatic, idempotent-by-content) with the
-   * providers detected in the workspace — the SAME entry point `glosa init` itself runs. It used
-   * to default to init.ts's legacy v1 `runInit`, which writes the superseded
+   * providers detected in the workspace — the SAME entry point `glosa init` itself runs. The
+   * removed legacy transaction wrote the superseded
    * `.claude/.glosa-init.json` ownership layout that neither `doctor` nor the daemon's wiring
    * probe treats as authoritative any more (issue #96). */
   runInit?: (opts: { dir: string }) => Promise<InitResult>;

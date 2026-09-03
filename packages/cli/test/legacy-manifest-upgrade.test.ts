@@ -4,16 +4,13 @@
 // WHY this file exists separately from init.test.ts: A6 §F26 says "a legacy
 // `<ws>/.claude/.glosa-init.json` is read and atomically migrated on the first scoped
 // init/uninstall". Users have v1 manifests on disk right now, so the ability to READ one is a
-// compatibility guarantee that must outlive the v1 WRITER (`runInit`, which is `@deprecated` and
-// slated for deletion once the scoped path's gaps below are closed).
+// compatibility guarantee that outlives the now-removed v1 writer.
 //
-// The one pre-existing upgrade test (init.test.ts's "the first scoped operation atomically
-// migrates the legacy manifest") builds its v1 fixture BY CALLING that writer, so deleting the
-// writer would silently delete the only proof that a v1 workspace still upgrades. Every byte below
-// is therefore a hand-written literal captured from what v1 actually wrote, not a value re-derived
-// from today's code: if the migration or the reader drifts, these fixtures do not drift with it,
-// and the test fails. That independence is the whole point — this file is the safety net that has
-// to be in place BEFORE the v1 writer can go.
+// The broader transaction suite also checks migration mechanics, but derives its fixture from a
+// current scoped manifest. Every byte below is instead a hand-written literal captured from what
+// v1 actually wrote, not a value re-derived from today's code: if the migration or reader drifts,
+// these fixtures do not drift with it. That independence is the safety net that allowed the v1
+// writer to be removed.
 //
 // The fixture is deliberately the FULL v1 shape — both providers, all four target files, including
 // the optional `codex_hooks`/`codex_config` records — because `migrateLegacy` branches on those

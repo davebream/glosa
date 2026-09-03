@@ -2,7 +2,7 @@
 // issue #80 — the consent-gated `glosa init` shell-out. Unit tests inject a fake spawn to pin
 // the argv shape, env scrubbing (ANTHROPIC_API_KEY / GIT_*), single-flight, and timeout; one
 // real-subprocess integration test proves a manifest actually lands and a second run reports
-// changed:false (runInit's idempotence surviving the shell-out boundary).
+// changed:false (the scoped transaction's idempotence surviving the shell-out boundary).
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
