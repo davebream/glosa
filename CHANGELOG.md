@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] - 2026-09-03
+
+### Added
+
+- `glosa doctor` now reports journal byte and physical-line growth so operators can distinguish
+  ordinary queue depth from a journal that needs attention.
+
+### Changed
+
+- The daemon now separates application routes and services from transport, security, and process
+  lifecycle modules; the SPA viewer lifecycle is likewise split into transport-free components.
+- The deterministic T8 gate names its acceptance set explicitly and exercises browser security,
+  provider delivery, and daemon lifecycle behavior across real process boundaries.
+
+### Fixed
+
+- Expired apply leases, stale shadow indexes, and approval replay can no longer assign unproven
+  session provenance or lose the durable approval identity recorded in the journal.
+- Workspace registration, adoption, fallback leases, lock reclamation, journal tails, and approval
+  uniqueness now fail closed under ambiguous or concurrent state instead of risking lost updates.
+- Provider setup remains generic, transcript selection rejects ambiguity, descendant workspaces
+  drain correctly, and the SPA offers honest recovery when more than one session could be selected.
+- CLI uninstall preserves foreign configuration and indentation, request-review failures retain
+  their real category, and durable-install recovery guidance is restored.
+- Daemon startup fails promptly when its spawned child exits before handshake, while interrupted
+  test runners reliably reap their isolated daemon children.
+
+### Security
+
+- Every CLI-spawned child environment scrubs `ANTHROPIC_API_KEY`, browser token storage is covered
+  by the real-engine security gate, and stale git locks are removed only with proven ownership.
+
 ## [0.1.0-alpha.8] - 2026-08-10
 
 ### Fixed
@@ -190,7 +222,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.8...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.9...HEAD
+[0.1.0-alpha.9]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.8...v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.7...v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.6...v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.5...v0.1.0-alpha.6
