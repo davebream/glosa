@@ -406,7 +406,10 @@ async function runScopedInitLocked(
         code: "durable-install-required",
         kind: "usage",
         message: error.message,
-        hint: "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`",
+        hint:
+          "install with `bun add --global @davebream/glosa@alpha`, then re-run `glosa init`; " +
+          "if your npm config maps the @davebream scope to another registry, install from the published " +
+          "tarball URL instead — see the README's Quick start",
       },
     };
   }
