@@ -2,9 +2,9 @@
 // P5.1 — `glosa request-review <path> [--message] [--action] [--wait <duration>]` (A5 §F23, A6 §F26).
 import { describe, expect, test } from "bun:test";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { printRequestReviewResult, runRequestReview, type RequestReviewDeps } from "../src/request-review.ts";
+import { printRequestReviewResult, type RequestReviewDeps, runRequestReview } from "../src/request-review.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
-import { captureStdout } from "./test-utils.ts";
+import { captureStderr, captureStdout } from "./test-utils.ts";
 
 function makeDeps(client: FakeGlosaApiClient = new FakeGlosaApiClient()): {
   deps: RequestReviewDeps;
@@ -128,17 +128,40 @@ describe("glosa request-review", () => {
     expect(result.error?.kind).toBe("review_timeout");
   });
 
-  test("workspace creation fails at the API level -> exit 4 (not_a_workspace)", async () => {
+  test("workspace lookup returns 404 -> exit 4 (not_a_workspace)", async () => {
     const client = new FakeGlosaApiClient();
     client.createAttentionRequest = async () => {
-      throw apiError(400, {
-        type: "https://glosa.local/errors/invalid-path",
-        title: "path does not resolve to a real directory",
+      throw apiError(404, {
+        type: "https://glosa.local/errors/not-found",
+        title: "unknown workspace",
       });
     };
     const { deps } = makeDeps(client);
     const result = await runRequestReview({ dir: "/nowhere", path: "notes.md" }, deps);
     expect(result.exitCode).toBe(4);
+    expect(result.error).toMatchObject({ code: "not-a-workspace", kind: "not_a_workspace" });
+  });
+
+  test("invalid request returns 400 -> exit 70 (internal) with the safe problem title", async () => {
+    const client = new FakeGlosaApiClient();
+    client.createAttentionRequest = async () => {
+      throw apiError(400, {
+        type: "https://glosa.local/errors/invalid-path",
+        title: "target_path must be workspace-relative and confined",
+      });
+    };
+    const { deps } = makeDeps(client);
+    const result = await runRequestReview({ dir: "/repo", path: "../notes.md" }, deps);
+
+    expect(result.exitCode).toBe(70);
+    expect(result.error).toEqual({
+      code: "request-review-failed",
+      kind: "internal",
+      message: "target_path must be workspace-relative and confined",
+    });
+
+    const human = captureStderr(() => printRequestReviewResult(result, false));
+    expect(human).toBe("glosa request-review: target_path must be workspace-relative and confined\n");
   });
 
   test("duplicate active approval -> exit 8 (approval-conflict)", async () => {
@@ -153,6 +176,45 @@ describe("glosa request-review", () => {
     const result = await runRequestReview({ dir: "/repo", path: "notes.md", requireApproval: true }, deps);
     expect(result.exitCode).toBe(8);
     expect(result.error).toMatchObject({ code: "approval-conflict", kind: "conflict" });
+  });
+
+  test("unprovable approval uniqueness returns 500 -> exit 70 (internal) without leaking problem detail", async () => {
+    const client = new FakeGlosaApiClient();
+    client.createAttentionRequest = async () => {
+      throw apiError(500, {
+        type: "https://glosa.local/errors/approval-uniqueness-unprovable",
+        title: "cannot prove this artifact has no open approval request",
+        status: 500,
+        detail: "inbox entry inb-sensitive could not be read; restore it, then retry",
+        instance: "/api/workspaces/attention-request",
+      });
+    };
+    const { deps } = makeDeps(client);
+    const result = await runRequestReview({ dir: "/repo", path: "notes.md", requireApproval: true }, deps);
+
+    expect(result.exitCode).toBe(70);
+    expect(result.error).toEqual({
+      code: "request-review-failed",
+      kind: "internal",
+      message: "cannot prove this artifact has no open approval request",
+    });
+
+    const json = JSON.parse(captureStdout(() => printRequestReviewResult(result, true)));
+    expect(json).toMatchObject({
+      glosa_json: 1,
+      ok: false,
+      command: "request-review",
+      exit_code: 70,
+      data: {},
+      warnings: [],
+      error: {
+        code: "request-review-failed",
+        kind: "internal",
+        message: "cannot prove this artifact has no open approval request",
+      },
+    });
+    expect(JSON.stringify(json)).not.toContain("inb-sensitive");
+    expect(JSON.stringify(json)).not.toContain("/api/workspaces/attention-request");
   });
 
   test("--json envelope has exactly the documented top-level keys", async () => {

@@ -239,7 +239,7 @@
 | `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid>` | F05 lease: pre-checkpoint + attribution lease; prints lease token | 0;3;8;12;2 |
-| `request-review` | `<path> [--message] [--action] [--require-approval] [--wait <dur>]` | create attention_request; approval mode binds final approval to the saved artifact revision; --wait blocks to resolution | 0(verdict in data);7 timeout;8 approval conflict;3;4;2 |
+| `request-review` | `<path> [--message] [--action] [--require-approval] [--wait <dur>]` | create attention_request; approval mode binds final approval to the saved artifact revision; --wait blocks to resolution | 0(verdict in data);7 timeout;8 approval conflict;3;4;2;70 |
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>]` | explicitly bind a registered session to the artifact workspace | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
@@ -262,6 +262,10 @@
   over HTTP. A successful result includes `bound_session`; no alternate persistence path is created.
 - Preview lock is an **affordance expressing intent ("not for review")**, not access control: the
   annotation API continues to accept authenticated POSTs for the artifact.
+- `request-review` creation maps daemon 404 to exit 4 `not_a_workspace` and daemon 409 to exit 8
+  `approval-conflict`. Any other API failure before the review request is created maps to exit 70
+  `internal`, preserving the problem title but not its detail or instance. Exit 9 does not apply:
+  no primary operation completed successfully.
 - doctor 15 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), pending-delivery(WARN when entries are queued for this workspace but the hooks check is not passing; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
 
 ## Metadata and binding output
