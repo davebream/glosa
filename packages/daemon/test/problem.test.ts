@@ -3,7 +3,7 @@
 // throw in the HTTP pipeline falls back to. The point of this response is what it does NOT say —
 // no error message, no stack, nothing an exception could have been carrying.
 import { describe, expect, test } from "bun:test";
-import { internalErrorResponse, problem } from "../src/problem.ts";
+import { internalErrorResponse, problem } from "../src/transport/problem.ts";
 
 describe("problem", () => {
   test("builds the RFC 9457 envelope with problem+json content type", async () => {

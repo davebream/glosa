@@ -18,13 +18,13 @@ import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
 import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
 import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "../src/capability.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
-import { type ApiContext, createApiFetch } from "../src/http.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -339,7 +339,7 @@ describe("A1 §5 route catalog", () => {
   });
 
   test("presentation-token mint + redeem is single-use; replay and foreign Origin fail closed", async () => {
-    const { PresentationTokenStore } = await import("../src/presentation-token.ts");
+    const { PresentationTokenStore } = await import("../src/security/presentation-token.ts");
     ctx.presentationTokenStore = new PresentationTokenStore();
     fetchFn = createApiFetch(ctx);
 
@@ -1700,7 +1700,7 @@ describe("A1 §5 route catalog", () => {
 
     test("unwired → wired → live → back to wired on lease expiry; response never leaks a path", async () => {
       // No init manifest anywhere -> unwired.
-      let res = await fetchFn(req(`/w/${slug}/wiring`));
+      const res = await fetchFn(req(`/w/${slug}/wiring`));
       expect(res.status).toBe(200);
       let body = await res.json();
       expect(body.state).toBe("unwired");

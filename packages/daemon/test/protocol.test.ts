@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { parseProtocolVersion, protocolCompatible } from "../src/protocol.ts";
+import { parseProtocolVersion, protocolCompatible } from "../src/lifecycle/protocol.ts";
 
 describe("protocol.ts", () => {
   test("parseProtocolVersion splits major.minor", () => {

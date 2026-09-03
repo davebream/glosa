@@ -31,9 +31,9 @@ describe("daemon application seams", () => {
   });
 
   test("http delegates coherent route families instead of owning their application handlers", () => {
-    const http = parsed(join(SRC, "http.ts"));
+    const http = parsed(join(SRC, "transport/http.ts"));
     for (const family of ["artifactRoutes", "attentionRoutes", "composerRoutes"]) {
-      expect(http.imports).toContain(`./routes/${family.replace("Routes", "")}.ts`);
+      expect(http.imports).toContain(`../routes/${family.replace("Routes", "")}.ts`);
       expect(
         new RegExp(`\\b${family}\\s*\\(\\s*\\{`).test(http.executable),
         `${family} must receive a composed dependency object rather than ApiContext`,
@@ -61,7 +61,7 @@ describe("daemon application seams", () => {
     ]) {
       expect(
         new RegExp(`\\bfunction\\s+${legacyHandler}\\s*\\(`).test(http.executable),
-        `${legacyHandler} remains in http.ts`,
+        `${legacyHandler} remains in transport/http.ts`,
       ).toBe(false);
     }
   });

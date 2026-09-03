@@ -9,8 +9,12 @@ import { join } from "node:path";
 import { JournalWriter } from "../../src/bus/journal.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { createUlidGenerator, type UlidGenerator } from "../../src/bus/ulid.ts";
-import { claimDaemonIdentity, type DaemonIdentity, releaseDaemonIdentity } from "../../src/daemon-identity.ts";
-import { writeLockExclusive } from "../../src/lock.ts";
+import {
+  claimDaemonIdentity,
+  type DaemonIdentity,
+  releaseDaemonIdentity,
+} from "../../src/lifecycle/daemon-identity.ts";
+import { writeLockExclusive } from "../../src/lifecycle/lock.ts";
 
 export function freshWorkspace(): string {
   return mkdtempSync(join(tmpdir(), "glosa-git-test-"));

@@ -3,7 +3,7 @@
 // expired collapse to the same lookup result" invariant the class-F serve route depends on to
 // never leak which failure occurred (A1 §7: "no daemon-origin details").
 import { describe, expect, test } from "bun:test";
-import { CAPABILITY_TTL_MS, CapabilityStore } from "../src/capability.ts";
+import { CAPABILITY_TTL_MS, CapabilityStore } from "../src/security/capability.ts";
 
 function input(overrides: Partial<{ slug: string; artifactDirRealPath: string; artifactBasename: string }> = {}) {
   return {

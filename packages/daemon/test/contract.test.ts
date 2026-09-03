@@ -2,7 +2,7 @@
 // A1 §3 contract-version matrix: missing AND unparseable/partial headers are both "ok" (lenient, same
 // major assumed); only a well-formed value with a differing major is a proven mismatch.
 import { describe, expect, test } from "bun:test";
-import { checkContractVersion } from "../src/contract.ts";
+import { checkContractVersion } from "../src/transport/contract.ts";
 
 describe("checkContractVersion", () => {
   test("null (missing header) → ok", () => {

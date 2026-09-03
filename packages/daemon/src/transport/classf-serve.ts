@@ -7,9 +7,9 @@
 // asset (A1 §7's "sibling assets are streamed with their own content-type... no bridge").
 import { readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
-import { confinePath } from "./confine-path.ts";
-import { buildBridgeInjection } from "./classf-bridge.ts";
-import type { CapabilityStore } from "./capability.ts";
+import type { CapabilityStore } from "../security/capability.ts";
+import { buildBridgeInjection } from "../security/classf-bridge.ts";
+import { confinePath } from "../security/confine-path.ts";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",

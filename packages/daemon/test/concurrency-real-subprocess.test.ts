@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenPath } from "../src/token.ts";
+import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "concurrency-real-subprocess-test-token-0123456789";

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { internalErrorResponse, problem } from "../problem.ts";
 import {
   type ComposerDependencies,
   ComposerError,
@@ -8,6 +7,7 @@ import {
   sendComposerMessage,
 } from "../services/composer.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
+import { internalErrorResponse, problem } from "../transport/problem.ts";
 import type { RouteMatch } from "./types.ts";
 
 const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

@@ -5,8 +5,9 @@
 // integration suite. The Host-literal check (A3 §4 Rule 1) is NOT here: it runs earlier, before
 // routing even knows the route class, and its failure mode (400, no body) differs from every
 // case this function can return.
+
+import type { ProblemSlug } from "../transport/problem.ts";
 import { tokenMatches } from "./token.ts";
-import type { ProblemSlug } from "./problem.ts";
 
 export type RouteClass =
   | "tokenless-handshake"

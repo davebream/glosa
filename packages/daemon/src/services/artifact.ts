@@ -21,14 +21,14 @@ import {
 } from "../anchoring.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "../artifact-render.ts";
 import { isTerminal } from "../bus/lifecycle.ts";
-import type { CapabilityStore } from "../capability.ts";
 import { buildDiffHunks, commitExists } from "../checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "../checkpoints.ts";
-import { confinePath } from "../confine-path.ts";
 import { buildDeliveryPresentation, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "../git/shadow.ts";
 import { type MatchedFile, resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceEntry } from "../registry/workspace-index.ts";
+import type { CapabilityStore } from "../security/capability.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { findWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface ArtifactAccessDependencies extends WorkspaceAccess {

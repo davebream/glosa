@@ -16,12 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "../../packages/daemon/src/artifact-render.ts";
-import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/auth.ts";
-import { bridgeShouldAcceptInit } from "../../packages/daemon/src/classf-bridge.ts";
-import { confinePath } from "../../packages/daemon/src/confine-path.ts";
-import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/csp.ts";
+import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/security/auth.ts";
+import { bridgeShouldAcceptInit } from "../../packages/daemon/src/security/classf-bridge.ts";
+import { confinePath } from "../../packages/daemon/src/security/confine-path.ts";
+import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/security/csp.ts";
 import { scrubSecrets } from "../../packages/spa/src/bootstrap.js";
-import { createDataAccess, DataAccessError } from "../../packages/spa/src/data-access.js";
 import {
   checkEventSource,
   checkNonce,
@@ -29,6 +28,7 @@ import {
   validateBridgeMessage,
 } from "../../packages/spa/src/classf-viewer.js";
 import { mountConversationPane } from "../../packages/spa/src/conversation.js";
+import { createDataAccess, DataAccessError } from "../../packages/spa/src/data-access.js";
 import { type DomEnv, installDom } from "../../packages/spa/test/dom-env.ts";
 
 const SPA_PORT = 4646;

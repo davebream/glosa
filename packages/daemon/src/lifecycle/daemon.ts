@@ -7,22 +7,28 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AdapterRegistry } from "./adapters/interface.ts";
-import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { AdoptionCoordinator, resumePendingAdoptions } from "./adoption.ts";
-import { type AgentProvider, AgentProviderRegistry } from "./agent-provider/interface.ts";
-import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
-import { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
+import { AdapterRegistry } from "../adapters/interface.ts";
+import { WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
+import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
+import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
+import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
+import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
+import { createInitRunner } from "../init-runner.ts";
+import { SessionRegistry } from "../registry/session-registry.ts";
+import { WorkspaceIndex } from "../registry/workspace-index.ts";
+import { CapabilityStore } from "../security/capability.ts";
+import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
+import { PresentationTokenStore } from "../security/presentation-token.ts";
+import { TokenAuthority } from "../security/token.ts";
+import { createApiFetch, createClassFFetch } from "../transport/http.ts";
+import { internalErrorResponse } from "../transport/problem.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
-import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
-import type { WorkspaceBusWriteCheckpointObserver } from "./bus/write-checkpoint.ts";
-import { CapabilityStore } from "./capability.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
+import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
-import { createApiFetch, createClassFFetch } from "./http.ts";
-import { createInitRunner } from "./init-runner.ts";
 import {
   type DaemonLock,
   isPidAlive,
@@ -31,13 +37,7 @@ import {
   removeLockIfOwned,
   writeLockExclusive,
 } from "./lock.ts";
-import { PresentationTokenStore } from "./presentation-token.ts";
-import { internalErrorResponse } from "./problem.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
-import { SessionRegistry } from "./registry/session-registry.ts";
-import { WorkspaceIndex } from "./registry/workspace-index.ts";
-import { TokenAuthority } from "./token.ts";
-import type { WorkspaceTarget } from "./workspace.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -663,7 +663,7 @@ export function buildChildEnv(
 }
 
 async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
-  const mainPath = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
+  const mainPath = fileURLToPath(new URL("../../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
   const env = buildChildEnv(Bun.env, { home, port });
 

@@ -6,9 +6,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { glosaHome, lockPath } from "../src/home.ts";
-import { type EnsureDaemonResult, ensureDaemon as ensureProductionDaemon } from "../src/lifecycle.ts";
-import { readLock } from "../src/lock.ts";
+import { type EnsureDaemonResult, ensureDaemon as ensureProductionDaemon } from "../src/lifecycle/daemon.ts";
+import { glosaHome, lockPath } from "../src/lifecycle/home.ts";
+import { readLock } from "../src/lifecycle/lock.ts";
 
 const MAIN_PATH = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
 const GUARDIAN_PATH = fileURLToPath(new URL("./fixtures/daemon-guardian.ts", import.meta.url));

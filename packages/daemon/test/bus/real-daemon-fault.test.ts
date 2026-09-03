@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tokenPath } from "../../src/token.ts";
+import { tokenPath } from "../../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "../helpers.ts";
 
 const FIXTURE = fileURLToPath(new URL("../fixtures/fault-injected-daemon.ts", import.meta.url));

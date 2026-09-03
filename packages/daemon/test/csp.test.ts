@@ -5,7 +5,7 @@
 // checked. This file pins BOTH headers verbatim against A3 §1 (class-F) and A3 §3 (SPA), so the
 // "exact string" claim is actually enforced symmetrically.
 import { describe, expect, test } from "bun:test";
-import { classFCspHeaders, spaCspHeaders } from "../src/csp.ts";
+import { classFCspHeaders, spaCspHeaders } from "../src/security/csp.ts";
 
 describe("classFCspHeaders — A3 §1 exact string", () => {
   test("matches the spec string verbatim for a given SPA port", () => {

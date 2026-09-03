@@ -7,14 +7,14 @@
 // NOT import http.ts (which imports THIS module for the route wiring) — http.ts owns slug ->
 // workspace resolution and hands this module an already-reconciled `WorkspaceBus`.
 import { readFileSync } from "node:fs";
+import { classifyArtifactPath, sourceSha256 } from "../artifact-render.ts";
+import type { ArtifactWatcherEvent } from "../artifact-watcher.ts";
+import type { WorkspaceBus } from "../bus/bus.ts";
+import { isTerminal } from "../bus/lifecycle.ts";
+import { readJournalEventsSince } from "../bus/tail.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 import { encodeSseFrame } from "./sse.ts";
-import { readJournalEventsSince } from "./bus/tail.ts";
-import { resolveTrackedFiles } from "./matcher.ts";
-import { classifyArtifactPath, sourceSha256 } from "./artifact-render.ts";
-import { isTerminal } from "./bus/lifecycle.ts";
-import type { ArtifactWatcherEvent } from "./artifact-watcher.ts";
-import type { WorkspaceTarget } from "./workspace.ts";
-import type { WorkspaceBus } from "./bus/bus.ts";
 
 const HEARTBEAT_MS = 15_000;
 

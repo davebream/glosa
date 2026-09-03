@@ -7,11 +7,11 @@ import { AdapterRegistry } from "../../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../../src/adapters/workspace-metadata.ts";
 import { sourceSha256 } from "../../src/artifact-render.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { createApiFetch, type ApiContext } from "../../src/http.ts";
 import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { canonicalize } from "../../src/registry/slug.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
 
 const TOKEN = "metadata-routes-token-0123456789";
 const PORT = 4646;

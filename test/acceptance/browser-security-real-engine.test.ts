@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { CapabilityStore } from "../../packages/daemon/src/capability.ts";
-import { createClassFFetch } from "../../packages/daemon/src/http.ts";
+import { CapabilityStore } from "../../packages/daemon/src/security/capability.ts";
+import { createClassFFetch } from "../../packages/daemon/src/transport/http.ts";
 import { randomPort } from "../../packages/daemon/test/helpers.ts";
 
 const CHROMIUM_CANDIDATES = [

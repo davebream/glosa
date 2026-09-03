@@ -24,8 +24,8 @@
 import { readFileSync } from "node:fs";
 import picomatch from "picomatch";
 import type { ChunkManifest } from "../anchoring.ts";
-import { confinePath } from "../confine-path.ts";
 import { loadMatcherConfig } from "../matcher.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { type WorkspaceTarget, workspaceBusPath, workspaceWorktree } from "../workspace.ts";
 
 /** The subset of a live session an adapter needs to decide a `workspace_binding` — mirrors

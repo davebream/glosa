@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
-import completion from "@gunshi/plugin-completion";
-import {
-  ArgsValidationError,
-  cli,
-  define,
-  isArgsValidationError,
-  isCommandNotFoundError,
-  lazy,
-  plugin,
-  type Args,
-  type Command,
-  type CommandContext,
-  type CommandRunner,
-  type GunshiParams,
-} from "gunshi";
+
 import { realpathSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import completion from "@gunshi/plugin-completion";
+import {
+  type Args,
+  ArgsValidationError,
+  type Command,
+  type CommandContext,
+  type CommandRunner,
+  cli,
+  define,
+  type GunshiParams,
+  isArgsValidationError,
+  isCommandNotFoundError,
+  lazy,
+  plugin,
+} from "gunshi";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
 import type { HookDeps } from "./hook.ts";
 import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
@@ -1036,7 +1037,7 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
 /** Run the glosa CLI and return an A6 process exit code. */
 export async function run(argv: readonly string[], deps: CliRunDependencies = {}): Promise<number> {
   if (argv.length === 1 && argv[0] === "--build-id") {
-    const { BUILD_ID } = await import("../../daemon/src/build-id.ts");
+    const { BUILD_ID } = await import("../../daemon/src/lifecycle/build-id.ts");
     process.stdout.write(`${BUILD_ID}\n`);
     return EXIT_CODES.OK;
   }

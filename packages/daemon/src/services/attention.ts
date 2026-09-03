@@ -7,10 +7,10 @@ import { ApprovalConflictError, ApprovalUniquenessUnprovableError, type Attentio
 import { readInboxEntry } from "../bus/inbox.ts";
 import { isTerminal } from "../bus/lifecycle.ts";
 import { peekJournal } from "../bus/peek.ts";
-import { confinePath } from "../confine-path.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import { canonicalize } from "../registry/slug.ts";
 import type { WorkspaceIndex } from "../registry/workspace-index.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { findWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface AttentionDependencies extends WorkspaceAccess {

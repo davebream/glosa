@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { drainDaemonServers, SHUTDOWN_DRAIN_MS } from "../src/lifecycle.ts";
+import { drainDaemonServers, SHUTDOWN_DRAIN_MS } from "../src/lifecycle/daemon.ts";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;

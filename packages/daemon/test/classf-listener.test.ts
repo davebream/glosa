@@ -10,12 +10,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, createClassFFetch, type ApiContext } from "../src/http.ts";
-import { CapabilityStore } from "../src/capability.ts";
-import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
+import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
+import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { type ApiContext, createApiFetch, createClassFFetch } from "../src/transport/http.ts";
 import { randomPort } from "./helpers.ts";
 
 const TOKEN = "classf-listener-test-token-0123456789abcdef";

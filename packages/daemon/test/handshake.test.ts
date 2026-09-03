@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { parseHandshakeResponse } from "../src/handshake.ts";
+import { parseHandshakeResponse } from "../src/lifecycle/handshake.ts";
 
 const base = {
   protocol_version: "1.0",

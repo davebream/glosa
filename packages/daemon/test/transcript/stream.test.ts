@@ -17,13 +17,13 @@ import {
   type SessionBinding,
 } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { type ApiContext, createApiFetch } from "../../src/http.ts";
 import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { canonicalize } from "../../src/registry/slug.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
-import { type ParsedSseEvent, parseSseStream } from "../../src/sse.ts";
+import { CapabilityStore } from "../../src/security/capability.ts";
 import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
+import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
+import { type ParsedSseEvent, parseSseStream } from "../../src/transport/sse.ts";
 import { randomPort } from "../helpers.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";

@@ -3,10 +3,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "../src/build-id.ts";
-import { daemonPeerMismatchReason, decideDaemonBuild } from "../src/lifecycle.ts";
-import type { DaemonLock } from "../src/lock.ts";
-import type { HandshakeResponse } from "../src/handshake.ts";
+import { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "../src/lifecycle/build-id.ts";
+import { daemonPeerMismatchReason, decideDaemonBuild } from "../src/lifecycle/daemon.ts";
+import type { HandshakeResponse } from "../src/lifecycle/handshake.ts";
+import type { DaemonLock } from "../src/lifecycle/lock.ts";
 
 const roots: string[] = [];
 

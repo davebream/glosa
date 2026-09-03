@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RouteClass } from "../auth.ts";
+import type { RouteClass } from "../security/auth.ts";
 
 export type BunServer = ReturnType<typeof Bun.serve>;
 

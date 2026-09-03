@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Test-only guardian: the owning test process keeps stdin open and registers isolated daemon
 // homes before spawning. Unexpected EOF means the owner died before its async cleanup hooks ran.
-import { lockPath } from "../../src/home.ts";
-import { readLock } from "../../src/lock.ts";
+import { lockPath } from "../../src/lifecycle/home.ts";
+import { readLock } from "../../src/lifecycle/lock.ts";
 
 const watched = new Set<string>();
 

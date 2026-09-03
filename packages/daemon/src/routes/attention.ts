@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { problem } from "../problem.ts";
 import {
   type AttentionDependencies,
   AttentionError,
@@ -11,6 +10,7 @@ import {
   markAttentionSeen,
 } from "../services/attention.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
+import { problem } from "../transport/problem.ts";
 import type { RouteMatch } from "./types.ts";
 
 function mapWorkspace(error: WorkspaceLookupError, pathname: string) {

@@ -4,12 +4,11 @@
 // attack surface end-to-end over a real subprocess, this file is the fast, no-socket harness for
 // the same claims, per the existing http-routes.test.ts/http.test.ts split convention).
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { realpathSync } from "node:fs";
-import { CapabilityStore } from "../src/capability.ts";
-import { serveClassFDocument } from "../src/classf-serve.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { serveClassFDocument } from "../src/transport/classf-serve.ts";
 
 describe("serveClassFDocument", () => {
   function freshWorkspace() {

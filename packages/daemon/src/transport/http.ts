@@ -9,52 +9,52 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AdapterRegistry, AdapterSessionHint } from "./adapters/interface.ts";
-import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { AdoptionCoordinator, adoptLooseLineages } from "./adoption.ts";
-import type { AgentProviderRegistry, DeliverableEntry } from "./agent-provider/interface.ts";
-import type { SessionPushRegistry } from "./agent-provider/push-registry.ts";
-import { sourceSha256 } from "./artifact-render.ts";
-import type { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
-import { authorizeRequest, isForeignOrigin } from "./auth.ts";
-import { BUILD_ID } from "./build-id.ts";
-import { WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
-import { type DeliveryVia, isTerminal } from "./bus/lifecycle.ts";
-import { hasOpenAttention, peekJournal, pendingCount } from "./bus/peek.ts";
-import type { CapabilityStore } from "./capability.ts";
-import { serveClassFDocument } from "./classf-serve.ts";
-import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { CompositeDeliveryRegistry } from "./delivery/composite-reservations.ts";
-import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "./delivery/presentation.ts";
-import { glosaHome } from "./home.ts";
-import { probeInitManifest } from "./init-probe.ts";
-import type { InitRunner } from "./init-runner.ts";
-import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presentation-token.ts";
-import { internalErrorResponse, problem } from "./problem.ts";
-import { PROTOCOL_VERSION } from "./protocol.ts";
-import { type OrphanedState, scanOrphanedHomeState } from "./registry/orphan-scan.ts";
-import type { SessionRegistry } from "./registry/session-registry.ts";
-import { canonicalize } from "./registry/slug.ts";
+import type { AdapterRegistry, AdapterSessionHint } from "../adapters/interface.ts";
+import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
+import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
+import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
+import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import { sourceSha256 } from "../artifact-render.ts";
+import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
+import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
+import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
+import { hasOpenAttention, peekJournal, pendingCount } from "../bus/peek.ts";
+import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
+import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
+import { probeInitManifest } from "../init-probe.ts";
+import type { InitRunner } from "../init-runner.ts";
+import { BUILD_ID } from "../lifecycle/build-id.ts";
+import { glosaHome } from "../lifecycle/home.ts";
+import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
+import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
+import type { SessionRegistry } from "../registry/session-registry.ts";
+import { canonicalize } from "../registry/slug.ts";
 import {
   AdoptionError,
   type WorkspaceEntry,
   type WorkspaceIndex,
   WorkspaceOpenError,
-} from "./registry/workspace-index.ts";
-import { artifactRoutes } from "./routes/artifact.ts";
-import { attentionRoutes } from "./routes/attention.ts";
-import { composerRoutes } from "./routes/composer.ts";
-import type { BunServer, RouteMatch } from "./routes/types.ts";
+} from "../registry/workspace-index.ts";
+import { artifactRoutes } from "../routes/artifact.ts";
+import { attentionRoutes } from "../routes/attention.ts";
+import { composerRoutes } from "../routes/composer.ts";
+import type { BunServer, RouteMatch } from "../routes/types.ts";
+import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
+import type { CapabilityStore } from "../security/capability.ts";
+import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
+import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "../security/presentation-token.ts";
+import type { TokenSource } from "../security/token.ts";
 import {
   type ArtifactAccessDependencies,
   actionablePresentation as buildArtifactPresentation,
-} from "./services/artifact.ts";
+} from "../services/artifact.ts";
+import { confineTranscriptPath } from "../transcript/root.ts";
+import { createTranscriptStreamResponse } from "../transcript/stream.ts";
+import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
+import { serveClassFDocument } from "./classf-serve.ts";
+import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
+import { internalErrorResponse, problem } from "./problem.ts";
 import { createJournalStreamResponse } from "./stream.ts";
-import type { TokenSource } from "./token.ts";
-import { confineTranscriptPath } from "./transcript/root.ts";
-import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import { type WorkspaceTarget, workspaceRegistrationId } from "./workspace.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -64,11 +64,11 @@ const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
  * appears below so route-schema-level tests that call `createApiFetch(ctx)`'s returned function
  * directly (no real bound `Bun.serve`, e.g. http-routes.test.ts) don't have to fabricate one —
  * only the stream route (P3.2) actually needs it, for `server.timeout(req, 0)` (A1 §8.3). */
-export type { BunServer } from "./routes/types.ts";
+export type { BunServer } from "../routes/types.ts";
 
 // The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
 // `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
-const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
+const SPA_SRC_DIR = fileURLToPath(new URL("../../../spa/src/", import.meta.url));
 
 // Fixed allowlist of files servable under `GET /app/<file>` (A3 §3: no path traversal — a
 // basename check alone isn't enough, so every servable file is named here explicitly; anything

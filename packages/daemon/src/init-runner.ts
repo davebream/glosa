@@ -8,7 +8,7 @@
 // Consent lives with the CLIENT (the SPA's explicit dialog click); this module's job is to make
 // the execution safe: scrubbed env, timeout, bounded capture, one child per workspace at a time.
 import { fileURLToPath } from "node:url";
-import { buildChildEnv } from "./lifecycle.ts";
+import { buildChildEnv } from "./lifecycle/daemon.ts";
 
 /** The F26 envelope `glosa init --json` prints — exactly one JSON object on stdout. */
 export interface InitRunEnvelope {

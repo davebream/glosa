@@ -3,8 +3,8 @@
 // protocol.ts's daemon-lifecycle handshake version — see
 // protocol.ts's header comment for why the two compatibility checks are kept apart despite the
 // coincidence.
-import { APP_VERSION } from "./build-id.ts";
-import { parseProtocolVersion } from "./protocol.ts";
+import { APP_VERSION } from "../lifecycle/build-id.ts";
+import { parseProtocolVersion } from "../lifecycle/protocol.ts";
 
 /** `contract_version` in the handshake body and the version `X-Contract-Version` is compared
  * against. API v1.3 adds artifact-scoped approval requests and revision-bound verdicts without changing

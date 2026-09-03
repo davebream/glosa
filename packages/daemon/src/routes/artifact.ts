@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { CAPABILITY_TTL_MS } from "../capability.ts";
-import { problem, restoreConflictResponse } from "../problem.ts";
+import { CAPABILITY_TTL_MS } from "../security/capability.ts";
 import {
   type ArtifactDependencies,
   ArtifactError,
@@ -19,6 +18,7 @@ import {
   withdrawAnnotation,
 } from "../services/artifact.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
+import { problem, restoreConflictResponse } from "../transport/problem.ts";
 import type { RouteMatch } from "./types.ts";
 
 export interface ArtifactRouteDependencies extends ArtifactDependencies {

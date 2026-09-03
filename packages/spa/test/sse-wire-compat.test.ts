@@ -6,7 +6,7 @@
 // actually proves they still agree on the wire format — feeding real `encodeSseFrame` output
 // through the browser-side `parseSseStream` and checking every field round-trips.
 import { describe, expect, test } from "bun:test";
-import { encodeSseFrame } from "../../daemon/src/sse.ts";
+import { encodeSseFrame } from "../../daemon/src/transport/sse.ts";
 import { parseSseStream } from "../src/data-access.js";
 
 function readerFor(text: string): ReadableStreamDefaultReader<Uint8Array> {

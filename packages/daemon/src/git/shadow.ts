@@ -13,10 +13,10 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { appendEvent, type JournalWriter } from "../bus/journal.ts";
 import { shadowGitDir } from "../bus/paths.ts";
-import { currentDaemonIdentity, type DaemonIdentity } from "../daemon-identity.ts";
-import { readLock } from "../lock.ts";
+import { currentDaemonIdentity, type DaemonIdentity } from "../lifecycle/daemon-identity.ts";
+import { readLock } from "../lifecycle/lock.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
-import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
+import { type WorkspaceTarget, workspaceWorktree } from "../workspace.ts";
 
 export const GLOSA_BRANCH = "glosa";
 const GIT_IDENTITY_NAME = "glosa";

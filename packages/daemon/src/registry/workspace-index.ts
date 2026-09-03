@@ -12,6 +12,7 @@ import {
   accessSync,
   closeSync,
   existsSync,
+  constants as fsConstants,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -22,12 +23,11 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fsyncContainingDir, writeAllSync, type WriteSync } from "../bus/io.ts";
+import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, pendingCount } from "../bus/peek.ts";
-import { glosaHome } from "../home.ts";
+import { glosaHome } from "../lifecycle/home.ts";
 import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
 // Aliased so every call site below reads unchanged: this file is the reference caller of the
 // registration-id derivation, but it no longer OWNS it. `workspace.ts` holds the single copy so

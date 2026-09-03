@@ -13,9 +13,9 @@
 // Raw JSONL bytes are NEVER inspected here — every byte read off disk goes straight into
 // `TranscriptNormalizer` (normalize.ts), the one module allowed to know the transcript format.
 import { readFileSync, statSync } from "node:fs";
-import { watch, type FSWatcher } from "chokidar";
-import { encodeSseFrame } from "../sse.ts";
-import { TranscriptNormalizer, type TranscriptEvent } from "./normalize.ts";
+import { type FSWatcher, watch } from "chokidar";
+import { encodeSseFrame } from "../transport/sse.ts";
+import { type TranscriptEvent, TranscriptNormalizer } from "./normalize.ts";
 
 const HEARTBEAT_MS = 15_000;
 

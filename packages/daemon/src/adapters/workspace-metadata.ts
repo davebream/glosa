@@ -13,12 +13,12 @@ import {
   unlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { confinePath } from "../confine-path.ts";
 import { fsyncContainingDir, writeAllSync } from "../bus/io.ts";
 import { KeyedMutex } from "../bus/mutex.ts";
 import { workspaceBusDir } from "../bus/paths.ts";
+import { confinePath } from "../security/confine-path.ts";
+import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
 import type { ContentAdapter } from "./interface.ts";
-import { workspaceRegistrationId, workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
 export const WORKSPACE_METADATA_VERSION = 1 as const;
 export const MAX_WORKSPACE_METADATA_BYTES = 256 * 1024;

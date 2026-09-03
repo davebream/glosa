@@ -9,13 +9,13 @@ import { join } from "node:path";
 import type { WorkspaceBus } from "../src/bus/bus.ts";
 import { journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "../src/capability.ts";
 import { CompositeDeliveryRegistry } from "../src/delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES } from "../src/delivery/presentation.ts";
-import { createApiFetch, type ApiContext } from "../src/http.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { type WorkspaceEntry, WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
 const TOKEN = "composite-session-drain-token-0123456789";
 const PORT = 4646;
