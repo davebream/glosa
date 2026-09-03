@@ -39,8 +39,10 @@ export function createViewerShell(
     "aria-expanded": "false",
     "aria-controls": "glosa-sidebar",
   });
+  // A panel glyph rather than a hamburger: this shows and hides one persistent side panel, and the
+  // filled column is the shown state's shape, so it reads without relying on color.
   navToggle.innerHTML =
-    '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11m-11 3.5h11m-11 3.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M7.5 4v12"/><path class="glosa-nav-toggle-fill" d="M4.25 5h2.5v10h-2.5z"/></svg>';
   const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
   brandMark.innerHTML =
     '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>';
@@ -134,7 +136,20 @@ export function createViewerShell(
   );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
-  const sidebarList = el("ul", { className: "glosa-workspace-list" });
+  const workspacesToggle = el("button", {
+    id: "glosa-workspaces-toggle",
+    className: "glosa-sidebar-section-toggle",
+    type: "button",
+    "aria-expanded": "true",
+    "aria-controls": "glosa-workspace-list",
+  });
+  workspacesToggle.innerHTML =
+    '<span class="glosa-sidebar-section-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span><span>Workspaces</span>';
+  const sidebarList = el("ul", { id: "glosa-workspace-list", className: "glosa-workspace-list" });
+  const workspacesSection = el("div", { className: "glosa-sidebar-section", hidden: true }, [
+    el("h2", {}, [workspacesToggle]),
+    sidebarList,
+  ]);
   const artifactList = el("ul", { className: "glosa-artifact-list" });
   const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [el("h2", { textContent: "Artifacts" })]);
   const artifactListEmpty = el("p", {
@@ -216,7 +231,7 @@ export function createViewerShell(
   const sidebarEl = el(
     "nav",
     { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" },
-    [el("h2", { textContent: "Workspaces" }), sidebarList, artifactHeading, artifactList, artifactListEmpty],
+    [workspacesSection, artifactHeading, artifactList, artifactListEmpty],
   );
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
   const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays, onWire: onWireWorkspace });
@@ -263,6 +278,8 @@ export function createViewerShell(
       copySourceButton,
       printArtifactButton,
       toolsStatus,
+      workspacesToggle,
+      workspacesSection,
       sidebarList,
       artifactList,
       artifactListEmpty,

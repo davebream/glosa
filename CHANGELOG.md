@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The navigator is a column beside the manuscript at 1024px and wider instead of an overlay that
+  every artifact you opened dismissed. The top-bar control shows and hides it in every mode, and
+  that choice is remembered per browser. Under 1024px it stays the drawer it was.
+- The workspace switcher is a disclosure that collapses out of the artifact tree's way, and
+  remembers whether it was left open.
+
 ### Fixed
 
 - A live daemon now repairs a deleted ownership lock without waiting for a handshake, while clients

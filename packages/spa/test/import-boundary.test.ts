@@ -265,6 +265,7 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./viewer-shell.js",
     "./viewer-context-surfaces.js",
     "./viewer-feedback.js",
+    "./viewer-navigator.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",

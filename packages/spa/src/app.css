@@ -213,61 +213,82 @@ button {
 
 /* ---------- 4. App topology ---------- */
 
+/* One column by default: the navigator floats over the manuscript. At desk widths (below) it
+   becomes a column of its own instead. */
 .glosa-app {
   height: 100%;
   display: grid;
   grid-template-rows: var(--topbar-height) minmax(0, 1fr);
-  grid-template-columns: var(--nav-width) minmax(0, 1fr);
-  grid-template-areas:
-    "topbar topbar"
-    "nav    main";
-}
-
-.glosa-app[data-surface="document"] {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "topbar"
     "main";
 }
 
-.glosa-app[data-surface="document"] .glosa-nav-toggle,
-.glosa-app[data-surface="document"] .glosa-sidebar,
-.glosa-app[data-surface="document"] .glosa-backdrop {
-  display: none;
-}
-
-/* Preview is a reading canvas at every width: the navigator becomes an explicit drawer instead
-   of reserving a persistent desktop column. */
-.glosa-app[data-mode="preview"] {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "main";
-}
-
-.glosa-app[data-mode="preview"] .glosa-nav-toggle {
-  display: inline-flex;
-}
-
-.glosa-app[data-mode="preview"] .glosa-sidebar {
+/* Under 1024px there is no room for a column beside the manuscript, so the navigator is a drawer
+   over a backdrop — asked for, used, and dismissed. */
+.glosa-sidebar {
   position: fixed;
   inset: var(--topbar-height) auto 0 0;
   width: min(var(--nav-width), 85vw);
   z-index: var(--z-drawer);
   transform: translateX(-100%);
   transition: transform var(--dur-base) var(--ease-out);
-  box-shadow: 2px 0 8px oklch(0.24 0.01 110 / 0.12);
+  box-shadow: 2px 0 12px oklch(0.24 0.01 110 / 0.1);
 }
 
-.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-sidebar {
+.glosa-app[data-nav-open="true"] .glosa-sidebar {
   transform: translateX(0);
 }
-.glosa-app[data-mode="preview"][data-nav-open="true"] .glosa-backdrop {
+
+.glosa-backdrop {
+  display: none;
+}
+
+.glosa-app[data-nav-open="true"] .glosa-backdrop {
   display: block;
   position: fixed;
-  inset: var(--topbar-height) 0 0;
+  inset: var(--topbar-height) 0 0 0;
   z-index: calc(var(--z-drawer) - 1);
   background: oklch(0.24 0.01 110 / 0.25);
+}
+
+/* At 1024px and wider the navigator is a column the manuscript sits beside, the way an editor's
+   file tree is — never an overlay, so it survives opening an artifact and nothing dims behind it.
+   The top-bar toggle collapses it to zero and back (viewer-navigator.js's DRAWER_ONLY_QUERY). */
+@media (min-width: 1024px) {
+  .glosa-app[data-surface="workspace"][data-nav-open="true"] {
+    grid-template-columns: var(--nav-width) minmax(0, 1fr);
+    grid-template-areas:
+      "topbar topbar"
+      "nav    main";
+  }
+
+  /* Attribute-qualified to match the drawer rules above selector-for-selector: a bare
+     `.glosa-sidebar` here would lose to their higher specificity no matter how late it appears. */
+  .glosa-app[data-nav-open] .glosa-sidebar {
+    position: static;
+    width: auto;
+    z-index: auto;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .glosa-app[data-nav-open="false"] .glosa-sidebar {
+    display: none;
+  }
+
+  .glosa-app[data-nav-open="true"] .glosa-backdrop {
+    display: none;
+  }
+}
+
+/* A single presented document has no workspace to navigate. Last, so it outranks every
+   navigator rule above rather than depending on the `hidden` attribute the shell also sets. */
+.glosa-app[data-surface="document"] .glosa-nav-toggle,
+.glosa-app[data-surface="document"] .glosa-sidebar,
+.glosa-app[data-surface="document"] .glosa-backdrop {
+  display: none;
 }
 
 /* The contextual margin is an overlay INSIDE the manuscript's scroll container (viewer.js puts
@@ -313,11 +334,38 @@ button {
   fill: var(--primary);
 }
 
+/* The navigator's one control: show/hide, at every width and in every mode. */
 .glosa-nav-toggle {
-  display: none; /* compact only */
-  padding: var(--space-1) var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
   color: var(--muted);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-nav-toggle:hover {
+  background: var(--surface-sunken);
+}
+
+.glosa-nav-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-nav-toggle-fill {
+  stroke: none;
+  fill: none;
+}
+
+.glosa-nav-toggle[aria-expanded="true"] .glosa-nav-toggle-fill {
+  fill: currentColor;
 }
 
 .glosa-topbar-title {
@@ -1125,6 +1173,51 @@ button {
   text-transform: uppercase;
   color: var(--muted);
   margin: 0 0 var(--space-2) var(--space-2);
+}
+
+/* The workspace switcher collapses out of the way; the artifact tree is what the navigator is
+   for, and a switcher you rarely touch should not push it down the panel. */
+.glosa-sidebar-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  margin-left: calc(var(--space-2) * -1);
+  padding: 2px var(--space-2) 2px 0;
+  border-radius: 5px;
+  color: inherit;
+  /* The UA stylesheet forces `text-transform: none` on buttons, which `font: inherit` does not
+     undo — without these the disclosure would read "Workspaces" beside an uppercase "ARTIFACTS". */
+  text-transform: inherit;
+  letter-spacing: inherit;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-sidebar-section-toggle:hover {
+  color: var(--ink);
+}
+
+.glosa-sidebar-section-chevron {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  display: grid;
+  place-items: center;
+  transition: transform 160ms var(--ease-out);
+}
+
+.glosa-sidebar-section-toggle[aria-expanded="true"] .glosa-sidebar-section-chevron {
+  transform: rotate(90deg);
+}
+
+.glosa-sidebar-section-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .glosa-sidebar h2 + ul {
@@ -2812,18 +2905,6 @@ button {
 /* ---------- 13. Compact (< 1024px): split-screen beside a terminal (brief §7.2/§7.3) ---------- */
 
 @media (max-width: 1023px) {
-  .glosa-app,
-  .glosa-app[data-mode="annotate"] {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "topbar"
-      "main";
-  }
-
-  .glosa-nav-toggle {
-    display: inline-flex;
-  }
-
   .glosa-topbar {
     gap: var(--space-2);
     padding-inline: var(--space-2);
@@ -2856,33 +2937,6 @@ button {
     max-height: min(70vh, calc(100vh - var(--topbar-height)));
     border-inline: 0;
     border-radius: 0 0 10px 10px;
-  }
-
-  /* Navigator becomes a left drawer over a backdrop. */
-  .glosa-sidebar {
-    position: fixed;
-    inset: var(--topbar-height) auto 0 0;
-    width: min(var(--nav-width), 85vw);
-    z-index: var(--z-drawer);
-    transform: translateX(-100%);
-    transition: transform var(--dur-base) var(--ease-out);
-    box-shadow: 2px 0 12px oklch(0.24 0.01 110 / 0.1);
-  }
-
-  .glosa-app[data-nav-open="true"] .glosa-sidebar {
-    transform: translateX(0);
-  }
-
-  .glosa-backdrop {
-    display: none;
-  }
-
-  .glosa-app[data-nav-open="true"] .glosa-backdrop {
-    display: block;
-    position: fixed;
-    inset: var(--topbar-height) 0 0 0;
-    z-index: calc(var(--z-drawer) - 1);
-    background: oklch(0.24 0.01 110 / 0.25);
   }
 }
 
@@ -3127,6 +3181,9 @@ button {
   .glosa-tree-tool,
   .glosa-tree-row,
   .glosa-tree-disclosure,
+  .glosa-nav-toggle,
+  .glosa-sidebar-section-toggle,
+  .glosa-sidebar-section-chevron,
   .glosa-composer-intents button,
   .glosa-history-toggle,
   .glosa-conversation-toggle,

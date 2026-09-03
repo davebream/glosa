@@ -22,6 +22,7 @@ import { confirmDialog, noticeDialog } from "./dialog.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
+import { createNavigatorController } from "./viewer-navigator.js";
 import { createViewerShell, createElement as el } from "./viewer-shell.js";
 
 let historyPaneLoader;
@@ -178,6 +179,8 @@ export function mountApp(
     copySourceButton,
     printArtifactButton,
     toolsStatus,
+    workspacesToggle,
+    workspacesSection,
     sidebarList,
     artifactList,
     artifactListEmpty,
@@ -311,9 +314,6 @@ export function mountApp(
   };
   document.addEventListener("click", onDocumentClick);
 
-  const compactNav = () =>
-    modeState?.mode === "preview" ||
-    (typeof window !== "undefined" && window.matchMedia?.("(max-width: 1023px)").matches);
   const compactComposer = () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 1279px)").matches;
 
   function matchingApprovalRequest() {
@@ -451,37 +451,15 @@ export function mountApp(
     }
   }
 
-  function setNavOpen(open, { restoreFocus = false, focusDrawer = false } = {}) {
-    root.setAttribute("data-nav-open", String(open));
-    navToggle.setAttribute("aria-expanded", String(open));
-    navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
-    syncNavInteractivity();
-    if (open && focusDrawer && compactNav()) {
-      queueMicrotask(() => {
-        const target =
-          artifactList.querySelector('[role="treeitem"][aria-current="page"]') ??
-          artifactList.querySelector('[role="treeitem"][tabindex="0"]') ??
-          sidebarList.querySelector('button[aria-current="true"]') ??
-          sidebarList.querySelector("button");
-        target?.focus();
-      });
-    } else if (!open && restoreFocus) {
-      queueMicrotask(() => navToggle.focus({ preventScroll: true }));
-    }
-  }
+  // Not `navigator` — that name is the browser's own global, which copyArtifactSource reads.
+  const sidebarNav = createNavigatorController({
+    root,
+    elements: { navToggle, sidebarEl, sidebarList, artifactList, workspacesToggle, workspacesSection },
+    enabled: surface !== "document",
+  });
 
-  function syncNavInteractivity() {
-    const hiddenDrawer = compactNav() && root.getAttribute("data-nav-open") !== "true";
-    sidebarEl.inert = hiddenDrawer;
-    if (hiddenDrawer) sidebarEl.setAttribute("aria-hidden", "true");
-    else sidebarEl.removeAttribute("aria-hidden");
-  }
-
-  syncNavInteractivity();
-  navToggle.addEventListener("click", () =>
-    setNavOpen(root.getAttribute("data-nav-open") !== "true", { focusDrawer: true }),
-  );
-  backdrop.addEventListener("click", () => setNavOpen(false, { restoreFocus: true }));
+  const onBackdropClick = () => sidebarNav.setOpen(false, { restoreFocus: true });
+  backdrop.addEventListener("click", onBackdropClick);
 
   // R6/A5 §F11: class-F Edit follows the generic derived-from edge — enabled only when the
   // artifact metadata carries a `derived_from` path (supplied by a content adapter, P6.1; the
@@ -1383,9 +1361,11 @@ export function mountApp(
   // ⌘1/2/3 mode switching (brief §9); Escape in the composer input is handled by the composer.
   // On `document` (a non-focusable div never receives key events); removed by unmount below.
   function onShortcut(e) {
-    if (e.key === "Escape" && root.getAttribute("data-nav-open") === "true") {
+    // Escape dismisses an overlay drawer. A pinned column is not something the reader escaped
+    // into, so it stays where they put it.
+    if (e.key === "Escape" && sidebarNav.isOpen() && !sidebarNav.isDocked()) {
       e.preventDefault();
-      setNavOpen(false, { restoreFocus: true });
+      sidebarNav.setOpen(false, { restoreFocus: true });
       return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
@@ -1400,7 +1380,7 @@ export function mountApp(
   // Card alignment depends on wrapped-line geometry — recompute cards AND gutter markers when
   // the window reflows (a resize can also cross the side-margin breakpoint either way).
   const onResize = () => {
-    syncNavInteractivity();
+    sidebarNav.handleResize();
     layoutMargin();
     renderMarkers();
   };
@@ -1448,7 +1428,7 @@ export function mountApp(
   }
 
   async function openArtifact(path) {
-    const returnToReading = compactNav() && root.getAttribute("data-nav-open") === "true";
+    const returnToReading = sidebarNav.isOpen() && !sidebarNav.isDocked();
     loading = true;
     classFInteractive = false;
     composer = null;
@@ -1471,7 +1451,9 @@ export function mountApp(
       return false;
     }
     loading = false;
-    setNavOpen(false); // compact: picking an artifact closes the drawer and returns to reading
+    // An overlay drawer is in the way of what was just opened, so picking an artifact dismisses it
+    // and returns to reading. A pinned column is the point of pinning — it stays.
+    if (!sidebarNav.isDocked()) sidebarNav.setOpen(false);
     contentEl.removeAttribute("data-path");
     artifactNavigator.setCurrent(path);
     onFocusChange?.({ slug: currentSlug, artifact: path, mode: modeState.mode }); // reflect the opened file into the URL
@@ -1638,11 +1620,9 @@ export function mountApp(
         ]),
       );
     }
-    // MCP/CLI single-workspace mode: a "list of one" is noise — you're already scoped, and a lone
-    // workspace auto-selects below. The switcher only earns its space once a SECOND workspace is
-    // live (the machine-wide singleton daemon can serve several at once). Buttons stay in the DOM
-    // for markCurrent + the compact-drawer focus fallback; only the switcher chrome is hidden.
-    sidebarList.hidden = workspaces.length <= 1;
+    // A lone workspace auto-selects below, so the switcher only earns its space once a SECOND
+    // workspace is live (the machine-wide singleton daemon can serve several at once).
+    sidebarNav.setWorkspacesAvailable(workspaces.length > 1);
     if (workspaces.length === 0) {
       setEmpty(
         "No workspaces yet.",
@@ -1672,7 +1652,9 @@ export function mountApp(
   return () => {
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
+    backdrop.removeEventListener("click", onBackdropClick);
     if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
+    sidebarNav.destroy();
     feedbackController.destroy();
     teardownRichFace();
     stopStream?.();
