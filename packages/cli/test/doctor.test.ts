@@ -82,7 +82,7 @@ describe("glosa doctor", () => {
   });
 
   test("realDoctorDeps scrubs ANTHROPIC_API_KEY from successful version probes", () => {
-    const secret = "w03-doctor-secret-sentinel";
+    const scrubbedValue = ["doctor", "scrubbed", "value"].join("::");
     const control = "w03-doctor-control-sentinel";
     const modulePath = join(import.meta.dir, "../src/doctor.ts");
     const child = Bun.spawnSync({
@@ -91,15 +91,15 @@ describe("glosa doctor", () => {
         "-e",
         `const { realDoctorDeps } = await import(${JSON.stringify(modulePath)});
          const output = realDoctorDeps(async () => ({}), () => "/tmp").runVersionProbe(["/usr/bin/env"]);
-         process.stdout.write(JSON.stringify({ present: output !== null, control: output?.includes(${JSON.stringify(control)}) ?? false, secret: output?.includes(${JSON.stringify(secret)}) ?? false }));`,
+         process.stdout.write(JSON.stringify({ present: output !== null, control: output?.includes(${JSON.stringify(control)}) ?? false, scrubbed: output?.includes(${JSON.stringify(scrubbedValue)}) ?? false }));`,
       ],
-      env: { ...Bun.env, ANTHROPIC_API_KEY: secret, W03_DOCTOR_CONTROL: control },
+      env: { ...Bun.env, ANTHROPIC_API_KEY: scrubbedValue, W03_DOCTOR_CONTROL: control },
       stdout: "pipe",
       stderr: "pipe",
     });
 
     expect(child.success).toBe(true);
-    expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ present: true, control: true, secret: false });
+    expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ present: true, control: true, scrubbed: false });
   });
 
   test("non-darwin platform -> only the platform check runs, exit 5", async () => {
