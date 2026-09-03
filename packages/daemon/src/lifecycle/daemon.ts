@@ -662,6 +662,15 @@ export function buildChildEnv(
   return env;
 }
 
+function spawnFailed(home: string, reason: string): Extract<EnsureDaemonResult, { ok: false }> {
+  const daemonLog = logPath(home);
+  return {
+    ok: false,
+    reason: reason.includes(daemonLog) ? reason : `${reason} — see ${daemonLog}`,
+    logPath: daemonLog,
+  };
+}
+
 async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
   const mainPath = fileURLToPath(new URL("../../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
@@ -675,13 +684,24 @@ async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureD
   child.unref();
   closeSync(logFd); // child holds its own dup'd copy; safe to release ours
 
-  const hs = await pollHandshake(port, HANDSHAKE_POLL_MS);
-  if (!hs) {
-    return {
-      ok: false,
-      reason: `daemon did not become ready within ${HANDSHAKE_POLL_MS}ms`,
-      logPath: logPath(home),
-    };
+  const hs = await pollHandshake(port, HANDSHAKE_POLL_MS, 100, () => child.exitCode !== null);
+  if (hs) return null;
+
+  // Child already gone: a peer may have won the bind race (exit 0), or this spawn lost to a
+  // foreign squatter / crashed before serving. Do not burn the rest of the 5s poll budget.
+  if (child.exitCode === 0) {
+    const peer = await fetchHandshake(port, HANDSHAKE_TIMEOUT_MS);
+    if (peer) return null;
   }
-  return null;
+  if (child.exitCode !== null) {
+    if (await probePortBound(port, HANDSHAKE_TIMEOUT_MS)) {
+      return spawnFailed(
+        home,
+        `a process is bound to port ${port} but is not answering the glosa handshake; the daemon could not bind`,
+      );
+    }
+    return spawnFailed(home, `daemon exited before becoming ready (exit ${child.exitCode})`);
+  }
+
+  return spawnFailed(home, `daemon did not become ready within ${HANDSHAKE_POLL_MS}ms`);
 }
