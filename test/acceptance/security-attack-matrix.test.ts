@@ -11,15 +11,17 @@
 // the exhaustive confinePath symlink/traversal matrix in confine-path.test.ts), that's noted rather
 // than duplicated — this file's job is breadth-in-one-place, not replacing that depth.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderMarkdown } from "../../packages/daemon/src/artifact-render.ts";
 import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/auth.ts";
 import { bridgeShouldAcceptInit } from "../../packages/daemon/src/classf-bridge.ts";
 import { confinePath } from "../../packages/daemon/src/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/csp.ts";
 import { scrubSecrets } from "../../packages/spa/src/bootstrap.js";
+import { createDataAccess, DataAccessError } from "../../packages/spa/src/data-access.js";
 import {
   checkEventSource,
   checkNonce,
@@ -31,6 +33,10 @@ import { type DomEnv, installDom } from "../../packages/spa/test/dom-env.ts";
 
 const SPA_PORT = 4646;
 const CLASSF_PORT = 4647;
+const BOOTSTRAP_SOURCE = readFileSync(
+  fileURLToPath(new URL("../../packages/spa/src/bootstrap.js", import.meta.url)),
+  "utf8",
+);
 
 function freshDir(): string {
   return mkdtempSync(join(tmpdir(), "glosa-attack-matrix-"));
@@ -308,10 +314,9 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
     } as Storage;
   }
 
-  test("fragment scrub: the token lands in sessionStorage (never localStorage), and the URL hash is stripped via history.replaceState", () => {
+  test("the fragment token flows through the injected tab store, is stripped from history, and is cleared on 401", async () => {
     const loc = { hash: "#t=SUPERSECRET", pathname: "/", search: "" };
     const session = fakeStorage();
-    const localStorage = fakeStorage();
     const calls: Array<[unknown, string, string]> = [];
     const history = { replaceState: (s: unknown, t: string, u?: string | URL | null) => calls.push([s, t, String(u)]) };
 
@@ -319,14 +324,38 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
 
     expect(result).toBe("SUPERSECRET");
     expect(session.getItem("glosa_token")).toBe("SUPERSECRET");
-    expect(localStorage.getItem("glosa_token")).toBeNull(); // never touched
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[2]).not.toContain("t="); // no `t=` survives into browser history
+
+    const authorizations: Array<string | null> = [];
+    const dataAccess = createDataAccess({
+      storage: session,
+      fetchFn: async (_path: string, init: RequestInit) => {
+        authorizations.push(new Headers(init.headers).get("Authorization"));
+        return new Response(JSON.stringify({ title: "missing or invalid bearer token" }), { status: 401 });
+      },
+      onUnauthorized: () => {},
+    });
+    await expect(dataAccess.getWorkspaces()).rejects.toBeInstanceOf(DataAccessError);
+
+    expect(authorizations).toEqual(["Bearer SUPERSECRET"]);
+    expect(session.getItem("glosa_token")).toBeNull();
   });
 
-  // KNOWN GAP (not built here — see test/acceptance/T8-GATE.md): `glosa token rotate`/`revoke`
-  // (the "old Bearer -> 401 after revoke" half of this attack) has no implementation anywhere in
-  // packages/daemon or packages/cli as of this suite — token.ts's own top comment says rotation/
-  // revocation is explicitly deferred. There is nothing to test until that ships; asserting
-  // anything here would be theater, not proof.
+  test("production main wires scrubSecrets to window.sessionStorage and contains no executable localStorage reference", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /scrubSecrets\(\s*window\.location,\s*window\.sessionStorage,\s*window\.history,\s*route,\s*redeemed\s*\)/,
+    );
+
+    // Pin every raw mention instead of stripping comments: a comment scanner with a string/regex
+    // edge case could hide later executable code. The sole allowed occurrence is existing prose.
+    const localStorageLines = BOOTSTRAP_SOURCE.split(/\r?\n/).filter((line) => /\blocalStorage\b/.test(line));
+    expect(localStorageLines).toEqual([
+      " * localStorage — and rewrite the address bar to keep only non-secret route state before anything",
+    ]);
+  });
+
+  // Token rotation/revocation is implemented. packages/daemon/test/token-lifecycle.test.ts proves
+  // over real HTTP transport that each transition makes the previous Bearer return 401; this block
+  // owns the complementary SPA behavior that clears that rejected credential from tab-scoped storage.
 });

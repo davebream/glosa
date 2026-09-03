@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // P1.4 — scrubSecrets/selectScreen are the security-load-bearing pure functions in bootstrap.js
-// (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/localStorage/history stand in for the
+// (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
 import { CONTRACT_VERSION, focusHash, readRoute, scrubSecrets, selectScreen, writeFocus } from "../src/bootstrap.js";
@@ -176,17 +176,6 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 
     expect(result).toBe("SECRET");
     expect(session.getItem("glosa_token")).toBe("SECRET");
-  });
-
-  test("#t=<token> present: localStorage is never touched", () => {
-    const loc = { hash: "#t=SECRET", pathname: "/", search: "" };
-    const session = fakeStorage();
-    const local = fakeStorage();
-    const history = fakeHistory();
-
-    scrubSecrets(loc, session, history as unknown as History);
-
-    expect(local.getItem("glosa_token")).toBeNull();
   });
 
   test("#t=<token> present: history.replaceState strips t= from the URL", () => {
