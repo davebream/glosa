@@ -4,10 +4,12 @@
 
 | Decision | Result | Reason |
 |---|---|---|
-| T8 result | **PASS — maintainer sign-off pending** | The frozen candidate passed the deterministic gates and every generic real-session scenario. Three defects found during rehearsal were fixed and the affected browser/MCP paths were rerun successfully. |
-| Overall v1 readiness | **BLOCKED** | Token rotation and revocation remain an independent release blocker tracked by issue #20. |
+| Recorded generic rehearsal | **PASS — maintainer sign-off pending** | The frozen candidate passed the then-current deterministic gates and every generic real-session scenario. Three defects found during rehearsal were fixed and the affected browser/MCP paths were rerun successfully. |
+| Current T8 result | **INCOMPLETE** | The expanded real-session conversation-delivery scenario was not part of this run, and maintainer sign-off is still pending. Automated real-daemon, Chromium, and production-provider coverage added later does not substitute for either attended result. |
+| Overall v1 readiness | **BLOCKED** | T8 remains incomplete until the expanded attended scenario passes and the maintainer signs the sanitized report. Token rotation/revocation has shipped since this rehearsal and is no longer the blocker stated by the original report. |
 
-This report certifies the generic T8 behavior exercised by issue #19. It does not approve v1 release and it does not contain a maintainer signature.
+This report records the generic T8 behavior exercised by issue #19. It does not approve v1 release,
+does not cover the later expanded real-session scenario, and does not contain a maintainer signature.
 
 ## Rehearsal boundary
 
@@ -97,8 +99,9 @@ Mitigation: transcript stream status now travels through the existing single dat
 | MCP pull/retrieval | PASS | Exact-ID retrieval succeeded after hook presentation; the implementation no longer conflates retrieval with a delivery drain. |
 
 The prior Channel result remains valid for annotation delivery. Issue #30's conversation
-acknowledgement split still requires the expanded real-session rehearsal above before it can be
-marked PASS.
+acknowledgement split still requires the expanded real-session rehearsal above before current T8 can
+be marked PASS. Deterministic use of the production provider implementation is complementary
+evidence, not a replacement for observing a live vendor session.
 
 ## Sanitization check
 
@@ -114,4 +117,4 @@ marked PASS.
 The agent has not signed on the maintainer's behalf. The maintainer must review the rendered report
 and provide an explicit approval or rejection. The expanded issue #30 conversation scenario is still
 pending real-session rehearsal, and maintainer sign-off remains outstanding. Overall v1 readiness
-remains blocked independently by issue #20.
+remains blocked on those T8 conditions; the previously named issue #20 token blocker has shipped.
