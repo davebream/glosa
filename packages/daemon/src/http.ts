@@ -143,6 +143,10 @@ export interface ApiContext {
   token: string | null | TokenSource;
   instanceId: string;
   startedAt: string;
+  /** Daemon-owned reconciliation hook for a lock file that disappeared after initial ownership
+   * was established. The tokenless handshake may trigger the repair, but clients never write the
+   * lock themselves. Optional for hand-built test contexts. */
+  repairLockOwnership?: () => void;
   workspaceIndex: WorkspaceIndex;
   sessionRegistry: SessionRegistry;
   /** Always resolves to the SAME `WorkspaceBus` instance for a given canonical root (backed by
@@ -271,6 +275,7 @@ interface RouteMatch {
 
 function handleHandshake(ctx: ApiContext): () => Response {
   return () => {
+    ctx.repairLockOwnership?.();
     const body: HandshakeBody = {
       contract_version: CONTRACT_VERSION,
       daemon_version: DAEMON_VERSION,
