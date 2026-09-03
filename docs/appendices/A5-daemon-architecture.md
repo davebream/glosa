@@ -5,13 +5,20 @@
 - Lock `~/.glosa/daemon.lock` (daemon-only, written AFTER port bound): `{instance_id:gl-uuid, pid, port, protocol_version, build_id, started_at, host, bun}`. Handshake and status expose the same required `build_id`; readers accept a missing field only as a legacy migration case. **`lock.port` = authoritative port for all clients**; GLOSA_PORT only seeds a fresh spawn. Readiness = a lock plus passing `/api/handshake`, with identity/PID/instance/protocol agreeing between them.
 - `build_id` is `<root-package-semver>-<first-16-hex-of-sha256>`. The hash covers every regular file under `packages/daemon/src`, `packages/cli/src`, `packages/spa/src`, and `packages/providers/*/src`, ordered by repository-relative POSIX path. Each path and its file bytes are independently framed as `<decimal-byte-length>:<bytes>\0`. Identity computation and semver parsing fail closed.
 - `ensureDaemon()` verifies the lock/handshake pair, then applies this matrix: higher client semver → SIGTERM+replace regardless of protocol; lower client semver → reuse only when protocol-compatible, otherwise FAIL `incompatible glosa versions installed` without signalling; equal semver+hash → reuse only when protocol-compatible; equal semver+different hash → invoking client SIGTERM+replace; missing legacy identity → replace. Malformed identity or any lock/handshake disagreement fails closed without signalling.
-- After initial ownership, the daemon may repair a missing lock from inside its tokenless handshake
-  handler by recreating its original record with O_EXCL+fsync. Repair is disabled before initial
-  acquisition and throughout shutdown; it never overwrites an existing corrupt or mismatched file.
-  A client that observed handshake-without-lock re-reads and verifies the repaired pair, then
-  re-enters the normal build matrix. Concurrent clients converge on that daemon-written record.
-  Older lockless daemons that cannot participate remain fail-closed and receive manual PID/port
-  verification and termination guidance; no client manufactures a lock or signals an unverified PID.
+- After initial ownership, the daemon repairs a missing lock on a 250 ms watchdog and from inside
+  its tokenless handshake handler by recreating its original record with O_EXCL+fsync. Repair is
+  disabled before initial acquisition and throughout shutdown; it never overwrites an existing
+  corrupt or mismatched file. A client that observes handshake-without-lock or a lock appearing
+  after a timed-out handshake re-reads and verifies the repaired pair, then re-enters the normal
+  build matrix. Concurrent clients converge on that daemon-written record. Older lockless daemons
+  that cannot participate remain fail-closed and receive manual PID/port verification and
+  termination guidance; no client manufactures a lock or signals an unverified PID.
+- `ensureDaemon({timeoutMs})` applies one monotonic deadline to every handshake, port probe,
+  replacement wait, and spawn wait. Hooks pass 3000 ms; explicit CLI and MCP clients default to
+  12000 ms. Before removing any lock or spawning without one, the client must observe three
+  consecutive clean `ECONNREFUSED` results 100 ms apart while the exact ownership state remains
+  unchanged. Any bound/timeout result, ownership change, or exhausted deadline fails closed without
+  mutation. One invocation may spawn at most one contender; EADDRINUSE remains terminal.
 - Replacement signals only the verified PID, waits ≤5s for that exact lock instance to disappear/change, then re-enters the ordinary read-or-spawn loop. Concurrent clients therefore converge through bind/O_EXCL/CAS; clients never unlink a replacement lock or spawn independently. If no live daemon exists, spawn = detachedSpawn + poll handshake ≤5s; timeout→FAIL w/ daemon.log path.
 - Detach (macOS, no setsid): `Bun.spawn stdio:["ignore",logfd,logfd]` (~/.glosa/daemon.log) + `child.unref()`; **daemon ignores SIGHUP/SIGINT** (survives Ctrl-C/terminal close), SIGTERM→graceful. Claude killing shim kills only shim.
 - Daemon boot: bind 127.0.0.1:port (EADDRINUSE + valid peer → exit0 benign race; EADDRINUSE foreign → exit3 + log) → `openSync(lock,"wx")` O_EXCL = CAS (EEXIST + live peer → exit0; else reclaim+retry once→exit4) → write+fsync lock → install signal handlers → serve (handshake→200). Bind-before-lock + O_EXCL → exactly one daemon wins.

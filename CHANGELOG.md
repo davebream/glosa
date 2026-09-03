@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The workspace switcher is a disclosure that collapses out of the artifact tree's way, and
   remembers whether it was left open.
 
+### Fixed
+
+- A live daemon now repairs a deleted ownership lock without waiting for a handshake, while clients
+  use stable port observations and one overall deadline before reclaiming or spawning. Hook-side
+  discovery yields quietly inside its host timeout instead of creating repeated EADDRINUSE
+  contenders or delaying unrelated prompts.
+
 ## [0.1.0-alpha.10] - 2026-09-03
 
 ### Fixed

@@ -84,11 +84,16 @@ generic.**
   class-F port = `GLOSA_PORT+1` = 4647). No entry point *becomes* the daemon in-process: a client with
   no live daemon **spawns a detached `glosa __daemon`** (unref + ignores SIGHUP/SIGINT) and acts as a
   client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = a lock plus a
-  passing `/api/handshake`. A daemon that already established ownership may recreate its own
-  missing lock during handshake via the same O_EXCL+fsync path; clients proceed only after
-  re-reading a matching lock/handshake pair. Corrupt or mismatched locks are never overwritten,
-  lockless older daemons remain fail-closed with manual recovery guidance, and lock and handshake
-  identity/PID/instance must agree before any signal is sent.
+  passing `/api/handshake`. A daemon that already established ownership recreates its own missing
+  lock through a 250 ms watchdog and also during handshake, using the same O_EXCL+fsync path;
+  clients proceed only after re-reading a matching lock/handshake pair. Corrupt or mismatched locks
+  are never overwritten, lockless older daemons remain fail-closed with manual recovery guidance,
+  and lock and handshake identity/PID/instance must agree before any signal is sent. Client-side
+  discovery has one caller-supplied wall-clock budget (three seconds for hooks, twelve seconds for
+  explicit CLI/MCP calls), permits at most one detached spawn, and requires three consecutive
+  `ECONNREFUSED` probes 100 ms apart before treating a port as free. Ownership changes or an
+  exhausted budget fail closed without unlinking or spawning; hook discovery failure exits quietly
+  so another durable delivery rung can retry later.
   Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
   `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
 - **Workspace registration** separates an immutable registration ID, kind (`directory` or

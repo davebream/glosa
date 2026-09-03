@@ -54,15 +54,17 @@ export async function pollHandshake(
   intervalMs = 100,
   shouldStop?: () => boolean,
 ): Promise<HandshakeResponse | null> {
-  const start = Date.now();
+  const deadline = performance.now() + deadlineMs;
   for (;;) {
     if (shouldStop?.()) return null;
-    const remaining = deadlineMs - (Date.now() - start);
+    const remaining = deadline - performance.now();
     if (remaining <= 0) return null;
     const hs = await fetchHandshake(port, Math.min(500, remaining));
     if (hs) return hs;
     if (shouldStop?.()) return null;
-    await Bun.sleep(Math.min(intervalMs, remaining));
+    const afterAttempt = deadline - performance.now();
+    if (afterAttempt <= 0) return null;
+    await Bun.sleep(Math.min(intervalMs, afterAttempt));
   }
 }
 
