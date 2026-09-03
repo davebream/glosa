@@ -10,15 +10,19 @@
 // Topology: top bar (title, mode control, panel toggles) / navigator / manuscript / contextual
 // margin. The margin holds the annotation composer at full width; below 1024px the same composer
 // node becomes a fixed bottom tray purely via CSS — this module renders ONE composer either way.
-import { createDataAccess } from "./data-access.js";
-import { buildAnnotationRecordFromSelection } from "./annotate.js";
-import { Idiomorph } from "./vendor/idiomorph.js";
-import { mountClassFViewer } from "./classf-viewer.js";
-import { confirmDialog, noticeDialog } from "./dialog.js";
-import { createArtifactTreeNavigator } from "./artifact-tree.js";
-import { mountAppearanceControl } from "./appearance.js";
-import { mountAttentionTray } from "./attention-tray.js";
+
 import { mountAgentFeedback } from "./agent-feedback.js";
+import { buildAnnotationRecordFromSelection } from "./annotate.js";
+import { mountAppearanceControl } from "./appearance.js";
+import { createArtifactTreeNavigator } from "./artifact-tree.js";
+import { mountAttentionTray } from "./attention-tray.js";
+import { mountClassFViewer } from "./classf-viewer.js";
+import { createDataAccess } from "./data-access.js";
+import { confirmDialog, noticeDialog } from "./dialog.js";
+import { Idiomorph } from "./vendor/idiomorph.js";
+import { createContextSurfaceController } from "./viewer-context-surfaces.js";
+import { createViewerFeedbackController } from "./viewer-feedback.js";
+import { createViewerShell, createElement as el } from "./viewer-shell.js";
 
 let historyPaneLoader;
 let conversationPaneLoader;
@@ -88,19 +92,6 @@ export function morphArtifactContent(container, newHtml) {
   Idiomorph.morph(container, newHtml, { morphStyle: "innerHTML" });
 }
 
-function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (key === "onClick") node.addEventListener("click", value);
-    else if (key === "onInput") node.addEventListener("input", value);
-    else if (key === "className") node.className = value;
-    else if (key.startsWith("data-") || key.startsWith("aria-")) node.setAttribute(key, value);
-    else node[key] = value;
-  }
-  for (const child of children) node.append(child);
-  return node;
-}
-
 /** Splits an artifact path into {dir, name} for the top-bar title — the filename leads, the
  * directory is quiet mono metadata beside it (brief §7.1). */
 function splitPath(path) {
@@ -138,117 +129,81 @@ export function mountApp(
   let approvalError = "";
   let approvalResult = null;
 
-  // --- top bar ---
-  const navToggle = el("button", {
-    className: "glosa-nav-toggle",
-    type: "button",
-    "aria-label": "Show artifacts",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-sidebar",
-  });
-  // Static trusted markup (no artifact-derived content ever goes through innerHTML here).
-  navToggle.innerHTML =
-    '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11m-11 3.5h11m-11 3.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
-  // Same geometry as glosa-mark.svg. Inline here so both forms follow explicit app themes,
-  // including a persisted theme that differs from the operating-system preference.
-  brandMark.innerHTML =
-    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>';
-  const artifactNameEl = el("span", { className: "glosa-artifact-name", textContent: "glosa" });
-  const artifactDirEl = el("span", { className: "glosa-artifact-dir" });
-  const modeBar = el("div", { className: "glosa-modebar", role: "group", "aria-label": "View mode" });
-  const historyToggle = el("button", {
-    id: "glosa-history-toggle",
-    className: "glosa-history-toggle",
-    type: "button",
-    textContent: "History",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-history",
-  });
-  const conversationToggle = el("button", {
-    id: "glosa-conversation-toggle",
-    className: "glosa-conversation-toggle",
-    type: "button",
-    textContent: "Conversation",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-conversation",
-  });
-  historyToggle.setAttribute("aria-label", "History");
-  historyToggle.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5V2.8M3.5 5.5h2.7M3.7 5.3A7 7 0 1 1 3 12M10 6.2V10l2.7 1.7"/></svg><span>History</span>';
-  conversationToggle.setAttribute("aria-label", "Conversation");
-  conversationToggle.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
-  const topbarOverlays = el("div", { className: "glosa-topbar-overlays" });
-  const appearanceHost = el("div", { className: "glosa-appearance" });
-  const attentionHost = el("div", { className: "glosa-attention" });
-  const attentionTray = mountAttentionTray(attentionHost, {
-    dataAccess,
-    overlayHost: topbarOverlays,
-    onEntriesChange: setAttentionEntries,
-    onOpenArtifact: requestOpenArtifact,
-    getCurrentArtifact: () => currentArtifact?.source_path ?? null,
-  });
-  const toolsTrigger = el("button", {
-    className: "glosa-tools-trigger",
-    type: "button",
-    title: "More",
-    "aria-label": "More",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-tools-menu",
-  });
-  toolsTrigger.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1"/><circle cx="10" cy="10" r="1"/><circle cx="16" cy="10" r="1"/></svg><span class="glosa-visually-hidden">More</span>';
-  const shortcutsToggle = el("button", {
-    className: "glosa-shortcuts-toggle",
-    type: "button",
-    "aria-label": "Keyboard shortcuts",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-shortcuts",
-  });
-  shortcutsToggle.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5.5" width="15" height="9.5" rx="1.5"/><path d="M5.5 8.5h.01M8.5 8.5h.01M11.5 8.5h.01M14.5 8.5h.01M6.5 12h7"/></svg><span>Keyboard shortcuts</span>';
-  const copySourceButton = el("button", {
-    className: "glosa-tools-copy-source",
-    type: "button",
-    "aria-label": "Copy source",
-    hidden: true,
-  });
-  copySourceButton.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5"/><path d="M4.5 12.5H4A1.5 1.5 0 0 1 2.5 11V4A1.5 1.5 0 0 1 4 2.5h7A1.5 1.5 0 0 1 12.5 4v.5"/></svg><span>Copy source</span>';
-  const printArtifactButton = el("button", {
-    className: "glosa-tools-print",
-    type: "button",
-    "aria-label": "Print / Save as PDF",
-    hidden: true,
-  });
-  printArtifactButton.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 7.5v-4h8v4M6 14.5H4.5A1.5 1.5 0 0 1 3 13V9a1.5 1.5 0 0 1 1.5-1.5h11A1.5 1.5 0 0 1 17 9v4a1.5 1.5 0 0 1-1.5 1.5H14"/><rect x="6" y="12" width="8" height="5" rx="1"/></svg><span>Print / Save as PDF</span>';
-  const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
   let toolsStatusArtifactPath = null;
-  const stopAppearance = appearance
-    ? mountAppearanceControl(appearanceHost, appearance, { overlayHost: topbarOverlays, returnFocus: toolsTrigger })
-    : null;
-  const toolsMenu = el(
-    "div",
-    {
-      id: "glosa-tools-menu",
-      className: "glosa-tools-menu",
-      role: "group",
-      "aria-label": "Workspace tools",
-    },
-    [
-      attentionHost,
-      historyToggle,
-      conversationToggle,
-      copySourceButton,
-      printArtifactButton,
-      appearanceHost,
-      shortcutsToggle,
-      toolsStatus,
-    ],
-  );
-  const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
+  let modeState = initialModeState(previewLock ? "preview" : initialMode);
+  // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
+  // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
+  let currentSlug = null;
+  let currentArtifact = null; // {path, content, rendered_html, source_sha256, class, derived_from?}
+  let loading = false;
+  let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per session
+  let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
+  let richMountRequest = 0;
+  let richEditorLoading = false;
+  const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
+  let composer = null; // {record} while the annotation composer is open
+  let annotatableFocusIndex = 0;
+  let stopStream = null;
+  let stopClassFViewer = null;
+  let classFInteractive = false;
+
+  const shell = createViewerShell(root, {
+    dataAccess,
+    surface,
+    appearance,
+    mountAppearanceControl,
+    mountAttentionTray,
+    mountAgentFeedback,
+    createArtifactTreeNavigator,
+    onAttentionEntriesChange: setAttentionEntries,
+    onOpenArtifact: (path) => void requestOpenArtifact(path),
+    getCurrentArtifact: () => currentArtifact?.source_path ?? null,
+    onWireWorkspace: wireWorkspace,
+  });
+  const { attentionTray, agentFeedback, artifactNavigator } = shell;
+  const {
+    navToggle,
+    artifactNameEl,
+    artifactDirEl,
+    modeBar,
+    historyToggle,
+    conversationToggle,
+    shortcutsToggle,
+    topbarOverlays,
+    appearanceHost,
+    attentionHost,
+    toolsTrigger,
+    toolsMenu,
+    tools,
+    copySourceButton,
+    printArtifactButton,
+    toolsStatus,
+    sidebarList,
+    artifactList,
+    artifactListEmpty,
+    backdrop,
+    contentEl,
+    emptyEl,
+    skeletonEl,
+    editArea,
+    saveButton,
+    editStatus,
+    richEl,
+    faceRichBtn,
+    faceSourceBtn,
+    editWrap,
+    classFEl,
+    historyEl,
+    conversationEl,
+    shortcutsEl,
+    marginEl,
+    markersEl,
+    bannerEl,
+    approvalStrip,
+    annotateInstructions,
+    mainEl,
+    sidebarEl,
+  } = shell.elements;
   const toolControls = () =>
     [
       attentionHost.querySelector(".glosa-attention-trigger"),
@@ -355,185 +310,6 @@ export function mountApp(
     setToolsOpen(false);
   };
   document.addEventListener("click", onDocumentClick);
-
-  // --- navigator ---
-  const sidebarList = el("ul", { className: "glosa-workspace-list" });
-  const artifactList = el("ul", { className: "glosa-artifact-list" });
-  let artifactNavigator = null;
-  const expandArtifacts = el("button", {
-    className: "glosa-tree-tool",
-    type: "button",
-    title: "Expand all folders",
-    "aria-label": "Expand all folders",
-    innerHTML: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>',
-    onClick: () => artifactNavigator?.expandAll(),
-  });
-  const collapseArtifacts = el("button", {
-    className: "glosa-tree-tool",
-    type: "button",
-    title: "Collapse all folders",
-    "aria-label": "Collapse all folders",
-    innerHTML: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg>',
-    onClick: () => artifactNavigator?.collapseAll(),
-  });
-  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [el("h2", { textContent: "Artifacts" })]);
-  const artifactListEmpty = el("p", {
-    className: "glosa-sidebar-empty",
-    textContent: "Markdown, HTML, and text files in this workspace appear here.",
-    hidden: true,
-  });
-  const backdrop = el("div", { className: "glosa-backdrop" });
-
-  // --- manuscript column ---
-  const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Artifact preview" });
-  const emptyEl = el("div", { className: "glosa-empty", hidden: true, role: "status", "aria-live": "polite" });
-  const skeletonEl = el("div", { className: "glosa-skeleton", hidden: true, "aria-hidden": "true" });
-  for (let i = 0; i < 8; i++) skeletonEl.append(el("i"));
-  const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Artifact source" });
-  const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
-  const editStatus = el("p", { className: "glosa-edit-status", role: "status", "aria-live": "polite" });
-  // Edit's two faces (rich is the default; Source is the byte-exact fallback and the code view).
-  const richEl = el("div", { className: "glosa-rich", hidden: true });
-  const faceRichBtn = el("button", { className: "glosa-face-rich", type: "button", textContent: "Rich" });
-  const faceSourceBtn = el("button", { className: "glosa-face-source", type: "button", textContent: "Source" });
-  const faceToggle = el("div", { className: "glosa-editor-face", role: "group", "aria-label": "Editor mode" }, [
-    faceRichBtn,
-    faceSourceBtn,
-  ]);
-  const editWrap = el("div", { className: "glosa-edit-wrap", hidden: true }, [
-    el("div", { className: "glosa-edit-topbar" }, [faceToggle]),
-    richEl,
-    editArea,
-    el("div", { className: "glosa-edit-actions" }, [editStatus, saveButton]),
-  ]);
-  const classFEl = el("div", {
-    className: "glosa-classf",
-    hidden: true,
-    role: "region",
-    "aria-label": "Artifact preview",
-  });
-  const historyEl = el("section", {
-    id: "glosa-history",
-    className: "glosa-history",
-    hidden: true,
-    "aria-labelledby": "glosa-history-toggle",
-  });
-  const conversationEl = el("section", {
-    id: "glosa-conversation",
-    className: "glosa-conversation",
-    hidden: true,
-    "aria-labelledby": "glosa-conversation-toggle",
-  });
-  const shortcutsEl = el("section", {
-    id: "glosa-shortcuts",
-    className: "glosa-shortcuts",
-    hidden: true,
-    "aria-labelledby": "glosa-shortcuts-toggle",
-  });
-
-  // --- contextual margin (annotation cards + the ONE composer) ---
-  const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
-  // Compact gutter: one dot per annotation at its anchor's height; tapping jumps to the card
-  // (which flows below the manuscript at narrow widths).
-  const markersEl = el("div", { className: "glosa-markers", "aria-hidden": "true" });
-
-  // The margin lives INSIDE the manuscript's scroll container (not a sibling column): cards are
-  // absolutely positioned at their anchors' document offsets, so they scroll glued to the text.
-  // Thin connection banner (hidden while healthy): honest words, no spinner theater.
-  const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
-  const approvalStrip = el("section", {
-    className: "glosa-approval-strip",
-    hidden: true,
-    "aria-label": "Final approval",
-  });
-  const annotateInstructions = el("p", {
-    id: "glosa-annotate-instructions",
-    className: "glosa-visually-hidden",
-    textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
-    hidden: true,
-  });
-
-  const mainEl = el("main", { className: "glosa-main" }, [
-    bannerEl,
-    approvalStrip,
-    annotateInstructions,
-    emptyEl,
-    skeletonEl,
-    contentEl,
-    classFEl,
-    editWrap,
-    marginEl,
-    markersEl,
-  ]);
-  const sidebarEl = el(
-    "nav",
-    {
-      id: "glosa-sidebar",
-      className: "glosa-sidebar",
-      "aria-label": "Workspace navigation",
-    },
-    [el("h2", { textContent: "Workspaces" }), sidebarList, artifactHeading, artifactList, artifactListEmpty],
-  );
-
-  // Issue #95: one compact status/control for explicit connection + integration wiring. The
-  // component receives only generic aggregate data; provider copy remains in provider packages.
-  const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
-  const agentFeedback = mountAgentFeedback(agentFeedbackHost, {
-    overlayHost: topbarOverlays,
-    onWire: wireWorkspace,
-  });
-
-  root.append(
-    el("header", { className: "glosa-topbar" }, [
-      navToggle,
-      brandMark,
-      el("div", { className: "glosa-topbar-title" }, [artifactNameEl, artifactDirEl]),
-      modeBar,
-      el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
-      topbarOverlays,
-    ]),
-    sidebarEl,
-    backdrop,
-    mainEl,
-    historyEl,
-    conversationEl,
-    shortcutsEl,
-  );
-
-  if (surface === "document") {
-    // Document surface: no navigator toggle, workspace switcher, sidebar, or artifact tree.
-    navToggle.hidden = true;
-    sidebarEl.hidden = true;
-    backdrop.hidden = true;
-    root.setAttribute("data-nav-open", "false");
-  }
-
-  artifactNavigator = createArtifactTreeNavigator(artifactList, {
-    onOpen: (path) => void requestOpenArtifact(path),
-  });
-
-  let modeState = initialModeState(previewLock ? "preview" : initialMode);
-  // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
-  // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
-  let currentSlug = null;
-  let currentArtifact = null; // {path, content, rendered_html, source_sha256, class, derived_from?}
-  let loading = false;
-  let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per session
-  let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
-  let richMountRequest = 0;
-  let richEditorLoading = false;
-  const annotationsByPath = new Map(); // per-session [{record, state}] (no GET-annotations route yet)
-  let composer = null; // {record} while the annotation composer is open
-  // Issue #81's point-of-action init consent remains. Issue #95 combines it with explicit session
-  // status; both bodies reset on any refresh failure so the control can never retain stale green.
-  let wiring = null; // last observed GET /w/:slug/wiring body, or null = unknown
-  let status = null; // last observed GET /api/status body, or null = unknown
-  let agentFeedbackRefresh = 0; // latest request wins when poll/stream/focus refreshes overlap
-  const wiringPromptedSlugs = new Set(); // once per workspace per SPA session, even after Cancel
-  let annotatableFocusIndex = 0;
-  let stopStream = null;
-  let stopClassFViewer = null; // unmount() for the currently mounted class-F iframe, if any
-  let classFInteractive = false;
 
   const compactNav = () =>
     modeState?.mode === "preview" ||
@@ -1414,7 +1190,7 @@ export function mountApp(
     }
 
     const previousMode = modeState.mode;
-    let next = modeReducer(modeState, { type: "set_mode", mode });
+    const next = modeReducer(modeState, { type: "set_mode", mode });
     if (next.blocked) {
       // The dialog is async; park the blocked state and settle when the user answers.
       void confirmDialog({
@@ -1436,7 +1212,7 @@ export function mountApp(
     renderModeBar();
     renderContent();
     void renderHistory();
-    if (conversationVisible) void renderConversation();
+    void renderConversation();
     onFocusChange?.({ slug: currentSlug, artifact: currentArtifact?.source_path ?? null, mode: modeState.mode });
     if (modeState.mode === "edit" && previousMode !== "edit") mainEl.scrollTop = 0;
   }
@@ -1630,129 +1406,20 @@ export function mountApp(
   };
   if (typeof window !== "undefined") window.addEventListener("resize", onResize);
 
-  let historyVisible = false;
-  let shortcutsVisible = false;
-
-  function closeContextSurfaces(except = null) {
-    if (except !== "history") {
-      historyVisible = false;
-      historyEl.hidden = true;
-      historyToggle.setAttribute("aria-expanded", "false");
-    }
-    if (except !== "conversation") {
-      setConversationVisible(false);
-    }
-    if (except !== "shortcuts") {
-      shortcutsVisible = false;
-      shortcutsEl.hidden = true;
-      shortcutsToggle.setAttribute("aria-expanded", "false");
-    }
-  }
-
-  async function renderHistory() {
-    if (!historyVisible || !currentSlug) return;
-    const slug = currentSlug;
-    try {
-      const mountHistoryPane = await loadHistoryPane();
-      if (!historyVisible || currentSlug !== slug) return;
-      mountHistoryPane(historyEl, {
-        dataAccess,
-        slug,
-        path: currentArtifact?.source_path,
-        canRestore: modeState.mode === "edit",
-        onClose: () => {
-          historyVisible = false;
-          historyEl.hidden = true;
-          historyToggle.setAttribute("aria-expanded", "false");
-          toolsTrigger.focus({ preventScroll: true });
-        },
-      });
-      queueMicrotask(() => historyEl.querySelector("h3")?.focus({ preventScroll: true }));
-    } catch {
-      if (!historyVisible || currentSlug !== slug) return;
-      historyEl.setAttribute("role", "alert");
-      historyEl.textContent = "History couldn't be loaded. Close this panel and try again.";
-    }
-  }
-
-  historyToggle.addEventListener("click", () => {
-    const nextVisible = !historyVisible;
-    if (nextVisible) closeContextSurfaces("history");
-    historyVisible = nextVisible;
-    historyEl.hidden = !historyVisible;
-    historyToggle.setAttribute("aria-expanded", String(historyVisible));
-    void renderHistory();
+  const contextSurfaces = createContextSurfaceController({
+    dataAccess,
+    elements: { historyEl, conversationEl, shortcutsEl, historyToggle, conversationToggle, shortcutsToggle },
+    getState: () => ({
+      slug: currentSlug,
+      artifactPath: currentArtifact?.source_path,
+      mode: modeState.mode,
+    }),
+    loadHistoryPane,
+    loadConversationPane,
+    createElement: el,
+    returnFocus: () => toolsTrigger.focus({ preventScroll: true }),
   });
-
-  // P4.2 — workspace-scoped (not artifact-scoped, unlike history): re-mounted on open and on every
-  // workspace switch (renderConversation is called from selectWorkspace below), never per-artifact.
-  let conversationVisible = false;
-  let stopConversation = null;
-
-  function setConversationVisible(visible) {
-    conversationVisible = visible;
-    conversationEl.hidden = !conversationVisible;
-    conversationToggle.setAttribute("aria-expanded", String(conversationVisible));
-    void renderConversation();
-  }
-
-  async function renderConversation() {
-    stopConversation?.();
-    stopConversation = null;
-    if (!conversationVisible || !currentSlug) return;
-    const slug = currentSlug;
-    try {
-      const mountConversationPane = await loadConversationPane();
-      if (!conversationVisible || currentSlug !== slug) return;
-      stopConversation = mountConversationPane(conversationEl, {
-        dataAccess,
-        slug,
-        readOnly: modeState.mode === "preview",
-        onClose: () => {
-          setConversationVisible(false);
-          toolsTrigger.focus({ preventScroll: true });
-        },
-      });
-    } catch {
-      if (!conversationVisible || currentSlug !== slug) return;
-      conversationEl.setAttribute("role", "alert");
-      conversationEl.textContent = "Conversation couldn't be loaded. Close this panel and use the terminal.";
-    }
-  }
-
-  conversationToggle.addEventListener("click", () => {
-    const nextVisible = !conversationVisible;
-    if (nextVisible) closeContextSurfaces("conversation");
-    setConversationVisible(nextVisible);
-  });
-
-  shortcutsToggle.addEventListener("click", () => {
-    const nextVisible = !shortcutsVisible;
-    if (nextVisible) closeContextSurfaces("shortcuts");
-    shortcutsVisible = nextVisible;
-    shortcutsEl.hidden = !nextVisible;
-    shortcutsToggle.setAttribute("aria-expanded", String(nextVisible));
-    if (nextVisible) {
-      shortcutsEl.textContent = "";
-      const close = el("button", {
-        type: "button",
-        className: "glosa-context-close",
-        textContent: "Close keyboard shortcuts",
-        onClick: () => {
-          shortcutsVisible = false;
-          shortcutsEl.hidden = true;
-          shortcutsToggle.setAttribute("aria-expanded", "false");
-          toolsTrigger.focus({ preventScroll: true });
-        },
-      });
-      shortcutsEl.append(
-        el("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }),
-        el("p", { textContent: "⌘/Ctrl+1 Preview · ⌘/Ctrl+2 Annotate · ⌘/Ctrl+3 Edit" }),
-        close,
-      );
-      queueMicrotask(() => shortcutsEl.querySelector("h3")?.focus({ preventScroll: true }));
-    }
-  });
+  const { renderHistory, renderConversation } = contextSurfaces;
 
   function markCurrent(listEl, key) {
     for (const btn of listEl.querySelectorAll("button")) {
@@ -1865,83 +1532,24 @@ export function mountApp(
     paintAnchorUnderlines();
   }
 
-  function renderAgentFeedback() {
-    agentFeedback.setState({ slug: currentSlug, wiring, status });
+  const feedbackController = createViewerFeedbackController({
+    dataAccess,
+    view: agentFeedback,
+    getWorkspaceSlug: () => currentSlug,
+    confirmDialog,
+    noticeDialog,
+  });
+
+  function refreshAgentFeedback() {
+    return feedbackController.refresh();
   }
 
-  async function refreshAgentFeedback() {
-    const refresh = ++agentFeedbackRefresh;
-    if (!currentSlug) {
-      wiring = null;
-      status = null;
-      renderAgentFeedback();
-      return;
-    }
-    const slugAtFetch = currentSlug;
-    try {
-      const [fetchedWiring, fetchedStatus] = await Promise.all([
-        dataAccess.getWiringStatus(slugAtFetch),
-        dataAccess.getStatus(),
-      ]);
-      if (currentSlug !== slugAtFetch || refresh !== agentFeedbackRefresh) return;
-      wiring = fetchedWiring;
-      status = fetchedStatus;
-    } catch {
-      // Old daemon (pre-1.5) or transient failure — reset both, never retain a stale green claim.
-      if (currentSlug === slugAtFetch && refresh === agentFeedbackRefresh) {
-        wiring = null;
-        status = null;
-      }
-    }
-    renderAgentFeedback();
+  function wireWorkspace() {
+    return feedbackController.wireWorkspace();
   }
 
-  /** The consent act (issue #81): runs `glosa init` daemon-side AFTER an explicit click. Shared
-   * by the combined control's Off action and the first-annotation dialog. Failures fall back to the
-   * copyable terminal command — this function never throws. */
-  async function wireWorkspace() {
-    if (!currentSlug) return;
-    try {
-      const result = await dataAccess.triggerInit(currentSlug);
-      await refreshAgentFeedback();
-      if (result?.restart_required !== false) {
-        await noticeDialog({
-          title: "Wired — one step left",
-          body: "Restart or resume your agent session so it loads glosa. Until then annotations queue locally — Agent feedback stays unbound until a session connects.",
-        });
-      } else {
-        await noticeDialog({
-          title: "Wired",
-          body: "Agent feedback is set up and a live session is bound — annotations will be delivered.",
-        });
-      }
-    } catch (error) {
-      const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
-      await noticeDialog({
-        title: "Couldn't set up agent feedback",
-        body: `Run \`glosa init\` in the workspace terminal instead${detail}.`,
-      });
-      void refreshAgentFeedback();
-    }
-  }
-
-  /** First-annotation consent gate (issue #81). Prompts at most once per workspace per SPA
-   * session, only on an OBSERVED unwired state — and the caller proceeds with the save no
-   * matter what happens here (the annotation is journaled regardless of wiring). */
-  async function maybeOfferWiring() {
-    if (wiring?.state !== "unwired") return;
-    if (!currentSlug || wiringPromptedSlugs.has(currentSlug)) return;
-    wiringPromptedSlugs.add(currentSlug);
-    try {
-      const wire = await confirmDialog({
-        title: "This workspace isn't wired for agent feedback",
-        body: "Your annotation will be saved here either way — but no agent session will see it until glosa's integration is installed. Wire it now?",
-        confirmLabel: "Wire it now",
-      });
-      if (wire) await wireWorkspace();
-    } catch {
-      // The save must never be blocked by anything in the offer flow.
-    }
+  function maybeOfferWiring() {
+    return feedbackController.maybeOfferWiring();
   }
 
   function startStream() {
@@ -1986,10 +1594,7 @@ export function mountApp(
     stopClassFViewer = null;
     classFEl.removeAttribute("data-path");
     markCurrent(sidebarList, slug);
-    wiring = null; // never carry the previous workspace's wiring claim across a switch
-    status = null; // nor its explicit session claim
-    renderAgentFeedback();
-    void refreshAgentFeedback();
+    feedbackController.selectWorkspace();
     await refreshArtifactList();
     renderModeBar();
     renderContent();
@@ -2064,26 +1669,15 @@ export function mountApp(
   renderContent();
   void refreshWorkspaces().catch(showWorkspaceError);
 
-  // Connection freshness: reuse issue #81's 15-second poll and focus refresh. Binding remains
-  // session-scoped and in memory; this is observation only, not a persistence or arbitration path.
-  const agentFeedbackPollTimer = setInterval(() => void refreshAgentFeedback(), 15_000);
-  agentFeedbackPollTimer.unref?.(); // Bun/Node Timer in tests — never keeps the process alive; no-op in browsers
-  const onWindowFocus = () => void refreshAgentFeedback();
-  if (typeof window !== "undefined") window.addEventListener("focus", onWindowFocus);
-
   return () => {
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
-    clearInterval(agentFeedbackPollTimer);
-    if (typeof window !== "undefined") window.removeEventListener("focus", onWindowFocus);
+    feedbackController.destroy();
     teardownRichFace();
     stopStream?.();
     stopClassFViewer?.();
-    stopConversation?.();
-    stopAppearance?.();
-    attentionTray.destroy();
-    agentFeedback.destroy();
-    artifactNavigator.destroy();
+    contextSurfaces.destroy();
+    shell.destroy();
   };
 }
