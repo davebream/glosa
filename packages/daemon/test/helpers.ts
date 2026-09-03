@@ -6,10 +6,85 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lockPath } from "../src/home.ts";
+import { glosaHome, lockPath } from "../src/home.ts";
+import { type EnsureDaemonResult, ensureDaemon as ensureProductionDaemon } from "../src/lifecycle.ts";
 import { readLock } from "../src/lock.ts";
 
 const MAIN_PATH = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
+const GUARDIAN_PATH = fileURLToPath(new URL("./fixtures/daemon-guardian.ts", import.meta.url));
+
+// A test runner can be stopped before its async finally/afterAll hooks run. Ordinary child
+// processes are reparented in that case, so every real daemon this helper launches would otherwise
+// survive the suite that owns its temporary home. Keep strong handles and synchronously SIGKILL
+// only those exact children from the process exit hook; production's detached-daemon semantics are
+// untouched because this ownership registry exists only in test code.
+const ownedDaemonChildren = new Set<Bun.Subprocess<"ignore", "ignore", "ignore">>();
+const ownedDetachedDaemons = new Map<number, { home: string; instanceId: string }>();
+let guardian: Bun.Subprocess<"pipe", "ignore", "ignore"> | null = null;
+
+function guardianCommand(op: "watch" | "unwatch", home: string): void {
+  if (!guardian || guardian.exitCode !== null) {
+    guardian = Bun.spawn({
+      cmd: [process.execPath, GUARDIAN_PATH],
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    guardian.unref();
+  }
+  guardian.stdin.write(`${JSON.stringify({ op, home })}\n`);
+  guardian.stdin.flush();
+}
+
+export function superviseDaemonHome(home: string): void {
+  guardianCommand("watch", home);
+}
+
+function releaseDaemonHome(home: string): void {
+  if (guardian?.exitCode === null) guardianCommand("unwatch", home);
+}
+
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function reapOwnedDaemonChildren(): void {
+  for (const child of ownedDaemonChildren) {
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The child won an exit race; there is nothing left to reap.
+      }
+    }
+  }
+  for (const [pid, owned] of ownedDetachedDaemons) {
+    const lock = readLock(lockPath(owned.home));
+    if (lock?.pid !== pid || lock.instance_id !== owned.instanceId) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already dead
+    }
+  }
+}
+
+process.once("exit", reapOwnedDaemonChildren);
+for (const [signal, exitCode] of [
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+  ["SIGHUP", 129],
+] as const) {
+  process.once(signal, () => {
+    reapOwnedDaemonChildren();
+    process.exit(exitCode);
+  });
+}
 
 export function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "glosa-test-"));
@@ -180,13 +255,56 @@ export function spawnDaemon(
   port: number,
   envOverrides: Record<string, string> = {},
 ): Bun.Subprocess<"ignore", "ignore", "ignore"> {
-  return Bun.spawn({
+  superviseDaemonHome(home);
+  const child = Bun.spawn({
     cmd: [process.execPath, MAIN_PATH, "__daemon"],
     env: { ...Bun.env, GLOSA_HOME: home, GLOSA_PORT: String(port), ...envOverrides } as Record<string, string>,
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
   });
+  ownedDaemonChildren.add(child);
+  void child.exited.finally(() => ownedDaemonChildren.delete(child));
+  return child;
+}
+
+export function trackDetachedDaemon(home: string, daemon: { pid: number; instanceId: string }): void {
+  ownedDetachedDaemons.set(daemon.pid, { home, instanceId: daemon.instanceId });
+}
+
+/** Production ensure semantics with test-runner ownership registered immediately after readiness. */
+export async function ensureTestDaemon(): Promise<EnsureDaemonResult> {
+  const home = glosaHome();
+  superviseDaemonHome(home);
+  const result = await ensureProductionDaemon();
+  if (result.ok) trackDetachedDaemon(home, result);
+  return result;
+}
+
+export async function stopDetachedDaemon(home: string, daemon: { pid: number; instanceId?: string }): Promise<void> {
+  try {
+    process.kill(daemon.pid, "SIGTERM");
+  } catch {
+    // already dead
+  }
+  let exited = await waitUntil(() => !pidIsAlive(daemon.pid), 3000);
+  if (!exited) {
+    const lock = readLock(lockPath(home));
+    if (lock?.pid === daemon.pid && (daemon.instanceId === undefined || lock.instance_id === daemon.instanceId)) {
+      try {
+        process.kill(daemon.pid, "SIGKILL");
+      } catch {
+        // already dead
+      }
+      exited = await waitUntil(() => !pidIsAlive(daemon.pid), 3000);
+    }
+  }
+  if (!exited) throw new Error(`test daemon pid ${daemon.pid} did not exit after SIGTERM/SIGKILL`);
+  ownedDetachedDaemons.delete(daemon.pid);
+  if (!(await waitUntil(() => lockOf(home) === null, 3000))) {
+    throw new Error(`test daemon pid ${daemon.pid} exited without releasing ${lockPath(home)}`);
+  }
+  releaseDaemonHome(home);
 }
 
 /** A pid guaranteed to be dead: spawn a trivial process and wait for it to exit. */
@@ -251,13 +369,25 @@ export function lockOf(home: string) {
   return readLock(lockPath(home));
 }
 
-/** Best-effort SIGTERM + wait for the lock to disappear; used to tear down spawned daemons. */
+/** SIGTERM, then bounded SIGKILL fallback, proving the owned child actually exited before its
+ * temporary home can be removed. */
 export async function stopDaemon(home: string, proc: Bun.Subprocess): Promise<void> {
   try {
     proc.kill("SIGTERM");
   } catch {
     // already dead
   }
-  await Promise.race([proc.exited, Bun.sleep(3000)]);
-  await waitUntil(() => lockOf(home) === null, 3000);
+  const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(3000).then(() => false)]);
+  if (!exited && proc.exitCode === null) {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // already dead
+    }
+  }
+  await proc.exited;
+  if (!(await waitUntil(() => lockOf(home) === null, 3000))) {
+    throw new Error(`test daemon pid ${proc.pid} exited without releasing ${lockPath(home)}`);
+  }
+  releaseDaemonHome(home);
 }

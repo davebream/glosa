@@ -13,13 +13,13 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureToken, lockPath, readLock } from "@glosa/daemon";
-import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
-import { createHttpDaemonClient } from "../src/daemon-client.ts";
-import { runOpen, type OpenDeps } from "../src/open.ts";
-import { runRequestReview } from "../src/request-review.ts";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
-import { randomPort } from "../../daemon/test/helpers.ts";
+import { randomPort, stopDetachedDaemon, superviseDaemonHome, trackDetachedDaemon } from "../../daemon/test/helpers.ts";
+import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
+import { createHttpDaemonClient } from "../src/daemon-client.ts";
+import { type OpenDeps, runOpen } from "../src/open.ts";
+import { runRequestReview } from "../src/request-review.ts";
 
 let home: string;
 let client: GlosaApiClient;
@@ -42,21 +42,20 @@ beforeAll(async () => {
   // daemon's first-ever spawn (which `createHttpGlosaClient()` below triggers via `ensureDaemon`),
   // or every authed call in this file would 401 for this daemon's entire process lifetime.
   token = ensureToken(home);
+  superviseDaemonHome(home);
   // Lazily spawns a real `glosa __daemon` subprocess via `ensureDaemon` — the SAME mechanism
   // `glosa open` uses in production; nothing here pre-spawns a daemon by hand.
   client = await createHttpGlosaClient();
+  const lock = readLock(lockPath(home));
+  if (!lock) throw new Error("real integration daemon did not publish its ownership lock");
+  trackDetachedDaemon(home, { pid: lock.pid, instanceId: lock.instance_id });
 }, 15000);
 
 afterAll(async () => {
   const lock = readLock(lockPath(home));
   if (lock) {
-    try {
-      process.kill(lock.pid, "SIGTERM");
-    } catch {
-      // already gone
-    }
+    await stopDetachedDaemon(home, { pid: lock.pid, instanceId: lock.instance_id });
   }
-  await Bun.sleep(300);
   for (const d of dirsToClean) {
     try {
       rmSync(d, { recursive: true, force: true });

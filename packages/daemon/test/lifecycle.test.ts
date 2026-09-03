@@ -9,12 +9,12 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
 import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
-import { ensureDaemon } from "../src/lifecycle.ts";
 import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lock.ts";
 import { PROTOCOL_VERSION } from "../src/protocol.ts";
 import {
   cleanupHome,
   deadPid,
+  ensureTestDaemon as ensureDaemon,
   freshHome,
   lockOf,
   randomPort,
