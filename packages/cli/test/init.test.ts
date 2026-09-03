@@ -849,6 +849,56 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     expect(manifest.providers.codex).toBeUndefined();
   });
 
+  // ---------------------------------------------------------------------------------------------
+  // The two `test.failing` cases below are KNOWN GAPS in the scoped (v2) uninstall path, found
+  // while consolidating the two init generations. Both are covered on the superseded v1 path by
+  // `describe("glosa uninstall")` above, which is why deleting `runInit`/`runUninstall` is blocked
+  // on fixing these first — the deprecated generation is currently the only correct implementation
+  // of two A6 §F26 uninstall clauses.
+  //
+  // Root cause for both: `scoped-init.ts`'s `pruneEmpty` (a generic "delete anything that
+  // recursively empties" walk) replaced v1's schema-aware prune (init.ts's `pruneEmpty`, which
+  // touches ONLY `hooks` and `mcpServers` and drops a hook GROUP whose `hooks` array is empty
+  // regardless of what else the group carries).
+  //
+  // `test.failing` rather than a skip so these stay executable: each one FAILS the suite the
+  // moment the gap is fixed, which is the prompt to delete the marker and the note above.
+  // ---------------------------------------------------------------------------------------------
+
+  test.failing("A6 §F26: a settings.json glosa created is deleted once its last hook is removed", async () => {
+    const dir = freshDir();
+    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expect(existsSync(settingsPathOf(dir))).toBe(true);
+
+    const removed = await runScopedUninstall({ dir, agents: ["claude-code"] });
+    expect(removed.ok).toBe(true);
+
+    // A6 §F26 uninstall: "created:true file now empty→delete". What survives instead is the
+    // SessionStart matcher group glosa itself wrote, stripped of its hooks but not of its
+    // `matcher` — so the generic prune never sees an empty root and never deletes the file:
+    //   {"hooks":{"SessionStart":[{"matcher":"startup|resume|clear|compact"}]}}
+    // `.mcp.json` and `.codex/hooks.json` ARE deleted correctly; only the matcher-bearing group
+    // survives, which is why no existing scoped test caught it.
+    expect(existsSync(settingsPathOf(dir))).toBe(false);
+  });
+
+  test.failing("A6 §F26: uninstall never touches a foreign sibling in settings.json", async () => {
+    const dir = freshDir();
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    // `permissions: {}` is a real, meaningful Claude Code settings key that happens to be empty —
+    // it is the user's, not glosa's, and uninstall has no business removing it.
+    writeFileSync(settingsPathOf(dir), JSON.stringify({ permissions: {} }, null, 2));
+    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+
+    await runScopedUninstall({ dir, agents: ["claude-code"] });
+
+    // The generic prune recurses into the WHOLE document, so any foreign key whose value happens
+    // to be an empty object or array is silently deleted from the user's own config — a data-loss
+    // bug, not just an untidiness one. v1's schema-aware prune could never reach outside
+    // `hooks`/`mcpServers`.
+    expect(readJson(settingsPathOf(dir))).toEqual({ permissions: {} });
+  });
+
   test("the first scoped operation atomically migrates the legacy manifest", async () => {
     const dir = freshDir();
     await runInit({ dir, resolveGlosaBin: () => BIN_A });
