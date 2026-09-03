@@ -73,13 +73,47 @@ const NFC_KEY = "directory:/tmp/glosa-café"; // "café" with precomposed U+00E9
 const NFD_KEY = "directory:/tmp/glosa-café"; // "café" as "e" + U+0301 COMBINING ACUTE ACCENT
 
 describe("KeyedMutex.runExclusiveMany", () => {
-  test("the NFC/NFD fixture keys tie under ICU collation but are ordered under byte comparison", () => {
+  test("the NFC/NFD fixture keys tie under ICU collation but are ordered under code-unit comparison", () => {
     expect(NFC_KEY).not.toBe(NFD_KEY);
     // Ties in BOTH directions — this is what makes the comparator non-total, not merely asymmetric.
     expect(NFC_KEY.localeCompare(NFD_KEY)).toBe(0);
     expect(NFD_KEY.localeCompare(NFC_KEY)).toBe(0);
-    // A byte-exact comparator separates them deterministically ("e" U+0065 sorts before U+00E9).
+    // A code-unit-exact comparator separates them deterministically ("e" U+0065 sorts before U+00E9).
     expect(NFD_KEY < NFC_KEY).toBe(true);
+  });
+
+  test("uses the code-unit total order even where the matcher's UTF-8 output order differs", async () => {
+    // U+10000 starts with the UTF-16 high surrogate 0xD800, which sorts before U+E000. In UTF-8,
+    // U+E000 starts with 0xEE and sorts before U+10000's 0xF0. The matcher must use the latter
+    // order (A4 F20); a mutex may use either total order, and deliberately uses the allocation-free
+    // ECMAScript relation because lock acquisition order is not persisted or exposed.
+    const codeUnitFirst = `key-${String.fromCodePoint(0x10000)}`;
+    const utf8First = `key-${String.fromCodePoint(0xe000)}`;
+    expect(codeUnitFirst < utf8First).toBe(true);
+    expect(Buffer.compare(Buffer.from(utf8First, "utf8"), Buffer.from(codeUnitFirst, "utf8"))).toBeLessThan(0);
+
+    const mutex = new KeyedMutex<string>();
+    let releaseCodeUnitFirst!: () => void;
+    let holderStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseCodeUnitFirst = resolve;
+    });
+    const holder = mutex.runExclusive(codeUnitFirst, async () => {
+      holderStarted();
+      await release;
+    });
+    await started;
+
+    const many = mutex.runExclusiveMany([utf8First, codeUnitFirst], () => undefined);
+    const utf8FirstProbe = mutex.runExclusive(utf8First, () => "probe-completed" as const);
+    const probeOutcome = await Promise.race([utf8FirstProbe, Bun.sleep(100).then(() => "probe-blocked" as const)]);
+
+    releaseCodeUnitFirst();
+    await Promise.all([holder, many, utf8FirstProbe]);
+    expect(probeOutcome).toBe("probe-completed");
   });
 
   test("two callers acquiring canonically-equivalent keys in opposite order both complete", async () => {

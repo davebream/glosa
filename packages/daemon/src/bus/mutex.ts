@@ -50,8 +50,16 @@ export class KeyedMutex<K> {
    * NFD, among others) as equal, and `Array.prototype.sort` is stable, so tied keys fall back to
    * *insertion* order — which differs per caller. Two callers can then acquire `{A,B}` and
    * `{B,A}` and wedge those keys for the life of the daemon, since `AsyncMutex` has no timeout and
-   * no deadlock detection. Compare byte-exact instead: `<`/`>` on strings is a total order,
-   * tie-free for every pair of distinct strings.
+   * no deadlock detection. Compare code-unit-exact instead: ECMAScript `<`/`>` on strings is a
+   * host-independent total order, tie-free for every pair of distinct strings.
+   *
+   * This deliberately differs from `matcher.ts`'s UTF-8 byte order. Matcher order is an A4 F20
+   * output contract shared by watcher/sidebar/git consumers; mutex order is neither persisted nor
+   * exposed and needs only one total order that every caller computes identically. The code-unit
+   * comparison avoids allocating UTF-8 buffers for every sort comparison. Do not NFC-normalize
+   * here: canonically-equivalent spellings can still be distinct `Map` keys and therefore must not
+   * tie. Supplementary-plane strings can sort differently under the two policies, but both remain
+   * deterministic across processes.
    *
    * `KeyedMutex` is generic, so this cannot lean on what its callers happen to pass. The workspace
    * caller no longer reaches the hazard — `workspaceRegistrationId` returns a sha256 hex digest,
@@ -64,7 +72,7 @@ export class KeyedMutex<K> {
       const right = String(b);
       return left < right ? -1 : left > right ? 1 : 0;
     });
-    // Byte-exact comparison can still tie when two keys are distinct to `Map`/`Set` but identical
+    // Code-unit-exact comparison can still tie when two keys are distinct to `Map`/`Set` but identical
     // once stringified (`1` vs `"1"`, two objects sharing a `toString`). Those get separate mutex
     // slots yet no defined relative order, which is the same hold-and-wait hazard again. Nothing
     // in the workspace layer can produce it — `workspaceRegistrationId` always returns a string —
