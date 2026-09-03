@@ -609,6 +609,38 @@ function removePointer(root: unknown, pointer: string): void {
   else if (parent !== null && typeof parent === "object") delete (parent as Record<string, unknown>)[last];
 }
 
+/** Order removal pointers against the document they address.
+ *
+ * Descendants precede ancestors so deleting a parent cannot make a child unreachable. At the first
+ * divergent segment beneath an array, higher indices precede lower ones; this also handles a direct
+ * removal at `/items/2` alongside a nested removal at `/items/10/value`, not only equal-depth
+ * siblings. Numeric-looking object keys retain ordinary deterministic key order because deleting an
+ * object property cannot shift another property. */
+function compareRemovalPointers(root: unknown, a: string, b: string): number {
+  const aParts = a.split("/").filter(Boolean);
+  const bParts = b.split("/").filter(Boolean);
+  let container = root;
+  const sharedLength = Math.min(aParts.length, bParts.length);
+
+  for (let index = 0; index < sharedLength; index++) {
+    const aPart = aParts[index] as string;
+    const bPart = bParts[index] as string;
+    if (aPart !== bPart) {
+      if (Array.isArray(container)) {
+        const numericOrder = Number(bPart) - Number(aPart);
+        if (numericOrder !== 0) return numericOrder;
+      }
+      return aPart < bPart ? -1 : 1;
+    }
+    if (Array.isArray(container)) container = container[Number(aPart)];
+    else if (container !== null && typeof container === "object")
+      container = (container as Record<string, unknown>)[aPart];
+    else container = undefined;
+  }
+
+  return bParts.length - aParts.length;
+}
+
 /** One node of the ancestor trie built from the pointers a single uninstall actually removed. */
 interface AncestorTrie {
   children: Map<string, AncestorTrie>;
@@ -716,7 +748,7 @@ function uninstallJson(
     }
   }
   if (removable.length === 0) return { ...ownership, inserted: surviving };
-  for (const node of [...removable].sort((a, b) => b.pointer.localeCompare(a.pointer)))
+  for (const node of [...removable].sort((a, b) => compareRemovalPointers(json, a.pointer, b.pointer)))
     removePointer(json, node.pointer);
   // Only the parents of what this run removed are reconsidered; the document root is passed as a
   // named container so its own residue verdict is discarded — an emptied root is not deleted as a
