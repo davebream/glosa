@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
+import { confirmPortFree } from "../src/lifecycle/daemon.ts";
 import { ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
 import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
@@ -41,7 +42,12 @@ function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
 
 const VERSIONED_DAEMON_FIXTURE = fileURLToPath(new URL("./fixtures/versioned-daemon.ts", import.meta.url));
 
-function spawnVersionedDaemon(home: string, port: number, buildId?: string): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+function spawnVersionedDaemon(
+  home: string,
+  port: number,
+  buildId?: string,
+  envOverrides: Record<string, string> = {},
+): Bun.Subprocess<"ignore", "pipe", "pipe"> {
   return Bun.spawn({
     cmd: [process.execPath, VERSIONED_DAEMON_FIXTURE],
     env: {
@@ -49,6 +55,7 @@ function spawnVersionedDaemon(home: string, port: number, buildId?: string): Bun
       GLOSA_HOME: home,
       GLOSA_PORT: String(port),
       ...(buildId === undefined ? {} : { GLOSA_FIXTURE_BUILD_ID: buildId }),
+      ...envOverrides,
     } as Record<string, string>,
     stdin: "ignore",
     stdout: "pipe",
@@ -100,6 +107,28 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       }
     }
   }, 10000);
+
+  test("a daemon contender exits terminally when a foreign process already owns the port", async () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    const proc = spawnDaemon(home, port);
+    try {
+      expect(await proc.exited).toBe(3);
+      expect(readFileSync(logPath(home), "utf8")).toContain("EADDRINUSE");
+      expect(lockOf(home)).toBeNull();
+    } finally {
+      squatter.stop();
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already stopped
+      }
+    }
+  }, 5000);
 
   test("second daemon on a different port hits the lock EEXIST/live-peer branch and exits 0, leaving the first daemon's lock intact", async () => {
     const portA = randomPort();
@@ -175,6 +204,47 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     }
   }, 10000);
 
+  test("repairs a deleted ownership lock without handshake traffic", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    const proc = spawnDaemon(home, port);
+    try {
+      const hs = await waitForHandshake(port);
+      expect(hs).not.toBeNull();
+      unlinkSync(lockPath(home));
+
+      await waitUntil(() => lockOf(home)?.instance_id === hs!.instance_id, 3000);
+
+      expect(lockOf(home)).toMatchObject({
+        instance_id: hs!.instance_id,
+        pid: hs!.pid,
+        port,
+        build_id: hs!.build_id,
+      });
+      expect(readFileSync(logPath(home), "utf8")).toContain("recreated missing ownership lock");
+    } finally {
+      await stopDaemon(home, proc);
+    }
+  }, 10000);
+
+  test("watchdog never overwrites an existing malformed ownership file", async () => {
+    ensureHomeDir(home);
+    const port = randomPort();
+    const proc = spawnDaemon(home, port);
+    const malformed = "{not-json";
+    try {
+      expect(await waitForHandshake(port)).not.toBeNull();
+      await Bun.write(lockPath(home), malformed);
+
+      await Bun.sleep(350);
+
+      expect(readFileSync(lockPath(home), "utf8")).toBe(malformed);
+    } finally {
+      proc.kill("SIGTERM");
+      await proc.exited;
+    }
+  }, 10000);
+
   test("SIGTERM: daemon stops accepting and removes its own lock", async () => {
     ensureHomeDir(home);
     const port = randomPort();
@@ -187,6 +257,7 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       proc.kill("SIGTERM");
       const code = await proc.exited;
       expect(code).toBe(0);
+      await Bun.sleep(350);
       expect(lockOf(home)).toBeNull();
     } finally {
       try {
@@ -207,6 +278,9 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
 
       // Simulate the lock having been reclaimed by someone else out from under this daemon.
       reclaimStaleLock(lockPath(home), sampleLock({ instance_id: "gl-someone-else", port }));
+
+      await Bun.sleep(350);
+      expect(lockOf(home)?.instance_id).toBe("gl-someone-else");
 
       proc.kill("SIGTERM");
       const code = await proc.exited;
@@ -247,6 +321,71 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       await stopDaemon(home, proc);
     }
   }, 10000);
+});
+
+describe("stable free-port confirmation", () => {
+  test("retains ownership when a transient refused sequence becomes bound", async () => {
+    const observations = [false, false, true];
+    let calls = 0;
+    const delays: number[] = [];
+    const result = await confirmPortFree(4646, {
+      deadline: performance.now() + 1000,
+      ownershipUnchanged: () => true,
+      probe: async () => observations[calls++] as boolean,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    expect(result).toBe("bound");
+    expect(calls).toBe(3);
+    expect(delays).toEqual([100, 100]);
+  });
+
+  test("reports free only after three consecutive refused connections", async () => {
+    let calls = 0;
+    const result = await confirmPortFree(4646, {
+      deadline: performance.now() + 1000,
+      ownershipUnchanged: () => true,
+      probe: async () => {
+        calls += 1;
+        return false;
+      },
+      sleep: async () => {},
+    });
+
+    expect(result).toBe("free");
+    expect(calls).toBe(3);
+  });
+
+  test("stops before another probe when ownership changes or the deadline expires", async () => {
+    let ownershipChecks = 0;
+    let probes = 0;
+    const changed = await confirmPortFree(4646, {
+      deadline: performance.now() + 1000,
+      ownershipUnchanged: () => {
+        ownershipChecks += 1;
+        return ownershipChecks < 3;
+      },
+      probe: async () => {
+        probes += 1;
+        return false;
+      },
+      sleep: async () => {},
+    });
+    const expired = await confirmPortFree(4646, {
+      deadline: 0,
+      ownershipUnchanged: () => true,
+      probe: async () => {
+        throw new Error("deadline should prevent probing");
+      },
+      now: () => 1,
+    });
+
+    expect(changed).toBe("ownership-changed");
+    expect(probes).toBe(1);
+    expect(expired).toBe("deadline");
+  });
 });
 
 // P1.3 review item 5 follow-up: this describe block used to share one `let home` / `savedHome` /
@@ -345,6 +484,168 @@ describe("ensureDaemon — client", () => {
       cleanupHome(home);
     }
   }, 12000);
+
+  test("a slow current daemon repairs a missing lock and is reused without spawning a contender", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const daemon = spawnVersionedDaemon(home, port, BUILD_ID, {
+      GLOSA_FIXTURE_REPAIR_INTERVAL_MS: "250",
+      GLOSA_FIXTURE_SLOW_HANDSHAKE_AFTER: "1",
+      GLOSA_FIXTURE_SLOW_HANDSHAKE_COUNT: "2",
+      GLOSA_FIXTURE_HANDSHAKE_DELAY_MS: "1100",
+    });
+    try {
+      const handshake = await waitForHandshake(port);
+      expect(handshake).not.toBeNull();
+      unlinkSync(lockPath(home));
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon({ timeoutMs: 3000 });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.reason);
+      expect(result.pid).toBe(handshake!.pid);
+      expect(result.instanceId).toBe(handshake!.instance_id);
+      expect(lockOf(home)?.instance_id).toBe(handshake!.instance_id);
+      const log = existsSync(logPath(home)) ? readFileSync(logPath(home), "utf8") : "";
+      expect(log).not.toContain("EADDRINUSE");
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 12000);
+
+  test("an overall deadline leaves ambiguous live ownership untouched", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    ensureHomeDir(home);
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    writeLockExclusive(lockPath(home), sampleLock({ pid: process.pid, port }));
+
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+      const started = performance.now();
+      const result = await ensureDaemon({ timeoutMs: 300 });
+      const elapsed = performance.now() - started;
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("300ms wall-clock budget");
+      expect(elapsed).toBeLessThan(1000);
+      expect(lockOf(home)?.instance_id).toBe("gl-fake");
+      expect(existsSync(logPath(home))).toBe(false);
+    } finally {
+      squatter.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  });
+
+  test("a dead-PID lock is retained when its port remains bound", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const stalePid = await deadPid();
+    ensureHomeDir(home);
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    writeLockExclusive(lockPath(home), sampleLock({ pid: stalePid, port }));
+
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon({ timeoutMs: 1000 });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("lock was retained and no daemon was spawned");
+      expect(lockOf(home)?.instance_id).toBe("gl-fake");
+      expect(existsSync(logPath(home))).toBe(false);
+    } finally {
+      squatter.stop();
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  });
+
+  test("ownership changes restart stable evaluation and still permit only one spawn", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const firstPort = randomPort();
+    const replacementPort = randomPort();
+    const stalePid = await deadPid();
+    ensureHomeDir(home);
+    writeLockExclusive(
+      lockPath(home),
+      sampleLock({ instance_id: "gl-first-observation", pid: stalePid, port: firstPort }),
+    );
+
+    let replacementTimer: ReturnType<typeof setTimeout> | undefined;
+    let daemonPid: number | null = null;
+    try {
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(firstPort);
+      replacementTimer = setTimeout(() => {
+        reclaimStaleLock(
+          lockPath(home),
+          sampleLock({ instance_id: "gl-replacement-observation", pid: stalePid, port: replacementPort }),
+        );
+      }, 25);
+
+      const started = performance.now();
+      const result = await ensureDaemon({ timeoutMs: 3000 });
+      const elapsed = performance.now() - started;
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.reason);
+      daemonPid = result.pid;
+      expect(result.port).toBe(replacementPort);
+      expect(elapsed).toBeLessThan(3000);
+      const servingLines = readFileSync(logPath(home), "utf8")
+        .split("\n")
+        .filter((line) => line.includes(" serving 127.0.0.1:"));
+      expect(servingLines).toHaveLength(1);
+    } finally {
+      if (replacementTimer) clearTimeout(replacementTimer);
+      if (daemonPid !== null) {
+        try {
+          process.kill(daemonPid, "SIGTERM");
+        } catch {
+          // already stopped
+        }
+        await waitUntil(() => lockOf(home) === null, 5000);
+      }
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 8000);
 
   test("an older lockless daemon remains fail-closed with exact manual recovery guidance", async () => {
     const home = freshHome();
@@ -761,14 +1062,13 @@ describe("ensureDaemon — client", () => {
     }
   }, 10000);
 
-  test("foreign squatter: spawn fails as soon as the child dies, pointing at daemon.log", async () => {
+  test("foreign squatter: a bound port fails closed without spawning a daemon contender", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
     const savedPort = process.env.GLOSA_PORT;
     const port = randomPort();
-    // Occupy the port with a non-glosa server so the spawned daemon can never bind it. The
-    // child exits 3 (EADDRINUSE, no glosa peer) — the client must not sit out the 5s handshake
-    // poll against a port that will never answer.
+    // Occupy the port with a non-glosa server. Stable occupancy is enough to refuse the spawn;
+    // the bootDaemon test above independently preserves EADDRINUSE's terminal child behavior.
     const squatter = Bun.serve({
       hostname: "127.0.0.1",
       port,
@@ -780,19 +1080,17 @@ describe("ensureDaemon — client", () => {
       process.env.GLOSA_PORT = String(port);
 
       const started = Date.now();
-      const result = await ensureDaemon();
+      const result = await ensureDaemon({ timeoutMs: 6000 });
       const elapsed = Date.now() - started;
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.logPath).toBe(logPath(home));
         expect(result.reason).toContain(String(port));
         expect(result.reason).toContain(logPath(home));
-        expect(result.reason.toLowerCase()).toContain("could not bind");
-        expect(existsSync(result.logPath!)).toBe(true);
-        const log = readFileSync(result.logPath!, "utf8");
-        expect(log).toContain("EADDRINUSE");
+        expect(result.reason.toLowerCase()).toContain("no daemon was spawned");
+        expect(existsSync(result.logPath!)).toBe(false);
       }
-      expect(elapsed).toBeLessThan(4000);
+      expect(elapsed).toBeLessThan(6500);
     } finally {
       squatter.stop();
       if (savedHome === undefined) delete process.env.GLOSA_HOME;

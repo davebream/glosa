@@ -6,7 +6,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type EnsureDaemonResult, ensureDaemon as ensureProductionDaemon } from "../src/lifecycle/daemon.ts";
+import {
+  type EnsureDaemonOptions,
+  type EnsureDaemonResult,
+  ensureDaemon as ensureProductionDaemon,
+} from "../src/lifecycle/daemon.ts";
 import { glosaHome, lockPath } from "../src/lifecycle/home.ts";
 import { readLock } from "../src/lifecycle/lock.ts";
 
@@ -275,10 +279,10 @@ export function trackDetachedDaemon(home: string, daemon: { pid: number; instanc
 }
 
 /** Production ensure semantics with test-runner ownership registered immediately after readiness. */
-export async function ensureTestDaemon(): Promise<EnsureDaemonResult> {
+export async function ensureTestDaemon(options?: EnsureDaemonOptions): Promise<EnsureDaemonResult> {
   const home = glosaHome();
   superviseDaemonHome(home);
-  const result = await ensureProductionDaemon();
+  const result = await ensureProductionDaemon(options);
   if (result.ok) trackDetachedDaemon(home, result);
   return result;
 }
