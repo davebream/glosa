@@ -2161,11 +2161,11 @@ async function handleStream(
  * session bound to it via the registry (never a cwd->slug guess, per A2 §F16's "Source
  * (Authoritative)"); no session at all, or none with a known `transcript_path`, is 404 "no
  * session registered" (A1 §5.8: "the SPA shows 'no session registered' rather than treating this
- * as a stream error"). Several live sessions with equal routing precedence (`forWorkspace`'s own
- * "never guess" contract) aren't disambiguated here — v1 has no session-picker wiring for the
- * conversation mirror, so this just takes the first; a future picker is additive. `transcript_
- * path` is confined under `$CLAUDE_CONFIG_DIR` (A2 §F16/A6 §F30's doctor check) BEFORE this route
- * ever opens it — outside that root is refused (400), never tailed. */
+ * as a stream error"). Several live transcript-bearing sessions with equal routing precedence
+ * fail closed with the same safe session-selection problem shape as the composer; this GET route
+ * has no session-hint parameter. `transcript_path` is confined under `$CLAUDE_CONFIG_DIR` (A2
+ * §F16/A6 §F30's doctor check) BEFORE this route ever opens it — outside that root is refused
+ * (400), never tailed. */
 function handleTranscriptStream(
   ctx: ApiContext,
   slug: string,
@@ -2180,6 +2180,11 @@ function handleTranscriptStream(
   const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).filter((s) => s.transcript_path);
   if (sessions.length === 0) {
     return problem(404, "not-found", "no session registered", undefined, url.pathname);
+  }
+  if (sessions.length > 1) {
+    return conversationProblem(409, "session-selection-required", "choose a live session", url.pathname, {
+      candidates: sessionCandidates(sessions),
+    });
   }
   const transcriptPath = sessions[0]!.transcript_path as string;
 
@@ -2254,7 +2259,7 @@ function conversationResult(
   };
 }
 
-function composerCandidates(records: ReturnType<SessionRegistry["explicitlyBoundForWorkspace"]>) {
+function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>) {
   return records.map((record) => ({
     session_id: record.session_id,
     provider: record.provider,
@@ -2354,19 +2359,19 @@ async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): 
       "the selected session is not a live binding",
       url.pathname,
       {
-        candidates: composerCandidates(liveBound),
+        candidates: sessionCandidates(liveBound),
       },
     );
   }
   if (!target && liveBound.length > 1) {
     return conversationProblem(409, "session-selection-required", "choose a live bound session", url.pathname, {
-      candidates: composerCandidates(liveBound),
+      candidates: sessionCandidates(liveBound),
     });
   }
   target ??= liveBound[0];
   if (!target) {
     return conversationProblem(409, "bound-session-stale", "the selected session is not live", url.pathname, {
-      candidates: composerCandidates(liveBound),
+      candidates: sessionCandidates(liveBound),
     });
   }
 

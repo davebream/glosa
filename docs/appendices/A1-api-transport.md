@@ -250,6 +250,8 @@ Same connection/heartbeat/resync mechanics.
 - **200**, `text/event-stream`.
 - **404 not-found** — unknown `:slug`, or no live/parked session bound to it yet (the SPA shows
   "no session registered" rather than treating this as a stream error).
+- **409 session-selection-required** — multiple equally eligible live transcript-bearing sessions;
+  the response exposes only `{session_id,provider,last_active_at}` candidates and never guesses.
 
 ### 5.9 `GET /w/:slug/inbox`
 Bearer required. Summary for the sidebar badge and attention tray. Immutable request fields are
