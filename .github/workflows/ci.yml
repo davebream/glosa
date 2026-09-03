@@ -33,6 +33,8 @@ jobs:
         run: bun run lint
       - name: Typecheck
         run: bun run typecheck
+      - name: Acceptance suites (T8 deterministic gate)
+        run: bun run test:acceptance
       - name: Test (first pass)
         run: bun test
       - name: Test (second pass)

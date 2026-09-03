@@ -51,6 +51,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:acceptance": "bun run scripts/test-acceptance.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint --changed --since origin/main --no-errors-on-unmatched",
     "lint:staged": "biome lint --staged --no-errors-on-unmatched",
