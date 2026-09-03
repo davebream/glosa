@@ -24,6 +24,8 @@ import { runRequestReview } from "../src/request-review.ts";
 let home: string;
 let client: GlosaApiClient;
 let token: string;
+let savedHome: string | undefined;
+let savedPort: string | undefined;
 const dirsToClean: string[] = [];
 
 function freshWorkspaceDir(): string {
@@ -33,6 +35,8 @@ function freshWorkspaceDir(): string {
 }
 
 beforeAll(async () => {
+  savedHome = Bun.env.GLOSA_HOME;
+  savedPort = Bun.env.GLOSA_PORT;
   home = mkdtempSync(join(tmpdir(), "glosa-cli-api-home-"));
   dirsToClean.push(home);
   Bun.env.GLOSA_HOME = home;
@@ -52,16 +56,23 @@ beforeAll(async () => {
 }, 15000);
 
 afterAll(async () => {
-  const lock = readLock(lockPath(home));
-  if (lock) {
-    await stopDetachedDaemon(home, { pid: lock.pid, instanceId: lock.instance_id });
-  }
-  for (const d of dirsToClean) {
-    try {
-      rmSync(d, { recursive: true, force: true });
-    } catch {
-      // best-effort
+  try {
+    const lock = readLock(lockPath(home));
+    if (lock) {
+      await stopDetachedDaemon(home, { pid: lock.pid, instanceId: lock.instance_id });
     }
+    for (const d of dirsToClean) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+  } finally {
+    if (savedHome === undefined) delete Bun.env.GLOSA_HOME;
+    else Bun.env.GLOSA_HOME = savedHome;
+    if (savedPort === undefined) delete Bun.env.GLOSA_PORT;
+    else Bun.env.GLOSA_PORT = savedPort;
   }
 });
 

@@ -9,8 +9,10 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/index.ts";
+import { FakeGlosaApiClient } from "./fake-api-client.ts";
 
 let dirs: string[] = [];
+let doctorClients: FakeGlosaApiClient[] = [];
 function freshRepo(): string {
   const d = mkdtempSync(join(tmpdir(), "glosa-cli-doctor-test-"));
   mkdirSync(join(d, ".git"));
@@ -20,6 +22,7 @@ function freshRepo(): string {
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   dirs = [];
+  doctorClients = [];
 });
 
 function captureStdout(fn: () => Promise<number>): Promise<{ exitCode: number; out: string }> {
@@ -37,19 +40,31 @@ function captureStdout(fn: () => Promise<number>): Promise<{ exitCode: number; o
     });
 }
 
+function runDoctorCommand(dir: string): Promise<number> {
+  const client = new FakeGlosaApiClient();
+  doctorClients.push(client);
+  return run(["doctor", dir, "--json"], {
+    doctor: {
+      createClient: async () => client,
+      glosaHome: freshRepo,
+    },
+  });
+}
+
 describe("run(['doctor', ...]) — workspace-root resolution (issue #96)", () => {
   test("an explicit repo-root dir gets no not-repository-root warning", async () => {
     const repo = freshRepo();
-    const { out } = await captureStdout(() => run(["doctor", repo, "--json"]));
+    const { out } = await captureStdout(() => runDoctorCommand(repo));
     const parsed = JSON.parse(out);
     expect(parsed.warnings.map((w: { code: string }) => w.code)).not.toContain("not-repository-root");
+    expect(doctorClients[0]?.calls.some((call) => call.method === "getStatus")).toBe(true);
   });
 
   test("an explicit NON-root dir inside a repo warns and names the root", async () => {
     const repo = freshRepo();
     const sub = join(repo, "sub");
     mkdirSync(sub);
-    const { out } = await captureStdout(() => run(["doctor", sub, "--json"]));
+    const { out } = await captureStdout(() => runDoctorCommand(sub));
     const parsed = JSON.parse(out);
     const warning = parsed.warnings.find((w: { code: string }) => w.code === "not-repository-root");
     expect(warning).toBeDefined();
@@ -59,7 +74,7 @@ describe("run(['doctor', ...]) — workspace-root resolution (issue #96)", () =>
   test("a dir outside any repo is honoured literally, no warning (nothing to reconcile against)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "glosa-cli-doctor-test-"));
     dirs.push(dir);
-    const { out } = await captureStdout(() => run(["doctor", dir, "--json"]));
+    const { out } = await captureStdout(() => runDoctorCommand(dir));
     const parsed = JSON.parse(out);
     expect(parsed.warnings.map((w: { code: string }) => w.code)).not.toContain("not-repository-root");
   });

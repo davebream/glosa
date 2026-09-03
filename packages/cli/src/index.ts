@@ -20,6 +20,7 @@ import {
   lazy,
   plugin,
 } from "gunshi";
+import type { GlosaApiClient } from "./api-client.ts";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
 import type { HookDeps } from "./hook.ts";
 import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
@@ -75,6 +76,11 @@ export interface CliRunDependencies {
     homeDir?: string;
     glosaHomeDir?: string;
     which?: (executable: string) => string | null;
+  };
+  /** Doctor-specific seams for command-boundary tests. Omit in production for the real daemon. */
+  doctor?: {
+    createClient?: () => Promise<GlosaApiClient>;
+    glosaHome?: () => string;
   };
 }
 
@@ -647,7 +653,13 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("./doctor.ts"),
       ]);
       const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
-      const result = await doctorModule.runDoctor(dir, doctorModule.realDoctorDeps(createHttpGlosaClient, glosaHome));
+      const result = await doctorModule.runDoctor(
+        dir,
+        doctorModule.realDoctorDeps(
+          deps.doctor?.createClient ?? createHttpGlosaClient,
+          deps.doctor?.glosaHome ?? glosaHome,
+        ),
+      );
       const withDirWarnings =
         dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
       doctorModule.printDoctorResult(withDirWarnings, Boolean(values.json));
