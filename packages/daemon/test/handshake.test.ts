@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { parseHandshakeResponse } from "../src/handshake.ts";
+import { parseHandshakeResponse, pollHandshake } from "../src/handshake.ts";
 
 const base = {
   protocol_version: "1.0",
@@ -20,5 +20,14 @@ describe("handshake migration parsing", () => {
   test("rejects a non-string build identity and malformed required fields", () => {
     expect(parseHandshakeResponse({ ...base, build_id: 42 })).toBeNull();
     expect(parseHandshakeResponse({ ...base, pid: "42" })).toBeNull();
+  });
+});
+
+describe("pollHandshake", () => {
+  test("returns immediately when shouldStop is already true", async () => {
+    const started = Date.now();
+    const hs = await pollHandshake(1, 5000, 100, () => true);
+    expect(hs).toBeNull();
+    expect(Date.now() - started).toBeLessThan(200);
   });
 });

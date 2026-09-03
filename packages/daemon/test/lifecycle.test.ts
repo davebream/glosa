@@ -761,13 +761,14 @@ describe("ensureDaemon — client", () => {
     }
   }, 10000);
 
-  test("handshake-poll timeout: fails referencing the daemon.log path", async () => {
+  test("foreign squatter: spawn fails as soon as the child dies, pointing at daemon.log", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
     const savedPort = process.env.GLOSA_PORT;
     const port = randomPort();
-    // Occupy the port with a non-glosa server so the spawned daemon can never bind it, and so
-    // polling never sees a valid handshake shape — this forces the full poll deadline.
+    // Occupy the port with a non-glosa server so the spawned daemon can never bind it. The
+    // child exits 3 (EADDRINUSE, no glosa peer) — the client must not sit out the 5s handshake
+    // poll against a port that will never answer.
     const squatter = Bun.serve({
       hostname: "127.0.0.1",
       port,
@@ -778,14 +779,20 @@ describe("ensureDaemon — client", () => {
       process.env.GLOSA_HOME = home;
       process.env.GLOSA_PORT = String(port);
 
+      const started = Date.now();
       const result = await ensureDaemon();
+      const elapsed = Date.now() - started;
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.logPath).toBe(logPath(home));
+        expect(result.reason).toContain(String(port));
+        expect(result.reason).toContain(logPath(home));
+        expect(result.reason.toLowerCase()).toContain("could not bind");
         expect(existsSync(result.logPath!)).toBe(true);
         const log = readFileSync(result.logPath!, "utf8");
-        expect(log.length).toBeGreaterThan(0);
+        expect(log).toContain("EADDRINUSE");
       }
+      expect(elapsed).toBeLessThan(4000);
     } finally {
       squatter.stop();
       if (savedHome === undefined) delete process.env.GLOSA_HOME;

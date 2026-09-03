@@ -79,7 +79,11 @@ function unreachableError(reason: string): DaemonUnreachableError {
  * browser requests, but the state-changing route class still requires it (A3 §4). */
 export async function createHttpDaemonClient(): Promise<DaemonHookClient> {
   const conn = await ensureDaemon();
-  if (!conn.ok) throw unreachableError(conn.reason);
+  if (!conn.ok) {
+    throw unreachableError(
+      conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
+    );
+  }
   const port = conn.port; // captured outside the closure below — narrowing doesn't cross into it
   const token = loadToken(glosaHome());
   const base = `http://127.0.0.1:${port}`;
