@@ -4,10 +4,10 @@
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenPath, WorkspaceBus } from "@glosa/daemon";
+import { journalPath, tokenPath, WorkspaceBus } from "@glosa/daemon";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
 import { runInit } from "../src/init.ts";
@@ -143,6 +143,70 @@ describe("glosa doctor", () => {
     const workspaceCheck = findCheck(result.data.checks, "workspace");
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain("1 tracked artifact");
+  });
+
+  test("workspace reports journal bytes and physical line count without adding a sixteenth check", async () => {
+    const { deps } = makeDeps();
+    const dir = freshDir();
+    writeFileSync(join(dir, "notes.md"), "# hello\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile();
+    await bus.createEntry("entry-1", { kind: "annotation" });
+    await bus.createEntry("entry-2", { kind: "annotation" });
+    await bus.close();
+
+    const expectedBytes = statSync(journalPath(dir)).size;
+    const result = await runDoctor(dir, deps);
+    const workspaceCheck = findCheck(result.data.checks, "workspace");
+    expect(result.data.checks).toHaveLength(15);
+    expect(workspaceCheck?.status).toBe("pass");
+    expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
+    expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
+  });
+
+  test("workspace journal metrics count quarantined and torn lines in physical cursor space", async () => {
+    const { deps } = makeDeps();
+    const dir = freshDir();
+    writeFileSync(join(dir, "notes.md"), "# hello\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile();
+    await bus.close();
+
+    const journal = [
+      '{"v":1,"event_id":"valid","at":"2026-09-03Z","event":"entry_created","by":"daemon"}',
+      "malformed interior line",
+      '{"v":1,"event_id":"quarantine","at":"2026-09-03Z","event":"line_quarantined","by":"daemon"}',
+      '{"v":1',
+    ].join("\n");
+    writeFileSync(journalPath(dir), journal);
+
+    const result = await runDoctor(dir, deps);
+    const workspaceCheck = findCheck(result.data.checks, "workspace");
+    expect(workspaceCheck?.status).toBe("pass");
+    expect(workspaceCheck?.detail).toContain(`${Buffer.byteLength(journal)} journal byte(s)`);
+    expect(workspaceCheck?.detail).toContain("4 physical journal line(s)");
+  });
+
+  test("workspace journal metrics report absent and unreadable journals without throwing", async () => {
+    const { deps } = makeDeps();
+    const dir = freshDir();
+    writeFileSync(join(dir, "notes.md"), "# hello\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile();
+    await bus.close();
+    rmSync(journalPath(dir));
+
+    const absent = await runDoctor(dir, deps);
+    expect(findCheck(absent.data.checks, "workspace")?.detail).toContain(
+      "0 journal byte(s), 0 physical journal line(s)",
+    );
+
+    mkdirSync(journalPath(dir));
+    const unreadable = await runDoctor(dir, deps);
+    const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
+    expect(unreadable.data.checks).toHaveLength(15);
+    expect(workspaceCheck?.status).toBe("warn");
+    expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
 
   test("hooks: no manifest -> WARN; after `glosa init`, matches -> pass; after external drift -> FAIL", async () => {
