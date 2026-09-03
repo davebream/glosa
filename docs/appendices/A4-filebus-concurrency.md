@@ -56,8 +56,11 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 - Open-target normalization is realpath→NFC→strip trailing slash. Ancestry checks are
   segment-aware and case-sensitive; the deepest registered directory root wins.
 - A file inside that root reuses its registration only when the canonical tracked LIST contains it.
-  Excluded, oversize, `.glosa/**`, and symlink targets fail with `artifact-not-tracked` or an
-  unsupported-file error before a document surface is presented.
+  An explicitly named regular non-symlink file excluded by that list opens through a bounded
+  `loose-file` registration instead; exact-path and hardlink aliases reuse an existing loose
+  registration before a new one is created. The parent directory's tracked LIST is unchanged.
+  Symlinks remain unsupported, and an explicit directory focus outside its tracked LIST still
+  fails with `artifact-not-tracked`.
 - With no owning root, compare BigInt `dev`/`ino` identities against registered tracked files.
   Hardlink aliases reuse the first registration and its durable representative focus path.
 - Resolution, the final alias recheck, and new registration persist under the global index writer.

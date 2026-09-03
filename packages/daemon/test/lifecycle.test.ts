@@ -308,7 +308,7 @@ describe("ensureDaemon — client", () => {
     }
   }, 20000);
 
-  test("fails closed instead of spawning when an answering daemon has no lock", async () => {
+  test("a current daemon silently recreates a missing lock and concurrent clients converge", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;
     const savedPort = process.env.GLOSA_PORT;
@@ -321,10 +321,51 @@ describe("ensureDaemon — client", () => {
       process.env.GLOSA_HOME = home;
       process.env.GLOSA_PORT = String(port);
 
+      const results = await Promise.all(Array.from({ length: 8 }, () => ensureDaemon()));
+
+      expect(results.every((result) => result.ok)).toBe(true);
+      for (const result of results) {
+        if (!result.ok) throw new Error(result.reason);
+        expect(result.pid).toBe(handshake!.pid);
+        expect(result.instanceId).toBe(handshake!.instance_id);
+      }
+      expect(lockOf(home)).toMatchObject({
+        pid: handshake!.pid,
+        instance_id: handshake!.instance_id,
+        port,
+        build_id: handshake!.build_id,
+      });
+      expect(readFileSync(logPath(home), "utf8")).toContain("recreated missing ownership lock");
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 12000);
+
+  test("an older lockless daemon remains fail-closed with exact manual recovery guidance", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const daemon = spawnVersionedDaemon(home, port);
+    try {
+      const handshake = await waitForHandshake(port);
+      expect(handshake?.build_id).toBeUndefined();
+      unlinkSync(lockPath(home));
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
       const result = await ensureDaemon();
 
       expect(result).toMatchObject({ ok: false });
-      if (!result.ok) expect(result.reason).toContain("without a lock");
+      if (result.ok) throw new Error("expected an old lockless daemon to fail closed");
+      expect(result.reason).toContain("daemon build cannot self-repair");
+      expect(result.reason).toContain(`lsof -nP -iTCP:${port} -sTCP:LISTEN`);
+      expect(result.reason).toContain(`kill -TERM ${handshake!.pid}`);
       expect(lockOf(home)).toBeNull();
       expect((await waitForHandshake(port, 1000))?.instance_id).toBe(handshake!.instance_id);
     } finally {

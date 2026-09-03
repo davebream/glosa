@@ -182,12 +182,41 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     presentationTokenStore.clear();
   });
 
+  const record: DaemonLock = {
+    instance_id: instanceId,
+    pid: process.pid,
+    port,
+    protocol_version: PROTOCOL_VERSION,
+    build_id: BUILD_ID,
+    started_at: startedAt,
+    host: "127.0.0.1",
+    bun: Bun.version,
+  };
+  let mayRepairLock = false;
+  const repairLockOwnership = (): void => {
+    // Only the process that already won the initial bind + O_EXCL race may repair its missing
+    // coordination record. Existing files — including malformed or mismatched ones — are never
+    // overwritten here, and shutdown disables repair before removing its own lock.
+    if (!mayRepairLock || existsSync(lockFile)) return;
+    try {
+      writeLockExclusive(lockFile, record);
+      log(home, `${instanceId} recreated missing ownership lock`);
+    } catch (error) {
+      // Another writer winning O_EXCL is a normal race. Any other failure is logged and left for
+      // the client-side lock/handshake verification to fail closed; the daemon never guesses.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        log(home, `${instanceId} could not recreate missing ownership lock: ${(error as Error).message}`);
+      }
+    }
+  };
+
   const apiFetch = createApiFetch({
     port,
     classFPort,
     token: tokenAuthority,
     instanceId,
     startedAt,
+    repairLockOwnership,
     workspaceIndex: backend.workspaceIndex,
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
@@ -216,17 +245,8 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // wrote the lock. The lock's real O_EXCL CAS is the actual single-owner guarantee (the port
   // bind is only a fast-path optimization), so it must follow the primary bind as tightly as
   // P1.2 had it. Class-F binds only once this process has already won the lock outright.
-  const record: DaemonLock = {
-    instance_id: instanceId,
-    pid: process.pid,
-    port,
-    protocol_version: PROTOCOL_VERSION,
-    build_id: BUILD_ID,
-    started_at: startedAt,
-    host: "127.0.0.1",
-    bun: Bun.version,
-  };
   await acquireLockOrExit(home, lockFile, record, server);
+  mayRepairLock = true;
 
   try {
     await resumePendingAdoptions(
@@ -260,6 +280,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    mayRepairLock = false;
     // Calling stop(false) synchronously closes the listeners to new work while allowing active
     // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
     // long-lived responses from holding the drain open forever.
@@ -513,11 +534,26 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
       // into an already occupied port; ownership is unknowable, so this remains fail-closed.
       const hs = await fetchHandshake(preferredPort, HANDSHAKE_TIMEOUT_MS);
       if (hs) {
+        // A current daemon repairs a missing lock from inside its own handshake handler. Trust it
+        // only after the newly visible daemon-written record agrees with that handshake; the next
+        // pass then applies the ordinary build/protocol decision using lock.port as authority.
+        const repaired = readLock(lockFile);
+        if (repaired && repaired.port === preferredPort && daemonPeerMismatchReason(repaired, hs) === null) {
+          continue;
+        }
+
+        const buildDecision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
+        const manualRecovery =
+          buildDecision.action === "restart"
+            ? `; this daemon build cannot self-repair — verify PID ${hs.pid} with ` +
+              `\`lsof -nP -iTCP:${preferredPort} -sTCP:LISTEN\`, stop it with ` +
+              `\`kill -TERM ${hs.pid}\`, then retry`
+            : "";
         return {
           ok: false,
           reason: `glosa daemon answered on port ${preferredPort} ${
             existsSync(lockFile) ? "with an unusable lock" : "without a lock"
-          }; cannot safely establish ownership`,
+          }; cannot safely establish ownership${manualRecovery}`,
           logPath: logPath(home),
         };
       }
