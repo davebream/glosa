@@ -63,25 +63,25 @@
     "package:check": "bun run scripts/package-smoke.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.5",
-    "@types/bun": "latest",
-    "@types/markdown-it": "^14.1.2",
+    "@biomejs/biome": "^2.5.12",
+    "@types/bun": "^1.4.0",
+    "@types/markdown-it": "^14.2.0",
     "@types/picomatch": "^4.0.3",
-    "happy-dom": "^20.11.0",
-    "lefthook": "^2.1.10",
+    "happy-dom": "^20.13.2",
+    "lefthook": "^2.1.12",
     "license-checker-rseidelsohn": "5.0.1",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@gunshi/plugin-completion": "0.37.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "chokidar": "^5",
     "diff2html": "^3.4.56",
     "gunshi": "0.37.1",
     "idiomorph": "^0.7.4",
-    "markdown-it": "^14.3.0",
-    "picomatch": "^4.0.5",
-    "zod": "^4.4.3"
+    "markdown-it": "^14.3.1",
+    "picomatch": "^4.0.7",
+    "zod": "^4.5.4"
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
