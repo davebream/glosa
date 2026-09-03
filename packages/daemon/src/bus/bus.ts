@@ -35,7 +35,7 @@ import { KeyedMutex } from "./mutex.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
 import { peekJournal } from "./peek.ts";
 import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
-import { applyEvent, type ApplyLeaseState, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 
@@ -101,11 +101,10 @@ export class ApprovalConflictError extends Error {
   }
 }
 
-/** R9's "at most one non-terminal approval request per workspace/path" is proven by READING the
- * candidate entries' immutable inbox payloads — the journal event carries only `detail.kind`, so
- * `target_path`/`approval_mode` are only knowable from the file (A4 §F04). When a candidate's
- * payload cannot be read, the scan has neither proven a conflict nor proven there is none, and
- * those are different answers that must not collapse into the same one.
+/** R9's "at most one non-terminal approval request per workspace/path" is proven from additive
+ * `entry_created.detail` facts for new entries. Legacy events without those facts fall back to
+ * their immutable inbox payloads; when such a payload cannot be read, the scan has neither proven
+ * a conflict nor proven there is none, and those are different answers that must not collapse.
  *
  * Distinct from `ApprovalConflictError` on purpose, in the same spirit as `LEASE_EXPIRED` vs
  * `NO_ACTIVE_LEASE` (A4 §F05) and `INDEX_LOCK_NOT_OWNED` (A4 §F21): reporting a definite conflict
@@ -327,8 +326,9 @@ export class WorkspaceBus {
    * `payload.kind` (R3: `human_edit`|`annotation`|`attention_request`) is mirrored into the
    * `entry_created` event's own `detail.kind` — the fold only ever sees journal EVENTS, never the
    * inbox file, so `lifecycleReducer` (P2.5) needs its own copy of the kind to pick the right
-   * transition table (attention vs. common). `fields.detail`, if given, is applied on top and wins
-   * on any overlapping key, `kind` included. */
+   * transition table (attention vs. common). `fields.detail` may add unrelated metadata, but the
+   * payload remains authoritative for reserved identity keys: `kind`, and for attention requests
+   * `approval_mode`/`target_path`. */
   createEntry(
     id: string,
     payload: unknown,
@@ -343,9 +343,9 @@ export class WorkspaceBus {
    *
    * The scan produces one of THREE answers, and the middle one is the whole point (R9: "at most
    * one non-terminal approval request may exist for that workspace/path"):
-   *   - a candidate's payload proves a same-path approval is open      -> ApprovalConflictError
-   *   - some candidate's payload could not be read at all              -> unprovable, fail closed
-   *   - every candidate was read and positively ruled out              -> create
+   *   - journal state (or a legacy payload) proves a same-path approval -> ApprovalConflictError
+   *   - a legacy candidate's payload could not be read                  -> unprovable, fail closed
+   *   - journal state / readable legacy payload rules out every entry   -> create
    *
    * `readInboxEntry` collapses "missing", "unparseable" and "EACCES" all into `null` (its own
    * contract: never throws). Reading that `null` as "not a match" would be a fail-OPEN on the
@@ -371,6 +371,21 @@ export class WorkspaceBus {
         let proven = false;
         for (const [entryId, state] of Object.entries(this.state.entries)) {
           if (state.kind !== "attention" || isTerminal("attention", state.status)) continue;
+
+          // New entry_created events explicitly record `approval_mode` for every attention
+          // request and `target_path` for approvals. Those journal-derived facts are sufficient:
+          // false rules the candidate out, while true + a target proves either conflict or a
+          // different artifact. Missing/incomplete facts identify an N-1 event and retain W21's
+          // fail-closed inbox fallback below.
+          if (state.approval_mode === false) continue;
+          if (state.approval_mode === true && typeof state.target_path === "string") {
+            if (state.target_path === payload.target_path) {
+              proven = true;
+              break;
+            }
+            continue;
+          }
+
           const existing = readInboxEntry(this.workspace, entryId);
           // A non-object body (scalar, array, JSON `null`) is not an inbox payload this daemon
           // ever wrote — inbox files are write-once, so any deviation is corruption, and a
@@ -399,14 +414,20 @@ export class WorkspaceBus {
   ): void {
     this.assertWritable();
     writeInboxEntryOnce(this.workspace, id, payload);
-    const payloadKind =
-      payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
-        ? ((payload as Record<string, unknown>).kind as string)
+    const payloadRecord =
+      payload !== null && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
         : undefined;
+    const payloadKind = typeof payloadRecord?.kind === "string" ? payloadRecord.kind : undefined;
     const detail: Record<string, unknown> | undefined =
-      payloadKind !== undefined || fields.detail !== undefined
-        ? { ...(payloadKind !== undefined ? { kind: payloadKind } : {}), ...(fields.detail ?? {}) }
-        : undefined;
+      payloadKind !== undefined || fields.detail !== undefined ? { ...(fields.detail ?? {}) } : undefined;
+    if (detail && payloadKind !== undefined) detail.kind = payloadKind;
+    if (detail && payloadKind === "attention_request") {
+      const approvalMode = payloadRecord?.approval_mode === true;
+      detail.approval_mode = approvalMode;
+      if (approvalMode && typeof payloadRecord.target_path === "string") detail.target_path = payloadRecord.target_path;
+      else delete detail.target_path;
+    }
     const event: JournalEvent = {
       v: 1,
       event_id: this.ulidFn(),

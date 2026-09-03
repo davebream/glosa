@@ -7,23 +7,24 @@
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../src/http.ts";
-import { CapabilityStore } from "../src/capability.ts";
-import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../src/registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { canonicalize } from "../src/registry/slug.ts";
-import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
-import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
-import { checkpoint, headSha } from "../src/git/shadow.ts";
-import { readFileSync } from "node:fs";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
-import { AgentProviderRegistry, type AgentProvider } from "../src/agent-provider/interface.ts";
+import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider/interface.ts";
+import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
+import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
+import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
+import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
+import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
+import { CapabilityStore } from "../src/capability.ts";
+import { checkpoint, headSha } from "../src/git/shadow.ts";
+import { type ApiContext, createApiFetch } from "../src/http.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
+import { SessionRegistry } from "../src/registry/session-registry.ts";
+import { canonicalize } from "../src/registry/slug.ts";
+import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -1448,7 +1449,7 @@ describe("A1 §5 route catalog", () => {
     expect(ctx.getWorkspaceBus(root).state.entries[winner.id]?.status).toBe("open");
   });
 
-  test("an unreadable live approval entry answers 500 approval-uniqueness-unprovable, never a 201 or a bare conflict", async () => {
+  test("a new live approval remains a definite 409 conflict when its inbox entry becomes unreadable", async () => {
     writeFileSync(join(root, "notes.md"), "# Approval\n");
     const request = () =>
       fetchFn(
@@ -1466,19 +1467,52 @@ describe("A1 §5 route catalog", () => {
     writeFileSync(inboxEntryPath(bus.workspace, created.id), '{"kind":"attention_requ');
 
     const second = await request();
-    expect(second.status).toBe(500);
+    expect(second.status).toBe(409);
     expect(second.headers.get("Content-Type")).toBe("application/problem+json");
     const body = await second.json();
-    expect(body.type).toContain("approval-uniqueness-unprovable");
-    // The 500 must stay a NAMED refusal, not collapse into the detail-free generic `internal`.
-    expect(body.type).not.toContain("errors/internal");
-    expect(body.detail).toContain(created.id);
+    expect(body.type).toContain("approval-conflict");
     expect(body.instance).toBe("/api/workspaces/attention-request");
-    // Fail closed means fail closed: no second approval entry was created for this target.
     const attentionIds = Object.entries(bus.state.entries)
       .filter(([, state]) => state.kind === "attention")
       .map(([id]) => id);
     expect(attentionIds).toEqual([created.id]);
+  });
+
+  test("an unreadable legacy live approval still answers 500 approval-uniqueness-unprovable", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\n");
+    const legacyId = "legacy-approval";
+    writeInboxEntryOnce(root, legacyId, {
+      kind: "attention_request",
+      action: "review",
+      target_path: "notes.md",
+      approval_mode: true,
+    });
+    const writer = new JournalWriter(journalPath(root));
+    appendEvent(writer, {
+      v: 1,
+      event_id: "legacy-created",
+      at: new Date(0).toISOString(),
+      entry: legacyId,
+      event: "entry_created",
+      by: "daemon",
+      detail: { kind: "attention_request" },
+    });
+    writer.close();
+    writeFileSync(inboxEntryPath(root, legacyId), '{"kind":"attention_requ');
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, target_path: "notes.md", approval_mode: true }),
+      }),
+    );
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Content-Type")).toBe("application/problem+json");
+    const body = await response.json();
+    expect(body.type).toContain("approval-uniqueness-unprovable");
+    expect(body.type).not.toContain("errors/internal");
+    expect(body.detail).toContain(legacyId);
+    expect(body.instance).toBe("/api/workspaces/attention-request");
   });
 
   // --- POST /w/:slug/capability/:artifactPath (5.13/§7, P4.1) — the class-F capability mint ---

@@ -4,7 +4,9 @@
 // (via `foldEvents`) rather than going through a WorkspaceBus — the transition table is a pure
 // function of the event sequence, so that's the sharpest way to exercise it.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import type { EventType, JournalEvent } from "../../src/bus/journal.ts";
+import { journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
@@ -275,6 +277,44 @@ describe("wrong-axis events are no-ops — the guard table is keyed on the entry
 });
 
 describe("WorkspaceBus.createEntry propagates payload.kind into entry_created.detail.kind (the blocker fix)", () => {
+  test("payload identity overrides conflicting caller detail in both the journal and derived state", async () => {
+    const root = freshWorkspace();
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await bus.createEntry(
+      "approval",
+      {
+        kind: "attention_request",
+        action: "review",
+        approval_mode: true,
+        target_path: "actual.md",
+      },
+      {
+        detail: {
+          kind: "human_edit",
+          approval_mode: false,
+          target_path: "spoofed.md",
+          caller_note: "preserved",
+        },
+      },
+    );
+
+    expect(bus.state.entries.approval).toMatchObject({
+      status: "open",
+      kind: "attention",
+      approval_mode: true,
+      target_path: "actual.md",
+    });
+    const created = JSON.parse(readFileSync(journalPath(root), "utf8").trim()) as JournalEvent;
+    expect(created.detail).toEqual({
+      caller_note: "preserved",
+      kind: "attention_request",
+      approval_mode: true,
+      target_path: "actual.md",
+    });
+    await bus.close();
+    cleanupWorkspace(root);
+  });
+
   test("an attention_request entry created via createEntry (not a hand-built event) reaches 'done' through the real guard table", async () => {
     const root = freshWorkspace();
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });

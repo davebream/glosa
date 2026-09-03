@@ -25,11 +25,15 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { EventType, JournalEvent } from "./journal.ts";
-import { appendEvent, MAX_EVENT_BYTES, type JournalWriter } from "./journal.ts";
+import { appendEvent, type JournalWriter, MAX_EVENT_BYTES } from "./journal.ts";
 import { quarantineLine } from "./quarantine.ts";
 
 export interface DerivedEntryState {
   status: string;
+  /** Additive `entry_created.detail` facts used to prove approval uniqueness without reopening
+   * the immutable inbox payload. Absent on legacy events, which callers must handle explicitly. */
+  approval_mode?: boolean;
+  target_path?: string;
   [key: string]: unknown;
 }
 
@@ -78,7 +82,13 @@ export const defaultReducer: Reducer = (state, event) => {
   switch (event.event) {
     case "entry_created": {
       if (!event.entry) return;
-      if (!state.entries[event.entry]) state.entries[event.entry] = { status: "pending" };
+      if (!state.entries[event.entry]) {
+        state.entries[event.entry] = {
+          status: "pending",
+          ...(typeof event.detail?.approval_mode === "boolean" ? { approval_mode: event.detail.approval_mode } : {}),
+          ...(typeof event.detail?.target_path === "string" ? { target_path: event.detail.target_path } : {}),
+        };
+      }
       return;
     }
     case "transition_committed": {

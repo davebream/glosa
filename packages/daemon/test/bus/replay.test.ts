@@ -59,6 +59,20 @@ describe("replay.ts — foldEvents (pure)", () => {
     const state = foldEvents([mkEvent("entry_created", "e1"), mkEvent("delivery_attempt", "e1")]);
     expect(state.entries.e1?.status).toBe("pending");
   });
+
+  test("entry_created approval metadata is retained by both replay reducers while legacy events remain valid", () => {
+    const created = mkEvent("entry_created", "approval", {
+      detail: { kind: "attention_request", approval_mode: true, target_path: "notes.md" },
+    });
+    const legacy = mkEvent("entry_created", "legacy", { detail: { kind: "attention_request" } });
+
+    for (const reducer of [undefined, lifecycleReducer]) {
+      const state = foldEvents([created, legacy], reducer);
+      expect(state.entries.approval).toMatchObject({ approval_mode: true, target_path: "notes.md" });
+      expect(state.entries.legacy?.approval_mode).toBeUndefined();
+      expect(state.entries.legacy?.target_path).toBeUndefined();
+    }
+  });
 });
 
 describe("replayJournal — corruption quarantine", () => {

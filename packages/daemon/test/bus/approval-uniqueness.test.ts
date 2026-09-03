@@ -1,26 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
 // R9's approval-mode uniqueness rule ("at most one non-terminal approval request may exist for
-// that workspace/path") is enforced by a scan over the non-terminal attention entries inside the
-// same mutex critical section as the write. The scan reads each candidate's IMMUTABLE inbox file
-// (A4 §F04) because `target_path`/`approval_mode` live in the payload, not in the journal event.
-//
-// These tests pin the FAILURE MODE of that read. A read that cannot be completed proves nothing,
-// and "proves nothing" must not be spelled "not a match" — that would let a single corrupt,
-// truncated or unreadable entry file silently defeat the very invariant the block exists to keep.
-// They also pin the converse: a scan that cannot prove a conflict must not claim one, and must
-// not fail closed on entries it can positively rule out.
+// that workspace/path") is enforced inside the same mutex critical section as creation. New
+// entries mirror the minimum immutable approval facts into journal-derived state; legacy journal
+// events without that additive detail still fall back to their immutable inbox payloads.
 import { describe, expect, test } from "bun:test";
-import { unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { ApprovalConflictError, WorkspaceBus } from "../../src/bus/bus.ts";
-import { inboxEntryPath } from "../../src/bus/paths.ts";
+import { writeInboxEntryOnce } from "../../src/bus/inbox.ts";
+import { appendEvent, JournalWriter } from "../../src/bus/journal.ts";
+import { inboxEntryPath, journalPath } from "../../src/bus/paths.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
 
-function openBus(root: string): WorkspaceBus {
-  return new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+function openBus(root: string, seed = 0): WorkspaceBus {
+  return new WorkspaceBus(root, { ulid: deterministicUlid(seed), now: deterministicClock(seed) });
 }
 
 function approval(targetPath: string) {
-  return { kind: "attention_request" as const, action: "review", target_path: targetPath, approval_mode: true as const };
+  return {
+    kind: "attention_request" as const,
+    action: "review",
+    target_path: targetPath,
+    approval_mode: true as const,
+  };
+}
+
+function seedLegacyEntry(root: string, id: string, payload: unknown): void {
+  writeInboxEntryOnce(root, id, payload);
+  const writer = new JournalWriter(journalPath(root));
+  appendEvent(writer, {
+    v: 1,
+    event_id: `legacy-${id}`,
+    at: new Date(0).toISOString(),
+    entry: id,
+    event: "entry_created",
+    by: "daemon",
+    detail: { kind: (payload as { kind?: unknown }).kind },
+  });
+  writer.close();
 }
 
 async function capture(promise: Promise<unknown>): Promise<{ code?: string; name?: string } | undefined> {
@@ -33,27 +49,63 @@ async function capture(promise: Promise<unknown>): Promise<{ code?: string; name
 }
 
 describe("approval-mode uniqueness — unreadable entries fail closed (R9, A4 §F04)", () => {
-  test("a truncated inbox body blocks a second approval instead of being read as 'not a match'", async () => {
+  test("a new approval is proven from journal truth and remains a real conflict when its inbox is unreadable", async () => {
     const root = freshWorkspace();
     const bus = openBus(root);
     await bus.createAttentionRequest("a1", approval("notes.md"));
-
-    // A crash mid-write, a partial page, a torn body: the journal still says a1 is a live
-    // attention entry, but its payload can no longer be parsed.
     writeFileSync(inboxEntryPath(root, "a1"), '{"kind":"attention_requ');
 
     const err = await capture(bus.createAttentionRequest("a2", approval("notes.md")));
-    expect(err?.code).toBe("APPROVAL_UNIQUENESS_UNPROVABLE");
+    expect(err).toBeInstanceOf(ApprovalConflictError);
     expect(bus.state.entries.a2).toBeUndefined();
+    const created = JSON.parse(readFileSync(journalPath(root), "utf8").trim().split("\n")[0]!);
+    expect(created.detail).toMatchObject({
+      kind: "attention_request",
+      target_path: "notes.md",
+      approval_mode: true,
+    });
     await bus.close();
     cleanupWorkspace(root);
   });
 
-  test("a missing inbox file blocks a second approval", async () => {
+  test("journal-derived approval facts survive restart and rule out non-approvals and other targets", async () => {
     const root = freshWorkspace();
     const bus = openBus(root);
-    await bus.createAttentionRequest("a1", approval("notes.md"));
-    unlinkSync(inboxEntryPath(root, "a1"));
+    await bus.createAttentionRequest("plain", { kind: "attention_request", action: "review" });
+    await bus.createAttentionRequest("other", approval("other.md"));
+    writeFileSync(inboxEntryPath(root, "plain"), "{");
+    writeFileSync(inboxEntryPath(root, "other"), "{");
+    await bus.close();
+
+    const restarted = openBus(root, 1_000_000);
+    await restarted.reconcile();
+    expect(restarted.state.entries.plain).toMatchObject({ approval_mode: false });
+    expect(restarted.state.entries.other).toMatchObject({ approval_mode: true, target_path: "other.md" });
+
+    await restarted.createAttentionRequest("wanted", approval("notes.md"));
+    expect(restarted.state.entries.wanted?.status).toBe("open");
+    await restarted.close();
+    cleanupWorkspace(root);
+  });
+
+  test("a legacy approval without mirrored metadata still falls back to its readable inbox", async () => {
+    const root = freshWorkspace();
+    seedLegacyEntry(root, "a1", approval("notes.md"));
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    const err = await capture(bus.createAttentionRequest("a2", approval("notes.md")));
+    expect(err).toBeInstanceOf(ApprovalConflictError);
+    await bus.close();
+    cleanupWorkspace(root);
+  });
+
+  test("a legacy approval without mirrored metadata fails closed when its inbox is truncated", async () => {
+    const root = freshWorkspace();
+    seedLegacyEntry(root, "a1", approval("notes.md"));
+    writeFileSync(inboxEntryPath(root, "a1"), '{"kind":"attention_requ');
+    const bus = openBus(root);
+    await bus.reconcile();
 
     const err = await capture(bus.createAttentionRequest("a2", approval("notes.md")));
     expect(err?.code).toBe("APPROVAL_UNIQUENESS_UNPROVABLE");
@@ -62,11 +114,26 @@ describe("approval-mode uniqueness — unreadable entries fail closed (R9, A4 §
     cleanupWorkspace(root);
   });
 
-  test("a body that parses but is not an inbox payload object blocks a second approval", async () => {
+  test("a missing legacy inbox file blocks a second approval", async () => {
     const root = freshWorkspace();
+    seedLegacyEntry(root, "a1", approval("notes.md"));
+    unlinkSync(inboxEntryPath(root, "a1"));
     const bus = openBus(root);
-    await bus.createAttentionRequest("a1", approval("notes.md"));
+    await bus.reconcile();
+
+    const err = await capture(bus.createAttentionRequest("a2", approval("notes.md")));
+    expect(err?.code).toBe("APPROVAL_UNIQUENESS_UNPROVABLE");
+    expect(bus.state.entries.a2).toBeUndefined();
+    await bus.close();
+    cleanupWorkspace(root);
+  });
+
+  test("a legacy body that parses but is not an inbox payload object blocks a second approval", async () => {
+    const root = freshWorkspace();
+    seedLegacyEntry(root, "a1", approval("notes.md"));
     writeFileSync(inboxEntryPath(root, "a1"), '"attention_request"');
+    const bus = openBus(root);
+    await bus.reconcile();
 
     const err = await capture(bus.createAttentionRequest("a2", approval("notes.md")));
     expect(err?.code).toBe("APPROVAL_UNIQUENESS_UNPROVABLE");
@@ -76,9 +143,10 @@ describe("approval-mode uniqueness — unreadable entries fail closed (R9, A4 §
 
   test("the unprovable error names the entry that could not be read and the contested target", async () => {
     const root = freshWorkspace();
-    const bus = openBus(root);
-    await bus.createAttentionRequest("a1", approval("notes.md"));
+    seedLegacyEntry(root, "a1", approval("notes.md"));
     writeFileSync(inboxEntryPath(root, "a1"), "not json at all");
+    const bus = openBus(root);
+    await bus.reconcile();
 
     const err = (await capture(bus.createAttentionRequest("a2", approval("notes.md")))) as
       | { targetPath?: string; entries?: string[]; message?: string }
@@ -92,11 +160,12 @@ describe("approval-mode uniqueness — unreadable entries fail closed (R9, A4 §
 
   test("every unreadable candidate is reported at once, not one restart at a time", async () => {
     const root = freshWorkspace();
-    const bus = openBus(root);
-    await bus.createAttentionRequest("a1", approval("notes.md"));
-    await bus.createAttentionRequest("a2", { kind: "attention_request", action: "review" });
+    seedLegacyEntry(root, "a1", approval("notes.md"));
+    seedLegacyEntry(root, "a2", { kind: "attention_request", action: "review" });
     writeFileSync(inboxEntryPath(root, "a1"), "{");
     writeFileSync(inboxEntryPath(root, "a2"), "{");
+    const bus = openBus(root);
+    await bus.reconcile();
 
     const err = (await capture(bus.createAttentionRequest("a3", approval("notes.md")))) as
       | { entries?: string[] }
@@ -108,12 +177,11 @@ describe("approval-mode uniqueness — unreadable entries fail closed (R9, A4 §
 
   test("a PROVEN conflict outranks an unreadable sibling — never downgrade a fact to a maybe", async () => {
     const root = freshWorkspace();
-    const bus = openBus(root);
-    // `unreadable` sorts before `zz-live` in the scan, so the proven match is found second: the
-    // scan must finish before it decides, or the weaker verdict would win by accident of order.
-    await bus.createAttentionRequest("unreadable", approval("other.md"));
-    await bus.createAttentionRequest("zz-live", approval("notes.md"));
+    seedLegacyEntry(root, "unreadable", approval("other.md"));
+    seedLegacyEntry(root, "zz-live", approval("notes.md"));
     writeFileSync(inboxEntryPath(root, "unreadable"), "{");
+    const bus = openBus(root);
+    await bus.reconcile();
 
     const err = await capture(bus.createAttentionRequest("a3", approval("notes.md")));
     expect(err).toBeInstanceOf(ApprovalConflictError);

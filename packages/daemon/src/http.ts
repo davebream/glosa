@@ -2101,8 +2101,9 @@ async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): P
         url.pathname,
       );
     }
-    // Uniqueness could not be checked because a live candidate's immutable payload is unreadable
-    // (R9 / A4 §F04). Answered separately from the 409 above so the caller is told what is
+    // Uniqueness could not be checked because a legacy live candidate has no journal-derived
+    // approval facts and its immutable payload is unreadable (R9 / A4 §F04). Answered separately
+    // from the 409 above so the caller is told what is
     // actually true rather than a conflict the daemon cannot demonstrate — and, unlike the
     // anonymous `internal` 500 this would otherwise fall through to, the detail names the entries
     // to repair. Those ids are the caller's own workspace's, over an authenticated loopback
