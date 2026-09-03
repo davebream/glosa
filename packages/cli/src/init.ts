@@ -88,7 +88,7 @@ export const CHANNEL_COMMAND = "claude --dangerously-load-development-channels s
 // biome-ignore lint: JSON.parse's natural output type
 type Json = any;
 
-function detectIndent(raw: string): string {
+export function detectIndent(raw: string): string {
   const m = raw.match(/\n( +|\t+)\S/);
   return m ? (m[1] as string) : "  ";
 }

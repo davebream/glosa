@@ -17,6 +17,7 @@ import {
   CHANNEL_COMMAND,
   DurableGlosaInstallRequiredError,
   defaultResolveGlosaBin,
+  detectIndent,
   mergeMcp,
   mergeSettingsHooks,
   parseJsonFile,
@@ -757,7 +758,7 @@ function uninstallJson(
   undo.push(() => writeAtomic(ownership.path, before));
   if (ownership.created && json !== null && typeof json === "object" && Object.keys(json).length === 0) {
     safeUnlink(ownership.path);
-  } else writeJsonAtomic(ownership.path, json, "  ", write);
+  } else writeJsonAtomic(ownership.path, json, detectIndent(before), write);
   removed.push(...removable.map((node) => `${ownership.path}${node.pointer}`));
   return { ...ownership, inserted: surviving };
 }
