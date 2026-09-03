@@ -29,6 +29,13 @@ function stripComments(source: string): string {
   return source.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
+function hasActiveTsCheckDirective(source: string): boolean {
+  // TypeScript only recognizes @ts-check in the leading comment preamble. Match that preamble
+  // structurally so SPDX headers and future comment additions do not pin the directive to a line.
+  const preamble = source.match(/^(?:(?:\s+)|(?:\/\/[^\r\n]*(?:\r?\n|$))|(?:\/\*[\s\S]*?\*\/))*/)?.[0] ?? "";
+  return /^\s*\/\/\s*@ts-check\s*$/m.test(preamble);
+}
+
 // Matches a real network call: `fetch(`, `window.fetch(`, `globalThis.fetch(` — but not the string
 // "fetch" in a comment, and not a parameter/property NAME (`fetchFn`, `{ fetchFn }`), which
 // data-access.js uses legitimately as its own injection point, nor `fetch.bind(...)`.
@@ -148,6 +155,12 @@ const BOOTSTRAP_SANCTIONED_CALLS = new Map<string, string>([
 ]);
 
 describe("no SPA module reaches the daemon except through data-access.js (R6)", () => {
+  test("the daemon boundary and token bootstrap retain active static checking", () => {
+    for (const name of ["data-access.js", "bootstrap.js"] as const) {
+      expect(hasActiveTsCheckDirective(read(`../src/${name}`))).toBe(true);
+    }
+  });
+
   test("the enumeration found the SPA modules — proves the per-module checks below aren't vacuous", () => {
     // If HAND_WRITTEN_SPA_MODULES silently came back empty (wrong path, over-eager filter), every
     // `test.each` below would run zero cases and pass forever. Pin a known-present subset — not the

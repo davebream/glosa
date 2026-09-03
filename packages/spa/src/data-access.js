@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// @ts-check
 // @glosa/spa — R6's ONE data-access module: the SPA reaches the daemon through this file and
 // NOTHING else does (no other module calls `fetch` — see test/import-boundary.test.ts, which
 // checks that structurally). This is the L0→L3 swappable-data-layer invariant: a future hosted
@@ -9,10 +10,34 @@
 // per R6's "same-origin fetch today" v1 scope.
 const TOKEN_KEY = "glosa_token";
 
+/** @typedef {{ title?: string, type?: string, status?: number, [key: string]: unknown }} ProblemDetails */
+/** @typedef {Pick<Storage, "getItem" | "setItem" | "removeItem">} TokenStorage */
+/** @typedef {(path: string, init: RequestInit) => Promise<Response>} FetchFn */
+/** @typedef {{ id?: string, event: string, data: string }} SseFrame */
+/** @typedef {{ event: string, data: unknown, id?: string }} StreamEvent */
+/** @typedef {(frame: StreamEvent) => void} StreamEventHandler */
+/** @typedef {(attempt: number, rand?: () => number) => number} BackoffFn */
+/** @typedef {(ms: number) => Promise<unknown>} SleepFn */
+/** @typedef {{
+ *   fetchFn?: FetchFn,
+ *   storage?: TokenStorage,
+ *   onEvent?: StreamEventHandler,
+ *   onReconnect?: () => void,
+ *   onStatus?: (status: "down" | "up") => unknown,
+ *   onUnauthorized?: () => unknown,
+ *   backoffFn?: BackoffFn,
+ *   sleepFn?: SleepFn,
+ *   randFn?: () => number,
+ * }} StreamOptions */
+/** @typedef {StreamOptions & { slug: string }} OpenStreamOptions */
+/** @typedef {{ fetchFn?: FetchFn, storage?: TokenStorage, onUnauthorized?: () => void }} DataAccessDeps */
+/** @typedef {{ method?: string, headers?: Record<string, string>, body?: string }} RequestOptions */
+
 /** Thrown by every data-access call that gets a non-2xx response. Carries the parsed
  * problem+json body (A1 §1) when the daemon sent one, so a caller can branch on `.status`/
  * `.problem.type` without re-parsing anything itself. */
 export class DataAccessError extends Error {
+  /** @param {number} status @param {ProblemDetails | null | undefined} problem */
   constructor(status, problem) {
     super(problem?.title ?? `request failed with status ${status}`);
     this.name = "DataAccessError";
@@ -21,6 +46,7 @@ export class DataAccessError extends Error {
   }
 }
 
+/** @param {string} path */
 function encodePathSegments(path) {
   return path
     .split("/")
@@ -37,6 +63,7 @@ function encodePathSegments(path) {
 // wire-compatibility check even though the code itself is necessarily duplicated.
 // ---------------------------------------------------------------------------------------------
 
+/** @param {string} raw @returns {SseFrame | null} */
 function parseSseFrame(raw) {
   let id;
   let event;
@@ -55,6 +82,8 @@ function parseSseFrame(raw) {
 /** Reads a `response.body.getReader()` reader and yields one parsed frame per blank-line-
  * terminated SSE frame, reassembling frames a chunk boundary split mid-line. Drops `heartbeat`
  * frames silently (A1 §8.3) — no caller ever has to special-case them. */
+/** @param {ReadableStreamDefaultReader<Uint8Array>} reader
+ *  @returns {AsyncGenerator<SseFrame, void, unknown>} */
 export async function* parseSseStream(reader) {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -79,6 +108,7 @@ const BACKOFF_JITTER = 0.2;
 
 /** A1 §8.2's client reconnect backoff: 250ms base, ×2 factor, capped at 5s, ±20% jitter. Pure
  * (`rand` injectable) so a test can assert the exact schedule instead of Math.random noise. */
+/** @param {number} attempt @param {() => number} [rand] */
 export function computeBackoffMs(attempt, rand = Math.random) {
   const raw = Math.min(BACKOFF_BASE_MS * BACKOFF_FACTOR ** attempt, BACKOFF_MAX_MS);
   const jitter = raw * BACKOFF_JITTER * (rand() * 2 - 1);
@@ -95,10 +125,7 @@ export function computeBackoffMs(attempt, rand = Math.random) {
  * known here. `onReconnect()` fires once a DROPPED connection is successfully re-established —
  * never on the very first connect. Returns a `stop()` function; deps are all injectable for testing
  * (`sleepFn`/`randFn` in particular — a test never wants a real backoff timer running). */
-/** @param {string} path
- *  @param {{fetchFn?: any, storage?: any, onEvent?: (frame: any) => void, onReconnect?: () => void,
- *           onStatus?: (status: "down"|"up") => unknown, onUnauthorized?: () => unknown,
- *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
+/** @param {string} path @param {StreamOptions} opts */
 function openEventStream(
   path,
   {
@@ -114,18 +141,22 @@ function openEventStream(
   },
 ) {
   let stopped = false;
+  /** @type {string | null} */
   let lastEventId = null;
   let attempt = 0;
+  /** @type {null | (() => void)} */
   let cancelReader = null;
   let down = false; // dedupes onStatus: one "down" per outage, one "up" per recovery
 
+  /** @param {boolean} isReconnect */
   async function connectOnce(isReconnect) {
+    /** @type {Record<string, string>} */
     const headers = {};
     const token = storage?.getItem(TOKEN_KEY);
     if (token) headers.Authorization = `Bearer ${token}`;
     if (lastEventId !== null) headers["Last-Event-ID"] = lastEventId;
 
-    const res = await fetchFn(path, { headers });
+    const res = await /** @type {FetchFn} */ (fetchFn)(path, { headers });
     if (res.status === 401) {
       storage?.removeItem(TOKEN_KEY);
       stopped = true;
@@ -153,10 +184,11 @@ function openEventStream(
         continue;
       }
       if (frame.id !== undefined) lastEventId = frame.id;
+      /** @type {unknown} */
       let data = frame.data;
-      if (data) {
+      if (frame.data) {
         try {
-          data = JSON.parse(data);
+          data = JSON.parse(frame.data);
         } catch {
           // not JSON — pass the raw string through rather than throwing
         }
@@ -199,10 +231,7 @@ function openEventStream(
  * review note), so a caller's `onReconnect` MUST re-fetch whatever state might have changed while
  * disconnected (the artifact list, the open artifact) rather than trust that live events alone
  * will catch it up. */
-/** @param {{fetchFn?: any, storage?: any, slug?: any, onEvent?: (frame: any) => void,
- *           onReconnect?: () => void, onStatus?: (status: "down"|"up") => unknown,
- *           onUnauthorized?: () => unknown,
- *           backoffFn?: any, sleepFn?: any, randFn?: any}} opts */
+/** @param {OpenStreamOptions} opts */
 export function openStream({
   fetchFn,
   storage,
@@ -236,6 +265,7 @@ export function openStream({
  * terminal" without tearing down anything else), and `resync_required` (already handled generically
  * by `openEventStream` — the connection ends and the next reconnect is a fresh first-connect). */
 export function openTranscriptStream(
+  /** @type {string} */
   slug,
   {
     fetchFn,
@@ -247,7 +277,7 @@ export function openTranscriptStream(
     backoffFn = computeBackoffMs,
     sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randFn = Math.random,
-  } = {},
+  } = /** @type {StreamOptions} */ ({}),
 ) {
   return openEventStream(`/w/${encodeURIComponent(slug)}/transcript/stream`, {
     fetchFn,
@@ -269,6 +299,7 @@ export function openTranscriptStream(
 /** Builds the one object every other SPA module talks to the daemon through. `fetchFn`/`storage`
  * are injectable (default to the real globals) purely so this is unit-testable without a browser
  * — production code never passes them. */
+/** @param {DataAccessDeps} [deps] */
 export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
   const storage = deps.storage ?? (typeof sessionStorage !== "undefined" ? sessionStorage : undefined);
@@ -286,6 +317,7 @@ export function createDataAccess(deps = {}) {
     onUnauthorized();
   }
 
+  /** @param {Record<string, string> | undefined} extra */
   function authHeaders(extra) {
     const headers = { ...(extra ?? {}) };
     const token = storage?.getItem(TOKEN_KEY);
@@ -293,8 +325,12 @@ export function createDataAccess(deps = {}) {
     return headers;
   }
 
+  /** @param {string} path @param {RequestOptions} [init] */
   async function request(path, init = {}) {
-    const res = await fetchFn(path, { ...init, headers: authHeaders(init.headers) });
+    const res = await /** @type {FetchFn} */ (fetchFn)(path, {
+      ...init,
+      headers: authHeaders(init.headers),
+    });
     if (!res.ok) {
       if (res.status === 401) handleUnauthorized();
       let problem = null;
@@ -308,6 +344,7 @@ export function createDataAccess(deps = {}) {
     return res;
   }
 
+  /** @param {string} path @param {RequestOptions} [init] */
   async function requestJson(path, init) {
     return (await request(path, init)).json();
   }
@@ -325,13 +362,16 @@ export function createDataAccess(deps = {}) {
     getStatus() {
       return requestJson("/api/status");
     },
+    /** @param {string} slug */
     getArtifacts(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts`);
     },
+    /** @param {string} slug @param {string} path @param {{ render?: string }} [options] */
     getArtifact(slug, path, { render } = {}) {
       const qs = render ? `?render=${encodeURIComponent(render)}` : "";
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts/${encodePathSegments(path)}${qs}`);
     },
+    /** @param {string} slug @param {unknown} record */
     postAnnotation(slug, record) {
       return requestJson(`/w/${encodeURIComponent(slug)}/annotations`, {
         method: "POST",
@@ -343,22 +383,27 @@ export function createDataAccess(deps = {}) {
      * topbar badge renders: `live` (delivery reaches a session) / `wired` (init installed, no
      * bound session) / `unwired` (init never ran), plus `pending_count`. 404 against a daemon
      * that predates contract 1.4 — callers hide the badge on any failure. */
+    /** @param {string} slug */
     getWiringStatus(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/wiring`);
     },
     /** `POST /w/:slug/init` (A1 §5.19, state-changing) — the consent-gated init trigger: runs
      * `glosa init` daemon-side for a directory workspace AFTER the user's explicit dialog click.
      * 409 carries the child's conflict code+hint; 400 for loose-file workspaces. */
+    /** @param {string} slug */
     triggerInit(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/init`, { method: "POST" });
     },
     /** `POST /w/:slug/annotations/:id/withdraw` — terminal `rejected` transition (never a delete;
      * the journal is append-only). 409 once the entry is already terminal. */
+    /** @param {string} slug @param {string} id */
     withdrawAnnotation(slug, id) {
       return requestJson(`/w/${encodeURIComponent(slug)}/annotations/${encodeURIComponent(id)}/withdraw`, {
         method: "POST",
       });
     },
+    /** @param {string} slug @param {string} path @param {string} content
+     *  @param {{ ifMatch?: string }} [options] */
     putArtifact(slug, path, content, { ifMatch } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts/${encodePathSegments(path)}`, {
         method: "PUT",
@@ -369,6 +414,7 @@ export function createDataAccess(deps = {}) {
     /** `GET /w/:slug/checkpoints` (A6 §F31, P3.5) — the history/timeline listing. `since` is one
      * of `yesterday|today|<ISO>|<checkpoint-id>` (resolved daemon-side, host-local TZ); `limit`
      * caps the row count. Omitting both fetches full history. */
+    /** @param {string} slug @param {{ since?: string, limit?: number }} [options] */
     getCheckpoints(slug, { since, limit } = {}) {
       const params = new URLSearchParams();
       if (since !== undefined) params.set("since", since);
@@ -378,6 +424,7 @@ export function createDataAccess(deps = {}) {
     },
     /** `GET /w/:slug/diff` (A1 §5.7, extended P3.5) — a unified diff between two checkpoints, or
      * a checkpoint and the live working tree (`to: "working"`). */
+    /** @param {string} slug @param {{ from: string, to: string }} range */
     getDiff(slug, { from, to }) {
       const params = new URLSearchParams({ from, to });
       return requestJson(`/w/${encodeURIComponent(slug)}/diff?${params.toString()}`);
@@ -386,6 +433,7 @@ export function createDataAccess(deps = {}) {
      * Without `force`, a dirty artifact (changes since its latest checkpoint) is refused with a
      * `DataAccessError` whose `.problem.would_be_lost_diff` carries what a `force:true` retry
      * would discard — the caller (history.js) shows that diff before retrying with force. */
+    /** @param {string} slug @param {{ path?: string, to?: string, force?: boolean }} [options] */
     restore(slug, { path, to, force } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/restore`, {
         method: "POST",
@@ -393,12 +441,16 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify({ path, to, ...(force ? { force: true } : {}) }),
       });
     },
+    /** @param {string} slug */
     getInbox(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox`);
     },
+    /** @param {string} slug @param {string} id */
     markAttentionSeen(slug, id) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/seen`, { method: "POST" });
     },
+    /** @param {string} slug @param {string} id
+     *  @param {{ outcome?: string, response?: string, revisionId?: string }} [options] */
     respondToAttention(slug, id, { outcome, response, revisionId } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/response`, {
         method: "POST",
@@ -410,11 +462,17 @@ export function createDataAccess(deps = {}) {
         }),
       });
     },
+    /** @param {string} slug
+     *  @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void,
+     *            onStatus?: (status: "down" | "up") => unknown }} [options] */
     openStream(slug, { onEvent, onReconnect, onStatus } = {}) {
       return openStream({ fetchFn, storage, slug, onEvent, onReconnect, onStatus, onUnauthorized: handleUnauthorized });
     },
     /** `GET /w/:slug/transcript/stream` (A1 §5.8/§8, P4.2) — the conversation mirror. See
      * `openTranscriptStream`'s own docstring for the frame kinds `onEvent` receives. */
+    /** @param {string} slug
+     *  @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void,
+     *            onStatus?: (status: "down" | "up") => unknown }} [options] */
     openTranscriptStream(slug, { onEvent, onReconnect, onStatus } = {}) {
       return openTranscriptStream(slug, {
         fetchFn,
@@ -428,6 +486,8 @@ export function createDataAccess(deps = {}) {
     /** `POST /w/:slug/transcript/compose` (F32/R6) — creates or retries one immutable,
      * exact-session conversation message without touching the transcript. `delivered:true` means
      * the target session acknowledged presentation; queueing/transport acceptance stay pending. */
+    /** @param {string} slug @param {string} text
+     *  @param {{ messageId?: string, sessionHint?: string }} [options] */
     sendComposerMessage(slug, text, { messageId, sessionHint } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/transcript/compose`, {
         method: "POST",
@@ -440,6 +500,7 @@ export function createDataAccess(deps = {}) {
       });
     },
 
+    /** @param {string} slug @param {string} messageId */
     getComposerMessageStatus(slug, messageId) {
       return requestJson(`/w/${encodeURIComponent(slug)}/transcript/compose/${encodeURIComponent(messageId)}`);
     },
@@ -447,6 +508,7 @@ export function createDataAccess(deps = {}) {
      * scoped capability for a class-F artifact. classf-viewer.js calls this once per iframe
      * open/reload; the response `{url, nonce, expires_in_s}` is exactly what it needs to embed
      * the iframe and complete the nonce-gated MessageChannel handshake (A3 §2). */
+    /** @param {string} slug @param {string} artifactPath */
     mintClassFCapability(slug, artifactPath) {
       return requestJson(`/w/${encodeURIComponent(slug)}/capability/${encodePathSegments(artifactPath)}`, {
         method: "POST",
