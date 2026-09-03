@@ -11,11 +11,10 @@ import { PassThrough, Readable } from "node:stream";
 import { promptInitAgents, run } from "../src/index.ts";
 import { REAL_GLOSA_HOME, tempGlosaHome, useTempHome } from "./home.ts";
 
-// `run(["init", …])` has no injection seam for `rootsFor()`'s roots, so the user-scope ownership
-// manifest it consults is whatever `$GLOSA_HOME ?? ~/.glosa` resolves to. Without this, these
-// tests read the developer's own install state: a machine with a user-scope `codex` install
-// recorded there fails the two `--agent`-with-codex cases below on A6 §F26's (correct)
-// cross-scope-duplicate guard.
+// Most tests intentionally exercise `run(["init", …])`'s production defaults, whose user-scope
+// manifest is `$GLOSA_HOME ?? ~/.glosa`. Redirect GLOSA_HOME so those cases never consult the
+// developer's own install state. The provider-detection cases below separately inject both home
+// roots per invocation because `os.homedir()` is process-cached.
 useTempHome();
 
 let dirs: string[] = [];
@@ -27,6 +26,19 @@ function freshDir(): string {
   mkdirSync(join(d, ".git"));
   dirs.push(d);
   return d;
+}
+
+function freshProviderHome(provider: "claude-code" | "codex"): string {
+  const home = mkdtempSync(join(tmpdir(), "glosa-cli-provider-home-"));
+  dirs.push(home);
+  if (provider === "claude-code") {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+  } else {
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), "# existing provider config\n");
+  }
+  return home;
 }
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -117,9 +129,66 @@ describe("run(['init', ...])", () => {
 
   test("ambiguous --json invocation exits 2 with the exact agent hint", async () => {
     const dir = freshDir();
-    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--json"]));
+    const homeDir = freshProviderHome("claude-code");
+    mkdirSync(join(homeDir, ".codex"), { recursive: true });
+    writeFileSync(join(homeDir, ".codex", "config.toml"), "# existing provider config\n");
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--json"], {
+        init: { homeDir, glosaHomeDir: join(homeDir, ".glosa"), which: () => null },
+      }),
+    );
     expect(exitCode).toBe(2);
     expect(JSON.parse(out).error.message).toContain("pass --agent claude-code, --agent codex, or --agent all");
+  });
+
+  test("public run auto-detects only Claude Code from an isolated synthetic home", async () => {
+    const dir = freshDir();
+    const homeDir = freshProviderHome("claude-code");
+    const probedExecutables: string[] = [];
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--scope", "user", "--print", "--json"], {
+        init: {
+          homeDir,
+          glosaHomeDir: join(homeDir, ".glosa"),
+          which(executable) {
+            probedExecutables.push(executable);
+            return null;
+          },
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(out).data;
+    expect(data.providers).toEqual(["claude-code"]);
+    const files = Object.values(data.files as Record<string, { path: string }>);
+    expect(files.every((file) => file.path.startsWith(`${homeDir}/`))).toBe(true);
+    expect(probedExecutables.sort()).toEqual(["claude", "codex"]);
+  });
+
+  test("public run auto-detects only Codex from a different isolated synthetic home", async () => {
+    const dir = freshDir();
+    const homeDir = freshProviderHome("codex");
+    const probedExecutables: string[] = [];
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--scope", "user", "--print", "--json"], {
+        init: {
+          homeDir,
+          glosaHomeDir: join(homeDir, ".glosa"),
+          which(executable) {
+            probedExecutables.push(executable);
+            return null;
+          },
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(out).data;
+    expect(data.providers).toEqual(["codex"]);
+    const files = Object.values(data.files as Record<string, { path: string }>);
+    expect(files.every((file) => file.path.startsWith(`${homeDir}/`))).toBe(true);
+    expect(probedExecutables.sort()).toEqual(["claude", "codex"]);
   });
 
   test("invalid scope is a usage error", async () => {
