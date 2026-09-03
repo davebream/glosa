@@ -45,18 +45,23 @@ export async function fetchHandshake(port: number, timeoutMs: number): Promise<H
   }
 }
 
-/** Polls until `deadlineMs` elapses or a valid handshake answers. */
+/** Polls until `deadlineMs` elapses, a valid handshake answers, or `shouldStop` returns true.
+ * `shouldStop` is how spawn-wait bails when the child has already exited (EADDRINUSE / crash)
+ * instead of burning the rest of the deadline against a port that will never answer. */
 export async function pollHandshake(
   port: number,
   deadlineMs: number,
   intervalMs = 100,
+  shouldStop?: () => boolean,
 ): Promise<HandshakeResponse | null> {
   const start = Date.now();
   for (;;) {
+    if (shouldStop?.()) return null;
     const remaining = deadlineMs - (Date.now() - start);
     if (remaining <= 0) return null;
     const hs = await fetchHandshake(port, Math.min(500, remaining));
     if (hs) return hs;
+    if (shouldStop?.()) return null;
     await Bun.sleep(Math.min(intervalMs, remaining));
   }
 }
