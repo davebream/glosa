@@ -6,21 +6,22 @@
 // SPECIFIC file in the settings→mcp→manifest sequence can be made to fail without relying on OS
 // permission tricks a sandboxed/root test runner might bypass).
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CHANNEL_COMMAND,
   defaultResolveGlosaBin,
+  type GlosaBinResolution,
   isEphemeralPackageRunnerPath,
   runInit,
   runUninstall,
-  type GlosaBinResolution,
 } from "../src/init.ts";
 import {
   detectInstallProviders,
   runScopedInit,
   runScopedUninstall,
+  type InitResult as ScopedInitResult,
   scopedManifestPaths,
 } from "../src/scoped-init.ts";
 import { useTempHome } from "./home.ts";
@@ -66,6 +67,14 @@ function backupsFor(path: string): string[] {
 }
 
 const BIN_A: GlosaBinResolution = { command: "glosa", args: [], mode: "path" };
+
+/** Every successful scoped setup goes through this assertion so replacing `runScopedInit` with a
+ * no-op cannot leave a fixture accidentally green. */
+function expectScopedInitSuccess(result: ScopedInitResult): ScopedInitResult {
+  expect(result.ok).toBe(true);
+  expect(result.exitCode).toBe(0);
+  return result;
+}
 
 /** The REAL bun-run fallback shape (A6 §F26) — a distinct `glosaRoot` per call so several of
  * these are still all mutually different commands while EACH ONE still matches glosa's in-band
@@ -723,6 +732,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     const result = await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
 
     expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
     expect(result.data.scope).toBe("workspace");
     expect(result.data.providers).toEqual(["claude-code"]);
     expect(existsSync(settingsPathOf(dir))).toBe(true);
@@ -753,6 +763,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
     expect(existsSync(join(home, ".codex", "hooks.json"))).toBe(true);
     expect(existsSync(join(home, ".codex", "config.toml"))).toBe(true);
     expect(existsSync(join(glosaHome, "init-manifest.json"))).toBe(true);
@@ -775,14 +786,16 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     const dir = freshDir();
     const home = freshDir();
     const glosaHome = join(home, ".glosa");
-    await runScopedInit({
-      dir,
-      scope: "user",
-      agents: ["claude-code"],
-      homeDir: home,
-      glosaHomeDir: glosaHome,
-      resolveGlosaBin: () => BIN_A,
-    });
+    expectScopedInitSuccess(
+      await runScopedInit({
+        dir,
+        scope: "user",
+        agents: ["claude-code"],
+        homeDir: home,
+        glosaHomeDir: glosaHome,
+        resolveGlosaBin: () => BIN_A,
+      }),
+    );
     const result = await runScopedInit({
       dir,
       agents: ["claude-code"],
@@ -792,6 +805,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
       resolveGlosaBin: () => BIN_A,
     });
 
+    expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(2);
     expect(result.error?.code).toBe("cross-scope-duplicate");
     expect(result.error?.hint).toContain("--scope user --agent claude-code --uninstall");
@@ -837,8 +851,8 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
 
   test("a later provider extends the manifest and targeted uninstall preserves the other provider", async () => {
     const dir = freshDir();
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
-    await runScopedInit({ dir, agents: ["codex"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["codex"], resolveGlosaBin: () => BIN_A }));
 
     const removed = await runScopedUninstall({ dir, agents: ["codex"] });
     expect(removed.ok).toBe(true);
@@ -865,7 +879,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
 
   test("A6 §F26: a settings.json glosa created is deleted once its last hook is removed", async () => {
     const dir = freshDir();
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
     expect(existsSync(settingsPathOf(dir))).toBe(true);
 
     const removed = await runScopedUninstall({ dir, agents: ["claude-code"] });
@@ -886,7 +900,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     // `permissions: {}` is a real, meaningful Claude Code settings key that happens to be empty —
     // it is the user's, not glosa's, and uninstall has no business removing it.
     writeFileSync(settingsPathOf(dir), JSON.stringify({ permissions: {} }, null, 2));
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
 
     await runScopedUninstall({ dir, agents: ["claude-code"] });
 
@@ -906,7 +920,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
       settingsPathOf(dir),
       JSON.stringify({ hooks: { PreToolUse: [], $comment: "mine" }, env: {} }, null, 2),
     );
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
 
     const result = await runScopedUninstall({ dir, agents: ["claude-code"] });
 
@@ -929,7 +943,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
         2,
       ),
     );
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
     expect(readJson(settingsPathOf(dir)).hooks.SessionStart[0].hooks).toHaveLength(3);
 
     const result = await runScopedUninstall({ dir, agents: ["claude-code"] });
@@ -946,7 +960,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     const dir = freshDir();
     const other = { type: "stdio", command: "some-other-server", args: [] as string[] };
     writeFileSync(mcpPathOf(dir), JSON.stringify({ mcpServers: { other } }, null, 2));
-    await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(await runScopedInit({ dir, agents: ["claude-code"], resolveGlosaBin: () => BIN_A }));
 
     await runScopedUninstall({ dir, agents: ["claude-code"] });
 
@@ -956,7 +970,9 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
 
   test("A6 §F26: a second scoped uninstall is a no-op that still exits 0", async () => {
     const dir = freshDir();
-    await runScopedInit({ dir, agents: ["claude-code", "codex"], resolveGlosaBin: () => BIN_A });
+    expectScopedInitSuccess(
+      await runScopedInit({ dir, agents: ["claude-code", "codex"], resolveGlosaBin: () => BIN_A }),
+    );
 
     const first = await runScopedUninstall({ dir });
     expect(first.exitCode).toBe(0);
@@ -976,6 +992,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
 
     const result = await runScopedInit({ dir, agents: ["claude-code", "codex"], resolveGlosaBin: () => BIN_A });
     expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
     expect(existsSync(manifestPathOf(dir))).toBe(false);
     const manifest = readJson(scopedManifestPaths(dir).workspace);
     expect(Object.keys(manifest.providers).sort()).toEqual(["claude-code", "codex"]);
@@ -989,6 +1006,8 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
       print: true,
       resolveGlosaBin: () => BIN_A,
     });
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
     expect(result.changed).toBe(true);
     expect(result.diff).toContain(join(dir, ".codex", "hooks.json"));
     expect(existsSync(join(dir, ".codex"))).toBe(false);
@@ -1009,6 +1028,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
         writeFileSync(path, content);
       },
     });
+    expect(result.ok).toBe(false);
     expect(result.exitCode).toBe(70);
     expect(existsSync(settingsPathOf(dir))).toBe(false);
     expect(existsSync(mcpPathOf(dir))).toBe(false);

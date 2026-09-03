@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.1 / issue #46 — `glosa open [target] [focus]` (A6 §F26).
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { maybeOfferInit, printOpenResult, runOpen, type OpenDeps } from "../src/open.ts";
+import { maybeOfferInit, type OpenDeps, printOpenResult, realOpenDeps, runOpen } from "../src/open.ts";
 import type { InitResult, ScopedOwnershipManifest } from "../src/scoped-init.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
+import { useTempHome } from "./home.ts";
 import { captureStderr, captureStdout } from "./test-utils.ts";
+
+// The default consented-init path reads the user-scope ownership manifest. Never let that one
+// integration test inspect or contend with the developer's real Glosa installation.
+useTempHome();
 
 /** A "wired" drift result so existing cases stay warning-free by default. */
 const WIRED_MANIFEST = {} as ScopedOwnershipManifest;
@@ -48,6 +53,26 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
 }
 
 describe("glosa open", () => {
+  test("realOpenDeps wires the injected client and classifies real files without following symlinks", async () => {
+    const dir = freshDir();
+    const file = join(dir, "draft.md");
+    const link = join(dir, "draft-link.md");
+    writeFileSync(file, "# Draft\n");
+    symlinkSync(file, link);
+    const marker = {} as GlosaApiClient;
+    const deps = realOpenDeps(async () => marker);
+
+    expect(await deps.createClient()).toBe(marker);
+    expect(deps.platform()).toBe(process.platform);
+    expect(deps.cwd?.()).toBe(process.cwd());
+    expect(deps.dirExists(dir)).toBe(true);
+    expect(deps.dirExists(file)).toBe(false);
+    expect(deps.fileExists(file)).toBe(true);
+    expect(deps.fileExists(join(dir, "missing.md"))).toBe(false);
+    expect(deps.isRegularFile?.(file)).toBe(true);
+    expect(deps.isRegularFile?.(link)).toBe(false);
+  });
+
   test("non-darwin platform -> exit 5, never touches the daemon", async () => {
     let daemonTouched = false;
     const { deps } = makeDeps({

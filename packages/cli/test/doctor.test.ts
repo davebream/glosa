@@ -9,9 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tokenPath, WorkspaceBus } from "@glosa/daemon";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { printDoctorResult, runDoctor, type DoctorDeps } from "../src/doctor.ts";
+import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
 import { runInit } from "../src/init.ts";
-import { FakeGlosaApiClient, daemonUnreachable } from "./fake-api-client.ts";
+import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { captureStdout } from "./test-utils.ts";
 
 let dirs: string[] = [];
@@ -61,6 +61,22 @@ function findCheck(checks: { name: string; status: string; detail: string }[], n
 }
 
 describe("glosa doctor", () => {
+  test("realDoctorDeps wires ambient probes without touching the daemon", async () => {
+    const marker = {} as GlosaApiClient;
+    const home = freshDir();
+    const deps = realDoctorDeps(async () => marker, () => home);
+
+    expect(await deps.createClient()).toBe(marker);
+    expect(deps.platform()).toBe(process.platform);
+    expect(deps.bunVersion()).toBe(Bun.version);
+    expect(deps.glosaHome()).toBe(home);
+    expect(deps.which("bun")).toBe(Bun.which("bun", { PATH: Bun.env.PATH ?? "" }));
+    // Exercise the failure half of the real spawn seam without starting a child that would inherit
+    // ambient secrets. W03 separately owns child-env scrubbing for successful doctor probes.
+    expect(deps.runVersionProbe([join(home, "definitely-missing-binary"), "--version"])).toBeNull();
+    expect(deps.claudeConfigDir()).toBeTruthy();
+  });
+
   test("non-darwin platform -> only the platform check runs, exit 5", async () => {
     const { deps } = makeDeps({ platform: () => "linux" });
     const dir = freshDir();
