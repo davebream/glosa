@@ -50,6 +50,34 @@ export interface JournalEvent {
   detail?: Record<string, unknown>;
 }
 
+/** The canonical runtime envelope check shared by journal replay and reconnect-tail reads.
+ * Keeping this beside the schema prevents an invalid line from being excluded from derived state
+ * while still being exposed over SSE. Event-specific `detail` validation remains reducer-owned. */
+export function isJournalEvent(value: unknown): value is JournalEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value as Record<string, unknown>;
+  return (
+    event.v === 1 &&
+    typeof event.event_id === "string" &&
+    event.event_id.length > 0 &&
+    typeof event.at === "string" &&
+    typeof event.event === "string" &&
+    typeof event.by === "string"
+  );
+}
+
+/** Parses one physical journal line under the same size and envelope rules used by replay. */
+export function parseJournalEventLine(line: string): JournalEvent | null {
+  if (line.length === 0 || Buffer.byteLength(line, "utf8") + 1 > MAX_EVENT_BYTES) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  return isJournalEvent(parsed) ? parsed : null;
+}
+
 // Lifecycle-critical events fsync before the append call returns success; delivery_attempt (and
 // anything else not listed here) may skip the per-write fsync — loss there is only a redundant
 // re-nudge, never a lost state transition (A4 §F04).

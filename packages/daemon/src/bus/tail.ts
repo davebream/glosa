@@ -9,7 +9,7 @@
 // stay stable across every replay/restart.
 import { existsSync, readFileSync } from "node:fs";
 import { journalPath } from "./paths.ts";
-import type { JournalEvent } from "./journal.ts";
+import { parseJournalEventLine, type JournalEvent } from "./journal.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
 
 /** Same trailing-newline trim as replay.ts's `replayJournal` — a clean (or already
@@ -30,20 +30,6 @@ export function countJournalLines(root: WorkspaceTarget): number {
   const path = journalPath(root);
   if (!existsSync(path)) return 0;
   return effectiveLines(readFileSync(path, "utf8")).length;
-}
-
-function tryParseEvent(line: string): JournalEvent | null {
-  if (line.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const p = parsed as Record<string, unknown>;
-  if (p.v !== 1 || typeof p.event !== "string" || typeof p.event_id !== "string") return null;
-  return p as unknown as JournalEvent;
 }
 
 export interface JournalTailEntry {
@@ -70,7 +56,7 @@ export function readJournalEventsSince(root: WorkspaceTarget, sinceSeq: number):
   const out: JournalTailEntry[] = [];
   const start = Math.max(sinceSeq + 1, 0);
   for (let i = start; i < lines.length; i++) {
-    const event = tryParseEvent(lines[i] as string);
+    const event = parseJournalEventLine(lines[i] as string);
     if (event) out.push({ sequence: i, event });
   }
   return out;
