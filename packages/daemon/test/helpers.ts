@@ -20,28 +20,30 @@ const GUARDIAN_PATH = fileURLToPath(new URL("./fixtures/daemon-guardian.ts", imp
 // untouched because this ownership registry exists only in test code.
 const ownedDaemonChildren = new Set<Bun.Subprocess<"ignore", "ignore", "ignore">>();
 const ownedDetachedDaemons = new Map<number, { home: string; instanceId: string }>();
-let guardian: Bun.Subprocess<"pipe", "ignore", "ignore"> | null = null;
-
-function guardianCommand(op: "watch" | "unwatch", home: string): void {
-  if (!guardian || guardian.exitCode !== null) {
-    guardian = Bun.spawn({
-      cmd: [process.execPath, GUARDIAN_PATH],
-      stdin: "pipe",
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    guardian.unref();
-  }
-  guardian.stdin.write(`${JSON.stringify({ op, home })}\n`);
-  guardian.stdin.flush();
-}
+const guardians = new Map<string, Bun.Subprocess<"pipe", "ignore", "ignore">>();
 
 export function superviseDaemonHome(home: string): void {
-  guardianCommand("watch", home);
+  const existing = guardians.get(home);
+  if (existing?.exitCode === null) return;
+
+  // Put the ownership scope in argv, which is fixed before Bun.spawn returns. A pipe command can
+  // still be buffered when a test worker is SIGKILLed; that exact registration race left a real
+  // daemon behind after a failing full-suite run. The open stdin pipe is now only the liveness
+  // lease: EOF means the owning worker vanished and the guardian must reap this one proven home.
+  const guardian = Bun.spawn({
+    cmd: [process.execPath, GUARDIAN_PATH, home],
+    stdin: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  guardian.unref();
+  guardians.set(home, guardian);
 }
 
 function releaseDaemonHome(home: string): void {
-  if (guardian?.exitCode === null) guardianCommand("unwatch", home);
+  const guardian = guardians.get(home);
+  guardians.delete(home);
+  if (guardian?.exitCode === null) guardian.kill("SIGTERM");
 }
 
 function pidIsAlive(pid: number): boolean {

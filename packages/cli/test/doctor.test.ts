@@ -12,7 +12,10 @@ import type { GlosaApiClient } from "../src/api-client.ts";
 import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
 import { runScopedInit } from "../src/scoped-init.ts";
 import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
+import { useTempHome } from "./home.ts";
 import { captureStdout } from "./test-utils.ts";
+
+useTempHome();
 
 let dirs: string[] = [];
 function freshDir(): string {

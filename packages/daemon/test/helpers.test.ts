@@ -86,7 +86,7 @@ test("distinct-TMPDIR processes can run ensureDaemon concurrently without crossi
   const releasePath = join(root, "release");
   const workerScript = `
     import { existsSync, writeFileSync } from "node:fs";
-    import { cleanupHome, freshHome, lockOf, randomPort, waitUntil } from ${JSON.stringify(childHelperPath)};
+    import { cleanupHome, freshHome, randomPort, stopDetachedDaemon } from ${JSON.stringify(childHelperPath)};
     import { ensureTestDaemon as ensureDaemon } from ${JSON.stringify(childHelperPath)};
     const home = freshHome();
     const port = randomPort();
@@ -98,8 +98,7 @@ test("distinct-TMPDIR processes can run ensureDaemon concurrently without crossi
     writeFileSync(process.env.GLOSA_TEST_PORT_RESULT, JSON.stringify(result));
     while (!existsSync(process.env.GLOSA_TEST_PORT_RELEASE)) await Bun.sleep(10);
     if (result.ok) {
-      try { process.kill(result.pid, "SIGTERM"); } catch {}
-      await waitUntil(() => lockOf(home) === null, 5000);
+      await stopDetachedDaemon(home, result);
     }
     cleanupHome(home);
   `;
@@ -236,6 +235,77 @@ test("a daemon spawned by a test helper exits when its test runner is terminated
       }
     }
     if (daemon) cleanupHome(daemon.home);
+  }
+}, 30_000);
+
+test("guardian ownership is durable when the runner dies immediately after spawn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "glosa-test-daemon-immediate-exit-"));
+  cleanupDirs.push(root);
+  const outputPath = join(root, "daemon.json");
+  const mainPath = join(import.meta.dir, "../../cli/src/main.ts");
+  const runnerScript = `
+    import { writeFileSync } from "node:fs";
+    import { freshHome, randomPort, superviseDaemonHome } from ${JSON.stringify(childHelperPath)};
+    const home = freshHome();
+    const port = randomPort();
+    superviseDaemonHome(home);
+    const daemon = Bun.spawn({
+      cmd: [process.execPath, ${JSON.stringify(mainPath)}, "__daemon"],
+      env: { ...Bun.env, GLOSA_HOME: home, GLOSA_PORT: String(port) },
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    daemon.unref();
+    writeFileSync(process.env.GLOSA_TEST_DAEMON_OUTPUT, JSON.stringify({ home, port, pid: daemon.pid }));
+    process.kill(process.pid, "SIGKILL");
+  `;
+  const runner = Bun.spawn({
+    cmd: [process.execPath, "-e", runnerScript],
+    env: { ...Bun.env, GLOSA_TEST_DAEMON_OUTPUT: outputPath },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  let daemon: { home: string; port: number; pid: number } | null = null;
+  const daemonIsAlive = () => {
+    if (!daemon) return false;
+    try {
+      process.kill(daemon.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  try {
+    expect(await waitUntil(() => existsSync(outputPath), 10_000)).toBe(true);
+    daemon = JSON.parse(readFileSync(outputPath, "utf8"));
+    expect(await runner.exited).toBe(137);
+    expect(await waitUntil(() => !daemonIsAlive(), 20_000)).toBe(true);
+    expect(await waitUntil(() => lockOf(daemon!.home) === null, 20_000)).toBe(true);
+  } finally {
+    if (runner.exitCode === null) runner.kill("SIGKILL");
+    await runner.exited;
+    if (daemon) {
+      const lock = lockOf(daemon.home);
+      let handshake: { pid?: unknown; instance_id?: unknown } | null = null;
+      if (lock) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${daemon.port}/api/handshake`, {
+            signal: AbortSignal.timeout(500),
+          });
+          if (response.ok) handshake = await response.json();
+        } catch {
+          // Ownership is not independently provable; do not signal a stale PID.
+        }
+        if (handshake?.pid === lock.pid && handshake.instance_id === lock.instance_id) {
+          process.kill(lock.pid, "SIGKILL");
+          await waitUntil(() => lockOf(daemon!.home) === null, 5_000);
+        }
+      }
+      cleanupHome(daemon.home);
+    }
   }
 }, 30_000);
 

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Test-only guardian: the owning test process keeps stdin open and registers isolated daemon
-// homes before spawning. Unexpected EOF means the owner died before its async cleanup hooks ran.
+// Test-only guardian: its one isolated daemon home is fixed in argv before the spawn returns, and
+// the owning test process keeps stdin open. Unexpected EOF means the owner died before its async
+// cleanup hooks ran.
 import { lockPath } from "../../src/lifecycle/home.ts";
 import { readLock } from "../../src/lifecycle/lock.ts";
 
-const watched = new Set<string>();
+const home = process.argv[2];
+if (!home) throw new Error("daemon guardian requires an isolated home path");
 
 process.on("SIGINT", () => {});
 process.on("SIGHUP", () => {});
@@ -71,24 +73,9 @@ async function reap(home: string): Promise<void> {
   await waitUntil(() => !pidIsAlive(owned.pid), 5_000);
 }
 
-let pending = "";
-for await (const chunk of Bun.stdin.stream()) {
-  pending += Buffer.from(chunk).toString("utf8");
-  let newline = pending.indexOf("\n");
-  while (newline >= 0) {
-    const line = pending.slice(0, newline);
-    pending = pending.slice(newline + 1);
-    try {
-      const command = JSON.parse(line) as { op?: unknown; home?: unknown };
-      if (typeof command.home === "string") {
-        if (command.op === "watch") watched.add(command.home);
-        if (command.op === "unwatch") watched.delete(command.home);
-      }
-    } catch {
-      // A malformed test-control line grants no authority to signal anything.
-    }
-    newline = pending.indexOf("\n");
-  }
+for await (const _chunk of Bun.stdin.stream()) {
+  // Only pipe liveness matters. Normal cleanup terminates this guardian after proving the daemon
+  // and lock are gone; unexpected owner death closes the pipe and reaches reap().
 }
 
-await Promise.all([...watched].map(reap));
+await reap(home);
