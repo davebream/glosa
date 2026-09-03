@@ -88,6 +88,9 @@ const SPA_ASSETS: Record<string, string> = {
   // bare-specifier import).
   "data-access.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
+  "viewer-shell.js": "text/javascript; charset=utf-8",
+  "viewer-context-surfaces.js": "text/javascript; charset=utf-8",
+  "viewer-feedback.js": "text/javascript; charset=utf-8",
   "agent-feedback.js": "text/javascript; charset=utf-8",
   "artifact-tree.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
