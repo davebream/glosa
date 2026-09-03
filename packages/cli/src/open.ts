@@ -115,8 +115,7 @@ export async function maybeOfferInit(
   if (!consented) {
     const isTTY = options.isTTY ?? (() => Boolean(process.stdin.isTTY));
     if (options.json || !isTTY()) return;
-    const confirm =
-      options.confirm ?? (async (q: string) => (await import("./confirm.ts")).confirmOnTty(q));
+    const confirm = options.confirm ?? (async (q: string) => (await import("./confirm.ts")).confirmOnTty(q));
     consented = await confirm("Wire this workspace for agent feedback? (runs `glosa init`)");
   }
   if (!consented) return;

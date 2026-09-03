@@ -13,11 +13,7 @@ import { WorkspaceBus } from "../../src/bus/bus.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
 
 let seq = 0;
-function mkEvent(
-  type: EventType,
-  entry: string,
-  extra: Partial<JournalEvent> = {},
-): JournalEvent {
+function mkEvent(type: EventType, entry: string, extra: Partial<JournalEvent> = {}): JournalEvent {
   seq++;
   return {
     v: 1,
@@ -56,12 +52,22 @@ function fold(events: JournalEvent[]) {
 
 describe("common-entry lifecycle — every legal transition", () => {
   test("pending -> delivered -> seen -> applied", () => {
-    const s = fold([created("e1"), transition("e1", "delivered"), transition("e1", "seen"), transition("e1", "applied")]);
+    const s = fold([
+      created("e1"),
+      transition("e1", "delivered"),
+      transition("e1", "seen"),
+      transition("e1", "applied"),
+    ]);
     expect(s.entries.e1?.status).toBe("applied");
   });
 
   test("pending -> delivered -> seen -> rejected", () => {
-    const s = fold([created("e1"), transition("e1", "delivered"), transition("e1", "seen"), transition("e1", "rejected")]);
+    const s = fold([
+      created("e1"),
+      transition("e1", "delivered"),
+      transition("e1", "seen"),
+      transition("e1", "rejected"),
+    ]);
     expect(s.entries.e1?.status).toBe("rejected");
   });
 
@@ -110,7 +116,11 @@ describe("attention lifecycle — every legal transition", () => {
   });
 
   test("open -> delivered -> stale (daemon-driven, loose guard)", () => {
-    const s = fold([attentionCreated("a1"), attentionTransition("a1", "delivered"), attentionTransition("a1", "stale")]);
+    const s = fold([
+      attentionCreated("a1"),
+      attentionTransition("a1", "delivered"),
+      attentionTransition("a1", "stale"),
+    ]);
     expect(s.entries.a1?.status).toBe("stale");
   });
 
@@ -207,7 +217,11 @@ describe("delivery_attempt is a separate axis — never changes status", () => {
     const N = 5;
     const events = [created("e1"), transition("e1", "delivered")];
     for (let i = 0; i < N; i++) {
-      events.push(delivery("e1", { detail: { via: "channel", session: "sess-1", outcome: "presented", reason: i === 0 ? "initial" : "re_nudge" } }));
+      events.push(
+        delivery("e1", {
+          detail: { via: "channel", session: "sess-1", outcome: "presented", reason: i === 0 ? "initial" : "re_nudge" },
+        }),
+      );
     }
     const s = fold(events);
     expect(s.entries.e1?.status).toBe("delivered");
@@ -216,7 +230,10 @@ describe("delivery_attempt is a separate axis — never changes status", () => {
   });
 
   test("a delivery_attempt on a still-pending entry doesn't advance it to delivered", () => {
-    const s = fold([created("e1"), delivery("e1", { detail: { via: "gate", outcome: "attempted", reason: "initial" } })]);
+    const s = fold([
+      created("e1"),
+      delivery("e1", { detail: { via: "gate", outcome: "attempted", reason: "initial" } }),
+    ]);
     expect(s.entries.e1?.status).toBe("pending");
     expect(s.entries.e1?.deliveryAttempts).toHaveLength(1);
   });
@@ -360,7 +377,12 @@ describe("live WorkspaceBus state == a fresh restart's reconcile fold (concurren
 
     await bus.commitTransition("a1", "done"); // illegal — a1 is still "open", no delivered/seen yet
     await bus.commitTransition("a1", "delivered");
-    await bus.recordDeliveryAttempt("a1", { via: "channel", session: "sess-1", outcome: "presented", reason: "initial" });
+    await bus.recordDeliveryAttempt("a1", {
+      via: "channel",
+      session: "sess-1",
+      outcome: "presented",
+      reason: "initial",
+    });
     await bus.commitTransition("a1", "done");
 
     const liveEntries = structuredClone(bus.state.entries);

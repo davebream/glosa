@@ -15,7 +15,11 @@ describe("Class R never returns pipeline_feedback", () => {
   for (const intent of ["content", "classification", "style", "anything-else-entirely"]) {
     test(`intent="${intent}" on a total miss still resolves to orphaned/block_range, never pipeline_feedback`, () => {
       const { artifact, freshCtx } = buildRArtifact("07.md", SOURCE);
-      const res = resolve(annotation({ quoteExact: "this text does not exist anywhere in the source", intent }), artifact, freshCtx);
+      const res = resolve(
+        annotation({ quoteExact: "this text does not exist anywhere in the source", intent }),
+        artifact,
+        freshCtx,
+      );
       expect(res.kind).not.toBe("pipeline_feedback");
       expect(["orphaned", "source_range"]).toContain(res.kind);
     });

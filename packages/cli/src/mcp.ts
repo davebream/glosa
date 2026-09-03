@@ -497,7 +497,14 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         throw new Error(result.error?.message ?? "glosa_present failed");
       }
       const data = result.data;
-      if (!data.url || !data.slug || !data.path || data.surface === undefined || data.mode === undefined || data.preview === undefined) {
+      if (
+        !data.url ||
+        !data.slug ||
+        !data.path ||
+        data.surface === undefined ||
+        data.mode === undefined ||
+        data.preview === undefined
+      ) {
         throw new Error("glosa_present returned an incomplete presentation payload");
       }
       if (data.url.includes("#t=") || /[?&#]t=/.test(data.url)) {

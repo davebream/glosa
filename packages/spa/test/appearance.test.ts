@@ -49,7 +49,13 @@ describe("appearance preference resolution", () => {
   test("missing or invalid stored values safely default to system", () => {
     expect(readAppearance(fakeStorage())).toBe("system");
     expect(readAppearance(fakeStorage("sepia"))).toBe("system");
-    expect(readAppearance({ getItem: () => { throw new Error("unavailable"); } } as unknown as Storage)).toBe("system");
+    expect(
+      readAppearance({
+        getItem: () => {
+          throw new Error("unavailable");
+        },
+      } as unknown as Storage),
+    ).toBe("system");
   });
 });
 
@@ -81,7 +87,11 @@ describe("createAppearanceController", () => {
     expect(first.getSnapshot()).toEqual({ preference: "dark", resolved: "dark" });
     first.destroy();
 
-    const restarted = createAppearanceController({ root: dom.document.createElement("html"), storage, mediaQuery: media as any });
+    const restarted = createAppearanceController({
+      root: dom.document.createElement("html"),
+      storage,
+      mediaQuery: media as any,
+    });
     expect(restarted.getSnapshot()).toEqual({ preference: "dark", resolved: "dark" });
     restarted.destroy();
   });
@@ -89,7 +99,11 @@ describe("createAppearanceController", () => {
   test("system follows live OS changes; explicit mode ignores them; selecting system resumes inheritance", () => {
     const storage = fakeStorage("system");
     const media = fakeMediaQuery(false);
-    const controller = createAppearanceController({ root: dom.document.documentElement, storage, mediaQuery: media as any });
+    const controller = createAppearanceController({
+      root: dom.document.documentElement,
+      storage,
+      mediaQuery: media as any,
+    });
 
     expect(controller.getSnapshot().resolved).toBe("light");
     media.setMatches(true);
@@ -124,8 +138,10 @@ describe("createAppearanceController", () => {
     const unmount = mountAppearanceControl(host, controller, { returnFocus });
     const options = [...host.querySelectorAll('[role="menuitemradio"]')] as unknown as HTMLElement[];
     expect(options).toHaveLength(3);
-    expect(host.querySelector('.glosa-appearance-trigger')?.getAttribute("aria-label")).toBe("Appearance: System (light)");
-    expect(host.querySelector('.glosa-appearance-trigger-label')?.textContent).toBe("Appearance");
+    expect(host.querySelector(".glosa-appearance-trigger")?.getAttribute("aria-label")).toBe(
+      "Appearance: System (light)",
+    );
+    expect(host.querySelector(".glosa-appearance-trigger-label")?.textContent).toBe("Appearance");
 
     options[0]!.focus();
     options[0]!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) as any);
@@ -145,6 +161,6 @@ describe("createAppearanceController", () => {
 
 test("the blocking appearance preload is loaded before the visual system stylesheet", () => {
   const shell = readFileSync(new URL("../src/shell.html", import.meta.url), "utf8");
-  expect(shell.indexOf('/app/appearance-preload.js')).toBeGreaterThan(-1);
-  expect(shell.indexOf('/app/appearance-preload.js')).toBeLessThan(shell.indexOf('/app/app.css'));
+  expect(shell.indexOf("/app/appearance-preload.js")).toBeGreaterThan(-1);
+  expect(shell.indexOf("/app/appearance-preload.js")).toBeLessThan(shell.indexOf("/app/app.css"));
 });

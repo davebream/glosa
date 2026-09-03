@@ -97,7 +97,15 @@ describe("neutral fixture adapter (P6.1 acceptance)", () => {
         manifest_version: 1,
         source_path: "source.md",
         source_sha256: SOURCE_HASH,
-        chunks: [{ chunk_id: "chunk-1", source_start_line: 0, source_end_line: LAST_LINE, source_sha256: SOURCE_HASH, transformed }],
+        chunks: [
+          {
+            chunk_id: "chunk-1",
+            source_start_line: 0,
+            source_end_line: LAST_LINE,
+            source_sha256: SOURCE_HASH,
+            transformed,
+          },
+        ],
       }),
     );
   }
@@ -209,7 +217,10 @@ describe("neutral fixture adapter (P6.1 acceptance)", () => {
         body: JSON.stringify({
           body: "this should be a different chunk type",
           intent: "classification",
-          target: { chunk_id: "chunk-1", quote: { exact: "text nowhere in the source at all", prefix: "", suffix: "" } },
+          target: {
+            chunk_id: "chunk-1",
+            quote: { exact: "text nowhere in the source at all", prefix: "", suffix: "" },
+          },
           artifact_path: "rendered.html",
         }),
       }),
@@ -218,7 +229,12 @@ describe("neutral fixture adapter (P6.1 acceptance)", () => {
     const parsed = await res.json();
     expect(parsed.resolution).toEqual({
       kind: "pipeline_feedback",
-      target: { adapter: "fixture", component: "fixture-renderer", chunk_id: "chunk-1", source_line_range: [0, LAST_LINE] },
+      target: {
+        adapter: "fixture",
+        component: "fixture-renderer",
+        chunk_id: "chunk-1",
+        source_line_range: [0, LAST_LINE],
+      },
       intent: "classification",
       body: "this should be a different chunk type",
     });

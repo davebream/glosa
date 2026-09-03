@@ -48,7 +48,9 @@ describe("assignSlug", () => {
 
   test("is idempotent for the same canonical path", () => {
     const first = assignSlug("/Users/alice/glosa", []);
-    const existing: ExistingSlugEntry[] = [{ canonicalPath: "/Users/alice/glosa", slug: first.slug, slugLen: first.slugLen }];
+    const existing: ExistingSlugEntry[] = [
+      { canonicalPath: "/Users/alice/glosa", slug: first.slug, slugLen: first.slugLen },
+    ];
     const second = assignSlug("/Users/alice/glosa", existing);
     expect(second).toEqual(first);
   });
@@ -80,7 +82,9 @@ describe("assignSlug", () => {
     const incumbent = assignSlug("/Users/alice/glosa", [], { hash: fakeHash });
     expect(incumbent).toEqual({ slug: "glosa-aaaaaa", slugLen: 6 });
 
-    const existing: ExistingSlugEntry[] = [{ canonicalPath: "/Users/alice/glosa", slug: incumbent.slug, slugLen: incumbent.slugLen }];
+    const existing: ExistingSlugEntry[] = [
+      { canonicalPath: "/Users/alice/glosa", slug: incumbent.slug, slugLen: incumbent.slugLen },
+    ];
     const newcomer = assignSlug("/Users/bob/glosa", existing, { hash: fakeHash });
 
     // Incumbent's slug is untouched by the newcomer's assignment.
@@ -124,7 +128,9 @@ describe("assignSlug", () => {
 
   test("a collision against a slug belonging to the SAME path never triggers lengthening (idempotent, not a false collision)", () => {
     const first = assignSlug("/Users/alice/glosa", []);
-    const existing: ExistingSlugEntry[] = [{ canonicalPath: "/Users/alice/glosa", slug: first.slug, slugLen: first.slugLen }];
+    const existing: ExistingSlugEntry[] = [
+      { canonicalPath: "/Users/alice/glosa", slug: first.slug, slugLen: first.slugLen },
+    ];
     // Same path again -> the "already assigned" branch, not the collision-lengthening branch.
     const again = assignSlug("/Users/alice/glosa", existing);
     expect(again.slugLen).toBe(6);

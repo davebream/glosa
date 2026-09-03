@@ -125,29 +125,12 @@ describe("Gunshi command surface", () => {
   });
 
   test("global flags work before and after the subcommand", async () => {
-    const before = await captureRun([
-      "--port",
-      "4711",
-      "--quiet",
-      "init",
-      freshDir(),
-      "--agent",
-      "codex",
-      "--print",
-    ]);
+    const before = await captureRun(["--port", "4711", "--quiet", "init", freshDir(), "--agent", "codex", "--print"]);
     expect(before.exitCode).toBe(0);
     expect(before.stderr).toBe("");
     expect(Bun.env.GLOSA_PORT).toBe("4711");
 
-    const after = await captureRun([
-      "init",
-      freshDir(),
-      "--agent",
-      "codex",
-      "--dry-run",
-      "--verbose",
-      "--port=4712",
-    ]);
+    const after = await captureRun(["init", freshDir(), "--agent", "codex", "--dry-run", "--verbose", "--port=4712"]);
     expect(after.exitCode).toBe(0);
     expect(after.stderr).toBe("");
     expect(Bun.env.GLOSA_PORT).toBe("4712");
@@ -212,12 +195,12 @@ describe("Gunshi command surface", () => {
   });
 
   test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
-  const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
-  expect(r.exitCode).toBe(2);
-  expect(r.stderr).toContain("--init and --no-init are mutually exclusive");
-});
+    const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("--init and --no-init are mutually exclusive");
+  });
 
-test("manual parser functions are gone", () => {
+  test("manual parser functions are gone", () => {
     const source = readFileSync(join(import.meta.dir, "../src/index.ts"), "utf8");
     expect(source).not.toContain("parseInitArgs");
     expect(source).not.toContain("extractGlobalFlags");

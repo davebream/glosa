@@ -76,12 +76,15 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
   });
 
   function writeManifest(transformed: boolean) {
-    writeFileSync(join(root, "manifest.json"), JSON.stringify({
-      manifest_version: 1,
-      source_path: "source.md",
-      source_sha256: HASH,
-      chunks: [{ chunk_id: "chunk-1", source_start_line: 0, source_end_line: 3, source_sha256: HASH, transformed }],
-    }));
+    writeFileSync(
+      join(root, "manifest.json"),
+      JSON.stringify({
+        manifest_version: 1,
+        source_path: "source.md",
+        source_sha256: HASH,
+        chunks: [{ chunk_id: "chunk-1", source_start_line: 0, source_end_line: 3, source_sha256: HASH, transformed }],
+      }),
+    );
   }
 
   function request(path: string, init: RequestInit = {}) {
@@ -102,7 +105,9 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
   }
 
   test("artifact responses derive class, source, order, and manifest only through metadata", async () => {
-    expect((await (await fetchFn(request(`/w/${slug}/artifacts`))).json()).map((item: { path: string }) => item.path)).toEqual(["source.md", "rendered.html"]);
+    expect(
+      (await (await fetchFn(request(`/w/${slug}/artifacts`))).json()).map((item: { path: string }) => item.path),
+    ).toEqual(["source.md", "rendered.html"]);
     expect(await (await fetchFn(request(`/w/${slug}/artifacts/rendered.html`))).json()).toMatchObject({
       class: "F",
       derived_from: "source.md",
@@ -111,11 +116,15 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
   });
 
   test("verbatim and transformed chunks resolve to source range and descriptor-owned pipeline feedback", async () => {
-    const verbatim = await fetchFn(request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }));
+    const verbatim = await fetchFn(
+      request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }),
+    );
     expect((await verbatim.json()).resolution).toMatchObject({ kind: "source_range", path: "source.md" });
 
     writeManifest(true);
-    const transformed = await fetchFn(request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }));
+    const transformed = await fetchFn(
+      request(`/w/${slug}/annotations`, { method: "POST", body: JSON.stringify(annotation()) }),
+    );
     expect((await transformed.json()).resolution).toEqual({
       kind: "pipeline_feedback",
       target: { adapter: "external-renderer", component: "preview", chunk_id: "chunk-1", source_line_range: [0, 3] },

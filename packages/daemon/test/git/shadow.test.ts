@@ -5,14 +5,7 @@
 // mocked.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import {
-  checkpoint,
-  headSha,
-  indexLockPath,
-  initShadowRepo,
-  reclaimIndexLock,
-  runGit,
-} from "../../src/git/shadow.ts";
+import { checkpoint, headSha, indexLockPath, initShadowRepo, reclaimIndexLock, runGit } from "../../src/git/shadow.ts";
 import { journalPath, shadowGitDir } from "../../src/bus/paths.ts";
 import {
   claimTestDaemonIdentity,
@@ -163,10 +156,7 @@ describe("isolated config — a bogus ambient gitconfig never leaks in", () => {
   beforeEach(() => {
     root = freshWorkspace();
     bogusGlobalConfig = `${root}.bogus-gitconfig`;
-    writeFileSync(
-      bogusGlobalConfig,
-      "[user]\n\tname = evil\n\temail = evil@example.com\n[commit]\n\tgpgsign = true\n",
-    );
+    writeFileSync(bogusGlobalConfig, "[user]\n\tname = evil\n\temail = evil@example.com\n[commit]\n\tgpgsign = true\n");
     savedGitConfigGlobal = Bun.env.GIT_CONFIG_GLOBAL;
     Bun.env.GIT_CONFIG_GLOBAL = bogusGlobalConfig;
   });
@@ -261,7 +251,11 @@ describe("index.lock reclaim", () => {
     writeFileSync(indexLockPath(root), "");
     expect(existsSync(indexLockPath(root))).toBe(true);
 
-    const reclaimed = reclaimIndexLock(root, { writer, ulid: deterministicUlid(999_000), now: deterministicClock(999_000) });
+    const reclaimed = reclaimIndexLock(root, {
+      writer,
+      ulid: deterministicUlid(999_000),
+      now: deterministicClock(999_000),
+    });
     expect(reclaimed).toBe(true);
     expect(existsSync(indexLockPath(root))).toBe(false);
 
@@ -418,11 +412,7 @@ describe("delete/rename staging (A4 §F21 union staging)", () => {
     const before = await headSha(root);
 
     rmSync(`${root}/old-name.md`);
-    writeFile(
-      root,
-      "new-name.md",
-      "same content, long enough for git's rename heuristic to notice ".repeat(5),
-    );
+    writeFile(root, "new-name.md", "same content, long enough for git's rename heuristic to notice ".repeat(5));
     const after = await checkpoint(root, { attribution: "unknown", kind: "auto_checkpoint" });
 
     const diff = await runGit(root, ["diff", "-M", "--summary", before, after]);

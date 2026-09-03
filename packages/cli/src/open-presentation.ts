@@ -30,9 +30,7 @@ export interface PresentFragmentOptions {
   /** When true, emit `lock=preview` (CLI `--preview` / MCP `mode:"preview"`). */
   previewLock: boolean;
   /** Durable pairing token (`t=`) or ephemeral presentation token (`p=`). Exactly one. */
-  pairing:
-    | { kind: "durable"; token: string }
-    | { kind: "presentation"; token: string };
+  pairing: { kind: "durable"; token: string } | { kind: "presentation"; token: string };
 }
 
 export interface OpenPresentationData {
@@ -236,8 +234,7 @@ export async function runOpenPresentation(
   if (previewLock && options.bindSessionId) {
     warnings.push({
       code: "preview-bind-conflict",
-      message:
-        "--preview hides annotate/edit controls while --bind wires feedback routing to a session",
+      message: "--preview hides annotate/edit controls while --bind wires feedback routing to a session",
     });
   }
 
@@ -267,9 +264,10 @@ export async function runOpenPresentation(
         : await client.openWorkspace(classified.openPath, openOpts);
   } catch (err) {
     if (isApiError(err)) {
-      const type = typeof err.problem === "object" && err.problem && "type" in err.problem
-        ? String((err.problem as { type?: string }).type ?? "")
-        : "";
+      const type =
+        typeof err.problem === "object" && err.problem && "type" in err.problem
+          ? String((err.problem as { type?: string }).type ?? "")
+          : "";
       const code = type.split("/").pop() || "open-failed";
       return {
         ok: false,
@@ -336,11 +334,7 @@ export async function runOpenPresentation(
       const bound = await client.bindSession(classified.openPath, options.bindSessionId);
       boundSession = bound.session_id;
     } catch (err) {
-      const message = isApiError(err)
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "session bind failed";
+      const message = isApiError(err) ? err.message : err instanceof Error ? err.message : "session bind failed";
       warnings.push({
         code: "bind-failed",
         message: `could not bind session ${options.bindSessionId}: ${message}`,

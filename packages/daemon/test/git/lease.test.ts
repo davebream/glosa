@@ -454,9 +454,7 @@ describe("LEASE_EXPIRED — a lease past its TTL proves nothing, on either path 
     const expired = events.filter((e) => e.event === "apply_expired");
     expect(expired.map((e) => e.detail?.lease_id)).toEqual([firstLease]);
     const expiredIndex = events.findIndex((e) => e.event === "apply_expired");
-    const secondBeginIndex = events.findIndex(
-      (e) => e.event === "apply_begin" && e.detail?.lease_id === secondLease,
-    );
+    const secondBeginIndex = events.findIndex((e) => e.event === "apply_begin" && e.detail?.lease_id === secondLease);
     expect(expiredIndex).toBeLessThan(secondBeginIndex);
 
     // Every apply_begin on record is closed by exactly one apply_end/apply_expired except the

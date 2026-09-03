@@ -650,10 +650,7 @@ export class WorkspaceIndex {
       }
 
       if (opts.focus) {
-        throw new WorkspaceOpenError(
-          "invalid-path",
-          "focus is only valid when the open target is a directory",
-        );
+        throw new WorkspaceOpenError("invalid-path", "focus is only valid when the open target is a directory");
       }
 
       if (!leafStat.isFile()) {
@@ -815,10 +812,7 @@ export class WorkspaceIndex {
     const rel = relativeNfc(entry.worktree_path, focusCanonical);
     const matched = resolveTrackedFiles(entry).tracked.find((file) => file.path === rel);
     if (!matched) {
-      throw new WorkspaceOpenError(
-        "artifact-not-tracked",
-        "focus file is not in the workspace tracked artifact list",
-      );
+      throw new WorkspaceOpenError("artifact-not-tracked", "focus file is not in the workspace tracked artifact list");
     }
     return matched.path;
   }

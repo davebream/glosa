@@ -1693,9 +1693,9 @@ describe("A1 §5 route catalog", () => {
         headers: { Host: `127.0.0.1:${PORT}` },
       });
       expect((await fetchFn(bare)).status).toBe(401);
-      expect(
-        (await fetchFn(req(`/w/${slug}/wiring`, { headers: { Origin: "http://evil.example.com" } }))).status,
-      ).toBe(403);
+      expect((await fetchFn(req(`/w/${slug}/wiring`, { headers: { Origin: "http://evil.example.com" } }))).status).toBe(
+        403,
+      );
     });
 
     test("unwired → wired → live → back to wired on lease expiry; response never leaks a path", async () => {
@@ -1784,11 +1784,8 @@ describe("A1 §5 route catalog", () => {
       // Bearer but NO Origin — state-changing rejects (unlike authed-read).
       expect((await fetchFn(req(`/w/${slug}/init`, { method: "POST" }))).status).toBe(403);
       expect(
-        (
-          await fetchFn(
-            req(`/w/${slug}/init`, { method: "POST", headers: { Origin: "http://evil.example.com" } }),
-          )
-        ).status,
+        (await fetchFn(req(`/w/${slug}/init`, { method: "POST", headers: { Origin: "http://evil.example.com" } })))
+          .status,
       ).toBe(403);
     });
 
@@ -1844,7 +1841,12 @@ describe("A1 §5 route catalog", () => {
         okEnvelope({
           ok: false,
           exit_code: 6,
-          error: { code: "mcp-key-conflict", kind: "conflict", message: "foreign glosa key", hint: "re-run with --force" },
+          error: {
+            code: "mcp-key-conflict",
+            kind: "conflict",
+            message: "foreign glosa key",
+            hint: "re-run with --force",
+          },
         });
       let res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
       expect(res.status).toBe(409);
@@ -1856,7 +1858,12 @@ describe("A1 §5 route catalog", () => {
         okEnvelope({
           ok: false,
           exit_code: 2,
-          error: { code: "durable-install-required", kind: "usage", message: "ephemeral runner cache", hint: "bun install -g" },
+          error: {
+            code: "durable-install-required",
+            kind: "usage",
+            message: "ephemeral runner cache",
+            hint: "bun install -g",
+          },
         });
       res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
       expect(res.status).toBe(409);
@@ -1874,7 +1881,8 @@ describe("A1 §5 route catalog", () => {
       ctx.runWorkspaceInit = async () => ({ kind: "bad-output" as const, message: "no envelope" });
       expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
 
-      ctx.runWorkspaceInit = async () => okEnvelope({ ok: false, exit_code: 70, error: { code: "internal", kind: "internal", message: "boom" } });
+      ctx.runWorkspaceInit = async () =>
+        okEnvelope({ ok: false, exit_code: 70, error: { code: "internal", kind: "internal", message: "boom" } });
       expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
 
       ctx.runWorkspaceInit = async () => okEnvelope();

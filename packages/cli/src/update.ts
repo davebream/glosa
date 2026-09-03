@@ -968,11 +968,7 @@ export function formatPreSpawnBlock(data: UpdateData, recoveryCommand: string): 
     // bun cannot install over its own recorded resolution, so the old copy is removed first. Say so
     // plainly: for a few seconds there is no glosa on PATH, and if the machine dies in that window
     // the recovery command above is the only way back.
-    lines.splice(
-      4,
-      0,
-      "  note:        bun requires the old copy to be removed first, so glosa is briefly uninstalled",
-    );
+    lines.splice(4, 0, "  note:        bun requires the old copy to be removed first, so glosa is briefly uninstalled");
   }
   if (data.daemon_running && data.daemon_pid !== null) {
     lines.push("", `A glosa daemon is running (pid ${data.daemon_pid}). Run \`glosa open\` afterwards to restart it.`);
@@ -1084,7 +1080,10 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
     return fail(data, warnings, exitCode, error);
   }
 
-  const resolved = resolveTarget(fetched.body, opts.to !== undefined ? { version: opts.to } : { channel: channel as string });
+  const resolved = resolveTarget(
+    fetched.body,
+    opts.to !== undefined ? { version: opts.to } : { channel: channel as string },
+  );
   if (!resolved.ok) {
     const isUsage = resolved.code === "update-unknown-channel" || resolved.code === "update-unknown-version";
     const tagList = resolved.availableTags?.length ? ` Available channels: ${resolved.availableTags.join(", ")}.` : "";
@@ -1100,7 +1099,12 @@ export async function runUpdate(opts: UpdateOptions, deps: UpdateDeps): Promise<
   data.target_version = resolved.version;
   data.latest_version = resolved.latest;
 
-  const tarball = validateTarballUrl(resolved.tarball, data.registry, resolved.version, Boolean(opts.allowOffsiteTarball));
+  const tarball = validateTarballUrl(
+    resolved.tarball,
+    data.registry,
+    resolved.version,
+    Boolean(opts.allowOffsiteTarball),
+  );
   if (!tarball.ok) {
     return fail(data, warnings, EXIT_CODES.INTERNAL, {
       code: "update-offsite-tarball-refused",

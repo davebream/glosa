@@ -188,20 +188,44 @@ args = ["mcp"]
  * fixture with today's `sha256Of` would make the drift assertions tautological — the test would
  * still pass if BOTH the hash function and the migration changed together. */
 const LEGACY_SETTINGS_NODES = [
-  { pointer: "/hooks/SessionStart/0/hooks/0", sha256: "53a245ee9f471ee642d5f022ebfae20e118317c3a62d2d7ee012854fe6f39b33" },
-  { pointer: "/hooks/SessionStart/0/hooks/1", sha256: "f823928f8471aca12af74842319262f8084cb4146b31075c5a71200a14abfbeb" },
-  { pointer: "/hooks/SessionEnd/0/hooks/0", sha256: "9cebb7559519f403a9c7328d36b2458ade1f67f17a4463723c7785c2b3984d13" },
-  { pointer: "/hooks/UserPromptSubmit/0/hooks/0", sha256: "29f90b2754754ad1c1206f21f5e9a4b5dbe56266acf869c6befb747b0da077ea" },
+  {
+    pointer: "/hooks/SessionStart/0/hooks/0",
+    sha256: "53a245ee9f471ee642d5f022ebfae20e118317c3a62d2d7ee012854fe6f39b33",
+  },
+  {
+    pointer: "/hooks/SessionStart/0/hooks/1",
+    sha256: "f823928f8471aca12af74842319262f8084cb4146b31075c5a71200a14abfbeb",
+  },
+  {
+    pointer: "/hooks/SessionEnd/0/hooks/0",
+    sha256: "9cebb7559519f403a9c7328d36b2458ade1f67f17a4463723c7785c2b3984d13",
+  },
+  {
+    pointer: "/hooks/UserPromptSubmit/0/hooks/0",
+    sha256: "29f90b2754754ad1c1206f21f5e9a4b5dbe56266acf869c6befb747b0da077ea",
+  },
   { pointer: "/hooks/Stop/0/hooks/0", sha256: "6006244dc302c9081ba9c301bf7f15e904a9e9313bfa1062324894074f987898" },
-  { pointer: "/hooks/Notification/0/hooks/0", sha256: "cceb56fa862da3c12235b43b6e6182eac1e2426567493f7a3591ed09f9fe5de4" },
+  {
+    pointer: "/hooks/Notification/0/hooks/0",
+    sha256: "cceb56fa862da3c12235b43b6e6182eac1e2426567493f7a3591ed09f9fe5de4",
+  },
 ];
 const LEGACY_MCP_NODES = [
   { pointer: "/mcpServers/glosa", sha256: "79d027f369e8ffd6d076812e48e94841b723cc8af08037a9cd36942b1814462f" },
 ];
 const LEGACY_CODEX_HOOK_NODES = [
-  { pointer: "/hooks/SessionStart/0/hooks/0", sha256: "fe163ac9e10ad3496558cb92e22758acd61bb33d51029accf8fda156ba3cb5c6" },
-  { pointer: "/hooks/SessionEnd/0/hooks/0", sha256: "dc4c50143f910f2b97d709a0bdf4fac4c60652a18d3be966892217ddd1c9d80a" },
-  { pointer: "/hooks/UserPromptSubmit/0/hooks/0", sha256: "6f48cb5b68aaee875a4930e4cdbf43a649545198d68601fae59108ecf859cd93" },
+  {
+    pointer: "/hooks/SessionStart/0/hooks/0",
+    sha256: "fe163ac9e10ad3496558cb92e22758acd61bb33d51029accf8fda156ba3cb5c6",
+  },
+  {
+    pointer: "/hooks/SessionEnd/0/hooks/0",
+    sha256: "dc4c50143f910f2b97d709a0bdf4fac4c60652a18d3be966892217ddd1c9d80a",
+  },
+  {
+    pointer: "/hooks/UserPromptSubmit/0/hooks/0",
+    sha256: "6f48cb5b68aaee875a4930e4cdbf43a649545198d68601fae59108ecf859cd93",
+  },
   { pointer: "/hooks/Stop/0/hooks/0", sha256: "43e3d07a6826382e04590aac20f8a553e4592be629c976a0803bdfe75eba8408" },
 ];
 const LEGACY_CODEX_CONFIG_SHA = "d7046b2f3ec81a57f2d5fb1852da2253fdad87f1bb9e2d21ce48dfef0b1c4a40";

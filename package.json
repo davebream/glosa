@@ -22,9 +22,17 @@
     "NOTICE",
     "THIRD_PARTY_NOTICES.md"
   ],
-  "workspaces": ["packages/*", "packages/providers/*"],
-  "os": ["darwin"],
-  "cpu": ["arm64", "x64"],
+  "workspaces": [
+    "packages/*",
+    "packages/providers/*"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
   "engines": {
     "bun": ">=1.2.7"
   },
@@ -53,11 +61,11 @@
     "test": "bun test",
     "test:acceptance": "bun run scripts/test-acceptance.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint --changed --since origin/main --no-errors-on-unmatched",
+    "lint": "biome lint . --no-errors-on-unmatched",
     "lint:staged": "biome lint --staged --no-errors-on-unmatched",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "check": "bun run lint && bun run typecheck && bun test",
+    "check": "bun run lint && bun run typecheck && bun test && bun run format:check",
     "setup:hooks": "lefthook install --reset-hooks-path",
     "audit:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow '0BSD;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;MIT;Python-2.0'",
     "package:check": "bun run scripts/package-smoke.ts"

@@ -26,7 +26,9 @@ for (let i = 0; i < times; i++) {
   for (;;) {
     try {
       withFileLease(lockPath, () => {
-        const current: number = existsSync(counterPath) ? (JSON.parse(readFileSync(counterPath, "utf8")) as Counter).count : 0;
+        const current: number = existsSync(counterPath)
+          ? (JSON.parse(readFileSync(counterPath, "utf8")) as Counter).count
+          : 0;
         // Hold the lease across a tiny synchronous delay — widens the race window a real
         // unsynchronized read-modify-write would lose, without slowing the test down noticeably.
         const start = Date.now();

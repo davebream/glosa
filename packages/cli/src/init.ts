@@ -25,10 +25,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
-import type {
-  DesiredInstallHook,
-  ProviderInstallDescriptor,
-} from "../../daemon/src/index.ts";
+import type { DesiredInstallHook, ProviderInstallDescriptor } from "../../daemon/src/index.ts";
 import { claudeCodeInstallDescriptor } from "../../providers/claude-code/src/index.ts";
 import { codexInstallDescriptor } from "../../providers/codex/src/index.ts";
 import { renderUnifiedDiff } from "./unified-diff.ts";
@@ -192,7 +189,12 @@ function backupsFor(path: string): string[] {
  * newest backup already on record (A6 §F26: "skip if identical to newest"). Prunes down to the 5
  * most recent afterward. Returns `null` only when there was nothing on disk to back up (a file
  * glosa is about to CREATE for the first time has no "before" state). */
-export function takeBackup(path: string, currentContent: string, now: Date, write: WriteFileAtomic = writeAtomic): string | null {
+export function takeBackup(
+  path: string,
+  currentContent: string,
+  now: Date,
+  write: WriteFileAtomic = writeAtomic,
+): string | null {
   const existing = backupsFor(path);
   const newest = existing[existing.length - 1];
   if (newest !== undefined && readFileSync(newest, "utf8") === currentContent) return newest;
@@ -214,10 +216,7 @@ export function takeBackup(path: string, currentContent: string, now: Date, writ
 // The desired hook/MCP shape (A6 §F26's exact hook entries + matchers).
 // ---------------------------------------------------------------------------------------------
 
-function hooksFromDescriptor(
-  descriptor: ProviderInstallDescriptor,
-  bin: GlosaBinResolution,
-): DesiredInstallHook[] {
+function hooksFromDescriptor(descriptor: ProviderInstallDescriptor, bin: GlosaBinResolution): DesiredInstallHook[] {
   const target = descriptor
     .targets("workspace", { workspace: "/", home: "/", glosaHome: "/" }, bin)
     .find((item) => item.kind === "hooks-json");
@@ -299,7 +298,8 @@ export function mergeSettingsHooks(root: Json, hooks: DesiredInstallHook[]): Mer
         const groupHooks = groups[gi]?.hooks;
         if (!Array.isArray(groupHooks)) continue;
         for (let hi = 0; hi < groupHooks.length; hi++) {
-          const matches = pass === 0 ? hookRoleOf(groupHooks[hi]?.command) === h.role : groupHooks[hi]?.command === h.command;
+          const matches =
+            pass === 0 ? hookRoleOf(groupHooks[hi]?.command) === h.role : groupHooks[hi]?.command === h.command;
           if (matches) {
             existingGroupIndex = gi;
             existingHookIndex = hi;
@@ -347,7 +347,11 @@ interface McpMergeResult extends MergeResult {
 /** Idempotent-by-key insert. `owned` (from the manifest, not the file itself — files carry no
  * marker) is what lets a repeat init recognize "this `glosa` entry is ours, safe to reconcile"
  * versus "someone else's `glosa`-named server, don't touch it without `--force`" (A6 §F26). */
-export function mergeMcp(root: Json, bin: GlosaBinResolution, opts: { force: boolean; owned: boolean }): McpMergeResult {
+export function mergeMcp(
+  root: Json,
+  bin: GlosaBinResolution,
+  opts: { force: boolean; owned: boolean },
+): McpMergeResult {
   root.mcpServers ??= {};
   const servers = root.mcpServers as Json;
   const desired = desiredMcpEntry(bin);
@@ -445,7 +449,9 @@ async function withWorkspaceLock<T>(manifestPath: string, now: () => Date, fn: (
         continue; // retry the exclusive create immediately
       }
       if (now().getTime() > deadline) {
-        throw new Error(`glosa init: another init/uninstall is already running for this workspace (lock: ${lockPath}) — try again shortly`);
+        throw new Error(
+          `glosa init: another init/uninstall is already running for this workspace (lock: ${lockPath}) — try again shortly`,
+        );
       }
       await Bun.sleep(INIT_LOCK_POLL_MS);
     }
@@ -565,7 +571,12 @@ function mergeCodexConfig(
   if (managed) {
     if (!opts.owned && !opts.force) return { changed: false, conflict: true, content: raw, block: managed.block };
     if (managed.block === desired) return { changed: false, conflict: false, content: raw, block: desired };
-    return { changed: true, conflict: false, content: `${raw.slice(0, managed.start)}${desired}${raw.slice(managed.end)}`, block: desired };
+    return {
+      changed: true,
+      conflict: false,
+      content: `${raw.slice(0, managed.start)}${desired}${raw.slice(managed.end)}`,
+      block: desired,
+    };
   }
   if (/^\s*\[mcp_servers\.glosa\]\s*(?:#.*)?$/m.test(raw) && !opts.force) {
     return { changed: false, conflict: true, content: raw, block: desired };
@@ -651,7 +662,12 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       changed: false,
       data: emptyData(bin),
       warnings: [],
-      error: { code: "invalid-json", kind: "foreign_config_conflict", message: e.message, hint: "fix the JSON syntax error, or remove the file, then re-run `glosa init`" },
+      error: {
+        code: "invalid-json",
+        kind: "foreign_config_conflict",
+        message: e.message,
+        hint: "fix the JSON syntax error, or remove the file, then re-run `glosa init`",
+      },
     };
   }
 
@@ -694,13 +710,21 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
     // diff section at all.
     let diff = "";
     if (settingsMerge.changed) {
-      diff += unifiedDiff(settingsPath, settingsParsed.raw, `${JSON.stringify(settingsParsed.obj, null, settingsParsed.indent)}\n`);
+      diff += unifiedDiff(
+        settingsPath,
+        settingsParsed.raw,
+        `${JSON.stringify(settingsParsed.obj, null, settingsParsed.indent)}\n`,
+      );
     }
     if (mcpMerge.changed) {
       diff += unifiedDiff(mcpPath, mcpParsed.raw, `${JSON.stringify(mcpParsed.obj, null, mcpParsed.indent)}\n`);
     }
     if (codexHooksMerge.changed) {
-      diff += unifiedDiff(codexHooksPath, codexHooksParsed.raw, `${JSON.stringify(codexHooksParsed.obj, null, codexHooksParsed.indent)}\n`);
+      diff += unifiedDiff(
+        codexHooksPath,
+        codexHooksParsed.raw,
+        `${JSON.stringify(codexHooksParsed.obj, null, codexHooksParsed.indent)}\n`,
+      );
     }
     if (codexConfigMerge.changed) {
       diff += unifiedDiff(codexConfigPath, codexConfigRaw, codexConfigMerge.content);
@@ -719,9 +743,18 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
   const fileResults: OwnershipManifest["files"] = {
     settings: existingManifest?.files.settings ?? { path: settingsPath, created: false, backup: null, inserted: [] },
     mcp: existingManifest?.files.mcp ?? { path: mcpPath, created: false, backup: null, inserted: [] },
-    codex_hooks: existingManifest?.files.codex_hooks ?? { path: codexHooksPath, created: false, backup: null, inserted: [] },
-    codex_config:
-      existingManifest?.files.codex_config ?? { path: codexConfigPath, created: false, backup: null, sha256: "" },
+    codex_hooks: existingManifest?.files.codex_hooks ?? {
+      path: codexHooksPath,
+      created: false,
+      backup: null,
+      inserted: [],
+    },
+    codex_config: existingManifest?.files.codex_config ?? {
+      path: codexConfigPath,
+      created: false,
+      backup: null,
+      sha256: "",
+    },
   };
   const summary: InitData = emptyData(bin);
 
@@ -737,7 +770,9 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       // hook (same pointer, updated content after a GLOSA_BIN change) must replace its old
       // manifest record, never accumulate alongside it — a stale duplicate would make uninstall
       // hash-check the SAME pointer twice against two different recorded hashes.
-      const carried = fileResults.settings.inserted.filter((i) => !settingsMerge.inserted.some((n) => n.pointer === i.pointer));
+      const carried = fileResults.settings.inserted.filter(
+        (i) => !settingsMerge.inserted.some((n) => n.pointer === i.pointer),
+      );
       fileResults.settings = {
         path: settingsPath,
         created: created || fileResults.settings.created,
@@ -771,7 +806,9 @@ async function runInitLocked(opts: InitOptions, now: () => Date): Promise<InitRe
       let backup: string | null = fileResults.codex_hooks?.backup ?? null;
       if (!created) backup = takeBackup(codexHooksPath, codexHooksParsed.raw as string, now(), write);
       writeJsonAtomic(codexHooksPath, codexHooksParsed.obj, codexHooksParsed.indent, write);
-      undo.push(() => (created ? unlinkSync(codexHooksPath) : writeAtomic(codexHooksPath, codexHooksParsed.raw as string)));
+      undo.push(() =>
+        created ? unlinkSync(codexHooksPath) : writeAtomic(codexHooksPath, codexHooksParsed.raw as string),
+      );
       const prior = fileResults.codex_hooks?.inserted ?? [];
       const carried = prior.filter((i) => !codexHooksMerge.inserted.some((n) => n.pointer === i.pointer));
       fileResults.codex_hooks = {
@@ -857,7 +894,11 @@ export interface UninstallOptions {
  * manifest is the identical hazard, just with a different pair of callers. */
 export async function runUninstall(opts: UninstallOptions): Promise<UninstallResult> {
   const { manifestPath } = paths(opts.dir);
-  return withWorkspaceLock(manifestPath, () => new Date(), () => runUninstallLocked(opts));
+  return withWorkspaceLock(
+    manifestPath,
+    () => new Date(),
+    () => runUninstallLocked(opts),
+  );
 }
 
 async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResult> {
@@ -865,7 +906,12 @@ async function runUninstallLocked(opts: UninstallOptions): Promise<UninstallResu
   const write = opts.writeFileAtomic ?? writeAtomic;
   const manifest = readManifest(manifestPath);
   if (!manifest) {
-    return { ok: true, exitCode: 0, removed: [], warnings: [{ code: "no-manifest", message: "no glosa init manifest found — nothing to uninstall" }] };
+    return {
+      ok: true,
+      exitCode: 0,
+      removed: [],
+      warnings: [{ code: "no-manifest", message: "no glosa init manifest found — nothing to uninstall" }],
+    };
   }
 
   const removed: string[] = [];
@@ -963,7 +1009,8 @@ export function checkManifestDrift(dir: string): ManifestDriftResult {
     ...(manifest.files.codex_hooks ? ([[codexHooksPath, manifest.files.codex_hooks]] as const) : []),
   ] as const) {
     if (!existsSync(path)) {
-      if (fileManifest.inserted.length > 0) drifted.push(...fileManifest.inserted.map((n) => `${path}${n.pointer} (file missing)`));
+      if (fileManifest.inserted.length > 0)
+        drifted.push(...fileManifest.inserted.map((n) => `${path}${n.pointer} (file missing)`));
       continue;
     }
     let obj: Json;

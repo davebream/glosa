@@ -32,7 +32,14 @@ describe("data-access.js parses real daemon-encoded SSE frames", () => {
   });
 
   test("a journal frame carrying a full JournalEvent-shaped payload round-trips", async () => {
-    const payload = { v: 1, event_id: "01ABC", at: "2026-01-01T00:00:00.000Z", entry: "e1", event: "entry_created", by: "daemon" };
+    const payload = {
+      v: 1,
+      event_id: "01ABC",
+      at: "2026-01-01T00:00:00.000Z",
+      entry: "e1",
+      event: "entry_created",
+      by: "daemon",
+    };
     const wire = encodeSseFrame({ id: 5, event: "journal", data: payload });
     const frames = [];
     for await (const frame of parseSseStream(readerFor(wire))) frames.push(frame);
@@ -51,12 +58,15 @@ describe("data-access.js parses real daemon-encoded SSE frames", () => {
     const wire = encodeSseFrame({ event: "artifact", data: { path: "a.md", class: "R", source_sha256: "abc" } });
     const frames = [];
     for await (const frame of parseSseStream(readerFor(wire))) frames.push(frame);
-    expect(frames).toEqual([{ id: undefined, event: "artifact", data: JSON.stringify({ path: "a.md", class: "R", source_sha256: "abc" }) }]);
+    expect(frames).toEqual([
+      { id: undefined, event: "artifact", data: JSON.stringify({ path: "a.md", class: "R", source_sha256: "abc" }) },
+    ]);
   });
 
   test("multiple frames concatenated in one write (as a real TCP chunk might) are all parsed in order", async () => {
     const wire =
-      encodeSseFrame({ id: 1, event: "journal", data: { n: 1 } }) + encodeSseFrame({ id: 2, event: "journal", data: { n: 2 } });
+      encodeSseFrame({ id: 1, event: "journal", data: { n: 1 } }) +
+      encodeSseFrame({ id: 2, event: "journal", data: { n: 2 } });
     const frames = [];
     for await (const frame of parseSseStream(readerFor(wire))) frames.push(frame);
     expect(frames.map((f) => f.id)).toEqual(["1", "2"]);

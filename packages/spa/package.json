@@ -6,5 +6,7 @@
   "license": "Apache-2.0",
   "description": "glosa browser SPA — server-rendered HTML + vanilla ES modules; three modes, four viewers.",
   "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" }
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

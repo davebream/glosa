@@ -115,13 +115,16 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
 
     for (const offset of new Set(offsetsToTest)) {
       casesRun++;
-      const legalBefore = stateAfterPrefix(fullBytes.subarray(0, recordBoundaries.filter((b) => b <= offset).slice(-1)[0] as number));
+      const legalBefore = stateAfterPrefix(
+        fullBytes.subarray(0, recordBoundaries.filter((b) => b <= offset).slice(-1)[0] as number),
+      );
       const legalAfter = stateAfterPrefix(fullBytes.subarray(0, recordBoundaries.find((b) => b >= offset) as number));
 
       // Both sides of the expiry only produce a DIFFERENT outcome when a lease is actually open
       // in one of this offset's two legal snapshots — everywhere else (no lease on record either
       // way) the wall clock is inert, so skip the redundant (and git-spawning) second pass there.
-      const leaseCouldBeOpenHere = legalBefore.applyLease?.leaseId === leaseId || legalAfter.applyLease?.leaseId === leaseId;
+      const leaseCouldBeOpenHere =
+        legalBefore.applyLease?.leaseId === leaseId || legalAfter.applyLease?.leaseId === leaseId;
       const clocksToTry = leaseCouldBeOpenHere ? [wellBeforeExpiry, wellAfterExpiry] : [wellBeforeExpiry];
 
       for (const now of clocksToTry) {
@@ -167,11 +170,12 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
         // 4. If a lease was legally open in the pre-crash state and we reconciled well past its
         // expiry, it must have been closed out (never left dangling forever) — and closing it out
         // must NEVER fabricate a completed status.
-        const leaseWasOpenBefore = legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId !== leaseId
-          ? legalBefore.applyLease
-          : legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId === leaseId
+        const leaseWasOpenBefore =
+          legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId !== leaseId
             ? legalBefore.applyLease
-            : null;
+            : legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId === leaseId
+              ? legalBefore.applyLease
+              : null;
         if (leaseWasOpenBefore && now === wellAfterExpiry) {
           expect(result.state.applyLease).toBeNull();
           expect(result.state.entries.e1?.status).not.toBe("applied");

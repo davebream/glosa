@@ -44,10 +44,8 @@ const TYPEAHEAD_RESET_MS = 650;
 const EXPANSION_STORAGE_PREFIX = "glosa:artifact-tree:expanded:";
 
 const ICONS = {
-  chevron:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
-  file:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
+  file: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>',
   folder:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
 };
@@ -331,19 +329,23 @@ export function createArtifactTreeNavigator(container, options) {
     const item = target.closest('[role="treeitem"]');
     if (!(item instanceof HTMLElement) || !container.contains(item)) return;
 
-    const items = [...container.querySelectorAll('[role="treeitem"]')].filter((candidate) => candidate instanceof HTMLElement);
+    const items = [...container.querySelectorAll('[role="treeitem"]')].filter(
+      (candidate) => candidate instanceof HTMLElement,
+    );
     const index = items.indexOf(item);
     const id = item.getAttribute("data-node-id") ?? "";
     const isDirectory = item.getAttribute("data-kind") === "directory";
     const isExpanded = item.getAttribute("aria-expanded") === "true";
 
-    if (event.key === "ArrowDown" && index < items.length - 1) focusItem(items[index + 1]?.getAttribute("data-node-id") ?? id);
+    if (event.key === "ArrowDown" && index < items.length - 1)
+      focusItem(items[index + 1]?.getAttribute("data-node-id") ?? id);
     else if (event.key === "ArrowUp" && index > 0) focusItem(items[index - 1]?.getAttribute("data-node-id") ?? id);
     else if (event.key === "Home") focusItem(items[0]?.getAttribute("data-node-id") ?? id);
     else if (event.key === "End") focusItem(items.at(-1)?.getAttribute("data-node-id") ?? id);
     else if (event.key === "ArrowRight" && isDirectory) {
       if (!isExpanded) toggle(id);
-      else if (items[index + 1]?.getAttribute("data-parent-id") === id) focusItem(items[index + 1]?.getAttribute("data-node-id") ?? id);
+      else if (items[index + 1]?.getAttribute("data-parent-id") === id)
+        focusItem(items[index + 1]?.getAttribute("data-node-id") ?? id);
     } else if (event.key === "ArrowLeft") {
       if (isDirectory && isExpanded) toggle(id);
       else {

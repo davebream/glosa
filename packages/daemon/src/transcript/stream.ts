@@ -15,7 +15,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { watch, type FSWatcher } from "chokidar";
 import { encodeSseFrame } from "../sse.ts";
-import { TranscriptNormalizer } from "./normalize.ts";
+import { TranscriptNormalizer, type TranscriptEvent } from "./normalize.ts";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -133,7 +133,13 @@ export function createTranscriptStreamResponse(
       if (closed) return;
 
       const sendTranscriptEvent = (ev: unknown) => {
-        send(encodeSseFrame({ id: encodeTranscriptCursor({ inode: currentIno as number, byte_offset: offset }), event: "transcript", data: ev }));
+        send(
+          encodeSseFrame({
+            id: encodeTranscriptCursor({ inode: currentIno as number, byte_offset: offset }),
+            event: "transcript",
+            data: ev,
+          }),
+        );
       };
       /** Fail-soft escape hatch (A2 §F16 "Failure Recovery"): ANY problem reading/tailing the
        * transcript emits this instead of ever throwing out of the stream — ends up as `event:
@@ -164,7 +170,7 @@ export function createTranscriptStreamResponse(
           return;
         }
         const slice = buf.subarray(offset);
-        let events;
+        let events: TranscriptEvent[];
         try {
           events = normalizer.feed(slice);
         } catch {

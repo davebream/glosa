@@ -123,7 +123,11 @@ describe("core runs with ZERO adapters (P6.1 acceptance)", () => {
       stateChangingReq(`/w/${slug}/annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: "note", intent: "content", target: { quote: { exact: "Body text here.", prefix: "", suffix: "" } } }),
+        body: JSON.stringify({
+          body: "note",
+          intent: "content",
+          target: { quote: { exact: "Body text here.", prefix: "", suffix: "" } },
+        }),
       }),
     );
     expect(res.status).toBe(400);

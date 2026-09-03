@@ -211,7 +211,7 @@ describe("serveClassFDocument", () => {
       "<style>.verse { color: #333; } .highlight { background: yellow; }</style>",
       "</head>",
       "<body>",
-      '<header><h1>Boża łaska</h1></header>',
+      "<header><h1>Boża łaska</h1></header>",
       '<section data-chunk-id="chunk-001">',
       "<p>Pierwszy fragment kazania.</p>",
       '<p class="verse">Drugi fragment, z cytatem biblijnym.</p>',
@@ -243,7 +243,8 @@ describe("serveClassFDocument", () => {
   });
 
   test("[self-navigation mitigation] a <meta http-equiv=refresh> tag is neutralized before serving", async () => {
-    const html = '<html><head><meta http-equiv="refresh" content="0;url=http://evil.example.com"></head><body>hi</body></html>';
+    const html =
+      '<html><head><meta http-equiv="refresh" content="0;url=http://evil.example.com"></head><body>hi</body></html>';
     const body = await serveDoc(html);
     expect(body).not.toContain("http-equiv");
     expect(body).not.toContain("evil.example.com");
@@ -252,9 +253,9 @@ describe("serveClassFDocument", () => {
 
   test("[self-navigation mitigation] case/quote-style variants of meta-refresh are all caught", async () => {
     const variants = [
-      "<META HTTP-EQUIV=REFRESH CONTENT=\"1;url=http://evil.example.com\">",
+      '<META HTTP-EQUIV=REFRESH CONTENT="1;url=http://evil.example.com">',
       "<meta content='2;url=http://evil.example.com' http-equiv='refresh'>",
-      "<meta http-equiv=refresh content=\"3;url=http://evil.example.com\">",
+      '<meta http-equiv=refresh content="3;url=http://evil.example.com">',
     ];
     for (const metaTag of variants) {
       const body = await serveDoc(`<html><head>${metaTag}</head><body>hi</body></html>`);
@@ -264,7 +265,8 @@ describe("serveClassFDocument", () => {
   });
 
   test("a meta tag that ISN'T refresh (e.g. charset, viewport) is left untouched", async () => {
-    const html = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body>hi</body></html>';
+    const html =
+      '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body>hi</body></html>';
     const body = await serveDoc(html);
     expect(body).toContain('<meta charset="utf-8">');
     expect(body).toContain('<meta name="viewport" content="width=device-width">');

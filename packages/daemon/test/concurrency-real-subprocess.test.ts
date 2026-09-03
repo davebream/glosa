@@ -77,7 +77,9 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     // Genuinely concurrent: all N requests are fired in the same microtask, each traveling over
     // its own real TCP connection to the one live daemon process — not sequential awaits.
     const responses = await Promise.all(
-      sessions.map((session) => fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session }))),
+      sessions.map((session) =>
+        fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session })),
+      ),
     );
     const bodies = await Promise.all(responses.map((r) => r.json()));
 

@@ -73,7 +73,9 @@ function renderToolResult(ev) {
 }
 
 function renderSubagentGroup(group) {
-  const summary = el("summary", { textContent: `Subagent (${group.items.length} turn${group.items.length === 1 ? "" : "s"})` });
+  const summary = el("summary", {
+    textContent: `Subagent (${group.items.length} turn${group.items.length === 1 ? "" : "s"})`,
+  });
   const body = group.items.map((item) => el("p", { className: "glosa-conv-subagent-turn", textContent: item.summary }));
   return el("details", { className: "glosa-conv-subagent-group" }, [summary, ...body]);
 }
@@ -122,7 +124,12 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
   container.textContent = "";
 
   const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
-  const mirrorStatusEl = el("p", { className: "glosa-conv-mirror-status", hidden: true, role: "status", "aria-live": "polite" });
+  const mirrorStatusEl = el("p", {
+    className: "glosa-conv-mirror-status",
+    hidden: true,
+    role: "status",
+    "aria-live": "polite",
+  });
   const listEl = el("div", { className: "glosa-conv-list", role: "region", "aria-label": "Conversation transcript" });
   const sessionPickerLabel = el("label", {
     className: "glosa-conv-session-picker",
@@ -150,7 +157,12 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
   // Notification hook, NOT a heuristic derived from transcript activity/staleness — this element
   // exists as the mount point a future P4.3 wiring flips, never inferred here (R6: "Attention
   // state from the provider's Notification hook, not a transcript stall heuristic").
-  const attentionEl = el("p", { className: "glosa-conv-attention", hidden: true, role: "status", "aria-live": "polite" });
+  const attentionEl = el("p", {
+    className: "glosa-conv-attention",
+    hidden: true,
+    role: "status",
+    "aria-live": "polite",
+  });
 
   const header = el("header", { className: "glosa-conv-header" }, [
     el("div", { className: "glosa-conv-heading" }, [
@@ -313,14 +325,13 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
         markFailed("Choose which live agent session should receive this message.");
       } else {
         const type = String(error?.problem?.type ?? "");
-        const message =
-          type.endsWith("/no-bound-session")
-            ? "No live agent session is bound to this workspace. Start or resume it, bind it, then try again."
-            : type.endsWith("/bound-session-stale")
-              ? "The bound agent session is stale. Resume it, then try again."
-              : error instanceof Error
-                ? error.message
-                : "Try again.";
+        const message = type.endsWith("/no-bound-session")
+          ? "No live agent session is bound to this workspace. Start or resume it, bind it, then try again."
+          : type.endsWith("/bound-session-stale")
+            ? "The bound agent session is stale. Resume it, then try again."
+            : error instanceof Error
+              ? error.message
+              : "Try again.";
         markFailed(`Message couldn't be sent: ${message}`);
       }
     } finally {

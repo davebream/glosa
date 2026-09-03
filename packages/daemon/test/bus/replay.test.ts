@@ -158,13 +158,17 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
 
     const first = await reconcileWorkspace(root, { ulid: deterministicUlid(1_000), now: deterministicClock(1_000) });
     expect(first.quarantineCount).toBe(1);
-    const linesAfterFirst = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
+    const linesAfterFirst = readFileSync(jPath, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     const quarantinedAfterFirst = linesAfterFirst.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterFirst).toBe(1);
 
     const second = await reconcileWorkspace(root, { ulid: deterministicUlid(2_000), now: deterministicClock(2_000) });
     expect(second.quarantineCount).toBe(1); // still "1 distinct bad line present", not accumulating
-    const linesAfterSecond = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
+    const linesAfterSecond = readFileSync(jPath, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(linesAfterSecond.length).toBe(linesAfterFirst.length); // journal didn't grow
     const quarantinedAfterSecond = linesAfterSecond.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterSecond).toBe(1); // not re-announced

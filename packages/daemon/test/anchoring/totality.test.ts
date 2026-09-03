@@ -23,7 +23,9 @@ function assertIsValidResolution(res: unknown): asserts res is Resolution {
     expect(typeof r.intent).toBe("string");
     expect(typeof r.body).toBe("string");
   } else {
-    expect(["hash_mismatch_no_match", "ambiguous", "no_source_map", "quote_absent_not_transformed"]).toContain(r.reason as string);
+    expect(["hash_mismatch_no_match", "ambiguous", "no_source_map", "quote_absent_not_transformed"]).toContain(
+      r.reason as string,
+    );
   }
 }
 
@@ -58,14 +60,17 @@ describe("totality — garbage annotation input never throws", () => {
 
   const { artifact, freshCtx } = buildRArtifact("07.md", SOURCE);
 
-  test.each(garbageAnnotations.map((a, i) => [i, a] as const))("garbage annotation #%p never throws, always a valid Resolution", (_i, garbage) => {
-    let res: unknown;
-    expect(() => {
-      res = resolve(garbage, artifact, freshCtx);
-    }).not.toThrow();
-    assertIsValidResolution(res);
-    expect(VALID_R_RESOLUTION_KINDS.has((res as Resolution).kind)).toBe(true);
-  });
+  test.each(garbageAnnotations.map((a, i) => [i, a] as const))(
+    "garbage annotation #%p never throws, always a valid Resolution",
+    (_i, garbage) => {
+      let res: unknown;
+      expect(() => {
+        res = resolve(garbage, artifact, freshCtx);
+      }).not.toThrow();
+      assertIsValidResolution(res);
+      expect(VALID_R_RESOLUTION_KINDS.has((res as Resolution).kind)).toBe(true);
+    },
+  );
 });
 
 describe("totality — garbage artifact input never throws", () => {
@@ -86,19 +91,30 @@ describe("totality — garbage artifact input never throws", () => {
     42,
   ];
 
-  test.each(garbageArtifacts.map((a, i) => [i, a] as const))("garbage artifact #%p never throws, always orphaned/no_source_map-shaped", (_i, garbage) => {
-    let res: unknown;
-    expect(() => {
-      res = resolve(okAnnotation, garbage, {});
-    }).not.toThrow();
-    assertIsValidResolution(res);
-  });
+  test.each(garbageArtifacts.map((a, i) => [i, a] as const))(
+    "garbage artifact #%p never throws, always orphaned/no_source_map-shaped",
+    (_i, garbage) => {
+      let res: unknown;
+      expect(() => {
+        res = resolve(okAnnotation, garbage, {});
+      }).not.toThrow();
+      assertIsValidResolution(res);
+    },
+  );
 });
 
 describe("totality — garbage ctx never throws", () => {
   const { artifact } = buildRArtifact("07.md", "# Document\n\nBoża łaska.\n");
   const okAnnotation = annotation({ quoteExact: "łaska" });
-  const garbageCtxs: unknown[] = [null, undefined, "nope", 42, { capturedRenderedSha256: 12345 }, { pipelineFeedback: "not an object" }, { pipelineFeedback: { adapter: 5 } }];
+  const garbageCtxs: unknown[] = [
+    null,
+    undefined,
+    "nope",
+    42,
+    { capturedRenderedSha256: 12345 },
+    { pipelineFeedback: "not an object" },
+    { pipelineFeedback: { adapter: 5 } },
+  ];
 
   test.each(garbageCtxs.map((c, i) => [i, c] as const))("garbage ctx #%p never throws", (_i, garbage) => {
     let res: unknown;

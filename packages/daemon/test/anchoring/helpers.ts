@@ -42,7 +42,9 @@ export function positionOf(artifact: ClassRArtifact, needle: string, occurrence 
   for (let i = 0; i <= occurrence; i++) {
     idx = text.indexOf(needle, from);
     if (idx === -1) {
-      throw new Error(`positionOf: "${needle}" occurrence ${occurrence} not found in rendered text: ${JSON.stringify(text)}`);
+      throw new Error(
+        `positionOf: "${needle}" occurrence ${occurrence} not found in rendered text: ${JSON.stringify(text)}`,
+      );
     }
     from = idx + 1;
   }

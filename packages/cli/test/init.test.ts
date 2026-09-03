@@ -83,7 +83,11 @@ function expectScopedInitSuccess(result: ScopedInitResult): ScopedInitResult {
  * change looks like — unlike an arbitrary/synthetic command string, which would never be
  * recognized as glosa's own and so could never be RECONCILED, only ever newly inserted. */
 function bunRunBin(glosaRoot: string): GlosaBinResolution {
-  return { command: "/opt/bun/bin/bun", args: ["run", "--silent", `${glosaRoot}/packages/cli/src/main.ts`], mode: "bun-run" };
+  return {
+    command: "/opt/bun/bin/bun",
+    args: ["run", "--silent", `${glosaRoot}/packages/cli/src/main.ts`],
+    mode: "bun-run",
+  };
 }
 
 describe("glosa init — fresh install", () => {
@@ -110,7 +114,11 @@ describe("glosa init — fresh install", () => {
       { type: "command", command: "glosa hook session-start", timeout: 10 },
       { type: "command", command: "glosa hook rewake-watch", asyncRewake: true },
     ]);
-    expect(settings.hooks.SessionEnd[0].hooks[0]).toEqual({ type: "command", command: "glosa hook session-end", timeout: 5 });
+    expect(settings.hooks.SessionEnd[0].hooks[0]).toEqual({
+      type: "command",
+      command: "glosa hook session-end",
+      timeout: 5,
+    });
     expect(settings.hooks.UserPromptSubmit[0].hooks[0]).toEqual({
       type: "command",
       command: "glosa hook user-prompt-submit",
@@ -128,7 +136,9 @@ describe("glosa init — fresh install", () => {
 
     const codexHooks = readJson(codexHooksPathOf(dir));
     expect(codexHooks.hooks.SessionStart[0].hooks[0].command).toBe("glosa hook session-start --provider codex");
-    expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe("glosa hook user-prompt-submit --provider codex");
+    expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(
+      "glosa hook user-prompt-submit --provider codex",
+    );
     expect(codexHooks.hooks.Stop[0].hooks[0].command).toBe("glosa hook stop --provider codex");
     expect(codexHooks.hooks.Notification).toBeUndefined();
     const codexConfig = readFileSync(codexConfigPathOf(dir), "utf8");
@@ -174,7 +184,11 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
     mkdirSync(join(dir, ".claude"), { recursive: true });
     writeFileSync(
       settingsPathOf(dir),
-      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } }, null, 2),
+      JSON.stringify(
+        { hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } },
+        null,
+        2,
+      ),
     );
 
     await runInit({ dir, resolveGlosaBin: () => BIN_A }); // path mode: "glosa hook <role>"
@@ -188,7 +202,9 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
     // Exactly 2 SessionStart hooks (not 4 — the reviewer's repro), exactly 1 Stop hook that's
     // OURS (plus the foreign one, untouched) — never a duplicate.
     expect(settings.hooks.SessionStart[0].hooks).toHaveLength(2);
-    const ourStopHooks = settings.hooks.Stop.flatMap((g: any) => g.hooks).filter((h: any) => h.command.includes("hook stop"));
+    const ourStopHooks = settings.hooks.Stop.flatMap((g: any) => g.hooks).filter((h: any) =>
+      h.command.includes("hook stop"),
+    );
     expect(ourStopHooks).toHaveLength(1);
 
     // Updated TO binB's commands — BIN_A's old command string is gone entirely.
@@ -196,7 +212,9 @@ describe("glosa init — hook reconciliation across a GLOSA_BIN change (P4.3 rev
       .flatMap((groups: any) => groups.flatMap((g: any) => g.hooks))
       .map((h: any) => h.command);
     expect(allCommands).not.toContain("glosa hook session-start");
-    expect(allCommands).toContain(`/opt/bun/bin/bun run --silent /opt/glosa/packages/cli/src/main.ts hook session-start`);
+    expect(allCommands).toContain(
+      `/opt/bun/bin/bun run --silent /opt/glosa/packages/cli/src/main.ts hook session-start`,
+    );
     expect(allCommands).toContain(`/opt/bun/bin/bun run --silent /opt/glosa/packages/cli/src/main.ts hook stop`);
 
     // The foreign hook is preserved byte-for-byte, untouched by the reconciliation.
@@ -309,7 +327,11 @@ describe("glosa init — foreign MCP 'glosa' key", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       mcpPathOf(dir),
-      JSON.stringify({ mcpServers: { glosa: { type: "stdio", command: "some-other-tool", args: ["serve"] } } }, null, 2),
+      JSON.stringify(
+        { mcpServers: { glosa: { type: "stdio", command: "some-other-tool", args: ["serve"] } } },
+        null,
+        2,
+      ),
     );
   }
 
@@ -440,7 +462,13 @@ describe("glosa init — mid-run failure rolls back (no half-install)", () => {
   test("a late Codex config failure rolls back Claude and Codex writes as one transaction", async () => {
     const dir = freshDir();
     await runInit({ dir, resolveGlosaBin: () => BIN_A });
-    const tracked = [settingsPathOf(dir), mcpPathOf(dir), codexHooksPathOf(dir), codexConfigPathOf(dir), manifestPathOf(dir)];
+    const tracked = [
+      settingsPathOf(dir),
+      mcpPathOf(dir),
+      codexHooksPathOf(dir),
+      codexConfigPathOf(dir),
+      manifestPathOf(dir),
+    ];
     const before = new Map(tracked.map((path) => [path, readFileSync(path, "utf8")]));
     const result = await runInit({
       dir,
@@ -640,7 +668,11 @@ describe("glosa uninstall", () => {
     mkdirSync(join(dir, ".claude"), { recursive: true });
     writeFileSync(
       settingsPathOf(dir),
-      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } }, null, 2),
+      JSON.stringify(
+        { hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } },
+        null,
+        2,
+      ),
     );
     await runInit({ dir, resolveGlosaBin: () => BIN_A });
 
@@ -697,9 +729,16 @@ describe("glosa uninstall", () => {
     mkdirSync(join(dir, ".claude"), { recursive: true });
     writeFileSync(
       settingsPathOf(dir),
-      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } }, null, 2),
+      JSON.stringify(
+        { hooks: { Stop: [{ hooks: [{ type: "command", command: "my-other-tool check", timeout: 30 }] }] } },
+        null,
+        2,
+      ),
     );
-    writeFileSync(mcpPathOf(dir), JSON.stringify({ mcpServers: { "some-other-server": { type: "stdio", command: "x", args: [] } } }, null, 2));
+    writeFileSync(
+      mcpPathOf(dir),
+      JSON.stringify({ mcpServers: { "some-other-server": { type: "stdio", command: "x", args: [] } } }, null, 2),
+    );
     await runInit({ dir, resolveGlosaBin: () => BIN_A });
 
     const settingsBefore = readFileSync(settingsPathOf(dir), "utf8");
@@ -773,9 +812,9 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
   test("provider-owned local probes select executables or existing provider config only", () => {
     const dir = freshDir();
     const home = freshDir();
-    expect(detectInstallProviders(dir, { homeDir: home, which: (name) => (name === "claude" ? "/bin/claude" : null) })).toEqual([
-      "claude-code",
-    ]);
+    expect(
+      detectInstallProviders(dir, { homeDir: home, which: (name) => (name === "claude" ? "/bin/claude" : null) }),
+    ).toEqual(["claude-code"]);
 
     mkdirSync(join(dir, ".codex"), { recursive: true });
     writeFileSync(join(dir, ".codex", "config.toml"), "");
@@ -818,10 +857,7 @@ describe("glosa init — scoped and targeted onboarding (#82)", () => {
     const glosaHome = join(home, ".glosa");
     const paths = scopedManifestPaths(dir, { homeDir: home, glosaHomeDir: glosaHome });
     mkdirSync(glosaHome, { recursive: true });
-    writeFileSync(
-      `${paths.user}.lock`,
-      JSON.stringify({ pid: process.pid, started: new Date().toISOString() }),
-    );
+    writeFileSync(`${paths.user}.lock`, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
     setTimeout(() => rmSync(`${paths.user}.lock`, { force: true }), 25);
 
     const [workspace, user] = await Promise.all([

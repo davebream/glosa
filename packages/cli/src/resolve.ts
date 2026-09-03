@@ -9,7 +9,13 @@
 // does neither (see http.ts's docstring on that route, and `commitTransition`'s in bus.ts, for why
 // deferred is a legal no-op transition rather than a lease-closing one).
 import type { GlosaApiClient } from "./api-client.ts";
-import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
+import {
+  type CommandEnvelope,
+  EXIT_CODES,
+  daemonUnreachableEnvelope,
+  printJsonEnvelope,
+  usageEnvelope,
+} from "./envelope.ts";
 import { isApiError } from "./api-client.ts";
 
 export type ResolveOutcomeArg = "applied" | "rejected" | "deferred" | "stale";
@@ -68,7 +74,13 @@ export async function runResolve(args: ResolveArgs, deps: ResolveDeps): Promise<
   }
 
   try {
-    const result = await client.resolveEntry(args.dir, args.id, args.outcome as ResolveOutcomeArg, args.session, args.note);
+    const result = await client.resolveEntry(
+      args.dir,
+      args.id,
+      args.outcome as ResolveOutcomeArg,
+      args.session,
+      args.note,
+    );
     return { ok: true, command: "resolve", exitCode: EXIT_CODES.OK, data: result, warnings: [] };
   } catch (err) {
     return { ...mapEntryFailure("resolve", err), data: {} };
@@ -125,7 +137,11 @@ export async function runApplyBegin(args: ApplyBeginArgs, deps: ResolveDeps): Pr
         exitCode: EXIT_CODES.LEASE_CONFLICT,
         data: {},
         warnings: [],
-        error: { code: "lease-conflict", kind: "lease_conflict", message: err.problem?.title ?? "an apply-lease is already active" },
+        error: {
+          code: "lease-conflict",
+          kind: "lease_conflict",
+          message: err.problem?.title ?? "an apply-lease is already active",
+        },
       };
     }
     return { ...mapEntryFailure("apply-begin", err), data: {} };

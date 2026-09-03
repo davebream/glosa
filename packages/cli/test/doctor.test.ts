@@ -64,7 +64,10 @@ describe("glosa doctor", () => {
   test("realDoctorDeps wires ambient probes without touching the daemon", async () => {
     const marker = {} as GlosaApiClient;
     const home = freshDir();
-    const deps = realDoctorDeps(async () => marker, () => home);
+    const deps = realDoctorDeps(
+      async () => marker,
+      () => home,
+    );
 
     expect(await deps.createClient()).toBe(marker);
     expect(deps.platform()).toBe(process.platform);
@@ -241,7 +244,11 @@ describe("glosa doctor", () => {
   });
 
   test("daemon+proto: unreachable daemon -> FAIL", async () => {
-    const { deps } = makeDeps({ createClient: async () => { throw daemonUnreachable(); } });
+    const { deps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    });
     const dir = freshDir();
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "daemon+proto")?.status).toBe("fail");
@@ -254,7 +261,9 @@ describe("glosa doctor", () => {
     const result = await runDoctor(dir, deps);
     const out = captureStdout(() => printDoctorResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
     expect(parsed.data.checks).toHaveLength(15);
@@ -280,7 +289,11 @@ describe("glosa doctor", () => {
     expect(findCheck(wired.data.checks, "pending-delivery")?.status).toBe("pass");
 
     // Daemon unreachable -> SKIP, never a duplicate warn on top of check 6's fail.
-    const { deps: downDeps } = makeDeps({ createClient: async () => { throw daemonUnreachable(); } });
+    const { deps: downDeps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    });
     const down = await runDoctor(dir, downDeps);
     expect(findCheck(down.data.checks, "pending-delivery")?.status).toBe("skip");
   });
@@ -299,7 +312,11 @@ describe("glosa doctor", () => {
     expect(orphanCheck?.detail).toContain("1 pending annotation(s) in 1 orphaned home-state dir(s)");
     expect(orphanCheck?.detail).toContain("glosa open");
 
-    const { deps: downDeps } = makeDeps({ createClient: async () => { throw daemonUnreachable(); } });
+    const { deps: downDeps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    });
     const down = await runDoctor(dir, downDeps);
     expect(findCheck(down.data.checks, "orphaned-state")?.status).toBe("skip");
   });

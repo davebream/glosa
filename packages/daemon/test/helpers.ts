@@ -182,10 +182,7 @@ export function spawnDaemon(
 ): Bun.Subprocess<"ignore", "ignore", "ignore"> {
   return Bun.spawn({
     cmd: [process.execPath, MAIN_PATH, "__daemon"],
-    env: { ...Bun.env, GLOSA_HOME: home, GLOSA_PORT: String(port), ...envOverrides } as Record<
-      string,
-      string
-    >,
+    env: { ...Bun.env, GLOSA_HOME: home, GLOSA_PORT: String(port), ...envOverrides } as Record<string, string>,
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
@@ -218,7 +215,13 @@ export async function waitForHandshake(
   port: number,
   deadlineMs = 15000,
   proc?: Bun.Subprocess,
-): Promise<{ protocol_version: string; build_id?: string; instance_id: string; pid: number; started_at: string } | null> {
+): Promise<{
+  protocol_version: string;
+  build_id?: string;
+  instance_id: string;
+  pid: number;
+  started_at: string;
+} | null> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
     if (proc && proc.exitCode !== null) return null;

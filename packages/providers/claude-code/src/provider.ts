@@ -90,7 +90,12 @@ export class ClaudeCodeProvider implements AgentProvider {
     const binding: SessionBinding = {
       session_id: raw.session_id,
       workspace: raw.cwd,
-      source: typeof raw.source === "string" ? raw.source : typeof raw.hook_event_name === "string" ? raw.hook_event_name : "unknown",
+      source:
+        typeof raw.source === "string"
+          ? raw.source
+          : typeof raw.hook_event_name === "string"
+            ? raw.hook_event_name
+            : "unknown",
     };
     if (typeof raw.transcript_path === "string" && raw.transcript_path.length > 0) {
       binding.transcript_path = raw.transcript_path;

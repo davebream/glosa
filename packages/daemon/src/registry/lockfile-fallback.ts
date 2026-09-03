@@ -83,7 +83,9 @@ export interface FallbackLeaseStolenError extends Error {
 }
 
 function leaseContendedError(lockPath: string, detail: string): FallbackLeaseContendedError {
-  const err = new Error(`fallback lease for ${lockPath} is held by another writer: ${detail}`) as FallbackLeaseContendedError;
+  const err = new Error(
+    `fallback lease for ${lockPath} is held by another writer: ${detail}`,
+  ) as FallbackLeaseContendedError;
   err.code = "LEASE_CONTENDED";
   return err;
 }

@@ -137,8 +137,7 @@ function toHunks(ops: Op[], context: number): Hunk[] {
 
 /** `@@ -a,b +c,d @@`, collapsing the git-standard `,1` and using start 0 for an empty side. */
 function hunkHeader(hunk: Hunk): string {
-  const range = (start: number, count: number) =>
-    count === 1 ? `${start}` : `${count === 0 ? 0 : start},${count}`;
+  const range = (start: number, count: number) => (count === 1 ? `${start}` : `${count === 0 ? 0 : start},${count}`);
   return `@@ -${range(hunk.beforeStart, hunk.beforeCount)} +${range(hunk.afterStart, hunk.afterCount)} @@`;
 }
 

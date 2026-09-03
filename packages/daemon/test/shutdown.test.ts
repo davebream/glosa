@@ -48,7 +48,14 @@ describe("daemon shutdown drain", () => {
       },
     }));
 
-    expect(await drainDaemonServers(servers, () => {}, async () => {}, 10)).toBe(false);
+    expect(
+      await drainDaemonServers(
+        servers,
+        () => {},
+        async () => {},
+        10,
+      ),
+    ).toBe(false);
     expect(calls).toEqual([
       { server: 0, force: false },
       { server: 1, force: false },

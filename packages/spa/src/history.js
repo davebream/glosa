@@ -95,8 +95,22 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
     onClick: () => void compareSelected(),
   });
   compareCurrentButton.disabled = true;
-  const closeButton = el("button", { type: "button", className: "glosa-context-close", textContent: "Close version history", onClick: () => onClose?.() });
-  container.append(el("header", { className: "glosa-context-header" }, [el("h3", { tabIndex: -1, textContent: "Version history" }), closeButton]), status, compareCurrentButton, list, diffPane);
+  const closeButton = el("button", {
+    type: "button",
+    className: "glosa-context-close",
+    textContent: "Close version history",
+    onClick: () => onClose?.(),
+  });
+  container.append(
+    el("header", { className: "glosa-context-header" }, [
+      el("h3", { tabIndex: -1, textContent: "Version history" }),
+      closeButton,
+    ]),
+    status,
+    compareCurrentButton,
+    list,
+    diffPane,
+  );
 
   let selected = [];
   let rows = [];
@@ -122,7 +136,10 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
       status.textContent = "Comparison ready.";
     } catch (error) {
       status.setAttribute("data-error", "true");
-      status.textContent = error instanceof Error ? `Couldn't load the comparison: ${error.message}` : "Couldn't load the comparison. Try again.";
+      status.textContent =
+        error instanceof Error
+          ? `Couldn't load the comparison: ${error.message}`
+          : "Couldn't load the comparison. Try again.";
     }
   }
 
@@ -136,7 +153,10 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
       if (err?.status === 409 && err.problem?.would_be_lost_diff) {
         // The dirty-worktree guard: show exactly what a forced restore would throw away (the
         // daemon's would-be-lost diff, rendered in the pane behind the dialog), then ask.
-        const lostHtml = Diff2Html.html(err.problem.would_be_lost_diff, { drawFileList: false, outputFormat: "line-by-line" });
+        const lostHtml = Diff2Html.html(err.problem.would_be_lost_diff, {
+          drawFileList: false,
+          outputFormat: "line-by-line",
+        });
         renderDiff(lostHtml);
         const proceed = await confirmDialog({
           title: "Discard the changes shown behind this dialog?",
@@ -148,7 +168,10 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
         else status.textContent = "Restore canceled.";
       } else {
         status.setAttribute("data-error", "true");
-        status.textContent = err instanceof Error ? `Couldn't restore this version: ${err.message}` : "Couldn't restore this version. Try again.";
+        status.textContent =
+          err instanceof Error
+            ? `Couldn't restore this version: ${err.message}`
+            : "Couldn't restore this version. Try again.";
       }
     }
   }
@@ -160,9 +183,10 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
     compareCurrentButton.disabled = selected.length === 0;
     if (selected.length > 0) {
       status.removeAttribute("data-error");
-      status.textContent = selected.length === 1
-        ? "One version selected. Compare it with the current artifact or select a second version."
-        : "Two versions selected. Loading their comparison…";
+      status.textContent =
+        selected.length === 1
+          ? "One version selected. Compare it with the current artifact or select a second version."
+          : "Two versions selected. Loading their comparison…";
     }
   }
 
@@ -209,7 +233,12 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
             textContent: attributionLabel,
             // Provenance chip styling hook (app.css): honest three-way shape — solid "You",
             // accent-tinted session, dashed unknown — never color alone (brief §7.5).
-            "data-by": row.by === "human" ? "human" : typeof row.by === "string" && row.by.startsWith("session:") ? "session" : "unknown",
+            "data-by":
+              row.by === "human"
+                ? "human"
+                : typeof row.by === "string" && row.by.startsWith("session:")
+                  ? "session"
+                  : "unknown",
           }),
           el("span", { className: "glosa-history-kind", textContent: kindLabel }),
           el("time", { dateTime: row.at, textContent: timestampLabel }),
@@ -227,7 +256,10 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
       renderList();
     } catch (error) {
       status.setAttribute("data-error", "true");
-      status.textContent = error instanceof Error ? `Couldn't load version history: ${error.message}` : "Couldn't load version history. Try again.";
+      status.textContent =
+        error instanceof Error
+          ? `Couldn't load version history: ${error.message}`
+          : "Couldn't load version history. Try again.";
     }
   }
 

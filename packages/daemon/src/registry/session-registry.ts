@@ -149,10 +149,7 @@ export class SessionRegistry {
   /** Exact explicit bindings only. Conversation composition uses this stricter view and never
    * falls back to cwd ancestry. `includeStale` exists so the API can distinguish "not bound"
    * from "bound session needs to be resumed" without treating a stale record as routable. */
-  explicitlyBoundForWorkspace(
-    canonicalWorkspace: string,
-    opts: { includeStale?: boolean } = {},
-  ): SessionRecord[] {
+  explicitlyBoundForWorkspace(canonicalWorkspace: string, opts: { includeStale?: boolean } = {}): SessionRecord[] {
     return [...this.sessions.values()].filter(
       (record) =>
         record.workspace_binding === canonicalWorkspace &&

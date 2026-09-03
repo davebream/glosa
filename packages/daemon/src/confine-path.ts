@@ -13,7 +13,13 @@ import { dirname, resolve, sep } from "node:path";
 export type ConfineResult = { ok: true; realPath: string } | { ok: false };
 
 // ASCII control chars (incl. NUL and \n) — A3 §5 attack #5.
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+function hasAsciiControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
 
 // P6.1 review fix: cheap ceilings rejected BEFORE any filesystem work. Without these, a
 // pathological (but traversal-clean — no ".." components, so the check above doesn't catch it)
@@ -28,7 +34,7 @@ export function confinePath(workspaceRoot: string, relPath: string): ConfineResu
   if (relPath.length === 0) return { ok: false };
   if (relPath.length > MAX_PATH_LENGTH) return { ok: false };
   if (relPath.startsWith("/")) return { ok: false }; // must be workspace-relative
-  if (CONTROL_CHAR_RE.test(relPath)) return { ok: false };
+  if (hasAsciiControlCharacter(relPath)) return { ok: false };
   const segments = relPath.split("/");
   if (segments.length > MAX_SEGMENTS) return { ok: false };
   if (segments.some((segment) => segment === "..")) return { ok: false };

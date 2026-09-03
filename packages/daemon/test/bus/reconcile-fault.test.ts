@@ -135,7 +135,9 @@ describe("reconcile — inbox <-> journal crash scenarios", () => {
     });
     expect(again.healedEntryIds).toEqual([]);
     expect(again.state.entries.e1?.status).toBe("pending");
-    const lines = readFileSync(journalPath(root), "utf8").split("\n").filter((l) => l.length > 0);
+    const lines = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines.filter((l) => l.includes('"entry_created"')).length).toBe(1); // not duplicated
 
     cleanupWorkspace(root);

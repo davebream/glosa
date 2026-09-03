@@ -119,7 +119,12 @@ describe("adapter-topology (T8) — session cwd != adapter's real workspace root
     fetchFn = createApiFetch(ctx);
 
     const res = await fetchFn(
-      req("/api/sessions/register", { session_id: "sess-2", provider: "claude-code", cwd: unrelatedDir, source: "startup" }),
+      req("/api/sessions/register", {
+        session_id: "sess-2",
+        provider: "claude-code",
+        cwd: unrelatedDir,
+        source: "startup",
+      }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { workspace: string };
@@ -141,7 +146,12 @@ describe("adapter-topology (T8) — session cwd != adapter's real workspace root
     fetchFn = createApiFetch(ctx);
 
     const res = await fetchFn(
-      req("/api/sessions/register", { session_id: "sess-3", provider: "claude-code", cwd: unrelatedDir, source: "startup" }),
+      req("/api/sessions/register", {
+        session_id: "sess-3",
+        provider: "claude-code",
+        cwd: unrelatedDir,
+        source: "startup",
+      }),
     );
     const body = (await res.json()) as { workspace: string };
 

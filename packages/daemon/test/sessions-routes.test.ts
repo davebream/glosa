@@ -101,7 +101,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
   });
 
   test("POST /api/sessions/register with a missing field -> 400 validation-failed", async () => {
-    const res = await fetchFn(req("/api/sessions/register", { method: "POST", body: JSON.stringify({ session_id: "sess-1" }) }));
+    const res = await fetchFn(
+      req("/api/sessions/register", { method: "POST", body: JSON.stringify({ session_id: "sess-1" }) }),
+    );
     expect(res.status).toBe(400);
   });
 
@@ -109,7 +111,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     const res = await fetchFn(
       req("/api/sessions/register", {
         method: "POST",
-        body: JSON.stringify({ session_id: "sess-1", provider: "claude-code", cwd: "/no/such/dir/at/all", source: "startup" }),
+        body: JSON.stringify({
+          session_id: "sess-1",
+          provider: "claude-code",
+          cwd: "/no/such/dir/at/all",
+          source: "startup",
+        }),
       }),
     );
     expect(res.status).toBe(400);
@@ -159,7 +166,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
   describe("POST /api/sessions/:id/drain", () => {
     test("SPA annotation producer reaches Claude/Codex hook context as actionable content", async () => {
       writeFileSync(join(root, "notes.md"), "Grace upon grace.\n");
-      await sessionRegistry.register({ session_id: "sess-claude", provider: "claude-code", cwd: root, source: "startup" });
+      await sessionRegistry.register({
+        session_id: "sess-claude",
+        provider: "claude-code",
+        cwd: root,
+        source: "startup",
+      });
       const slug = workspaceIndex.list({ presentOnly: true })[0]!.slug;
       const created = await fetchFn(
         req(`/w/${slug}/annotations`, {
@@ -174,7 +186,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       );
       expect(created.status).toBe(201);
       const prepared = await (
-        await fetchFn(req("/api/sessions/sess-claude/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }))
+        await fetchFn(
+          req("/api/sessions/sess-claude/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }),
+        )
       ).json();
       expect(prepared.drained[0].text).toContain("artifact: notes.md");
       expect(prepared.drained[0].text).toContain("Explain how this connects");
@@ -215,7 +229,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect((await ack("sess-1", body.delivery_id)).status).toBe(200);
 
       for (const item of body.drained) {
-        const attempts = bus.state.entries[item.id]?.deliveryAttempts as { via?: string; outcome?: string; reason?: string }[] | undefined;
+        const attempts = bus.state.entries[item.id]?.deliveryAttempts as
+          | { via?: string; outcome?: string; reason?: string }[]
+          | undefined;
         // Default `via` (no `via` in the request body) is "userprompt" — the drain route's own
         // default; `outcome:"presented"` because this route IS the hook response surfacing it.
         expect(attempts?.[0]).toMatchObject({ via: "userprompt", outcome: "presented", reason: "initial" });
@@ -229,7 +245,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       const bus = busRegistry.get(root);
       await bus.createEntry("e1", actionableAnnotation());
 
-      const prepared = await (await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ via: "stop" }) }))).json();
+      const prepared = await (
+        await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ via: "stop" }) }))
+      ).json();
       await ack("sess-1", prepared.delivery_id);
       const attempts = bus.state.entries.e1?.deliveryAttempts as { via?: string }[] | undefined;
       expect(attempts?.[0]?.via).toBe("stop");
@@ -266,7 +284,13 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       await bus.createEntry("e1", actionableAnnotation());
       // Simulate a provider's own failed rung attempt (e.g. ClaudeCodeProvider.deliver()'s
       // channel rung throwing) recorded BEFORE this entry ever reaches the drain route.
-      await bus.recordDeliveryAttempt("e1", { via: "channel", session: "sess-1", outcome: "failed", reason: "initial", error: "ECONNRESET" });
+      await bus.recordDeliveryAttempt("e1", {
+        via: "channel",
+        session: "sess-1",
+        outcome: "failed",
+        reason: "initial",
+        error: "ECONNRESET",
+      });
 
       const body = await (await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: "" }))).json();
       expect(body.count).toBe(1);
@@ -275,7 +299,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(bus.state.entries.e1?.deliveryAttempts).toHaveLength(1);
       await ack("sess-1", body.delivery_id);
 
-      const attempts = bus.state.entries.e1?.deliveryAttempts as { via?: string; outcome?: string; reason?: string }[] | undefined;
+      const attempts = bus.state.entries.e1?.deliveryAttempts as
+        | { via?: string; outcome?: string; reason?: string }[]
+        | undefined;
       expect(attempts).toHaveLength(2);
       expect(attempts?.[0]).toMatchObject({ outcome: "failed", reason: "initial" });
       expect(attempts?.[1]).toMatchObject({ outcome: "presented", reason: "re_nudge" });
@@ -285,7 +311,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
       const bus = busRegistry.get(root);
       await bus.createEntry("e1", actionableAnnotation());
-      await bus.recordDeliveryAttempt("e1", { via: "channel", session: "sess-1", outcome: "transport_accepted", reason: "initial" });
+      await bus.recordDeliveryAttempt("e1", {
+        via: "channel",
+        session: "sess-1",
+        outcome: "transport_accepted",
+        reason: "initial",
+      });
 
       const body = await (await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: "" }))).json();
       expect(body.count).toBe(1);
@@ -302,8 +333,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       for (let i = 0; i < 4; i++) await bus.createEntry(`e${i}`, actionableAnnotation(`Comment ${i}`));
 
       const [bodyA, bodyB] = await Promise.all([
-        fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ limit: 4 }) })).then((r) => r.json()),
-        fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ limit: 4 }) })).then((r) => r.json()),
+        fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ limit: 4 }) })).then((r) =>
+          r.json(),
+        ),
+        fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ limit: 4 }) })).then((r) =>
+          r.json(),
+        ),
       ]);
 
       const idsA = bodyA.drained.map((e: { id: string }) => e.id);
@@ -413,7 +448,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       mkdirSync(busDir, { recursive: true });
       writeFileSync(join(busDir, "shadow.git"), "not a directory"); // blocks initShadowRepo's mkdirSync
 
-      await sessionRegistry.register({ session_id: "sess-shadow-broken", provider: "claude-code", cwd: root, source: "startup" });
+      await sessionRegistry.register({
+        session_id: "sess-shadow-broken",
+        provider: "claude-code",
+        cwd: root,
+        source: "startup",
+      });
       const res = await fetchFn(
         req("/api/sessions/sess-shadow-broken/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }),
       );

@@ -26,7 +26,12 @@ function chunkSliceSha(text: string, l0: number, l1: number): string {
 }
 
 function buildFArtifact(manifest?: ChunkManifest): ClassFArtifact {
-  return { class: "F", path: "output/docs/rendered-preview.html", source: MANUSCRIPT, ...(manifest ? { manifest } : {}) };
+  return {
+    class: "F",
+    path: "output/docs/rendered-preview.html",
+    source: MANUSCRIPT,
+    ...(manifest ? { manifest } : {}),
+  };
 }
 
 function freshManifest(chunks: ChunkManifest["chunks"]): ChunkManifest {
@@ -41,15 +46,29 @@ describe("Class F — no manifest / no chunk", () => {
 
   test("chunk_id not present in the manifest → orphaned{no_source_map}", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-999", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2) },
+      {
+        chunk_id: "chunk-999",
+        source_start_line: 2,
+        source_end_line: 2,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+      },
     ]);
-    const res = resolve(annotation({ quoteExact: "anything", chunkId: "chunk-not-in-manifest" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "anything", chunkId: "chunk-not-in-manifest" }),
+      buildFArtifact(manifest),
+      {},
+    );
     expect(res).toEqual({ kind: "orphaned", reason: "no_source_map" });
   });
 
   test("no chunk_id on the annotation at all → orphaned{no_source_map}", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2) },
+      {
+        chunk_id: "chunk-001",
+        source_start_line: 2,
+        source_end_line: 2,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+      },
     ]);
     const res = resolve(annotation({ quoteExact: "anything" }), buildFArtifact(manifest), {});
     expect(res).toEqual({ kind: "orphaned", reason: "no_source_map" });
@@ -59,9 +78,19 @@ describe("Class F — no manifest / no chunk", () => {
 describe("Class F — transformed:false (verbatim chunk)", () => {
   test("the quote is findable verbatim in the chunk's declared source lines → source_range against the MANUSCRIPT path", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2), transformed: false },
+      {
+        chunk_id: "chunk-001",
+        source_start_line: 2,
+        source_end_line: 2,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+        transformed: false,
+      },
     ]);
-    const res = resolve(annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }),
+      buildFArtifact(manifest),
+      {},
+    );
 
     expect(res.kind).toBe("source_range");
     if (res.kind !== "source_range") throw new Error("unreachable");
@@ -72,9 +101,18 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
 
   test("`transformed` omitted defaults to false — same verbatim-search behavior", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2) },
+      {
+        chunk_id: "chunk-001",
+        source_start_line: 2,
+        source_end_line: 2,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+      },
     ]);
-    const res = resolve(annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }),
+      buildFArtifact(manifest),
+      {},
+    );
     expect(res.kind).toBe("source_range");
   });
 
@@ -101,7 +139,13 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
 
   test("the quote is absent from a verbatim chunk → orphaned{quote_absent_not_transformed}, EVEN with intent:classification — intent does not rescue", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2), transformed: false },
+      {
+        chunk_id: "chunk-001",
+        source_start_line: 2,
+        source_end_line: 2,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+        transformed: false,
+      },
     ]);
     const res = resolve(
       annotation({ quoteExact: "this text is nowhere in the chunk", chunkId: "chunk-001", intent: "classification" }),
@@ -119,9 +163,21 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
       manifest_version: 1,
       source_path: "07_manuscript.md",
       source_sha256: manuscriptSha(),
-      chunks: [{ chunk_id: "chunk-001", source_start_line: 4, source_end_line: 4, source_sha256: "0".repeat(64), transformed: false }],
+      chunks: [
+        {
+          chunk_id: "chunk-001",
+          source_start_line: 4,
+          source_end_line: 4,
+          source_sha256: "0".repeat(64),
+          transformed: false,
+        },
+      ],
     };
-    const res = resolve(annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "dla każdego grzesznika", chunkId: "chunk-001" }),
+      buildFArtifact(manifest),
+      {},
+    );
 
     expect(res.kind).toBe("source_range");
     if (res.kind !== "source_range") throw new Error("unreachable");
@@ -133,9 +189,21 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
       manifest_version: 1,
       source_path: "07_manuscript.md",
       source_sha256: "0".repeat(64), // stale against the WHOLE current manuscript
-      chunks: [{ chunk_id: "chunk-001", source_start_line: 2, source_end_line: 2, source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2), transformed: false }],
+      chunks: [
+        {
+          chunk_id: "chunk-001",
+          source_start_line: 2,
+          source_end_line: 2,
+          source_sha256: chunkSliceSha(MANUSCRIPT, 2, 2),
+          transformed: false,
+        },
+      ],
     };
-    const res = resolve(annotation({ quoteExact: "sparafrazowany automatycznie", chunkId: "chunk-001" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "sparafrazowany automatycznie", chunkId: "chunk-001" }),
+      buildFArtifact(manifest),
+      {},
+    );
     expect(res.kind).toBe("source_range");
     if (res.kind !== "source_range") throw new Error("unreachable");
     expect(res.start_line).toBe(4);
@@ -145,10 +213,21 @@ describe("Class F — transformed:false (verbatim chunk)", () => {
 describe("Class F — transformed:true (paraphrased chunk)", () => {
   test("always routes to pipeline_feedback — no search is even attempted, even when the quote WOULD be findable", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-002", source_start_line: 4, source_end_line: 4, source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4), transformed: true },
+      {
+        chunk_id: "chunk-002",
+        source_start_line: 4,
+        source_end_line: 4,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4),
+        transformed: true,
+      },
     ]);
     const res = resolve(
-      annotation({ quoteExact: "sparafrazowany automatycznie", chunkId: "chunk-002", intent: "classification", body: "wrong split" }),
+      annotation({
+        quoteExact: "sparafrazowany automatycznie",
+        chunkId: "chunk-002",
+        intent: "classification",
+        body: "wrong split",
+      }),
       buildFArtifact(manifest),
       { pipelineFeedback: { adapter: "producer-x", component: "paraphraser" } },
     );
@@ -161,9 +240,15 @@ describe("Class F — transformed:true (paraphrased chunk)", () => {
     });
   });
 
-  test("no ctx.pipelineFeedback supplied → falls back to \"unknown\"/\"unknown\" rather than inventing or throwing", () => {
+  test('no ctx.pipelineFeedback supplied → falls back to "unknown"/"unknown" rather than inventing or throwing', () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-002", source_start_line: 4, source_end_line: 4, source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4), transformed: true },
+      {
+        chunk_id: "chunk-002",
+        source_start_line: 4,
+        source_end_line: 4,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4),
+        transformed: true,
+      },
     ]);
     const res = resolve(annotation({ quoteExact: "anything", chunkId: "chunk-002" }), buildFArtifact(manifest), {});
     expect(res.kind).toBe("pipeline_feedback");
@@ -174,9 +259,19 @@ describe("Class F — transformed:true (paraphrased chunk)", () => {
 
   test("a missing quote on a transformed chunk is STILL pipeline_feedback, not orphaned — there's nothing to verify against", () => {
     const manifest = freshManifest([
-      { chunk_id: "chunk-002", source_start_line: 4, source_end_line: 4, source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4), transformed: true },
+      {
+        chunk_id: "chunk-002",
+        source_start_line: 4,
+        source_end_line: 4,
+        source_sha256: chunkSliceSha(MANUSCRIPT, 4, 4),
+        transformed: true,
+      },
     ]);
-    const res = resolve(annotation({ quoteExact: "text that appears literally nowhere", chunkId: "chunk-002" }), buildFArtifact(manifest), {});
+    const res = resolve(
+      annotation({ quoteExact: "text that appears literally nowhere", chunkId: "chunk-002" }),
+      buildFArtifact(manifest),
+      {},
+    );
     expect(res.kind).toBe("pipeline_feedback");
   });
 });

@@ -46,7 +46,9 @@ const META_TAG_RE = /<meta\b[^>]*>/gi;
 const HTTP_EQUIV_REFRESH_RE = /http-equiv\s*=\s*(["']?)\s*refresh\s*\1/i;
 
 function stripMetaRefresh(html: string): string {
-  return html.replace(META_TAG_RE, (tag) => (HTTP_EQUIV_REFRESH_RE.test(tag) ? "<!-- glosa: meta refresh removed -->" : tag));
+  return html.replace(META_TAG_RE, (tag) =>
+    HTTP_EQUIV_REFRESH_RE.test(tag) ? "<!-- glosa: meta refresh removed -->" : tag,
+  );
 }
 
 /** Finds the index the bridge should be spliced in front of: the START of the LAST `</body>`

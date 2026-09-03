@@ -112,10 +112,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
           onStatusCb = null;
         };
       },
-      openStream(
-        _slug: string,
-        { onEvent, onReconnect }: { onEvent: (frame: any) => void; onReconnect?: () => void },
-      ) {
+      openStream(_slug: string, { onEvent, onReconnect }: { onEvent: (frame: any) => void; onReconnect?: () => void }) {
         onJournalCb = onEvent;
         onReconnectCb = onReconnect ?? null;
         return () => {
@@ -124,11 +121,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
         };
       },
       getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
-      sendComposerMessage: async (
-        slug: string,
-        text: string,
-        options: { messageId: string; sessionHint?: string },
-      ) => {
+      sendComposerMessage: async (slug: string, text: string, options: { messageId: string; sessionHint?: string }) => {
         sent.push({ slug, text, options });
         return { accepted: true, delivered: true };
       },
@@ -213,7 +206,10 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     const da = fakeDataAccess();
 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
-    da.emit({ event: "transcript", data: { type: "tool_use", tool_name: "Bash", tool_id: "t1", input: { command: "ls" }, id: "1" } });
+    da.emit({
+      event: "transcript",
+      data: { type: "tool_use", tool_name: "Bash", tool_id: "t1", input: { command: "ls" }, id: "1" },
+    });
 
     const details = root.querySelector(".glosa-conv-tool-use") as any;
     expect(details).not.toBeNull();
@@ -573,6 +569,8 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     unmount();
     // A frame emitted after unmount must not throw, and (since the fake clears its own callback
     // reference on stop()) is simply a no-op.
-    expect(() => da.emit({ event: "transcript", data: { type: "prose", role: "user", content: "late", id: "1" } })).not.toThrow();
+    expect(() =>
+      da.emit({ event: "transcript", data: { type: "prose", role: "user", content: "late", id: "1" } }),
+    ).not.toThrow();
   });
 });

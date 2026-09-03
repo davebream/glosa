@@ -4,7 +4,13 @@ import * as nodeFs from "node:fs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { appendEvent, isLifecycleCritical, JournalWriter, MAX_EVENT_BYTES, type JournalEvent } from "../../src/bus/journal.ts";
+import {
+  appendEvent,
+  isLifecycleCritical,
+  JournalWriter,
+  MAX_EVENT_BYTES,
+  type JournalEvent,
+} from "../../src/bus/journal.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { cleanupWorkspace, freshWorkspace } from "./helpers.ts";
 
@@ -101,7 +107,9 @@ describe("journal.ts — append", () => {
     appendEvent(writer, event({ event: "entry_created", event_id: "skip-fsync" }), { fsync: false });
     writer.close();
 
-    const lines = readFileSync(journalPath(root), "utf8").split("\n").filter((l) => l.length > 0);
+    const lines = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines).toHaveLength(3);
   });
 
@@ -128,7 +136,9 @@ describe("journal.ts — append", () => {
     appendEvent(writer, event({ event_id: "recovered" }));
     writer.close();
 
-    const lines = readFileSync(journalPath(root), "utf8").split("\n").filter((l) => l.length > 0);
+    const lines = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[1] as string).event_id).toBe("recovered");
     cleanupWorkspace(root);

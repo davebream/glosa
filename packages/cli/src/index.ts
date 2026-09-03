@@ -422,10 +422,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     async (context) => {
       const values = withGlobals(context);
       const initModule = await import("./scoped-init.ts");
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(
-        values.dir as string | undefined,
-        process.cwd(),
-      );
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
       const scope = (values.scope as string | undefined) ?? "workspace";
       if (scope !== "workspace" && scope !== "user") {
         const message = "--scope must be workspace or user";
@@ -648,12 +645,10 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("../../daemon/src/index.ts"),
         import("./doctor.ts"),
       ]);
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(
-        values.dir as string | undefined,
-        process.cwd(),
-      );
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
       const result = await doctorModule.runDoctor(dir, doctorModule.realDoctorDeps(createHttpGlosaClient, glosaHome));
-      const withDirWarnings = dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
+      const withDirWarnings =
+        dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
       doctorModule.printDoctorResult(withDirWarnings, Boolean(values.json));
       setExitCode(result.exitCode);
     },

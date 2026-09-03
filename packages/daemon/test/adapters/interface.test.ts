@@ -156,7 +156,7 @@ describe("derivedFromSourcePath", () => {
     expect(derivedFromSourcePath(adapter, "/w", "out.html")).toBe("src.md");
   });
 
-  test("Fix 1: a throwing derivedFrom() degrades to undefined (\"no edge\"), not a throw", () => {
+  test('Fix 1: a throwing derivedFrom() degrades to undefined ("no edge"), not a throw', () => {
     const adapter = fakeAdapter({
       derivedFrom: () => {
         throw new Error("boom — buggy adapter");
@@ -297,9 +297,16 @@ describe("resolveManifest", () => {
       const manifest = { manifest_version: 1 as const, source_path: "src.md", source_sha256: "abc", chunks: [] };
       mkdirSync(join(root, "chunks-2026"), { recursive: true });
       writeFileSync(join(root, "chunks-2026", "manifest.json"), JSON.stringify(manifest));
-      const adapter = fakeAdapter({ manifestFor: () => ({ manifestPath: "chunks-2026/manifest.json", component: "renderer" }) });
+      const adapter = fakeAdapter({
+        manifestFor: () => ({ manifestPath: "chunks-2026/manifest.json", component: "renderer" }),
+      });
       const result = resolveManifest(root, adapter, "out.html");
-      expect(result).toEqual({ manifest, component: "renderer", manifestPath: "chunks-2026/manifest.json", adapterId: "fake" });
+      expect(result).toEqual({
+        manifest,
+        component: "renderer",
+        manifestPath: "chunks-2026/manifest.json",
+        adapterId: "fake",
+      });
     });
 
     test("manifestPath escaping the workspace (confinePath rejection) -> null, never a throw", () => {
@@ -322,7 +329,9 @@ describe("resolveManifest", () => {
       const manifest = { manifest_version: 1 as const, source_path: "src.md", source_sha256: "abc", chunks: [] };
       mkdirSync(join(root, ".glosa"), { recursive: true });
       writeFileSync(join(root, ".glosa", "manifest.json"), JSON.stringify(manifest));
-      const adapter = fakeAdapter({ manifestFor: () => ({ manifestPath: ".glosa/manifest.json", component: "renderer" }) });
+      const adapter = fakeAdapter({
+        manifestFor: () => ({ manifestPath: ".glosa/manifest.json", component: "renderer" }),
+      });
       expect(resolveManifest(root, adapter, "out.html")).toBeNull();
     });
   });
