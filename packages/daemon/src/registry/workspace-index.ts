@@ -893,7 +893,10 @@ export class WorkspaceIndex {
           return { registration_id: entry.registration_id, source_path: sourcePath, target_path: targetPath };
         })
         .filter((source) => tracked.has(source.target_path))
-        .sort((a, b) => a.registration_id.localeCompare(b.registration_id));
+        // This order is persisted in the adoption plan and drives source processing after a
+        // restart, so it must not vary with the host's ICU locale. Compare the UTF-8 bytes
+        // directly, matching A4's deterministic byte-order convention.
+        .sort((a, b) => Buffer.compare(Buffer.from(a.registration_id, "utf8"), Buffer.from(b.registration_id, "utf8")));
 
       if (sources.length === 0) return null;
       if (existsSync(localBus)) {
