@@ -27,6 +27,7 @@ import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const DESCRIPTION = "Writing-first workspace for AI coding agents";
+const HOOK_ENSURE_TIMEOUT_MS = 3000;
 const PUBLIC_COMMANDS = new Set([
   "open",
   "init",
@@ -291,7 +292,7 @@ async function hookDeps(): Promise<HookDeps> {
     import("../../daemon/src/index.ts"),
     import("../../providers/claude-code/src/index.ts"),
   ]);
-  const daemonClient = await createHttpDaemonClient();
+  const daemonClient = await createHttpDaemonClient({ ensureTimeoutMs: HOOK_ENSURE_TIMEOUT_MS });
   const leases = new provider.RewakeLeaseStore({ dir: join(glosaHome(), ".sessions") });
   const rewake = new provider.RewakeCoordinator({
     leases,
@@ -888,15 +889,29 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       }
       const cwd = (input as { cwd?: unknown } | null)?.cwd;
       if (typeof cwd === "string") lastKnownCwd = cwd;
-      const { runHook } = await import("./hook.ts");
-      const deps = await hookDeps();
-      const outcome = await runHook(
-        values.event as string,
-        input,
-        deps,
-        process.pid,
-        (values.provider as string | undefined) ?? "claude-code",
-      );
+      const { runHook, validateHookInvocation } = await import("./hook.ts");
+      const providerId = (values.provider as string | undefined) ?? "claude-code";
+      const validation = validateHookInvocation(values.event as string, input, providerId);
+      if (validation) {
+        await writeOutput(process.stdout, validation.stdout);
+        await writeOutput(process.stderr, validation.stderr);
+        setExitCode(validation.exitCode);
+        return;
+      }
+      let deps: HookDeps;
+      try {
+        deps = await hookDeps();
+      } catch (error) {
+        // Hooks are one rung in the durable delivery ladder. If daemon discovery cannot finish
+        // inside the hook-specific budget, yield silently so the host prompt is never delayed or
+        // discarded; explicit CLI and MCP clients retain the actionable error.
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "DAEMON_UNREACHABLE") {
+          setExitCode(EXIT_CODES.OK);
+          return;
+        }
+        throw error;
+      }
+      const outcome = await runHook(values.event as string, input, deps, process.pid, providerId);
       try {
         await writeOutput(process.stdout, outcome.stdout);
         await writeOutput(process.stderr, outcome.stderr);

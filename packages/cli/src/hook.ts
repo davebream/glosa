@@ -62,6 +62,25 @@ function usageError(message: string): HookOutcome {
   return { exitCode: 2, stdout: "", stderr: message };
 }
 
+/** Validate everything supplied by the hook host before daemon discovery. This keeps malformed
+ * input visible even when discovery itself must yield quietly inside the host's timeout. */
+export function validateHookInvocation(event: string, input: unknown, providerId = "claude-code"): HookOutcome | null {
+  const selected = providerFor(providerId);
+  if (!selected) return usageError(`glosa hook: unknown provider '${providerId}'`);
+  if (event === "rewake-watch" && providerId !== "claude-code") {
+    return usageError("rewake-watch is only supported for claude-code");
+  }
+  if (
+    !(
+      ["session-start", "session-end", "user-prompt-submit", "stop", "notification", "rewake-watch"] as string[]
+    ).includes(event)
+  ) {
+    return usageError(`glosa hook: unknown event '${event}'`);
+  }
+  if (!selected.detectSession(input)) return usageError(`${event}: hook input missing session_id/cwd`);
+  return null;
+}
+
 async function handleSessionStart(
   input: unknown,
   deps: HookDeps,
@@ -200,6 +219,8 @@ export async function runHook(
   watcherPid = process.pid,
   providerId = "claude-code",
 ): Promise<HookOutcome> {
+  const validation = validateHookInvocation(event, input, providerId);
+  if (validation) return validation;
   const selected = providerFor(providerId);
   if (!selected) return usageError(`glosa hook: unknown provider '${providerId}'`);
   switch (event as HookEvent) {
@@ -214,7 +235,6 @@ export async function runHook(
     case "notification":
       return handleNotification(input, deps, selected);
     case "rewake-watch":
-      if (providerId !== "claude-code") return usageError("rewake-watch is only supported for claude-code");
       return handleRewakeWatch(input, deps, watcherPid);
     default:
       return usageError(`glosa hook: unknown event '${event}'`);
