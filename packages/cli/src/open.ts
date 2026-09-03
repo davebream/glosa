@@ -26,7 +26,9 @@ export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenD
     // no cross-platform detection. Fire-and-forget: `open` itself forks and hands off to the
     // browser almost immediately, so this CLI process doesn't need to await its exit.
     openBrowser: (url) => {
-      Bun.spawn({ cmd: ["open", url], stdout: "ignore", stderr: "ignore" });
+      const env = { ...Bun.env };
+      delete env.ANTHROPIC_API_KEY;
+      Bun.spawn({ cmd: ["open", url], env, stdout: "ignore", stderr: "ignore" });
     },
     platform: () => process.platform,
     cwd: () => process.cwd(),

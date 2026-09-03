@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.1 / issue #46 — `glosa open [target] [focus]` (A6 §F26).
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
@@ -71,6 +71,43 @@ describe("glosa open", () => {
     expect(deps.fileExists(join(dir, "missing.md"))).toBe(false);
     expect(deps.isRegularFile?.(file)).toBe(true);
     expect(deps.isRegularFile?.(link)).toBe(false);
+  });
+
+  test("realOpenDeps scrubs ANTHROPIC_API_KEY from the browser launcher", () => {
+    const dir = freshDir();
+    const fakeOpen = join(dir, "open");
+    const outputPath = join(dir, "child-env.txt");
+    writeFileSync(
+      fakeOpen,
+      '#!/bin/sh\nsecret="$(printenv ANTHROPIC_API_KEY || printf unset)"\ncontrol="$(printenv W03_OPEN_CONTROL || printf unset)"\nprintf \'%s|%s\' "$secret" "$control" > "$W03_OPEN_OUTPUT"\n',
+    );
+    chmodSync(fakeOpen, 0o755);
+
+    const modulePath = join(import.meta.dir, "../src/open.ts");
+    const child = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "-e",
+        `const { existsSync, readFileSync } = await import("node:fs");
+         const { realOpenDeps } = await import(${JSON.stringify(modulePath)});
+         realOpenDeps(async () => ({})).openBrowser("http://127.0.0.1:4646/");
+         for (let attempt = 0; attempt < 100 && !existsSync(${JSON.stringify(outputPath)}); attempt++) await Bun.sleep(10);
+         const observed = existsSync(${JSON.stringify(outputPath)}) ? readFileSync(${JSON.stringify(outputPath)}, "utf8") : null;
+         process.stdout.write(JSON.stringify({ observed }));`,
+      ],
+      env: {
+        ...Bun.env,
+        PATH: `${dir}:/usr/bin:/bin`,
+        ANTHROPIC_API_KEY: "w03-open-secret-sentinel",
+        W03_OPEN_CONTROL: "w03-open-control-sentinel",
+        W03_OPEN_OUTPUT: outputPath,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(child.success).toBe(true);
+    expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ observed: "unset|w03-open-control-sentinel" });
   });
 
   test("non-darwin platform -> exit 5, never touches the daemon", async () => {

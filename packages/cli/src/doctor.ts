@@ -43,7 +43,9 @@ export interface DoctorDeps {
 
 function realRunVersionProbe(cmd: string[]): string | null {
   try {
-    const proc = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe" });
+    const env = { ...Bun.env };
+    delete env.ANTHROPIC_API_KEY;
+    const proc = Bun.spawnSync({ cmd, env, stdout: "pipe", stderr: "pipe" });
     if (!proc.success) return null;
     return proc.stdout.toString("utf8").trim();
   } catch {

@@ -9,6 +9,27 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { realUpdateDeps, runUpdate, type UpdateDeps } from "../src/update.ts";
 
+test("realUpdateDeps scrubs ANTHROPIC_API_KEY from successful version probes", () => {
+  const secret = "w03-update-secret-sentinel";
+  const control = "w03-update-control-sentinel";
+  const modulePath = join(import.meta.dir, "../src/update.ts");
+  const child = Bun.spawnSync({
+    cmd: [
+      process.execPath,
+      "-e",
+      `const { realUpdateDeps } = await import(${JSON.stringify(modulePath)});
+       const output = realUpdateDeps().runVersionProbe(["/usr/bin/env"]);
+       process.stdout.write(JSON.stringify({ present: output !== null, control: output?.includes(${JSON.stringify(control)}) ?? false, secret: output?.includes(${JSON.stringify(secret)}) ?? false }));`,
+    ],
+    env: { ...Bun.env, ANTHROPIC_API_KEY: secret, W03_UPDATE_CONTROL: control },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  expect(child.success).toBe(true);
+  expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ present: true, control: true, secret: false });
+});
+
 test("realUpdateDeps fetches and verifies a local release with static requests and safe install wiring", async () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), "glosa-update-registry-"));
   const keyPath = join(fixtureDir, "key.pem");
