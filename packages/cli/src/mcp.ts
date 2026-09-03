@@ -257,7 +257,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     {
       title: "Pull glosa inbox",
       description:
-        "Pull the oldest pending actionable glosa inbox entries for a workspace (at most eight). Reserves delivery briefly; successful stdio write acknowledges presentation.",
+        "Pull the oldest pending actionable glosa inbox entries across the active session's routable workspaces (at most eight globally). Reserves delivery briefly; successful stdio write acknowledges presentation.",
       inputSchema: inboxPullInputSchema,
       outputSchema: inboxPullOutputSchema,
       annotations: { ...readOnlyClosedWorld, title: "Pull glosa inbox" },

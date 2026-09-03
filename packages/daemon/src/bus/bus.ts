@@ -33,6 +33,7 @@ import {
 } from "./lifecycle.ts";
 import { KeyedMutex } from "./mutex.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
+import { peekJournal } from "./peek.ts";
 import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
 import { applyEvent, type ApplyLeaseState, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
@@ -51,6 +52,21 @@ export interface PreparedDelivery {
   delivery_id: string | null;
   drained: DeliverableEntry[];
   count: number;
+  has_more: boolean;
+}
+
+/** A read-only delivery candidate used to merge several workspace journals before any entry is
+ * reserved. `journal_order` is local to this workspace; `created_at` comes from the durable
+ * entry-created/adopted journal event rather than inbox metadata or process memory. */
+export interface PlannedDeliveryEntry {
+  id: string;
+  created_at: string;
+  journal_order: number;
+  presentation: DeliverableEntry | null;
+}
+
+export interface PlannedDelivery {
+  entries: PlannedDeliveryEntry[];
   has_more: boolean;
 }
 
@@ -648,6 +664,63 @@ export class WorkspaceBus {
     }
   }
 
+  private eligibleDeliveryEntriesLocked(opts: {
+    session: string;
+    entryId?: string;
+  }): Array<[string, DerivedState["entries"][string], unknown]> {
+    const reserved = new Set(
+      Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
+    );
+    const eligible: Array<[string, DerivedState["entries"][string], unknown]> = [];
+    for (const [id, entry] of Object.entries(this.state.entries)) {
+      if (opts.entryId && id !== opts.entryId) continue;
+      if (reserved.has(id)) continue;
+      const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
+      if (isTerminal(kind, entry.status)) continue;
+      const payload = readInboxEntry(this.workspace, id);
+      if (payload && typeof payload === "object") {
+        const target = (payload as Record<string, unknown>).target_session_id;
+        if (typeof target === "string" && target !== opts.session) continue;
+      }
+      const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+      // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
+      // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
+      // turn-boundary/MCP safety-net drain permanently.
+      if (attempts.some((attempt) => attempt.outcome === "presented")) continue;
+      eligible.push([id, entry, payload]);
+    }
+    return eligible;
+  }
+
+  /** Plans at most eight locally-oldest eligible presentations under this workspace's mutex but
+   * does not reserve, discard, or append anything. A cross-workspace coordinator can therefore
+   * compute one global order/cap first, then reserve the exact selected ids. A concurrent drain
+   * between these two phases is detected by the exact-id prepare returning no item; callers must
+   * roll back every reservation they already acquired rather than substitute another entry. */
+  previewDelivery(
+    limit: number,
+    opts: { session: string; entryId?: string },
+    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+  ): Promise<PlannedDelivery> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      this.pruneDeliveryReservationsLocked();
+      const { createdAt, entryOrder } = peekJournal(this.workspace);
+      const planned: PlannedDeliveryEntry[] = [];
+      const eligible = this.eligibleDeliveryEntriesLocked(opts);
+      for (const [id, entry, payload] of eligible) {
+        planned.push({
+          id,
+          created_at: createdAt.get(id) ?? "9999-12-31T23:59:59.999Z",
+          journal_order: entryOrder.get(id) ?? Number.MAX_SAFE_INTEGER,
+          presentation: await build(id, payload, entry.status),
+        });
+        if (planned.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
+      }
+      return { entries: planned, has_more: eligible.length > planned.length };
+    });
+  }
+
   /** Selects and formats entries under the workspace mutex, without claiming that the caller has
    * surfaced them. A later acknowledgement records the actual transport outcome. */
   prepareDelivery(
@@ -658,36 +731,15 @@ export class WorkspaceBus {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       this.pruneDeliveryReservationsLocked();
-      const reserved = new Set(
-        Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
-      );
-      const eligible = Object.entries(this.state.entries).filter(([id, entry]) => {
-        if (opts.entryId && id !== opts.entryId) return false;
-        if (reserved.has(id)) return false;
-        const kind =
-          entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
-        if (isTerminal(kind, entry.status)) return false;
-        const payload = readInboxEntry(this.workspace, id);
-        if (payload && typeof payload === "object") {
-          const target = (payload as Record<string, unknown>).target_session_id;
-          if (typeof target === "string" && target !== opts.session) return false;
-        }
-        const attempts = Array.isArray(entry.deliveryAttempts)
-          ? (entry.deliveryAttempts as DeliveryAttemptRecord[])
-          : [];
-        // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
-        // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
-        // turn-boundary/MCP safety-net drain permanently.
-        return !attempts.some((attempt) => attempt.outcome === "presented");
-      });
+      const eligible = this.eligibleDeliveryEntriesLocked(opts);
 
       const presentations: DeliverableEntry[] = [];
       let batchBytes = 0;
-      for (const [id, entry] of eligible) {
+      for (const [id, entry, payload] of eligible) {
         if (presentations.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
         let presentation: DeliverableEntry | null = null;
         try {
-          presentation = await build(id, readInboxEntry(this.workspace, id), entry.status);
+          presentation = await build(id, payload, entry.status);
         } catch (error) {
           const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
           this.recordDeliveryAttemptLocked(id, {
@@ -779,6 +831,16 @@ export class WorkspaceBus {
         }
       }
       return true;
+    });
+  }
+
+  /** Releases an unacknowledged reservation without appending a delivery attempt. Composite
+   * preparation uses this on every already-prepared constituent if a later exact-id reservation
+   * fails or the freshly rebuilt presentation no longer fits the global cap. */
+  cancelDelivery(deliveryId: string): Promise<boolean> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.pruneDeliveryReservationsLocked();
+      return this.deliveryReservations.delete(deliveryId);
     });
   }
 

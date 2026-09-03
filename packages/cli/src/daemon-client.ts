@@ -21,7 +21,9 @@ export interface RegisterSessionResult {
   workspace: string;
 }
 
-export type DrainedEntry = DeliverableEntry;
+/** Contract 1.6 daemons always label the canonical workspace in structured data and visible text.
+ * The field stays optional here because same-major N/N-1 clients may receive a 1.5 response. */
+export type DrainedEntry = DeliverableEntry & { workspace?: string };
 
 export interface DrainResult {
   delivery_id?: string | null;

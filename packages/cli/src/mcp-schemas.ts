@@ -72,6 +72,11 @@ const presentationRetrievalSchema = z
 
 const presentationBaseShape = {
   id: inboxId,
+  workspace: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Canonical absolute workspace path from contract 1.6+; also included in presentation text."),
   status: z.string().min(1).describe("Derived inbox status at presentation time."),
   text: z.string().describe("Bounded actionable presentation text."),
   bytes: z.number().int().min(0).describe("UTF-8 byte length of text."),
@@ -111,7 +116,9 @@ export const inboxPullOutputSchema = z
     entries: z
       .array(inboxPresentationSchema)
       .max(8)
-      .describe("Pulled actionable presentations in journal creation order."),
+      .describe(
+        "Pulled actionable presentations in global durable created/adopted order, each labelled with its canonical workspace.",
+      ),
     count: z.number().int().min(0).max(8).describe("Number of returned entries."),
     has_more: z.boolean().describe("True when more eligible entries remain."),
   })

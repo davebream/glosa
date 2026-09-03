@@ -96,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.5", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.6", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -358,7 +358,33 @@ All routes require Bearer authentication; POST routes are Origin-gated.
 
 Each `drained[]` item is the R3 discriminated presentation object and is capped at 16 KiB UTF-8;
 the serialized batch is capped at 32 KiB including separators. Continuations use the same opaque
-cursor accepted by the retrieval GET and `glosa_inbox_get` MCP tool.
+cursor accepted by the retrieval GET and `glosa_inbox_get` MCP tool. A contract 1.6 daemon always
+adds the canonical absolute `workspace` path to each structured presentation and prepends
+`workspace: <path>` to its agent-visible text; both the label and separator count inside those
+existing byte caps. Same-major N/N-1 client schemas continue to accept its absence from a 1.5 daemon.
+
+An explicitly bound session prepares and acknowledges only its exact workspace. For an unbound
+session, the daemon enumerates every present, active workspace for which the R2 `forWorkspace`
+predicate includes that session, without selecting one descendant. It first plans candidates without
+reserving or discarding them, then sorts by the durable entry-created/adopted timestamp. Ties use the
+workspace registration id's raw UTF-8 byte order, followed by local journal order and raw UTF-8 entry
+id; locale collation is forbidden. Only after applying the global count/byte caps does it reserve each
+exact selected id. A contender, changed presentation that no longer fits, or constituent preparation
+failure releases every reservation acquired by that attempt and returns an error; it never substitutes
+a different entry or exposes a partial response. Entries omitted by either cap were never reserved.
+
+One `cmp_…` token coordinates the constituent workspace reservations in memory. The coordinator
+serializes preparation and acknowledgement, so duplicate acknowledgements cannot consume or cancel
+one another's child reservations. Ordinary coordinator activity prunes expired composites and releases
+only their unacknowledged children. Acknowledgement appends each workspace's ordinary
+`delivery_attempt`; HTTP success is returned only after every append completes. This is coordination,
+not a second source of truth and not a cross-file atomic write. If an append fails after a prefix
+completed, the same-process retry skips that in-memory completed prefix and continues the suffix with
+the same outcome. If the daemon instead crashes, the composite token and all
+unacknowledged reservations disappear: completed journal attempts remain true, while the suffix is
+eligible for a later drain. Retrying a lost token returns 409. Thus a crash may leave an honest journal
+prefix, never a false all-or-nothing claim; no response reports full acknowledgement until all journals
+completed.
 
 ### 5.16 Conversation composer delivery
 

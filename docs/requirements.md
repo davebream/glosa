@@ -134,7 +134,11 @@ generic.**
   contract (authoritative); (2) the generic cwd-ancestor fallback. This supports artifact workspaces
   that differ from the agent process cwd without teaching glosa about an external workflow. Two sessions bound to one
   workspace → deliver to the `session_hint`; else a one-time SPA picker (never guess). No live session →
-  the entry **parks**; next session registration for that workspace drains it.
+  the entry **parks**; next session registration for that workspace drains it. An explicitly bound
+  session drains only that exact workspace. An unbound session drain applies the same cwd-ancestor
+  routing predicate in reverse across every present, active registered workspace; it combines rather
+  than guesses among nested descendants. The combined response retains the global eight-entry/32-KiB
+  caps and labels every agent-visible presentation with its canonical workspace path (A1 §5.15).
 
 ### R3 — file bus: inbox, journal (=truth), provenance  (detail: A4 §F04/§F05, A5 §F23)
 - **The journal is the single source of truth.** Inbox entries are **immutable** (write-once, temp→
@@ -207,7 +211,7 @@ the entry survives.
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.3: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.6: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, presentation-token mint/redeem) — schemas, status codes, 1 MiB body cap,

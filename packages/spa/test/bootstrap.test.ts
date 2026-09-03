@@ -226,6 +226,10 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
+  test("the bundled SPA advertises contract 1.6", () => {
+    expect(CONTRACT_VERSION).toBe("1.6");
+  });
+
   test("handshake null (fetch failed/threw) → down", () => {
     expect(selectScreen(null, "some-token")).toBe("down");
   });

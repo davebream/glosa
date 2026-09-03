@@ -66,6 +66,7 @@ function actionable(
 ): DrainedEntry {
   return {
     id,
+    workspace: "/repo",
     kind,
     status: "pending",
     text,

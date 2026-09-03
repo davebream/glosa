@@ -65,7 +65,13 @@ import { serveClassFDocument } from "./classf-serve.ts";
 import { confinePath } from "./confine-path.ts";
 import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
 import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { buildDeliveryPresentation } from "./delivery/presentation.ts";
+import { CompositeDeliveryRegistry } from "./delivery/composite-reservations.ts";
+import {
+  buildDeliveryPresentation,
+  MAX_BATCH_PRESENTATION_BYTES,
+  MAX_ENTRY_PRESENTATION_BYTES,
+  utf8Bytes,
+} from "./delivery/presentation.ts";
 import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
 import { resolveTrackedFiles } from "./matcher.ts";
 import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presentation-token.ts";
@@ -159,6 +165,9 @@ export interface ApiContext {
    * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
    * construct their own `WorkspaceBus`. */
   getWorkspaceBus: (workspace: WorkspaceTarget) => WorkspaceBus;
+  /** Ephemeral only: coordinates a single agent-visible batch assembled from several workspace
+   * reservations. Optional for hand-built tests; `createApiFetch` owns one per context otherwise. */
+  compositeDeliveryRegistry?: CompositeDeliveryRegistry;
   /** Atomically preflights and seals all loose sources through the daemon's shared registry. */
   sealAdoptionSources?: (
     sources: readonly WorkspaceTarget[],
@@ -196,6 +205,18 @@ export interface ApiContext {
    * hand-built test contexts keep compiling and narrow tests can inject a fake. Production wires
    * `createInitRunner` in lifecycle.ts. */
   runWorkspaceInit?: InitRunner;
+}
+
+const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
+
+function compositeRegistry(ctx: ApiContext): CompositeDeliveryRegistry {
+  if (ctx.compositeDeliveryRegistry) return ctx.compositeDeliveryRegistry;
+  let registry = contextCompositeRegistries.get(ctx);
+  if (!registry) {
+    registry = new CompositeDeliveryRegistry();
+    contextCompositeRegistries.set(ctx, registry);
+  }
+  return registry;
 }
 
 /** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
@@ -660,7 +681,7 @@ function buildActionablePresentation(
   payload: unknown,
   status: string,
   cursor?: string,
-): DeliverableEntry | null {
+): (DeliverableEntry & { workspace: string }) | null {
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
@@ -676,11 +697,25 @@ function buildActionablePresentation(
       });
     }
   }
-  return buildDeliveryPresentation(id, payload, {
+  const workspaceLine = `workspace: ${workspace.canonical_path}`;
+  const presentation = buildDeliveryPresentation(id, payload, {
     status,
     ...(resolution ? { resolution } : {}),
     ...(cursor ? { cursor } : {}),
+    // The canonical workspace label is agent-visible, so its bytes are part of the same 16 KiB
+    // entry cap rather than uncounted JSON metadata bolted onto an already-full presentation.
+    maxBytes: Math.max(0, MAX_ENTRY_PRESENTATION_BYTES - utf8Bytes(workspaceLine) - 1),
   });
+  if (!presentation) return null;
+  const text = `${workspaceLine}\n${presentation.text}`;
+  const bytes = utf8Bytes(text);
+  if (bytes > MAX_ENTRY_PRESENTATION_BYTES) return null;
+  return {
+    ...presentation,
+    workspace: workspace.canonical_path,
+    text,
+    bytes,
+  };
 }
 
 /** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
@@ -1343,6 +1378,165 @@ async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Prom
 
 const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
 
+interface CompositeDrainCandidate {
+  workspace: WorkspaceEntry;
+  bus: WorkspaceBus;
+  id: string;
+  created_at: string;
+  journal_order: number;
+  presentation: (DeliverableEntry & { workspace: string }) | null;
+}
+
+function compareUtf8Text(a: string, b: string): number {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+/** Cross-workspace creation order is the persisted entry timestamp. Equal timestamps use the
+ * durable registration id's raw UTF-8 bytes, then the entry's local journal order and id bytes.
+ * No host locale participates. Invalid legacy timestamps sort after valid timestamps, then by
+ * their raw UTF-8 bytes so even damaged-but-readable history has one deterministic order. */
+function compareCompositeCandidates(a: CompositeDrainCandidate, b: CompositeDrainCandidate): number {
+  const aAt = Date.parse(a.created_at);
+  const bAt = Date.parse(b.created_at);
+  const aValid = Number.isFinite(aAt);
+  const bValid = Number.isFinite(bAt);
+  if (aValid !== bValid) return aValid ? -1 : 1;
+  if (aValid && bValid && aAt !== bAt) return aAt < bAt ? -1 : 1;
+  if (!aValid && !bValid) {
+    const malformedAt = compareUtf8Text(a.created_at, b.created_at);
+    if (malformedAt !== 0) return malformedAt;
+  }
+  const workspace = compareUtf8Text(a.workspace.registration_id, b.workspace.registration_id);
+  if (workspace !== 0) return workspace;
+  if (a.journal_order !== b.journal_order) return a.journal_order - b.journal_order;
+  return compareUtf8Text(a.id, b.id);
+}
+
+function sessionRoutesToWorkspace(ctx: ApiContext, sessionId: string, workspace: WorkspaceEntry): boolean {
+  return ctx.sessionRegistry
+    .forWorkspace(workspace.canonical_path)
+    .some((candidate) => candidate.session_id === sessionId);
+}
+
+async function handleCompositeSessionDrain(
+  ctx: ApiContext,
+  sessionId: string,
+  record: NonNullable<ReturnType<SessionRegistry["get"]>>,
+  limit: number,
+  via: DeliveryVia,
+  entryId?: string,
+  cursor?: string,
+): Promise<Response> {
+  return compositeRegistry(ctx).prepare(async () => {
+    let workspaces = ctx.workspaceIndex
+      .list({ presentOnly: true })
+      .filter((workspace) => (workspace.lifecycle?.state ?? "active") === "active")
+      .filter((workspace) => sessionRoutesToWorkspace(ctx, sessionId, workspace))
+      .sort((a, b) => compareUtf8Text(a.registration_id, b.registration_id));
+
+    // Registration normally created this already. Preserve the old route's self-healing behavior
+    // if an in-memory session outlives an absent index entry, but do not override an explicit
+    // session bound to the cwd (the routing predicate still decides eligibility).
+    if (workspaces.length === 0) {
+      const cwdWorkspace =
+        ctx.workspaceIndex.get(record.cwd) ?? (await ctx.workspaceIndex.upsertWorkspace(record.cwd, "session"));
+      if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace)) workspaces = [cwdWorkspace];
+    }
+
+    const candidates: CompositeDrainCandidate[] = [];
+    let undisclosedLocalCandidates = false;
+    for (const workspace of workspaces) {
+      const bus = await resolveBus(ctx, workspace);
+      const plan = await bus.previewDelivery(
+        DRAIN_MAX,
+        { session: sessionId, ...(entryId ? { entryId } : {}) },
+        (id, payload, status) => buildActionablePresentation(ctx, workspace, id, payload, status, cursor),
+      );
+      undisclosedLocalCandidates ||= plan.has_more;
+      for (const item of plan.entries) {
+        candidates.push({
+          ...item,
+          workspace,
+          bus,
+          presentation: item.presentation as CompositeDrainCandidate["presentation"],
+        });
+      }
+    }
+    candidates.sort(compareCompositeCandidates);
+
+    const selected: CompositeDrainCandidate[] = [];
+    let plannedBytes = 0;
+    for (const candidate of candidates) {
+      if (!candidate.presentation) throw new Error(`entry ${candidate.id} is not an actionable presentation`);
+      if (selected.length >= Math.min(Math.max(1, limit), DRAIN_MAX)) break;
+      const separatorBytes = selected.length > 0 ? utf8Bytes("\n\n---\n\n") : 0;
+      if (plannedBytes + separatorBytes + candidate.presentation.bytes > MAX_BATCH_PRESENTATION_BYTES) break;
+      selected.push(candidate);
+      plannedBytes += separatorBytes + candidate.presentation.bytes;
+    }
+
+    if (selected.length === 0) {
+      return Response.json({ delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 });
+    }
+
+    const children: Array<{ bus: WorkspaceBus; delivery_id: string }> = [];
+    const drained: Array<DeliverableEntry & { workspace: string }> = [];
+    let reservedBytes = 0;
+    let compositeDeliveryId: string;
+    try {
+      for (const candidate of selected) {
+        // Reserve exactly the planned id. If another drain won the race after preview, this returns
+        // no item; never substitute the workspace's next eligible entry.
+        const prepared = await candidate.bus.prepareDelivery(
+          1,
+          { via, session: sessionId, entryId: candidate.id },
+          (id, payload, status) => buildActionablePresentation(ctx, candidate.workspace, id, payload, status, cursor),
+        );
+        if (prepared.count !== 1 || prepared.delivery_id === null || prepared.drained[0]?.id !== candidate.id) {
+          if (prepared.delivery_id) children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} changed during preparation`);
+        }
+        const presentation = prepared.drained[0] as DeliverableEntry & { workspace?: string };
+        if (presentation.workspace !== candidate.workspace.canonical_path) {
+          children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} lost its workspace identity`);
+        }
+        const separatorBytes = drained.length > 0 ? utf8Bytes("\n\n---\n\n") : 0;
+        if (
+          presentation.bytes > MAX_ENTRY_PRESENTATION_BYTES ||
+          reservedBytes + separatorBytes + presentation.bytes > MAX_BATCH_PRESENTATION_BYTES
+        ) {
+          children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} changed beyond the presentation cap`);
+        }
+        children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+        drained.push(presentation as DeliverableEntry & { workspace: string });
+        reservedBytes += separatorBytes + presentation.bytes;
+      }
+      // Registry allocation is part of preparation. If it fails, none of the child reservations
+      // may remain stranded behind a token that was never returned to the caller.
+      compositeDeliveryId = compositeRegistry(ctx).create(sessionId, children);
+    } catch (error) {
+      const releases = await Promise.allSettled(children.map((child) => child.bus.cancelDelivery(child.delivery_id)));
+      const releaseFailure = releases.find((result) => result.status === "rejected");
+      if (releaseFailure?.status === "rejected") {
+        throw new AggregateError(
+          [error, releaseFailure.reason],
+          "composite preparation and reservation release failed",
+        );
+      }
+      throw error;
+    }
+
+    return Response.json({
+      delivery_id: compositeDeliveryId,
+      drained,
+      count: drained.length,
+      has_more: undisclosedLocalCandidates || candidates.length > selected.length,
+    });
+  });
+}
+
 /** `POST /api/sessions/:id/drain` — prepares the rung-3 turn-boundary payload (UserPromptSubmit's
  * additionalContext + Stop's blocking reason, A6 §F26). Selection, actionable formatting, byte
  * accounting, and reservation happen under one workspace mutex; no `presented` event is written
@@ -1386,7 +1580,11 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
 
-  const root = record.workspace_binding ?? record.cwd;
+  if (!record.workspace_binding) {
+    return handleCompositeSessionDrain(ctx, sessionId, record, limit, via, entryId, cursor);
+  }
+
+  const root = record.workspace_binding;
   const workspace = ctx.workspaceIndex.get(root) ?? (await ctx.workspaceIndex.upsertWorkspace(root, "session"));
   const bus = await resolveBus(ctx, workspace);
 
@@ -1418,6 +1616,21 @@ async function handleSessionDeliveryAck(
   const outcome = value?.outcome;
   if (outcome !== "presented" && outcome !== "failed") {
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, url.pathname);
+  }
+  if (CompositeDeliveryRegistry.isCompositeToken(deliveryId)) {
+    const acknowledged = await compositeRegistry(ctx).acknowledge(
+      deliveryId,
+      sessionId,
+      outcome,
+      typeof value?.error === "string" ? value.error : undefined,
+    );
+    if (acknowledged === "outcome-conflict") {
+      return problem(409, "conflict", "composite acknowledgement outcome changed", undefined, url.pathname);
+    }
+    if (acknowledged !== "acknowledged") {
+      return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
+    }
+    return Response.json({ acknowledged: true });
   }
   const root = record.workspace_binding ?? record.cwd;
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);

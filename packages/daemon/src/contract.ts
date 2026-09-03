@@ -11,8 +11,9 @@ import { parseProtocolVersion } from "./protocol.ts";
  * daemon lifecycle compatibility, so this is deliberately independent of `PROTOCOL_VERSION`.
  * v1.4 (issue #80) additively adds `GET /w/:slug/wiring`, `POST /w/:slug/init`, and the
  * `wiring`/`orphaned_state` fields on `GET /api/status` — N/N-1 safe per A1 §3.
- * v1.5 (issue #95) adds provider-owned connect prompts to each `/api/status` workspace. */
-export const CONTRACT_VERSION = "1.5";
+ * v1.5 (issue #95) adds provider-owned connect prompts to each `/api/status` workspace.
+ * v1.6 adds workspace-labelled composite drains for unbound ancestor sessions. */
+export const CONTRACT_VERSION = "1.6";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

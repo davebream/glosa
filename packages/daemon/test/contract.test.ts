@@ -9,12 +9,12 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.5) → ok", () => {
-    expect(checkContractVersion("1.5")).toEqual({ status: "ok" });
+  test("exact match (1.6) → ok", () => {
+    expect(checkContractVersion("1.6")).toEqual({ status: "ok" });
   });
 
-  test("previous minor (1.4) → stale-minor", () => {
-    expect(checkContractVersion("1.4")).toEqual({ status: "stale-minor" });
+  test("N-1 minor (1.5) → stale-minor", () => {
+    expect(checkContractVersion("1.5")).toEqual({ status: "stale-minor" });
   });
 
   test("previous minor (1.0) → stale-minor", () => {
