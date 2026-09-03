@@ -2,7 +2,7 @@
 // Test-only helpers shared across the P1.2 daemon lifecycle suites. Every test gets its own
 // tmp GLOSA_HOME and collision-free high port block, and nothing here ever touches a real
 // `~/.glosa`.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,76 +23,153 @@ export function cleanupHome(home: string): void {
   }
 }
 
-// Every isolated Bun test module evaluates this file separately, so a module-local random range
-// is not enough: two workers can independently choose the same port. Reserve blocks atomically
-// in the shared temp directory instead. A block has four ports because the daemon claims
-// `port + 1` for Class-F and tests may derive up to `port + 3`.
+// Every isolated Bun test module evaluates this file separately, so a module-local random range is
+// not enough: two workers can independently choose the same port. Two *worktrees* can too — a
+// developer running `bun test` in two checkouts at once is the case that made this concrete. So the
+// reservation stays MACHINE-GLOBAL. Namespacing it per worktree would only trade one bug for a
+// worse one: 127.0.0.1 ports are a machine-global resource, so two namespaced checkouts would each
+// happily "own" port 20000 and then collide for real on bind.
+//
+// The reservation IS a listening socket, not a file. Reservations used to be directories under a
+// shared `$TMPDIR` root, released only from `process.once("exit", ...)`, which meant a SIGKILLed or
+// crashed run leaked its block forever; the root grew monotonically until every socket test on the
+// machine failed, in isolation too, with nothing to hint that the fix was `rm -rf` on a directory.
+//
+// `packages/daemon/src/registry/lockfile-fallback.ts` solves its equivalent problem with an owner
+// pid plus `kill(pid, 0)` liveness bounded by an abandon ceiling, and that is the right answer
+// THERE: it guards an ordinary file, and no filesystem offers compare-and-delete, so a reclaimer
+// that reads a dead record and then unlinks it can unlink the LIVE record a second reclaimer just
+// put in its place — which is why that module also has to re-prove ownership afterwards and can
+// raise LEASE_STOLEN. Copying that here would import the same residual race and a TTL that is a
+// guess either way.
+//
+// We do not need it, because the resource being reserved is itself a kernel object. bind(2) is a
+// real compare-and-swap, and the kernel closes the socket when the owner dies for ANY reason —
+// SIGKILL, panic, a `bun test` interrupted with ctrl-C. Reclamation is therefore immediate and
+// exact, with no pid, no TTL, no sweeper and no reclaim race; and a crashed run leaves nothing on
+// disk at all, so there is no leak left to reap. That is strictly stronger than the directories
+// were, which only excluded processes that agreed to consult the directory.
+//
+// One sentinel port per block, in a range disjoint from the blocks themselves, so holding a
+// reservation never occupies a port a test might want. A block is four ports because the daemon
+// claims `port + 1` for Class-F and tests may derive up to `port + 3`.
 const PORT_MIN = 20_000;
-const PORT_MAX_EXCLUSIVE = 60_000;
 const PORT_BLOCK_SIZE = 4;
-const PORT_RESERVATION_ROOT = join(tmpdir(), "glosa-test-port-reservations");
-const ownedReservations = new Set<string>();
-let nextPort = PORT_MIN;
+/** First sentinel port. Everything below is block space, everything from here to 59_999 is one
+ * sentinel per block — 8000 blocks and 8000 sentinels fit the 20_000-59_999 range exactly. */
+const SENTINEL_MIN = 52_000;
+const MAX_BLOCKS = (SENTINEL_MIN - PORT_MIN) / PORT_BLOCK_SIZE;
 
-function reservationPath(port: number): string {
-  return join(PORT_RESERVATION_ROOT, String(port));
+/** Test seams, and the ONLY reason this is configurable: a subprocess test must be able to retry
+ * one exact block to prove crash release and live-owner exclusion without binding 8000 sentinels.
+ * Anything absent, unparseable or out of range falls back to the normal whole-range behavior, so
+ * a stray env var cannot point outside the allocator's range. */
+function configuredBlockOffset(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed >= MAX_BLOCKS) return 0;
+  return parsed;
+}
+
+function configuredBlockCount(raw: string | undefined, available: number): number {
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > available) return available;
+  return parsed;
+}
+
+const BLOCK_OFFSET = configuredBlockOffset(Bun.env.GLOSA_TEST_PORT_BLOCK_OFFSET);
+const BLOCK_COUNT = configuredBlockCount(Bun.env.GLOSA_TEST_PORT_BLOCKS, MAX_BLOCKS - BLOCK_OFFSET);
+const BLOCK_MIN = PORT_MIN + BLOCK_OFFSET * PORT_BLOCK_SIZE;
+const BLOCK_MAX_EXCLUSIVE = BLOCK_MIN + BLOCK_COUNT * PORT_BLOCK_SIZE;
+
+function bindExclusiveListener(port: number) {
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port,
+    // Bun documents the default as non-exclusive. Darwin currently rejects a second bind even
+    // without this flag, but the allocator must depend on the API contract, not that accident.
+    exclusive: true,
+    // Nothing ever connects to a sentinel. It exists only to be un-bindable by anyone else, so the
+    // handlers just refuse whatever wanders in.
+    socket: {
+      data: () => {},
+      open: (socket) => {
+        socket.end();
+      },
+    },
+  });
+}
+
+type Sentinel = ReturnType<typeof bindExclusiveListener>;
+
+// Strong references, deliberately. Sentinels are unref'd so a reservation never keeps a test
+// process alive, and an unref'd listener that nothing references is exactly the kind of object a GC
+// is free to finalize — which would silently drop a reservation the process still depends on.
+const heldSentinels: Sentinel[] = [];
+let nextPort = BLOCK_MIN;
+
+function sentinelPortFor(port: number): number {
+  return SENTINEL_MIN + (port - PORT_MIN) / PORT_BLOCK_SIZE;
 }
 
 function probePortBlock(port: number): boolean {
-  const probes: ReturnType<typeof Bun.serve>[] = [];
+  const probes: Sentinel[] = [];
   try {
     for (let offset = 0; offset < PORT_BLOCK_SIZE; offset += 1) {
-      probes.push(
-        Bun.serve({
-          hostname: "127.0.0.1",
-          port: port + offset,
-          fetch: () => new Response(null, { status: 204 }),
-        }),
-      );
+      probes.push(bindExclusiveListener(port + offset));
     }
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
     return false;
   } finally {
-    for (const probe of probes) void probe.stop(true);
+    // SocketListener.stop() is synchronous, unlike Bun.serve.stop(). randomPort() may hand this
+    // block to a daemon immediately, so returning before the probes close creates its own bind race.
+    for (const probe of probes) probe.stop(true);
   }
 }
 
 function reservePortBlock(port: number): boolean {
-  const reservation = reservationPath(port);
+  let sentinel: Sentinel;
   try {
-    mkdirSync(PORT_RESERVATION_ROOT, { recursive: true });
-    mkdirSync(reservation);
+    sentinel = bindExclusiveListener(sentinelPortFor(port));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw error;
+    // EADDRINUSE means a live process — this one, a sibling test file, another worktree's suite —
+    // holds the block. Anything else is a real failure and must not be read as "block taken".
+    if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    return false;
+  }
+  sentinel.unref();
+
+  // The sentinel excludes other users of this helper; the probe catches everything else that might
+  // already be sitting on the block — an unrelated service, or a daemon orphaned by an earlier run.
+  if (!probePortBlock(port)) {
+    sentinel.stop(true);
+    return false;
   }
 
-  if (probePortBlock(port)) {
-    ownedReservations.add(reservation);
-    return true;
-  }
-
-  rmSync(reservation, { recursive: true, force: true });
-  return false;
+  heldSentinels.push(sentinel);
+  return true;
 }
 
-process.once("exit", () => {
-  for (const reservation of ownedReservations) rmSync(reservation, { recursive: true, force: true });
-});
-
 /** A cross-process collision-free high port block. The returned port and its next three ports
- * are reserved for this test process, including the daemon's default Class-F listener. */
+ * are reserved for this test process, including the daemon's default Class-F listener. The
+ * reservation lasts exactly as long as this process does, however it ends. */
 export function randomPort(): number {
-  const blockCount = (PORT_MAX_EXCLUSIVE - PORT_MIN) / PORT_BLOCK_SIZE;
-  for (let attempt = 0; attempt < blockCount; attempt += 1) {
+  for (let attempt = 0; attempt < BLOCK_COUNT; attempt += 1) {
     const port = nextPort;
     nextPort += PORT_BLOCK_SIZE;
-    if (nextPort >= PORT_MAX_EXCLUSIVE) nextPort = PORT_MIN;
+    if (nextPort >= BLOCK_MAX_EXCLUSIVE) nextPort = BLOCK_MIN;
     if (reservePortBlock(port)) return port;
   }
-  throw new Error("no free glosa test port blocks remain");
+  throw new Error(
+    `no free glosa test port block in ${BLOCK_MIN}-${BLOCK_MAX_EXCLUSIVE - 1}: all ${BLOCK_COUNT} ` +
+      `sentinel ports (${sentinelPortFor(BLOCK_MIN)}-${sentinelPortFor(BLOCK_MAX_EXCLUSIVE - PORT_BLOCK_SIZE)}) ` +
+      "are bound. Reservations " +
+      "are held by live processes and released by the kernel the moment they exit, so this is " +
+      "never leftover state and there is no directory to delete — something is genuinely holding " +
+      "them. Stop any other running glosa test suites and any orphaned `glosa __daemon`, then " +
+      "see who is left with:\n  lsof -nP -iTCP@127.0.0.1 -sTCP:LISTEN",
+  );
 }
 
 /** Spawns the real `glosa __daemon` process (not detached — tests want a handle to control it).
