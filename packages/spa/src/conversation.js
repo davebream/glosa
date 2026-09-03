@@ -299,8 +299,16 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
       if (result?.delivered) markPresented();
       else markWaiting(result);
     } catch (error) {
-      const candidates = error?.problem?.candidates;
-      if (Array.isArray(candidates) && candidates.length > 1) {
+      const candidates = Array.isArray(error?.problem?.candidates)
+        ? error.problem.candidates.filter(
+            (candidate) =>
+              candidate &&
+              typeof candidate === "object" &&
+              typeof candidate.session_id === "string" &&
+              candidate.session_id.length > 0,
+          )
+        : [];
+      if (candidates.length > 0) {
         showSessionPicker(candidates);
         markFailed("Choose which live agent session should receive this message.");
       } else {
