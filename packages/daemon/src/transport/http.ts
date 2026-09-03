@@ -91,6 +91,7 @@ const SPA_ASSETS: Record<string, string> = {
   "viewer-shell.js": "text/javascript; charset=utf-8",
   "viewer-context-surfaces.js": "text/javascript; charset=utf-8",
   "viewer-feedback.js": "text/javascript; charset=utf-8",
+  "viewer-navigator.js": "text/javascript; charset=utf-8",
   "agent-feedback.js": "text/javascript; charset=utf-8",
   "artifact-tree.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",

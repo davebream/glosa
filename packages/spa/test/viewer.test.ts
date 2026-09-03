@@ -271,7 +271,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     dom.document.body.append(solo);
     mountApp(solo, { dataAccess: fakeDataAccess() }); // the sole ws-1
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect((solo.querySelector(".glosa-workspace-list") as any).hidden).toBe(true);
+    expect((solo.querySelector(".glosa-sidebar-section") as any).hidden).toBe(true);
 
     const many = dom.document.createElement("div");
     dom.document.body.append(many);
@@ -284,6 +284,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       }),
     });
     for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect((many.querySelector(".glosa-sidebar-section") as any).hidden).toBe(false);
     const manyList = many.querySelector(".glosa-workspace-list") as any;
     expect(manyList.hidden).toBe(false);
     const keys = Array.from(manyList.querySelectorAll("button[data-key]")).map((b: any) => b.getAttribute("data-key"));
@@ -403,6 +404,157 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     expect((root.querySelector(".glosa-tools-copy-source") as any).hidden).toBe(true);
     expect((root.querySelector(".glosa-tools-print") as any).hidden).toBe(true);
+  });
+
+  test("clicking a tree row opens THAT file: content, title, current marker and URL all follow", async () => {
+    const opened: string[] = [];
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, {
+      dataAccess: fakeDataAccess({
+        getArtifacts: async () => [
+          { path: "notes.md", class: "R" },
+          { path: "drafts/outline.md", class: "R" },
+        ],
+        getArtifact: async (_slug: string, path: string) => {
+          opened.push(path);
+          return {
+            source_path: path,
+            source_sha256: `sha-${path}`,
+            class: "R",
+            content: `# ${path}\n`,
+            rendered_html: `<h1 data-line="0">${path}</h1>`,
+          };
+        },
+      }),
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const rowFor = (path: string) =>
+      root.querySelector(`.glosa-artifact-list [data-node-id="f:${path}"] .glosa-tree-row`) as any;
+
+    rowFor("notes.md").click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(opened.at(-1)).toBe("notes.md");
+    expect((root.querySelector(".glosa-content") as unknown as HTMLElement).textContent).toContain("notes.md");
+    expect((root.querySelector(".glosa-artifact-name") as unknown as HTMLElement).textContent).toBe("notes.md");
+    expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("aria-current")).toBe("page");
+
+    // A different row opens the file that was actually clicked, not the one already open.
+    root
+      .querySelector('[data-node-id="d:drafts"] .glosa-tree-row')
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    rowFor("drafts/outline.md").click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(opened.at(-1)).toBe("drafts/outline.md");
+    expect((root.querySelector(".glosa-content") as unknown as HTMLElement).textContent).toContain("drafts/outline.md");
+    expect(root.querySelector('[data-node-id="f:drafts/outline.md"]')?.getAttribute("aria-current")).toBe("page");
+    expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("aria-current")).toBeNull();
+    expect((root.querySelector(".glosa-artifact-name") as unknown as HTMLElement).textContent).toBe("outline.md");
+    expect((root.querySelector(".glosa-artifact-dir") as unknown as HTMLElement).textContent).toBe("drafts/");
+    expect(dom.document.title).toBe("ws-1 — outline.md"); // the opened file reaches the tab title
+  });
+
+  test("at desk widths the navigator is a column: opening an artifact leaves it in place", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const sidebar = root.querySelector(".glosa-sidebar") as unknown as HTMLElement;
+    expect(root.getAttribute("data-nav-open")).toBe("true");
+    expect(sidebar.inert).toBe(false);
+
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(root.getAttribute("data-nav-open")).toBe("true");
+    // Escape belongs to the transient drawer, not to a column the reader put there.
+    dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(root.getAttribute("data-nav-open")).toBe("true");
+  });
+
+  test("the one top-bar toggle hides and shows the column, and the choice persists", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    // Exactly one control governs the navigator — no second pin/dock button beside it.
+    expect(root.querySelectorAll('[aria-controls="glosa-sidebar"]')).toHaveLength(1);
+
+    const navToggle = root.querySelector(".glosa-nav-toggle") as unknown as HTMLButtonElement;
+    const sidebar = root.querySelector(".glosa-sidebar") as unknown as HTMLElement;
+    navToggle.click();
+    expect(root.getAttribute("data-nav-open")).toBe("false");
+    expect(navToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(sidebar.inert).toBe(true);
+
+    const next = dom.document.createElement("div");
+    dom.document.body.append(next);
+    mountApp(next, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(next.getAttribute("data-nav-open")).toBe("false");
+
+    (next.querySelector(".glosa-nav-toggle") as any).click();
+    expect(next.getAttribute("data-nav-open")).toBe("true");
+  });
+
+  test("a compact viewport gets a transient drawer whose state is never persisted", async () => {
+    dom.window.matchMedia = ((query: string) => ({
+      matches: query === "(max-width: 1023px)",
+    })) as typeof dom.window.matchMedia;
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: fakeDataAccess() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(root.getAttribute("data-nav-open")).toBe("false"); // a column would starve the measure
+
+    (root.querySelector(".glosa-nav-toggle") as any).click();
+    expect(root.getAttribute("data-nav-open")).toBe("true");
+    dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(root.getAttribute("data-nav-open")).toBe("false");
+
+    (root.querySelector(".glosa-nav-toggle") as any).click();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(root.getAttribute("data-nav-open")).toBe("false"); // the drawer was in the way of the artifact
+
+    // None of that touched the desk-width preference, so a wide viewport still opens its column.
+    expect(globalThis.localStorage.getItem("glosa_nav_open")).toBeNull();
+  });
+
+  test("the workspace switcher collapses independently of the tree, and the choice persists", async () => {
+    const twoWorkspaces = () =>
+      fakeDataAccess({
+        getWorkspaces: async () => [
+          { slug: "ws-1", path: "/tmp/ws-1" },
+          { slug: "ws-2", path: "/tmp/ws-2" },
+        ],
+      });
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: twoWorkspaces() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const toggle = root.querySelector(".glosa-sidebar-section-toggle") as unknown as HTMLButtonElement;
+    const list = root.querySelector(".glosa-workspace-list") as unknown as HTMLElement;
+    expect(toggle.getAttribute("aria-controls")).toBe(list.id);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(list.hidden).toBe(false);
+
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(list.hidden).toBe(true);
+    // Collapsing the switcher must not touch the artifact tree beneath it.
+    expect((root.querySelector(".glosa-artifact-list") as unknown as HTMLElement).hidden).toBe(false);
+
+    const next = dom.document.createElement("div");
+    dom.document.body.append(next);
+    mountApp(next, { dataAccess: twoWorkspaces() });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect((next.querySelector(".glosa-sidebar-section-toggle") as any).getAttribute("aria-expanded")).toBe("false");
+    expect((next.querySelector(".glosa-workspace-list") as unknown as HTMLElement).hidden).toBe(true);
   });
 
   test("a closed compact navigator is inert and returns to the focus order only while open", async () => {

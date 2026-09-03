@@ -29,8 +29,9 @@ exempt from contrast requirements and is not used for active information.
 
 | Workflow | Expected keyboard behavior |
 |---|---|
-| Workspace and artifact navigation | Tab reaches the workspace list and one roving tree item; arrow keys navigate the tree; Enter/Space opens an item. |
-| Compact artifact drawer | Opening moves focus into the drawer; Escape/backdrop closes and restores the trigger; choosing an artifact returns focus to its rendered content. |
+| Workspace and artifact navigation | Tab reaches the workspace list and one roving tree item; arrow keys navigate the tree; Enter/Space opens an item. The workspace switcher is a disclosure with `aria-expanded` and `aria-controls`, and collapsing it never hides the artifact tree. |
+| Artifact drawer (under 1024px) | Opening moves focus into the drawer; Escape/backdrop closes and restores the trigger; choosing an artifact returns focus to its rendered content. |
+| Artifact column (1024px and wider) | The column takes no focus when it appears, survives opening an artifact, and is not dismissed by Escape. Its one top-bar control reports state through `aria-expanded` and a filled glyph rather than color alone, and a hidden navigator is `inert`. |
 | Preview / Annotate / Edit | Tab reaches every mode; Command/Ctrl+1–3 switches modes; focus remains on the active mode after its DOM refresh. |
 | Annotation composition | In Annotate, Tab reaches rendered passages; Enter/Space opens the composer; Escape/Cancel restores the passage; Command/Ctrl+Enter sends. |
 | History and conversation | Disclosure buttons expose `aria-expanded` and `aria-controls`; comparison checkboxes have complete names; async results and errors are textual live status. |
