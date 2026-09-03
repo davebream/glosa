@@ -71,12 +71,9 @@ export type { ProblemSlug } from "./problem.ts";
 export { internalErrorResponse, problem } from "./problem.ts";
 export type { ProtocolVersion } from "./protocol.ts";
 export { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
-export type { RouteResult } from "./registry/routing.ts";
-export { route } from "./registry/routing.ts";
 export type {
   Liveness,
   RegisterInput,
-  RegisterResult,
   SessionRecord,
   SessionRegistryDeps,
 } from "./registry/session-registry.ts";

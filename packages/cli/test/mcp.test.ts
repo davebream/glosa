@@ -54,7 +54,7 @@ class HookClient implements DaemonHookClient {
 
   async register(input: RegisterSessionInput) {
     this.registered = input;
-    return { workspace: input.cwd, drained_workspaces: [] };
+    return { workspace: input.cwd };
   }
 
   async heartbeat(sessionId: string) {

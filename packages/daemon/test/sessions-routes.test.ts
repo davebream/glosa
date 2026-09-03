@@ -83,7 +83,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     );
   }
 
-  test("POST /api/sessions/register creates a live registry record and returns drained_workspaces:[]", async () => {
+  test("POST /api/sessions/register creates a live registry record and returns only the resolved identity", async () => {
     const res = await fetchFn(
       req("/api/sessions/register", {
         method: "POST",
@@ -92,7 +92,10 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ session_id: "sess-1", workspace: root, drained_workspaces: [] });
+    // R2's park is journal state, not daemon memory (AGENTS.md invariant 2), so a registration has
+    // no "workspaces I just un-parked" list to report. The response carries identity only; the
+    // drain that actually surfaces parked work is the separate `POST /api/sessions/:id/drain`.
+    expect(body).toEqual({ session_id: "sess-1", workspace: root });
     expect(sessionRegistry.liveness("sess-1")).toBe("alive");
     expect(sessionRegistry.get("sess-1")?.cwd).toBe(root);
   });
@@ -112,17 +115,26 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(res.status).toBe(400);
   });
 
-  test("register -> drained_workspaces surfaces a previously-parked workspace (R2)", async () => {
-    // Park the workspace by asking the registry to route to it while no session is live.
-    sessionRegistry.markParked(root);
-    const res = await fetchFn(
+  test("R2 park -> drain: an entry created with NO live session is drained by the next session to register", async () => {
+    // R2: "No live session -> the entry parks; next session registration for that workspace drains
+    // it." The park IS the entry staying non-terminal in the workspace journal — there is no
+    // separate in-memory park ledger, which is why a park survives a daemon restart.
+    expect(sessionRegistry.forWorkspace(root)).toHaveLength(0);
+    const bus = busRegistry.get(root);
+    await bus.createEntry("parked-1", actionableAnnotation("Parked before any session existed."));
+
+    const registered = await fetchFn(
       req("/api/sessions/register", {
         method: "POST",
         body: JSON.stringify({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" }),
       }),
     );
+    expect(registered.status).toBe(200);
+
+    const res = await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: "" }));
+    expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.drained_workspaces).toEqual([root]);
+    expect(body.drained.map((entry: { id: string }) => entry.id)).toEqual(["parked-1"]);
   });
 
   test("POST /api/sessions/:id/heartbeat extends the lease for a known session", async () => {

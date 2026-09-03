@@ -42,7 +42,7 @@ class FakeDaemonClient implements DaemonHookClient {
   async register(input: RegisterSessionInput): Promise<RegisterSessionResult> {
     this.calls.push({ method: "register", args: [input] });
     this.registered.add(input.session_id);
-    return { workspace: input.workspace_binding ?? input.cwd, drained_workspaces: [] };
+    return { workspace: input.workspace_binding ?? input.cwd };
   }
   async heartbeat(sessionId: string): Promise<void> {
     this.calls.push({ method: "heartbeat", args: [sessionId] });

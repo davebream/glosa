@@ -19,7 +19,6 @@ export interface RegisterSessionInput {
 
 export interface RegisterSessionResult {
   workspace: string;
-  drained_workspaces: string[];
 }
 
 export type DrainedEntry = DeliverableEntry;

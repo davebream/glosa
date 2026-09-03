@@ -73,7 +73,6 @@ describe("SessionRegistry — liveness without PID", () => {
 
   test("never checks PID liveness (grep guard: no process.kill / kill( call sites)", () => {
     const sessionRegistrySrc = readFileSync(new URL("../../src/registry/session-registry.ts", import.meta.url), "utf8");
-    const routingSrc = readFileSync(new URL("../../src/registry/routing.ts", import.meta.url), "utf8");
     // Strip `//` line comments before scanning — the module docstrings deliberately MENTION
     // process.kill (explaining why it's banned here, unlike lockfile-fallback.ts), and those
     // mentions must not trip this guard.
@@ -82,36 +81,9 @@ describe("SessionRegistry — liveness without PID", () => {
         .split("\n")
         .map((line) => line.replace(/\/\/.*/, ""))
         .join("\n");
-    const codeOnly = stripComments(sessionRegistrySrc) + stripComments(routingSrc);
+    const codeOnly = stripComments(sessionRegistrySrc);
     expect(codeOnly).not.toMatch(/process\.kill/);
     expect(codeOnly).not.toMatch(/\bkill\(/);
-  });
-});
-
-describe("SessionRegistry — park / drain", () => {
-  test("markParked + register() for that same workspace drains it", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    expect(registry.isParked("/ws/a")).toBe(false);
-    registry.markParked("/ws/a");
-    expect(registry.isParked("/ws/a")).toBe(true);
-
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/a", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual(["/ws/a"]);
-    expect(registry.isParked("/ws/a")).toBe(false);
-  });
-
-  test("registering a DIFFERENT workspace does not drain an unrelated park", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    registry.markParked("/ws/a");
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/b", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual([]);
-    expect(registry.isParked("/ws/a")).toBe(true);
-  });
-
-  test("a workspace with no pending park drains nothing on register", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/a", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual([]);
   });
 });
 
@@ -248,6 +220,6 @@ describe("SessionRegistry.register — rollback on index failure", () => {
 
     // Rolled back to exactly the record from the first successful register — not deleted, and
     // not left holding the failed attempt's (cwd: "/ws/b") half-applied state.
-    expect(registry.get("s1")).toEqual(first.record);
+    expect(registry.get("s1")).toEqual(first);
   });
 });

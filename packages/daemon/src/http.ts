@@ -1245,10 +1245,13 @@ function canonicalOrNull(path: string): string | null {
   }
 }
 
-/** `POST /api/sessions/register` — A2 §F08's SessionStart registration + R2's "no live session ->
- * park; next registration for that workspace drains it" (the drained-workspace list this returns
- * is exactly `SessionRegistry.register`'s own `drainedWorkspaces`, surfaced so the caller can
- * decide what to do with a just-unparked workspace — this route never itself pushes/delivers). */
+/** `POST /api/sessions/register` — A2 §F08's SessionStart registration. It records the session and
+ * returns the identity the caller resolved to; it never pushes or delivers. R2's "no live session
+ * -> park; next registration for that workspace drains it" is NOT settled here: a park is an entry
+ * left non-terminal in the workspace journal, and the drain is the separate
+ * `POST /api/sessions/:id/drain` the same hook invocation calls immediately after this one (see
+ * `handleSessionDrain`, and `glosa hook session-start`). Nothing about a park lives in daemon
+ * memory, so it survives a daemon restart. */
 async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -1307,7 +1310,7 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   const transcriptPath =
     typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
 
-  const { record, drainedWorkspaces } = await ctx.sessionRegistry.register({
+  const record = await ctx.sessionRegistry.register({
     session_id: sessionId,
     provider,
     cwd: canonicalCwd,
@@ -1319,7 +1322,6 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   return Response.json({
     session_id: record.session_id,
     workspace: record.workspace_binding ?? record.cwd,
-    drained_workspaces: drainedWorkspaces,
   });
 }
 
