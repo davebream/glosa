@@ -6,11 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256Of, type GlosaBinResolution } from "../src/init-io.ts";
-import {
-  runScopedUninstall,
-  scopedManifestPaths,
-  type ScopedOwnershipManifest,
-} from "../src/scoped-init.ts";
+import { runScopedUninstall, scopedManifestPaths, type ScopedOwnershipManifest } from "../src/scoped-init.ts";
 import { useTempHome } from "./home.ts";
 
 useTempHome();
@@ -35,13 +31,7 @@ test("scoped uninstall removes owned hook siblings at indices 2 and 10 without s
     command: `foreign hook ${index}`,
     marker: { index },
   }));
-  const hooks = [
-    foreignHooks[0],
-    foreignHooks[1],
-    ownedAt2,
-    ...foreignHooks.slice(2),
-    ownedAt10,
-  ];
+  const hooks = [foreignHooks[0], foreignHooks[1], ownedAt2, ...foreignHooks.slice(2), ownedAt10];
   expect(hooks).toHaveLength(11);
 
   mkdirSync(join(dir, ".claude"), { recursive: true });
