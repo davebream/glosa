@@ -33,8 +33,7 @@ describe("two-phase delivery reservations", () => {
       target_session_id: "session-a",
       provider: "claude-code",
     });
-    const build = (id: string, value: unknown, status: string) =>
-      buildDeliveryPresentation(id, value, { status });
+    const build = (id: string, value: unknown, status: string) => buildDeliveryPresentation(id, value, { status });
 
     expect((await bus.prepareDelivery(8, { via: "mcp_pull", session: "session-b" }, build)).count).toBe(0);
     expect(
@@ -73,8 +72,7 @@ describe("two-phase delivery reservations", () => {
 
     const restarted = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
     await restarted.reconcile();
-    const build = (id: string, value: unknown, status: string) =>
-      buildDeliveryPresentation(id, value, { status });
+    const build = (id: string, value: unknown, status: string) => buildDeliveryPresentation(id, value, { status });
     expect(restarted.state.entries["message-restart"]?.status).toBe("pending");
     expect((await restarted.prepareDelivery(8, { via: "mcp_pull", session: "session-b" }, build)).count).toBe(0);
     expect((await restarted.prepareDelivery(8, { via: "mcp_pull", session: "session-a" }, build)).count).toBe(1);

@@ -8,7 +8,11 @@ import { captureStdout } from "./test-utils.ts";
 
 describe("glosa status", () => {
   test("daemon unreachable -> STILL exit 0, reachability reported in data, not thrown", async () => {
-    const deps: StatusDeps = { createClient: async () => { throw daemonUnreachable("no daemon running"); } };
+    const deps: StatusDeps = {
+      createClient: async () => {
+        throw daemonUnreachable("no daemon running");
+      },
+    };
     const result = await runStatus("/repo", deps);
     expect(result.exitCode).toBe(0);
     expect(result.ok).toBe(true);
@@ -39,8 +43,19 @@ describe("glosa status", () => {
         contract_version: "1.0",
         build_id: "0.1.0-alpha.0-0123456789abcdef",
       },
-      workspaces: [{ slug: "abc", path: "/repo", last_seen: "2020-01-01T00:00:00.000Z", pending_count: 2, has_attention: true }],
-      sessions: [{ session_id: "sess-1", provider: "claude-code", cwd: "/repo", workspace_binding: null, last_active_at: "2020-01-01T00:00:00.000Z", liveness: "alive" }],
+      workspaces: [
+        { slug: "abc", path: "/repo", last_seen: "2020-01-01T00:00:00.000Z", pending_count: 2, has_attention: true },
+      ],
+      sessions: [
+        {
+          session_id: "sess-1",
+          provider: "claude-code",
+          cwd: "/repo",
+          workspace_binding: null,
+          last_active_at: "2020-01-01T00:00:00.000Z",
+          liveness: "alive",
+        },
+      ],
     };
     const deps: StatusDeps = { createClient: async () => client as unknown as GlosaApiClient };
     const result = await runStatus("/repo", deps);
@@ -51,11 +66,17 @@ describe("glosa status", () => {
   });
 
   test("--json envelope has exactly the documented top-level keys", async () => {
-    const deps: StatusDeps = { createClient: async () => { throw daemonUnreachable(); } };
+    const deps: StatusDeps = {
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    };
     const result = await runStatus("/repo", deps);
     const out = captureStdout(() => printStatusResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "status", exit_code: 0 });
   });
 });

@@ -13,18 +13,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../src/http.ts";
-import { CapabilityStore } from "../src/capability.ts";
-import { createJournalStreamResponse } from "../src/stream.ts";
-import { WorkspaceBus } from "../src/bus/bus.ts";
-import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../src/registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { canonicalize } from "../src/registry/slug.ts";
-import { parseSseStream, type ParsedSseEvent } from "../src/sse.ts";
-import { randomPort, waitForHandshake } from "./helpers.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 import type { ArtifactWatcherEvent } from "../src/artifact-watcher.ts";
+import { WorkspaceBus } from "../src/bus/bus.ts";
+import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
+import { SessionRegistry } from "../src/registry/session-registry.ts";
+import { canonicalize } from "../src/registry/slug.ts";
+import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
+import { type ParsedSseEvent, parseSseStream } from "../src/transport/sse.ts";
+import { createJournalStreamResponse } from "../src/transport/stream.ts";
+import { randomPort, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "stream-test-token-0123456789abcdef";
 

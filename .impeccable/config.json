@@ -1,9 +1,7 @@
 {
   "detector": {
     "ignoreRules": [],
-    "ignoreFiles": [
-      "docs/assets/screens/frame.html"
-    ],
+    "ignoreFiles": ["docs/assets/screens/frame.html"],
     "ignoreValues": []
   }
 }

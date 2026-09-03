@@ -178,13 +178,15 @@ describe("validateTarballUrl", () => {
 
   // Immune to any `hostname.includes(registryHost)` implementation; fails only a real equality check.
   test("a host that CONTAINS the registry host is still rejected", () => {
-    expect(validateTarballUrl(`https://registry.npmjs.org.evil.com/@davebream/glosa/-/glosa-${V}.tgz`, REG, V, false).ok).toBe(
-      false,
-    );
+    expect(
+      validateTarballUrl(`https://registry.npmjs.org.evil.com/@davebream/glosa/-/glosa-${V}.tgz`, REG, V, false).ok,
+    ).toBe(false);
   });
 
   test("a trailing-dot hostname is DNS-equivalent and must not false-reject", () => {
-    expect(validateTarballUrl(`https://registry.npmjs.org./@davebream/glosa/-/glosa-${V}.tgz`, REG, V, false).ok).toBe(true);
+    expect(validateTarballUrl(`https://registry.npmjs.org./@davebream/glosa/-/glosa-${V}.tgz`, REG, V, false).ok).toBe(
+      true,
+    );
   });
 
   test("an offsite host is accepted only with the explicit override", () => {
@@ -194,7 +196,9 @@ describe("validateTarballUrl", () => {
   });
 
   test("the override widens WHERE, never HOW — https stays mandatory", () => {
-    expect(validateTarballUrl(`http://mirror.corp.example/@davebream/glosa/-/glosa-${V}.tgz`, REG, V, true).ok).toBe(false);
+    expect(validateTarballUrl(`http://mirror.corp.example/@davebream/glosa/-/glosa-${V}.tgz`, REG, V, true).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -307,7 +311,10 @@ describe("resolveTarget", () => {
   });
 
   test("--to addresses an exact version", () => {
-    expect(resolveTarget(PACKUMENT, { version: "0.1.0-alpha.0" })).toMatchObject({ ok: true, version: "0.1.0-alpha.0" });
+    expect(resolveTarget(PACKUMENT, { version: "0.1.0-alpha.0" })).toMatchObject({
+      ok: true,
+      version: "0.1.0-alpha.0",
+    });
   });
 
   test("--to an unpublished version is a user error", () => {
@@ -395,7 +402,9 @@ describe("decideAction", () => {
     const d = decideAction("0.1.0-alpha.3", "0.1.0-alpha.3", { force: false, dryRun: false, latest: "0.2.0" });
     expect(d.action).toBe("already-current");
     expect(d.warnings.map((w) => w.code)).toContain("newer-stable-available");
-    expect(d.warnings.find((w) => w.code === "newer-stable-available")?.message).toContain("glosa update --channel latest");
+    expect(d.warnings.find((w) => w.code === "newer-stable-available")?.message).toContain(
+      "glosa update --channel latest",
+    );
   });
 
   test("no newer-stable warning when latest is not ahead of the target", () => {
@@ -454,7 +463,10 @@ describe("fetchFailureToError", () => {
   });
 
   test("401/403 names the real cause instead of a generic HTTP error", () => {
-    const e = fetchFailureToError({ ok: false, kind: "http", status: 401, message: "Unauthorized" }, "https://mirror.corp");
+    const e = fetchFailureToError(
+      { ok: false, kind: "http", status: 401, message: "Unauthorized" },
+      "https://mirror.corp",
+    );
     expect(e.error.message.toLowerCase()).toContain("authenticat");
     expect(e.error.hint).toContain(".npmrc");
   });
@@ -629,15 +641,30 @@ describe("interpretProbe", () => {
 
 describe("readDaemonLockWith", () => {
   test("a lock file for a dead pid is NOT a running daemon", () => {
-    expect(readDaemonLockWith(() => ({ pid: 999999, port: 4646 }) as never, () => false)).toBeNull();
+    expect(
+      readDaemonLockWith(
+        () => ({ pid: 999999, port: 4646 }) as never,
+        () => false,
+      ),
+    ).toBeNull();
   });
 
   test("a lock file for a live pid is a running daemon", () => {
-    expect(readDaemonLockWith(() => ({ pid: 8510, port: 4646 }) as never, () => true)).toMatchObject({ pid: 8510 });
+    expect(
+      readDaemonLockWith(
+        () => ({ pid: 8510, port: 4646 }) as never,
+        () => true,
+      ),
+    ).toMatchObject({ pid: 8510 });
   });
 
   test("no lock file at all is not a running daemon", () => {
-    expect(readDaemonLockWith(() => null, () => true)).toBeNull();
+    expect(
+      readDaemonLockWith(
+        () => null,
+        () => true,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -857,20 +884,56 @@ describe("runUpdate — envelope invariants", () => {
     ["updated", () => runUpdate({}, makeDeps().deps)],
     ["checked", () => runUpdate({ check: true }, makeDeps().deps)],
     ["already-current", () => runUpdate({}, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps)],
-    ["downgrade-refused", () => runUpdate({ to: "0.1.0-alpha.0" }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps)],
+    [
+      "downgrade-refused",
+      () => runUpdate({ to: "0.1.0-alpha.0" }, makeDeps({ currentVersion: () => "0.1.0-alpha.3" }).deps),
+    ],
     ["refused-volta", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH }).deps)],
     ["platform", () => runUpdate({}, makeDeps({ platform: () => "linux" }).deps)],
     ["invalid-registry", () => runUpdate({ registry: "http://evil" }, makeDeps().deps)],
     ["flag-combo", () => runUpdate({ allowOffsiteTarball: true }, makeDeps().deps)],
-    ["registry-timeout", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }) }).deps)],
-    ["registry-http", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "http", status: 401, message: "x" }) }).deps)],
-    ["registry-malformed", () => runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "malformed", message: "x" }) }).deps)],
+    [
+      "registry-timeout",
+      () =>
+        runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }) }).deps),
+    ],
+    [
+      "registry-http",
+      () =>
+        runUpdate(
+          {},
+          makeDeps({ fetchPackument: async () => ({ ok: false, kind: "http", status: 401, message: "x" }) }).deps,
+        ),
+    ],
+    [
+      "registry-malformed",
+      () =>
+        runUpdate({}, makeDeps({ fetchPackument: async () => ({ ok: false, kind: "malformed", message: "x" }) }).deps),
+    ],
     ["unknown-channel", () => runUpdate({ channel: "nightly" }, makeDeps().deps)],
-    ["registry-inconsistent", () => runUpdate({ channel: "broken" }, makeDeps({ fetchPackument: async () => ({ ok: true, status: 200, body: BROKEN_PACKUMENT }) }).deps)],
+    [
+      "registry-inconsistent",
+      () =>
+        runUpdate(
+          { channel: "broken" },
+          makeDeps({ fetchPackument: async () => ({ ok: true, status: 200, body: BROKEN_PACKUMENT }) }).deps,
+        ),
+    ],
     ["installer-not-found", () => runUpdate({}, makeDeps({ which: () => null }).deps)],
     ["permission-denied", () => runUpdate({}, makeDeps({ packageRoot: () => NPM, isWritable: () => false }).deps)],
-    ["download-failed", () => runUpdate({}, makeDeps({ downloadTarball: async () => ({ ok: false, kind: "network", message: "x" }) }).deps)],
-    ["integrity-mismatch", () => runUpdate({}, makeDeps({ downloadTarball: async () => ({ ok: true, path: TGZ_PATH, bytes: 1, sha512: "WRONG" }) }).deps)],
+    [
+      "download-failed",
+      () =>
+        runUpdate({}, makeDeps({ downloadTarball: async () => ({ ok: false, kind: "network", message: "x" }) }).deps),
+    ],
+    [
+      "integrity-mismatch",
+      () =>
+        runUpdate(
+          {},
+          makeDeps({ downloadTarball: async () => ({ ok: true, path: TGZ_PATH, bytes: 1, sha512: "WRONG" }) }).deps,
+        ),
+    ],
     ["installer-failed", () => runUpdate({}, makeDeps({ spawnInstaller: async () => ({ exitCode: 1 }) }).deps)],
     ["probe-mismatch", () => runUpdate({}, makeDeps({ runVersionProbe: () => "glosa 0.1.0-alpha.2" }).deps)],
     ["probe-failed", () => runUpdate({}, makeDeps({ runVersionProbe: () => null }).deps)],
@@ -1074,7 +1137,9 @@ describe("printUpdateResult", () => {
   });
 
   test("a reshim hint reaches the user as a machine-readable warning", async () => {
-    const h = makeDeps({ packageRoot: () => "/Users/x/.asdf/installs/nodejs/22.0.0/lib/node_modules/@davebream/glosa" });
+    const h = makeDeps({
+      packageRoot: () => "/Users/x/.asdf/installs/nodejs/22.0.0/lib/node_modules/@davebream/glosa",
+    });
     const r = await runUpdate({ check: true }, h.deps);
     expect(r.warnings.map((w) => w.code)).toContain("reshim-required");
     expect(captureStdout(() => printUpdateResult(r, false))).toContain("asdf reshim nodejs");
@@ -1092,11 +1157,45 @@ describe("runUpdate — daemon liveness is reported on EVERY path", () => {
   // `daemon_running: false` must mean "we checked and none is running", never "we returned before
   // checking". Same honesty rule as install_kind's nullability.
   test.each([
-    ["platform refusal", () => runUpdate({}, makeDeps({ platform: () => "linux", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
-    ["unmanaged install", () => runUpdate({}, makeDeps({ packageRoot: () => VOLTA_PATH, readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
-    ["invalid registry", () => runUpdate({ registry: "http://evil" }, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
-    ["registry unreachable", () => runUpdate({}, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never, fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }) }).deps)],
-    ["--check", () => runUpdate({ check: true }, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps)],
+    [
+      "platform refusal",
+      () =>
+        runUpdate(
+          {},
+          makeDeps({ platform: () => "linux", readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
+        ),
+    ],
+    [
+      "unmanaged install",
+      () =>
+        runUpdate(
+          {},
+          makeDeps({ packageRoot: () => VOLTA_PATH, readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
+        ),
+    ],
+    [
+      "invalid registry",
+      () =>
+        runUpdate(
+          { registry: "http://evil" },
+          makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps,
+        ),
+    ],
+    [
+      "registry unreachable",
+      () =>
+        runUpdate(
+          {},
+          makeDeps({
+            readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never,
+            fetchPackument: async () => ({ ok: false, kind: "timeout", message: "x" }),
+          }).deps,
+        ),
+    ],
+    [
+      "--check",
+      () => runUpdate({ check: true }, makeDeps({ readDaemonLock: () => ({ pid: 8510, port: 4646 }) as never }).deps),
+    ],
   ])("%s still reports the live daemon", async (_label, run) => {
     const r = await run();
     expect(r.data.daemon_running).toBe(true);

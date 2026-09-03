@@ -2,19 +2,19 @@
 // A1 §3 contract-version matrix: missing AND unparseable/partial headers are both "ok" (lenient, same
 // major assumed); only a well-formed value with a differing major is a proven mismatch.
 import { describe, expect, test } from "bun:test";
-import { checkContractVersion } from "../src/contract.ts";
+import { checkContractVersion } from "../src/transport/contract.ts";
 
 describe("checkContractVersion", () => {
   test("null (missing header) → ok", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.5) → ok", () => {
-    expect(checkContractVersion("1.5")).toEqual({ status: "ok" });
+  test("exact match (1.6) → ok", () => {
+    expect(checkContractVersion("1.6")).toEqual({ status: "ok" });
   });
 
-  test("previous minor (1.4) → stale-minor", () => {
-    expect(checkContractVersion("1.4")).toEqual({ status: "stale-minor" });
+  test("N-1 minor (1.5) → stale-minor", () => {
+    expect(checkContractVersion("1.5")).toEqual({ status: "stale-minor" });
   });
 
   test("previous minor (1.0) → stale-minor", () => {

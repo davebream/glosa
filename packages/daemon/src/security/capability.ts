@@ -38,7 +38,10 @@ export class CapabilityStore {
 
   /** Mints a fresh token+nonce for one artifact directory. `now` is injectable for tests only —
    * production callers always take the default `Date.now()`. */
-  mint(input: { slug: string; artifactDirRealPath: string; artifactBasename: string }, now: number = Date.now()): {
+  mint(
+    input: { slug: string; artifactDirRealPath: string; artifactBasename: string },
+    now: number = Date.now(),
+  ): {
     token: string;
     nonce: string;
     expiresAt: number;

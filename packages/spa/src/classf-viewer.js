@@ -97,7 +97,10 @@ export function validateBridgeMessage(raw) {
 /** A token bucket: `capacity` tokens, refilled at `refillPerSec` tokens/second, `take()` consumes
  * one and returns whether it was available. `nowFn` is injectable so a test can drive it without
  * a real clock. Matches A3 §2's "rate limit 50 msg/s/iframe (token bucket, drop excess)". */
-export function createTokenBucket({ capacity = RATE_LIMIT_PER_SEC, refillPerSec = RATE_LIMIT_PER_SEC } = {}, nowFn = () => Date.now()) {
+export function createTokenBucket(
+  { capacity = RATE_LIMIT_PER_SEC, refillPerSec = RATE_LIMIT_PER_SEC } = {},
+  nowFn = () => Date.now(),
+) {
   let tokens = capacity;
   let last = nowFn();
 
@@ -150,7 +153,10 @@ export function createMessageRouter({ bucket, onSelection, onMark, onReady, onEr
  * @param {any} container
  * @param {{dataAccess: any, slug?: string, artifactPath?: string, interactive?: boolean, onSelection?: Function, onReady?: Function, onError?: Function}} options
  */
-export function mountClassFViewer(container, { dataAccess, slug, artifactPath, interactive = true, onSelection, onReady, onError } = {}) {
+export function mountClassFViewer(
+  container,
+  { dataAccess, slug, artifactPath, interactive = true, onSelection, onReady, onError } = {},
+) {
   const iframe = document.createElement("iframe");
   // `setAttribute`, not the `.sandbox`/`.referrerPolicy` IDL properties — more portable across
   // DOM implementations (including the happy-dom harness this module is unit-tested against) and
@@ -212,7 +218,8 @@ export function mountClassFViewer(container, { dataAccess, slug, artifactPath, i
       const bucket = createTokenBucket();
       const router = createMessageRouter({
         bucket,
-        onSelection: (msg) => onSelection?.({ quote: msg.quote, position: msg.range, ...(msg.chunk_id ? { chunk_id: msg.chunk_id } : {}) }),
+        onSelection: (msg) =>
+          onSelection?.({ quote: msg.quote, position: msg.range, ...(msg.chunk_id ? { chunk_id: msg.chunk_id } : {}) }),
         onReady: () => onReady?.(),
         onError: (msg) => onError?.(msg.message),
       });

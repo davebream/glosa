@@ -4,17 +4,19 @@
 // token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
 // Channel status, transcript-root).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { countJournalLines } from "../../daemon/src/bus/tail.ts";
 import {
   claudeConfigDir,
-  protocolCompatible,
+  journalPath,
   PROTOCOL_VERSION,
+  protocolCompatible,
   resolveMatchedFiles,
   tokenPath,
 } from "../../daemon/src/index.ts";
-import { join } from "node:path";
-import { checkScopedManifestDrift } from "./scoped-init.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
+import { checkScopedManifestDrift } from "./scoped-init.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
 
@@ -43,7 +45,9 @@ export interface DoctorDeps {
 
 function realRunVersionProbe(cmd: string[]): string | null {
   try {
-    const proc = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe" });
+    const env = { ...Bun.env };
+    delete env.ANTHROPIC_API_KEY;
+    const proc = Bun.spawnSync({ cmd, env, stdout: "pipe", stderr: "pipe" });
     if (!proc.success) return null;
     return proc.stdout.toString("utf8").trim();
   } catch {
@@ -83,6 +87,30 @@ function meetsFloor(output: string | null, floor: string): boolean | null {
 
 function check(name: string, status: CheckStatus, detail: string): CheckResult {
   return { name, status, detail };
+}
+
+interface JournalMetrics {
+  available: boolean;
+  detail: string;
+}
+
+/** Read-only observability for A4's append-only journal. The line count deliberately reuses the
+ * SSE cursor-space definition: malformed/quarantined lines and a torn final line still occupy a
+ * physical offset, so this never mislabels them as valid folded events. */
+function journalMetrics(dir: string): JournalMetrics {
+  const path = journalPath(dir);
+  if (!existsSync(path)) {
+    return { available: true, detail: "0 journal byte(s), 0 physical journal line(s)" };
+  }
+  try {
+    return {
+      available: true,
+      detail: `${statSync(path).size} journal byte(s), ${countJournalLines(dir)} physical journal line(s)`,
+    };
+  } catch (err) {
+    const code = typeof err === "object" && err !== null && "code" in err ? String(err.code) : "read failed";
+    return { available: false, detail: `journal metrics unavailable (${code})` };
+  }
 }
 
 async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> {
@@ -205,6 +233,7 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
       check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
     );
   } else {
+    const journal = journalMetrics(dir);
     const shadowGitDir = join(glosaDir, "shadow.git");
     const headOut = existsSync(shadowGitDir)
       ? deps.runVersionProbe([
@@ -218,13 +247,27 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
         ])
       : null;
     if (!headOut) {
-      checks.push(check("workspace", "fail", `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve)`));
+      checks.push(
+        check(
+          "workspace",
+          "fail",
+          `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve); ${journal.detail}`,
+        ),
+      );
     } else {
       const tracked = resolveMatchedFiles(dir).tracked;
       checks.push(
         tracked.length > 0
-          ? check("workspace", "pass", `baseline checkpoint present, ${tracked.length} tracked artifact(s)`)
-          : check("workspace", "warn", "baseline checkpoint present, but the matcher currently tracks zero artifacts"),
+          ? check(
+              "workspace",
+              journal.available ? "pass" : "warn",
+              `baseline checkpoint present, ${tracked.length} tracked artifact(s); ${journal.detail}`,
+            )
+          : check(
+              "workspace",
+              "warn",
+              `baseline checkpoint present, but the matcher currently tracks zero artifacts; ${journal.detail}`,
+            ),
       );
     }
   }

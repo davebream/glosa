@@ -1,0 +1,2 @@
+# Synthetic value used to prove doctor removes ANTHROPIC_API_KEY from child environments.
+c82d8288e80eeea9b8c4c49904fe7df3e5927c15:packages/cli/test/doctor.test.ts:generic-api-key:79

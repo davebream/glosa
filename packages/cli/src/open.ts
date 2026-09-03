@@ -26,7 +26,9 @@ export function realOpenDeps(createClient: () => Promise<GlosaApiClient>): OpenD
     // no cross-platform detection. Fire-and-forget: `open` itself forks and hands off to the
     // browser almost immediately, so this CLI process doesn't need to await its exit.
     openBrowser: (url) => {
-      Bun.spawn({ cmd: ["open", url], stdout: "ignore", stderr: "ignore" });
+      const env = { ...Bun.env };
+      delete env.ANTHROPIC_API_KEY;
+      Bun.spawn({ cmd: ["open", url], env, stdout: "ignore", stderr: "ignore" });
     },
     platform: () => process.platform,
     cwd: () => process.cwd(),
@@ -80,8 +82,8 @@ export interface OfferInitOptions {
   /** Defaults to confirm.ts's `confirmOnTty`. */
   confirm?: (question: string) => Promise<boolean>;
   /** Defaults to scoped-init.ts's `runScopedInit` (programmatic, idempotent-by-content) with the
-   * providers detected in the workspace — the SAME entry point `glosa init` itself runs. It used
-   * to default to init.ts's legacy v1 `runInit`, which writes the superseded
+   * providers detected in the workspace — the SAME entry point `glosa init` itself runs. The
+   * removed legacy transaction wrote the superseded
    * `.claude/.glosa-init.json` ownership layout that neither `doctor` nor the daemon's wiring
    * probe treats as authoritative any more (issue #96). */
   runInit?: (opts: { dir: string }) => Promise<InitResult>;
@@ -113,8 +115,7 @@ export async function maybeOfferInit(
   if (!consented) {
     const isTTY = options.isTTY ?? (() => Boolean(process.stdin.isTTY));
     if (options.json || !isTTY()) return;
-    const confirm =
-      options.confirm ?? (async (q: string) => (await import("./confirm.ts")).confirmOnTty(q));
+    const confirm = options.confirm ?? (async (q: string) => (await import("./confirm.ts")).confirmOnTty(q));
     consented = await confirm("Wire this workspace for agent feedback? (runs `glosa init`)");
   }
   if (!consented) return;

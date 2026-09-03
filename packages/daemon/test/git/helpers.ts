@@ -9,6 +9,12 @@ import { join } from "node:path";
 import { JournalWriter } from "../../src/bus/journal.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { createUlidGenerator, type UlidGenerator } from "../../src/bus/ulid.ts";
+import {
+  claimDaemonIdentity,
+  type DaemonIdentity,
+  releaseDaemonIdentity,
+} from "../../src/lifecycle/daemon-identity.ts";
+import { writeLockExclusive } from "../../src/lifecycle/lock.ts";
 
 export function freshWorkspace(): string {
   return mkdtempSync(join(tmpdir(), "glosa-git-test-"));
@@ -47,4 +53,33 @@ export function deterministicClock(startMs = 1_700_000_000_000): () => Date {
  * done (or left for the tmp dir cleanup to sweep, same as elsewhere in this test suite). */
 export function testWriter(root: string): JournalWriter {
   return new JournalWriter(journalPath(root));
+}
+
+/** Establishes the A4 §F21 singleton proof the way the live daemon does: writes a REAL
+ * `daemon.lock` (same `writeLockExclusive` + `DaemonLock` shape as `lifecycle.ts`) under this
+ * test's own tmp workspace — never a real `~/.glosa` — and claims the matching process identity.
+ * `reclaimIndexLock` then proves sole-operatorship against genuine on-disk bytes rather than a
+ * stubbed comparison. Always pair with `dropDaemonIdentity()` in `afterEach`: the claim is
+ * process-wide, and `bun test` runs every file in one process. */
+export function claimTestDaemonIdentity(root: string, instanceId = "gl-test-instance"): DaemonIdentity {
+  const home = join(root, "daemon-home");
+  mkdirSync(home, { recursive: true });
+  const lockFile = join(home, "daemon.lock");
+  rmSync(lockFile, { force: true });
+  writeLockExclusive(lockFile, {
+    instance_id: instanceId,
+    pid: process.pid,
+    port: 0,
+    protocol_version: "test",
+    started_at: new Date().toISOString(),
+    host: "127.0.0.1",
+    bun: Bun.version,
+  });
+  const identity: DaemonIdentity = { instanceId, lockFile };
+  claimDaemonIdentity(identity);
+  return identity;
+}
+
+export function dropDaemonIdentity(): void {
+  releaseDaemonIdentity();
 }

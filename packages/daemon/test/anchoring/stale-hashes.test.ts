@@ -66,7 +66,7 @@ describe("stale rendered_sha256", () => {
 
   test("sanity: renderedSha256(html) actually changes when the artifact is re-rendered with different content", () => {
     const { artifact } = buildRArtifact("07.md", SOURCE);
-    const otherHtmlSha = renderedSha256("<p data-line=\"0\">completely different</p>");
+    const otherHtmlSha = renderedSha256('<p data-line="0">completely different</p>');
     expect(otherHtmlSha).not.toBe(renderedSha256(artifact.renderedHtml));
   });
 });

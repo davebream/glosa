@@ -78,7 +78,8 @@ export function noticeDialog({ title, body, dismissLabel = "Got it" }) {
 export function confirmDialog({ title, body, confirmLabel = "Continue", danger = false }) {
   const dialog = document.createElement("dialog");
   if (typeof dialog.showModal !== "function") {
-    const ok = typeof window !== "undefined" && window.confirm ? window.confirm(body ? `${title}\n\n${body}` : title) : true;
+    const ok =
+      typeof window !== "undefined" && window.confirm ? window.confirm(body ? `${title}\n\n${body}` : title) : true;
     return Promise.resolve(ok);
   }
 

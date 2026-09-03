@@ -3,7 +3,7 @@
 // throw in the HTTP pipeline falls back to. The point of this response is what it does NOT say —
 // no error message, no stack, nothing an exception could have been carrying.
 import { describe, expect, test } from "bun:test";
-import { internalErrorResponse, problem } from "../src/problem.ts";
+import { internalErrorResponse, problem } from "../src/transport/problem.ts";
 
 describe("problem", () => {
   test("builds the RFC 9457 envelope with problem+json content type", async () => {
@@ -55,7 +55,9 @@ describe("internalErrorResponse", () => {
   test("never contains a stack trace, file path, or error message — only the fixed generic body", async () => {
     const res = internalErrorResponse();
     const text = await res.text();
-    expect(text).toBe(JSON.stringify({ type: "https://glosa.local/errors/internal", title: "internal error", status: 500 }));
+    expect(text).toBe(
+      JSON.stringify({ type: "https://glosa.local/errors/internal", title: "internal error", status: 500 }),
+    );
     expect(text).not.toContain(".ts:"); // no source location
     expect(text).not.toContain("at "); // no stack-frame-shaped text
     expect(text.toLowerCase()).not.toContain("error:"); // no re-thrown message prefix

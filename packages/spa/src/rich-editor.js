@@ -63,7 +63,12 @@ function markdownInputRules(schema) {
     textblockTypeInputRule(/^(#{1,6})\s$/, schema.nodes.heading, (match) => ({ level: match[1].length })),
     wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
     wrappingInputRule(/^\s*([-+*])\s$/, schema.nodes.bullet_list),
-    wrappingInputRule(/^(\d+)\.\s$/, schema.nodes.ordered_list, (match) => ({ order: Number(match[1]) }), (match, node) => node.childCount + (node.attrs.order ?? 1) === Number(match[1])),
+    wrappingInputRule(
+      /^(\d+)\.\s$/,
+      schema.nodes.ordered_list,
+      (match) => ({ order: Number(match[1]) }),
+      (match, node) => node.childCount + (node.attrs.order ?? 1) === Number(match[1]),
+    ),
   ];
   return inputRules({ rules });
 }
@@ -89,9 +94,26 @@ function toolbarActions(schema) {
     return state.doc.rangeHasMark(from, to, markType);
   };
   return [
-    { label: "B", aria: "Bold", command: () => toggleMark(schema.marks.strong), active: markActive(schema.marks.strong), className: "glosa-rich-b" },
-    { label: "I", aria: "Italic", command: () => toggleMark(schema.marks.em), active: markActive(schema.marks.em), className: "glosa-rich-i" },
-    { label: "Code", aria: "Inline code", command: () => toggleMark(schema.marks.code), active: markActive(schema.marks.code) },
+    {
+      label: "B",
+      aria: "Bold",
+      command: () => toggleMark(schema.marks.strong),
+      active: markActive(schema.marks.strong),
+      className: "glosa-rich-b",
+    },
+    {
+      label: "I",
+      aria: "Italic",
+      command: () => toggleMark(schema.marks.em),
+      active: markActive(schema.marks.em),
+      className: "glosa-rich-i",
+    },
+    {
+      label: "Code",
+      aria: "Inline code",
+      command: () => toggleMark(schema.marks.code),
+      active: markActive(schema.marks.code),
+    },
     { label: "H1", aria: "Heading 1", command: () => setBlockType(schema.nodes.heading, { level: 1 }) },
     { label: "H2", aria: "Heading 2", command: () => setBlockType(schema.nodes.heading, { level: 2 }) },
     { label: "H3", aria: "Heading 3", command: () => setBlockType(schema.nodes.heading, { level: 3 }) },

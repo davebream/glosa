@@ -18,6 +18,7 @@ import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./j
 import {
   APPLY_LEASE_TTL_MS,
   isLeaseExpired,
+  leaseExpiredError,
   leaseHeldError,
   leaseSessionMismatchError,
   noActiveLeaseError,
@@ -32,10 +33,12 @@ import {
 } from "./lifecycle.ts";
 import { KeyedMutex } from "./mutex.ts";
 import { journalPath, workspaceBusDir } from "./paths.ts";
+import { peekJournal } from "./peek.ts";
 import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
-import { applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
 
 const DELIVERY_RESERVATION_TTL_MS = 30_000;
 
@@ -50,6 +53,21 @@ export interface PreparedDelivery {
   delivery_id: string | null;
   drained: DeliverableEntry[];
   count: number;
+  has_more: boolean;
+}
+
+/** A read-only delivery candidate used to merge several workspace journals before any entry is
+ * reserved. `journal_order` is local to this workspace; `created_at` comes from the durable
+ * entry-created/adopted journal event rather than inbox metadata or process memory. */
+export interface PlannedDeliveryEntry {
+  id: string;
+  created_at: string;
+  journal_order: number;
+  presentation: DeliverableEntry | null;
+}
+
+export interface PlannedDelivery {
+  entries: PlannedDeliveryEntry[];
   has_more: boolean;
 }
 
@@ -81,6 +99,36 @@ export class ApprovalConflictError extends Error {
 
   constructor(readonly targetPath: string) {
     super(`an approval request is already active for ${targetPath}`);
+  }
+}
+
+/** R9's "at most one non-terminal approval request per workspace/path" is proven from additive
+ * `entry_created.detail` facts for new entries. Legacy events without those facts fall back to
+ * their immutable inbox payloads; when such a payload cannot be read, the scan has neither proven
+ * a conflict nor proven there is none, and those are different answers that must not collapse.
+ *
+ * Distinct from `ApprovalConflictError` on purpose, in the same spirit as `LEASE_EXPIRED` vs
+ * `NO_ACTIVE_LEASE` (A4 §F05) and `INDEX_LOCK_NOT_OWNED` (A4 §F21): reporting a definite conflict
+ * we cannot demonstrate would send the caller after an "existing request" that may not exist, and
+ * whose payload is unreadable anyway — so the advertised remedy (finish that approval) could be
+ * impossible to carry out. This error says only what is true — uniqueness is unprovable right now
+ * — and names the entries responsible so the remedy is actionable: make those payloads readable
+ * again, or drive them terminal through the journal (`glosa resolve`), after which they stop
+ * being candidates. Reconcile is deliberately NOT offered as the fix: its step-3 self-heal
+ * repairs a file with no `entry_created`, never an `entry_created` whose file is damaged. */
+export class ApprovalUniquenessUnprovableError extends Error {
+  readonly code = "APPROVAL_UNIQUENESS_UNPROVABLE";
+
+  constructor(
+    readonly targetPath: string,
+    readonly entries: readonly string[],
+  ) {
+    super(
+      `cannot prove ${targetPath} has no open approval request: inbox entr${entries.length === 1 ? "y" : "ies"} ` +
+        `${entries.join(", ")} could not be read — restore the payload(s) or resolve the entr${
+          entries.length === 1 ? "y" : "ies"
+        } so they leave the non-terminal set, then retry`,
+    );
   }
 }
 
@@ -117,6 +165,8 @@ export interface WorkspaceBusDeps {
   ulid?: () => string;
   now?: () => Date;
   reducer?: Reducer;
+  /** Explicit composition seam for subprocess durability tests. Production omits it. */
+  writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
 }
 
 export class WorkspaceBus {
@@ -129,6 +179,7 @@ export class WorkspaceBus {
   private readonly ulidFn: () => string;
   private readonly nowFn: () => Date;
   private readonly reducer: Reducer;
+  private readonly writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
   private readonly mutexKey: string;
   // P3.1 review fix: tracks whether THIS INSTANCE has reconciled — deliberately an instance field,
   // not something a caller tracks externally keyed by root string. A root string survives a
@@ -159,7 +210,8 @@ export class WorkspaceBus {
     this.root = workspaceWorktree(workspaceRoot);
     this.mutexKey = workspaceRegistrationId(workspaceRoot);
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
-    this.writer = new JournalWriter(journalPath(workspaceRoot));
+    this.writeCheckpoint = deps.writeCheckpoint;
+    this.writer = new JournalWriter(journalPath(workspaceRoot), this.writeCheckpoint);
     this.mutex = deps.mutex ?? new KeyedMutex<string>();
     this.ulidFn = deps.ulid ?? defaultUlid;
     this.nowFn = deps.now ?? (() => new Date());
@@ -279,8 +331,9 @@ export class WorkspaceBus {
    * `payload.kind` (R3: `human_edit`|`annotation`|`attention_request`) is mirrored into the
    * `entry_created` event's own `detail.kind` — the fold only ever sees journal EVENTS, never the
    * inbox file, so `lifecycleReducer` (P2.5) needs its own copy of the kind to pick the right
-   * transition table (attention vs. common). `fields.detail`, if given, is applied on top and wins
-   * on any overlapping key, `kind` included. */
+   * transition table (attention vs. common). `fields.detail` may add unrelated metadata, but the
+   * payload remains authoritative for reserved identity keys: `kind`, and for attention requests
+   * `approval_mode`/`target_path`. */
   createEntry(
     id: string,
     payload: unknown,
@@ -291,23 +344,69 @@ export class WorkspaceBus {
 
   /** Creates an attention request while enforcing approval-mode uniqueness in the same critical
    * section as the immutable inbox write. The check cannot race another request for this
-   * workspace: both the scan and createEntryLocked() share the workspace mutex. */
+   * workspace: both the scan and createEntryLocked() share the workspace mutex.
+   *
+   * The scan produces one of THREE answers, and the middle one is the whole point (R9: "at most
+   * one non-terminal approval request may exist for that workspace/path"):
+   *   - journal state (or a legacy payload) proves a same-path approval -> ApprovalConflictError
+   *   - a legacy candidate's payload could not be read                  -> unprovable, fail closed
+   *   - journal state / readable legacy payload rules out every entry   -> create
+   *
+   * `readInboxEntry` collapses "missing", "unparseable" and "EACCES" all into `null` (its own
+   * contract: never throws). Reading that `null` as "not a match" would be a fail-OPEN on the
+   * exact invariant this block exists to hold — one truncated, half-written or unreadable entry
+   * file would make a live approval invisible and let a second one be created for the same path.
+   * Absence of evidence is not evidence of absence, the same reasoning `reclaimIndexLock` applies
+   * to a missing daemon lock (A4 §F21): a refused request is recoverable, a broken invariant is
+   * not. So an unreadable candidate goes on `unprovable` rather than being skipped.
+   *
+   * A PROVEN conflict outranks an unprovable one, so the loop finishes (or breaks on the proof)
+   * before deciding: a fact must never lose to a maybe just because the maybe was scanned first.
+   * The scan also collects EVERY unreadable candidate instead of throwing on the first, so one
+   * failed request tells the operator about all of the damage at once.
+   *
+   * Deliberately no try/catch: `readInboxEntry` cannot throw, and everything after it is property
+   * access on a value already narrowed to a plain object — so nothing here has a failure that
+   * warrants swallowing, and a throw that does escape is a programming error which must surface
+   * rather than be silently re-read as "no conflict" (the class of bug being fixed here). */
   createAttentionRequest(id: string, payload: AttentionRequestPayload): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       if (payload.approval_mode === true && payload.target_path) {
+        const unprovable: string[] = [];
+        let proven = false;
         for (const [entryId, state] of Object.entries(this.state.entries)) {
           if (state.kind !== "attention" || isTerminal("attention", state.status)) continue;
-          try {
-            const existing = readInboxEntry(this.workspace, entryId) as Record<string, unknown> | null;
-            if (existing?.approval_mode === true && existing.target_path === payload.target_path) {
-              throw new ApprovalConflictError(payload.target_path);
+
+          // New entry_created events explicitly record `approval_mode` for every attention
+          // request and `target_path` for approvals. Those journal-derived facts are sufficient:
+          // false rules the candidate out, while true + a target proves either conflict or a
+          // different artifact. Missing/incomplete facts identify an N-1 event and retain W21's
+          // fail-closed inbox fallback below.
+          if (state.approval_mode === false) continue;
+          if (state.approval_mode === true && typeof state.target_path === "string") {
+            if (state.target_path === payload.target_path) {
+              proven = true;
+              break;
             }
-          } catch (error) {
-            if (error instanceof ApprovalConflictError) throw error;
-            // An unreadable immutable entry remains journal-authoritative, but cannot safely be
-            // identified as a path-scoped approval request. Reconciliation handles corruption.
+            continue;
+          }
+
+          const existing = readInboxEntry(this.workspace, entryId);
+          // A non-object body (scalar, array, JSON `null`) is not an inbox payload this daemon
+          // ever wrote — inbox files are write-once, so any deviation is corruption, and a
+          // corrupted body cannot rule out what the entry originally was.
+          if (existing === null || typeof existing !== "object" || Array.isArray(existing)) {
+            unprovable.push(entryId);
+            continue;
+          }
+          const record = existing as Record<string, unknown>;
+          if (record.approval_mode === true && record.target_path === payload.target_path) {
+            proven = true;
+            break;
           }
         }
+        if (proven) throw new ApprovalConflictError(payload.target_path);
+        if (unprovable.length > 0) throw new ApprovalUniquenessUnprovableError(payload.target_path, unprovable);
       }
       this.createEntryLocked(id, payload);
     });
@@ -319,15 +418,21 @@ export class WorkspaceBus {
     fields: Partial<Pick<JournalEvent, "by" | "idem" | "detail">> = {},
   ): void {
     this.assertWritable();
-    writeInboxEntryOnce(this.workspace, id, payload);
-    const payloadKind =
-      payload !== null && typeof payload === "object" && typeof (payload as Record<string, unknown>).kind === "string"
-        ? ((payload as Record<string, unknown>).kind as string)
+    writeInboxEntryOnce(this.workspace, id, payload, this.writeCheckpoint);
+    const payloadRecord =
+      payload !== null && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
         : undefined;
+    const payloadKind = typeof payloadRecord?.kind === "string" ? payloadRecord.kind : undefined;
     const detail: Record<string, unknown> | undefined =
-      payloadKind !== undefined || fields.detail !== undefined
-        ? { ...(payloadKind !== undefined ? { kind: payloadKind } : {}), ...(fields.detail ?? {}) }
-        : undefined;
+      payloadKind !== undefined || fields.detail !== undefined ? { ...(fields.detail ?? {}) } : undefined;
+    if (detail && payloadKind !== undefined) detail.kind = payloadKind;
+    if (detail && payloadKind === "attention_request") {
+      const approvalMode = payloadRecord?.approval_mode === true;
+      detail.approval_mode = approvalMode;
+      if (approvalMode && typeof payloadRecord.target_path === "string") detail.target_path = payloadRecord.target_path;
+      else delete detail.target_path;
+    }
     const event: JournalEvent = {
       v: 1,
       event_id: this.ulidFn(),
@@ -348,7 +453,7 @@ export class WorkspaceBus {
   adoptEntry(id: string, payload: unknown, detail: Record<string, unknown>, idem: string): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
-      writeInboxEntryOnce(this.workspace, id, payload);
+      writeInboxEntryOnce(this.workspace, id, payload, this.writeCheckpoint);
       const event: JournalEvent = {
         v: 1,
         event_id: this.ulidFn(),
@@ -585,6 +690,63 @@ export class WorkspaceBus {
     }
   }
 
+  private eligibleDeliveryEntriesLocked(opts: {
+    session: string;
+    entryId?: string;
+  }): Array<[string, DerivedState["entries"][string], unknown]> {
+    const reserved = new Set(
+      Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
+    );
+    const eligible: Array<[string, DerivedState["entries"][string], unknown]> = [];
+    for (const [id, entry] of Object.entries(this.state.entries)) {
+      if (opts.entryId && id !== opts.entryId) continue;
+      if (reserved.has(id)) continue;
+      const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
+      if (isTerminal(kind, entry.status)) continue;
+      const payload = readInboxEntry(this.workspace, id);
+      if (payload && typeof payload === "object") {
+        const target = (payload as Record<string, unknown>).target_session_id;
+        if (typeof target === "string" && target !== opts.session) continue;
+      }
+      const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+      // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
+      // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
+      // turn-boundary/MCP safety-net drain permanently.
+      if (attempts.some((attempt) => attempt.outcome === "presented")) continue;
+      eligible.push([id, entry, payload]);
+    }
+    return eligible;
+  }
+
+  /** Plans at most eight locally-oldest eligible presentations under this workspace's mutex but
+   * does not reserve, discard, or append anything. A cross-workspace coordinator can therefore
+   * compute one global order/cap first, then reserve the exact selected ids. A concurrent drain
+   * between these two phases is detected by the exact-id prepare returning no item; callers must
+   * roll back every reservation they already acquired rather than substitute another entry. */
+  previewDelivery(
+    limit: number,
+    opts: { session: string; entryId?: string },
+    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+  ): Promise<PlannedDelivery> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      this.pruneDeliveryReservationsLocked();
+      const { createdAt, entryOrder } = peekJournal(this.workspace);
+      const planned: PlannedDeliveryEntry[] = [];
+      const eligible = this.eligibleDeliveryEntriesLocked(opts);
+      for (const [id, entry, payload] of eligible) {
+        planned.push({
+          id,
+          created_at: createdAt.get(id) ?? "9999-12-31T23:59:59.999Z",
+          journal_order: entryOrder.get(id) ?? Number.MAX_SAFE_INTEGER,
+          presentation: await build(id, payload, entry.status),
+        });
+        if (planned.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
+      }
+      return { entries: planned, has_more: eligible.length > planned.length };
+    });
+  }
+
   /** Selects and formats entries under the workspace mutex, without claiming that the caller has
    * surfaced them. A later acknowledgement records the actual transport outcome. */
   prepareDelivery(
@@ -595,36 +757,15 @@ export class WorkspaceBus {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       this.pruneDeliveryReservationsLocked();
-      const reserved = new Set(
-        Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
-      );
-      const eligible = Object.entries(this.state.entries).filter(([id, entry]) => {
-        if (opts.entryId && id !== opts.entryId) return false;
-        if (reserved.has(id)) return false;
-        const kind =
-          entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
-        if (isTerminal(kind, entry.status)) return false;
-        const payload = readInboxEntry(this.workspace, id);
-        if (payload && typeof payload === "object") {
-          const target = (payload as Record<string, unknown>).target_session_id;
-          if (typeof target === "string" && target !== opts.session) return false;
-        }
-        const attempts = Array.isArray(entry.deliveryAttempts)
-          ? (entry.deliveryAttempts as DeliveryAttemptRecord[])
-          : [];
-        // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
-        // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
-        // turn-boundary/MCP safety-net drain permanently.
-        return !attempts.some((attempt) => attempt.outcome === "presented");
-      });
+      const eligible = this.eligibleDeliveryEntriesLocked(opts);
 
       const presentations: DeliverableEntry[] = [];
       let batchBytes = 0;
-      for (const [id, entry] of eligible) {
+      for (const [id, entry, payload] of eligible) {
         if (presentations.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
         let presentation: DeliverableEntry | null = null;
         try {
-          presentation = await build(id, readInboxEntry(this.workspace, id), entry.status);
+          presentation = await build(id, payload, entry.status);
         } catch (error) {
           const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
           this.recordDeliveryAttemptLocked(id, {
@@ -719,6 +860,16 @@ export class WorkspaceBus {
     });
   }
 
+  /** Releases an unacknowledged reservation without appending a delivery attempt. Composite
+   * preparation uses this on every already-prepared constituent if a later exact-id reservation
+   * fails or the freshly rebuilt presentation no longer fits the global cap. */
+  cancelDelivery(deliveryId: string): Promise<boolean> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.pruneDeliveryReservationsLocked();
+      return this.deliveryReservations.delete(deliveryId);
+    });
+  }
+
   /** Direct acknowledgement for a session-targeted conversation message. Channel transports do
    * not use the hook reservation token, so they acknowledge the immutable entry itself. */
   acknowledgeConversationMessage(
@@ -772,12 +923,55 @@ export class WorkspaceBus {
     return { payload: readInboxEntry(this.workspace, id), status: state.status };
   }
 
+  /** The ONE way a lease dies without a `resolve` having proven anything, shared by `applyBegin`
+   * and `resolveEntry` so both provably do the same thing (A4 §F04 reconcile step 4 —
+   * "apply_begin w/o apply_end & expired -> apply_expired, interval->unknown" — and §F05's
+   * "Lease expiry -> apply_expired, diff->unknown").
+   *
+   * Reconcile implements exactly this at STARTUP, but startup is the one moment a long-lived
+   * daemon never reaches: a session can stall past the 15-minute TTL while the daemon stays up
+   * for days, so without an inline path the journal would hold an `apply_begin` no event ever
+   * closes, and the interval since `pre_sha` would keep accumulating drift no lease covers.
+   *
+   * Event first, then checkpoint — the same order reconcile uses (step 4 appends `apply_expired`,
+   * step 5 captures the drift as `unknown`): the journal records that the lease is dead BEFORE
+   * anything is committed under it, so a crash between the two recovers to "lease already
+   * expired, drift not yet captured", which reconcile's own step 5 then finishes. The reverse
+   * order would recover to "commit exists, lease still nominally open" — a window in which the
+   * next `resolve` could sweep an already-unknown-attributed commit into a session's diff. */
+  private async expireLeaseLocked(lease: ApplyLeaseState): Promise<string> {
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: lease.entry,
+      event: "apply_expired",
+      by: "daemon", // never `session:<id>` — a lease that expired proved nothing for its holder
+      detail: { lease_id: lease.leaseId },
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
+
+    // Captures whatever happened since `pre_sha` so nothing is silently lost — as `unknown`,
+    // which is what A4 §F05 says an interval with no live lease over it is. Idempotent when
+    // nothing actually drifted (`checkpoint` returns HEAD without committing).
+    return checkpoint(this.workspace, {
+      attribution: "unknown",
+      kind: "apply_expired",
+      entry: lease.entry,
+      lease: lease.leaseId,
+    });
+  }
+
   /** `apply-begin` (A4 §F05): under this workspace's ONE git+journal mutex (the same slot every
    * other write to this workspace goes through, so a checkpoint here can never race a concurrent
    * journal append) — reject `LEASE_HELD` if a lease is already active and not expired (2nd
-   * apply-begin never queues); else checkpoint the CURRENT state (attributed `unknown` — whatever
-   * drifted before this lease started isn't this session's doing) as `pre_sha`, then append
-   * `apply_begin` recording it plus a 15-minute expiry. */
+   * apply-begin never queues); if one is on record but EXPIRED, close it out honestly first
+   * (`expireLeaseLocked`) rather than silently overwriting `state.applyLease` and leaving its
+   * `apply_begin` dangling in the journal forever; then checkpoint the CURRENT state (attributed
+   * `unknown` — whatever drifted before this lease started isn't this session's doing) as
+   * `pre_sha`, and append `apply_begin` recording it plus a 15-minute expiry. */
   applyBegin(entry: string, sessionId: string): Promise<{ leaseId: string; preSha: string }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
@@ -785,7 +979,10 @@ export class WorkspaceBus {
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
       const active = this.state.applyLease;
-      if (active && !isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
+      if (active) {
+        if (!isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
+        await this.expireLeaseLocked(active);
+      }
 
       const preSha = await checkpoint(this.workspace, { attribution: "unknown", kind: "pre_apply", entry });
 
@@ -816,9 +1013,11 @@ export class WorkspaceBus {
    * `sessionId` directly: without the match check, any caller could resolve someone else's open
    * lease and have the edit attributed to themselves, which is exactly the forgery §F05 exists to
    * prevent. A mismatched `sessionId` throws `LEASE_SESSION_MISMATCH` rather than falsely
-   * attributing anything. Guarded (first-terminal-wins, illegal-from-status) transition rules
-   * belong to P2.5's `lifecycleReducer` — this just appends the events `resolve` is defined to
-   * produce and lets whichever reducer this bus is running fold them. */
+   * attributing anything. A lease past its TTL throws `LEASE_EXPIRED` for the same reason, after
+   * closing it out as `unknown` (see `expireLeaseLocked`). Guarded (first-terminal-wins,
+   * illegal-from-status) transition rules belong to P2.5's `lifecycleReducer` — this just appends
+   * the events `resolve` is defined to produce and lets whichever reducer this bus is running
+   * fold them. */
   resolveEntry(
     entry: string,
     outcome: "applied" | "rejected" | "stale",
@@ -832,6 +1031,19 @@ export class WorkspaceBus {
       const lease = this.state.applyLease;
       if (!lease || lease.entry !== entry) throw noActiveLeaseError(entry);
       if (lease.session !== sessionId) throw leaseSessionMismatchError(entry, lease.session, sessionId);
+      // The TTL is what BOUNDS the proof (A4 §F05). Past `expires_at` the pre..post diff no
+      // longer describes "what this session did under a live lease" — it describes everything
+      // that reached the worktree since `pre_sha`, including however many hours of drift arrived
+      // by some other route while the session was stalled. Attributing that to `lease.session`
+      // would be exactly the forged provenance §F05 exists to prevent, so close the lease out as
+      // `unknown` and make the caller re-open a provable window. Deliberately AFTER the session
+      // check: a caller that doesn't hold this lease never gets to drive someone else's lease to
+      // expiry — the holder's own next `resolve`, the next `applyBegin`, or reconcile step 4 all
+      // reach the same place, so nothing is lost by refusing a non-holder first.
+      if (isLeaseExpired(lease, this.nowFn())) {
+        await this.expireLeaseLocked(lease);
+        throw leaseExpiredError(entry, lease.leaseId, lease.expiresAt);
+      }
 
       // Attribution comes from the LEASE's own recorded session (the proven identity), not the
       // `sessionId` parameter — they're equal here (just checked above), but using `lease.session`

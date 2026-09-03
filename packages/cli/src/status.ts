@@ -44,7 +44,12 @@ export async function runStatus(_dir: string, deps: StatusDeps): Promise<Command
       ok: true,
       command: "status",
       exitCode: EXIT_CODES.OK,
-      data: { daemon_reachable: true, daemon: summary.daemon, workspaces: summary.workspaces, sessions: summary.sessions },
+      data: {
+        daemon_reachable: true,
+        daemon: summary.daemon,
+        workspaces: summary.workspaces,
+        sessions: summary.sessions,
+      },
       warnings: [],
     };
   } catch (err) {
@@ -71,8 +76,12 @@ export function printStatusResult(result: CommandEnvelope<StatusData>, json: boo
   }
   const wsCount = result.data.workspaces?.length ?? 0;
   const sessCount = result.data.sessions?.length ?? 0;
-  process.stdout.write(`glosa status: daemon ${result.data.daemon?.instance_id} — ${wsCount} workspace(s), ${sessCount} session(s)\n`);
+  process.stdout.write(
+    `glosa status: daemon ${result.data.daemon?.instance_id} — ${wsCount} workspace(s), ${sessCount} session(s)\n`,
+  );
   for (const w of result.data.workspaces ?? []) {
-    process.stdout.write(`  ${w.slug}  ${w.path}  pending=${w.pending_count}${w.has_attention ? " [attention]" : ""}\n`);
+    process.stdout.write(
+      `  ${w.slug}  ${w.path}  pending=${w.pending_count}${w.has_attention ? " [attention]" : ""}\n`,
+    );
   }
 }

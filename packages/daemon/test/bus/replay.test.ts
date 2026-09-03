@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { EventType, JournalEvent } from "../../src/bus/journal.ts";
 import { JournalWriter, MAX_EVENT_BYTES } from "../../src/bus/journal.ts";
+import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { journalPath, quarantinePath } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
 import { foldEvents, replayJournal } from "../../src/bus/replay.ts";
@@ -57,6 +58,20 @@ describe("replay.ts — foldEvents (pure)", () => {
   test("delivery_attempt never changes status — separate axis", () => {
     const state = foldEvents([mkEvent("entry_created", "e1"), mkEvent("delivery_attempt", "e1")]);
     expect(state.entries.e1?.status).toBe("pending");
+  });
+
+  test("entry_created approval metadata is retained by both replay reducers while legacy events remain valid", () => {
+    const created = mkEvent("entry_created", "approval", {
+      detail: { kind: "attention_request", approval_mode: true, target_path: "notes.md" },
+    });
+    const legacy = mkEvent("entry_created", "legacy", { detail: { kind: "attention_request" } });
+
+    for (const reducer of [undefined, lifecycleReducer]) {
+      const state = foldEvents([created, legacy], reducer);
+      expect(state.entries.approval).toMatchObject({ approval_mode: true, target_path: "notes.md" });
+      expect(state.entries.legacy?.approval_mode).toBeUndefined();
+      expect(state.entries.legacy?.target_path).toBeUndefined();
+    }
   });
 });
 
@@ -143,13 +158,17 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
 
     const first = await reconcileWorkspace(root, { ulid: deterministicUlid(1_000), now: deterministicClock(1_000) });
     expect(first.quarantineCount).toBe(1);
-    const linesAfterFirst = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
+    const linesAfterFirst = readFileSync(jPath, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     const quarantinedAfterFirst = linesAfterFirst.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterFirst).toBe(1);
 
     const second = await reconcileWorkspace(root, { ulid: deterministicUlid(2_000), now: deterministicClock(2_000) });
     expect(second.quarantineCount).toBe(1); // still "1 distinct bad line present", not accumulating
-    const linesAfterSecond = readFileSync(jPath, "utf8").split("\n").filter((l) => l.length > 0);
+    const linesAfterSecond = readFileSync(jPath, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(linesAfterSecond.length).toBe(linesAfterFirst.length); // journal didn't grow
     const quarantinedAfterSecond = linesAfterSecond.filter((l) => l.includes('"line_quarantined"')).length;
     expect(quarantinedAfterSecond).toBe(1); // not re-announced
@@ -157,4 +176,83 @@ describe("reconcile — quarantine is idempotent across restarts", () => {
     expect(second.state.entries.e1?.status).toBe("applied"); // the bad line still stays folded-out
     cleanupWorkspace(root);
   });
+});
+
+// A4 §F04's ordered reconcile step 4 and §F05's "Lease expiry -> apply_expired, diff->unknown"
+// are no longer reachable only from a daemon restart: `WorkspaceBus.applyBegin`/`resolveEntry`
+// now close out an expired lease inline, so `apply_begin -> apply_expired -> apply_begin` is a
+// sequence a LIVE journal can contain. These fold it through BOTH reducers (the minimal one and
+// the production `lifecycleReducer`, which delegates every apply_* event to it) so the derived
+// lease/status axes stay correct and replay-stable for it.
+describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
+  const reducers = [
+    ["defaultReducer", undefined],
+    ["lifecycleReducer", lifecycleReducer],
+  ] as const;
+
+  function beginEvent(entry: string, leaseId: string, session: string, expiresAt = "2023-11-14T22:15:00.000Z") {
+    return mkEvent("apply_begin", entry, {
+      by: `session:${session}`,
+      detail: { lease_id: leaseId, entry, session, pre_sha: `sha-${leaseId}`, expires_at: expiresAt },
+    });
+  }
+
+  for (const [name, reducer] of reducers) {
+    test(`${name}: apply_begin -> apply_expired clears the lease and fabricates no status`, () => {
+      const state = foldEvents(
+        [
+          mkEvent("entry_created", "e1"),
+          beginEvent("e1", "L1", "sess-1"),
+          mkEvent("apply_expired", "e1", { detail: { lease_id: "L1" } }),
+        ],
+        reducer,
+      );
+      expect(state.applyLease).toBeNull();
+      expect(state.entries.e1?.status).toBe("pending"); // never fast-forwarded to a terminal
+    });
+
+    test(`${name}: apply_expired -> a superseding apply_begin leaves exactly the NEW lease outstanding`, () => {
+      const state = foldEvents(
+        [
+          mkEvent("entry_created", "e1"),
+          beginEvent("e1", "L1", "sess-1"),
+          mkEvent("apply_expired", "e1", { detail: { lease_id: "L1" } }),
+          beginEvent("e2", "L2", "sess-2"),
+        ],
+        reducer,
+      );
+      expect(state.applyLease?.leaseId).toBe("L2");
+      expect(state.applyLease?.entry).toBe("e2");
+      expect(state.applyLease?.session).toBe("sess-2");
+    });
+
+    test(`${name}: a full expire-then-retry lifecycle ends closed, applied, and replay-stable`, () => {
+      const events: JournalEvent[] = [
+        mkEvent("entry_created", "e1"),
+        beginEvent("e1", "L1", "sess-1"),
+        mkEvent("apply_expired", "e1", { detail: { lease_id: "L1" } }),
+        beginEvent("e1", "L2", "sess-1"),
+        mkEvent("apply_end", "e1", { by: "session:sess-1", detail: { lease_id: "L2", post_sha: "sha-post" } }),
+        mkEvent("transition_committed", "e1", { by: "session:sess-1", detail: { to: "applied", outcome: "applied" } }),
+      ];
+      const first = foldEvents(events, reducer);
+      const second = foldEvents(events, reducer);
+      expect(first.applyLease).toBeNull();
+      expect(first.entries.e1?.status).toBe("applied");
+      expect(first.entries).toEqual(second.entries); // replay twice == identical
+      expect(second.applyLease).toBeNull();
+    });
+
+    test(`${name}: an apply_expired naming a DIFFERENT lease never closes the live one`, () => {
+      const state = foldEvents(
+        [
+          mkEvent("entry_created", "e1"),
+          beginEvent("e1", "L1", "sess-1"),
+          mkEvent("apply_expired", "e1", { detail: { lease_id: "L-some-other-lease" } }),
+        ],
+        reducer,
+      );
+      expect(state.applyLease?.leaseId).toBe("L1");
+    });
+  }
 });

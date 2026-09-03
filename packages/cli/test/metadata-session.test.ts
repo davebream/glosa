@@ -35,11 +35,20 @@ describe("metadata/session CLI contract", () => {
       },
     };
     const createClient = async () => client as GlosaApiClient;
-    expect((await runMetadata({ action: "set", workspace: "/private/workspace", file }, createClient)).data).toEqual({ metadata: descriptor, replaced: false });
-    expect((await runMetadata({ action: "show", workspace: "/private/workspace" }, createClient)).data).toEqual({ metadata: descriptor });
-    expect((await runMetadata({ action: "clear", workspace: "/private/workspace" }, createClient)).data).toEqual({ cleared: true });
+    expect((await runMetadata({ action: "set", workspace: "/private/workspace", file }, createClient)).data).toEqual({
+      metadata: descriptor,
+      replaced: false,
+    });
+    expect((await runMetadata({ action: "show", workspace: "/private/workspace" }, createClient)).data).toEqual({
+      metadata: descriptor,
+    });
+    expect((await runMetadata({ action: "clear", workspace: "/private/workspace" }, createClient)).data).toEqual({
+      cleared: true,
+    });
     expect(JSON.stringify(calls)).toContain("/private/workspace");
-    expect(JSON.stringify((await runMetadata({ action: "show", workspace: "/private/workspace" }, createClient)).data)).not.toContain("/private/workspace");
+    expect(
+      JSON.stringify((await runMetadata({ action: "show", workspace: "/private/workspace" }, createClient)).data),
+    ).not.toContain("/private/workspace");
   });
 
   test("session bind reports only the session id and bound state", async () => {

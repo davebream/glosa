@@ -30,9 +30,7 @@ export interface PresentFragmentOptions {
   /** When true, emit `lock=preview` (CLI `--preview` / MCP `mode:"preview"`). */
   previewLock: boolean;
   /** Durable pairing token (`t=`) or ephemeral presentation token (`p=`). Exactly one. */
-  pairing:
-    | { kind: "durable"; token: string }
-    | { kind: "presentation"; token: string };
+  pairing: { kind: "durable"; token: string } | { kind: "presentation"; token: string };
 }
 
 export interface OpenPresentationData {
@@ -76,8 +74,8 @@ export interface OpenPresentationDeps {
   isRegularFile?: (path: string) => boolean;
   /** Read-only init-manifest probe used for the `not-initialized`/`init-drifted` warnings.
    * Defaults to scoped-init.ts's `checkScopedManifestDrift` — the SAME function `glosa doctor`'s
-   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. It previously
-   * defaulted to init.ts's legacy v1 probe, which only ever looked at `.claude/.glosa-init.json`;
+   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. The removed
+   * legacy probe only looked at `.claude/.glosa-init.json`;
    * since `runScopedInit` writes `.glosa/init-manifest.json` and DELETES the legacy file after
    * migrating it, every correctly-wired workspace reported `not-initialized` (issue #96).
    * Injectable for tests. */
@@ -236,8 +234,7 @@ export async function runOpenPresentation(
   if (previewLock && options.bindSessionId) {
     warnings.push({
       code: "preview-bind-conflict",
-      message:
-        "--preview hides annotate/edit controls while --bind wires feedback routing to a session",
+      message: "--preview hides annotate/edit controls while --bind wires feedback routing to a session",
     });
   }
 
@@ -267,9 +264,10 @@ export async function runOpenPresentation(
         : await client.openWorkspace(classified.openPath, openOpts);
   } catch (err) {
     if (isApiError(err)) {
-      const type = typeof err.problem === "object" && err.problem && "type" in err.problem
-        ? String((err.problem as { type?: string }).type ?? "")
-        : "";
+      const type =
+        typeof err.problem === "object" && err.problem && "type" in err.problem
+          ? String((err.problem as { type?: string }).type ?? "")
+          : "";
       const code = type.split("/").pop() || "open-failed";
       return {
         ok: false,
@@ -336,11 +334,7 @@ export async function runOpenPresentation(
       const bound = await client.bindSession(classified.openPath, options.bindSessionId);
       boundSession = bound.session_id;
     } catch (err) {
-      const message = isApiError(err)
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "session bind failed";
+      const message = isApiError(err) ? err.message : err instanceof Error ? err.message : "session bind failed";
       warnings.push({
         code: "bind-failed",
         message: `could not bind session ${options.bindSessionId}: ${message}`,

@@ -24,8 +24,8 @@
 import { readFileSync } from "node:fs";
 import picomatch from "picomatch";
 import type { ChunkManifest } from "../anchoring.ts";
-import { confinePath } from "../confine-path.ts";
 import { loadMatcherConfig } from "../matcher.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { type WorkspaceTarget, workspaceBusPath, workspaceWorktree } from "../workspace.ts";
 
 /** The subset of a live session an adapter needs to decide a `workspace_binding` — mirrors
@@ -74,7 +74,7 @@ export interface ContentAdapter {
   recognizes(workspaceRoot: string, workspace?: WorkspaceTarget): boolean;
   /** R2's authoritative routing input, derived from adapter-specific state (e.g. a provider's own
    * session-history file) rather than the hook payload's raw `cwd`. `null`/`undefined` defers to
-   * the core's existing cwd-ancestor fallback (registry/routing.ts) exactly as if no adapter had
+   * the core's existing cwd-ancestor fallback (`SessionRegistry.forWorkspace`) exactly as if no adapter had
    * an opinion — the core calls this WITHOUT knowing why the adapter picked what it picked. */
   sessionBinding?(session: AdapterSessionHint): string | null;
   /** Overrides the extension-based R/F split (`artifact-render.ts`'s `classifyArtifactPath`) for

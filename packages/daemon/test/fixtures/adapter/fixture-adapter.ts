@@ -16,7 +16,12 @@
 // Fix 2's corrected form).
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { AdapterSessionHint, ContentAdapter, DerivedFromEdge, ManifestSource } from "../../../src/adapters/interface.ts";
+import type {
+  AdapterSessionHint,
+  ContentAdapter,
+  DerivedFromEdge,
+  ManifestSource,
+} from "../../../src/adapters/interface.ts";
 
 /** Presence of this marker file at a workspace's root is the fixture's whole "data-path
  * recognition" rule (R7) — deliberately trivial (a real adapter's own rule, e.g. a fixed path

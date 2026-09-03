@@ -16,6 +16,7 @@ import { createMcpServer, GLOSA_MCP_TOOL_NAMES, type GlosaMcpServer, type McpDep
 import {
   conversationAckInputSchema,
   inboxGetInputSchema,
+  inboxPresentationSchema,
   inboxPullInputSchema,
   metadataClearInputSchema,
   metadataSetInputSchema,
@@ -28,6 +29,7 @@ import { CLI_VERSION } from "../src/version.ts";
 function presentation(id: string, kind: "annotation" | "human_edit", text: string) {
   return {
     id,
+    workspace: "/workspace",
     kind,
     status: "pending",
     text,
@@ -54,7 +56,7 @@ class HookClient implements DaemonHookClient {
 
   async register(input: RegisterSessionInput) {
     this.registered = input;
-    return { workspace: input.cwd, drained_workspaces: [] };
+    return { workspace: input.cwd };
   }
 
   async heartbeat(sessionId: string) {
@@ -231,6 +233,17 @@ describe("official TypeScript MCP SDK contract", () => {
           openWorldHint: false,
         });
       }
+      expect(byName.get("glosa_inbox_pull")?.description).toBe(
+        "Pull the oldest pending actionable glosa inbox entries across the active session's routable workspaces (at most eight globally). Reserves delivery briefly; successful stdio write acknowledges presentation.",
+      );
+      expect(byName.get("glosa_inbox_pull")?.outputSchema).toMatchObject({
+        properties: {
+          entries: {
+            description:
+              "Pulled actionable presentations in global durable created/adopted order, each labelled with its canonical workspace.",
+          },
+        },
+      });
       expect(byName.get("glosa_metadata_clear")?.annotations?.destructiveHint).toBe(true);
       expect(byName.get("glosa_present")?.annotations).toMatchObject({
         readOnlyHint: false,
@@ -295,6 +308,13 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(workspaceMetadataDescriptorSchema.safeParse({ version: 1, id: "bad id", artifacts: [] }).success).toBe(
       false,
     );
+    const legacyPresentation: Partial<ReturnType<typeof presentation>> = presentation(
+      "inb-n-minus-one",
+      "annotation",
+      "legacy response",
+    );
+    delete legacyPresentation.workspace;
+    expect(inboxPresentationSchema.safeParse(legacyPresentation).success).toBe(true);
   });
 
   test("SDK-native tool errors reject invalid input and session identity overrides", async () => {
@@ -500,6 +520,7 @@ describe("official TypeScript MCP SDK contract", () => {
     hook.push = async (_sessionId, onEntry, signal) => {
       await onEntry({
         id: "message-1",
+        workspace: "/workspace",
         kind: "conversation_message",
         status: "pending",
         text: "bounded",

@@ -7,22 +7,24 @@
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../src/http.ts";
-import { CapabilityStore } from "../src/capability.ts";
-import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../src/registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
-import { canonicalize } from "../src/registry/slug.ts";
-import { journalPath } from "../src/bus/paths.ts";
-import { checkpoint, headSha } from "../src/git/shadow.ts";
-import { readFileSync } from "node:fs";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
-import { AgentProviderRegistry, type AgentProvider } from "../src/agent-provider/interface.ts";
+import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider/interface.ts";
+import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
+import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
+import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
+import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
+import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
+import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
+import { SessionRegistry } from "../src/registry/session-registry.ts";
+import { canonicalize } from "../src/registry/slug.ts";
+import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
 const TOKEN = "route-test-token-0123456789abcdef";
 const PORT = 4646; // arbitrary — never actually bound, only compared against the Host header
@@ -212,6 +214,42 @@ describe("A1 §5 route catalog", () => {
     rmSync(looseRoot, { recursive: true, force: true });
   });
 
+  test("POST /api/workspaces/open joins concurrent adoption of the same loose-file directory", async () => {
+    const adoptingRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-concurrent-adoption-")));
+    const artifact = join(adoptingRoot, "notes.md");
+    writeFileSync(artifact, "note\n");
+
+    try {
+      const looseResponse = await fetchFn(
+        stateChangingReq("/api/workspaces/open", {
+          method: "POST",
+          body: JSON.stringify({ path: artifact }),
+        }),
+      );
+      expect(looseResponse.status).toBe(200);
+
+      const openDirectory = () =>
+        fetchFn(
+          stateChangingReq("/api/workspaces/open", {
+            method: "POST",
+            body: JSON.stringify({ path: adoptingRoot }),
+          }),
+        );
+      const [first, second] = await Promise.all([openDirectory(), openDirectory()]);
+      expect([first.status, second.status]).toEqual([200, 200]);
+
+      const [firstBody, secondBody] = await Promise.all([first.json(), second.json()]);
+      expect(secondBody.slug).toBe(firstBody.slug);
+      const entry = workspaceIndex.getBySlug(firstBody.slug);
+      expect(entry?.kind).toBe("directory");
+      expect(entry?.lifecycle?.state).toBe("active");
+      expect(entry && existsSync(entry.bus_path)).toBe(true);
+    } finally {
+      await busRegistry.closeAll();
+      rmSync(adoptingRoot, { recursive: true, force: true });
+    }
+  });
+
   test("POST /api/workspaces/open presents an explicitly named excluded file as a loose document", async () => {
     const hiddenDir = join(root, ".hidden");
     const hiddenPath = join(hiddenDir, "secret.md");
@@ -301,7 +339,7 @@ describe("A1 §5 route catalog", () => {
   });
 
   test("presentation-token mint + redeem is single-use; replay and foreign Origin fail closed", async () => {
-    const { PresentationTokenStore } = await import("../src/presentation-token.ts");
+    const { PresentationTokenStore } = await import("../src/security/presentation-token.ts");
     ctx.presentationTokenStore = new PresentationTokenStore();
     fetchFn = createApiFetch(ctx);
 
@@ -391,6 +429,39 @@ describe("A1 §5 route catalog", () => {
       source_sha256: expect.any(String),
       stale: false,
     });
+  });
+
+  test("ordinary workspace routes fail closed while their target is being adopted", async () => {
+    const adoptingRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-adopting-ws-")));
+    try {
+      const artifact = join(adoptingRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      const loose = await workspaceIndex.resolveOpenTarget(artifact);
+      await busRegistry.get(loose.entry).reconcileOnce();
+      const directory = await workspaceIndex.resolveOpenTarget(adoptingRoot);
+      const record = await workspaceIndex.beginAdoption(directory.entry);
+      expect(record).not.toBeNull();
+
+      const response = await fetchFn(req(`/w/${directory.entry.slug}/artifacts`));
+      expect(response.status).toBe(409);
+      expect((await response.json()).type).toContain("workspace-adopting");
+      expect(busRegistry.has(directory.entry)).toBe(false);
+      expect(existsSync(directory.entry.bus_path)).toBe(false);
+
+      const rootAddressed = await fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({ path: adoptingRoot, message: "wait for adoption" }),
+        }),
+      );
+      expect(rootAddressed.status).toBe(409);
+      expect((await rootAddressed.json()).type).toContain("workspace-adopting");
+      expect(busRegistry.has(directory.entry)).toBe(false);
+      expect(existsSync(directory.entry.bus_path)).toBe(false);
+    } finally {
+      await busRegistry.closeAll();
+      rmSync(adoptingRoot, { recursive: true, force: true });
+    }
   });
 
   test("GET /w/:slug/artifacts on an unknown slug → 404 not-found", async () => {
@@ -1447,6 +1518,72 @@ describe("A1 §5 route catalog", () => {
     expect(ctx.getWorkspaceBus(root).state.entries[winner.id]?.status).toBe("open");
   });
 
+  test("a new live approval remains a definite 409 conflict when its inbox entry becomes unreadable", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\n");
+    const request = () =>
+      fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          body: JSON.stringify({ path: root, target_path: "notes.md", approval_mode: true }),
+        }),
+      );
+    const first = await request();
+    expect(first.status).toBe(201);
+    const created = await first.json();
+
+    // The journal still says this entry is a live approval; its immutable payload no longer parses.
+    const bus = ctx.getWorkspaceBus(root);
+    writeFileSync(inboxEntryPath(bus.workspace, created.id), '{"kind":"attention_requ');
+
+    const second = await request();
+    expect(second.status).toBe(409);
+    expect(second.headers.get("Content-Type")).toBe("application/problem+json");
+    const body = await second.json();
+    expect(body.type).toContain("approval-conflict");
+    expect(body.instance).toBe("/api/workspaces/attention-request");
+    const attentionIds = Object.entries(bus.state.entries)
+      .filter(([, state]) => state.kind === "attention")
+      .map(([id]) => id);
+    expect(attentionIds).toEqual([created.id]);
+  });
+
+  test("an unreadable legacy live approval still answers 500 approval-uniqueness-unprovable", async () => {
+    writeFileSync(join(root, "notes.md"), "# Approval\n");
+    const legacyId = "legacy-approval";
+    writeInboxEntryOnce(root, legacyId, {
+      kind: "attention_request",
+      action: "review",
+      target_path: "notes.md",
+      approval_mode: true,
+    });
+    const writer = new JournalWriter(journalPath(root));
+    appendEvent(writer, {
+      v: 1,
+      event_id: "legacy-created",
+      at: new Date(0).toISOString(),
+      entry: legacyId,
+      event: "entry_created",
+      by: "daemon",
+      detail: { kind: "attention_request" },
+    });
+    writer.close();
+    writeFileSync(inboxEntryPath(root, legacyId), '{"kind":"attention_requ');
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, target_path: "notes.md", approval_mode: true }),
+      }),
+    );
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Content-Type")).toBe("application/problem+json");
+    const body = await response.json();
+    expect(body.type).toContain("approval-uniqueness-unprovable");
+    expect(body.type).not.toContain("errors/internal");
+    expect(body.detail).toContain(legacyId);
+    expect(body.instance).toBe("/api/workspaces/attention-request");
+  });
+
   // --- POST /w/:slug/capability/:artifactPath (5.13/§7, P4.1) — the class-F capability mint ---
 
   test("POST /w/:slug/capability/:artifactPath with missing Origin → 403 (state-changing route class)", async () => {
@@ -1556,14 +1693,14 @@ describe("A1 §5 route catalog", () => {
         headers: { Host: `127.0.0.1:${PORT}` },
       });
       expect((await fetchFn(bare)).status).toBe(401);
-      expect(
-        (await fetchFn(req(`/w/${slug}/wiring`, { headers: { Origin: "http://evil.example.com" } }))).status,
-      ).toBe(403);
+      expect((await fetchFn(req(`/w/${slug}/wiring`, { headers: { Origin: "http://evil.example.com" } }))).status).toBe(
+        403,
+      );
     });
 
     test("unwired → wired → live → back to wired on lease expiry; response never leaks a path", async () => {
       // No init manifest anywhere -> unwired.
-      let res = await fetchFn(req(`/w/${slug}/wiring`));
+      const res = await fetchFn(req(`/w/${slug}/wiring`));
       expect(res.status).toBe(200);
       let body = await res.json();
       expect(body.state).toBe("unwired");
@@ -1647,11 +1784,8 @@ describe("A1 §5 route catalog", () => {
       // Bearer but NO Origin — state-changing rejects (unlike authed-read).
       expect((await fetchFn(req(`/w/${slug}/init`, { method: "POST" }))).status).toBe(403);
       expect(
-        (
-          await fetchFn(
-            req(`/w/${slug}/init`, { method: "POST", headers: { Origin: "http://evil.example.com" } }),
-          )
-        ).status,
+        (await fetchFn(req(`/w/${slug}/init`, { method: "POST", headers: { Origin: "http://evil.example.com" } })))
+          .status,
       ).toBe(403);
     });
 
@@ -1707,7 +1841,12 @@ describe("A1 §5 route catalog", () => {
         okEnvelope({
           ok: false,
           exit_code: 6,
-          error: { code: "mcp-key-conflict", kind: "conflict", message: "foreign glosa key", hint: "re-run with --force" },
+          error: {
+            code: "mcp-key-conflict",
+            kind: "conflict",
+            message: "foreign glosa key",
+            hint: "re-run with --force",
+          },
         });
       let res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
       expect(res.status).toBe(409);
@@ -1719,7 +1858,12 @@ describe("A1 §5 route catalog", () => {
         okEnvelope({
           ok: false,
           exit_code: 2,
-          error: { code: "durable-install-required", kind: "usage", message: "ephemeral runner cache", hint: "bun install -g" },
+          error: {
+            code: "durable-install-required",
+            kind: "usage",
+            message: "ephemeral runner cache",
+            hint: "bun install -g",
+          },
         });
       res = await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }));
       expect(res.status).toBe(409);
@@ -1737,7 +1881,8 @@ describe("A1 §5 route catalog", () => {
       ctx.runWorkspaceInit = async () => ({ kind: "bad-output" as const, message: "no envelope" });
       expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
 
-      ctx.runWorkspaceInit = async () => okEnvelope({ ok: false, exit_code: 70, error: { code: "internal", kind: "internal", message: "boom" } });
+      ctx.runWorkspaceInit = async () =>
+        okEnvelope({ ok: false, exit_code: 70, error: { code: "internal", kind: "internal", message: "boom" } });
       expect((await fetchFn(stateChangingReq(`/w/${slug}/init`, { method: "POST" }))).status).toBe(500);
 
       ctx.runWorkspaceInit = async () => okEnvelope();
@@ -1762,6 +1907,79 @@ describe("A1 §5 route catalog", () => {
       const body = await res.json();
       expect(body.detail ?? body.title).toContain("directory");
       rmSync(looseDir, { recursive: true, force: true });
+    });
+  });
+
+  // --- POST /api/workspaces/resolve — apply-lease expiry (A4 §F05) ---
+
+  describe("POST /api/workspaces/resolve — an expired apply-lease (A4 §F05)", () => {
+    /** Puts the route in the LONG-LIVED-DAEMON condition this case is about. `resolveBus` calls
+     * `bus.reconcileOnce()`, and reconcile step 4 is the only OTHER code that closes out a
+     * dangling lease — leaving it unconsumed would let the route's own reconcile expire the lease
+     * before `resolveEntry` ever sees it, and the test would pass without exercising the resolve
+     * path at all. Consuming it here is what makes reconcile a no-op for the rest of the test,
+     * exactly as it is on a daemon that has been up for hours. */
+    async function busWithReconcileAlreadyConsumed(now: () => Date) {
+      const bus = busRegistry.get(root, { now });
+      await bus.reconcileOnce();
+      return bus;
+    }
+
+    test("resolve on a lease past its TTL → 409 problem+json telling the caller to re-run apply-begin, never a 200 with a session attribution", async () => {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      // The bus must be constructed with this test's clock BEFORE any route touches the root —
+      // `WorkspaceBusRegistry.get` only honours `deps` on first construction (see its docstring),
+      // and the 15-minute TTL is not something a test can wait out in wall-clock time.
+      let nowMs = 1_700_000_000_000;
+      const bus = await busWithReconcileAlreadyConsumed(() => new Date(nowMs));
+      const { leaseId, preSha } = await bus.applyBegin("entry-1", "sess-a");
+
+      nowMs += APPLY_LEASE_TTL_MS + 1_000;
+      writeFileSync(join(root, "notes.md"), "v2 — drift no lease ever covered\n");
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", outcome: "applied", session: "sess-a" }),
+        }),
+      );
+
+      expect(res.status).toBe(409);
+      expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+      const body = await res.json();
+      expect(body.type).toBe("https://glosa.local/errors/conflict");
+      // Distinct from the NO_ACTIVE_LEASE/LEASE_SESSION_MISMATCH 409 that shares this slug: the
+      // caller has to be told the lease EXPIRED and that a fresh apply-begin is the way forward.
+      expect(`${body.title} ${body.detail ?? ""}`).toContain("expired");
+      expect(`${body.title} ${body.detail ?? ""}`).toContain("apply-begin");
+
+      // The refusal is honest all the way down: nothing was attributed to sess-a, and the
+      // unproven interval is on record as `unknown`.
+      const journal = readFileSync(journalPath(root), "utf8");
+      expect(journal).toContain(`"apply_expired"`);
+      expect(journal).toContain(leaseId);
+      expect(journal).not.toContain(`"apply_end"`);
+      const head = await headSha(root);
+      expect(head).not.toBe(preSha);
+      expect(bus.state.entries["entry-1"]?.status).not.toBe("applied");
+    });
+
+    test("resolve with a live lease still succeeds through the same route (the 409 is expiry-specific, not a blanket refusal)", async () => {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      const bus = await busWithReconcileAlreadyConsumed(() => new Date());
+      await bus.applyBegin("entry-1", "sess-a");
+      writeFileSync(join(root, "notes.md"), "v2 — edited under a live lease\n");
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", outcome: "applied", session: "sess-a" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe("applied");
     });
   });
 });

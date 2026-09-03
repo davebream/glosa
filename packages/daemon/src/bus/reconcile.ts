@@ -121,6 +121,11 @@ export function selfHealInbox(deps: {
 // gets closed out, and closing it out NEVER attributes it to a session — the interval just goes
 // unrecorded as anything more than "unknown" (no checkpoint here either; step 5 immediately after
 // this one is what captures whatever the worktree looks like now, as `unknown`).
+//
+// This runs at STARTUP only, so it is not the only closer: a daemon that stays up for days never
+// reaches it, and `WorkspaceBus#expireLeaseLocked` does the same job inline on the two paths that
+// meet a dead lease live (`applyBegin` superseding one, `resolveEntry` arriving after the TTL).
+// Both emit the same `apply_expired{lease_id}` and leave the interval `unknown`.
 export interface ApplyLeaseReconcileDeps {
   workspaceRoot: WorkspaceTarget;
   state: DerivedState;

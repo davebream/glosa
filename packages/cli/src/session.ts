@@ -20,14 +20,24 @@ export async function runSessionBind(
     return { ok: true, command: "session", exitCode: EXIT_CODES.OK, data: result, warnings: [] };
   } catch (error) {
     if (isApiError(error)) {
-      return { ok: false, command: "session", exitCode: EXIT_CODES.ENTRY_ERROR, data: {}, warnings: [], error: { code: "session-bind-failed", kind: "entry_error", message: error.problem?.title ?? error.message } };
+      return {
+        ok: false,
+        command: "session",
+        exitCode: EXIT_CODES.ENTRY_ERROR,
+        data: {},
+        warnings: [],
+        error: { code: "session-bind-failed", kind: "entry_error", message: error.problem?.title ?? error.message },
+      };
     }
     return { ...daemonUnreachableEnvelope("session", (error as Error).message), data: {} };
   }
 }
 
 export function printSessionBindResult(result: CommandEnvelope<SessionData>, json: boolean): void {
-  if (json) return printJsonEnvelope(result);
+  if (json) {
+    printJsonEnvelope(result);
+    return;
+  }
   if (!result.ok) {
     process.stderr.write(`glosa session bind: ${result.error?.message ?? "failed"}\n`);
     return;

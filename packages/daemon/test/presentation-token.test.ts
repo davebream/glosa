@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import {
-  PRESENTATION_TOKEN_TTL_MS,
-  PresentationTokenStore,
-} from "../src/presentation-token.ts";
+import { PRESENTATION_TOKEN_TTL_MS, PresentationTokenStore } from "../src/security/presentation-token.ts";
 
 describe("PresentationTokenStore", () => {
   test("mints a 256-bit hex token with a 60s TTL", () => {

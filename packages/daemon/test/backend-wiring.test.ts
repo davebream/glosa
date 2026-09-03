@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBackend } from "../src/lifecycle.ts";
+import { buildBackend } from "../src/lifecycle/daemon.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 
 describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () => {
@@ -65,6 +65,28 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     expect(backend.workspaceIndex.get(root)).toBeNull(); // gone from the index
     expect(backend.busRegistry.has(root)).toBe(false); // AND its bus was evicted, not leaked
     expect(backend.artifactWatcherRegistry.modeFor(entry)).toBeNull();
+  });
+
+  test("hard-remove evicts by registration identity without closing a loose-file sibling", async () => {
+    const backend = buildBackend(home);
+    const directory = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const artifact = join(root, "loose.pdf");
+    writeFileSync(artifact, "loose\n");
+    const loose = await backend.workspaceIndex.resolveOpenTarget(artifact);
+    expect(loose.entry.kind).toBe("loose-file");
+
+    backend.busRegistry.get(loose.entry);
+    backend.artifactWatcherRegistry.subscribe(loose.entry, () => {});
+    expect(backend.busRegistry.has(loose.entry)).toBe(true);
+    expect(backend.artifactWatcherRegistry.modeFor(loose.entry)).toBe("files");
+
+    await backend.workspaceIndex.forget(directory.slug);
+    expect(backend.busRegistry.has(loose.entry)).toBe(true);
+    expect(backend.artifactWatcherRegistry.modeFor(loose.entry)).toBe("files");
+
+    await backend.workspaceIndex.forget(loose.entry.slug);
+    expect(backend.busRegistry.has(loose.entry)).toBe(false);
+    expect(backend.artifactWatcherRegistry.modeFor(loose.entry)).toBeNull();
   });
 
   test("adoption sealing and daemon resource shutdown close shared artifact watchers", async () => {

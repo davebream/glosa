@@ -26,6 +26,36 @@ describe("ulid.ts", () => {
     expect(a < b).toBe(true); // random component incremented
   });
 
+  test("stays monotonic when the clock steps backwards (NTP step, manual change, VM resume)", () => {
+    // A backwards `Date.now()` must not be able to mint an id that sorts BEFORE one already written
+    // to the journal — lexicographic order == chronological order is the property A4 §F04 rests on.
+    let t = 1_700_000_000_000;
+    const gen = createUlidGenerator({ now: () => t, randomBytes: (n) => new Uint8Array(n) });
+    const a = gen();
+    t -= 5_000; // clock jumps 5s into the past
+    const b = gen();
+    expect(a < b).toBe(true);
+    expect(b.slice(0, 10)).toBe(a.slice(0, 10)); // time clamped to the high-water mark, not rewound
+    expect(b.slice(10)).toBe(`${"0".repeat(15)}1`); // clamp engaged -> increment-with-carry ran
+  });
+
+  test("holds the high-water mark across repeated calls while the clock is still behind it", () => {
+    // The trap in a partial fix: clamp the emitted time but still assign `lastTime = now()`. The
+    // first id would look right and the NEXT one would rewind again, so drive three calls through a
+    // clock that regresses and then only partially recovers.
+    let t = 1_700_000_000_000;
+    const gen = createUlidGenerator({ now: () => t, randomBytes: (n) => new Uint8Array(n) });
+    const a = gen();
+    t -= 5_000;
+    const b = gen();
+    t += 1_000; // recovers a little, still 4s behind the high-water mark
+    const c = gen();
+    expect(a < b).toBe(true);
+    expect(b < c).toBe(true);
+    expect(c.slice(0, 10)).toBe(a.slice(0, 10));
+    expect(c.slice(10)).toBe(`${"0".repeat(15)}2`); // carry chain continued across both clamped calls
+  });
+
   test("deterministic deps produce a repeatable sequence", () => {
     const deps = { now: () => 1_700_000_000_000, randomBytes: (n: number) => new Uint8Array(n).fill(3) };
     expect(createUlidGenerator(deps)()).toBe(createUlidGenerator(deps)());

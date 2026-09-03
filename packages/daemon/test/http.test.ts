@@ -7,8 +7,8 @@
 // confinement combinatorics live in confine-path.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
-import { tokenPath } from "../src/token.ts";
+import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
+import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "integration-test-token-0123456789abcdef";
@@ -62,7 +62,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.contract_version).toBe("1.5");
+    expect(body.contract_version).toBe("1.6");
     expect(body.daemon_version).toBe(APP_VERSION);
     expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists

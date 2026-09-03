@@ -115,10 +115,7 @@ describe("buildAnnotationRecordFromSelection — DOM (happy-dom)", () => {
   }
 
   test("a real selection inside the rendered container produces {body, intent, target}", () => {
-    const { container, selection } = setUpSelection(
-      '<p data-line="0">Hello there, world</p>',
-      "there",
-    );
+    const { container, selection } = setUpSelection('<p data-line="0">Hello there, world</p>', "there");
 
     const record = buildAnnotationRecordFromSelection(selection, container, {
       body: "tighten this",

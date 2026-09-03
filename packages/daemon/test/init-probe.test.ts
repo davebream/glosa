@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// issue #80 — the daemon's minimal read-only init-manifest probe. The literal path
-// `.claude/.glosa-init.json` is the ONE fact duplicated from the CLI's `paths()`
-// (packages/cli/src/init.ts) — pinned here and by init.test.ts's own manifestPath helper so the
-// two packages can never silently diverge.
+// issue #80 — the daemon's minimal read-only init-manifest probe. The scoped v2 path is pinned
+// here as a literal cross-package contract; frozen v1-path compatibility is covered by the CLI's
+// legacy-manifest-upgrade suite.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

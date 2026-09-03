@@ -8,59 +8,125 @@
         "role": "neutral",
         "displayName": "Reading Surface",
         "canonical": "oklch(1 0 0)",
-        "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.26 0 0)", "oklch(0.38 0 0)", "oklch(0.5 0 0)", "oklch(0.62 0 0)", "oklch(0.74 0 0)", "oklch(0.86 0 0)", "oklch(1 0 0)"]
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.26 0 0)",
+          "oklch(0.38 0 0)",
+          "oklch(0.5 0 0)",
+          "oklch(0.62 0 0)",
+          "oklch(0.74 0 0)",
+          "oklch(0.86 0 0)",
+          "oklch(1 0 0)"
+        ]
       },
       "control-surface": {
         "role": "neutral",
         "displayName": "Control Surface",
         "canonical": "oklch(0.972 0.004 110)",
-        "tonalRamp": ["oklch(0.15 0.004 110)", "oklch(0.26 0.004 110)", "oklch(0.38 0.004 110)", "oklch(0.5 0.004 110)", "oklch(0.62 0.004 110)", "oklch(0.74 0.004 110)", "oklch(0.86 0.004 110)", "oklch(0.972 0.004 110)"]
+        "tonalRamp": [
+          "oklch(0.15 0.004 110)",
+          "oklch(0.26 0.004 110)",
+          "oklch(0.38 0.004 110)",
+          "oklch(0.5 0.004 110)",
+          "oklch(0.62 0.004 110)",
+          "oklch(0.74 0.004 110)",
+          "oklch(0.86 0.004 110)",
+          "oklch(0.972 0.004 110)"
+        ]
       },
       "ink": {
         "role": "neutral",
         "displayName": "Editorial Ink",
         "canonical": "oklch(0.24 0.01 110)",
-        "tonalRamp": ["oklch(0.15 0.01 110)", "oklch(0.24 0.01 110)", "oklch(0.36 0.01 110)", "oklch(0.48 0.01 110)", "oklch(0.6 0.01 110)", "oklch(0.72 0.01 110)", "oklch(0.84 0.01 110)", "oklch(0.95 0.01 110)"]
+        "tonalRamp": [
+          "oklch(0.15 0.01 110)",
+          "oklch(0.24 0.01 110)",
+          "oklch(0.36 0.01 110)",
+          "oklch(0.48 0.01 110)",
+          "oklch(0.6 0.01 110)",
+          "oklch(0.72 0.01 110)",
+          "oklch(0.84 0.01 110)",
+          "oklch(0.95 0.01 110)"
+        ]
       },
       "workbench-olive": {
         "role": "primary",
         "displayName": "Workbench Olive",
         "canonical": "oklch(0.5 0.1 110)",
-        "tonalRamp": ["oklch(0.15 0.1 110)", "oklch(0.26 0.1 110)", "oklch(0.38 0.1 110)", "oklch(0.5 0.1 110)", "oklch(0.62 0.1 110)", "oklch(0.74 0.1 110)", "oklch(0.86 0.08 110)", "oklch(0.95 0.04 110)"]
+        "tonalRamp": [
+          "oklch(0.15 0.1 110)",
+          "oklch(0.26 0.1 110)",
+          "oklch(0.38 0.1 110)",
+          "oklch(0.5 0.1 110)",
+          "oklch(0.62 0.1 110)",
+          "oklch(0.74 0.1 110)",
+          "oklch(0.86 0.08 110)",
+          "oklch(0.95 0.04 110)"
+        ]
       },
       "dark-reading-surface": {
         "role": "neutral",
         "displayName": "Dark Reading Surface",
         "canonical": "oklch(0.19 0.012 110)",
-        "tonalRamp": ["oklch(0.15 0.012 110)", "oklch(0.19 0.012 110)", "oklch(0.235 0.014 110)", "oklch(0.275 0.016 110)", "oklch(0.32 0.014 110)", "oklch(0.5 0.018 110)", "oklch(0.72 0.014 105)", "oklch(0.92 0.012 105)"]
+        "tonalRamp": [
+          "oklch(0.15 0.012 110)",
+          "oklch(0.19 0.012 110)",
+          "oklch(0.235 0.014 110)",
+          "oklch(0.275 0.016 110)",
+          "oklch(0.32 0.014 110)",
+          "oklch(0.5 0.018 110)",
+          "oklch(0.72 0.014 105)",
+          "oklch(0.92 0.012 105)"
+        ]
       },
       "dark-workbench-olive": {
         "role": "primary",
         "displayName": "Dark Workbench Olive",
         "canonical": "oklch(0.68 0.085 110)",
-        "tonalRamp": ["oklch(0.2 0.04 110)", "oklch(0.28 0.06 110)", "oklch(0.38 0.075 110)", "oklch(0.5 0.085 110)", "oklch(0.6 0.085 110)", "oklch(0.68 0.085 110)", "oklch(0.75 0.075 110)", "oklch(0.9 0.035 110)"]
+        "tonalRamp": [
+          "oklch(0.2 0.04 110)",
+          "oklch(0.28 0.06 110)",
+          "oklch(0.38 0.075 110)",
+          "oklch(0.5 0.085 110)",
+          "oklch(0.6 0.085 110)",
+          "oklch(0.68 0.085 110)",
+          "oklch(0.75 0.075 110)",
+          "oklch(0.9 0.035 110)"
+        ]
       }
     },
     "typographyMeta": {
       "headline": { "displayName": "Editorial Headline", "purpose": "Boot and overlay headlines only." },
       "body": { "displayName": "Manuscript Body", "purpose": "Long-form rendered writing at a 68ch measure." },
       "label": { "displayName": "Workbench Label", "purpose": "Controls, annotations, and product copy." },
-      "metadata": { "displayName": "Technical Metadata", "purpose": "Paths, anchors, timestamps, and identifiers only." }
+      "metadata": {
+        "displayName": "Technical Metadata",
+        "purpose": "Paths, anchors, timestamps, and identifiers only."
+      }
     },
     "shadows": [
-      { "name": "composer-rest", "value": "0 1px 3px oklch(0.24 0.01 110 / 0.06)", "purpose": "Tight separation for the annotation composer." },
-      { "name": "drawer-edge", "value": "2px 0 12px oklch(0.24 0.01 110 / 0.1)", "purpose": "Directional edge for the compact navigator drawer." },
-      { "name": "dialog-float", "value": "0 12px 40px oklch(0.24 0.01 110 / 0.18)", "purpose": "Blocking dialog above its dimmed backdrop only." }
+      {
+        "name": "composer-rest",
+        "value": "0 1px 3px oklch(0.24 0.01 110 / 0.06)",
+        "purpose": "Tight separation for the annotation composer."
+      },
+      {
+        "name": "drawer-edge",
+        "value": "2px 0 12px oklch(0.24 0.01 110 / 0.1)",
+        "purpose": "Directional edge for the compact navigator drawer."
+      },
+      {
+        "name": "dialog-float",
+        "value": "0 12px 40px oklch(0.24 0.01 110 / 0.18)",
+        "purpose": "Blocking dialog above its dimmed backdrop only."
+      }
     ],
     "motion": [
       { "name": "ease-out", "value": "cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "All product state transitions." },
       { "name": "fast", "value": "150ms", "purpose": "Hover, focus, and anchor-wash feedback." },
       { "name": "base", "value": "200ms", "purpose": "Drawers, trays, and structural state changes." }
     ],
-    "breakpoints": [
-      { "name": "compact", "value": "1024px" },
-      { "name": "side-margin", "value": "1280px" }
-    ]
+    "breakpoints": [{ "name": "compact", "value": "1024px" }, { "name": "side-margin", "value": "1280px" }]
   },
   "components": [
     {
@@ -126,10 +192,26 @@
       "Responsive behavior collapses chrome before compromising the manuscript."
     ],
     "rules": [
-      { "name": "The Accent Rarity Rule", "body": "Workbench Olive marks action, focus, selection, or trustworthy state and occupies no more than ten percent of a screen. It never becomes a decorative panel wash.", "section": "colors" },
-      { "name": "The Status Needs Shape Rule", "body": "Danger, warning, success, delivery, and provenance always carry a label, icon, or border treatment. Color is never the only channel.", "section": "colors" },
-      { "name": "The Reading Measure Rule", "body": "Manuscript prose stays between 65ch and 75ch with generous line-height. Operational panels may be denser; writing never becomes a data table.", "section": "typography" },
-      { "name": "The Flat-Until-Floating Rule", "body": "Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace or needs interaction priority.", "section": "elevation" }
+      {
+        "name": "The Accent Rarity Rule",
+        "body": "Workbench Olive marks action, focus, selection, or trustworthy state and occupies no more than ten percent of a screen. It never becomes a decorative panel wash.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Needs Shape Rule",
+        "body": "Danger, warning, success, delivery, and provenance always carry a label, icon, or border treatment. Color is never the only channel.",
+        "section": "colors"
+      },
+      {
+        "name": "The Reading Measure Rule",
+        "body": "Manuscript prose stays between 65ch and 75ch with generous line-height. Operational panels may be denser; writing never becomes a data table.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-Until-Floating Rule",
+        "body": "Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace or needs interaction priority.",
+        "section": "elevation"
+      }
     ],
     "dos": [
       "Do keep rendered writing as the dominant surface and collapse chrome before shrinking the reading measure.",

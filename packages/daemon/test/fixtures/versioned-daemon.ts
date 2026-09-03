@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Test-only daemon peer with selectable identity. It exercises ensureDaemon's real lock,
 // handshake, signal, and replacement paths without importing the production lifecycle.
-import { ensureHomeDir, lockPath } from "../../src/home.ts";
-import { removeLockIfOwned, writeLockExclusive, type DaemonLock } from "../../src/lock.ts";
+import { ensureHomeDir, lockPath } from "../../src/lifecycle/home.ts";
+import { type DaemonLock, removeLockIfOwned, writeLockExclusive } from "../../src/lifecycle/lock.ts";
 
 const home = ensureHomeDir(Bun.env.GLOSA_HOME as string);
 const port = Number(Bun.env.GLOSA_PORT);

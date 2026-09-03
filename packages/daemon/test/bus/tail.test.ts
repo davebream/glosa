@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync } from "node:fs";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
+import { MAX_EVENT_BYTES } from "../../src/bus/journal.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { countJournalLines, readJournalEventsSince } from "../../src/bus/tail.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
@@ -84,6 +85,50 @@ describe("bus/tail.ts", () => {
     // (the malformed line) is silently absent, never reassigned to e2.
     expect(tail.map((t) => t.sequence)).toEqual([0, 2]);
     expect(tail.map((t) => t.event.entry)).toEqual(["e1", "e2"]);
+  });
+
+  test("journal envelopes rejected by replay are also skipped by the SSE tail without shifting later offsets", async () => {
+    await bus.createEntry("valid-before", { kind: "annotation" }); // sequence 0
+    const missingAt = {
+      v: 1,
+      event_id: "01INVALIDMISSINGAT00000000",
+      event: "entry_created",
+      entry: "must-not-stream-missing-at",
+      by: "daemon",
+    };
+    const missingBy = {
+      v: 1,
+      event_id: "01INVALIDMISSINGBY00000000",
+      at: new Date(0).toISOString(),
+      event: "entry_created",
+      entry: "must-not-stream-missing-by",
+    };
+    const emptyEventId = {
+      v: 1,
+      event_id: "",
+      at: new Date(0).toISOString(),
+      event: "entry_created",
+      entry: "must-not-stream-empty-event-id",
+      by: "daemon",
+    };
+    const oversize = {
+      v: 1,
+      event_id: "01INVALIDOVERSIZE000000000",
+      at: new Date(0).toISOString(),
+      event: "entry_created",
+      entry: "must-not-stream-oversize",
+      by: "daemon",
+      detail: { blob: "x".repeat(MAX_EVENT_BYTES) },
+    };
+    const invalidLines = [missingAt, missingBy, emptyEventId, oversize].map((event) => JSON.stringify(event));
+    expect(Buffer.byteLength(invalidLines[3]!, "utf8") + 1).toBeGreaterThan(MAX_EVENT_BYTES);
+    appendFileSync(journalPath(root), `${invalidLines.join("\n")}\n`); // sequences 1..4
+    await bus.createEntry("valid-after", { kind: "annotation" }); // physical sequence 5
+
+    expect(countJournalLines(root)).toBe(6); // every invalid line really occupies a durable cursor slot
+    const tail = readJournalEventsSince(root, -1);
+    expect(tail.map((t) => t.sequence)).toEqual([0, 5]);
+    expect(tail.map((t) => t.event.entry)).toEqual(["valid-before", "valid-after"]);
   });
 });
 

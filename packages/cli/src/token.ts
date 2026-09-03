@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import {
-  glosaHome,
-  revokeToken,
-  rotateToken,
-  type TokenMutationDeps,
-} from "../../daemon/src/index.ts";
+import { glosaHome, revokeToken, rotateToken, type TokenMutationDeps } from "../../daemon/src/index.ts";
 import { EXIT_CODES, printJsonEnvelope, type CommandEnvelope } from "./envelope.ts";
 
 export type TokenAction = "rotate" | "revoke";
@@ -66,7 +61,10 @@ export function runToken(
 }
 
 export function printTokenResult(result: CommandEnvelope<TokenCommandData>, json: boolean): void {
-  if (json) return printJsonEnvelope(result);
+  if (json) {
+    printJsonEnvelope(result);
+    return;
+  }
   if (!result.ok) {
     process.stderr.write(`glosa token: ${result.error?.message ?? "failed"}\n`);
     return;
@@ -76,5 +74,7 @@ export function printTokenResult(result: CommandEnvelope<TokenCommandData>, json
     return;
   }
   const suffix = result.data.already_revoked ? " (already revoked)" : "";
-  process.stdout.write(`glosa token: revoked${suffix}; all existing credentials are invalid\nRun \`glosa open\` to re-pair.\n`);
+  process.stdout.write(
+    `glosa token: revoked${suffix}; all existing credentials are invalid\nRun \`glosa open\` to re-pair.\n`,
+  );
 }

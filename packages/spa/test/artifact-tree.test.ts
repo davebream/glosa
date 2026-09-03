@@ -26,11 +26,7 @@ describe("artifact tree model", () => {
   });
 
   test("flattens only expanded branches and derives stable ancestor IDs", () => {
-    const root = buildArtifactTree([
-      { path: "drafts/notes/a.md" },
-      { path: "drafts/b.md" },
-      { path: "root.md" },
-    ]);
+    const root = buildArtifactTree([{ path: "drafts/notes/a.md" }, { path: "drafts/b.md" }, { path: "root.md" }]);
 
     expect(flattenVisibleTree(root, new Set()).map(({ node }) => node.name)).toEqual(["drafts", "root.md"]);
     expect(flattenVisibleTree(root, new Set(["d:drafts"])).map(({ node }) => node.name)).toEqual([
@@ -91,7 +87,10 @@ describe("artifact tree navigator", () => {
       onOpen: () => {},
     });
     navigator.setWorkspace("ws");
-    navigator.setArtifacts([{ path: "drafts/deep/current.md", class: "R" }, { path: "root.md", class: "R" }]);
+    navigator.setArtifacts([
+      { path: "drafts/deep/current.md", class: "R" },
+      { path: "root.md", class: "R" },
+    ]);
     navigator.setCurrent("drafts/deep/current.md");
 
     const current = container.querySelector('[data-node-id="f:drafts/deep/current.md"]')!;

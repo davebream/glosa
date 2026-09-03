@@ -3,85 +3,58 @@
 // host-check → route lookup → authorizeRequest → contract-version gate → body cap → handler for
 // the SPA/API listener, and the minimal host-check-only pipeline for the class-F listener.
 //
-// P3.1 fills in the full A1 §5 route catalog on top of the P1.3 pipeline: every `/w/:slug/...`
-// route resolves its slug through `ctx.workspaceIndex` (unknown slug → 404) before touching
-// anything else, and every `:path`/`:artifactPath` param goes through `confinePath` (A1 §6). Two
-// routes (the transcript SSE stream, the attention-response route) are still SHELLS — the
-// auth/contract/confinement pipeline runs for real, but the body is a `// Pxx:` placeholder until
-// their owning task lands (see `handleNotImplemented`). P3.2 replaced one shell, the artifact/
-// journal SSE stream (§5.5), with the real thing (`handleStream`/stream.ts); P4.1 replaced
-// another, the class-F capability mint (`handleMintCapability`) plus the class-F listener's own
-// serve route (`createClassFFetch`/classf-serve.ts).
+// Route families own URL/body validation and exact problem mapping. The top-level pipeline keeps
+// host checks, route precedence, authorization, contract-version enforcement, and body limits.
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  type AdapterRegistry,
-  type AdapterSessionHint,
-  classifyWithAdapter,
-  derivedFromSourcePath,
-  isArtifactStale,
-  orderWithAdapter,
-  resolveManifest,
-} from "./adapters/interface.ts";
-import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { adoptLooseLineages } from "./adoption.ts";
-import {
-  type AgentProviderRegistry,
-  type DeliverableEntry,
-  type DeliveryResult,
-  recordDelivery,
-  type SessionBinding,
-} from "./agent-provider/interface.ts";
-import type { SessionPushRegistry } from "./agent-provider/push-registry.ts";
-import type { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
-import {
-  type ClassFArtifact,
-  type ClassRArtifact,
-  type Resolution,
-  type ResolveCtx,
-  resolve as resolveAnchor,
-} from "./anchoring.ts";
-import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "./artifact-render.ts";
-import { authorizeRequest, isForeignOrigin, type RouteClass } from "./auth.ts";
-import { BUILD_ID } from "./build-id.ts";
-import { ApprovalConflictError, type AttentionVerdict, WorkspaceAdoptedError, type WorkspaceBus } from "./bus/bus.ts";
-import { readInboxEntry } from "./bus/inbox.ts";
-import { type DeliveryVia, isTerminal } from "./bus/lifecycle.ts";
-import { hasOpenAttention, peekJournal, pendingCount } from "./bus/peek.ts";
-import type { DerivedState } from "./bus/replay.ts";
-import { CAPABILITY_TTL_MS, type CapabilityStore } from "./capability.ts";
-import { buildDiffHunks, commitExists } from "./checkpoint-diff.ts";
-import { checkpointArtifactPath, listCheckpoints } from "./checkpoints.ts";
-import { serveClassFDocument } from "./classf-serve.ts";
-import { confinePath } from "./confine-path.ts";
-import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
-import { buildDeliveryPresentation } from "./delivery/presentation.ts";
-import { isPathDirty, readFileAtCheckpoint, runGit, safePathspec } from "./git/shadow.ts";
-import { resolveTrackedFiles } from "./matcher.ts";
-import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "./presentation-token.ts";
-import { internalErrorResponse, problem, restoreConflictResponse } from "./problem.ts";
-import { PROTOCOL_VERSION } from "./protocol.ts";
-import { glosaHome } from "./home.ts";
-import { probeInitManifest } from "./init-probe.ts";
-import type { InitRunner } from "./init-runner.ts";
-import { type OrphanedState, scanOrphanedHomeState } from "./registry/orphan-scan.ts";
-import type { SessionRegistry } from "./registry/session-registry.ts";
-import { canonicalize } from "./registry/slug.ts";
+import type { AdapterRegistry, AdapterSessionHint } from "../adapters/interface.ts";
+import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
+import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
+import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
+import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import { sourceSha256 } from "../artifact-render.ts";
+import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
+import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
+import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
+import { hasOpenAttention, peekJournal, pendingCount } from "../bus/peek.ts";
+import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
+import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
+import { probeInitManifest } from "../init-probe.ts";
+import type { InitRunner } from "../init-runner.ts";
+import { BUILD_ID } from "../lifecycle/build-id.ts";
+import { glosaHome } from "../lifecycle/home.ts";
+import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
+import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
+import type { SessionRegistry } from "../registry/session-registry.ts";
+import { canonicalize } from "../registry/slug.ts";
 import {
   AdoptionError,
   type WorkspaceEntry,
   type WorkspaceIndex,
   WorkspaceOpenError,
-} from "./registry/workspace-index.ts";
+} from "../registry/workspace-index.ts";
+import { artifactRoutes } from "../routes/artifact.ts";
+import { attentionRoutes } from "../routes/attention.ts";
+import { composerRoutes } from "../routes/composer.ts";
+import type { BunServer, RouteMatch } from "../routes/types.ts";
+import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
+import type { CapabilityStore } from "../security/capability.ts";
+import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
+import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "../security/presentation-token.ts";
+import type { TokenSource } from "../security/token.ts";
+import {
+  type ArtifactAccessDependencies,
+  actionablePresentation as buildArtifactPresentation,
+} from "../services/artifact.ts";
+import { confineTranscriptPath } from "../transcript/root.ts";
+import { createTranscriptStreamResponse } from "../transcript/stream.ts";
+import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
+import { serveClassFDocument } from "./classf-serve.ts";
+import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
+import { internalErrorResponse, problem } from "./problem.ts";
 import { createJournalStreamResponse } from "./stream.ts";
-import type { TokenSource } from "./token.ts";
-import { confineTranscriptPath } from "./transcript/root.ts";
-import { createTranscriptStreamResponse } from "./transcript/stream.ts";
-import type { WorkspaceTarget } from "./workspace.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
 
@@ -91,11 +64,11 @@ const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
  * appears below so route-schema-level tests that call `createApiFetch(ctx)`'s returned function
  * directly (no real bound `Bun.serve`, e.g. http-routes.test.ts) don't have to fabricate one —
  * only the stream route (P3.2) actually needs it, for `server.timeout(req, 0)` (A1 §8.3). */
-export type BunServer = ReturnType<typeof Bun.serve>;
+export type { BunServer } from "../routes/types.ts";
 
 // The SPA's static source dir (`packages/spa/src/`), resolved relative to this file rather than
 // `process.cwd()` so it's correct regardless of where `glosa` is invoked from (P1.4).
-const SPA_SRC_DIR = fileURLToPath(new URL("../../spa/src/", import.meta.url));
+const SPA_SRC_DIR = fileURLToPath(new URL("../../../spa/src/", import.meta.url));
 
 // Fixed allowlist of files servable under `GET /app/<file>` (A3 §3: no path traversal — a
 // basename check alone isn't enough, so every servable file is named here explicitly; anything
@@ -153,12 +126,18 @@ export interface ApiContext {
    * the daemon's one `WorkspaceBusRegistry`, see lifecycle.ts's `buildBackend`) — routes never
    * construct their own `WorkspaceBus`. */
   getWorkspaceBus: (workspace: WorkspaceTarget) => WorkspaceBus;
+  /** Ephemeral only: coordinates a single agent-visible batch assembled from several workspace
+   * reservations. Optional for hand-built tests; `createApiFetch` owns one per context otherwise. */
+  compositeDeliveryRegistry?: CompositeDeliveryRegistry;
   /** Atomically preflights and seals all loose sources through the daemon's shared registry. */
   sealAdoptionSources?: (
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
     targetRegistrationId: string,
   ) => Promise<void>;
+  /** Serializes the complete loose-file adoption transaction per target. Optional only for
+   * hand-built contexts; production shares the backend's daemon-scoped coordinator. */
+  adoptionCoordinator?: AdoptionCoordinator;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
@@ -190,6 +169,29 @@ export interface ApiContext {
    * hand-built test contexts keep compiling and narrow tests can inject a fake. Production wires
    * `createInitRunner` in lifecycle.ts. */
   runWorkspaceInit?: InitRunner;
+}
+
+const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
+const contextAdoptionCoordinators = new WeakMap<ApiContext, AdoptionCoordinator>();
+
+function compositeRegistry(ctx: ApiContext): CompositeDeliveryRegistry {
+  if (ctx.compositeDeliveryRegistry) return ctx.compositeDeliveryRegistry;
+  let registry = contextCompositeRegistries.get(ctx);
+  if (!registry) {
+    registry = new CompositeDeliveryRegistry();
+    contextCompositeRegistries.set(ctx, registry);
+  }
+  return registry;
+}
+
+function adoptionCoordinator(ctx: ApiContext): AdoptionCoordinator {
+  if (ctx.adoptionCoordinator) return ctx.adoptionCoordinator;
+  let coordinator = contextAdoptionCoordinators.get(ctx);
+  if (!coordinator) {
+    coordinator = new AdoptionCoordinator();
+    contextAdoptionCoordinators.set(ctx, coordinator);
+  }
+  return coordinator;
 }
 
 /** The handshake body extends the A1 §5.1 response with daemon-lifecycle fields: it keeps
@@ -268,11 +270,6 @@ async function readBodyCapped(req: Request): Promise<{ ok: true; body: Uint8Arra
   return { ok: true, body: merged };
 }
 
-interface RouteMatch {
-  routeClass: RouteClass;
-  handle: (req: Request, server?: BunServer, authSignal?: AbortSignal) => Response | Promise<Response>;
-}
-
 function handleHandshake(ctx: ApiContext): () => Response {
   return () => {
     ctx.repairLockOwnership?.();
@@ -329,10 +326,20 @@ function serveSpaAsset(req: Request, pathname: string): Response {
 // workspace: routes resolve `:slug`... unknown slug → 404").
 // -------------------------------------------------------------------------------------------
 
+function isAdoptingTarget(entry: WorkspaceEntry | null): boolean {
+  return entry?.lifecycle?.state === "adopting" && entry.lifecycle.target_registration_id === entry.registration_id;
+}
+
 function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   const entry = ctx.workspaceIndex.getBySlug(slug);
   if (!entry)
     return { ok: false as const, response: problem(404, "not-found", "unknown workspace", undefined, pathname) };
+  if (isAdoptingTarget(entry)) {
+    return {
+      ok: false as const,
+      response: problem(409, "workspace-adopting", "workspace adoption is in progress", undefined, pathname),
+    };
+  }
   return { ok: true as const, entry };
 }
 
@@ -359,777 +366,21 @@ function handleListWorkspaces(ctx: ApiContext): Response {
  * + reopen and wrongly skip reconciling the fresh instance underneath it — see reconcileOnce's own
  * docstring in bus.ts). */
 async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
+  const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
+  if (isAdoptingTarget(indexed)) {
+    throw new AdoptionError("workspace-adopting", "workspace adoption is in progress");
+  }
   const bus = ctx.getWorkspaceBus(root);
   await bus.reconcileOnce();
   return bus;
 }
 
-/** `GET /w/:slug/artifacts` (A1 §5.3) — the sidebar listing. P6.1: `class`/ordering/`stale` are
- * all generic-core behavior driven by whatever adapter (if any) recognizes this workspace —
- * `ctx.adapterRegistry` absent, or present but not recognizing `root`, degrades every one of
- * these to its pre-P6.1 answer (extension-based class, on-disk-sorted order, never stale). */
-function handleListArtifacts(ctx: ApiContext, slug: string, pathname: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.worktree_path;
-  const adapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
-
-  const { tracked } = resolveTrackedFiles(resolved.entry);
-  const byPath = new Map(tracked.map((f) => [f.path, f]));
-  const mtimeMs = new Map(tracked.map((f) => [f.path, statSync(f.rawPath).mtime.getTime()]));
-  const resolveSourceMtimeMs = (p: string): number | null => mtimeMs.get(p) ?? null;
-
-  const orderedPaths = orderWithAdapter(
-    adapter,
-    root,
-    tracked.map((f) => f.path),
-    resolved.entry,
-  );
-  const body = orderedPaths.map((path) => {
-    const f = byPath.get(path)!;
-    return {
-      path: f.path,
-      class: classifyWithAdapter(adapter, root, f.path, classifyArtifactPath(f.path), resolved.entry),
-      size_bytes: f.sizeBytes,
-      mtime: new Date(mtimeMs.get(f.path)!).toISOString(),
-      source_sha256: sourceSha256(readFileSync(f.rawPath)),
-      stale: isArtifactStale(adapter, root, f.path, mtimeMs.get(f.path)!, resolveSourceMtimeMs, resolved.entry),
-    };
-  });
-  return Response.json(body);
-}
-
-/** `GET /w/:slug/artifacts/:path` (A1 §5.4). `path` is workspace-relative and must both pass
- * `confinePath` (A1 §6 — traversal/symlink-escape → 400) AND be a currently tracked artifact
- * (matcher membership — confined-but-untracked → 404, a different failure class per §6 step 4). */
-function handleGetArtifact(ctx: ApiContext, slug: string, rawPathParam: string, req: Request): Response {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.worktree_path;
-
-  const confineResult = confinePath(root, rawPathParam);
-  if (!confineResult.ok) {
-    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
-  }
-
-  const relNfc = rawPathParam
-    .split("/")
-    .map((segment) => segment.normalize("NFC"))
-    .join("/");
-  const { tracked } = resolveTrackedFiles(resolved.entry);
-  const match = tracked.find((f) => f.path === relNfc);
-  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
-
-  const raw = readFileSync(match.rawPath);
-  const sourceSha = sourceSha256(raw);
-  const adapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
-  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path), resolved.entry);
-
-  if (cls === "F") {
-    // Metadata only — the actual HTML is never served through this route (A1 §5.4/§7); serving it
-    // is the class-F capability listener's job (P4.1).
-    // P6.1: `derived_from` (R6/R7's generic Edit-on-class-F affordance, already consumed by
-    // viewer.js's `canEdit`/`setMode`) and `manifest_path` (A1 §5.4's own example response) are
-    // both domain provenance a CONTENT ADAPTER supplies — the core ships with zero adapters
-    // (invariant #1), so both are simply absent when none is registered/recognizes this workspace.
-    const derivedFrom = derivedFromSourcePath(adapter, root, match.path, resolved.entry);
-    const manifestResolution = resolveManifest(root, adapter, match.path, resolved.entry);
-    return Response.json({
-      source_path: match.path,
-      source_sha256: sourceSha,
-      class: "F",
-      ...(derivedFrom !== undefined ? { derived_from: derivedFrom } : {}),
-      ...(manifestResolution?.manifestPath !== undefined ? { manifest_path: manifestResolution.manifestPath } : {}),
-    });
-  }
-
-  const content = raw.toString("utf8");
-  if (url.searchParams.get("render") === "html") {
-    const renderedHtml = renderMarkdown(content);
-    return Response.json({
-      source_path: match.path,
-      source_sha256: sourceSha,
-      rendered_sha256: createHash("sha256").update(renderedHtml, "utf8").digest("hex"),
-      class: "R",
-      content,
-      rendered_html: renderedHtml,
-    });
-  }
-  return Response.json({ source_path: match.path, source_sha256: sourceSha, class: "R", content });
-}
-
-/** `PUT /w/:slug/artifacts/:path` — P3.3 addition, NOT in A1 §5 (the class-R editor's save
- * action). Same slug-gate + `confinePath` + tracked-artifact-membership pipeline as the GET
- * (A1 §6): confined-but-untracked → 404, same as GET, so this route can only overwrite an
- * artifact that already exists and is currently tracked — it never creates a new one. Body is
- * either the raw new source text, or a JSON object `{content: "..."}` (either is accepted so a
- * plain-text `fetch(..., {body: source})` and a JSON caller both work without a content-type
- * dance). An optional `If-Match: <source_sha256>` header makes the write conditional — a
- * mismatch means the file changed since the caller last read it, so the write is refused rather
- * than silently clobbering someone else's change (a nice-to-have, not required by any invariant
- * here, since glosa is single-user v1 — but cheap to offer). On success, writes the file
- * (temp -> fsync -> rename, `writeArtifactAtomic`) then checkpoints it as a `human`-attributed
- * shadow-git commit (`WorkspaceBus#humanEditCheckpoint`) — an edit made through glosa's own
- * editor is `human` BY CONSTRUCTION (A4 §F05), never `session`/`unknown`. */
-async function handlePutArtifact(ctx: ApiContext, slug: string, rawPathParam: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.worktree_path;
-
-  const confineResult = confinePath(root, rawPathParam);
-  if (!confineResult.ok) {
-    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
-  }
-
-  const relNfc = rawPathParam
-    .split("/")
-    .map((segment) => segment.normalize("NFC"))
-    .join("/");
-  const { tracked } = resolveTrackedFiles(resolved.entry);
-  const match = tracked.find((f) => f.path === relNfc);
-  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
-
-  const putAdapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
-  if (classifyWithAdapter(putAdapter, root, match.path, classifyArtifactPath(match.path), resolved.entry) === "F") {
-    return problem(
-      400,
-      "validation-failed",
-      "class-F artifacts are not editable through this route",
-      undefined,
-      url.pathname,
-    );
-  }
-
-  const ifMatch = req.headers.get("If-Match");
-  if (ifMatch !== null) {
-    const currentSha = sourceSha256(readFileSync(match.rawPath));
-    if (ifMatch !== currentSha) {
-      return problem(409, "conflict", "source_sha256 has changed since If-Match was captured", undefined, url.pathname);
-    }
-  }
-
-  let raw: string;
-  try {
-    raw = await req.text();
-  } catch {
-    return problem(400, "validation-failed", "unable to read request body", undefined, url.pathname);
-  }
-  if (raw.length === 0)
-    return problem(400, "validation-failed", "request body must not be empty", undefined, url.pathname);
-
-  // Accept either a bare-text body or `{"content": "..."}` — a body that parses as JSON but
-  // isn't that shape (an array, a number, an object with no string `content`) falls back to
-  // treating the ORIGINAL raw text as the content, not an error: a markdown source file starting
-  // with e.g. `123` or `"just a quoted line"` is itself valid JSON, so "parses as JSON" alone
-  // can't be the signal for "caller meant the wrapped-object form".
-  let content = raw;
-  try {
-    const parsed = JSON.parse(raw);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as Record<string, unknown>).content === "string"
-    ) {
-      content = (parsed as Record<string, unknown>).content as string;
-    }
-  } catch {
-    // not JSON at all — `content` stays the raw text, which is the common case
-  }
-
-  // `resolveBus` (and the reconcile it may trigger) MUST run BEFORE the file is written, not
-  // after: reconcile's own offline-catch-up self-heal checkpoints whatever it finds already
-  // sitting on disk as `unknown` drift (correctly, for content that arrived some other way while
-  // the daemon wasn't watching) — if it ran AFTER this write, the very first reconcile for a
-  // workspace would steal THIS edit's commit as unknown drift before `humanEditCheckpoint` below
-  // ever got to attribute it `human`. Reconciling first means any real pre-existing drift is
-  // captured under its own honest `unknown` commit, leaving a clean slate for our write to be the
-  // next (and only) thing `humanEditCheckpoint` finds staged.
-  const bus = await resolveBus(ctx, resolved.entry);
-  const inboxId = generateAnnotationId();
-  const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
-
-  const newSha = sourceSha256(Buffer.from(content, "utf8"));
-  return Response.json({
-    source_path: match.path,
-    source_sha256: newSha,
-    class: "R",
-    content,
-    rendered_html: renderMarkdown(content),
-    ...(captured ? { inbox_id: inboxId } : {}),
-  });
-}
-
-const ANNOTATION_INTENTS = new Set(["content", "classification", "style"]);
-
-function validateAnnotationBody(
-  body: unknown,
-): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { ok: false, reason: "body must be a JSON object" };
-  }
-  const b = body as Record<string, unknown>;
-  if (typeof b.artifact_path !== "string" || b.artifact_path.length === 0) {
-    return { ok: false, reason: "body.artifact_path is required" };
-  }
-  if (typeof b.body !== "string" || b.body.length === 0) return { ok: false, reason: "body.body is required" };
-  if (typeof b.intent !== "string" || !ANNOTATION_INTENTS.has(b.intent)) {
-    return { ok: false, reason: "body.intent must be one of content|classification|style" };
-  }
-  const target = b.target;
-  if (typeof target !== "object" || target === null || Array.isArray(target)) {
-    return { ok: false, reason: "body.target is required" };
-  }
-  const quote = (target as Record<string, unknown>).quote;
-  if (typeof quote !== "object" || quote === null || typeof (quote as Record<string, unknown>).exact !== "string") {
-    return { ok: false, reason: "body.target.quote.exact is required" };
-  }
-  return { ok: true, value: b };
-}
-
-/** Matches the A1 §5.6 example id shape (`inb-1721470000-a1c2`) — epoch seconds + 4 hex chars.
- * Not a `ulid()` (that's reserved for journal `event_id`s, A4 §F04) — an inbox entry's own id has
- * no ordering/dedup contract of its own beyond "write-once", so a shorter, spec-matching id is
- * fine here. */
-function generateAnnotationId(): string {
-  return `inb-${Math.floor(Date.now() / 1000)}-${randomBytes(2).toString("hex")}`;
-}
-
-/** P6.1 — builds the `AnchoringArtifact` + `ResolveCtx` `anchoring.ts`'s `resolve()` needs for
- * `artifactPath`, from real on-disk content (class R) or the adapter's manifest + derived-from
- * source (class F). Returns `null` when `artifactPath` isn't a currently-tracked artifact — the
- * same "can't prove anything" posture as every other not-found case in this file, never a guess.
- * Class F with no manifest still returns an artifact (empty `source`, no `manifest`) rather than
- * `null` — `resolveClassF` already turns that into the honest `orphaned{no_source_map}` on its
- * own, so this function doesn't need to special-case "no adapter" itself. */
-function buildAnchoringContext(
-  ctx: ApiContext,
-  workspace: WorkspaceEntry,
-  artifactPath: string,
-): { artifact: ClassRArtifact | ClassFArtifact; resolveCtx: ResolveCtx } | null {
-  const root = workspace.worktree_path;
-  const confineResult = confinePath(root, artifactPath);
-  if (!confineResult.ok) return null;
-  const relNfc = artifactPath
-    .split("/")
-    .map((segment) => segment.normalize("NFC"))
-    .join("/");
-  const { tracked } = resolveTrackedFiles(workspace);
-  const match = tracked.find((f) => f.path === relNfc);
-  if (!match) return null;
-
-  const adapter = ctx.adapterRegistry?.forWorkspace(workspace);
-  const cls = classifyWithAdapter(adapter, root, match.path, classifyArtifactPath(match.path), workspace);
-
-  if (cls === "R") {
-    const source = readFileSync(match.rawPath, "utf8");
-    const artifact: ClassRArtifact = { class: "R", path: match.path, source, renderedHtml: renderMarkdown(source) };
-    return { artifact, resolveCtx: {} };
-  }
-
-  const manifestResolution = resolveManifest(root, adapter, match.path, workspace);
-  let source = "";
-  if (manifestResolution) {
-    const srcMatch = tracked.find((f) => f.path === manifestResolution.manifest.source_path);
-    if (srcMatch) source = readFileSync(srcMatch.rawPath, "utf8");
-  }
-  const artifact: ClassFArtifact = {
-    class: "F",
-    path: match.path,
-    source,
-    ...(manifestResolution ? { manifest: manifestResolution.manifest } : {}),
+function artifactAccess(ctx: ApiContext): ArtifactAccessDependencies {
+  return {
+    workspaceIndex: ctx.workspaceIndex,
+    getWorkspaceBus: ctx.getWorkspaceBus,
+    adapterRegistry: ctx.adapterRegistry,
   };
-  const resolveCtx: ResolveCtx = manifestResolution
-    ? { pipelineFeedback: { adapter: manifestResolution.adapterId, component: manifestResolution.component } }
-    : {};
-  return { artifact, resolveCtx };
-}
-
-function buildActionablePresentation(
-  ctx: ApiContext,
-  workspace: WorkspaceEntry,
-  id: string,
-  payload: unknown,
-  status: string,
-  cursor?: string,
-): DeliverableEntry | null {
-  const record =
-    payload !== null && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : null;
-  let resolution: Resolution | undefined;
-  if (record?.kind === "annotation" && typeof record.artifact_path === "string") {
-    const built = buildAnchoringContext(ctx, workspace, record.artifact_path);
-    if (built) {
-      const capturedRenderedSha256 = record.captured_rendered_sha256;
-      resolution = resolveAnchor({ body: record.body, intent: record.intent, target: record.target }, built.artifact, {
-        ...built.resolveCtx,
-        ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
-      });
-    }
-  }
-  return buildDeliveryPresentation(id, payload, {
-    status,
-    ...(resolution ? { resolution } : {}),
-    ...(cursor ? { cursor } : {}),
-  });
-}
-
-/** `POST /w/:slug/annotations` (A1 §5.6). Persists the annotation as an inbox entry via
- * `WorkspaceBus.createEntry` — honest provenance only: this route creates the entry, it does NOT
- * decide what the entry means, `resolve()` does.
- *
- * `artifact_path` is required and the SPA also sends the rendered hash it captured. Both are
- * immutable entry content; anchoring itself is intentionally re-run against current content for
- * every presentation attempt, so parked or retried annotations never carry a stale resolution. */
-async function handleCreateAnnotation(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const validated = validateAnnotationBody(body);
-  if (!validated.ok) return problem(400, "validation-failed", validated.reason, undefined, url.pathname);
-
-  const bus = await resolveBus(ctx, resolved.entry);
-  const id = generateAnnotationId();
-  // Explicitly picked fields ONLY — never spread the raw parsed body. `kind` in particular must
-  // stay a server-assigned constant: a client-supplied `kind` (e.g. "attention_request") spread
-  // in after this literal would silently clobber it, forging an attention-tray entry through the
-  // annotations endpoint.
-  await bus.createEntry(id, {
-    kind: "annotation",
-    artifact_path: validated.value.artifact_path,
-    ...(typeof validated.value.captured_rendered_sha256 === "string"
-      ? { captured_rendered_sha256: validated.value.captured_rendered_sha256 }
-      : {}),
-    body: validated.value.body,
-    intent: validated.value.intent,
-    target: validated.value.target,
-  });
-
-  let resolution: Resolution | undefined;
-  const artifactPathRaw = validated.value.artifact_path;
-  if (typeof artifactPathRaw === "string" && artifactPathRaw.length > 0) {
-    const built = buildAnchoringContext(ctx, resolved.entry, artifactPathRaw);
-    if (built) {
-      const capturedRenderedSha256 = (body as Record<string, unknown>).captured_rendered_sha256;
-      const resolveCtx: ResolveCtx = {
-        ...built.resolveCtx,
-        ...(typeof capturedRenderedSha256 === "string" ? { capturedRenderedSha256 } : {}),
-      };
-      resolution = resolveAnchor(
-        { body: validated.value.body, intent: validated.value.intent, target: validated.value.target },
-        built.artifact,
-        resolveCtx,
-      );
-    }
-  }
-
-  return new Response(JSON.stringify({ id, status: "pending", ...(resolution ? { resolution } : {}) }), {
-    status: 201,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/** `POST /w/:slug/annotations/:id/withdraw` — the human retracts an annotation from glosa's own
- * margin UI. The inbox entry is immutable and the journal append-only (R3), so "remove" is a
- * guarded terminal transition to `rejected` (legal from any non-terminal status, A5 §F23), never
- * a delete: the entry stops being deliverable/nudgeable but its history stays replayable. 404 for
- * an id the journal has never seen; 409 `conflict` once terminal (a session may have applied it
- * concurrently — the UI should refresh, not pretend the retraction won). */
-async function handleWithdrawAnnotation(
-  ctx: ApiContext,
-  slug: string,
-  entryId: string,
-  req: Request,
-): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-
-  const bus = await resolveBus(ctx, resolved.entry);
-  const entry = bus.state.entries[entryId];
-  if (!entry) return problem(404, "not-found", "no such annotation entry", entryId, url.pathname);
-  const kind = entry.kind === "attention" ? "attention" : "common";
-  if (isTerminal(kind, entry.status)) {
-    return problem(409, "conflict", "entry already closed", `status is ${entry.status}`, url.pathname);
-  }
-
-  await bus.commitTransition(entryId, "rejected", { by: "human", note: "withdrawn in glosa" });
-  return Response.json({ id: entryId, status: bus.state.entries[entryId]?.status ?? "rejected" });
-}
-
-/** `GET /w/:slug/diff` (A1 §5.7). v1 only implements the `from`/`to` checkpoint-id form — `since`
- * (`last-annotation`|`yesterday`) needs the full checkpoint-history resolution P3.5 owns, so any
- * `since` value 400s for now rather than half-implementing named-token resolution here.
- *
- * P3.5 addition: `to=working` is the sentinel for "checkpoint <-> the live working tree" (A6
- * §F31's "unified diff any two checkpoints OR checkpoint<->working") — it skips the
- * `commitExists` check (the working tree obviously isn't a checkpoint) and hands off to
- * `buildDiffHunks`'s own `to==="working"` branch. This is what lets the timeline UI show "what
- * changed since checkpoint X" for the file as it sits on disk right now, and what
- * restore-then-diff-clean (P3.5's acceptance case) proves against: after a successful restore,
- * diffing `from=<restored-to checkpoint>&to=working` for that file comes back with zero hunks. */
-async function handleDiff(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry;
-
-  if (url.searchParams.get("since") !== null) {
-    // P3.5: `since=last-annotation|yesterday` resolution belongs to the full checkpoint-query UI.
-    return problem(400, "validation-failed", "since= is not yet supported — use from=/to=", undefined, url.pathname);
-  }
-  const from = url.searchParams.get("from");
-  const to = url.searchParams.get("to");
-  if (!from || !to) {
-    return problem(400, "validation-failed", "from and to query params are required", undefined, url.pathname);
-  }
-
-  await resolveBus(ctx, root); // ensures the shadow repo exists (if there's anything to check out) before we ask git about it
-
-  const fromOk = await commitExists(root, from);
-  const toOk = to === "working" || (await commitExists(root, to));
-  if (!fromOk || !toOk) {
-    return problem(400, "validation-failed", "from/to is not a known checkpoint", undefined, url.pathname);
-  }
-
-  const hunks = await buildDiffHunks(root, from, to);
-  return Response.json({ from, to, hunks });
-}
-
-/** `GET /w/:slug/checkpoints` (A6 §F31) — the full-history listing behind the timeline UI.
- * `?since=` is optional (omit for full history); `?limit=` caps the row count after filtering.
- * `checkpoints.ts` owns the actual token resolution/git reads — this handler is just the
- * query-param parse + slug/shadow-repo plumbing every other route already does. */
-async function handleCheckpoints(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry;
-
-  const limitParam = url.searchParams.get("limit");
-  let limit: number | undefined;
-  if (limitParam !== null) {
-    const n = Number(limitParam);
-    if (!Number.isInteger(n) || n <= 0) {
-      return problem(400, "validation-failed", "limit must be a positive integer", undefined, url.pathname);
-    }
-    limit = n;
-  }
-
-  await resolveBus(ctx, root); // ensures the shadow repo exists before we ask git about it (mirrors handleDiff)
-
-  const since = url.searchParams.get("since") ?? undefined;
-  const result = await listCheckpoints(root, { since, limit }, new Date());
-  if (!result.ok) {
-    return problem(
-      400,
-      "validation-failed",
-      "since is not a recognized token or known checkpoint",
-      undefined,
-      url.pathname,
-    );
-  }
-  return Response.json(result.rows);
-}
-
-/** `POST /w/:slug/restore` (A6 §F31) — restores one artifact's bytes from a chosen checkpoint into
- * the working tree. Body `{path, to, force?}`. Same slug/confinePath/tracked-membership pipeline
- * as `PUT /w/:slug/artifacts/:path`, plus the dirty-worktree guard this route owns: if `path` has
- * changes since its latest checkpoint (HEAD) and the caller didn't pass `force:true`, refuses with
- * `409 restore-conflict` carrying the would-be-lost diff (`restoreConflictResponse`) rather than
- * silently clobbering it. A successful restore is recorded as a NEW `by:human` checkpoint
- * (`kind: "restore"`, via `WorkspaceBus#humanEditCheckpoint`) — append-only, same as every other
- * checkpoint; it never rewrites history. */
-async function handleRestore(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.worktree_path;
-
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const b = body as Record<string, unknown> | null;
-  const rawPathParam = typeof b?.path === "string" ? b.path : null;
-  const to = typeof b?.to === "string" ? b.to : null;
-  const force = b?.force === true;
-  if (!rawPathParam || !to) {
-    return problem(400, "validation-failed", "path and to are required", undefined, url.pathname);
-  }
-
-  const confineResult = confinePath(root, rawPathParam);
-  if (!confineResult.ok) {
-    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, url.pathname);
-  }
-
-  const relNfc = rawPathParam
-    .split("/")
-    .map((segment) => segment.normalize("NFC"))
-    .join("/");
-  const { tracked } = resolveTrackedFiles(resolved.entry);
-  const match = tracked.find((f) => f.path === relNfc);
-  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, url.pathname);
-
-  // resolveBus BEFORE the dirty check / commitExists — same reasoning as handlePutArtifact: it's
-  // what guarantees the shadow repo exists at all (a workspace whose first-ever git op is a
-  // restore call still needs `initShadowRepo` to have run).
-  const bus = await resolveBus(ctx, resolved.entry);
-
-  if (!(await commitExists(resolved.entry, to))) {
-    return problem(400, "validation-failed", "to is not a known checkpoint", undefined, url.pathname);
-  }
-
-  const dirty = await isPathDirty(resolved.entry, match.path);
-  if (dirty && !force) {
-    const lostDiff = await runGit(resolved.entry, ["diff", "HEAD", "--", safePathspec(match.path)]);
-    return restoreConflictResponse(url.pathname, match.path, lostDiff.stdout);
-  }
-
-  const checkpointPath = await checkpointArtifactPath(resolved.entry, to, match.path);
-  const content = await readFileAtCheckpoint(resolved.entry, to, checkpointPath);
-  if (content === null) {
-    return problem(404, "not-found", "artifact did not exist at that checkpoint", undefined, url.pathname);
-  }
-
-  const inboxId = generateAnnotationId();
-  const captured = await bus.captureHumanEdit(
-    inboxId,
-    match.path,
-    () => writeArtifactAtomic(match.rawPath, content),
-    "restore",
-  );
-  const fullSha = captured?.checkpoint_after ?? to;
-  // Shortened to match `checkpoints.ts`'s `checkpoint_id` format (A6 §F31: "the shadow-git SHORT
-  // sha") — `humanEditCheckpoint` itself returns the full sha (its `checkpoint()`/`headSha()`
-  // return type everywhere else in this codebase), so this is the one place that narrows it to
-  // the same opaque identifier the checkpoints listing hands back for the exact same commit.
-  const shortSha = (await runGit(resolved.entry, ["rev-parse", "--short", fullSha])).stdout.trim();
-
-  return Response.json({
-    path: match.path,
-    restored_to: to,
-    checkpoint_id: shortSha,
-    source_sha256: sourceSha256(Buffer.from(content, "utf8")),
-    ...(captured ? { inbox_id: inboxId } : {}),
-  });
-}
-
-/** `GET /w/:slug/inbox` (A1 §5.9) — sidebar badge + attention tray summary. `attention[]` lists
- * only attention-kind entries (per A5 §F23's two-axis split — common entries like annotations
- * aren't "attention"); the exact item shape is F12's to finalize, per A1 §5.9. */
-function handleInbox(ctx: ApiContext, slug: string, pathname: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-
-  const { state, createdAt } = peekJournal(resolved.entry);
-  const attention = Object.entries(state.entries)
-    .filter(([, e]) => e.kind === "attention" && !isTerminal("attention", e.status))
-    .map(([id, e]) => {
-      let payload: Record<string, unknown> = {};
-      try {
-        const raw = readInboxEntry(resolved.entry, id);
-        if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) payload = raw as Record<string, unknown>;
-      } catch {
-        // Journal state remains authoritative even if an immutable payload is unreadable.
-      }
-      const targetPath =
-        typeof payload.target_path === "string"
-          ? payload.target_path
-          : typeof payload.path === "string"
-            ? payload.path
-            : null;
-      return {
-        id,
-        created_at: createdAt.get(id) ?? "",
-        status: e.status,
-        message: typeof payload.message === "string" ? payload.message : null,
-        action: typeof payload.action === "string" ? payload.action : null,
-        target: targetPath,
-        target_path: targetPath,
-        approval_mode: payload.approval_mode === true,
-      };
-    })
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
-
-  return Response.json({ pending_count: attention.length, attention });
-}
-
-async function handleAttentionSeen(ctx: ApiContext, slug: string, entryId: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const bus = await resolveBus(ctx, resolved.entry);
-  try {
-    return Response.json({ id: entryId, ...(await bus.markAttentionSeen(entryId)) });
-  } catch {
-    return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
-  }
-}
-
-async function handleAttentionResponse(
-  ctx: ApiContext,
-  slug: string,
-  entryId: string,
-  req: Request,
-): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const b = body as Record<string, unknown> | null;
-  const outcome = b?.outcome;
-  if (outcome !== "done" && outcome !== "approved" && outcome !== "changes_requested") {
-    return problem(
-      400,
-      "validation-failed",
-      "outcome must be done, approved, or changes_requested",
-      undefined,
-      url.pathname,
-    );
-  }
-  const response = b?.response;
-  if (response !== undefined && (typeof response !== "string" || Buffer.byteLength(response, "utf8") > 4096)) {
-    return problem(
-      400,
-      "validation-failed",
-      "response must be a string of at most 4096 bytes",
-      undefined,
-      url.pathname,
-    );
-  }
-
-  const bus = await resolveBus(ctx, resolved.entry);
-  const entry = bus.readEntry(entryId);
-  if (!entry || typeof entry.payload !== "object" || entry.payload === null) {
-    return problem(404, "not-found", "unknown attention request", undefined, url.pathname);
-  }
-  const payload = entry.payload as Record<string, unknown>;
-  const action = payload.action;
-  const approvalMode = payload.approval_mode === true;
-  if (approvalMode) {
-    if (outcome !== "approved") {
-      return problem(
-        400,
-        "validation-failed",
-        "approval-mode requests require outcome approved",
-        undefined,
-        url.pathname,
-      );
-    }
-    if (response !== undefined) {
-      return problem(
-        400,
-        "validation-failed",
-        "approval-mode requests do not accept response text",
-        undefined,
-        url.pathname,
-      );
-    }
-    const revisionId = b?.revision_id;
-    if (typeof revisionId !== "string" || !/^[a-f0-9]{64}$/.test(revisionId)) {
-      return problem(
-        400,
-        "validation-failed",
-        "revision_id must be a lowercase SHA-256 digest",
-        undefined,
-        url.pathname,
-      );
-    }
-    if (entry.status === "done") {
-      return Response.json({
-        id: entryId,
-        ...(await bus.completeAttention(entryId)),
-      });
-    }
-    const targetPath = payload.target_path;
-    if (typeof targetPath !== "string") {
-      return problem(409, "conflict", "approval request has no target artifact", undefined, url.pathname);
-    }
-    const tracked = resolveTrackedFiles(bus.workspace).tracked.find((file) => file.path === targetPath);
-    if (!tracked) {
-      return problem(
-        409,
-        "artifact-revision-changed",
-        "the approval target is no longer available",
-        undefined,
-        url.pathname,
-      );
-    }
-    let currentRevision: string;
-    try {
-      currentRevision = sourceSha256(readFileSync(tracked.rawPath));
-    } catch {
-      return problem(
-        409,
-        "artifact-revision-changed",
-        "the approval target is no longer available",
-        undefined,
-        url.pathname,
-      );
-    }
-    if (currentRevision !== revisionId) {
-      return problem(
-        409,
-        "artifact-revision-changed",
-        "the artifact changed before approval; review the latest revision and try again",
-        undefined,
-        url.pathname,
-      );
-    }
-    const verdict: AttentionVerdict = {
-      outcome: "approved",
-      target_path: targetPath,
-      revision_id: revisionId,
-      completed_at: new Date().toISOString(),
-    };
-    try {
-      return Response.json({ id: entryId, ...(await bus.completeAttention(entryId, verdict)) });
-    } catch (error) {
-      return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
-    }
-  }
-  if (action === "review" && outcome === "done") {
-    return problem(
-      400,
-      "validation-failed",
-      "review requests require approved or changes_requested",
-      undefined,
-      url.pathname,
-    );
-  }
-  if (action !== "review" && outcome !== "done") {
-    return problem(400, "validation-failed", "generic requests require outcome done", undefined, url.pathname);
-  }
-  try {
-    const verdict: AttentionVerdict = {
-      outcome,
-      ...(response !== undefined ? { response } : {}),
-    };
-    return Response.json({
-      id: entryId,
-      ...(await bus.completeAttention(entryId, verdict)),
-    });
-  } catch (error) {
-    return problem(409, "conflict", (error as Error).message, undefined, url.pathname);
-  }
 }
 
 /** `POST /w/:slug/session-binding` (A1 §5.11) — the explicit user pick from the session picker
@@ -1239,10 +490,13 @@ function canonicalOrNull(path: string): string | null {
   }
 }
 
-/** `POST /api/sessions/register` — A2 §F08's SessionStart registration + R2's "no live session ->
- * park; next registration for that workspace drains it" (the drained-workspace list this returns
- * is exactly `SessionRegistry.register`'s own `drainedWorkspaces`, surfaced so the caller can
- * decide what to do with a just-unparked workspace — this route never itself pushes/delivers). */
+/** `POST /api/sessions/register` — A2 §F08's SessionStart registration. It records the session and
+ * returns the identity the caller resolved to; it never pushes or delivers. R2's "no live session
+ * -> park; next registration for that workspace drains it" is NOT settled here: a park is an entry
+ * left non-terminal in the workspace journal, and the drain is the separate
+ * `POST /api/sessions/:id/drain` the same hook invocation calls immediately after this one (see
+ * `handleSessionDrain`, and `glosa hook session-start`). Nothing about a park lives in daemon
+ * memory, so it survives a daemon restart. */
 async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -1301,7 +555,7 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   const transcriptPath =
     typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
 
-  const { record, drainedWorkspaces } = await ctx.sessionRegistry.register({
+  const record = await ctx.sessionRegistry.register({
     session_id: sessionId,
     provider,
     cwd: canonicalCwd,
@@ -1313,7 +567,6 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   return Response.json({
     session_id: record.session_id,
     workspace: record.workspace_binding ?? record.cwd,
-    drained_workspaces: drainedWorkspaces,
   });
 }
 
@@ -1334,6 +587,166 @@ async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Prom
 }
 
 const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
+
+interface CompositeDrainCandidate {
+  workspace: WorkspaceEntry;
+  bus: WorkspaceBus;
+  id: string;
+  created_at: string;
+  journal_order: number;
+  presentation: (DeliverableEntry & { workspace: string }) | null;
+}
+
+function compareUtf8Text(a: string, b: string): number {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+/** Cross-workspace creation order is the persisted entry timestamp. Equal timestamps use the
+ * durable registration id's raw UTF-8 bytes, then the entry's local journal order and id bytes.
+ * No host locale participates. Invalid legacy timestamps sort after valid timestamps, then by
+ * their raw UTF-8 bytes so even damaged-but-readable history has one deterministic order. */
+function compareCompositeCandidates(a: CompositeDrainCandidate, b: CompositeDrainCandidate): number {
+  const aAt = Date.parse(a.created_at);
+  const bAt = Date.parse(b.created_at);
+  const aValid = Number.isFinite(aAt);
+  const bValid = Number.isFinite(bAt);
+  if (aValid !== bValid) return aValid ? -1 : 1;
+  if (aValid && bValid && aAt !== bAt) return aAt < bAt ? -1 : 1;
+  if (!aValid && !bValid) {
+    const malformedAt = compareUtf8Text(a.created_at, b.created_at);
+    if (malformedAt !== 0) return malformedAt;
+  }
+  const workspace = compareUtf8Text(a.workspace.registration_id, b.workspace.registration_id);
+  if (workspace !== 0) return workspace;
+  if (a.journal_order !== b.journal_order) return a.journal_order - b.journal_order;
+  return compareUtf8Text(a.id, b.id);
+}
+
+function sessionRoutesToWorkspace(ctx: ApiContext, sessionId: string, workspace: WorkspaceEntry): boolean {
+  return ctx.sessionRegistry
+    .forWorkspace(workspace.canonical_path)
+    .some((candidate) => candidate.session_id === sessionId);
+}
+
+async function handleCompositeSessionDrain(
+  ctx: ApiContext,
+  sessionId: string,
+  record: NonNullable<ReturnType<SessionRegistry["get"]>>,
+  limit: number,
+  via: DeliveryVia,
+  entryId?: string,
+  cursor?: string,
+): Promise<Response> {
+  return compositeRegistry(ctx).prepare(async () => {
+    let workspaces = ctx.workspaceIndex
+      .list({ presentOnly: true })
+      .filter((workspace) => (workspace.lifecycle?.state ?? "active") === "active")
+      .filter((workspace) => sessionRoutesToWorkspace(ctx, sessionId, workspace))
+      .sort((a, b) => compareUtf8Text(a.registration_id, b.registration_id));
+
+    // Registration normally created this already. Preserve the old route's self-healing behavior
+    // if an in-memory session outlives an absent index entry, but do not override an explicit
+    // session bound to the cwd (the routing predicate still decides eligibility).
+    if (workspaces.length === 0) {
+      const cwdWorkspace =
+        ctx.workspaceIndex.get(record.cwd) ?? (await ctx.workspaceIndex.upsertWorkspace(record.cwd, "session"));
+      if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace)) workspaces = [cwdWorkspace];
+    }
+
+    const candidates: CompositeDrainCandidate[] = [];
+    let undisclosedLocalCandidates = false;
+    for (const workspace of workspaces) {
+      const bus = await resolveBus(ctx, workspace);
+      const plan = await bus.previewDelivery(
+        DRAIN_MAX,
+        { session: sessionId, ...(entryId ? { entryId } : {}) },
+        (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
+      );
+      undisclosedLocalCandidates ||= plan.has_more;
+      for (const item of plan.entries) {
+        candidates.push({
+          ...item,
+          workspace,
+          bus,
+          presentation: item.presentation as CompositeDrainCandidate["presentation"],
+        });
+      }
+    }
+    candidates.sort(compareCompositeCandidates);
+
+    const selected: CompositeDrainCandidate[] = [];
+    let plannedBytes = 0;
+    for (const candidate of candidates) {
+      if (!candidate.presentation) throw new Error(`entry ${candidate.id} is not an actionable presentation`);
+      if (selected.length >= Math.min(Math.max(1, limit), DRAIN_MAX)) break;
+      const separatorBytes = selected.length > 0 ? utf8Bytes("\n\n---\n\n") : 0;
+      if (plannedBytes + separatorBytes + candidate.presentation.bytes > MAX_BATCH_PRESENTATION_BYTES) break;
+      selected.push(candidate);
+      plannedBytes += separatorBytes + candidate.presentation.bytes;
+    }
+
+    if (selected.length === 0) {
+      return Response.json({ delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 });
+    }
+
+    const children: Array<{ bus: WorkspaceBus; delivery_id: string }> = [];
+    const drained: Array<DeliverableEntry & { workspace: string }> = [];
+    let reservedBytes = 0;
+    let compositeDeliveryId: string;
+    try {
+      for (const candidate of selected) {
+        // Reserve exactly the planned id. If another drain won the race after preview, this returns
+        // no item; never substitute the workspace's next eligible entry.
+        const prepared = await candidate.bus.prepareDelivery(
+          1,
+          { via, session: sessionId, entryId: candidate.id },
+          (id, payload, status) =>
+            buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor),
+        );
+        if (prepared.count !== 1 || prepared.delivery_id === null || prepared.drained[0]?.id !== candidate.id) {
+          if (prepared.delivery_id) children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} changed during preparation`);
+        }
+        const presentation = prepared.drained[0] as DeliverableEntry & { workspace?: string };
+        if (presentation.workspace !== candidate.workspace.canonical_path) {
+          children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} lost its workspace identity`);
+        }
+        const separatorBytes = drained.length > 0 ? utf8Bytes("\n\n---\n\n") : 0;
+        if (
+          presentation.bytes > MAX_ENTRY_PRESENTATION_BYTES ||
+          reservedBytes + separatorBytes + presentation.bytes > MAX_BATCH_PRESENTATION_BYTES
+        ) {
+          children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+          throw new Error(`delivery candidate ${candidate.id} changed beyond the presentation cap`);
+        }
+        children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
+        drained.push(presentation as DeliverableEntry & { workspace: string });
+        reservedBytes += separatorBytes + presentation.bytes;
+      }
+      // Registry allocation is part of preparation. If it fails, none of the child reservations
+      // may remain stranded behind a token that was never returned to the caller.
+      compositeDeliveryId = compositeRegistry(ctx).create(sessionId, children);
+    } catch (error) {
+      const releases = await Promise.allSettled(children.map((child) => child.bus.cancelDelivery(child.delivery_id)));
+      const releaseFailure = releases.find((result) => result.status === "rejected");
+      if (releaseFailure?.status === "rejected") {
+        throw new AggregateError(
+          [error, releaseFailure.reason],
+          "composite preparation and reservation release failed",
+        );
+      }
+      throw error;
+    }
+
+    return Response.json({
+      delivery_id: compositeDeliveryId,
+      drained,
+      count: drained.length,
+      has_more: undisclosedLocalCandidates || candidates.length > selected.length,
+    });
+  });
+}
 
 /** `POST /api/sessions/:id/drain` — prepares the rung-3 turn-boundary payload (UserPromptSubmit's
  * additionalContext + Stop's blocking reason, A6 §F26). Selection, actionable formatting, byte
@@ -1378,14 +791,18 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
 
-  const root = record.workspace_binding ?? record.cwd;
+  if (!record.workspace_binding) {
+    return handleCompositeSessionDrain(ctx, sessionId, record, limit, via, entryId, cursor);
+  }
+
+  const root = record.workspace_binding;
   const workspace = ctx.workspaceIndex.get(root) ?? (await ctx.workspaceIndex.upsertWorkspace(root, "session"));
   const bus = await resolveBus(ctx, workspace);
 
   const prepared = await bus.prepareDelivery(
     limit,
     { via, session: sessionId, ...(entryId ? { entryId } : {}) },
-    (id, payload, status) => buildActionablePresentation(ctx, workspace, id, payload, status, cursor),
+    (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
   );
 
   return Response.json(prepared);
@@ -1410,6 +827,21 @@ async function handleSessionDeliveryAck(
   const outcome = value?.outcome;
   if (outcome !== "presented" && outcome !== "failed") {
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, url.pathname);
+  }
+  if (CompositeDeliveryRegistry.isCompositeToken(deliveryId)) {
+    const acknowledged = await compositeRegistry(ctx).acknowledge(
+      deliveryId,
+      sessionId,
+      outcome,
+      typeof value?.error === "string" ? value.error : undefined,
+    );
+    if (acknowledged === "outcome-conflict") {
+      return problem(409, "conflict", "composite acknowledgement outcome changed", undefined, url.pathname);
+    }
+    if (acknowledged !== "acknowledged") {
+      return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
+    }
+    return Response.json({ acknowledged: true });
   }
   const root = record.workspace_binding ?? record.cwd;
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
@@ -1501,31 +933,6 @@ async function handleConversationAck(
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
-async function handleInboxPresentation(
-  ctx: ApiContext,
-  slug: string,
-  entryId: string,
-  req: Request,
-): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry;
-  const bus = await resolveBus(ctx, root);
-  const entry = bus.readEntry(entryId);
-  if (!entry) return problem(404, "not-found", "no such inbox entry", entryId, url.pathname);
-  const presentation = buildActionablePresentation(
-    ctx,
-    root,
-    entryId,
-    entry.payload,
-    entry.status,
-    url.searchParams.get("cursor") ?? undefined,
-  );
-  if (!presentation) return problem(422, "validation-failed", "entry payload is not actionable", entryId, url.pathname);
-  return Response.json({ presentation });
-}
-
 // -------------------------------------------------------------------------------------------
 // P5.1 additions — the CLI-facing `/api/workspaces/...` surface (A6 §F26's `open`/`resolve`/
 // `apply-begin`/`request-review`/`status` command surface). Not in A1 §5 (same footing as every
@@ -1568,7 +975,13 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
       ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
     });
     if (opened.entry.kind === "directory") {
-      await adoptLooseLineages(ctx.workspaceIndex, opened.entry, ctx.getWorkspaceBus, ctx.sealAdoptionSources);
+      await adoptLooseLineages(
+        ctx.workspaceIndex,
+        opened.entry,
+        ctx.getWorkspaceBus,
+        ctx.sealAdoptionSources,
+        adoptionCoordinator(ctx),
+      );
     }
     await resolveBus(ctx, opened.entry);
     const localBus = join(opened.entry.worktree_path, ".glosa");
@@ -1713,6 +1126,21 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
     if (code === "NO_ACTIVE_LEASE" || code === "LEASE_SESSION_MISMATCH") {
       return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
     }
+    // A4 §F05 lease expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
+    // `entry_error`) as the two above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
+    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s LEASE_HELD. The
+    // recovery step goes in the TITLE, not just the detail, because `runResolve`'s
+    // `mapEntryFailure` (packages/cli/src/resolve.ts) surfaces `problem.title` as the CLI's
+    // error message and never reads `detail` — guidance parked in `detail` would never be seen.
+    if (code === "LEASE_EXPIRED") {
+      return problem(
+        409,
+        "conflict",
+        "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
+        "past its TTL the lease could no longer prove its pre..post interval, so that interval was recorded as unknown rather than attributed to the session",
+        url.pathname,
+      );
+    }
     throw err;
   }
 }
@@ -1757,141 +1185,6 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
     }
     throw err;
   }
-}
-
-/** `POST /api/workspaces/attention-request` — `glosa request-review <path> [--message] [--action]`'s
- * daemon-side half (A5 §F23's attention axis: `open -> delivered -> seen -> {done|expired|stale}`).
- * `path` here is the WORKSPACE root (same convention as `open`/`resolve`/`apply-begin` — the CLI
- * runs from the workspace directory); `target_path`, if given, is the artifact the review concerns,
- * carried as informational payload for ordinary review. Approval mode upgrades it to a normalized
- * tracked-artifact identity used for revision-bound completion. */
-async function handleWorkspaceAttentionRequest(ctx: ApiContext, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const b = body as Record<string, unknown> | null;
-  const rawPath = typeof b?.path === "string" ? b.path : null;
-  if (!rawPath) return problem(400, "validation-failed", "path is required", undefined, url.pathname);
-  const root = canonicalOrNull(rawPath);
-  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
-
-  const message = typeof b?.message === "string" ? b.message : undefined;
-  const action = typeof b?.action === "string" ? b.action : "review";
-  const targetPath = typeof b?.target_path === "string" ? b.target_path : undefined;
-  if (b?.approval_mode !== undefined && typeof b.approval_mode !== "boolean") {
-    return problem(400, "validation-failed", "approval_mode must be a boolean", undefined, url.pathname);
-  }
-  const approvalMode = b?.approval_mode === true;
-  if (message !== undefined && Buffer.byteLength(message, "utf8") > 4096) {
-    return problem(400, "validation-failed", "message must be at most 4096 bytes", undefined, url.pathname);
-  }
-  if (Buffer.byteLength(action, "utf8") > 64) {
-    return problem(400, "validation-failed", "action must be at most 64 bytes", undefined, url.pathname);
-  }
-  const confinedTarget = targetPath !== undefined ? confinePath(root, targetPath) : null;
-  if (targetPath !== undefined && !confinedTarget?.ok) {
-    return problem(400, "invalid-path", "target_path must be workspace-relative and confined", undefined, url.pathname);
-  }
-  if (approvalMode && targetPath === undefined) {
-    return problem(400, "validation-failed", "approval-mode requests require target_path", undefined, url.pathname);
-  }
-
-  const entry = await ctx.workspaceIndex.upsertWorkspace(root, "glosa-open");
-  const bus = await resolveBus(ctx, entry);
-  let normalizedTargetPath = targetPath;
-  if (approvalMode) {
-    if (!confinedTarget?.ok || !existsSync(confinedTarget.realPath)) {
-      return problem(
-        400,
-        "invalid-path",
-        "approval target must be an existing tracked artifact",
-        undefined,
-        url.pathname,
-      );
-    }
-    let requestedRealPath: string;
-    try {
-      requestedRealPath = realpathSync(confinedTarget.realPath);
-    } catch {
-      return problem(
-        400,
-        "invalid-path",
-        "approval target must be an existing tracked artifact",
-        undefined,
-        url.pathname,
-      );
-    }
-    const match = resolveTrackedFiles(bus.workspace).tracked.find((file) => {
-      try {
-        return realpathSync(file.rawPath) === requestedRealPath;
-      } catch {
-        return false;
-      }
-    });
-    if (!match) {
-      return problem(
-        400,
-        "invalid-path",
-        "approval target must be an existing tracked artifact",
-        undefined,
-        url.pathname,
-      );
-    }
-    normalizedTargetPath = match.path;
-  }
-  const id = generateAnnotationId();
-  try {
-    await bus.createAttentionRequest(id, {
-      kind: "attention_request",
-      ...(message !== undefined ? { message } : {}),
-      action,
-      ...(approvalMode
-        ? { target_path: normalizedTargetPath!, approval_mode: true }
-        : targetPath !== undefined
-          ? { path: targetPath }
-          : {}),
-    });
-  } catch (error) {
-    if (error instanceof ApprovalConflictError) {
-      return problem(
-        409,
-        "approval-conflict",
-        "an approval request is already active for this artifact",
-        undefined,
-        url.pathname,
-      );
-    }
-    throw error;
-  }
-  return new Response(JSON.stringify({ id, slug: entry.slug, status: "open" }), {
-    status: 201,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-/** `GET /api/workspaces/entry-status?path=&entry=` — `glosa request-review --wait`'s poll target.
- * Peeks the LIVE (reconciled) bus state for one entry's current status/detail — a resolved
- * (terminal) attention entry no longer appears in `GET /w/:slug/inbox` (that route only lists
- * NON-terminal attention entries, by design — A1 §5.9), so `--wait` needs a way to see the
- * TERMINAL outcome, verdict included, once one lands. */
-async function handleWorkspaceEntryStatus(ctx: ApiContext, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const rawPath = url.searchParams.get("path");
-  const entry = url.searchParams.get("entry");
-  if (!rawPath || !entry) {
-    return problem(400, "validation-failed", "path and entry query params are required", undefined, url.pathname);
-  }
-  const root = canonicalOrNull(rawPath);
-  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
-
-  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
-  const state = bus.state.entries[entry];
-  if (!state) return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
-  return Response.json({ id: entry, kind: state.kind, status: state.status, detail: state.detail ?? null });
 }
 
 /** `GET /api/status` — `glosa status`'s aggregate (A6 §F26: "daemon+workspaces+sessions+pending").
@@ -1996,9 +1289,13 @@ async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request):
           restart_required: wiring.sessions.routable_live === 0,
         });
       }
-      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 =
-      // durable-install-required (ephemeral runner cache). Both are honest 409 conflicts with
-      // the child's own error code + hint in detail — see A6 §F26's stable exit-code table.
+      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 = usage,
+      // which the child emits for durable-install-required (ephemeral runner cache), an unsafe
+      // init target (issue #96), and — because this child runs `init` with no `--agent` so the
+      // provider choice stays provider-owned (A6 §F26, AGENTS.md invariant 1) — a provider
+      // selection it refuses to guess at. Only the first is re-confirmable with force:true; the
+      // rest are still honest 409s because the child's own error code + hint ride in `detail`,
+      // which is what the SPA shows next to its "run `glosa init` in the terminal" fallback.
       if (envelope.exit_code === 6 || envelope.exit_code === 2) {
         const err = envelope.error;
         const detail = err
@@ -2074,15 +1371,6 @@ function handleStatusAggregate(ctx: ApiContext): Response {
   });
 }
 
-/** Shared body for the two remaining route SHELLS (A1 §5.8/§5.10) — their real backends land in
- * later tasks (noted per call site below), but the slug-resolution + auth/contract/confinement
- * pipeline in front of them is real today, so the A3 §5 attack suite already covers these routes. */
-function handleNotImplemented(ctx: ApiContext, slug: string, pathname: string, note: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-  return problem(501, "not-implemented", note, undefined, pathname);
-}
-
 /** `GET /w/:slug/stream` (A1 §5.5/§8, P3.2) — resolves the slug, ensures the bus is reconciled
  * (so `bus.currentCursor()`/`bus.state` reflect the journal before anything subscribes to it),
  * then hands off to stream.ts, which owns the actual SSE mechanics. Kept a thin wrapper here so
@@ -2114,11 +1402,11 @@ async function handleStream(
  * session bound to it via the registry (never a cwd->slug guess, per A2 §F16's "Source
  * (Authoritative)"); no session at all, or none with a known `transcript_path`, is 404 "no
  * session registered" (A1 §5.8: "the SPA shows 'no session registered' rather than treating this
- * as a stream error"). Several live sessions with equal routing precedence (`forWorkspace`'s own
- * "never guess" contract) aren't disambiguated here — v1 has no session-picker wiring for the
- * conversation mirror, so this just takes the first; a future picker is additive. `transcript_
- * path` is confined under `$CLAUDE_CONFIG_DIR` (A2 §F16/A6 §F30's doctor check) BEFORE this route
- * ever opens it — outside that root is refused (400), never tailed. */
+ * as a stream error"). Several live transcript-bearing sessions with equal routing precedence
+ * fail closed with the same safe session-selection problem shape as the composer; this GET route
+ * has no session-hint parameter. `transcript_path` is confined under `$CLAUDE_CONFIG_DIR` (A2
+ * §F16/A6 §F30's doctor check) BEFORE this route ever opens it — outside that root is refused
+ * (400), never tailed. */
 function handleTranscriptStream(
   ctx: ApiContext,
   slug: string,
@@ -2133,6 +1421,11 @@ function handleTranscriptStream(
   const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).filter((s) => s.transcript_path);
   if (sessions.length === 0) {
     return problem(404, "not-found", "no session registered", undefined, url.pathname);
+  }
+  if (sessions.length > 1) {
+    return conversationProblem(409, "session-selection-required", "choose a live session", url.pathname, {
+      candidates: sessionCandidates(sessions),
+    });
   }
   const transcriptPath = sessions[0]!.transcript_path as string;
 
@@ -2151,8 +1444,6 @@ function handleTranscriptStream(
     shutdownSignal: lifecycleSignal(ctx, authSignal),
   });
 }
-
-const CONVERSATION_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function conversationProblem(
   status: number,
@@ -2173,287 +1464,12 @@ function conversationProblem(
   );
 }
 
-function conversationResult(
-  messageId: string,
-  state: { status: string; deliveryAttempts?: unknown },
-  fallback?: DeliveryResult,
-): Record<string, unknown> {
-  const attempts = Array.isArray(state.deliveryAttempts)
-    ? (state.deliveryAttempts as Array<Record<string, unknown>>)
-    : [];
-  const latest = attempts.at(-1) ?? fallback;
-  const delivered =
-    state.status === "delivered" ||
-    (latest !== undefined && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "presented");
-  return {
-    message_id: messageId,
-    accepted: true,
-    delivered,
-    state: delivered
-      ? "presented"
-      : latest && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "transport_accepted"
-        ? "transport_accepted"
-        : latest && typeof latest === "object" && (latest as Record<string, unknown>).outcome === "failed"
-          ? "failed"
-          : "queued",
-    ...(latest
-      ? {
-          delivery: {
-            via: (latest as Record<string, unknown>).via,
-            outcome: (latest as Record<string, unknown>).outcome,
-          },
-        }
-      : {}),
-  };
-}
-
-function composerCandidates(records: ReturnType<SessionRegistry["explicitlyBoundForWorkspace"]>) {
+function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>) {
   return records.map((record) => ({
     session_id: record.session_id,
     provider: record.provider,
     last_active_at: record.last_active_at,
   }));
-}
-
-/** `POST /w/:slug/transcript/compose` — out-of-band, session-targeted conversation delivery.
- * The immutable inbox + journal carry the message; the transcript remains read-only. */
-async function handleComposerSend(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const parsed = body as Record<string, unknown> | null;
-  const text = parsed?.text;
-  if (typeof text !== "string" || text.trim().length === 0) {
-    return problem(400, "validation-failed", "text is required", undefined, url.pathname);
-  }
-  const suppliedMessageId = parsed?.message_id;
-  if (
-    suppliedMessageId !== undefined &&
-    (typeof suppliedMessageId !== "string" || !CONVERSATION_MESSAGE_ID_RE.test(suppliedMessageId))
-  ) {
-    return problem(400, "validation-failed", "message_id must be a UUID", undefined, url.pathname);
-  }
-  const messageId = typeof suppliedMessageId === "string" ? suppliedMessageId : randomUUID();
-  const sessionHint = typeof parsed?.session_hint === "string" ? parsed.session_hint : undefined;
-  const bus = await resolveBus(ctx, resolved.entry);
-  const existingEntry = bus.readEntry(messageId);
-  let immutableTargetSession: string | undefined;
-  let immutableProvider: string | undefined;
-  if (existingEntry !== null) {
-    const existingPayload =
-      existingEntry.payload && typeof existingEntry.payload === "object"
-        ? (existingEntry.payload as Record<string, unknown>)
-        : null;
-    if (
-      existingPayload?.kind !== "conversation_message" ||
-      existingPayload.text !== text ||
-      typeof existingPayload.target_session_id !== "string" ||
-      typeof existingPayload.provider !== "string" ||
-      (sessionHint !== undefined && sessionHint !== existingPayload.target_session_id)
-    ) {
-      return conversationProblem(
-        409,
-        "idempotency-conflict",
-        "message_id already identifies a different message",
-        url.pathname,
-      );
-    }
-    immutableTargetSession = existingPayload.target_session_id;
-    immutableProvider = existingPayload.provider;
-    const existingState = bus.state.entries[messageId];
-    if (!existingState) return internalErrorResponse();
-    const current = conversationResult(messageId, existingState);
-    const latest = Array.isArray(existingState.deliveryAttempts) ? existingState.deliveryAttempts.at(-1) : undefined;
-    if (existingState.status === "delivered") return Response.json(current);
-    if (latest?.outcome !== "failed") return Response.json(current, { status: 202 });
-  }
-
-  const allBound = ctx.sessionRegistry.explicitlyBoundForWorkspace(resolved.entry.canonical_path, {
-    includeStale: true,
-  });
-  const liveBound = allBound.filter((record) => ctx.sessionRegistry.liveness(record.session_id) === "alive");
-  if (allBound.length === 0) {
-    return conversationProblem(404, "no-bound-session", "no live session is explicitly bound", url.pathname, {
-      recovery: "Start or resume an agent session and bind it to this workspace.",
-    });
-  }
-  if (liveBound.length === 0) {
-    return conversationProblem(409, "bound-session-stale", "the bound session is stale", url.pathname, {
-      recovery: "Resume the bound agent session and try again.",
-    });
-  }
-
-  let target = immutableTargetSession
-    ? liveBound.find((record) => record.session_id === immutableTargetSession && record.provider === immutableProvider)
-    : sessionHint
-      ? liveBound.find((record) => record.session_id === sessionHint)
-      : undefined;
-  if (immutableTargetSession && !target) {
-    return conversationProblem(409, "bound-session-stale", "the target session is not live", url.pathname, {
-      recovery: "Resume the originally targeted agent session and try again.",
-    });
-  }
-  if (!immutableTargetSession && sessionHint && !target) {
-    return conversationProblem(
-      409,
-      "session-selection-required",
-      "the selected session is not a live binding",
-      url.pathname,
-      {
-        candidates: composerCandidates(liveBound),
-      },
-    );
-  }
-  if (!target && liveBound.length > 1) {
-    return conversationProblem(409, "session-selection-required", "choose a live bound session", url.pathname, {
-      candidates: composerCandidates(liveBound),
-    });
-  }
-  target ??= liveBound[0];
-  if (!target) {
-    return conversationProblem(409, "bound-session-stale", "the selected session is not live", url.pathname, {
-      candidates: composerCandidates(liveBound),
-    });
-  }
-
-  const provider = ctx.providerRegistry?.get(target.provider);
-  if (!provider) {
-    return conversationProblem(503, "delivery-unavailable", "delivery is unavailable for this provider", url.pathname, {
-      provider: target.provider,
-      retryable: true,
-    });
-  }
-
-  const payload = {
-    kind: "conversation_message",
-    text,
-    target_session_id: target.session_id,
-    provider: target.provider,
-  } as const;
-  const preview = buildDeliveryPresentation(messageId, payload, { status: "pending" });
-  if (!preview || preview.bytes > 16 * 1024) {
-    return conversationProblem(400, "validation-failed", "message exceeds the 16 KiB delivery limit", url.pathname, {
-      max_bytes: 16 * 1024,
-    });
-  }
-
-  if (existingEntry === null) {
-    await bus.createEntry(messageId, payload, { idem: `conversation:${messageId}:created` });
-  }
-
-  const session: SessionBinding = {
-    session_id: target.session_id,
-    workspace: target.workspace_binding as string,
-    source: target.source,
-    ...(target.transcript_path ? { transcript_path: target.transcript_path } : {}),
-  };
-  let result: DeliveryResult;
-  try {
-    const deliverable = buildDeliveryPresentation(messageId, payload, { status: "pending" });
-    if (!deliverable) throw new Error("invalid_conversation_message");
-    result = await provider.deliver(session, deliverable);
-  } catch {
-    result = { via: "gate", outcome: "failed", error: "provider_delivery_failed" };
-  }
-  if (result.outcome === "failed") result = { ...result, error: "provider_delivery_failed" };
-  const priorAttempts = bus.state.entries[messageId]?.deliveryAttempts;
-  const attemptCount = Array.isArray(priorAttempts) ? priorAttempts.length : 0;
-  const latestRecorded = Array.isArray(priorAttempts) ? priorAttempts.at(-1) : undefined;
-  if (
-    bus.state.entries[messageId]?.status !== "delivered" &&
-    (latestRecorded?.via !== result.via || latestRecorded?.outcome !== result.outcome)
-  ) {
-    await recordDelivery(bus, messageId, session, result, {
-      durable: true,
-      idem: `conversation:${messageId}:delivery:${attemptCount + 1}`,
-    });
-  }
-
-  const state = bus.state.entries[messageId];
-  if (!state) return internalErrorResponse();
-  const responseBody = conversationResult(messageId, state, result);
-  if (result.outcome === "failed") {
-    return conversationProblem(502, "delivery-failed", "the provider could not start delivery", url.pathname, {
-      ...responseBody,
-      retryable: true,
-    });
-  }
-  return Response.json(responseBody, { status: responseBody.delivered === true ? 200 : 202 });
-}
-
-async function handleComposerStatus(
-  ctx: ApiContext,
-  slug: string,
-  messageId: string,
-  pathname: string,
-): Promise<Response> {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-  if (!CONVERSATION_MESSAGE_ID_RE.test(messageId)) {
-    return problem(400, "validation-failed", "message_id must be a UUID", undefined, pathname);
-  }
-  const bus = await resolveBus(ctx, resolved.entry);
-  const record = bus.readEntry(messageId);
-  const payload = record?.payload;
-  if (!payload || typeof payload !== "object" || (payload as Record<string, unknown>).kind !== "conversation_message") {
-    return problem(404, "not-found", "conversation message not found", undefined, pathname);
-  }
-  const state = bus.state.entries[messageId];
-  if (!state) return problem(404, "not-found", "conversation message not found", undefined, pathname);
-  return Response.json(conversationResult(messageId, state));
-}
-
-/** `POST /w/:slug/capability/:artifactPath` (A1 §5.13/§7, P4.1) — mints a fresh, directory-scoped
- * capability for a class-F artifact. Runs the identical slug/confinePath/tracked-membership
- * pipeline handleGetArtifact does (A1 §6) so a mint request is held to the same bar before it's
- * ever allowed to hand one out; a confined-but-untracked path is 404, same failure class as every
- * other route (§6 step 4). A capability request for a class-R path is refused — A1 §7 is explicit
- * that "class R is served in-band via §5.4, never through this listener". */
-function handleMintCapability(ctx: ApiContext, slug: string, artifactPath: string, pathname: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-  const root = resolved.entry.worktree_path;
-
-  const confineResult = confinePath(root, artifactPath);
-  if (!confineResult.ok) {
-    return problem(400, "invalid-path", "path escapes the workspace or is malformed", undefined, pathname);
-  }
-
-  const relNfc = artifactPath
-    .split("/")
-    .map((segment) => segment.normalize("NFC"))
-    .join("/");
-  const { tracked } = resolveTrackedFiles(resolved.entry);
-  const match = tracked.find((f) => f.path === relNfc);
-  if (!match) return problem(404, "not-found", "path within workspace but no such artifact", undefined, pathname);
-
-  const mintAdapter = ctx.adapterRegistry?.forWorkspace(resolved.entry);
-  if (classifyWithAdapter(mintAdapter, root, match.path, classifyArtifactPath(match.path), resolved.entry) !== "F") {
-    return problem(400, "invalid-path", "capability minting is only for class-F artifacts", undefined, pathname);
-  }
-
-  // realpath'd at MINT time, not at every serve — classf-serve.ts's confinePath call re-resolves
-  // the requested sibling against this fixed real directory on every single request (A1 §7).
-  const artifactDirRealPath = dirname(realpathSync(match.rawPath));
-  const artifactBasename = basename(match.rawPath);
-  const minted = ctx.capabilityStore.mint({ slug, artifactDirRealPath, artifactBasename });
-
-  return Response.json({
-    url: `http://127.0.0.1:${ctx.classFPort}/doc/${minted.token}/${artifactBasename}`,
-    // Not one of A1 §5.12's two documented example fields — required by A3 §2's MessageChannel
-    // handshake (the bridge validates the parent's `glosa:init` message against this exact
-    // value). A1 itself defers the nonce/postMessage schema to F03/F18 (its own "out of scope"
-    // footer), so this reconciles the two: A1's route/field names, A3's nonce requirement.
-    nonce: minted.nonce,
-    expires_in_s: CAPABILITY_TTL_MS / 1000,
-  });
 }
 
 function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
@@ -2492,12 +1508,16 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && pathname === "/api/workspaces/apply-begin") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceApplyBegin(ctx, req) };
   }
-  if (method === "POST" && pathname === "/api/workspaces/attention-request") {
-    return { routeClass: "state-changing", handle: (req) => handleWorkspaceAttentionRequest(ctx, req) };
-  }
-  if (method === "GET" && pathname === "/api/workspaces/entry-status") {
-    return { routeClass: "authed-read", handle: (req) => handleWorkspaceEntryStatus(ctx, req) };
-  }
+  const attentionRoute = attentionRoutes(
+    {
+      workspaceIndex: ctx.workspaceIndex,
+      workspaceRegistration: ctx.workspaceIndex,
+      getWorkspaceBus: ctx.getWorkspaceBus,
+    },
+    method,
+    pathname,
+  );
+  if (attentionRoute) return attentionRoute;
   if (method === "GET" && pathname === "/api/status") {
     return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
@@ -2537,27 +1557,16 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     };
   }
 
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: () => handleListArtifacts(ctx, slug, pathname) };
-  }
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/presentation$/))) {
-    const slug = m[1] as string;
-    const entryId = m[2] as string;
-    return { routeClass: "authed-read", handle: (req) => handleInboxPresentation(ctx, slug, entryId, req) };
-  }
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts\/(.+)$/))) {
-    const slug = m[1] as string;
-    const path = m[2] as string;
-    return { routeClass: "authed-read", handle: (req) => handleGetArtifact(ctx, slug, path, req) };
-  }
-  // P3.3 addition — not in A1 §5 (see handlePutArtifact's own docstring): the class-R editor's
-  // save action.
-  if (method === "PUT" && (m = pathname.match(/^\/w\/([^/]+)\/artifacts\/(.+)$/))) {
-    const slug = m[1] as string;
-    const path = m[2] as string;
-    return { routeClass: "state-changing", handle: (req) => handlePutArtifact(ctx, slug, path, req) };
-  }
+  const artifactRoute = artifactRoutes(
+    {
+      ...artifactAccess(ctx),
+      capabilityStore: ctx.capabilityStore,
+      classFPort: ctx.classFPort,
+    },
+    method,
+    pathname,
+  );
+  if (artifactRoute) return artifactRoute;
   // P3.2: artifact/journal SSE stream (A1 §5.5, full protocol §8).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
     const slug = m[1] as string;
@@ -2574,33 +1583,17 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
       handle: (req, server, authSignal) => handleTranscriptStream(ctx, slug, req, server, authSignal),
     };
   }
-  // P4.2: the conversation viewer's out-of-band composer (F32/R6) — not in A1 §5, see
-  // handleComposerSend's own docstring.
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/compose$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "state-changing", handle: (req) => handleComposerSend(ctx, slug, req) };
-  }
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/transcript\/compose\/([^/]+)$/))) {
-    const slug = m[1] as string;
-    const messageId = m[2] as string;
-    return {
-      routeClass: "authed-read",
-      handle: () => handleComposerStatus(ctx, slug, messageId, pathname),
-    };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "state-changing", handle: (req) => handleCreateAnnotation(ctx, slug, req) };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/annotations\/([^/]+)\/withdraw$/))) {
-    const slug = m[1] as string;
-    const entryId = m[2] as string;
-    return { routeClass: "state-changing", handle: (req) => handleWithdrawAnnotation(ctx, slug, entryId, req) };
-  }
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/diff$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: (req) => handleDiff(ctx, slug, req) };
-  }
+  const composerRoute = composerRoutes(
+    {
+      workspaceIndex: ctx.workspaceIndex,
+      getWorkspaceBus: ctx.getWorkspaceBus,
+      sessionRegistry: ctx.sessionRegistry,
+      providerRegistry: ctx.providerRegistry,
+    },
+    method,
+    pathname,
+  );
+  if (composerRoute) return composerRoute;
   // issue #80: the SPA wiring badge's read + the consent-gated init trigger (A1 §5.18/§5.19).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/wiring$/))) {
     const slug = m[1] as string;
@@ -2609,30 +1602,6 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/init$/))) {
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceInit(ctx, slug, req) };
-  }
-  // P3.5: full checkpoint history (A6 §F31).
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/checkpoints$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: (req) => handleCheckpoints(ctx, slug, req) };
-  }
-  // P3.5: restore an artifact's bytes from a checkpoint (A6 §F31).
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/restore$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "state-changing", handle: (req) => handleRestore(ctx, slug, req) };
-  }
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/inbox$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: () => handleInbox(ctx, slug, pathname) };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/seen$/))) {
-    const slug = m[1] as string;
-    const entryId = m[2] as string;
-    return { routeClass: "state-changing", handle: (req) => handleAttentionSeen(ctx, slug, entryId, req) };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/inbox\/([^/]+)\/response$/))) {
-    const slug = m[1] as string;
-    const entryId = m[2] as string;
-    return { routeClass: "state-changing", handle: (req) => handleAttentionResponse(ctx, slug, entryId, req) };
   }
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
     const slug = m[1] as string;
@@ -2650,13 +1619,6 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     const slug = m[1] as string;
     return { routeClass: "state-changing", handle: (req) => handleSessionBinding(ctx, slug, req) };
   }
-  // P4.1: class-F capability-URL mint (A1 §7).
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/capability\/(.+)$/))) {
-    const slug = m[1] as string;
-    const artifactPath = m[2] as string;
-    return { routeClass: "state-changing", handle: () => handleMintCapability(ctx, slug, artifactPath, pathname) };
-  }
-
   return null;
 }
 

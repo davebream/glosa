@@ -119,7 +119,11 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
         { checkpoint_id: "c2", at: "2026-07-20T11:00:00Z", by: "human", summary: "human_edit", bytes_changed: 12 },
         { checkpoint_id: "c1", at: "2026-07-20T10:00:00Z", by: "unknown", summary: "baseline", bytes_changed: 40 },
       ],
-      getDiff: async () => ({ from: "c1", to: "c2", hunks: [{ path: "notes.md", diff: SAMPLE_HUNK_DIFF, attribution: "human" }] }),
+      getDiff: async () => ({
+        from: "c1",
+        to: "c2",
+        hunks: [{ path: "notes.md", diff: SAMPLE_HUNK_DIFF, attribution: "human" }],
+      }),
       restore: async () => ({ path: "notes.md", restored_to: "c1", checkpoint_id: "c3", source_sha256: "sha" }),
       ...overrides,
     };
@@ -143,7 +147,9 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
     expect(visibleText).toContain("Unknown change");
 
     const checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"]'));
-    expect(checkboxes.every((checkbox) => (checkbox.getAttribute("aria-label") ?? "").startsWith("Select "))).toBe(true);
+    expect(checkboxes.every((checkbox) => (checkbox.getAttribute("aria-label") ?? "").startsWith("Select "))).toBe(
+      true,
+    );
     expect(root.querySelector(".glosa-history-status")?.getAttribute("role")).toBe("status");
     expect((root.querySelector(".glosa-history-compare-current") as any).disabled).toBe(true);
   });
@@ -155,7 +161,11 @@ describe("mountHistoryPane — DOM integration against a fake dataAccess (no rea
     const dataAccess = fakeDataAccess({
       getDiff: async (_slug: string, args: { from: string; to: string }) => {
         calls.push(args);
-        return { from: args.from, to: args.to, hunks: [{ path: "notes.md", diff: SAMPLE_HUNK_DIFF, attribution: "human" }] };
+        return {
+          from: args.from,
+          to: args.to,
+          hunks: [{ path: "notes.md", diff: SAMPLE_HUNK_DIFF, attribution: "human" }],
+        };
       },
     });
 

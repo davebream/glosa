@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PROTOCOL_VERSION } from "../src/protocol.ts";
-import { BUILD_ID } from "../src/build-id.ts";
-import { ensureHomeDir, lockPath } from "../src/home.ts";
+import { BUILD_ID } from "../src/lifecycle/build-id.ts";
+import { ensureHomeDir, lockPath } from "../src/lifecycle/home.ts";
 import {
+  type DaemonLock,
   isPidAlive,
   parseLock,
   readLock,
   reclaimStaleLock,
   removeLockIfOwned,
   writeLockExclusive,
-  type DaemonLock,
-} from "../src/lock.ts";
+} from "../src/lifecycle/lock.ts";
+import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
 import { cleanupHome, deadPid, freshHome, writeUnparseableLock } from "./helpers.ts";
 
 function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {

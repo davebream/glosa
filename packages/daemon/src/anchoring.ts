@@ -183,7 +183,10 @@ function sanitizeCtx(input: unknown): ResolveCtx {
     typeof pf.adapter === "string" && typeof pf.component === "string"
       ? { adapter: pf.adapter, component: pf.component }
       : undefined;
-  return { ...(captured ? { capturedRenderedSha256: captured } : {}), ...(pipelineFeedback ? { pipelineFeedback } : {}) };
+  return {
+    ...(captured ? { capturedRenderedSha256: captured } : {}),
+    ...(pipelineFeedback ? { pipelineFeedback } : {}),
+  };
 }
 
 // --- fixed normalization primitives (A5 §F10, shared verbatim by Class R and Class F) ---
@@ -332,7 +335,13 @@ type SearchResult =
   | { status: "none" }
   | { status: "ambiguous" };
 
-function searchExact(sourceLines: string[], lineStarts: number[], l0: number, l1: number, quoteExact: string): SearchResult {
+function searchExact(
+  sourceLines: string[],
+  lineStarts: number[],
+  l0: number,
+  l1: number,
+  quoteExact: string,
+): SearchResult {
   if (l0 > l1 || l0 < 0 || l1 >= sourceLines.length) return { status: "none" };
   const text = sourceLines.slice(l0, l1 + 1).join("\n");
   const absOffset = lineStarts[l0] ?? 0;
@@ -340,10 +349,22 @@ function searchExact(sourceLines: string[], lineStarts: number[], l0: number, l1
   if (offsets.length === 0) return { status: "none" };
   if (offsets.length > 1) return { status: "ambiguous" };
   const start = offsets[0]!;
-  return { status: "unique", absStart: absOffset + start, absEnd: absOffset + start + quoteExact.length, matchedText: quoteExact, confidence: "exact" };
+  return {
+    status: "unique",
+    absStart: absOffset + start,
+    absEnd: absOffset + start + quoteExact.length,
+    matchedText: quoteExact,
+    confidence: "exact",
+  };
 }
 
-function searchNormalized(sourceLines: string[], lineStarts: number[], l0: number, l1: number, quoteExact: string): SearchResult {
+function searchNormalized(
+  sourceLines: string[],
+  lineStarts: number[],
+  l0: number,
+  l1: number,
+  quoteExact: string,
+): SearchResult {
   if (l0 > l1 || l0 < 0 || l1 >= sourceLines.length) return { status: "none" };
   const text = sourceLines.slice(l0, l1 + 1).join("\n");
   const absOffset = lineStarts[l0] ?? 0;
@@ -456,7 +477,10 @@ function decodeEntities(s: string): string {
 /** The largest-offset marker at or before `pos` — i.e. the innermost/most-specific stamped block
  * that contains it (markers are appended in document order by `extractTextAndBlocks`, so they are
  * already offset-ascending). `undefined` means `pos` precedes every stamped block. */
-function markerAt(markers: { offset: number; line: number }[], pos: number): { offset: number; line: number } | undefined {
+function markerAt(
+  markers: { offset: number; line: number }[],
+  pos: number,
+): { offset: number; line: number } | undefined {
   let chosen: { offset: number; line: number } | undefined;
   for (const marker of markers) {
     if (marker.offset <= pos) chosen = marker;
@@ -511,7 +535,8 @@ function scopeForR(artifact: ClassRArtifact, target: AnchoringTarget, ctx: Resol
 
   // A5 §F10: "a position is trusted ONLY while rendered_sha256 still matches" — no captured hash
   // to compare against is treated the same as a stale one (no proof, no trust).
-  const hashFresh = ctx.capturedRenderedSha256 !== undefined && ctx.capturedRenderedSha256 === renderedSha256Hex(artifact.renderedHtml);
+  const hashFresh =
+    ctx.capturedRenderedSha256 !== undefined && ctx.capturedRenderedSha256 === renderedSha256Hex(artifact.renderedHtml);
   if (!hashFresh) return wholeDoc;
 
   const { text, markers } = extractTextAndBlocks(artifact.renderedHtml);
@@ -555,7 +580,8 @@ function resolveClassR(annotation: AnchoringAnnotation, artifact: ClassRArtifact
   // No stamped block was ever in play (no position, or a stale rendered hash) — scope was already
   // the whole document, so exactRes/normRes above already searched it in full. Class R NEVER
   // returns pipeline_feedback: it has no declared transform to route feedback through.
-  const reason = exactRes.status === "ambiguous" || normRes.status === "ambiguous" ? "ambiguous" : "hash_mismatch_no_match";
+  const reason =
+    exactRes.status === "ambiguous" || normRes.status === "ambiguous" ? "ambiguous" : "hash_mismatch_no_match";
   return { kind: "orphaned", reason };
 }
 
@@ -627,7 +653,11 @@ export function resolve(annotationInput: unknown, artifactInput: unknown, ctxInp
   try {
     const artifactRoot = asRecord(artifactInput);
     const cls = artifactRoot.class;
-    if ((cls !== "R" && cls !== "F") || typeof artifactRoot.path !== "string" || typeof artifactRoot.source !== "string") {
+    if (
+      (cls !== "R" && cls !== "F") ||
+      typeof artifactRoot.path !== "string" ||
+      typeof artifactRoot.source !== "string"
+    ) {
       return { kind: "orphaned", reason: "no_source_map" };
     }
     const annotation = sanitizeAnnotation(annotationInput);
@@ -635,12 +665,22 @@ export function resolve(annotationInput: unknown, artifactInput: unknown, ctxInp
 
     if (cls === "R") {
       if (typeof artifactRoot.renderedHtml !== "string") return { kind: "orphaned", reason: "no_source_map" };
-      const artifact: ClassRArtifact = { class: "R", path: artifactRoot.path, source: artifactRoot.source, renderedHtml: artifactRoot.renderedHtml };
+      const artifact: ClassRArtifact = {
+        class: "R",
+        path: artifactRoot.path,
+        source: artifactRoot.source,
+        renderedHtml: artifactRoot.renderedHtml,
+      };
       return resolveClassR(annotation, artifact, ctx);
     }
 
     const manifest = artifactRoot.manifest as ChunkManifest | undefined;
-    const artifact: ClassFArtifact = { class: "F", path: artifactRoot.path, source: artifactRoot.source, ...(manifest ? { manifest } : {}) };
+    const artifact: ClassFArtifact = {
+      class: "F",
+      path: artifactRoot.path,
+      source: artifactRoot.source,
+      ...(manifest ? { manifest } : {}),
+    };
     return resolveClassF(annotation, artifact, ctx);
   } catch {
     return { kind: "orphaned", reason: "no_source_map" };

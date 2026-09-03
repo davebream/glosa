@@ -6,14 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": [
-      "**",
-      "!.agents",
-      "!.claude",
-      "!.context",
-      "!.serena",
-      "!packages/spa/src/vendor"
-    ]
+    "includes": ["**", "!.agents", "!.claude", "!.context", "!.serena", "!packages/spa/src/vendor"]
   },
   "formatter": {
     "enabled": true,

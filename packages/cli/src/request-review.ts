@@ -9,17 +9,11 @@
 // (`done|expired|stale`, A5 §F23) and reports the verdict in `data`; without it, returns
 // immediately after creating the entry. Review requests default to action `review`; the terminal
 // journal detail carries the structured outcome and optional response.
-import {
-  type ApiError,
-  type AttentionVerdict,
-  type EntryStatus,
-  type GlosaApiClient,
-  isApiError,
-} from "./api-client.ts";
+import { type AttentionVerdict, type EntryStatus, type GlosaApiClient, isApiError } from "./api-client.ts";
 import {
   type CommandEnvelope,
-  EXIT_CODES,
   daemonUnreachableEnvelope,
+  EXIT_CODES,
   printJsonEnvelope,
   usageEnvelope,
 } from "./envelope.ts";
@@ -82,16 +76,17 @@ export async function runRequestReview(
   } catch (err) {
     if (isApiError(err)) {
       const conflict = err.status === 409;
+      const notAWorkspace = err.status === 404;
       return {
         ok: false,
         command: "request-review",
-        exitCode: conflict ? EXIT_CODES.ENTRY_ERROR : EXIT_CODES.NOT_A_WORKSPACE,
+        exitCode: conflict ? EXIT_CODES.ENTRY_ERROR : notAWorkspace ? EXIT_CODES.NOT_A_WORKSPACE : EXIT_CODES.INTERNAL,
         data: {},
         warnings: [],
         error: {
-          code: conflict ? "approval-conflict" : "not-a-workspace",
-          kind: conflict ? "conflict" : "not_a_workspace",
-          message: (err as ApiError).problem?.title ?? err.message,
+          code: conflict ? "approval-conflict" : notAWorkspace ? "not-a-workspace" : "request-review-failed",
+          kind: conflict ? "conflict" : notAWorkspace ? "not_a_workspace" : "internal",
+          message: err.problem?.title ?? err.message,
         },
       };
     }

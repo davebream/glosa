@@ -39,7 +39,11 @@ describe("glosa resolve", () => {
   });
 
   test("daemon unreachable -> exit 3", async () => {
-    const deps = { createClient: async () => { throw daemonUnreachable(); } };
+    const deps = {
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    };
     const result = await runResolve({ dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1" }, deps);
     expect(result.exitCode).toBe(3);
     expect(result.error?.kind).toBe("daemon_unreachable");
@@ -48,7 +52,10 @@ describe("glosa resolve", () => {
   test("unknown id (no matching apply-begin lease) -> exit 8 (entry_error)", async () => {
     const client = new FakeGlosaApiClient();
     client.resolveEntryImpl = async () => {
-      throw apiError(409, { type: "https://glosa.local/errors/conflict", title: "no matching apply-begin lease for this entry/session" });
+      throw apiError(409, {
+        type: "https://glosa.local/errors/conflict",
+        title: "no matching apply-begin lease for this entry/session",
+      });
     };
     const { deps } = makeClientDeps(client);
     const result = await runResolve({ dir: "/repo", id: "inb-unknown", outcome: "applied", session: "sess-1" }, deps);
@@ -56,12 +63,40 @@ describe("glosa resolve", () => {
     expect(result.error?.kind).toBe("entry_error");
   });
 
+  // A4 §F05: an apply-lease past its 15-minute TTL can no longer prove its interval, so the
+  // daemon refuses the resolve (409 `conflict`) instead of attributing unproven drift. A6 §F26
+  // keeps `resolve`'s exit set at 0;3;8;2 — so this is exit 8 like every other entry failure,
+  // NOT apply-begin's exit 12. What has to survive the trip is the recovery step: `runResolve`
+  // reports `problem.title` and never reads `detail`, so the title is where it must live.
+  test("expired apply-lease -> exit 8 (entry_error) and the message still tells the operator to re-run apply-begin", async () => {
+    const client = new FakeGlosaApiClient();
+    client.resolveEntryImpl = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/conflict",
+        title: "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
+        detail: "past its TTL the lease could no longer prove its pre..post interval",
+      });
+    };
+    const { deps } = makeClientDeps(client);
+    const result = await runResolve({ dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(8);
+    expect(result.error?.kind).toBe("entry_error");
+    expect(result.error?.message).toContain("expired");
+    expect(result.error?.message).toContain("apply-begin");
+  });
+
   test("applied: calls resolveEntry with the note threaded through, returns exit 0", async () => {
     const client = new FakeGlosaApiClient();
     const { deps } = makeClientDeps(client);
-    const result = await runResolve({ dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1", note: "looks good" }, deps);
+    const result = await runResolve(
+      { dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1", note: "looks good" },
+      deps,
+    );
     expect(result.exitCode).toBe(0);
-    expect(client.calls[0]).toMatchObject({ method: "resolveEntry", args: ["/repo", "inb-1", "applied", "sess-1", "looks good"] });
+    expect(client.calls[0]).toMatchObject({
+      method: "resolveEntry",
+      args: ["/repo", "inb-1", "applied", "sess-1", "looks good"],
+    });
   });
 
   test("deferred: still calls resolveEntry (the daemon route decides not to touch the lease) and succeeds", async () => {
@@ -79,7 +114,9 @@ describe("glosa resolve", () => {
     const result = await runResolve({ dir: "/repo", id: "inb-1", outcome: "applied", session: "sess-1" }, deps);
     const out = captureStdout(() => printResolveResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "resolve", exit_code: 0 });
   });
 });
@@ -98,7 +135,11 @@ describe("glosa apply-begin", () => {
   });
 
   test("daemon unreachable -> exit 3", async () => {
-    const deps: ResolveDeps = { createClient: async () => { throw daemonUnreachable(); } };
+    const deps: ResolveDeps = {
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    };
     const result = await runApplyBegin({ dir: "/repo", id: "inb-1", session: "sess-1" }, deps);
     expect(result.exitCode).toBe(3);
   });
@@ -106,7 +147,10 @@ describe("glosa apply-begin", () => {
   test("already-leased entry -> exit 12 (lease_conflict)", async () => {
     const client = new FakeGlosaApiClient();
     client.applyBeginImpl = async () => {
-      throw apiError(409, { type: "https://glosa.local/errors/lease-conflict", title: "an apply-lease is already active for this workspace" });
+      throw apiError(409, {
+        type: "https://glosa.local/errors/lease-conflict",
+        title: "an apply-lease is already active for this workspace",
+      });
     };
     const { deps } = makeClientDeps(client);
     const result = await runApplyBegin({ dir: "/repo", id: "inb-1", session: "sess-1" }, deps);
@@ -129,7 +173,9 @@ describe("glosa apply-begin", () => {
     const result = await runApplyBegin({ dir: "/repo", id: "inb-1", session: "sess-1" }, deps);
     const out = captureStdout(() => printApplyBeginResult(result, true));
     const parsed = JSON.parse(out);
-    expect(Object.keys(parsed).sort()).toEqual(["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort());
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
+    );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "apply-begin", exit_code: 0 });
   });
 });

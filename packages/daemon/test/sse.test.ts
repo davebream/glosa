@@ -4,7 +4,7 @@
 // deliberately splitting a single frame across an arbitrary chunk boundary — the whole reason
 // this can't be tested with a plain `String.split`.
 import { describe, expect, test } from "bun:test";
-import { encodeSseFrame, parseSseStream } from "../src/sse.ts";
+import { encodeSseFrame, parseSseStream } from "../src/transport/sse.ts";
 
 /** Turns an array of raw string chunks into a ReadableStreamDefaultReader<Uint8Array>, exactly
  * how a real fetch-streaming body would hand bytes to the client parser — chunk boundaries don't

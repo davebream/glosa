@@ -11,7 +11,7 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
   temp→fsync→rename), `<bus-path>/journal.quarantine.ndjson`, and redirected declarative
   metadata/config. A normal local directory uses `<work-tree>/.glosa`; redirected state uses
   `~/.glosa/state/<full-sha256-registration-id>`. Moving the bus does not alter journal authority.
-- Event envelope: `{v, event_id:ULID, at, entry, event, by:daemon|watcher|session:<id>|human, idem?, detail}`. Types incl. entry_created, delivery_attempt, transition_committed, attention_committed, baseline_checkpoint, auto_checkpoint, apply_begin/end/expired, journal_tail_truncated, line_quarantined, git_index_lock_reclaimed, offline_catchup, adoption_sealed, lineage_attached, entry_adopted.
+- Event envelope: `{v, event_id:ULID, at, entry, event, by:daemon|watcher|session:<id>|human, idem?, detail}`. Types incl. entry_created, delivery_attempt, transition_committed, attention_committed, baseline_checkpoint, auto_checkpoint, apply_begin/end/expired, journal_tail_truncated, line_quarantined, git_index_lock_reclaimed, offline_catchup, adoption_sealed, lineage_attached, entry_adopted. New attention-request `entry_created.detail` additively mirrors immutable approval identity as `{kind:"attention_request",approval_mode:boolean,target_path?}`; `target_path` is present when `approval_mode:true`, and these reserved identity keys always come from the immutable payload rather than caller-supplied event detail. Replay retains these facts in derived state. Legacy events without them remain valid and use the immutable inbox payload when approval uniqueness must be checked.
 - MAX_EVENT_BYTES = 65536 incl trailing `\n`. **Diffs never in journal** — live in shadow git, referenced by sha → events stay small. Oversize serialization → reject `EVENT_TOO_LARGE`, never truncate into journal.
 - Write: single `openSync(path,"a")` fd held at start; offset-advancing loop tolerating short writes; per-workspace mutex = single writer so records never interleave.
 - fsync: `fsyncSync` BEFORE returning success for lifecycle-critical events (entry_created, transition_committed, attention_committed, apply_begin/end, baseline_checkpoint). High-freq delivery_attempt may batch-flush (loss = redundant re-nudge only). Dir fsync once at file creation.
@@ -68,8 +68,11 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 
 ## Loose-file adoption — seal and link
 - When a directory workspace opens over contained loose-file registrations, the global index records
-  one durable adoption plan. The daemon holds every source registration mutex in stable lexical
-  order, preflights every apply lease, and only then appends lifecycle-critical
+  one durable adoption plan. A daemon-scoped mutex keyed by target registration ID holds the complete
+  seal/build/publish transaction, so parallel opens serialize before either can clean or write the
+  unpublished staging bus. Ordinary routes for that adopting target fail closed with
+  `409 workspace-adopting`. The daemon holds every source registration mutex in stable lexical order,
+  preflights every apply lease, and only then appends lifecycle-critical
   `adoption_sealed{adoption_id,target_registration_id}` events. Any live lease or existing target
   state fails closed before a source is sealed.
 - A sealed source is permanently read-only historical evidence: its immutable inbox, journal, and

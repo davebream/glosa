@@ -4,11 +4,18 @@
 // LOGIC itself is covered exhaustively in init.test.ts — this only proves `index.ts` calls it
 // correctly and reports the right process exit code.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { promptInitAgents, run } from "../src/index.ts";
+import { REAL_GLOSA_HOME, tempGlosaHome, useTempHome } from "./home.ts";
+
+// Most tests intentionally exercise `run(["init", …])`'s production defaults, whose user-scope
+// manifest is `$GLOSA_HOME ?? ~/.glosa`. Redirect GLOSA_HOME so those cases never consult the
+// developer's own install state. The provider-detection cases below separately inject both home
+// roots per invocation because `os.homedir()` is process-cached.
+useTempHome();
 
 let dirs: string[] = [];
 /** A `.git` marker makes this fixture read as a scratch git repo rather than a bare temp
@@ -19,6 +26,19 @@ function freshDir(): string {
   mkdirSync(join(d, ".git"));
   dirs.push(d);
   return d;
+}
+
+function freshProviderHome(provider: "claude-code" | "codex"): string {
+  const home = mkdtempSync(join(tmpdir(), "glosa-cli-provider-home-"));
+  dirs.push(home);
+  if (provider === "claude-code") {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+  } else {
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), "# existing provider config\n");
+  }
+  return home;
 }
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -109,9 +129,66 @@ describe("run(['init', ...])", () => {
 
   test("ambiguous --json invocation exits 2 with the exact agent hint", async () => {
     const dir = freshDir();
-    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--json"]));
+    const homeDir = freshProviderHome("claude-code");
+    mkdirSync(join(homeDir, ".codex"), { recursive: true });
+    writeFileSync(join(homeDir, ".codex", "config.toml"), "# existing provider config\n");
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--json"], {
+        init: { homeDir, glosaHomeDir: join(homeDir, ".glosa"), which: () => null },
+      }),
+    );
     expect(exitCode).toBe(2);
     expect(JSON.parse(out).error.message).toContain("pass --agent claude-code, --agent codex, or --agent all");
+  });
+
+  test("public run auto-detects only Claude Code from an isolated synthetic home", async () => {
+    const dir = freshDir();
+    const homeDir = freshProviderHome("claude-code");
+    const probedExecutables: string[] = [];
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--scope", "user", "--print", "--json"], {
+        init: {
+          homeDir,
+          glosaHomeDir: join(homeDir, ".glosa"),
+          which(executable) {
+            probedExecutables.push(executable);
+            return null;
+          },
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(out).data;
+    expect(data.providers).toEqual(["claude-code"]);
+    const files = Object.values(data.files as Record<string, { path: string }>);
+    expect(files.every((file) => file.path.startsWith(`${homeDir}/`))).toBe(true);
+    expect(probedExecutables.sort()).toEqual(["claude", "codex"]);
+  });
+
+  test("public run auto-detects only Codex from a different isolated synthetic home", async () => {
+    const dir = freshDir();
+    const homeDir = freshProviderHome("codex");
+    const probedExecutables: string[] = [];
+    const { exitCode, out } = await captureStdout(() =>
+      run(["init", dir, "--scope", "user", "--print", "--json"], {
+        init: {
+          homeDir,
+          glosaHomeDir: join(homeDir, ".glosa"),
+          which(executable) {
+            probedExecutables.push(executable);
+            return null;
+          },
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(out).data;
+    expect(data.providers).toEqual(["codex"]);
+    const files = Object.values(data.files as Record<string, { path: string }>);
+    expect(files.every((file) => file.path.startsWith(`${homeDir}/`))).toBe(true);
+    expect(probedExecutables.sort()).toEqual(["claude", "codex"]);
   });
 
   test("invalid scope is a usage error", async () => {
@@ -141,6 +218,69 @@ describe("run(['init', ...])", () => {
     expect(exitCode).toBe(0);
     expect(out).toContain("already up to date");
     expect(out.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/** A minimal user-scope ownership manifest: `readManifest` only requires `version: 2`, and the
+ * cross-scope guard only asks whether `providers[<id>]` is present. */
+function seedUserScopeInstall(provider: "claude-code" | "codex"): void {
+  writeFileSync(
+    join(tempGlosaHome(), "init-manifest.json"),
+    `${JSON.stringify(
+      {
+        version: 2,
+        scope: "user",
+        glosa_bin: { command: "/usr/bin/false", args: [], mode: "path" },
+        providers: { [provider]: { files: {} } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+// The exit-2 refusal below is CORRECT behavior (A6 §F26): a provider installed at user scope AND
+// workspace scope runs every hook twice. It was previously only reachable through `runScopedInit`
+// directly (packages/cli/test/init.test.ts), never through the CLI boundary, which is why real
+// `~/.glosa` state leaking into `run(["init", …])` looked like a CLI bug rather than the guard
+// doing its job.
+describe("glosa init — cross-scope duplicate guard through the CLI (A6 §F26)", () => {
+  test("a user-scope install of the same provider refuses the workspace init with exit 2", async () => {
+    const dir = freshDir();
+    seedUserScopeInstall("claude-code");
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(2);
+    const parsed = JSON.parse(out);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.code).toBe("cross-scope-duplicate");
+    expect(parsed.error.kind).toBe("usage");
+    expect(parsed.error.message).toBe(
+      "claude-code is already installed at user scope; workspace scope would run duplicate hooks",
+    );
+    expect(parsed.error.hint).toBe(
+      "run `glosa init --scope user --agent claude-code --uninstall`, then " +
+        `\`glosa init ${dir} --scope workspace --agent claude-code\``,
+    );
+    // The refusal is total — nothing is half-written before the guard fires.
+    expect(existsSync(join(dir, ".claude", "settings.json"))).toBe(false);
+    expect(existsSync(join(dir, ".glosa", "init-manifest.json"))).toBe(false);
+  });
+
+  test("an empty user scope lets the same provider through — the real ~/.glosa is never consulted", async () => {
+    const dir = freshDir();
+    // If this were reading the real home, a developer with a user-scope install of either provider
+    // would get exit 2 here. Pinning it makes the outcome a property of the fixture, not the box.
+    expect(tempGlosaHome()).not.toBe(REAL_GLOSA_HOME);
+    const { exitCode } = await captureStdout(() => run(["init", dir, "--agent", "codex", "--json"]));
+    expect(exitCode).toBe(0);
+  });
+
+  test("a user-scope install of a DIFFERENT provider does not block this one", async () => {
+    const dir = freshDir();
+    seedUserScopeInstall("codex");
+    const { exitCode, out } = await captureStdout(() => run(["init", dir, "--agent", "claude-code", "--json"]));
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(out).data.providers).toEqual(["claude-code"]);
   });
 });
 

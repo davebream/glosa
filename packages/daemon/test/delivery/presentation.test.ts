@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import {
-  buildDeliveryPresentation,
-  MAX_ENTRY_PRESENTATION_BYTES,
-  utf8Bytes,
-} from "../../src/delivery/presentation.ts";
+import { buildDeliveryPresentation, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../../src/delivery/presentation.ts";
 
 function annotation(body: string) {
   return {
@@ -62,7 +58,7 @@ describe("actionable inbox presentations", () => {
     expect(result?.text).toContain("glosa annotation inb-a");
     expect(result?.text).toContain("artifact: drafts/week.md");
     expect(result?.text).toContain("Make the connection explicit.");
-    expect(result?.text).toContain('intent: content');
+    expect(result?.text).toContain("intent: content");
     expect(result?.text).toContain('"exact":"grace upon grace"');
     expect(result?.text).toContain('"start":140');
     expect(result?.text).toContain('"kind":"source_range"');
@@ -115,7 +111,9 @@ describe("actionable inbox presentations", () => {
         checkpoint_before: "abc123",
         checkpoint_after: "def456",
         artifact_body: secretFullBody,
-        files: [{ path: "notes.md", diff: `diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n${hunks}` }],
+        files: [
+          { path: "notes.md", diff: `diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n${hunks}` },
+        ],
       },
       { status: "pending" },
     );
@@ -124,6 +122,8 @@ describe("actionable inbox presentations", () => {
     expect(result?.text).not.toContain(secretFullBody);
     expect(utf8Bytes(result?.text ?? "")).toBeLessThanOrEqual(MAX_ENTRY_PRESENTATION_BYTES);
     expect(result?.truncation?.omitted_hunks).toBeGreaterThan(0);
-    expect(((result?.text ?? "").match(/^@@ /gm) ?? []).length).toBe((result?.detail?.files as unknown[]).length);
+    expect(((result?.text ?? "").match(/^@@ /gm) ?? []).length).toBe(
+      (result?.detail?.files as unknown[] | undefined)?.length ?? -1,
+    );
   });
 });

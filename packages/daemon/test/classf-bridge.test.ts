@@ -6,7 +6,7 @@
 // nonce, never leaks it unescaped into somewhere unsafe, degrades gracefully with no `</body>`)
 // is covered here too; classf-serve.test.ts covers where it gets SPLICED into a real document.
 import { describe, expect, test } from "bun:test";
-import { bridgeShouldAcceptInit, buildBridgeInjection } from "../src/classf-bridge.ts";
+import { bridgeShouldAcceptInit, buildBridgeInjection } from "../src/security/classf-bridge.ts";
 
 describe("bridgeShouldAcceptInit — the bridge's one-time nonce gate (A3 §2)", () => {
   const NONCE = "a".repeat(64);

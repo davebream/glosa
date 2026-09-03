@@ -15,13 +15,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../../src/http.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../../src/registry/session-registry.ts";
-import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { canonicalize } from "../../src/registry/slug.ts";
 import { AdapterRegistry } from "../../src/adapters/interface.ts";
+import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
+import { SessionRegistry } from "../../src/registry/session-registry.ts";
+import { canonicalize } from "../../src/registry/slug.ts";
+import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
 import { createFixtureAdapter, FIXTURE_MARKER_FILE } from "../fixtures/adapter/fixture-adapter.ts";
 
 const TOKEN = "adapter-topology-test-token-0123456789";
@@ -119,7 +119,12 @@ describe("adapter-topology (T8) — session cwd != adapter's real workspace root
     fetchFn = createApiFetch(ctx);
 
     const res = await fetchFn(
-      req("/api/sessions/register", { session_id: "sess-2", provider: "claude-code", cwd: unrelatedDir, source: "startup" }),
+      req("/api/sessions/register", {
+        session_id: "sess-2",
+        provider: "claude-code",
+        cwd: unrelatedDir,
+        source: "startup",
+      }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { workspace: string };
@@ -141,7 +146,12 @@ describe("adapter-topology (T8) — session cwd != adapter's real workspace root
     fetchFn = createApiFetch(ctx);
 
     const res = await fetchFn(
-      req("/api/sessions/register", { session_id: "sess-3", provider: "claude-code", cwd: unrelatedDir, source: "startup" }),
+      req("/api/sessions/register", {
+        session_id: "sess-3",
+        provider: "claude-code",
+        cwd: unrelatedDir,
+        source: "startup",
+      }),
     );
     const body = (await res.json()) as { workspace: string };
 

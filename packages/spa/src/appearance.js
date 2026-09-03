@@ -10,8 +10,7 @@ const ICONS = {
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="10.5" rx="1.5"/><path d="M7 17h6M10 13.5V17"/></svg>',
   light:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.25"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6 16 16M16 4l-1.4 1.4M5.4 14.6 4 16"/></svg>',
-  dark:
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.8 12.3A7 7 0 0 1 7.7 3.2 7 7 0 1 0 16.8 12.3Z"/></svg>',
+  dark: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.8 12.3A7 7 0 0 1 7.7 3.2 7 7 0 1 0 16.8 12.3Z"/></svg>',
   check: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.2 10.2 3.1 3.1 6.5-6.6"/></svg>',
 };
 
@@ -57,9 +56,11 @@ export function createAppearanceController({ root, storage, mediaQuery } = {}) {
       targetStorage = undefined;
     }
   }
-  const targetMedia = mediaQuery ?? (typeof window.matchMedia === "function"
-    ? window.matchMedia("(prefers-color-scheme: dark)")
-    : fallbackMediaQuery());
+  const targetMedia =
+    mediaQuery ??
+    (typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : fallbackMediaQuery());
   const listeners = new Set();
   let preference = readAppearance(targetStorage);
 
@@ -177,11 +178,12 @@ export function mountAppearanceControl(container, controller, { overlayHost = co
     event.preventDefault();
     const options = [...rows.values()];
     const current = Math.max(0, options.indexOf(document.activeElement));
-    const next = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? options.length - 1
-        : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? options.length - 1
+          : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
     options[next].focus();
   });
 

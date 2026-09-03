@@ -46,7 +46,6 @@ describe("resolveDayBoundary — DST day-boundary (A6 §F31 acceptance case)", (
     const spanHours = (new Date(today).getTime() - new Date(yesterday).getTime()) / 3_600_000;
     expect(spanHours).toBe(24);
   });
-
 });
 
 describe("resolveSince — token classification (A6 §F31)", () => {

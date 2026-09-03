@@ -8,7 +8,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceBus, recordDelivery, type DeliverableEntry, type DeliveryAttemptRecord, type SessionBinding } from "@glosa/daemon";
+import {
+  WorkspaceBus,
+  recordDelivery,
+  type DeliverableEntry,
+  type DeliveryAttemptRecord,
+  type SessionBinding,
+} from "@glosa/daemon";
 import { ClaudeCodeProvider } from "../src/provider.ts";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };

@@ -213,6 +213,8 @@ export const lifecycleReducer: Reducer = (state, event) => {
         status: initialStatusFor(kind),
         kind,
         deliveryAttempts: [] as DeliveryAttemptRecord[],
+        ...(typeof event.detail?.approval_mode === "boolean" ? { approval_mode: event.detail.approval_mode } : {}),
+        ...(typeof event.detail?.target_path === "string" ? { target_path: event.detail.target_path } : {}),
       };
       return;
     }

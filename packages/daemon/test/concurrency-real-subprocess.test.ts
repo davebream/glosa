@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenPath } from "../src/token.ts";
+import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "concurrency-real-subprocess-test-token-0123456789";
@@ -77,7 +77,9 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     // Genuinely concurrent: all N requests are fired in the same microtask, each traveling over
     // its own real TCP connection to the one live daemon process — not sequential awaits.
     const responses = await Promise.all(
-      sessions.map((session) => fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session }))),
+      sessions.map((session) =>
+        fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session })),
+      ),
     );
     const bodies = await Promise.all(responses.map((r) => r.json()));
 

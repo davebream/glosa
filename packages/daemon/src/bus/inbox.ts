@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { fsyncContainingDir, writeAllSync } from "./io.ts";
 import { inboxDir, inboxEntryPath } from "./paths.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
 
 export interface InboxEntryExistsError extends Error {
   code: "EEXIST";
@@ -44,7 +45,12 @@ function inboxEntryExistsError(id: string): InboxEntryExistsError {
  * whose rename/link has been durably observed — never silently un-happening. Without this fsync,
  * a power loss could make the new directory entry vanish AFTER `entry_created` was already
  * fsynced to the journal, producing the one gap reconcile has no recovery path for. */
-export function writeInboxEntryOnce(workspaceRoot: WorkspaceTarget, id: string, payload: unknown): void {
+export function writeInboxEntryOnce(
+  workspaceRoot: WorkspaceTarget,
+  id: string,
+  payload: unknown,
+  writeCheckpoint?: WorkspaceBusWriteCheckpointObserver,
+): void {
   const dir = inboxDir(workspaceRoot);
   mkdirSync(dir, { recursive: true });
   const finalPath = inboxEntryPath(workspaceRoot, id);
@@ -55,12 +61,14 @@ export function writeInboxEntryOnce(workspaceRoot: WorkspaceTarget, id: string, 
   try {
     writeAllSync(fd, data);
     fsyncSync(fd);
+    writeCheckpoint?.({ name: "inbox:temp-fsynced" });
   } finally {
     closeSync(fd);
   }
 
   try {
     linkSync(tempPath, finalPath);
+    writeCheckpoint?.({ name: "inbox:linked" });
   } catch (err) {
     try {
       unlinkSync(tempPath); // don't leave scaffolding behind on a rejected write
@@ -72,6 +80,7 @@ export function writeInboxEntryOnce(workspaceRoot: WorkspaceTarget, id: string, 
   }
   unlinkSync(tempPath); // the link gave us the final name — the temp name is redundant now
   fsyncContainingDir(finalPath);
+  writeCheckpoint?.({ name: "inbox:published" });
 }
 
 /** Returns the parsed entry, or `null` if it's missing or unparseable (never throws — mirrors

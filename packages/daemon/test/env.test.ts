@@ -4,10 +4,11 @@
 // Bun.spawn round-trip proves the scrub survives actually handing the env to the OS — Bun.spawn
 // *replaces* the child's env with whatever object you pass, it doesn't merge, so the pure test
 // alone wouldn't catch a caller accidentally passing the wrong object through.
+
+import { describe, expect, test } from "bun:test";
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
-import { buildChildEnv } from "../src/lifecycle.ts";
+import { buildChildEnv } from "../src/lifecycle/daemon.ts";
 import { cleanupHome, freshHome } from "./helpers.ts";
 
 describe("buildChildEnv", () => {

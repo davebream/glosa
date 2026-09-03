@@ -7,14 +7,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { APP_VERSION, BUILD_ID } from "../src/build-id.ts";
-import { ensureHomeDir, lockPath, logPath } from "../src/home.ts";
-import { ensureDaemon } from "../src/lifecycle.ts";
-import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lock.ts";
-import { PROTOCOL_VERSION } from "../src/protocol.ts";
+import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
+import { ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
+import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lifecycle/lock.ts";
+import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
 import {
   cleanupHome,
   deadPid,
+  ensureTestDaemon as ensureDaemon,
   freshHome,
   lockOf,
   randomPort,

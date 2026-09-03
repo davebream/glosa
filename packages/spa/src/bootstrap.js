@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// @ts-check
 // @glosa/spa — bootstrap module, served byte-for-byte as `/app/bootstrap.js` (packages/daemon/src/
 // http.ts's static allowlist). Hand-written plain JS, deliberately — glosa's "no build step"
 // invariant (docs/requirements.md) means no bundle/transpile step exists between this file and
@@ -8,7 +9,7 @@
 //
 // Kept in lockstep with the daemon's CONTRACT_VERSION (packages/daemon/src/contract.ts) — bump
 // alongside a real wire-contract change, not on every daemon restart.
-export const CONTRACT_VERSION = "1.5";
+export const CONTRACT_VERSION = "1.6";
 
 // P3.3 — the class-R viewer (workspace/artifact sidebar + Preview/Annotate/Edit). A static
 // top-level import, same as every other module here: no dynamic `import()` needed since this
@@ -33,10 +34,46 @@ const MESSAGES = {
 const SURFACES = new Set(["document", "workspace"]);
 const MODES = new Set(["preview", "annotate", "edit"]);
 
+/** @typedef {"document" | "workspace"} Surface */
+/** @typedef {"preview" | "annotate" | "edit"} Mode */
+/** @typedef {"down" | "unpaired" | "mismatch" | "ready"} Screen */
+/** @typedef {{ hash: string }} FragmentLocation */
+/** @typedef {FragmentLocation & { pathname: string, search: string }} AddressLocation */
+/** @typedef {Pick<Storage, "getItem" | "setItem">} TokenStorage */
+/** @typedef {Pick<History, "replaceState">} HistoryWriter */
+/** @typedef {{
+ *   slug: string | null,
+ *   artifact: string | null,
+ *   surface: Surface | null,
+ *   mode: Mode | null,
+ *   previewLock: boolean,
+ *   durableToken: string | null,
+ *   presentationToken: string | null,
+ * }} Route */
+/** @typedef {{
+ *   slug?: string | null,
+ *   artifact?: string | null,
+ *   surface?: Surface | null,
+ *   mode?: Mode | null,
+ *   previewLock?: boolean,
+ * }} Focus */
+/** @typedef {{ contract_version: unknown, paired?: boolean }} Handshake */
+/** @typedef {{ slug?: string, artifact?: string, mode?: Mode }} FocusChange */
+/** @typedef {{
+ *   initialSlug?: string,
+ *   initialArtifact?: string,
+ *   surface: Surface,
+ *   initialMode: Mode,
+ *   previewLock: boolean,
+ *   appearance: ReturnType<typeof createAppearanceController> | null,
+ *   onFocusChange: (next: FocusChange) => void,
+ * }} BootstrapMountOptions */
+
 /**
  * Read non-secret route state and pairing secrets from the URL fragment. MUST run before
  * `scrubSecrets` strips `t`/`p`. Absent params → nulls (plain workspace open behavior).
  */
+/** @param {FragmentLocation} loc @returns {Route} */
 export function readRoute(loc) {
   const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
   const params = new URLSearchParams(hash);
@@ -46,8 +83,8 @@ export function readRoute(loc) {
   return {
     slug: params.get("w"),
     artifact: params.get("a"),
-    surface: SURFACES.has(surfaceRaw) ? surfaceRaw : null,
-    mode: MODES.has(modeRaw) ? modeRaw : null,
+    surface: surfaceRaw !== null && SURFACES.has(surfaceRaw) ? /** @type {Surface} */ (surfaceRaw) : null,
+    mode: modeRaw !== null && MODES.has(modeRaw) ? /** @type {Mode} */ (modeRaw) : null,
     previewLock: lockRaw === "preview",
     durableToken: params.get("t"),
     presentationToken: params.get("p"),
@@ -64,6 +101,10 @@ export function readRoute(loc) {
  * When `p=` is present, the caller must redeem it first and pass the durable token as
  * `redeemedToken`; this function never performs network I/O itself.
  *
+ * @param {AddressLocation} loc
+ * @param {TokenStorage} storage
+ * @param {HistoryWriter} history
+ * @param {Route} [route]
  * @param {string | null} [redeemedToken]
  */
 export function scrubSecrets(loc, storage, history, route = readRoute(loc), redeemedToken = null) {
@@ -88,6 +129,7 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
  * `t=` / `p=`). That is the load-bearing guard: live-reflecting focus into the address bar can't
  * re-expose pairing secrets that bootstrap deliberately stripped (A3 §3/F24).
  */
+/** @param {Focus} [focus] */
 export function focusHash({ slug, artifact, surface, mode, previewLock } = {}) {
   const params = new URLSearchParams();
   if (slug) params.set("w", slug);
@@ -105,6 +147,7 @@ export function focusHash({ slug, artifact, surface, mode, previewLock } = {}) {
  * `pathname + search + focusHash(...)` from scratch (same shape scrub leaves behind), which is
  * why secrets can never reappear.
  */
+/** @param {AddressLocation} loc @param {HistoryWriter} history @param {Focus} focus */
 export function writeFocus(loc, history, focus) {
   history.replaceState(null, "", loc.pathname + loc.search + focusHash(focus));
 }
@@ -113,6 +156,7 @@ export function writeFocus(loc, history, focus) {
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
  * or null if the fetch failed/threw. `token` is whatever scrub returned.
  */
+/** @param {Handshake | null} handshake @param {string | null} token @returns {Screen} */
 export function selectScreen(handshake, token) {
   if (!handshake) return "down";
   const daemonMajor = String(handshake.contract_version).split(".")[0];
@@ -122,20 +166,24 @@ export function selectScreen(handshake, token) {
   return "ready";
 }
 
+/** @param {Screen} screen */
 function render(screen) {
-  const app = document.getElementById("app");
-  for (const el of app.querySelectorAll("[data-screen]")) {
+  const app = /** @type {HTMLElement} */ (document.getElementById("app"));
+  const message = screen === "ready" ? undefined : MESSAGES[screen];
+  const screens = /** @type {NodeListOf<HTMLElement>} */ (app.querySelectorAll("[data-screen]"));
+  for (const el of screens) {
     const isMatch = el.dataset.screen === screen;
     el.hidden = !isMatch;
-    if (isMatch && MESSAGES[screen]) {
+    if (isMatch && message) {
       // The failure screens carry static teaching markup in shell.html; the dynamic status line
       // goes into their [data-message] slot (textContent — never innerHTML).
       const slot = el.querySelector("[data-message]") ?? el;
-      slot.textContent = MESSAGES[screen];
+      slot.textContent = message;
     }
   }
 }
 
+/** @param {string} presentationToken @returns {Promise<string | null>} */
 async function redeemPresentationToken(presentationToken) {
   const res = await fetch("/api/presentation-token/redeem", {
     method: "POST",
@@ -162,6 +210,7 @@ async function main() {
   }
   const token = scrubSecrets(window.location, window.sessionStorage, window.history, route, redeemed);
 
+  /** @type {Handshake | null} */
   let handshake = null;
   try {
     const res = await fetch("/api/handshake");
@@ -182,7 +231,12 @@ async function main() {
     const surface = route.surface ?? "workspace";
     const initialMode = route.mode ?? "preview";
     const previewLock = Boolean(route.previewLock);
-    mountApp(readyEl, {
+    // viewer.js is intentionally not yet checked; adapt its incomplete inferred parameter type
+    // at this one import seam while keeping bootstrap's full call contract explicit.
+    const mountReadyApp = /** @type {(root: Element, options: BootstrapMountOptions) => unknown} */ (
+      /** @type {unknown} */ (mountApp)
+    );
+    mountReadyApp(/** @type {Element} */ (readyEl), {
       initialSlug: route.slug ?? undefined,
       initialArtifact: route.artifact ?? undefined,
       surface,

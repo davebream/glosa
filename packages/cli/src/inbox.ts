@@ -24,7 +24,9 @@ export async function runInboxGet(
 
 export function printInboxGetResult(result: InboxGetResult, json: boolean): void {
   if (json) {
-    process.stdout.write(`${JSON.stringify({ glosa_json: 1, ok: true, command: "inbox get", exit_code: 0, data: result.presentation })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ glosa_json: 1, ok: true, command: "inbox get", exit_code: 0, data: result.presentation })}\n`,
+    );
     return;
   }
   process.stdout.write(`${result.presentation.text}\n`);

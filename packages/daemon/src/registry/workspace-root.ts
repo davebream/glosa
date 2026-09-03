@@ -50,10 +50,7 @@ export function isGitRepoRoot(dir: string, exists: (path: string) => boolean = e
  *
  * `startDir` is expected to be a directory. Callers holding a FILE path pass `dirname(file)`.
  */
-export function enclosingGitRoot(
-  startDir: string,
-  exists: (path: string) => boolean = existsSync,
-): string | null {
+export function enclosingGitRoot(startDir: string, exists: (path: string) => boolean = existsSync): string | null {
   let current = realOrSelf(startDir);
   for (;;) {
     if (isGitRepoRoot(current, exists)) return current;

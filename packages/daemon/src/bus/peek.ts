@@ -18,6 +18,8 @@ import { createEmptyState, type DerivedState, foldEvents } from "./replay.ts";
 export interface JournalPeek {
   state: DerivedState;
   createdAt: Map<string, string>;
+  /** First entry_created/entry_adopted event position, independent of timestamp validity. */
+  entryOrder: Map<string, number>;
 }
 
 /** Fold a workspace's journal read-only (empty state when no journal exists). */
@@ -33,7 +35,8 @@ export function peekJournalAt(busDir: string): JournalPeek {
 
 function peekJournalFile(path: string): JournalPeek {
   const createdAt = new Map<string, string>();
-  if (!existsSync(path)) return { state: createEmptyState(), createdAt };
+  const entryOrder = new Map<string, number>();
+  if (!existsSync(path)) return { state: createEmptyState(), createdAt, entryOrder };
 
   const raw = readFileSync(path, "utf8");
   const events: JournalEvent[] = [];
@@ -50,11 +53,16 @@ function peekJournalFile(path: string): JournalPeek {
     if (p.v !== 1 || typeof p.event !== "string" || typeof p.event_id !== "string") continue;
     const event = p as unknown as JournalEvent;
     events.push(event);
-    if (event.event === "entry_created" && typeof event.entry === "string" && !createdAt.has(event.entry)) {
-      createdAt.set(event.entry, event.at);
+    if (
+      (event.event === "entry_created" || event.event === "entry_adopted") &&
+      typeof event.entry === "string" &&
+      !entryOrder.has(event.entry)
+    ) {
+      entryOrder.set(event.entry, events.length - 1);
+      if (typeof event.at === "string") createdAt.set(event.entry, event.at);
     }
   }
-  return { state: foldEvents(events, lifecycleReducer), createdAt };
+  return { state: foldEvents(events, lifecycleReducer), createdAt, entryOrder };
 }
 
 /** Journal-derived count of non-terminal (pending) entries — the "user work still parked here"

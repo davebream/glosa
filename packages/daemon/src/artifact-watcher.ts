@@ -132,13 +132,7 @@ export class ArtifactWatcherRegistry {
   }
 
   private findState(workspace: WorkspaceTarget): WatchState | undefined {
-    const direct = this.states.get(workspaceRegistrationId(workspace));
-    if (direct) return direct;
-    if (typeof workspace !== "string") return undefined;
-    return [...this.states.values()].find((state) => {
-      if (typeof state.workspace === "string") return state.workspace === workspace;
-      return state.workspace.canonical_path === workspace || state.workspace.worktree_path === workspace;
-    });
+    return this.states.get(workspaceRegistrationId(workspace));
   }
 
   private warnOnce(state: WatchState, code: string, message: string): void {

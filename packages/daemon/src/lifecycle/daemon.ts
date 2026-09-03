@@ -7,20 +7,28 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AdapterRegistry } from "./adapters/interface.ts";
-import { WorkspaceMetadataRegistry } from "./adapters/workspace-metadata.ts";
-import { resumePendingAdoptions } from "./adoption.ts";
-import { type AgentProvider, AgentProviderRegistry } from "./agent-provider/interface.ts";
-import { SessionPushRegistry } from "./agent-provider/push-registry.ts";
-import { ArtifactWatcherRegistry } from "./artifact-watcher.ts";
+import { AdapterRegistry } from "../adapters/interface.ts";
+import { WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
+import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
+import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
+import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
+import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
+import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
+import { createInitRunner } from "../init-runner.ts";
+import { SessionRegistry } from "../registry/session-registry.ts";
+import { WorkspaceIndex } from "../registry/workspace-index.ts";
+import { CapabilityStore } from "../security/capability.ts";
+import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
+import { PresentationTokenStore } from "../security/presentation-token.ts";
+import { TokenAuthority } from "../security/token.ts";
+import { createApiFetch, createClassFFetch } from "../transport/http.ts";
+import { internalErrorResponse } from "../transport/problem.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
-import { WorkspaceBusRegistry } from "./bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "./capability.ts";
-import { classFCspHeaders, spaCspHeaders } from "./csp.ts";
+import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
-import { createApiFetch, createClassFFetch } from "./http.ts";
-import { createInitRunner } from "./init-runner.ts";
 import {
   type DaemonLock,
   isPidAlive,
@@ -29,13 +37,7 @@ import {
   removeLockIfOwned,
   writeLockExclusive,
 } from "./lock.ts";
-import { PresentationTokenStore } from "./presentation-token.ts";
-import { internalErrorResponse } from "./problem.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
-import { SessionRegistry } from "./registry/session-registry.ts";
-import { WorkspaceIndex } from "./registry/workspace-index.ts";
-import { TokenAuthority } from "./token.ts";
-import type { WorkspaceTarget } from "./workspace.ts";
 
 const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
@@ -86,6 +88,7 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   pushRegistry: SessionPushRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
+  adoptionCoordinator: AdoptionCoordinator;
   sealAdoptionSources(
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -105,12 +108,14 @@ export interface BuildBackendOptions {
   gcGraceMs?: number;
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
+  /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
+  writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
   const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
-  const busRegistry = new WorkspaceBusRegistry();
+  const busRegistry = new WorkspaceBusRegistry({ writeCheckpoint: opts.writeCheckpoint });
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
@@ -118,6 +123,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     warn: (message) => log(home, message),
   });
+  const adoptionCoordinator = new AdoptionCoordinator();
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -138,8 +144,8 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   workspaceIndex.setLiveSessionPredicate((canonicalPath) => sessionRegistry.forWorkspace(canonicalPath).length > 0);
   // Hard-remove eviction: a workspace GC actually removes from the index must also drop its open
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
-  workspaceIndex.setOnHardRemove((canonicalPath) =>
-    Promise.all([busRegistry.evict(canonicalPath), artifactWatcherRegistry.evict(canonicalPath)]).then(() => {}),
+  workspaceIndex.setOnHardRemove((entry) =>
+    Promise.all([busRegistry.evict(entry), artifactWatcherRegistry.evict(entry)]).then(() => {}),
   );
 
   return {
@@ -151,6 +157,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     providerRegistry,
     pushRegistry,
     artifactWatcherRegistry,
+    adoptionCoordinator,
     sealAdoptionSources,
     closeWorkspaceResources,
   };
@@ -221,6 +228,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
     sealAdoptionSources: backend.sealAdoptionSources,
+    adoptionCoordinator: backend.adoptionCoordinator,
     capabilityStore,
     presentationTokenStore,
     adapterRegistry: backend.adapterRegistry,
@@ -247,12 +255,20 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // P1.2 had it. Class-F binds only once this process has already won the lock outright.
   await acquireLockOrExit(home, lockFile, record, server);
   mayRepairLock = true;
+  // This is the ONLY moment a glosa process may call itself the daemon: the O_EXCL CAS above has
+  // just proven it owns `<GLOSA_HOME>/daemon.lock`. `git/shadow.ts#reclaimIndexLock` needs that
+  // proof before it may unlink a stray `index.lock` (A4 §F21) — a process that never reaches this
+  // line has no identity to claim and therefore refuses to reclaim rather than risk deleting a
+  // lock a live `git` owns. `lockFile` is captured with the id so the proof is always read back
+  // from the home this process actually locked.
+  claimDaemonIdentity({ instanceId, lockFile });
 
   try {
     await resumePendingAdoptions(
       backend.workspaceIndex,
       (workspace) => backend.busRegistry.get(workspace),
       backend.sealAdoptionSources,
+      backend.adoptionCoordinator,
     );
   } catch (error) {
     // A sealed adoption is deliberately fail-closed for its own target, but must not prevent a
@@ -296,6 +312,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
     }
     removeLockIfOwned(lockFile, instanceId);
+    // Dropped AFTER the lock file is gone, so the two can never disagree in the direction that
+    // matters: an identity outliving its lock only makes `reclaimIndexLock` fail closed, whereas
+    // a lock outliving its identity would be a claim with nothing behind it.
+    releaseDaemonIdentity();
     log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
     process.exit(0);
   };
@@ -652,7 +672,7 @@ function spawnFailed(home: string, reason: string): Extract<EnsureDaemonResult, 
 }
 
 async function spawnAndWait(home: string, port: number): Promise<Extract<EnsureDaemonResult, { ok: false }> | null> {
-  const mainPath = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
+  const mainPath = fileURLToPath(new URL("../../../cli/src/main.ts", import.meta.url));
   const logFd = openSync(logPath(home), "a");
   const env = buildChildEnv(Bun.env, { home, port });
 

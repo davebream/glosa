@@ -112,10 +112,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
           onStatusCb = null;
         };
       },
-      openStream(
-        _slug: string,
-        { onEvent, onReconnect }: { onEvent: (frame: any) => void; onReconnect?: () => void },
-      ) {
+      openStream(_slug: string, { onEvent, onReconnect }: { onEvent: (frame: any) => void; onReconnect?: () => void }) {
         onJournalCb = onEvent;
         onReconnectCb = onReconnect ?? null;
         return () => {
@@ -124,11 +121,7 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
         };
       },
       getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
-      sendComposerMessage: async (
-        slug: string,
-        text: string,
-        options: { messageId: string; sessionHint?: string },
-      ) => {
+      sendComposerMessage: async (slug: string, text: string, options: { messageId: string; sessionHint?: string }) => {
         sent.push({ slug, text, options });
         return { accepted: true, delivered: true };
       },
@@ -213,7 +206,10 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     const da = fakeDataAccess();
 
     mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
-    da.emit({ event: "transcript", data: { type: "tool_use", tool_name: "Bash", tool_id: "t1", input: { command: "ls" }, id: "1" } });
+    da.emit({
+      event: "transcript",
+      data: { type: "tool_use", tool_name: "Bash", tool_id: "t1", input: { command: "ls" }, id: "1" },
+    });
 
     const details = root.querySelector(".glosa-conv-tool-use") as any;
     expect(details).not.toBeNull();
@@ -393,6 +389,121 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     expect(input.value).toBe("");
   });
 
+  test("a single eligible session remains selectable after a stale hint and retries the exact pending message", async () => {
+    const messageId = "123e4567-e89b-42d3-a456-426614174000";
+    globalThis.sessionStorage.setItem(
+      "glosa:conversation-pending:ws-1",
+      JSON.stringify({ id: messageId, text: "preserve this exact draft", sessionHint: "stale-session" }),
+    );
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const base = fakeDataAccess();
+    const sessionId = "session-<&\"'--🧪";
+    const provider = "<img src=x onerror=\"throw new Error('unsafe')\">";
+    const calls: Array<{ slug: string; text: string; options: { messageId: string; sessionHint?: string } }> = [];
+    const da = {
+      ...base,
+      getComposerMessageStatus: async () => ({
+        accepted: true,
+        delivered: false,
+        state: "failed",
+        delivery: { outcome: "failed" },
+      }),
+      sendComposerMessage: async (slug: string, text: string, options: { messageId: string; sessionHint?: string }) => {
+        calls.push({ slug, text, options: { ...options } });
+        if (calls.length === 1) {
+          throw {
+            problem: {
+              type: "https://glosa.dev/problems/session-selection-required",
+              candidates: [{ session_id: sessionId, provider, last_active_at: "2026-07-23T10:01:00Z" }],
+            },
+          };
+        }
+        if (options.sessionHint !== sessionId) throw new Error("wrong session selected");
+        return { accepted: true, delivered: true, state: "presented" };
+      },
+    };
+
+    mountConversationPane(root, { dataAccess: da, slug: "ws-1" });
+    const input = root.querySelector(".glosa-conv-composer-input") as InstanceType<
+      typeof dom.window.HTMLTextAreaElement
+    >;
+    const send = root.querySelector(".glosa-conv-composer-send") as InstanceType<typeof dom.window.HTMLButtonElement>;
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(input.value).toBe("preserve this exact draft");
+    expect(send.disabled).toBe(false);
+    send.click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const label = root.querySelector(".glosa-conv-session-picker") as InstanceType<typeof dom.window.HTMLLabelElement>;
+    const picker = label.querySelector("select") as InstanceType<typeof dom.window.HTMLSelectElement>;
+    const status = root.querySelector(".glosa-conv-status") as InstanceType<typeof dom.window.HTMLParagraphElement>;
+    expect(label.hidden).toBe(false);
+    expect(picker).toBeInstanceOf(dom.window.HTMLSelectElement);
+    expect(picker.getAttribute("aria-label")).toBe("Agent session");
+    expect(dom.document.activeElement).toBe(picker);
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toBe("Choose which live agent session should receive this message.");
+    expect(picker.options).toHaveLength(2);
+    const option = picker.options[1]!;
+    expect(option.value).toBe(sessionId);
+    expect(option.textContent).toContain(provider);
+    expect(label.querySelector("img")).toBeNull();
+    expect(calls[0]).toEqual({
+      slug: "ws-1",
+      text: "preserve this exact draft",
+      options: { messageId, sessionHint: "stale-session" },
+    });
+
+    picker.value = sessionId;
+    send.click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({
+      slug: "ws-1",
+      text: "preserve this exact draft",
+      options: { messageId, sessionHint: sessionId },
+    });
+    expect(input.value).toBe("");
+  });
+
+  test.each([
+    ["empty", []],
+    ["malformed", [{ provider: "codex" }]],
+  ])("a selection error with %s candidates stays a generic recoverable error", async (caseName, candidates) => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = {
+      ...fakeDataAccess(),
+      sendComposerMessage: async () => {
+        throw {
+          problem: {
+            type: "https://glosa.dev/problems/session-selection-required",
+            candidates,
+          },
+        };
+      },
+    };
+
+    mountConversationPane(root, { dataAccess: da, slug: `ws-${caseName}` });
+    const input = root.querySelector(".glosa-conv-composer-input") as InstanceType<
+      typeof dom.window.HTMLTextAreaElement
+    >;
+    input.value = "keep malformed response draft";
+    (root.querySelector(".glosa-conv-composer-send") as InstanceType<typeof dom.window.HTMLButtonElement>).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(
+      (root.querySelector(".glosa-conv-session-picker") as InstanceType<typeof dom.window.HTMLLabelElement>).hidden,
+    ).toBe(true);
+    expect(
+      (root.querySelector(".glosa-conv-status") as InstanceType<typeof dom.window.HTMLParagraphElement>).textContent,
+    ).toBe("Message couldn't be sent: Try again.");
+    expect(input.value).toBe("keep malformed response draft");
+  });
+
   test("reload recovery rechecks the durable status and clears only after presented", async () => {
     const firstRoot = dom.document.createElement("div");
     dom.document.body.append(firstRoot);
@@ -458,6 +569,8 @@ describe("mountConversationPane — DOM integration against a fake dataAccess", 
     unmount();
     // A frame emitted after unmount must not throw, and (since the fake clears its own callback
     // reference on stop()) is simply a no-op.
-    expect(() => da.emit({ event: "transcript", data: { type: "prose", role: "user", content: "late", id: "1" } })).not.toThrow();
+    expect(() =>
+      da.emit({ event: "transcript", data: { type: "prose", role: "user", content: "late", id: "1" } }),
+    ).not.toThrow();
   });
 });

@@ -50,7 +50,11 @@ describe("WorkspaceMetadataDescriptor v1", () => {
     expect(adapter.recognizes(root)).toBe(true);
     expect(adapter.classifyArtifact?.(root, "rendered.html")).toBe("F");
     expect(adapter.derivedFrom?.(root, "rendered.html")).toEqual({ sourcePath: "source.md", process: "render" });
-    expect(adapter.manifestFor?.(root, "rendered.html")).toEqual({ manifestPath: "manifest.json", component: "renderer", adapterId: "fixture" });
+    expect(adapter.manifestFor?.(root, "rendered.html")).toEqual({
+      manifestPath: "manifest.json",
+      component: "renderer",
+      adapterId: "fixture",
+    });
   });
 
   test("same id replaces atomically; different id conflicts until clear", async () => {
@@ -59,7 +63,10 @@ describe("WorkspaceMetadataDescriptor v1", () => {
     const replacement = descriptor();
     replacement.artifacts[0]!.order = 2;
     expect((await registry.set(root, replacement)).replaced).toBe(true);
-    await expect(registry.set(root, descriptor("other"))).rejects.toMatchObject({ code: "metadata-conflict", status: 409 });
+    await expect(registry.set(root, descriptor("other"))).rejects.toMatchObject({
+      code: "metadata-conflict",
+      status: 409,
+    });
     expect(registry.get(root)).toEqual(replacement);
     expect(await registry.clear(root)).toBe(true);
     expect((await registry.set(root, descriptor("other"))).descriptor.id).toBe("other");
@@ -69,7 +76,9 @@ describe("WorkspaceMetadataDescriptor v1", () => {
     const registry = new WorkspaceMetadataRegistry();
     await registry.set(root, descriptor());
     const before = readFileSync(workspaceMetadataPath(root), "utf8");
-    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "missing.md" }] })).rejects.toBeInstanceOf(WorkspaceMetadataError);
+    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "missing.md" }] })).rejects.toBeInstanceOf(
+      WorkspaceMetadataError,
+    );
     expect(readFileSync(workspaceMetadataPath(root), "utf8")).toBe(before);
     expect(registry.get(root)).toEqual(descriptor());
   });
@@ -81,11 +90,22 @@ describe("WorkspaceMetadataDescriptor v1", () => {
 
   test("rejects duplicate, escaping, missing-reference, and symlink paths", async () => {
     const registry = new WorkspaceMetadataRegistry();
-    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "source.md" }, { path: "source.md" }] })).rejects.toThrow("duplicate");
-    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "../outside.md" }] })).rejects.toThrow("confined");
-    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "source.md", derived_from: { path: "missing.md", via: "render" } }] })).rejects.toThrow("does not exist");
+    await expect(
+      registry.set(root, { ...descriptor(), artifacts: [{ path: "source.md" }, { path: "source.md" }] }),
+    ).rejects.toThrow("duplicate");
+    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "../outside.md" }] })).rejects.toThrow(
+      "confined",
+    );
+    await expect(
+      registry.set(root, {
+        ...descriptor(),
+        artifacts: [{ path: "source.md", derived_from: { path: "missing.md", via: "render" } }],
+      }),
+    ).rejects.toThrow("does not exist");
     symlinkSync(join(root, "source.md"), join(root, "linked.md"));
-    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "linked.md" }] })).rejects.toThrow("symlinks");
+    await expect(registry.set(root, { ...descriptor(), artifacts: [{ path: "linked.md" }] })).rejects.toThrow(
+      "symlinks",
+    );
   });
 
   test("empty registry preserves zero-adapter behavior", () => {

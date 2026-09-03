@@ -78,7 +78,12 @@ describe("isTrustedInitEvent — [A3 §5 #3] forged postMessage rejection", () =
 
 describe("validateBridgeMessage — the hand-rolled schema/size validator", () => {
   test("accepts a well-formed selection message", () => {
-    const msg = { type: "selection", seq: 0, quote: { exact: "a", prefix: "b", suffix: "c" }, range: { start: 0, end: 1 } };
+    const msg = {
+      type: "selection",
+      seq: 0,
+      quote: { exact: "a", prefix: "b", suffix: "c" },
+      range: { start: 0, end: 1 },
+    };
     expect(validateBridgeMessage(msg)).toEqual({ ok: true, value: msg });
   });
 
@@ -116,18 +121,35 @@ describe("validateBridgeMessage — the hand-rolled schema/size validator", () =
   });
 
   test("rejects a selection with a malformed quote or range", () => {
-    expect(validateBridgeMessage({ type: "selection", seq: 0, quote: "not an object", range: { start: 0, end: 1 } }).ok).toBe(false);
     expect(
-      validateBridgeMessage({ type: "selection", seq: 0, quote: { exact: "a", prefix: "b", suffix: "c" }, range: { start: 5, end: 5 } }).ok,
+      validateBridgeMessage({ type: "selection", seq: 0, quote: "not an object", range: { start: 0, end: 1 } }).ok,
+    ).toBe(false);
+    expect(
+      validateBridgeMessage({
+        type: "selection",
+        seq: 0,
+        quote: { exact: "a", prefix: "b", suffix: "c" },
+        range: { start: 5, end: 5 },
+      }).ok,
     ).toBe(false); // start === end, not start < end
     expect(
-      validateBridgeMessage({ type: "selection", seq: 0, quote: { exact: 1, prefix: "b", suffix: "c" }, range: { start: 0, end: 1 } }).ok,
+      validateBridgeMessage({
+        type: "selection",
+        seq: 0,
+        quote: { exact: 1, prefix: "b", suffix: "c" },
+        range: { start: 0, end: 1 },
+      }).ok,
     ).toBe(false); // exact isn't a string
   });
 
   test("[A3 §2] rejects a message over the 8KB size cap", () => {
     const huge = "x".repeat(9000);
-    const msg = { type: "selection", seq: 0, quote: { exact: huge, prefix: "", suffix: "" }, range: { start: 0, end: 1 } };
+    const msg = {
+      type: "selection",
+      seq: 0,
+      quote: { exact: huge, prefix: "", suffix: "" },
+      range: { start: 0, end: 1 },
+    };
     expect(validateBridgeMessage(msg)).toEqual({ ok: false, reason: "message exceeds 8KB cap" });
   });
 
@@ -249,7 +271,11 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
   test("creates a sandboxed, no-referrer iframe and mints a capability for the given artifact", async () => {
     const container = dom.document.createElement("div");
     dom.document.body.append(container);
-    const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
+    const da = fakeDataAccess({
+      url: "http://127.0.0.1:4647/doc/tok/notes.html",
+      nonce: "n".repeat(64),
+      expires_in_s: 600,
+    });
 
     mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "output/docs/notes.html" });
     await Promise.resolve();
@@ -270,10 +296,19 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
   test("[self-navigation mitigation] a SECOND `load` event on the iframe (a self-navigation) tears it down and surfaces an error, not a silent re-handshake", async () => {
     const container = dom.document.createElement("div");
     dom.document.body.append(container);
-    const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
+    const da = fakeDataAccess({
+      url: "http://127.0.0.1:4647/doc/tok/notes.html",
+      nonce: "n".repeat(64),
+      expires_in_s: 600,
+    });
     const errors: string[] = [];
 
-    mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "notes.html", onError: (msg: string) => errors.push(msg) });
+    mountClassFViewer(container, {
+      dataAccess: da,
+      slug: "ws-1",
+      artifactPath: "notes.html",
+      onError: (msg: string) => errors.push(msg),
+    });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -293,7 +328,11 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
   test("reading-only preview uses an empty sandbox while retaining the isolated capability URL", async () => {
     const container = dom.document.createElement("div");
     dom.document.body.append(container);
-    const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
+    const da = fakeDataAccess({
+      url: "http://127.0.0.1:4647/doc/tok/notes.html",
+      nonce: "n".repeat(64),
+      expires_in_s: 600,
+    });
     mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "notes.html", interactive: false });
     await Promise.resolve();
     const iframe = container.querySelector("iframe")!;
@@ -304,7 +343,11 @@ describe("mountClassFViewer — DOM smoke test (happy-dom; full handshake needs 
   test("unmount() removes the iframe from the container", async () => {
     const container = dom.document.createElement("div");
     dom.document.body.append(container);
-    const da = fakeDataAccess({ url: "http://127.0.0.1:4647/doc/tok/notes.html", nonce: "n".repeat(64), expires_in_s: 600 });
+    const da = fakeDataAccess({
+      url: "http://127.0.0.1:4647/doc/tok/notes.html",
+      nonce: "n".repeat(64),
+      expires_in_s: 600,
+    });
 
     const unmount = mountClassFViewer(container, { dataAccess: da, slug: "ws-1", artifactPath: "notes.html" });
     await Promise.resolve();

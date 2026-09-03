@@ -10,6 +10,13 @@
 // does the actual file write, this just guarantees the two updates (in-memory record, on-disk
 // workspace entry) always happen together, never interleaved by a second concurrent register().
 //
+// R2's fourth rung — "no live session -> the entry parks; next session registration for that
+// workspace drains it" — is deliberately NOT modelled here. A park is just an inbox entry that is
+// still non-terminal in the workspace journal, and the drain is `POST /api/sessions/:id/drain`
+// replaying that journal for the registering session's workspace. Keeping the park in the journal
+// (AGENTS.md invariant 2: the journal is the single source of truth) is what makes it survive a
+// daemon restart; a Set of "parked workspaces" on this in-memory registry could not.
+//
 // Liveness NEVER calls `process.kill`/`kill(pid, 0)`. SessionStart hook input has no documented
 // PID (A2 §F08) — there is no process to check in the first place, so liveness here is lease +
 // activity heartbeat only, full stop. (Contrast with registry/lockfile-fallback.ts, which
@@ -42,15 +49,6 @@ export type RegisterInput = Omit<SessionRecord, "last_active_at" | "lease_expiry
 
 export type Liveness = "alive" | "stale";
 
-export interface RegisterResult {
-  record: SessionRecord;
-  /** Canonical workspace paths that had a pending park — `routing.ts`'s `route()` calls
-   * `markParked` when it finds no live session — and are now drained by THIS registration. The
-   * parked inbox entries themselves live in the journal (P2.1/P2.3's concern); this is only the
-   * "a session is now available for workspace X" signal the delivery layer re-attempts on. */
-  drainedWorkspaces: string[];
-}
-
 export interface SessionRegistryDeps {
   now?: () => Date;
   /** A2 §F08: "auto-expires in 60s (heartbeat buffer); refreshed on each hook." */
@@ -62,7 +60,6 @@ const DEFAULT_LEASE_TTL_MS = 60_000;
 
 export class SessionRegistry {
   private readonly sessions = new Map<string, SessionRecord>();
-  private readonly parkedWorkspaces = new Set<string>();
   private readonly mutex = new AsyncMutex();
   private readonly now: () => Date;
   private readonly leaseTtlMs: number;
@@ -79,7 +76,7 @@ export class SessionRegistry {
    * completes (index write included) before the next one starts, so slug assignment and the
    * in-memory record never interleave. A repeat call for an already-known session_id just
    * replaces its record (e.g. a fresh SessionStart with an updated transcript_path). */
-  register(input: RegisterInput): Promise<RegisterResult> {
+  register(input: RegisterInput): Promise<SessionRecord> {
     return this.mutex.runExclusive(async () => {
       const now = this.now();
       const record: SessionRecord = {
@@ -88,10 +85,9 @@ export class SessionRegistry {
         lease_expiry: input.lease_expiry ?? new Date(now.getTime() + this.leaseTtlMs).toISOString(),
       };
 
-      // Captured BEFORE the mutation, not reordered after the index await: the park/drain
-      // ordering below still needs `this.sessions` mutated first. If the index upsert throws
-      // (e.g. ENOSPC/EACCES in `persist()`), roll the in-memory map back to exactly what it held
-      // before this call, so a failed registration never leaves a session routable for a
+      // Captured BEFORE the mutation, not read back after the index await: if the index upsert
+      // throws (e.g. ENOSPC/EACCES in `persist()`), roll the in-memory map back to exactly what
+      // it held before this call, so a failed registration never leaves a session routable for a
       // workspace `workspaces.json` never actually recorded.
       const priorRecord = this.sessions.get(record.session_id);
       this.sessions.set(record.session_id, record);
@@ -107,13 +103,7 @@ export class SessionRegistry {
         }
       }
 
-      const drainedWorkspaces: string[] = [];
-      if (this.parkedWorkspaces.has(canonicalWorkspace)) {
-        this.parkedWorkspaces.delete(canonicalWorkspace);
-        drainedWorkspaces.push(canonicalWorkspace);
-      }
-
-      return { record, drainedWorkspaces };
+      return record;
     });
   }
 
@@ -156,33 +146,10 @@ export class SessionRegistry {
     });
   }
 
-  // `markParked`/`isParked` touch `parkedWorkspaces` OUTSIDE `this.mutex` — `route()` (below and
-  // in routing.ts) calls them directly, unserialized. That's only safe because every touch is
-  // fully SYNCHRONOUS: JS run-to-completion guarantees a synchronous `Set.add`/`Set.has`/
-  // `Set.delete` can never interleave with another one, mutex or not. If either of these, or
-  // `route()` itself, ever grows an `await`, this safety argument breaks and `parkedWorkspaces`
-  // would need its own lock (or a move under `this.mutex`) — do not add one without doing that.
-
-  /** Marks a canonical workspace as having a pending park — called by `routing.ts`'s `route()`
-   * when it finds no live session for that workspace (R2: "no live session -> the entry parks").
-   * The next `register()` whose resolved workspace (workspace_binding ?? cwd) equals this exact
-   * canonical path drains it. MUST stay synchronous — see the comment above. */
-  markParked(canonicalWorkspace: string): void {
-    this.parkedWorkspaces.add(canonicalWorkspace);
-  }
-
-  /** MUST stay synchronous — see the comment above `markParked`. */
-  isParked(canonicalWorkspace: string): boolean {
-    return this.parkedWorkspaces.has(canonicalWorkspace);
-  }
-
   /** Exact explicit bindings only. Conversation composition uses this stricter view and never
    * falls back to cwd ancestry. `includeStale` exists so the API can distinguish "not bound"
    * from "bound session needs to be resumed" without treating a stale record as routable. */
-  explicitlyBoundForWorkspace(
-    canonicalWorkspace: string,
-    opts: { includeStale?: boolean } = {},
-  ): SessionRecord[] {
+  explicitlyBoundForWorkspace(canonicalWorkspace: string, opts: { includeStale?: boolean } = {}): SessionRecord[] {
     return [...this.sessions.values()].filter(
       (record) =>
         record.workspace_binding === canonicalWorkspace &&
@@ -201,7 +168,7 @@ export class SessionRegistry {
    * shouldn't force a picker against a session opened directly in the relevant subdirectory. This
    * is candidate SCOPING, not guessing — R2's "never guess" still governs what happens once the
    * candidate set is narrowed (a single deepest match routes directly; several sessions sharing
-   * that exact same deepest cwd still fall through to `route()`'s picker). Recency is deliberately
+   * that exact same deepest cwd still fall through to the caller's picker). Recency is deliberately
    * NOT used to break a tie — R2's "never guess" supersedes A2's recency auto-pick. */
   forWorkspace(canonicalWorkspace: string): SessionRecord[] {
     const alive = [...this.sessions.values()].filter((r) => this.liveness(r.session_id) === "alive");

@@ -59,4 +59,19 @@ describe("resolveMatchedFiles — deterministic ordering", () => {
     const paths = resolveMatchedFiles(root, CONFIG).tracked.map((f) => f.path);
     expect(paths).toEqual(["cafz.md", `caf${eAcute}.md`]);
   });
+
+  test("supplementary-plane characters follow UTF-8 bytes, not JavaScript's UTF-16 code-unit order", () => {
+    // U+10000 begins with UTF-16 high surrogate 0xD800, so bare `<` puts it before U+E000.
+    // Their UTF-8 prefixes are 0xF0 and 0xEE respectively, so A4 F20 byte order is the reverse.
+    const supplementary = `${String.fromCodePoint(0x10000)}.md`;
+    const privateUseBmp = `${String.fromCodePoint(0xe000)}.md`;
+    expect(supplementary < privateUseBmp).toBe(true);
+    expect(Buffer.compare(Buffer.from(privateUseBmp, "utf8"), Buffer.from(supplementary, "utf8"))).toBeLessThan(0);
+
+    writeFile(root, supplementary, "x");
+    writeFile(root, privateUseBmp, "x");
+
+    const paths = resolveMatchedFiles(root, CONFIG).tracked.map((f) => f.path);
+    expect(paths).toEqual([privateUseBmp, supplementary]);
+  });
 });

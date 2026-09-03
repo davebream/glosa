@@ -164,6 +164,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Public, maintainer-owned roadmap backed by a live GitHub Project and release milestone.
 - Durable `WorkspaceMetadataDescriptor` v1 registration through HTTP, CLI, and MCP.
 - Explicit CLI/MCP session binding and an action-aware attention badge/tray with structured results.
+- Local bearer-token rotation and revocation with immediate invalidation in the running daemon,
+  stale-tab unpairing, and a documented `glosa open` re-pairing path. Token commands never print
+  credential material.
 
 ### Changed
 

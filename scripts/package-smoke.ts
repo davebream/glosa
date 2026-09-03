@@ -118,7 +118,8 @@ try {
   const glosa = join(bunHome, "bin", "glosa");
   if (!existsSync(glosa)) fail("isolated global install did not create the glosa executable");
   const expectedVersion = `glosa ${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}\n`;
-  if (run(glosa, ["--version"], isolatedEnv) !== expectedVersion) fail("installed CLI version does not match package.json");
+  if (run(glosa, ["--version"], isolatedEnv) !== expectedVersion)
+    fail("installed CLI version does not match package.json");
   if (!run(glosa, ["--help"], isolatedEnv).includes("glosa open")) fail("installed CLI help omits the open command");
   if (!run(glosa, ["complete", "bash"], isolatedEnv).includes("bash completion for glosa")) {
     fail("installed CLI did not generate bash completion");

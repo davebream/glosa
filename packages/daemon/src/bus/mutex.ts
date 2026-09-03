@@ -39,9 +39,54 @@ export class KeyedMutex<K> {
 
   /** Acquires a stable, deduplicated set of keys in lexical order. Adoption needs this narrow
    * multi-key primitive so it can inspect every source lease and seal every source without a
-   * second writer slipping between source A and source B. */
+   * second writer slipping between source A and source B.
+   *
+   * Acquisition is hold-and-wait (each key's critical section nests inside the previous one), so
+   * A4 "Loose-file adoption — seal and link" — "holds every source registration mutex in stable
+   * lexical order" — is a deadlock-freedom requirement, not a cosmetic one. Two callers whose key
+   * sets overlap must agree on the order, which needs a genuine TOTAL order.
+   *
+   * `localeCompare` is NOT one: ICU collates distinct-but-canonically-equivalent strings (NFC vs
+   * NFD, among others) as equal, and `Array.prototype.sort` is stable, so tied keys fall back to
+   * *insertion* order — which differs per caller. Two callers can then acquire `{A,B}` and
+   * `{B,A}` and wedge those keys for the life of the daemon, since `AsyncMutex` has no timeout and
+   * no deadlock detection. Compare code-unit-exact instead: ECMAScript `<`/`>` on strings is a
+   * host-independent total order, tie-free for every pair of distinct strings.
+   *
+   * This deliberately differs from `matcher.ts`'s UTF-8 byte order. Matcher order is an A4 F20
+   * output contract shared by watcher/sidebar/git consumers; mutex order is neither persisted nor
+   * exposed and needs only one total order that every caller computes identically. The code-unit
+   * comparison avoids allocating UTF-8 buffers for every sort comparison. Do not NFC-normalize
+   * here: canonically-equivalent spellings can still be distinct `Map` keys and therefore must not
+   * tie. Supplementary-plane strings can sort differently under the two policies, but both remain
+   * deterministic across processes.
+   *
+   * `KeyedMutex` is generic, so this cannot lean on what its callers happen to pass. The workspace
+   * caller no longer reaches the hazard — `workspaceRegistrationId` returns a sha256 hex digest,
+   * and pure ASCII has no canonically-equivalent-but-distinct pairs — but it used to, when that id
+   * embedded a raw path: A4 F20 records that "APFS returns NFD", so two adoptions naming the same
+   * accented directory really did present one NFC key and one NFD key. */
   runExclusiveMany<T>(keys: readonly K[], fn: () => T | Promise<T>): Promise<T> {
-    const sorted = [...new Set(keys)].sort((a, b) => String(a).localeCompare(String(b)));
+    const sorted = [...new Set(keys)].sort((a, b) => {
+      const left = String(a);
+      const right = String(b);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+    // Code-unit-exact comparison can still tie when two keys are distinct to `Map`/`Set` but identical
+    // once stringified (`1` vs `"1"`, two objects sharing a `toString`). Those get separate mutex
+    // slots yet no defined relative order, which is the same hold-and-wait hazard again. Nothing
+    // in the workspace layer can produce it — `workspaceRegistrationId` always returns a string —
+    // so reaching here is a caller bug, and A4's fail-closed posture ("Any live lease or existing
+    // target state fails closed before a source is sealed") says surface it. Reject BEFORE the
+    // first acquisition, so a rejected call never leaves a key held.
+    for (let i = 1; i < sorted.length; i++) {
+      if (String(sorted[i - 1]) !== String(sorted[i])) continue;
+      return Promise.reject(
+        new Error(
+          `runExclusiveMany received indistinguishable keys (${JSON.stringify(String(sorted[i]))} appears twice once stringified) — multi-key acquisition needs a total order over distinct keys or it can deadlock`,
+        ),
+      );
+    }
     const acquire = (index: number): Promise<T> => {
       if (index >= sorted.length) return Promise.resolve().then(fn);
       return this.runExclusive(sorted[index]!, () => acquire(index + 1));

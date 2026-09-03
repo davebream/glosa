@@ -1,24 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
-import completion from "@gunshi/plugin-completion";
-import {
-  ArgsValidationError,
-  cli,
-  define,
-  isArgsValidationError,
-  isCommandNotFoundError,
-  lazy,
-  plugin,
-  type Args,
-  type Command,
-  type CommandContext,
-  type CommandRunner,
-  type GunshiParams,
-} from "gunshi";
+
 import { realpathSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import completion from "@gunshi/plugin-completion";
+import {
+  type Args,
+  ArgsValidationError,
+  type Command,
+  type CommandContext,
+  type CommandRunner,
+  cli,
+  define,
+  type GunshiParams,
+  isArgsValidationError,
+  isCommandNotFoundError,
+  lazy,
+  plugin,
+} from "gunshi";
+import type { GlosaApiClient } from "./api-client.ts";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
 import type { HookDeps } from "./hook.ts";
 import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
@@ -67,6 +69,20 @@ const GLOBAL_ARGS = {
 } as const satisfies Args;
 
 type DefaultContext = Readonly<CommandContext<GunshiParams>>;
+
+export interface CliRunDependencies {
+  /** Init-specific host dependencies. Omit in production to use the real home and PATH. */
+  init?: {
+    homeDir?: string;
+    glosaHomeDir?: string;
+    which?: (executable: string) => string | null;
+  };
+  /** Doctor-specific seams for command-boundary tests. Omit in production for the real daemon. */
+  doctor?: {
+    createClient?: () => Promise<GlosaApiClient>;
+    glosaHome?: () => string;
+  };
+}
 
 function withGlobals<T extends DefaultContext>(context: T): T["values"] & GlobalValues {
   return context.values as T["values"] & GlobalValues;
@@ -294,7 +310,11 @@ const globalOptions = plugin({
   },
 });
 
-function createSubCommands(setExitCode: (code: number) => void) {
+function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDependencies) {
+  const initRoots = {
+    homeDir: deps.init?.homeDir,
+    glosaHomeDir: deps.init?.glosaHomeDir,
+  };
   const open = lazyHandler(
     {
       name: "open",
@@ -409,10 +429,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
     async (context) => {
       const values = withGlobals(context);
       const initModule = await import("./scoped-init.ts");
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(
-        values.dir as string | undefined,
-        process.cwd(),
-      );
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
       const scope = (values.scope as string | undefined) ?? "workspace";
       if (scope !== "workspace" && scope !== "user") {
         const message = "--scope must be workspace or user";
@@ -429,7 +446,12 @@ function createSubCommands(setExitCode: (code: number) => void) {
         return;
       }
       if (values.uninstall) {
-        const result = await initModule.runScopedUninstall({ dir, scope, agents: normalized.agents });
+        const result = await initModule.runScopedUninstall({
+          dir,
+          scope,
+          agents: normalized.agents,
+          ...initRoots,
+        });
         printUninstallResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
         setExitCode(result.exitCode);
         return;
@@ -472,7 +494,10 @@ function createSubCommands(setExitCode: (code: number) => void) {
       }
       let agents = normalized.agents;
       if (!agents) {
-        const detected = initModule.detectInstallProviders(dir);
+        const detected = initModule.detectInstallProviders(dir, {
+          ...initRoots,
+          which: deps.init?.which,
+        });
         if (detected.length === 1) {
           agents = detected;
         } else if (values.json || !process.stdin.isTTY) {
@@ -491,6 +516,7 @@ function createSubCommands(setExitCode: (code: number) => void) {
         agents,
         print: Boolean(values.print) || Boolean(values["dry-run"]),
         force: Boolean(values.force),
+        ...initRoots,
       });
       printInitResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
       setExitCode(result.exitCode);
@@ -626,12 +652,16 @@ function createSubCommands(setExitCode: (code: number) => void) {
         import("../../daemon/src/index.ts"),
         import("./doctor.ts"),
       ]);
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(
-        values.dir as string | undefined,
-        process.cwd(),
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
+      const result = await doctorModule.runDoctor(
+        dir,
+        doctorModule.realDoctorDeps(
+          deps.doctor?.createClient ?? createHttpGlosaClient,
+          deps.doctor?.glosaHome ?? glosaHome,
+        ),
       );
-      const result = await doctorModule.runDoctor(dir, doctorModule.realDoctorDeps(createHttpGlosaClient, glosaHome));
-      const withDirWarnings = dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
+      const withDirWarnings =
+        dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };
       doctorModule.printDoctorResult(withDirWarnings, Boolean(values.json));
       setExitCode(result.exitCode);
     },
@@ -1017,9 +1047,9 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
 }
 
 /** Run the glosa CLI and return an A6 process exit code. */
-export async function run(argv: readonly string[]): Promise<number> {
+export async function run(argv: readonly string[], deps: CliRunDependencies = {}): Promise<number> {
   if (argv.length === 1 && argv[0] === "--build-id") {
-    const { BUILD_ID } = await import("../../daemon/src/build-id.ts");
+    const { BUILD_ID } = await import("../../daemon/src/lifecycle/build-id.ts");
     process.stdout.write(`${BUILD_ID}\n`);
     return EXIT_CODES.OK;
   }
@@ -1042,7 +1072,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       plugins: [globalOptions, completion()],
       subCommands: createSubCommands((code) => {
         exitCode = code;
-      }),
+      }, deps),
       strict: true,
       usageSilent: true,
       onBeforeCommand(context) {

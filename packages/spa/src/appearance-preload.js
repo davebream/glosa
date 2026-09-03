@@ -11,7 +11,8 @@
     // Storage can be unavailable in hardened/private contexts. System is the safe default.
   }
 
-  const systemIsDark = typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const systemIsDark =
+    typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
   const resolved = preference === "system" ? (systemIsDark ? "dark" : "light") : preference;
   const root = document.documentElement;
   root.dataset.appearance = preference;

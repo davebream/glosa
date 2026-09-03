@@ -13,9 +13,9 @@
 // Raw JSONL bytes are NEVER inspected here — every byte read off disk goes straight into
 // `TranscriptNormalizer` (normalize.ts), the one module allowed to know the transcript format.
 import { readFileSync, statSync } from "node:fs";
-import { watch, type FSWatcher } from "chokidar";
-import { encodeSseFrame } from "../sse.ts";
-import { TranscriptNormalizer } from "./normalize.ts";
+import { type FSWatcher, watch } from "chokidar";
+import { encodeSseFrame } from "../transport/sse.ts";
+import { type TranscriptEvent, TranscriptNormalizer } from "./normalize.ts";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -133,7 +133,13 @@ export function createTranscriptStreamResponse(
       if (closed) return;
 
       const sendTranscriptEvent = (ev: unknown) => {
-        send(encodeSseFrame({ id: encodeTranscriptCursor({ inode: currentIno as number, byte_offset: offset }), event: "transcript", data: ev }));
+        send(
+          encodeSseFrame({
+            id: encodeTranscriptCursor({ inode: currentIno as number, byte_offset: offset }),
+            event: "transcript",
+            data: ev,
+          }),
+        );
       };
       /** Fail-soft escape hatch (A2 §F16 "Failure Recovery"): ANY problem reading/tailing the
        * transcript emits this instead of ever throwing out of the stream — ends up as `event:
@@ -164,7 +170,7 @@ export function createTranscriptStreamResponse(
           return;
         }
         const slice = buf.subarray(offset);
-        let events;
+        let events: TranscriptEvent[];
         try {
           events = normalizer.feed(slice);
         } catch {

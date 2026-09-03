@@ -20,32 +20,24 @@ export class WorkspaceBusRegistry {
   // sure every bus in the process draws from the same keyed pool instead of each getting its own.
   private readonly mutex = new KeyedMutex<string>();
 
+  constructor(private readonly defaultDeps: Omit<WorkspaceBusDeps, "mutex"> = {}) {}
+
   /** Returns the SAME `WorkspaceBus` instance for `canonicalRoot` every time — constructed at
    * most once per root. `deps` (ulid/now/reducer) is only consulted on first construction; a
    * later call for an already-open root ignores it silently, since there is only ever one bus to
    * reconfigure and reconfiguring a live one out from under existing callers would be worse than
    * ignoring the request. */
   get(canonicalRoot: WorkspaceTarget, deps: Omit<WorkspaceBusDeps, "mutex"> = {}): WorkspaceBus {
+    // ONE lookup, no shape-bridging fallbacks: `workspaceRegistrationId` now hashes a bare
+    // directory string into the SAME sha256 the index persists for that directory, so both shapes
+    // of one workspace land on this key. The two remap/reverse-scan fallbacks that used to sit
+    // here only ever repaired `get()`; `has()` and `evictRegistration()` had no equivalent and
+    // silently answered for the wrong key, and any `new WorkspaceBus(...)` built outside this
+    // registry got a second mutex slot regardless (A4 F21 allows ONE git mutex per workspace).
     const id = workspaceRegistrationId(canonicalRoot);
     let bus = this.buses.get(id);
-    if (!bus && typeof canonicalRoot !== "string" && canonicalRoot.kind === "directory") {
-      const legacyId = workspaceRegistrationId(canonicalRoot.worktree_path);
-      bus = this.buses.get(legacyId);
-      if (bus) {
-        this.buses.delete(legacyId);
-        this.buses.set(id, bus);
-      }
-    }
-    if (!bus && typeof canonicalRoot === "string") {
-      bus = [...this.buses.values()].find(
-        (candidate) =>
-          typeof candidate.workspace !== "string" &&
-          candidate.workspace.kind === "directory" &&
-          candidate.workspace.worktree_path === canonicalRoot,
-      );
-    }
     if (!bus) {
-      bus = new WorkspaceBus(canonicalRoot, { ...deps, mutex: this.mutex });
+      bus = new WorkspaceBus(canonicalRoot, { ...this.defaultDeps, ...deps, mutex: this.mutex });
       this.buses.set(id, bus);
     }
     return bus;
@@ -80,22 +72,9 @@ export class WorkspaceBusRegistry {
    * bus's mutex, so any write already in flight for this root finishes first. */
   async close(canonicalRoot: WorkspaceTarget): Promise<void> {
     const id = workspaceRegistrationId(canonicalRoot);
-    const bus =
-      this.buses.get(id) ??
-      [...this.buses.values()].find(
-        (candidate) =>
-          (typeof canonicalRoot === "string" &&
-            typeof candidate.workspace !== "string" &&
-            (candidate.workspace.canonical_path === canonicalRoot ||
-              candidate.workspace.worktree_path === canonicalRoot)) ||
-          (typeof canonicalRoot !== "string" &&
-            typeof candidate.workspace !== "string" &&
-            candidate.workspace.registration_id === canonicalRoot.registration_id),
-      );
+    const bus = this.buses.get(id);
     if (!bus) return;
-    for (const [key, candidate] of this.buses) {
-      if (candidate === bus) this.buses.delete(key);
-    }
+    this.buses.delete(id);
     await bus.close();
   }
 
@@ -112,7 +91,7 @@ export class WorkspaceBusRegistry {
    * registry on its own — nothing wires the two together automatically — so production boot code
    * MUST connect them once, right after constructing both:
    *   const busRegistry = new WorkspaceBusRegistry();
-   *   const index = new WorkspaceIndex({ onHardRemove: (p) => busRegistry.evict(p) });
+   *   const index = new WorkspaceIndex({ onHardRemove: (entry) => busRegistry.evict(entry) });
    * Without that wiring, a hard-removed workspace's `WorkspaceBus` (open journal fd, `KeyedMutex`
    * slot, in-memory state) leaks for the life of the daemon process, and a later `get()` for the
    * same (now-reused) canonical path would return that stale instance instead of a fresh one. */

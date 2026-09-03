@@ -4,7 +4,7 @@
 // coverage lives — the integration suite (http.test.ts) only has to prove the pipeline wires
 // this function in correctly, not re-derive every combination.
 import { describe, expect, test } from "bun:test";
-import { authorizeRequest } from "../src/auth.ts";
+import { authorizeRequest } from "../src/security/auth.ts";
 
 const PORT = 4646;
 const SELF_ORIGIN = `http://127.0.0.1:${PORT}`;

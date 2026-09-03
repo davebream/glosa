@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { ensureToken, revokeToken, rotateToken } from "../src/token.ts";
+import { ensureToken, revokeToken, rotateToken } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 function authedRead(port: number, token: string): Promise<Response> {

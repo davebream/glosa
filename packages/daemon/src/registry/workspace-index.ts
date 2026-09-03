@@ -7,11 +7,12 @@
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
 // never observe (or assign) a torn/duplicate slug.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   accessSync,
   closeSync,
   existsSync,
+  constants as fsConstants,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -22,14 +23,22 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fsyncContainingDir } from "../bus/io.ts";
+import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, pendingCount } from "../bus/peek.ts";
-import { glosaHome } from "../home.ts";
+import { glosaHome } from "../lifecycle/home.ts";
 import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
-import type { WorkspaceKind, WorkspaceLocation, WorkspaceTracking } from "../workspace.ts";
+// Aliased so every call site below reads unchanged: this file is the reference caller of the
+// registration-id derivation, but it no longer OWNS it. `workspace.ts` holds the single copy so
+// the bare-string target form (`workspaceRegistrationId`) cannot drift away from the sha256 that
+// reaches `~/.glosa/workspaces.json` — A4 keys the per-workspace mutex on that id.
+import {
+  registrationIdFor as registrationId,
+  type WorkspaceKind,
+  type WorkspaceLocation,
+  type WorkspaceTracking,
+} from "../workspace.ts";
 import { assignSlug, type SlugDeps } from "./slug.ts";
 import { enclosingGitRoot } from "./workspace-root.ts";
 
@@ -64,7 +73,7 @@ export interface AdoptionRecord {
 
 export class AdoptionError extends Error {
   constructor(
-    readonly code: "adoption-conflict" | "adoption-blocked",
+    readonly code: "adoption-conflict" | "adoption-blocked" | "workspace-adopting",
     message: string,
   ) {
     super(message);
@@ -224,10 +233,6 @@ function isLegacyWorkspaceIndexShape(v: unknown): v is LegacyWorkspaceIndexFile 
   );
 }
 
-function registrationId(kind: WorkspaceKind, canonicalPath: string): string {
-  return createHash("sha256").update(`${kind}\0${canonicalPath}`).digest("hex");
-}
-
 function redirectedBusPath(home: string, id: string): string {
   return join(home, "state", id);
 }
@@ -284,12 +289,12 @@ export interface WorkspaceIndexDeps {
    * write/search check; injectable for deterministic permission tests. Existing local buses are
    * authoritative and never consult this predicate. */
   canCreateLocalBus?: (canonicalPath: string) => boolean;
-  /** Fired once for each canonical path GC actually hard-removes (never for a soft `present:false`
+  /** Fired once for each registration GC actually hard-removes (never for a soft `present:false`
    * — only real removal from the index). Defaults to a no-op. Production wiring calls
    * `setOnHardRemove` once a `WorkspaceBusRegistry` exists — see `setOnHardRemove`'s own docstring
    * for the snippet — so a hard-removed workspace's open `WorkspaceBus` (journal fd, mutex slot,
    * in-memory state) is evicted in step, not leaked. */
-  onHardRemove?: (canonicalPath: string) => void | Promise<void>;
+  onHardRemove?: (entry: WorkspaceEntry) => void | Promise<void>;
   /** Does this registration's bus still hold journal-derived pending (non-terminal) entries?
    * Consulted only by GC's hard-remove check (issue #79): parked user work — e.g. annotations
    * created in a workspace that was never `glosa init`'d, waiting for delivery — must never be
@@ -299,6 +304,12 @@ export interface WorkspaceIndexDeps {
    * `bus_path`; ANY fold failure counts as "has pending" — fail-safe, never remove on
    * uncertainty. `forget()` deliberately bypasses this (explicit user command stays forceful). */
   hasPendingWork?: (entry: WorkspaceEntry) => boolean;
+  /** The raw `write(2)` behind `persist()`'s temp-file write. Defaults to node:fs `writeSync`.
+   * Test-only, and deliberately NOT reachable from any config/env surface — production wiring
+   * (`lifecycle.ts`'s `buildBackend`) constructs this index with a fixed dep literal. The fault
+   * suite injects one that throws ENOSPC or returns a short count, which is the only way to
+   * exercise "a durable write failed" without a real full or read-only `~/.glosa`. */
+  write?: WriteSync;
   slug?: SlugDeps;
 }
 
@@ -319,13 +330,14 @@ export class WorkspaceIndex {
   private readonly slugDeps: SlugDeps;
   private hasLiveSession: (canonicalPath: string) => boolean;
   private readonly hasPendingWork: (entry: WorkspaceEntry) => boolean;
+  private readonly write: WriteSync;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
   // default `() => false` predicate is indistinguishable from "genuinely wired to say never" once
   // it's just a function, so GC needs this separate flag to tell "wired, and the answer is no"
   // apart from "nobody wired anything yet."
   private liveSessionPredicateWired: boolean;
-  private onHardRemove: (canonicalPath: string) => void | Promise<void>;
+  private onHardRemove: (entry: WorkspaceEntry) => void | Promise<void>;
   private cache: WorkspaceIndexFile | null = null;
   private lastGcAt = -Infinity;
 
@@ -359,6 +371,7 @@ export class WorkspaceIndex {
           return true; // fail-safe: an unreadable journal is treated as "work still parked here"
         }
       });
+    this.write = deps.write ?? writeSync;
     this.slugDeps = deps.slug ?? {};
   }
 
@@ -372,14 +385,14 @@ export class WorkspaceIndex {
     this.liveSessionPredicateWired = true;
   }
 
-  /** Wires in the callback GC fires for each path it actually hard-removes. Production callers
+  /** Wires in the callback GC fires for each registration it actually hard-removes. Production callers
    * set this once, right after constructing both this index and a `WorkspaceBusRegistry`:
    *   const busRegistry = new WorkspaceBusRegistry();
-   *   index.setOnHardRemove((p) => busRegistry.evict(p));
+   *   index.setOnHardRemove((entry) => busRegistry.evict(entry));
    * Without this wired, a hard-removed workspace's `WorkspaceBus` (open journal fd, `KeyedMutex`
    * slot, in-memory state) would otherwise leak forever, and a later reuse of the same canonical
    * path would return that stale instance instead of a fresh one. */
-  setOnHardRemove(fn: (canonicalPath: string) => void | Promise<void>): void {
+  setOnHardRemove(fn: (entry: WorkspaceEntry) => void | Promise<void>): void {
     this.onHardRemove = fn;
   }
 
@@ -445,6 +458,29 @@ export class WorkspaceIndex {
     return this.cache;
   }
 
+  /** The snapshot every MUTATOR works on: a detached deep copy of the last durable state.
+   *
+   * `load()` hands back `this.cache` by reference, so mutating it in place publishes the change to
+   * every reader (`get`/`getBySlug`/`list`/`pendingAdoptions`, and therefore every route and GC
+   * pass) BEFORE `persist()` has made it durable — and `persist()` genuinely can throw, on ENOSPC,
+   * EROFS, EMFILE, or a read-only `<GLOSA_HOME>`. Nothing then restored the cache, so a `forget()`
+   * whose write failed returned a 500 while memory had already lost the workspace, and the next
+   * successful `persist()` — handed that same still-mutated object — committed the deletion the
+   * user was told had failed. The same shape silently advanced GC hard-removes and the adoption
+   * phase machine (A5 §F19's `active -> adopting -> adopted`), whose whole point is that a crashed
+   * hand-off resumes from the phase that is actually ON DISK.
+   *
+   * Working on a copy makes `this.cache = index` at the end of `persist()` the single point where
+   * a mutation becomes visible, on disk and in memory at once: readers see the last durable state
+   * throughout, and a throw leaves both untouched. That is A4's "the daemon is the SOLE writer"
+   * rule applied to its own in-memory view — an uncommitted write is not state.
+   *
+   * Cost is a non-issue: `persist()` already `JSON.stringify`s this exact object on every single
+   * mutation, which is strictly more work than cloning it. */
+  private loadForMutation(): WorkspaceIndexFile {
+    return structuredClone(this.load());
+  }
+
   /** Renames the corrupt/invalid-shape `workspaces.json` aside to `<path>.corrupt.<ISO-ts>`
    * before `load()` falls back to a fresh empty index. Uses the real wall clock (`new
    * Date().toISOString()`), deliberately NOT the injected `now` — this is a diagnostic artifact's
@@ -486,7 +522,10 @@ export class WorkspaceIndex {
     const bytes = Buffer.from(JSON.stringify(index, null, 2), "utf8");
     const fd = openSync(tmpPath, "wx");
     try {
-      writeSync(fd, bytes);
+      // A4 §F04 — "writeSync may write fewer bytes": a bare single write would silently
+      // truncate the index into unparseable JSON, which the next load() would quarantine and
+      // replace with an empty index. Same offset-advancing loop journal.ts/inbox.ts already use.
+      writeAllSync(fd, bytes, this.write);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -503,7 +542,7 @@ export class WorkspaceIndex {
    * registration, `glosa open`, and discovery sweep funnels through. */
   upsertWorkspace(canonicalPath: string, source: WorkspaceSource): Promise<WorkspaceEntry> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const now = this.now().toISOString();
       const existing = Object.values(index.workspaces).find(
         (entry) => entry.kind === "directory" && entry.canonical_path === canonicalPath,
@@ -588,7 +627,7 @@ export class WorkspaceIndex {
         throw new WorkspaceOpenError("invalid-path", "path could not be canonicalized");
       }
 
-      const index = this.load();
+      const index = this.loadForMutation();
       const now = this.now().toISOString();
 
       if (leafStat.isDirectory()) {
@@ -611,10 +650,7 @@ export class WorkspaceIndex {
       }
 
       if (opts.focus) {
-        throw new WorkspaceOpenError(
-          "invalid-path",
-          "focus is only valid when the open target is a directory",
-        );
+        throw new WorkspaceOpenError("invalid-path", "focus is only valid when the open target is a directory");
       }
 
       if (!leafStat.isFile()) {
@@ -776,10 +812,7 @@ export class WorkspaceIndex {
     const rel = relativeNfc(entry.worktree_path, focusCanonical);
     const matched = resolveTrackedFiles(entry).tracked.find((file) => file.path === rel);
     if (!matched) {
-      throw new WorkspaceOpenError(
-        "artifact-not-tracked",
-        "focus file is not in the workspace tracked artifact list",
-      );
+      throw new WorkspaceOpenError("artifact-not-tracked", "focus file is not in the workspace tracked artifact list");
     }
     return matched.path;
   }
@@ -826,7 +859,7 @@ export class WorkspaceIndex {
    * durable writes discoverable without treating the index as entry-status truth. */
   beginAdoption(target: WorkspaceEntry): Promise<AdoptionRecord | null> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const currentTarget = index.workspaces[target.registration_id];
       if (!currentTarget) throw new AdoptionError("adoption-blocked", "target workspace registration disappeared");
 
@@ -854,7 +887,10 @@ export class WorkspaceIndex {
           return { registration_id: entry.registration_id, source_path: sourcePath, target_path: targetPath };
         })
         .filter((source) => tracked.has(source.target_path))
-        .sort((a, b) => a.registration_id.localeCompare(b.registration_id));
+        // This order is persisted in the adoption plan and drives source processing after a
+        // restart, so it must not vary with the host's ICU locale. Compare the UTF-8 bytes
+        // directly, matching A4's deterministic byte-order convention.
+        .sort((a, b) => Buffer.compare(Buffer.from(a.registration_id, "utf8"), Buffer.from(b.registration_id, "utf8")));
 
       if (sources.length === 0) return null;
       if (existsSync(localBus)) {
@@ -914,7 +950,7 @@ export class WorkspaceIndex {
 
   commitAdoption(adoptionId: string): Promise<AdoptionRecord> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const record = index.adoptions[adoptionId];
       if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
       const now = this.now().toISOString();
@@ -944,7 +980,7 @@ export class WorkspaceIndex {
     phase: Exclude<AdoptionPhase, "planned" | "committed">,
   ): Promise<AdoptionRecord> {
     return this.mutex.runExclusive(() => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const record = index.adoptions[adoptionId];
       if (!record) throw new AdoptionError("adoption-blocked", "adoption record is missing");
       if (record.phase === "committed") return record;
@@ -983,13 +1019,17 @@ export class WorkspaceIndex {
    * just a GC-driven one). Returns false if the slug is unknown. */
   forget(slug: string): Promise<boolean> {
     return this.mutex.runExclusive(async () => {
-      const index = this.load();
+      const index = this.loadForMutation();
       const match = Object.values(index.workspaces).find((e) => e.slug === slug);
       if (!match) return false;
       delete index.workspaces[match.registration_id];
       index.updated_at = this.now().toISOString();
       this.persist(index);
-      await this.onHardRemove(match.canonical_path);
+      // Deliberately AFTER persist, never before: eviction closes the bus's journal fd and drops
+      // its in-memory state, which is only safe once the removal is durable. A persist that throws
+      // rejects here with the registration still intact in memory and on disk (see
+      // `loadForMutation`), so this line is unreachable for a removal that did not actually happen.
+      await this.onHardRemove(match);
       return true;
     });
   }
@@ -1003,9 +1043,13 @@ export class WorkspaceIndex {
    *   - path missing, already `present:false` -> hard-remove only if there is no live session
    *     AND it's been absent for at least `gcGraceMs`. Conservative: a live session blocks
    *     removal indefinitely, no matter how long the path itself has been gone.
-   * Every hard-removed path fires `onHardRemove` (awaited before this call resolves) — the
-   * index write is already durable by the time it fires, so an eviction failure never leaves the
-   * on-disk index and the in-memory bus registry disagreeing about whether the workspace exists.
+   * Every hard-removed path fires `onHardRemove` (awaited before this call resolves), strictly
+   * AFTER the index write. That order is the correct one in both directions: the removal is
+   * durable before any bus is torn down, so an eviction failure leaves only the bus registry
+   * lagging (a leaked fd, recoverable) rather than the index claiming a workspace exists whose
+   * state was already destroyed; and a `persist()` that throws rejects before this loop runs, with
+   * every entry still intact in memory and on disk (see `loadForMutation`), so a workspace is
+   * never evicted on the strength of a removal that did not happen.
    *
    * Safety when NOBODY has wired a live-session predicate yet (`liveSessionPredicateWired` is
    * still false — neither the constructor nor `setLiveSessionPredicate` ever supplied one): GC
@@ -1021,9 +1065,10 @@ export class WorkspaceIndex {
       }
       this.lastGcAt = now.getTime();
 
-      const index = this.load();
+      const index = this.loadForMutation();
       const softened: string[] = [];
       const removed: string[] = [];
+      const removedEntries: WorkspaceEntry[] = [];
       let changed = false;
 
       for (const [registrationId, entry] of Object.entries(index.workspaces)) {
@@ -1056,6 +1101,7 @@ export class WorkspaceIndex {
         if (now.getTime() - absentSince >= this.gcGraceMs) {
           delete index.workspaces[registrationId];
           removed.push(canonicalPath);
+          removedEntries.push(entry);
           changed = true;
         }
       }
@@ -1064,7 +1110,7 @@ export class WorkspaceIndex {
         index.updated_at = now.toISOString();
         this.persist(index);
       }
-      for (const canonicalPath of removed) await this.onHardRemove(canonicalPath);
+      for (const entry of removedEntries) await this.onHardRemove(entry);
       return { softened, removed };
     });
   }

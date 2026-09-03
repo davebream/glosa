@@ -13,7 +13,7 @@ import {
   rotateToken,
   TokenAuthority,
   tokenPath,
-} from "../src/token.ts";
+} from "../src/security/token.ts";
 import { cleanupHome, freshHome } from "./helpers.ts";
 
 describe("mintToken", () => {

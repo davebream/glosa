@@ -105,6 +105,12 @@ Routing precedence is fixed:
 2. generic cwd-ancestor matching;
 3. park the entry until a session is registered and bound.
 
+Turn-boundary/MCP drains preserve the same routing relation in the inverse direction. An explicit
+binding stays exact. An unbound session may be a valid ancestor candidate for several present, active
+workspace journals, so the daemon emits one globally capped, workspace-labelled composite batch; it
+never picks one descendant. Composite coordination and crash-prefix acknowledgement semantics are
+specified in A1 §5.15 and do not replace any workspace journal as truth.
+
 `glosa_present` with `mode:"preview"` is session-independent: it registers the artifact and returns
 a preview-locked URL but never binds a session. A durable global or non-workspace MCP entry may use
 preview-only presentation without `glosa init`. `glosa open` is equally init-free: it registers and

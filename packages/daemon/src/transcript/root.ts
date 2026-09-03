@@ -10,7 +10,13 @@ import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
 // ASCII control chars (incl. NUL and \n) — same guard as confine-path.ts's A3 §5 attack #5.
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+function hasAsciiControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
 
 /** `$CLAUDE_CONFIG_DIR` (A2 §F16 "Fallback root"), falling back to the documented default
  * `~/.claude`. NEVER hardcode `~/.claude` at any other call site — this is the one place that
@@ -27,10 +33,13 @@ export type ConfineTranscriptResult = { ok: true; realPath: string } | { ok: fal
  * transcript byte is written) — falls back to realpath-ing the nearest existing ancestor
  * directory, exactly like confine-path.ts's `realpathNearestAncestor`, so confinement is still
  * enforced even when there's nothing to tail yet. */
-export function confineTranscriptPath(transcriptPath: string, root: string = claudeConfigDir()): ConfineTranscriptResult {
+export function confineTranscriptPath(
+  transcriptPath: string,
+  root: string = claudeConfigDir(),
+): ConfineTranscriptResult {
   if (transcriptPath.length === 0) return { ok: false };
   if (!transcriptPath.startsWith("/")) return { ok: false }; // hook input is documented as always absolute
-  if (CONTROL_CHAR_RE.test(transcriptPath)) return { ok: false };
+  if (hasAsciiControlCharacter(transcriptPath)) return { ok: false };
 
   let rootReal: string;
   try {

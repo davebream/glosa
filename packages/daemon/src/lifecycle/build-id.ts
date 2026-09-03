@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import packageMetadata from "../../../package.json" with { type: "json" };
+import packageMetadata from "../../../../package.json" with { type: "json" };
 
 const HASH_HEX_LENGTH = 16;
-const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 
 export const APP_VERSION = packageMetadata.version;
 

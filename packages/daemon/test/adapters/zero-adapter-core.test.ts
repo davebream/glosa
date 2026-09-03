@@ -11,12 +11,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiFetch, type ApiContext } from "../../src/http.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
-import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
+import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { canonicalize } from "../../src/registry/slug.ts";
+import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { CapabilityStore } from "../../src/security/capability.ts";
+import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
 
 const TOKEN = "zero-adapter-test-token-0123456789";
 const PORT = 4646;
@@ -123,7 +123,11 @@ describe("core runs with ZERO adapters (P6.1 acceptance)", () => {
       stateChangingReq(`/w/${slug}/annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: "note", intent: "content", target: { quote: { exact: "Body text here.", prefix: "", suffix: "" } } }),
+        body: JSON.stringify({
+          body: "note",
+          intent: "content",
+          target: { quote: { exact: "Body text here.", prefix: "", suffix: "" } },
+        }),
       }),
     );
     expect(res.status).toBe(400);

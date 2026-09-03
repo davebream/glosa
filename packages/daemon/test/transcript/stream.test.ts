@@ -17,13 +17,13 @@ import {
   type SessionBinding,
 } from "../../src/agent-provider/interface.ts";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
-import { CapabilityStore } from "../../src/capability.ts";
-import { type ApiContext, createApiFetch } from "../../src/http.ts";
 import { SessionRegistry } from "../../src/registry/session-registry.ts";
 import { canonicalize } from "../../src/registry/slug.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
-import { type ParsedSseEvent, parseSseStream } from "../../src/sse.ts";
+import { CapabilityStore } from "../../src/security/capability.ts";
 import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
+import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
+import { type ParsedSseEvent, parseSseStream } from "../../src/transport/sse.ts";
 import { randomPort } from "../helpers.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";
@@ -191,6 +191,52 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
     await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, source: "startup" });
     const res = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}` } });
     expect(res.status).toBe(404);
+  });
+
+  test("multiple equally eligible transcript sessions require explicit selection instead of guessing", async () => {
+    for (const [session_id, provider] of [
+      ["s1", "claude-code"],
+      ["s2", "codex"],
+    ] as const) {
+      const transcriptPath = join(h.claudeConfigDir, `${session_id}.jsonl`);
+      writeTranscriptLine(transcriptPath, {
+        type: "user",
+        uuid: `${session_id}-event`,
+        message: { role: "user", content: `private-${session_id}` },
+      });
+      await h.sessionRegistry.register({
+        session_id,
+        provider,
+        cwd: `/producer/${session_id}`,
+        workspace_binding: h.root,
+        transcript_path: transcriptPath,
+        source: "startup",
+      });
+    }
+
+    const controller = new AbortController();
+    let res: Response | undefined;
+    try {
+      res = await fetch(transcriptStreamUrl(h), {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+        signal: controller.signal,
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.type).toContain("session-selection-required");
+      expect(body.candidates).toEqual([
+        { session_id: "s1", provider: "claude-code", last_active_at: expect.any(String) },
+        { session_id: "s2", provider: "codex", last_active_at: expect.any(String) },
+      ]);
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(h.root);
+      expect(serialized).not.toContain(h.claudeConfigDir);
+      expect(serialized).not.toContain("/producer/");
+      expect(serialized).not.toContain("private-");
+    } finally {
+      controller.abort();
+      await res?.body?.cancel().catch(() => {});
+    }
   });
 
   test("a transcript_path OUTSIDE $CLAUDE_CONFIG_DIR is refused — 400 invalid-path, never opened", async () => {

@@ -13,8 +13,10 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { appendEvent, type JournalWriter } from "../bus/journal.ts";
 import { shadowGitDir } from "../bus/paths.ts";
+import { currentDaemonIdentity, type DaemonIdentity } from "../lifecycle/daemon-identity.ts";
+import { readLock } from "../lifecycle/lock.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
-import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
+import { type WorkspaceTarget, workspaceWorktree } from "../workspace.ts";
 
 export const GLOSA_BRANCH = "glosa";
 const GIT_IDENTITY_NAME = "glosa";
@@ -127,16 +129,75 @@ export interface ReclaimIndexLockDeps {
   writer: JournalWriter;
   ulid: () => string;
   now?: () => Date;
+  /** Who is claiming the right to unlink, and where the daemon lock proving it lives. Omitted
+   * (the production case) means "use this process's ambient identity", which `lifecycle.ts`
+   * claims when it wins the singleton CAS — so no call site has to carry the id, and no test has
+   * to invent one. Pass `null` to assert explicitly that there is no identity. Supplying a value
+   * cannot WEAKEN the check: the on-disk lock is the authority and this is only the claim tested
+   * against it. */
+  identity?: DaemonIdentity | null;
 }
 
-/** If `index.lock` is present, unlinks it and records `git_index_lock_reclaimed`. Safe
- * unconditionally: the daemon-singleton invariant (A5 §F13) guarantees this process is the ONLY
- * git operator for this workspace, so a leftover lock can only be a stale remnant of a git
- * process that died mid-operation on a PREVIOUS run — never a concurrent live writer racing us
- * right now (A4 §F21). Call before the first git op of a session and again at reconcile. */
+export interface IndexLockNotOwnedError extends Error {
+  code: "INDEX_LOCK_NOT_OWNED";
+  indexLock: string;
+  /** The instance id we claimed to be, or `null` when this process has no daemon identity. */
+  claimed: string | null;
+  /** The instance id the daemon lock actually records, or `null` when there is no usable lock. */
+  onDisk: string | null;
+}
+
+function indexLockNotOwnedError(
+  indexLock: string,
+  claimed: string | null,
+  onDisk: string | null,
+): IndexLockNotOwnedError {
+  const err = new Error(
+    `refusing to reclaim ${indexLock}: this process cannot prove it is the singleton daemon ` +
+      `(claimed instance ${claimed ?? "<none>"}, daemon.lock records ${onDisk ?? "<none>"}) — ` +
+      `the lock may belong to a live git process, and deleting it would put two writers on one index`,
+  ) as IndexLockNotOwnedError;
+  err.code = "INDEX_LOCK_NOT_OWNED";
+  err.indexLock = indexLock;
+  err.claimed = claimed;
+  err.onDisk = onDisk;
+  return err;
+}
+
+/** If `index.lock` is present AND the singleton daemon lock proves this process is the only
+ * daemon, unlinks it and records `git_index_lock_reclaimed` (A4 §F21). Both halves of that "AND"
+ * are load-bearing and the second one is NOT an assumption this module may make on its own.
+ *
+ * `index.lock` is git's own guard against two processes writing one `.git/index`. Deleting one
+ * that a LIVE git process owns is precisely the corruption it exists to prevent, so the unlink is
+ * only ever safe under proof that no other operator exists — which is exactly what the daemon
+ * singleton lock (A5 §F13) is. This function is reachable from `bus.ts` (`applyBegin`,
+ * `resolveEntry`, `captureHumanEdit`, `humanEditCheckpoint`) and from `reconcile.ts`
+ * (`offlineCatchUp`), none of which are themselves gated on holding that lock — a second daemon
+ * that lost the CAS but kept running, a diagnostic or CLI path, or a test harness pointed at a
+ * live workspace all reach here. So the proof is checked HERE, at the unlink, rather than assumed
+ * from the caller.
+ *
+ * Unprovable ownership THROWS instead of unlinking, including when there is no daemon lock on
+ * disk at all. Absence of the lock is absence of evidence, not evidence of absence: it is
+ * indistinguishable from "a daemon is running against a different `GLOSA_HOME`" or "our own lock
+ * was just deleted underneath us", and failing an operation is strictly recoverable while
+ * corrupting a git index is not. This costs a legitimate no-daemon caller nothing in the normal
+ * case — with no `index.lock` on disk this returns `false` before any of it runs — and A4's
+ * cross-cutting invariant already requires non-daemon callers to fail loudly rather than write
+ * unsynchronized.
+ *
+ * Call before the first git op of a session and again at reconcile. */
 export function reclaimIndexLock(root: WorkspaceTarget, deps: ReclaimIndexLockDeps): boolean {
   const lockFile = indexLockPath(root);
   if (!existsSync(lockFile)) return false;
+
+  const identity = deps.identity === undefined ? currentDaemonIdentity() : deps.identity;
+  const onDisk = identity ? readLock(identity.lockFile) : null;
+  if (!identity || !onDisk || onDisk.instance_id !== identity.instanceId) {
+    throw indexLockNotOwnedError(lockFile, identity?.instanceId ?? null, onDisk?.instance_id ?? null);
+  }
+
   unlinkSync(lockFile);
   // Force fsync despite not being in journal.ts's lifecycle-critical set — this is a rare
   // startup/repair event (mirrors truncateTornTail's own reasoning for journal_tail_truncated),
@@ -293,7 +354,8 @@ export interface CheckpointOptions {
   attribution: Attribution;
   /** Free-form `Glosa-Kind` trailer value — this module doesn't constrain the vocabulary, but
    * callers in this codebase use `baseline` (init only, via `commit()` directly, not this
-   * function), `pre_apply`/`post_apply` (lease boundaries), and `auto_checkpoint` (offline
+   * function), `pre_apply`/`post_apply` (lease boundaries), `apply_expired` (the unknown-attributed
+   * capture of an interval a lease died before proving, A4 §F05), and `auto_checkpoint` (offline
    * catch-up / any autonomous save outside a lease). */
   kind: string;
   entry?: string;
@@ -301,16 +363,35 @@ export interface CheckpointOptions {
   /** See `CommitOptions.at` — threaded through for the same test-only reason. */
   at?: Date;
   /** Restrict staging to these workspace-relative paths. Human edits use this to avoid attributing
-   * unrelated watcher drift to the reviewer. Omitted keeps the existing all-tracked behavior. */
+   * unrelated watcher drift to the reviewer (A4 §F05) — and because `checkpoint` resets the index to
+   * HEAD before staging, restricting what gets STAGED is exactly what restricts what gets COMMITTED.
+   * (Before that reset it was not: the index was cumulative, so a scoped checkpoint could commit
+   * whatever an earlier failed one had left staged.) Omitted keeps the all-tracked behavior. */
   paths?: string[];
 }
 
-/** Stages the tracked∪HEAD union and commits iff something actually changed — otherwise returns
- * the current HEAD sha without creating a commit (A4 §F21's idempotency rule: "nothing staged ->
- * return current HEAD sha, DO NOT commit"). Assumes `initShadowRepo` has already run for this
- * root (so `HEAD` resolves) — callers are responsible for that ordering, same as they are for
- * holding the mutex. */
+/** Resets the index to HEAD, stages the tracked∪HEAD union (or just `opts.paths`), and commits iff
+ * something actually changed — otherwise returns the current HEAD sha without creating a commit
+ * (A4 §F21's idempotency rule: "nothing staged -> return current HEAD sha, DO NOT commit"). The
+ * reset is what makes the committed set equal the staged set, so staged, probed and committed are
+ * all the same three things: see the comments on the reset and on the commit below.
+ * Assumes `initShadowRepo` has already run for this root (so `HEAD` resolves) — callers are
+ * responsible for that ordering, same as they are for holding the mutex. */
 export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions): Promise<string> {
+  // Reset the index to HEAD BEFORE staging anything, so the staged set is always exactly what this
+  // checkpoint staged. Without it the index is cumulative across calls: staging (below) and
+  // committing are two separate git invocations, so any checkpoint that dies between them —
+  // SIGKILL, a `runGit` throw on a full disk, `commit()`'s own trailer-injection rejection — leaves
+  // content staged that NOTHING ever cleans (`reclaimIndexLock` removes `index.lock`, not staged
+  // content, and the index file outlives a daemon restart). The next checkpoint would then sweep
+  // that orphaned content into ITS commit under ITS trailers, stamping unproven watcher drift
+  // `Glosa-Attribution: human` or `session:<id>` — the exact forged provenance A4 §F05 forbids
+  // ("EVERYTHING ELSE → unknown, never human"). `read-tree` rewrites only the index; the work-tree
+  // is untouched, so no on-disk bytes are lost — anything real is re-staged by the `git add` below.
+  // Exit 128 = HEAD doesn't resolve yet (a shadow repo before its first commit): no tree to reset
+  // to, and nothing can have staged into it yet — same house pattern as `isPathDirty`.
+  await runGit(root, ["read-tree", "HEAD"], { allowExitCodes: [0, 128] });
+
   const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
   const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
@@ -329,6 +410,16 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
   };
   if (opts.entry !== undefined) trailers["Glosa-Entry"] = opts.entry;
   if (opts.lease !== undefined) trailers["Glosa-Lease"] = opts.lease;
+  // Deliberately NO pathspec on this commit, even when `opts.paths` scoped the staging above.
+  // `git commit -- <paths>` is git's `--only` mode: it rebuilds the commit from the WORK-TREE bytes
+  // of those paths instead of committing the index this function just staged and probed. Adding one
+  // "to scope the commit" would reintroduce, in miniature, the exact defect the reset above closes —
+  // a save landing between the `git add` and this call would be committed under THESE trailers
+  // having never been staged and never been probed, i.e. `Glosa-Attribution: human` on bytes nobody
+  // proved (A4 §F05). No pathspec is needed anyway: the index was reset to HEAD and only `union` was
+  // staged into it, so the unscoped commit records exactly what `git diff --cached` just checked —
+  // commit and probe agree by construction. This is measured git behavior, not an assumption; the
+  // "commit records the INDEX" test in test/git/shadow.test.ts pins both halves of it.
   return commit(root, { message: "checkpoint", trailers, at: opts.at });
 }
 

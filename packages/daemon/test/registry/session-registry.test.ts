@@ -73,7 +73,6 @@ describe("SessionRegistry — liveness without PID", () => {
 
   test("never checks PID liveness (grep guard: no process.kill / kill( call sites)", () => {
     const sessionRegistrySrc = readFileSync(new URL("../../src/registry/session-registry.ts", import.meta.url), "utf8");
-    const routingSrc = readFileSync(new URL("../../src/registry/routing.ts", import.meta.url), "utf8");
     // Strip `//` line comments before scanning — the module docstrings deliberately MENTION
     // process.kill (explaining why it's banned here, unlike lockfile-fallback.ts), and those
     // mentions must not trip this guard.
@@ -82,43 +81,17 @@ describe("SessionRegistry — liveness without PID", () => {
         .split("\n")
         .map((line) => line.replace(/\/\/.*/, ""))
         .join("\n");
-    const codeOnly = stripComments(sessionRegistrySrc) + stripComments(routingSrc);
+    const codeOnly = stripComments(sessionRegistrySrc);
     expect(codeOnly).not.toMatch(/process\.kill/);
     expect(codeOnly).not.toMatch(/\bkill\(/);
-  });
-});
-
-describe("SessionRegistry — park / drain", () => {
-  test("markParked + register() for that same workspace drains it", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    expect(registry.isParked("/ws/a")).toBe(false);
-    registry.markParked("/ws/a");
-    expect(registry.isParked("/ws/a")).toBe(true);
-
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/a", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual(["/ws/a"]);
-    expect(registry.isParked("/ws/a")).toBe(false);
-  });
-
-  test("registering a DIFFERENT workspace does not drain an unrelated park", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    registry.markParked("/ws/a");
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/b", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual([]);
-    expect(registry.isParked("/ws/a")).toBe(true);
-  });
-
-  test("a workspace with no pending park drains nothing on register", async () => {
-    const registry = new SessionRegistry({ now: deterministicClock() });
-    const result = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/a", source: "startup" });
-    expect(result.drainedWorkspaces).toEqual([]);
   });
 });
 
 describe("isCwdAncestorOf", () => {
   test("equal paths match", () => expect(isCwdAncestorOf("/a/b", "/a/b")).toBe(true));
   test("a real ancestor matches", () => expect(isCwdAncestorOf("/a", "/a/b/c")).toBe(true));
-  test("a sibling with a shared string prefix does not match", () => expect(isCwdAncestorOf("/a/b", "/a/bc")).toBe(false));
+  test("a sibling with a shared string prefix does not match", () =>
+    expect(isCwdAncestorOf("/a/b", "/a/bc")).toBe(false));
   test("a descendant is not an ancestor of its parent", () => expect(isCwdAncestorOf("/a/b/c", "/a/b")).toBe(false));
 });
 
@@ -201,7 +174,12 @@ describe("SessionRegistry.forWorkspace — routing precedence", () => {
     await registry.register({ session_id: "B", provider: "claude-code", cwd: "/repo/sub", source: "startup" });
     await registry.register({ session_id: "C", provider: "claude-code", cwd: "/repo/sub", source: "startup" });
 
-    expect(registry.forWorkspace("/repo/sub/deep").map((r) => r.session_id).sort()).toEqual(["B", "C"]);
+    expect(
+      registry
+        .forWorkspace("/repo/sub/deep")
+        .map((r) => r.session_id)
+        .sort(),
+    ).toEqual(["B", "C"]);
   });
 
   test("a cwd of '/' is never treated as an ancestor of everything (degenerate root guard)", async () => {
@@ -239,7 +217,12 @@ describe("SessionRegistry.register — rollback on index failure", () => {
     } as unknown as WorkspaceIndex;
     const registry = new SessionRegistry({ now: deterministicClock(), index: flakyIndex });
 
-    const first = await registry.register({ session_id: "s1", provider: "claude-code", cwd: "/ws/a", source: "startup" });
+    const first = await registry.register({
+      session_id: "s1",
+      provider: "claude-code",
+      cwd: "/ws/a",
+      source: "startup",
+    });
 
     shouldFail = true;
     await expect(
@@ -248,6 +231,6 @@ describe("SessionRegistry.register — rollback on index failure", () => {
 
     // Rolled back to exactly the record from the first successful register — not deleted, and
     // not left holding the failed attempt's (cwd: "/ws/b") half-applied state.
-    expect(registry.get("s1")).toEqual(first.record);
+    expect(registry.get("s1")).toEqual(first);
   });
 });
