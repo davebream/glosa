@@ -68,7 +68,25 @@
   --nav-width: 260px;
   --margin-width: 320px;
   --topbar-height: 3rem;
+  --artifact-bar-height: 36px;
   --measure: 68ch;
+  /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
+     Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
+     serif context, where `68ch` would measure the sans face and lie by ~110px. MEASURED from the
+     built page, not estimated — the shipped serif is wider than the brief's 642px guess, and the
+     difference is the whole 1130–1187px band where a rail derived from the guess would have
+     overlapped the text. Keep in step with --measure, .glosa-content's padding, and
+     artifact-pane.js's MARGIN_RAIL_FLOOR. */
+  --manuscript-block: 707px;
+}
+
+/* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
+   — rather than re-resolved against whatever font each consumer happens to be set in. This is
+   what lets the editor's chrome share one measure with the textarea it frames (2026-09-04 §8). */
+@property --source-measure {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
 }
 
 /* The approved dark direction is the same annotated workbench under lower ambient light, not an
@@ -138,6 +156,16 @@ body {
 #app,
 #app > [data-screen] {
   height: 100%;
+}
+
+/* The workbench keeps its floors and lets the viewport clip it, the way a desktop editor does:
+   the navigator column holds its width, every pane holds its minimum, and a window narrower than
+   their sum scrolls rather than restacking the work. The alternative — collapsing the navigator
+   into an overlay the moment the window narrows — hides the tree behind a scrim exactly when the
+   reader is most likely to be navigating between two documents. */
+#app {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 button {
@@ -213,92 +241,49 @@ button {
 
 /* ---------- 4. App topology ---------- */
 
-/* One column by default: the navigator floats over the manuscript. At desk widths (below) it
-   becomes a column of its own instead. */
+/* The navigator is a column the work sits beside, at every width, or it is not there at all. The
+   banner row collapses to nothing while the connection holds. */
 .glosa-app {
   height: 100%;
+  /* The dock's own floor is one pane at its 360px minimum (dock.js's MIN_PANE_WIDTH); the open
+     navigator adds its column to that. Below this, #app scrolls. */
+  min-width: 360px;
   display: grid;
-  grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-height) auto minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "topbar"
+    "banner"
     "main";
 }
 
-/* Under 1024px there is no room for a column beside the manuscript, so the navigator is a drawer
-   over a backdrop — asked for, used, and dismissed. */
-.glosa-sidebar {
-  position: fixed;
-  inset: var(--topbar-height) auto 0 0;
-  width: min(var(--nav-width), 85vw);
-  z-index: var(--z-drawer);
-  transform: translateX(-100%);
-  transition: transform var(--dur-base) var(--ease-out);
-  box-shadow: 2px 0 12px oklch(0.24 0.01 110 / 0.1);
+.glosa-app[data-surface="workspace"][data-nav-open="true"] {
+  min-width: calc(var(--nav-width) + 360px);
+  grid-template-columns: var(--nav-width) minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "banner banner"
+    "nav    main";
 }
 
-.glosa-app[data-nav-open="true"] .glosa-sidebar {
-  transform: translateX(0);
-}
-
-.glosa-backdrop {
+.glosa-app[data-nav-open="false"] .glosa-sidebar {
   display: none;
 }
 
-.glosa-app[data-nav-open="true"] .glosa-backdrop {
-  display: block;
-  position: fixed;
-  inset: var(--topbar-height) 0 0 0;
-  z-index: calc(var(--z-drawer) - 1);
-  background: oklch(0.24 0.01 110 / 0.25);
-}
-
-/* At 1024px and wider the navigator is a column the manuscript sits beside, the way an editor's
-   file tree is — never an overlay, so it survives opening an artifact and nothing dims behind it.
-   The top-bar toggle collapses it to zero and back (viewer-navigator.js's DRAWER_ONLY_QUERY). */
-@media (min-width: 1024px) {
-  .glosa-app[data-surface="workspace"][data-nav-open="true"] {
-    grid-template-columns: var(--nav-width) minmax(0, 1fr);
-    grid-template-areas:
-      "topbar topbar"
-      "nav    main";
-  }
-
-  /* Attribute-qualified to match the drawer rules above selector-for-selector: a bare
-     `.glosa-sidebar` here would lose to their higher specificity no matter how late it appears. */
-  .glosa-app[data-nav-open] .glosa-sidebar {
-    position: static;
-    width: auto;
-    z-index: auto;
-    transform: none;
-    box-shadow: none;
-  }
-
-  .glosa-app[data-nav-open="false"] .glosa-sidebar {
-    display: none;
-  }
-
-  .glosa-app[data-nav-open="true"] .glosa-backdrop {
-    display: none;
-  }
-}
-
-/* A single presented document has no workspace to navigate. Last, so it outranks every
-   navigator rule above rather than depending on the `hidden` attribute the shell also sets. */
+/* A single presented document has no workspace to navigate. Last, so it outranks every navigator
+   rule above rather than depending on the `hidden` attribute the shell also sets. */
 .glosa-app[data-surface="document"] .glosa-nav-toggle,
-.glosa-app[data-surface="document"] .glosa-sidebar,
-.glosa-app[data-surface="document"] .glosa-backdrop {
+.glosa-app[data-surface="document"] .glosa-sidebar {
   display: none;
 }
 
-/* The contextual margin is an overlay INSIDE the manuscript's scroll container (viewer.js puts
-   it there), so cards scroll glued to their anchors; at annotate widths the manuscript shifts
-   left to clear it (brief §7.2). */
-@media (min-width: 1280px) {
-  .glosa-app[data-mode="annotate"] .glosa-main {
-    padding-right: calc(var(--margin-width) + var(--space-4));
-  }
-}
+/* The contextual margin is an overlay INSIDE the manuscript's scroll container (artifact-pane.js
+   puts it there), so cards scroll glued to their anchors.
+   THE MANUSCRIPT NEVER MOVES (2026-09-04 brief §7). There is deliberately no rule here reserving
+   space for the margin: entering Annotate, leaving it, or receiving the first annotation never
+   changes the manuscript's horizontal position. The rail is placed in whitespace the manuscript
+   was never using — see the pane's container-query ladder in section 7 — or it is not placed at
+   all. Anything that adds padding to a pane on mode is reintroducing the defect. */
 
 /* ---------- 5. Top bar ---------- */
 
@@ -376,22 +361,13 @@ button {
   flex: 1;
 }
 
-.glosa-artifact-name {
+/* The bar's title is the workspace — the honest label for what the bar now controls. Artifact
+   names live on tabs and in each pane's own artifact bar (2026-09-04 §6). */
+.glosa-workspace-name {
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.glosa-artifact-dir {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl; /* truncate the middle-left, keep the tail (filename side) visible */
-  text-align: left;
 }
 
 .glosa-topbar-actions {
@@ -880,12 +856,11 @@ button {
   outline-offset: -2px;
 }
 
-/* Mode control: one stable segmented control, active state never color-alone (weight + bg). */
+/* Mode control: one stable segmented control, active state never color-alone (weight + bg).
+   Inside the artifact bar it carries NO track of its own — the bar already is one, and a bordered
+   control in a bordered cluster on a bordered pane is three rules doing one rule's job. */
 .glosa-modebar {
   display: flex;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 2px;
   gap: 2px;
 }
@@ -901,7 +876,8 @@ button {
     color var(--dur-fast) var(--ease-out);
 }
 
-.glosa-modebar button:hover {
+.glosa-modebar button:not([aria-pressed="true"]):hover {
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
   color: var(--ink);
 }
 
@@ -909,8 +885,6 @@ button {
   background: var(--bg);
   color: var(--ink);
   font-weight: 600;
-  border: 1px solid var(--border-strong);
-  margin: -1px; /* keep the segmented track height stable when the active border appears */
 }
 
 .glosa-modebar button:disabled {
@@ -1158,8 +1132,12 @@ button {
 
 /* ---------- 6. Navigator ---------- */
 
+/* A column the work sits beside, at every width. It never floats, never overlays, and never dims
+   the work behind it — the top-bar toggle collapses it to nothing and back, and that choice is
+   remembered. */
 .glosa-sidebar {
   grid-area: nav;
+  min-width: 0;
   overflow-y: auto;
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -1356,6 +1334,27 @@ button {
   font-weight: 600;
 }
 
+/* An open artifact is one the reader already has on screen in some pane; the active pane's is
+   the one the URL and the top bar are talking about. Two states, told apart by weight and colour
+   as well as by the mark, so the tree says what is open rather than only where you last clicked. */
+.glosa-artifact-list [role="treeitem"][data-open="true"] > .glosa-tree-row {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.glosa-tree-open {
+  width: 3px;
+  height: 14px;
+  flex: 0 0 3px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+[aria-current="page"] > .glosa-tree-row > .glosa-tree-open {
+  background: var(--primary);
+}
+
 .glosa-tree-disclosure,
 .glosa-tree-icon {
   width: 15px;
@@ -1418,10 +1417,11 @@ button {
   text-wrap: pretty;
 }
 
-/* Connection banner: a thin, sticky, honest strip — content stays readable beneath it. */
+/* Connection banner: a thin, honest strip across the whole workbench. One banner, never one per
+   pane (2026-09-04 §11) — the connection either holds or it does not, and saying so six times
+   would not make it truer. */
 .glosa-banner {
-  position: sticky;
-  top: 0;
+  grid-area: banner;
   z-index: var(--z-sticky);
   background: color-mix(in oklch, var(--warn) 12%, var(--bg));
   color: var(--warn);
@@ -1436,13 +1436,374 @@ button {
 
 .glosa-main {
   grid-area: main;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  /* The desk the panes sit on. dockview's 1px gap shows this through between groups, so a sash
+     reads as the same quiet one-pixel rule as every other division in the workbench. */
+  background: var(--border);
+}
+
+.glosa-dock-host {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* ---------- 7a. The pane: one artifact, its own width ---------- */
+
+/* The pane is the container every artifact-scoped width rule is written against (§7). A pane
+   changes width when a sash moves and the window does not, so viewport media queries stopped
+   meaning anything the moment two artifacts could share a screen. */
+.glosa-pane {
+  container-type: inline-size;
+  container-name: pane;
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "bar"
+    "body";
+  background: var(--bg);
+}
+
+.glosa-panel {
+  height: 100%;
+  min-width: 0;
+}
+
+.glosa-pane-main {
+  grid-area: body;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden; /* pre/tables scroll internally; the page itself never pans sideways */
+  overflow-x: hidden; /* pre/tables scroll internally; a pane itself never pans sideways */
   background: var(--bg);
   display: flex;
   flex-direction: column;
   position: relative; /* the margin overlay and its anchor-aligned cards position against this */
+}
+
+.glosa-pane[data-mode="edit"] .glosa-pane-main {
+  overflow: hidden;
+}
+
+/* The artifact bar (§6). Not a bar: a bordered, rounded toolbar object inset on the pane's paper,
+   spanning the artifact container.
+
+   §6 specifies a flush control-surface row with a bottom border, and built that way it read as a
+   second top bar — two near-identical 35px chrome bands stacked, taxing exactly the single-tab
+   case the brief says the dock must not tax, and breaking §9's reason for giving the active tab
+   the reading surface ("so the active tab reads as the same sheet as the manuscript below it").
+   Inset, the pane's paper runs unbroken from the tab down and the toolbar sits ON it instead of
+   banding across it.
+
+   It takes the MANUSCRIPT's width, not the pane's — the text measure, so its edges line up with
+   where the prose starts and stops (and with the outline an annotatable block draws). It is the
+   document's toolbar, so it is the document's width; spanning the pane made it chrome again and
+   parked the mode control in a far corner the eye never travels to.
+
+   One container, no border. The sunken surface is what DESIGN.md §2 already reserves for
+   segmented tracks and hover beds, and a fill plus a radius says "control cluster" without a rule
+   around it. Everything inside it is therefore borderless too — see .glosa-modebar below. */
+.glosa-artifact-bar {
+  grid-area: bar;
+  container-type: inline-size;
+  container-name: bar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  width: min(calc(var(--manuscript-block) - 2 * var(--space-8)), calc(100% - 2 * var(--space-2)));
+  height: var(--artifact-bar-height);
+  margin: var(--space-2) auto 0;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+
+/* Only the pane the mode control, the shortcuts and the address bar are all addressing offers
+   them. The rest state their mode and stay out of the way. */
+.glosa-pane-mode-label {
+  flex: 0 0 auto;
+  padding-right: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: capitalize;
+}
+
+.glosa-pane[data-active="true"] .glosa-pane-mode-label,
+.glosa-pane[data-active="false"] .glosa-modebar,
+.glosa-pane[data-active="false"] .glosa-artifact-bar .glosa-history-toggle,
+.glosa-pane[data-active="false"] .glosa-pane-tools {
+  display: none;
+}
+
+/* An unfocused pane's toolbar has nothing to offer, so it stops looking like something to press. */
+.glosa-pane[data-active="false"] .glosa-artifact-bar {
+  background: none;
+}
+
+/* With the filename on the tab, this slot carries only the path the tab left out — and nothing at
+   all for an artifact at the workspace root. It keeps its place in the row either way, so the
+   controls do not jump edge to edge depending on whether a file sits in a subdirectory. */
+.glosa-artifact-id[data-empty="true"] {
+  pointer-events: none;
+}
+
+.glosa-artifact-id {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Genuine middle truncation, without JS: the leading segments shrink and ellipsize while the
+   segment nearest the filename never does, so the directory always ends where the reader is
+   looking. artifact-pane.js splits the path into these two spans. */
+.glosa-artifact-dir {
+  display: flex;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.glosa-artifact-dir-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-artifact-dir-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.glosa-artifact-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.glosa-pane[data-missing="true"] .glosa-artifact-name,
+.glosa-pane[data-missing="true"] .glosa-artifact-dir,
+.glosa-pane[data-missing="true"] .glosa-artifact-dir-head,
+.glosa-pane[data-missing="true"] .glosa-artifact-dir-tail {
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.glosa-pane-tools {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.glosa-pane-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: var(--z-drawer);
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 13rem;
+  padding: var(--space-1);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  /* A menu is genuinely above the work while it is open, which is the one case the
+     Flat-Until-Floating Rule admits. */
+  box-shadow: 0 6px 20px oklch(0.24 0.01 110 / 0.14);
+}
+
+.glosa-pane-tools[data-open="true"] .glosa-pane-menu {
+  display: flex;
+}
+
+.glosa-pane-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-pane-menu-item:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+/* A direction that would do nothing says so. Faint ink and no hover bed — DESIGN.md §5's disabled
+   treatment minus the fill, which on a menu row would read as more prominent rather than less. */
+.glosa-pane-menu-item:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.glosa-pane-menu-item:disabled:hover {
+  background: none;
+  color: var(--faint);
+}
+
+.glosa-pane-menu-item svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-pane-menu-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-pane-menu-group:empty {
+  display: none;
+  border: none;
+}
+
+.glosa-pane-menu-heading {
+  margin: 0;
+  padding: var(--space-1) var(--space-2) 0;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* History has its own control in the bar while there is room for one; below 400cqi that control
+   folds and this row takes over (§6's collapse order). */
+.glosa-pane-menu-history {
+  display: none;
+}
+
+.glosa-artifact-bar .glosa-history-toggle,
+.glosa-artifact-bar .glosa-tools-trigger {
+  flex: 0 0 auto;
+  display: grid;
+  grid-auto-flow: column;
+  place-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  border-radius: 6px;
+  color: var(--muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-artifact-bar .glosa-history-toggle:hover,
+.glosa-artifact-bar .glosa-tools-trigger:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.glosa-artifact-bar .glosa-history-toggle[aria-expanded="true"] {
+  background: var(--bg);
+  color: var(--primary);
+}
+
+.glosa-artifact-bar .glosa-history-toggle svg,
+.glosa-artifact-bar .glosa-tools-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.glosa-artifact-bar .glosa-history-toggle svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-artifact-bar .glosa-tools-trigger svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.glosa-artifact-bar .glosa-modebar {
+  flex: 0 0 auto;
+}
+
+.glosa-artifact-bar .glosa-modebar button {
+  display: grid;
+  grid-auto-flow: column;
+  place-items: center;
+  gap: var(--space-1);
+}
+
+.glosa-artifact-bar .glosa-modebar svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The collapse ladder (§6), on PANE width. In order: the directory drops, then the mode control
+   goes icon-only, then History folds into the overflow. The filename and the mode control are
+   the last two things standing. */
+/* The collapse ladder (§6). Keyed on the BAR, not the pane: now that the bar caps at the
+   manuscript measure, the pane can keep growing while the bar stays exactly as wide — so pane
+   width stopped predicting when the bar runs out of room. In order: History drops its word, the
+   directory drops, the mode control goes icon-only, then History folds into the overflow. The
+   filename lives on the tab; the mode control is the last thing standing here. */
+@container bar (max-width: 470px) {
+  .glosa-artifact-bar .glosa-history-toggle .glosa-control-label {
+    display: none;
+  }
+}
+
+@container bar (max-width: 400px) {
+  .glosa-artifact-dir {
+    display: none;
+  }
+}
+
+@container bar (max-width: 340px) {
+  .glosa-artifact-bar .glosa-modebar .glosa-control-label {
+    display: none;
+  }
+
+  .glosa-artifact-bar .glosa-modebar button {
+    padding-inline: var(--space-2);
+  }
+}
+
+@container bar (max-width: 250px) {
+  .glosa-artifact-bar .glosa-history-toggle {
+    display: none;
+  }
+
+  .glosa-pane-menu-history {
+    display: flex;
+  }
 }
 
 .glosa-approval-strip {
@@ -1794,8 +2155,34 @@ button {
   gap: var(--space-3);
 }
 
-.glosa-app[data-mode="edit"] .glosa-main {
-  overflow: hidden;
+/* §8: the measure follows the FACE. Rich is prose and keeps the 68ch reading measure the
+   Reading Measure Rule governs. Source is markdown — tables, fences, front-matter, URLs — and a
+   68-character wrap makes it unreadable while forcing horizontal scrolling inside a column with
+   room to spare. So the source face takes the pane up to a 100-character cap, left-aligned, in
+   the mono face it is already set in.
+
+   The cap is declared on the wrap, in the mono context, and inherited as a resolved length by the
+   chrome around the textarea (see @property --source-measure) — otherwise the toolbar and the
+   Save row would each measure `100ch` in their own sans face and sit at a different width from
+   the text they frame. */
+.glosa-pane[data-editor-face="source"] .glosa-edit-wrap {
+  max-width: none;
+  margin-inline: 0;
+  align-items: flex-start;
+  font-family: var(--font-mono);
+  --source-measure: 100ch;
+}
+
+.glosa-pane[data-editor-face="source"] .glosa-edit-topbar,
+.glosa-pane[data-editor-face="source"] .glosa-edit-area,
+.glosa-pane[data-editor-face="source"] .glosa-edit-actions {
+  width: 100%;
+  max-width: min(var(--source-measure), 100%);
+}
+
+.glosa-pane[data-editor-face="source"] .glosa-edit-topbar,
+.glosa-pane[data-editor-face="source"] .glosa-edit-actions {
+  font-family: var(--font-sans);
 }
 
 .glosa-edit-area {
@@ -2022,8 +2409,10 @@ button {
   max-width: 100%;
 }
 
-/* Side overlay (annotate mode ≥1280px, class set by viewer.js): a transparent right rail inside
-   the scroll container; each card is absolutely positioned beside its anchor by layoutMargin. */
+/* Side rail (annotate mode, pane ≥1130px — artifact-pane.js sets the class off one observed pane
+   width, so the rail/tray decision and the card geometry never disagree): a transparent right
+   rail inside the scroll container; each card is absolutely positioned beside its anchor by
+   layoutMargin. It overlays whitespace, so the manuscript below it never moves. */
 .glosa-margin-side {
   position: absolute;
   top: 0;
@@ -2049,6 +2438,24 @@ button {
 .glosa-margin-side .glosa-margin-title,
 .glosa-margin-side .glosa-margin-empty {
   display: none; /* aligned cards ARE the margin; labels only help the in-flow layout */
+}
+
+/* The rail's width is whatever the right-hand whitespace can actually hold, between a 240px floor
+   and the 320px the design asks for (§7).
+
+   The `- var(--space-2)` is the pane's own scrollbar. `100cqi` is the PANE's inline size, but the
+   manuscript scrolls inside .glosa-pane-main, whose scrollbar eats ~8px the container query
+   cannot see — without this the rail's edge crosses the manuscript's gutter by a few pixels at
+   every width below 1363. The cards' own 12px rail padding hid that, which is exactly the kind of
+   accidental correctness that breaks the next time the padding changes.
+
+   At the measured 707px manuscript block that gives the full 320px rail from 1363px of pane, and
+   the 240px floor at 1203px — below which artifact-pane.js stops setting .glosa-margin-side at
+   all and the compact tray takes over. Keep the threshold below in step with MARGIN_RAIL_FLOOR. */
+@container pane (min-width: 1205px) {
+  .glosa-margin-side {
+    --margin-width: clamp(240px, calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2)), 320px);
+  }
 }
 
 /* The card↔anchor thread (CSS Custom Highlight API): every annotated passage carries a quiet
@@ -2081,10 +2488,14 @@ button {
 }
 
 /* Compact gutter markers: quiet dots at anchor heights along the right edge. */
+/* Gutter dots ride the manuscript's right edge, not the pane's. The manuscript is centred, so in
+   a wide pane the pane edge can be hundreds of pixels from the text a dot is marking — which is
+   only invisible while the dots are an Annotate-and-compact-only affordance. They are neither now.
+   The `max()` collapses to the pane edge as soon as the manuscript fills the pane. */
 .glosa-markers {
   position: absolute;
   top: 0;
-  right: 2px;
+  right: max(2px, calc(50% - var(--manuscript-block) / 2 - 16px));
   width: 14px;
   pointer-events: none;
 }
@@ -2411,7 +2822,7 @@ button {
 /* ---------- 11. History pane ---------- */
 
 .glosa-history {
-  grid-area: main;
+  grid-area: body;
   z-index: var(--z-sticky);
   min-width: 0;
   min-height: 0;
@@ -2572,7 +2983,8 @@ button {
 /* diff2html ships dark variables but only applies them behind its own utility class. glosa owns
    theme resolution, so remap the vendor variables at the pane boundary instead of teaching the
    history module about appearance. */
-:root[data-theme="dark"] .glosa-diff-pane {
+:root[data-theme="dark"] .glosa-diff-pane,
+:root[data-theme="dark"] .glosa-diff-surface {
   --d2h-bg-color: var(--bg);
   --d2h-border-color: var(--border);
   --d2h-dim-color: var(--muted);
@@ -2610,8 +3022,12 @@ button {
   opacity: 1;
 }
 
-:root[data-theme="dark"] .glosa-sidebar {
+/* On a dark ground a broad soft shadow reads as haze, not as height. The pane menu keeps its
+   priority through a stronger border instead. */
+:root[data-theme="dark"] .glosa-pane-menu {
   box-shadow: none;
+  border-color: var(--border-strong);
+  background: var(--surface);
 }
 
 .glosa-diff-pane:empty {
@@ -2914,14 +3330,6 @@ button {
     display: none;
   }
 
-  .glosa-artifact-dir {
-    display: none;
-  }
-
-  .glosa-modebar button {
-    padding-inline: var(--space-2);
-  }
-
   .glosa-tools-menu {
     right: var(--space-2);
   }
@@ -2940,12 +3348,14 @@ button {
   }
 }
 
-/* Until the annotation rail has room beside the manuscript, the composer is a viewport-bound
-   tray. Keeping this breakpoint paired with the 1280px side-margin breakpoint avoids a dead
-   tablet band where a focused composer would otherwise render after the document. */
-@media (max-width: 1279px) {
+/* Until the annotation rail has room beside the manuscript, the composer is a tray pinned to the
+   bottom of ITS OWN PANE. A viewport-bound tray was right when there was one artifact on screen;
+   with several, a tray from the third pane covering the whole window would be a lie about which
+   document it belongs to. Paired with the 1130px rail floor above so there is no dead band where
+   a focused composer renders after the document. */
+@container pane (max-width: 1204px) {
   .glosa-composer {
-    position: fixed;
+    position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
@@ -2958,45 +3368,27 @@ button {
   }
 }
 
-/* Phone widths and 200% desktop zoom need a structural second row. Chrome collapses before the
-   manuscript does, keeping every command visible without horizontal scrolling. */
+/* Phone widths and 200% desktop zoom. The top bar stays a single row now that the mode control
+   lives in the pane — the second row it used to grow existed only to carry that control, and the
+   pane's own collapse ladder handles the same pressure closer to where it is felt. */
 @media (max-width: 640px) {
-  :root {
-    --topbar-height: 5.75rem;
-  }
-
   .glosa-topbar {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: 2.75rem 2.75rem;
-    column-gap: var(--space-2);
-    row-gap: 0;
+    gap: var(--space-1);
   }
 
   .glosa-nav-toggle {
-    grid-column: 1;
-    grid-row: 1;
     min-width: 2.75rem;
     min-height: 2.75rem;
   }
 
-  .glosa-topbar-title {
-    display: none;
+  .glosa-workspace-name {
+    font-size: var(--text-xs);
   }
 
   .glosa-topbar-actions {
-    grid-column: 3;
-    grid-row: 1;
     gap: var(--space-1);
   }
 
-  .glosa-modebar {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: center;
-  }
-
-  .glosa-modebar button,
   .glosa-tools-trigger {
     min-height: 2.25rem;
   }
@@ -3090,6 +3482,336 @@ button {
   }
 }
 
+/* ---------- 15. The dock: tabs, splits, and the sheet under them ---------- */
+
+/* dockview's own stylesheet ships a complete visual language. None of it survives here: every
+   value that carries a look is remapped onto glosa's tokens, so the workbench stays the
+   annotated workbench and never becomes IDE chrome (2026-09-04 brief §9). Tabs and splits are
+   furniture — an index tab on a manuscript.
+
+   `.glosa-dock-theme` is the className dock.js hands dockview as its DockviewTheme. dockview
+   defines nothing under that name, so nothing below is fighting a default. */
+.glosa-dock-theme {
+  /* A pane holds paper. */
+  --dv-group-view-background-color: var(--bg);
+
+  /* The tab strip is the control surface, like every other piece of chrome. */
+  --dv-tabs-and-actions-container-background-color: var(--surface);
+  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-font-size: var(--text-sm);
+  --dv-tab-font-size: var(--text-sm);
+  --dv-tab-divider-color: var(--border);
+  --dv-tabs-container-scrollbar-color: var(--border-strong);
+  --dv-scrollbar-background-color: var(--border-strong);
+
+  /* The active tab takes the reading surface, so it reads as the same sheet as the manuscript
+     directly below it; the inactive tabs stay on the control surface behind it. */
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--ink);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--surface-sunken);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--surface-sunken);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--faint);
+
+  /* Square. A rounded tab is a card, and a card floats. */
+  --dv-tab-border-radius: 0;
+  --dv-border-radius: 0;
+  --dv-sash-border-radius: 0;
+  --dv-dropdown-border-radius: 8px;
+  --dv-tab-margin: 0;
+  --dv-tab-margin-block: 0;
+  --dv-tab-margin-inline: 0;
+  --dv-spacing-padding: 0;
+  --dv-tab-close-icon-size: 14px;
+
+  /* Separators and sashes are the same one-pixel rule as every other division. The sash only
+     takes the accent while it is actually being dragged. */
+  --dv-separator-border: var(--border);
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--primary);
+  --dv-active-sash-transition-duration: var(--dur-fast);
+  --dv-active-sash-transition-delay: 0ms;
+  --dv-transition-duration: var(--dur-base);
+
+  /* The drop target is the one place in the product where olive marks a spatial intent rather
+     than a state, and it is gone the instant the pointer is released — which is exactly the
+     transient marking the Accent Rarity Rule permits. */
+  --dv-drag-over-background-color: color-mix(in oklch, var(--primary) 12%, transparent);
+  --dv-drag-over-border-color: var(--primary);
+  --dv-drag-over-border: 2px solid var(--primary);
+  --dv-edge-dock-indicator-color: var(--primary);
+
+  --dv-icon-hover-background-color: var(--surface-sunken);
+  --dv-context-menu-background-color: var(--bg);
+  --dv-context-menu-color: var(--ink);
+
+  /* Floating groups are off and popouts are unused, so nothing in the dock is ever above the
+     work. Every shadow resolves to none rather than to something quieter — the Flat-Until-
+     Floating Rule is not a preference for subtle shadows. */
+  --dv-floating-box-shadow: none;
+  --dv-floating-border: none;
+  --dv-floating-group-border: none;
+
+  /* Tab-group accents are an enterprise decoration vocabulary glosa does not use. */
+  --dv-tab-group-line-opacity: 0;
+  --dv-tab-group-color: transparent;
+}
+
+.glosa-dock-theme .dv-groupview,
+.glosa-dock-theme .dv-content-container {
+  background: var(--bg);
+}
+
+/* The strip is a track and the tabs sit in it — the same idiom as the segmented mode control, and
+   the reason an inactive tab is legible at all in light appearance, where --surface and --bg are
+   under three percent apart. */
+.glosa-dock-theme .dv-tabs-and-actions-container,
+.glosa-dock-theme .dv-void-container {
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.glosa-dock-theme .dv-tab {
+  position: relative;
+  padding: 0;
+  border-right: 1px solid var(--border);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* The active tab's mark: a 2px olive top edge, painted rather than added to the box, so switching
+   tabs never nudges the strip by two pixels. Weight and the surface change carry it too — the
+   edge is never the only signal. */
+.glosa-dock-theme .dv-active-group .dv-tab.dv-active-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--primary);
+}
+
+/* An unfocused group's current tab still reads as the sheet it is, in the neutral edge rather
+   than the accent — olive means focus, and there is only one focus. */
+.glosa-dock-theme .dv-inactive-group .dv-tab.dv-active-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--border-strong);
+}
+
+.glosa-dock-theme .dv-active-group .dv-tab.dv-active-tab .glosa-tab-label {
+  font-weight: 600;
+}
+
+.glosa-dock-theme .dv-tab:hover .glosa-tab-close,
+.glosa-dock-theme .dv-tab.dv-active-tab .glosa-tab-close,
+.glosa-dock-theme .dv-tab:focus-within .glosa-tab-close {
+  opacity: 1;
+}
+
+/* The tab itself. dockview owns the strip; everything inside one tab is glosa's. */
+.glosa-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 15rem;
+  height: 100%;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.glosa-tab-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.glosa-tab-glyph svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glosa-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glosa-tab[data-missing="true"] .glosa-tab-label {
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.glosa-tab-badges {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The same three marks the navigator tree uses, at tab scale — never a second vocabulary (§12).
+   Each one carries an accessible name as well as a shape. */
+.glosa-tab-stale {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.glosa-tab-count {
+  min-width: 1.05rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.05rem;
+  text-align: center;
+}
+
+.dv-active-tab .glosa-tab-count {
+  background: color-mix(in oklch, var(--primary) 14%, var(--bg));
+  color: var(--primary);
+}
+
+.glosa-tab-dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.glosa-tab-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-tab-close:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-tab-close:focus-visible {
+  opacity: 1;
+}
+
+.glosa-tab-close svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* Coarse pointers cannot hover, so a close target that only appears on hover is unreachable. */
+@media (pointer: coarse) {
+  .glosa-tab-close {
+    opacity: 1;
+  }
+
+  .glosa-tab {
+    padding-block: var(--space-1);
+  }
+}
+
+/* The empty dock carries glosa's own teaching copy, not dockview's watermark. */
+.glosa-watermark {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: var(--space-8);
+  background: var(--bg);
+}
+
+.glosa-watermark .glosa-empty {
+  max-width: 30rem;
+}
+
+/* ---------- 16. A comparison as a pane ---------- */
+
+.glosa-diff-main {
+  padding: var(--space-4) var(--space-6) var(--space-8);
+}
+
+.glosa-diff-range {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.125rem var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.glosa-diff-status {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+.glosa-diff-status[data-error] {
+  color: var(--danger);
+}
+
+.glosa-diff-surface {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.glosa-diff-surface:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+}
+
+/* ---------- 17. Keyboard sheet ---------- */
+
+.glosa-shortcut-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 var(--space-6);
+}
+
+.glosa-shortcut-list dt {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.glosa-shortcut-list dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 /* ---------- 14. Reduced motion ---------- */
 
 /* Native print/PDF uses the rendered Class-R manuscript, never the application workbench. Literal
@@ -3104,21 +3826,36 @@ button {
   body,
   .glosa-app,
   .glosa-main,
+  .glosa-pane,
+  .glosa-pane-main,
   .glosa-content {
     background: #ffffff !important;
     color: #20251f !important;
   }
 
   .glosa-app,
-  .glosa-main {
+  .glosa-main,
+  .glosa-dock-host,
+  .glosa-panel,
+  .glosa-pane,
+  .glosa-pane-main {
     display: block !important;
     overflow: visible !important;
+    height: auto !important;
+  }
+
+  /* Several artifacts can be open; exactly one asked to print. artifact-pane.js stamps the pane
+     that did, so the export is never ambiguous about which document it is. */
+  .glosa-app:has(.glosa-pane[data-printing]) .glosa-pane:not([data-printing]) {
+    display: none !important;
   }
 
   .glosa-topbar,
   .glosa-sidebar,
-  .glosa-backdrop,
   .glosa-banner,
+  .glosa-artifact-bar,
+  .dv-tabs-and-actions-container,
+  .glosa-watermark,
   .glosa-approval-strip,
   .glosa-annotate-instructions,
   .glosa-empty,
@@ -3175,7 +3912,6 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .glosa-app,
-  .glosa-sidebar,
   .glosa-modebar button,
   .glosa-sidebar li button,
   .glosa-tree-tool,

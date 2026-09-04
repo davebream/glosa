@@ -266,6 +266,10 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./viewer-context-surfaces.js",
     "./viewer-feedback.js",
     "./viewer-navigator.js",
+    "./artifact-pane.js",
+    "./diff-pane.js",
+    "./dock.js",
+    "./vendor/dockview.js",
     "./vendor/idiomorph.js",
     "./vendor/diff2html.js",
     "./vendor/prosemirror.js",
@@ -285,6 +289,30 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
       expect(staticSpecifiers).not.toContain(optional);
       expect(source).toContain(`import("${optional}")`);
     }
+  });
+
+  test("artifact-pane.js's local imports are exactly the sanctioned set", () => {
+    const source = read("../src/artifact-pane.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    const relative = specifiers.filter((s) => s.startsWith("./") || s.startsWith("../"));
+    expect(relative.length).toBeGreaterThan(0);
+    for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
+  });
+
+  test("dock.js knows about panels and tabs, never about the daemon", () => {
+    const source = read("../src/dock.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    // The dock decides which panes exist and where they sit. Everything a pane knows — including
+    // how to reach the daemon — is injected by viewer.js.
+    expect(specifiers).toEqual(["./vendor/dockview.js", "./viewer-shell.js"]);
+    expect(source).not.toContain("data-access");
+  });
+
+  test("diff-pane.js's local imports are exactly the sanctioned set", () => {
+    const source = read("../src/diff-pane.js");
+    const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
+    const relative = specifiers.filter((s) => s.startsWith("./") || s.startsWith("../"));
+    for (const spec of relative) expect(ALLOWED_RELATIVE_IMPORTS.has(spec)).toBe(true);
   });
 
   test("annotate.js imports nothing (self-contained — no daemon access of its own)", () => {

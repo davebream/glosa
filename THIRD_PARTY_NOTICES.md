@@ -12,6 +12,7 @@ validated by the repository's production dependency license check.
 - ProseMirror packages, copyright Marijn Haverbeke and others
 - markdown-it, copyright 2014 Vitaly Puzrin and Alex Kocharin
 - markdown-it dependencies bundled with the editor module
+- dockview-core 8.2.0, copyright https://github.com/mathuo
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

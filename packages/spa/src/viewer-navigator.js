@@ -2,20 +2,22 @@
 // Navigator visibility and the collapsible workspace switcher. Transport-free — mountApp injects
 // the elements and storage this needs.
 //
-// The navigator has ONE control: the top-bar toggle. What that toggle produces depends on whether
-// the viewport can host a column beside the manuscript:
-//   * 1024px and wider — a persistent column, like an editor's file tree. Never an overlay, so it
-//     survives opening an artifact, and the shown/hidden choice is remembered per browser.
-//   * narrower — an overlay drawer, because a 260px column would push the manuscript under the
-//     ~60ch floor the design brief sets. A drawer is transient: it starts closed, and opening an
-//     artifact, Escape, or the backdrop dismisses it. Nothing about it is persisted, so a narrow
-//     session can never leave the desk-width column hidden.
+// The navigator has ONE control and ONE behaviour: the top-bar toggle shows or hides a column,
+// at every width. It is never an overlay.
+//
+// It used to become a drawer over the manuscript below 1024px, on the theory that a 260px column
+// would push the manuscript under its reading floor. The workbench replaced that theory with a
+// floor: the app keeps a minimum width, the navigator keeps its column, every pane keeps its own
+// minimum, and a viewport narrower than the sum clips the workbench rather than restacking it —
+// the way a desktop editor does. A drawer that covers the work the moment the window narrows is
+// a worse answer than a column the reader can close themselves, and closing it is one click they
+// were always able to make.
+//
+// The shown/hidden choice is therefore a single preference, remembered at every width, because it
+// now means the same thing at every width.
 
 export const NAV_OPEN_STORAGE_KEY = "glosa_nav_open";
 export const NAV_WORKSPACES_STORAGE_KEY = "glosa_nav_workspaces";
-
-// Paired with app.css's `@media (min-width: 1024px)` column rules.
-export const DRAWER_ONLY_QUERY = "(max-width: 1023px)";
 
 function defaultStorage() {
   try {
@@ -23,11 +25,6 @@ function defaultStorage() {
   } catch {
     return null;
   }
-}
-
-function defaultMedia(query) {
-  if (typeof window === "undefined") return false;
-  return Boolean(window.matchMedia?.(query)?.matches);
 }
 
 function readFlag(storage, key, fallback) {
@@ -54,31 +51,21 @@ function writeFlag(storage, key, value) {
  *   root: any,
  *   elements: any,
  *   storage?: any,
- *   media?: (query: string) => boolean,
  *   enabled?: boolean,
  * }} options
  */
-export function createNavigatorController({
-  root,
-  elements,
-  storage = defaultStorage(),
-  media = defaultMedia,
-  enabled = true,
-} = {}) {
+export function createNavigatorController({ root, elements, storage = defaultStorage(), enabled = true } = {}) {
   const { navToggle, sidebarEl, sidebarList, artifactList, workspacesToggle, workspacesSection } = elements;
 
   let workspacesExpanded = readFlag(storage, NAV_WORKSPACES_STORAGE_KEY, true);
   let workspacesAvailable = false;
-
-  const isDocked = () => enabled && !media(DRAWER_ONLY_QUERY);
-  const naturalOpen = () => isDocked() && readFlag(storage, NAV_OPEN_STORAGE_KEY, true);
-
-  let open = naturalOpen();
-  let wasDocked = isDocked();
+  // A presented single document has no workspace to navigate, so there is nothing to show and no
+  // preference to honour.
+  let open = enabled && readFlag(storage, NAV_OPEN_STORAGE_KEY, true);
 
   function syncInteractivity() {
-    // A hidden navigator is out of the focus order either way: the drawer is translated
-    // off-screen and the column is display:none.
+    // A hidden navigator is display:none, and therefore already out of the focus order; `inert`
+    // and `aria-hidden` state it anyway so nothing depends on the CSS having loaded.
     const unreachable = enabled && !open;
     sidebarEl.inert = unreachable;
     if (unreachable) sidebarEl.setAttribute("aria-hidden", "true");
@@ -87,37 +74,24 @@ export function createNavigatorController({
 
   /**
    * @param {boolean} next
-   * @param {{ restoreFocus?: boolean, focusDrawer?: boolean, persist?: boolean }} [options]
+   * @param {{ restoreFocus?: boolean, persist?: boolean }} [options]
    */
-  function setOpen(next, { restoreFocus = false, focusDrawer = false, persist = false } = {}) {
+  function setOpen(next, { restoreFocus = false, persist = false } = {}) {
     open = Boolean(next);
     root.setAttribute("data-nav-open", String(open));
     navToggle.setAttribute("aria-expanded", String(open));
     navToggle.setAttribute("aria-label", open ? "Hide artifacts" : "Show artifacts");
-    // Only the desk-width column is a preference. Persisting a drawer's state would let a narrow
-    // session's transient dismissal hide the column on the next wide one.
-    if (persist && isDocked()) writeFlag(storage, NAV_OPEN_STORAGE_KEY, open);
+    if (persist) writeFlag(storage, NAV_OPEN_STORAGE_KEY, open);
     syncInteractivity();
-    // Only a drawer takes focus with it — a column appearing beside the manuscript must not pull
-    // the reader out of the text.
-    if (open && focusDrawer && !isDocked()) {
-      queueMicrotask(() => {
-        const target =
-          artifactList.querySelector('[role="treeitem"][aria-current="page"]') ??
-          artifactList.querySelector('[role="treeitem"][tabindex="0"]') ??
-          sidebarList.querySelector('button[aria-current="true"]') ??
-          sidebarList.querySelector("button");
-        target?.focus();
-      });
-    } else if (!open && restoreFocus) {
-      queueMicrotask(() => navToggle.focus({ preventScroll: true }));
-    }
+    // A column appearing beside the work must not pull the reader out of the text, so showing it
+    // never moves focus. Hiding it returns focus to the control that hid it.
+    if (!open && restoreFocus) queueMicrotask(() => navToggle.focus({ preventScroll: true }));
   }
 
   function applyWorkspaces() {
     // MCP/CLI single-workspace mode: a "list of one" is noise — you're already scoped. The whole
     // section (its disclosure included) stands down until a SECOND workspace is live. Buttons stay
-    // in the DOM for markCurrent and the drawer's focus fallback.
+    // in the DOM for markCurrent.
     workspacesSection.hidden = !workspacesAvailable;
     workspacesToggle.setAttribute("aria-expanded", String(workspacesExpanded));
     sidebarList.hidden = !workspacesExpanded;
@@ -130,7 +104,7 @@ export function createNavigatorController({
   }
 
   function onNavToggle() {
-    setOpen(!open, { focusDrawer: true, restoreFocus: true, persist: true });
+    setOpen(!open, { restoreFocus: true, persist: true });
   }
 
   navToggle.addEventListener("click", onNavToggle);
@@ -140,20 +114,18 @@ export function createNavigatorController({
   setOpen(open);
 
   return {
-    isDocked,
     isOpen: () => open,
     setOpen,
 
-    /** Crossing the column breakpoint resets the navigator to that width's natural state: the
-     * remembered column where there is room for one, a closed drawer where there is not. */
-    handleResize() {
-      const dockedNow = isDocked();
-      if (dockedNow === wasDocked) {
-        syncInteractivity();
-        return;
-      }
-      wasDocked = dockedNow;
-      setOpen(naturalOpen());
+    /** Moves keyboard focus into the tree — the current artifact's row when there is one. Used by
+     * the toggle's keyboard path, never by showing the column itself. */
+    focusTree() {
+      const target =
+        artifactList.querySelector('[role="treeitem"][aria-current="page"]') ??
+        artifactList.querySelector('[role="treeitem"][tabindex="0"]') ??
+        sidebarList.querySelector('button[aria-current="true"]') ??
+        sidebarList.querySelector("button");
+      target?.focus();
     },
 
     /** @param {boolean} available */

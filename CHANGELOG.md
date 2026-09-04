@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Several artifacts can be open at once. Open them as tabs, drag a tab to a pane edge to read two
+  side by side, and the arrangement comes back on the next visit. Each pane carries its own mode,
+  its own annotations and its own version history, so one bar no longer speaks for two documents.
+- A comparison between two saved versions opens as its own pane, so it can stay on screen beside
+  the manuscript it describes.
+- Every way of dragging a tab has a single-pointer equivalent in the pane's More menu, and a
+  direction that would do nothing is shown as unavailable rather than silently doing nothing.
+- New keys: Ctrl+Tab and Ctrl+Shift+Tab step through a pane's tabs, Command/Ctrl+Option+Left/Right
+  move between panes, Command/Ctrl+\ moves the active tab into a new split, and Command/Ctrl+W
+  closes it. The keyboard sheet lists all of them.
+
+### Changed
+
+- The navigator is a column at every width, replacing the drawer that alpha.11 kept under 1024px.
+  A narrow window keeps the navigator and every pane at their own minimum width and clips, the way
+  a desktop editor does, instead of covering the work with an overlay exactly when you are moving
+  between two documents. A single presented document still has no navigator at all.
+- Entering Annotate no longer shifts the manuscript sideways. The annotation rail is placed in
+  whitespace the manuscript was never using, measured from the pane rather than the window, or it
+  is not placed at all.
+- Annotating in a split pane works. The rail needs about 1200px and an even split never has that
+  on any ordinary display, so entering Annotate borrows width from the pane beside it and gives it
+  back on the way out.
+- Underlines and gutter marks on annotated passages survive every mode. Leaving Annotate used to
+  erase them, so a heavily reviewed document read as untouched in Preview.
+- Editing markdown source takes the width of the pane up to a 100-character measure. Tables,
+  fenced code and long URLs were being wrapped at the 68-character measure meant for prose.
+- The artifact bar sits above the manuscript at the manuscript's own width, and names only the
+  directory the tab has no room for. The filename is on the tab; it is not repeated underneath.
+
 ## [0.1.0-alpha.11] - 2026-09-04
 
 ### Changed
