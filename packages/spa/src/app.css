@@ -856,12 +856,11 @@ button {
   outline-offset: -2px;
 }
 
-/* Mode control: one stable segmented control, active state never color-alone (weight + bg). */
+/* Mode control: one stable segmented control, active state never color-alone (weight + bg).
+   Inside the artifact bar it carries NO track of its own — the bar already is one, and a bordered
+   control in a bordered cluster on a bordered pane is three rules doing one rule's job. */
 .glosa-modebar {
   display: flex;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 2px;
   gap: 2px;
 }
@@ -877,7 +876,8 @@ button {
     color var(--dur-fast) var(--ease-out);
 }
 
-.glosa-modebar button:hover {
+.glosa-modebar button:not([aria-pressed="true"]):hover {
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
   color: var(--ink);
 }
 
@@ -885,8 +885,6 @@ button {
   background: var(--bg);
   color: var(--ink);
   font-weight: 600;
-  border: 1px solid var(--border-strong);
-  margin: -1px; /* keep the segmented track height stable when the active border appears */
 }
 
 .glosa-modebar button:disabled {
@@ -1499,19 +1497,30 @@ button {
    second top bar — two near-identical 35px chrome bands stacked, taxing exactly the single-tab
    case the brief says the dock must not tax, and breaking §9's reason for giving the active tab
    the reading surface ("so the active tab reads as the same sheet as the manuscript below it").
-   Inset and bordered, the pane's paper runs unbroken from the tab down and the toolbar sits ON it
-   instead of banding across it. Still flat — a border and a radius are not elevation. */
+   Inset, the pane's paper runs unbroken from the tab down and the toolbar sits ON it instead of
+   banding across it.
+
+   It takes the MANUSCRIPT's width, not the pane's — the text measure, so its edges line up with
+   where the prose starts and stops (and with the outline an annotatable block draws). It is the
+   document's toolbar, so it is the document's width; spanning the pane made it chrome again and
+   parked the mode control in a far corner the eye never travels to.
+
+   One container, no border. The sunken surface is what DESIGN.md §2 already reserves for
+   segmented tracks and hover beds, and a fill plus a radius says "control cluster" without a rule
+   around it. Everything inside it is therefore borderless too — see .glosa-modebar below. */
 .glosa-artifact-bar {
   grid-area: bar;
+  container-type: inline-size;
+  container-name: bar;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  width: min(calc(var(--manuscript-block) - 2 * var(--space-8)), calc(100% - 2 * var(--space-2)));
   height: var(--artifact-bar-height);
-  margin: var(--space-2) var(--space-2) 0;
+  margin: var(--space-2) auto 0;
   padding: 0 var(--space-1) 0 var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--surface-sunken);
   border-radius: 8px;
 }
 
@@ -1535,7 +1544,6 @@ button {
 /* An unfocused pane's toolbar has nothing to offer, so it stops looking like something to press. */
 .glosa-pane[data-active="false"] .glosa-artifact-bar {
   background: none;
-  border-color: transparent;
 }
 
 /* With the filename on the tab, this slot carries only the path the tab left out — and nothing at
@@ -1697,12 +1705,12 @@ button {
 
 .glosa-artifact-bar .glosa-history-toggle:hover,
 .glosa-artifact-bar .glosa-tools-trigger:hover {
-  background: var(--surface-sunken);
+  background: var(--bg);
   color: var(--ink);
 }
 
 .glosa-artifact-bar .glosa-history-toggle[aria-expanded="true"] {
-  background: var(--surface-sunken);
+  background: var(--bg);
   color: var(--primary);
 }
 
@@ -1749,13 +1757,24 @@ button {
 /* The collapse ladder (§6), on PANE width. In order: the directory drops, then the mode control
    goes icon-only, then History folds into the overflow. The filename and the mode control are
    the last two things standing. */
-@container pane (max-width: 560px) {
+/* The collapse ladder (§6). Keyed on the BAR, not the pane: now that the bar caps at the
+   manuscript measure, the pane can keep growing while the bar stays exactly as wide — so pane
+   width stopped predicting when the bar runs out of room. In order: History drops its word, the
+   directory drops, the mode control goes icon-only, then History folds into the overflow. The
+   filename lives on the tab; the mode control is the last thing standing here. */
+@container bar (max-width: 470px) {
+  .glosa-artifact-bar .glosa-history-toggle .glosa-control-label {
+    display: none;
+  }
+}
+
+@container bar (max-width: 400px) {
   .glosa-artifact-dir {
     display: none;
   }
 }
 
-@container pane (max-width: 460px) {
+@container bar (max-width: 340px) {
   .glosa-artifact-bar .glosa-modebar .glosa-control-label {
     display: none;
   }
@@ -1765,21 +1784,13 @@ button {
   }
 }
 
-@container pane (max-width: 400px) {
+@container bar (max-width: 250px) {
   .glosa-artifact-bar .glosa-history-toggle {
     display: none;
   }
 
   .glosa-pane-menu-history {
     display: flex;
-  }
-}
-
-/* The History control keeps its icon and drops its word well before the ladder hides it, so the
-   bar spends its width on the filename and the modes. */
-@container pane (max-width: 720px) {
-  .glosa-artifact-bar .glosa-history-toggle .glosa-control-label {
-    display: none;
   }
 }
 
