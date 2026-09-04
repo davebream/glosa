@@ -289,6 +289,80 @@ describe("the multi-artifact workbench", () => {
     expect(root.querySelectorAll(".glosa-pane")).toHaveLength(2);
   });
 
+  test("§9: a move that would empty its own group is refused, not allowed to destroy the dock", async () => {
+    // The regression this pins: "Move tab to → Down" on a lone tab split it off from the group the
+    // split was measured against, dockview removed that group as empty, and the dock went to zero
+    // groups. The pane stayed in the DOM, invisible and unscrollable, while the navigator went on
+    // marking its artifact as open.
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: fakeDataAccess(), layoutStorage: memoryStorage() });
+    await flush();
+    root
+      .querySelector('.glosa-artifact-list [data-node-id="f:notes.md"] .glosa-tree-row')
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    const dockRoot = root.querySelector(".glosa-dock-host") as any;
+    expect(dockRoot.querySelectorAll(".dv-groupview")).toHaveLength(1);
+    expect(tabLabels(root)).toEqual(["notes.md"]);
+
+    const pane = activePane(root);
+    for (const direction of ["Left", "Right", "Up", "Down", "New tab group"]) {
+      const item = [...pane.querySelectorAll(".glosa-pane-menu-move")].find(
+        (element: any) => element.textContent.trim() === direction,
+      ) as any;
+      item.click();
+      await flush();
+      expect(dockRoot.querySelectorAll(".dv-groupview")).toHaveLength(1);
+      expect(tabLabels(root)).toEqual(["notes.md"]);
+    }
+
+    // ⌘\ reaches the same code, so it is guarded by the same rule.
+    dom.document.dispatchEvent(
+      new dom.window.KeyboardEvent("keydown", { key: "\\", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    await flush();
+    expect(dockRoot.querySelectorAll(".dv-groupview")).toHaveLength(1);
+    expect(activePane(root)).not.toBeNull();
+    // And the navigator never claims something is open that is not on screen.
+    expect(root.querySelectorAll(".glosa-tree-open")).toHaveLength(1);
+  });
+
+  test("§9: the ⋯ menu only offers directions that would do something", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    mountApp(root, { dataAccess: fakeDataAccess(), layoutStorage: memoryStorage() });
+    await flush();
+    root
+      .querySelector('.glosa-artifact-list [data-node-id="f:notes.md"] .glosa-tree-row')
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    // A lone tab: nothing to join, nothing to split off. The whole section stands down rather
+    // than presenting five rows that do nothing.
+    const pane = activePane(root);
+    (pane.querySelector(".glosa-tools-trigger") as any).click();
+    await flush();
+    expect((pane.querySelector(".glosa-pane-menu-group") as any).hidden).toBe(true);
+
+    // Open a second tab in the same group and the directions become real again.
+    root
+      .querySelector('[data-node-id="d:drafts"] .glosa-tree-row')
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await flush();
+    root
+      .querySelector('.glosa-artifact-list [data-node-id="f:drafts/outline.md"] .glosa-tree-row')
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    await flush();
+    const nextPane = activePane(root);
+    (nextPane.querySelector(".glosa-tools-trigger") as any).click();
+    await flush();
+    expect((nextPane.querySelector(".glosa-pane-menu-group") as any).hidden).toBe(false);
+    const enabled = [...nextPane.querySelectorAll(".glosa-pane-menu-move")].filter((el: any) => !el.disabled);
+    expect(enabled.length).toBe(5);
+  });
+
   test("§9: ⌘\\ moves the active tab into a new split and leaves one copy of it", async () => {
     const { root } = await mountWithTwoTabs();
     dom.document.dispatchEvent(

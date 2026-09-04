@@ -1647,6 +1647,18 @@ button {
   color: var(--ink);
 }
 
+/* A direction that would do nothing says so. Faint ink and no hover bed — DESIGN.md §5's disabled
+   treatment minus the fill, which on a menu row would read as more prominent rather than less. */
+.glosa-pane-menu-item:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.glosa-pane-menu-item:disabled:hover {
+  background: none;
+  color: var(--faint);
+}
+
 .glosa-pane-menu-item svg {
   width: 15px;
   height: 15px;

@@ -88,6 +88,61 @@ describe("pruneGrid — a corrupt or stale layout must never make a workspace un
   });
 });
 
+describe("moving a tab never destroys the layout it was moved within", () => {
+  // Splitting a group's ONLY panel off from that same group destroys the group the split is
+  // measured against. One artifact alone in one group took the whole dock down that way: zero
+  // groups, zero tabs, and a pane still in the DOM that nothing could reach or scroll to.
+  const dockviewMod = () => import("../src/vendor/dockview.js");
+
+  async function makeDock(dom: any, panelCount: number) {
+    const { createDockview } = await dockviewMod();
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const api = createDockview(host, {
+      createComponent: () => {
+        const element = dom.document.createElement("div");
+        return { element, init() {} };
+      },
+    });
+    for (let i = 0; i < panelCount; i++) {
+      api.addPanel({ id: `a${i}.md`, component: "pane", title: `a${i}.md` });
+    }
+    return api;
+  }
+
+  test("a lone tab has nowhere to go, so every direction reports itself unavailable", async () => {
+    const { installDom } = await import("./dom-env.ts");
+    const dom = installDom();
+    try {
+      const api = await makeDock(dom, 1);
+      const group = api.activePanel!.api.group;
+      expect(group.panels.length).toBe(1);
+      // The shape the guard exists for: no adjacent group, and a split would empty this one.
+      for (const direction of ["left", "right", "up", "down"] as const) {
+        expect(api.adjacentGroupInDirection(group, direction)).toBeUndefined();
+      }
+    } finally {
+      dom.teardown();
+    }
+  });
+
+  test("a group with two tabs can split one off without losing the other", async () => {
+    const { installDom } = await import("./dom-env.ts");
+    const dom = installDom();
+    try {
+      const api = await makeDock(dom, 2);
+      expect(api.groups.length).toBe(1);
+      const panel = api.activePanel!;
+      panel.api.moveTo({ group: panel.api.group, position: "bottom" });
+      expect(api.groups.length).toBe(2);
+      expect(api.panels.length).toBe(2);
+      for (const group of api.groups) expect(group.panels.length).toBeGreaterThan(0);
+    } finally {
+      dom.teardown();
+    }
+  });
+});
+
 describe("nesting is bounded by usable width, not by an arbitrary depth cap (§9)", () => {
   test("the minimum pane width is where the compact annotation tray bottoms out", () => {
     expect(MIN_PANE_WIDTH).toBe(360);

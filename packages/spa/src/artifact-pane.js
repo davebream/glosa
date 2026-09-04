@@ -271,16 +271,32 @@ export function createArtifactPane(host, deps) {
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
 
   const moveGroup = el("div", { className: "glosa-pane-menu-group", role: "group", "aria-label": "Move tab to" });
+  const moveItems = [];
   if (paneCommands.length) {
     moveGroup.append(el("p", { className: "glosa-pane-menu-heading", textContent: "Move tab to" }));
     for (const command of paneCommands) {
-      moveGroup.append(
-        menuItem("glosa-pane-menu-move", ICONS.move, command.label, () => {
-          setToolsOpen(false);
-          command.run();
-        }),
-      );
+      const item = menuItem("glosa-pane-menu-move", ICONS.move, command.label, () => {
+        setToolsOpen(false);
+        command.run();
+      });
+      item.setAttribute("data-direction", command.id);
+      moveItems.push({ item, command });
+      moveGroup.append(item);
     }
+  }
+
+  /** Which directions mean anything depends on a layout that changes between one opening of this
+   * menu and the next, so it is answered when the menu opens rather than when it was built. */
+  function refreshMoveCommands() {
+    let available = 0;
+    for (const { item, command } of moveItems) {
+      const enabled = command.isEnabled ? command.isEnabled() : true;
+      item.disabled = !enabled;
+      item.title = enabled ? "" : "There is no pane that way, and this tab already has a pane to itself.";
+      if (enabled) available += 1;
+    }
+    // A heading over five dead rows is noise. With nothing to move to, the section stands down.
+    moveGroup.hidden = moveItems.length > 0 && available === 0;
   }
 
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
@@ -382,6 +398,7 @@ export function createArtifactPane(host, deps) {
   }
 
   function setToolsOpen(open, { restoreFocus = false } = {}) {
+    if (open) refreshMoveCommands();
     tools.setAttribute("data-open", String(open));
     toolsTrigger.setAttribute("aria-expanded", String(open));
     if (open) queueMicrotask(() => paneMenuControls()[0]?.focus({ preventScroll: true }));

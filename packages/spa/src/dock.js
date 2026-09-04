@@ -336,20 +336,38 @@ export function createDock(host, deps) {
     }
   }
 
+  /** Where a given direction would actually take the active tab, or null when it would take it
+   * nowhere. One place decides, so the menu and the command can never disagree about whether an
+   * option does anything. */
+  function resolveMove(direction) {
+    const panel = api.activePanel;
+    if (!panel) return null;
+    const group = panel.api.group;
+    const adjacent = direction === "new" ? undefined : api.adjacentGroupInDirection(group, direction);
+    // Joining the pane already in that direction: the tab lands in its tab strip.
+    if (adjacent && adjacent !== group) return { panel, target: { group: adjacent, position: "center" } };
+    // Otherwise it would split. Splitting a group's ONLY panel off from that same group destroys
+    // the group the split is measured against and strands the panel in a group of zero size —
+    // one artifact alone in one group took the whole dock down that way. There is also nothing to
+    // do: a lone tab already has a pane to itself.
+    if (group.panels.length < 2) return null;
+    return { panel, target: { group, position: direction === "new" ? "right" : directionToPosition(direction) } };
+  }
+
   /** Left/Right/Up/Down join the adjacent pane when there is one and split when there is not —
    * the same two outcomes dragging offers (center joins, an edge splits), reachable with a single
    * pointer. WCAG 2.2 SC 2.5.7 makes this a release requirement, not a nicety (§9). */
   function moveActivePanel(direction) {
-    const panel = api.activePanel;
-    if (!panel) return;
-    const group = panel.api.group;
-    if (direction === "new") {
-      panel.api.moveTo({ group, position: "right" });
-      return;
-    }
-    const adjacent = api.adjacentGroupInDirection(group, direction);
-    if (adjacent && adjacent !== group) panel.api.moveTo({ group: adjacent, position: "center" });
-    else panel.api.moveTo({ group, position: directionToPosition(direction) });
+    const move = resolveMove(direction);
+    if (!move) return false;
+    move.panel.api.moveTo(move.target);
+    return true;
+  }
+
+  /** Whether the menu should offer this direction at all. A row that silently does nothing is not
+   * a quieter failure than a broken one; it is the same failure with no feedback. */
+  function canMoveActivePanel(direction) {
+    return resolveMove(direction) !== null;
   }
 
   function directionToPosition(direction) {
@@ -426,14 +444,22 @@ export function createDock(host, deps) {
     releaseWidth,
     activatePreviousTab: () => api.activatePrevious({ includePanel: true }),
     activateNextTab: () => api.activateNext({ includePanel: true }),
-    /** The single-pointer equivalents §9 requires, offered in every pane's `⋯` menu. */
-    moveCommands: () => [
-      { id: "left", label: "Left", run: () => moveActivePanel("left") },
-      { id: "right", label: "Right", run: () => moveActivePanel("right") },
-      { id: "up", label: "Up", run: () => moveActivePanel("up") },
-      { id: "down", label: "Down", run: () => moveActivePanel("down") },
-      { id: "new", label: "New tab group", run: () => moveActivePanel("new") },
-    ],
+    canMoveActivePanel,
+    /** The single-pointer equivalents §9 requires, offered in every pane's `⋯` menu. Each carries
+     * its own availability, because which of them mean anything depends on a layout that changes
+     * under the menu between one opening and the next. */
+    moveCommands: () =>
+      [
+        { id: "left", label: "Left" },
+        { id: "right", label: "Right" },
+        { id: "up", label: "Up" },
+        { id: "down", label: "Down" },
+        { id: "new", label: "New tab group" },
+      ].map((command) => ({
+        ...command,
+        run: () => moveActivePanel(command.id),
+        isEnabled: () => canMoveActivePanel(command.id),
+      })),
     destroy() {
       stopAppearance?.();
       api.dispose();

@@ -224,8 +224,16 @@ export function mountApp(
 
   // ---------- tab state (§5: reuse the navigator tree's vocabulary, never a second one) ----------
 
+  /** Ids the DOCK currently holds, which is not always the same as the panes we have built: a
+   * layout operation can remove a panel underneath us. Everything the reader is told about what
+   * is open reads from here, so a stranded pane can never put a marker on the navigator or a
+   * label on a tab strip for something that is not on screen. */
+  function openPanelIds() {
+    return dock ? dock.api.panels.map((panel) => panel.id) : [...panes.keys()];
+  }
+
   function tabLabels() {
-    return disambiguateLabels([...panes.keys()].filter(isArtifactPanel));
+    return disambiguateLabels(openPanelIds().filter(isArtifactPanel));
   }
 
   function tabStateFor(id) {
@@ -406,7 +414,7 @@ export function mountApp(
   /** The navigator marks every OPEN artifact quietly and the active pane's artifact as current,
    * so the tree says what is already on screen instead of only where you last clicked. */
   function markNavigatorOpenSet() {
-    artifactNavigator.setOpenPaths?.([...panes.keys()].filter(isArtifactPanel));
+    artifactNavigator.setOpenPaths?.(openPanelIds().filter(isArtifactPanel));
     artifactNavigator.setCurrent(activePanelId && isArtifactPanel(activePanelId) ? activePanelId : null, {
       reveal: false,
     });
@@ -595,6 +603,7 @@ export function mountApp(
           pane.remeasure?.();
           pane.refreshTitle?.();
         }
+        markNavigatorOpenSet();
       },
     });
   }
