@@ -76,9 +76,23 @@ function el(tag, props = {}, children = []) {
  * `slug`'s workspace. `dataAccess` defaults to a real `createDataAccess()` import — but per R6's
  * ONE-module rule this file never constructs one itself (viewer.js, which already holds the app's
  * single `dataAccess` instance, passes it in). Returns a `refresh()` the caller can invoke after
- * an SSE artifact-change event so the timeline picks up new checkpoints.
+ * an SSE artifact-change event so the timeline picks up new checkpoints. `onCompare` receives a
+ * picked {from, to} pair when the caller can host the comparison as its own pane.
+ *
+ * @param {any} container
+ * @param {{
+ *   dataAccess: any,
+ *   slug: string,
+ *   path?: string,
+ *   canRestore?: boolean,
+ *   onCompare?: (range: { from: string, to: string }) => void,
+ *   onClose?: () => void,
+ * }} options
  */
-export function mountHistoryPane(container, { dataAccess, slug, path, canRestore = false, onClose = () => {} }) {
+export function mountHistoryPane(
+  container,
+  { dataAccess, slug, path, canRestore = false, onCompare, onClose = () => {} },
+) {
   container.textContent = "";
   const list = el("ul", { className: "glosa-history-list" });
   const diffPane = el("div", { className: "glosa-diff-pane" });
@@ -125,6 +139,14 @@ export function mountHistoryPane(container, { dataAccess, slug, path, canRestore
     status.textContent = "Loading comparison…";
     try {
       const [from, to] = selected.length === 2 ? selected : [selected[0], "working"];
+      // With a dock to put it in, a comparison becomes a pane of its own (2026-09-04 brief §4) so
+      // it can stay on screen beside the manuscript it describes. Without one — a presented
+      // single document — it still renders here.
+      if (onCompare) {
+        onCompare({ from, to });
+        status.textContent = "Comparison opened in a new tab.";
+        return;
+      }
       const diff = await dataAccess.getDiff(slug, { from, to });
       const unified = diff.hunks.map((h) => h.diff).join("\n");
       if (!unified) {

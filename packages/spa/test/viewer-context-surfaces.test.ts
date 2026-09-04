@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+// The workspace's contextual surfaces. History used to live here; it is artifact-scoped, so the
+// 2026-09-04 workbench brief §6 moved it into the pane (see artifact-pane.test.ts).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createContextSurfaceController } from "../src/viewer-context-surfaces.js";
+import { createContextSurfaceController, SHORTCUTS } from "../src/viewer-context-surfaces.js";
 import { createElement } from "../src/viewer-shell.js";
 import { type DomEnv, installDom } from "./dom-env.ts";
 
@@ -17,60 +19,52 @@ describe("viewer contextual surfaces", () => {
   });
 
   function elements() {
-    const historyEl = dom.document.createElement("section");
     const conversationEl = dom.document.createElement("section");
     const shortcutsEl = dom.document.createElement("section");
-    const historyToggle = dom.document.createElement("button");
     const conversationToggle = dom.document.createElement("button");
     const shortcutsToggle = dom.document.createElement("button");
-    historyEl.hidden = true;
     conversationEl.hidden = true;
     shortcutsEl.hidden = true;
-    dom.document.body.append(
-      historyToggle,
-      conversationToggle,
-      shortcutsToggle,
-      historyEl,
-      conversationEl,
-      shortcutsEl,
-    );
-    return { historyEl, conversationEl, shortcutsEl, historyToggle, conversationToggle, shortcutsToggle };
+    dom.document.body.append(conversationToggle, shortcutsToggle, conversationEl, shortcutsEl);
+    return { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle };
   }
 
-  test("a delayed history mount receives the current artifact and mode through injected state", async () => {
+  test("a delayed conversation mount receives the current workspace and mode through injected state", async () => {
     const controls = elements();
     const dataAccess = { marker: "one shared instance" };
-    let state = { slug: "workspace", artifactPath: "old.md", mode: "preview" };
+    let state = { slug: "workspace", mode: "preview" };
     let releaseLoader: ((mount: unknown) => void) | undefined;
     const mounted: unknown[] = [];
     const controller = createContextSurfaceController({
       dataAccess,
       elements: controls,
       getState: () => state,
-      loadHistoryPane: () => new Promise((resolve) => (releaseLoader = resolve)),
-      loadConversationPane: async () => () => {},
+      loadConversationPane: () => new Promise((resolve) => (releaseLoader = resolve)),
       createElement,
       returnFocus: () => {},
     });
 
-    controls.historyToggle.click();
-    state = { slug: "workspace", artifactPath: "current.md", mode: "edit" };
-    releaseLoader?.((_container: unknown, options: unknown) => mounted.push(options));
+    controls.conversationToggle.click();
+    state = { slug: "workspace", mode: "annotate" };
+    releaseLoader?.((_container: unknown, options: unknown) => {
+      mounted.push(options);
+      return () => {};
+    });
     await Promise.resolve();
 
+    // Preview exposes the transcript read-only; composition requires an explicit mode transition.
     expect(mounted).toHaveLength(1);
-    expect(mounted[0]).toMatchObject({ dataAccess, slug: "workspace", path: "current.md", canRestore: true });
+    expect(mounted[0]).toMatchObject({ dataAccess, slug: "workspace", readOnly: false });
     controller.destroy();
   });
 
-  test("opening history closes and disposes the injected conversation surface", async () => {
+  test("opening the keyboard sheet closes and disposes the injected conversation surface", async () => {
     const controls = elements();
     let stopped = 0;
     const controller = createContextSurfaceController({
       dataAccess: {},
       elements: controls,
-      getState: () => ({ slug: "workspace", artifactPath: "notes.md", mode: "annotate" }),
-      loadHistoryPane: async () => () => {},
+      getState: () => ({ slug: "workspace", mode: "annotate" }),
       loadConversationPane: async () => () => {
         stopped += 1;
       },
@@ -82,10 +76,34 @@ describe("viewer contextual surfaces", () => {
     await Promise.resolve();
     expect(controls.conversationEl.hidden).toBe(false);
 
-    controls.historyToggle.click();
+    controls.shortcutsToggle.click();
     await Promise.resolve();
     expect(controls.conversationEl.hidden).toBe(true);
     expect(stopped).toBe(1);
+    controller.destroy();
+  });
+
+  test("the keyboard sheet documents every workbench binding, including the equivalents to dragging", () => {
+    const controls = elements();
+    const controller = createContextSurfaceController({
+      dataAccess: {},
+      elements: controls,
+      getState: () => ({ slug: "workspace", mode: "preview" }),
+      loadConversationPane: async () => () => {},
+      createElement,
+      returnFocus: () => {},
+    });
+
+    controls.shortcutsToggle.click();
+    const rows = Array.from(controls.shortcutsEl.querySelectorAll(".glosa-shortcut-list dd")).map(
+      (element) => element.textContent,
+    );
+    expect(rows).toHaveLength(SHORTCUTS.length);
+    // WCAG 2.2 SC 2.5.7 makes a single-pointer alternative to every drag a release requirement,
+    // and a binding nobody can find is not an alternative. Splitting and pane focus are listed.
+    expect(rows).toContain("Move this tab into a new split");
+    expect(rows).toContain("Focus the pane to the right");
+    expect(rows).toContain("Next tab in this pane");
     controller.destroy();
   });
 });

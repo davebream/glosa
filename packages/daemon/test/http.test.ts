@@ -384,6 +384,27 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     }
   });
 
+  it("the dock engine and its stylesheet are allowlisted, so the SPA needs no bundler and no inline style", async () => {
+    // The workbench vendors dockview-core rather than importing it by bare specifier, because the
+    // SPA has no build step (docs/requirements.md:343). Its stylesheet is served as a real
+    // stylesheet so it lands under `style-src 'self'` instead of an injected <style> write.
+    const script = await fetch(apiUrl("/app/vendor/dockview.js"));
+    expect(script.status).toBe(200);
+    expect(script.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
+    expect(await script.text()).not.toContain("from'dockview-enterprise'");
+
+    const styles = await fetch(apiUrl("/app/vendor/dockview.css"));
+    expect(styles.status).toBe(200);
+    expect(styles.headers.get("Content-Type")).toBe("text/css; charset=utf-8");
+    expect(await styles.text()).toContain(".dv-tabs-and-actions-container");
+
+    for (const name of ["dock.js", "artifact-pane.js", "diff-pane.js"]) {
+      const res = await fetch(apiUrl(`/app/${name}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("text/javascript; charset=utf-8");
+    }
+  });
+
   it("GET /app/glosa-mark.svg serves the fixed product mark as SVG", async () => {
     const res = await fetch(apiUrl("/app/glosa-mark.svg"));
     expect(res.status).toBe(200);

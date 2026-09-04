@@ -1,60 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
-// Contextual History, Conversation, and keyboard-shortcut surfaces. This controller is deliberately
-// transport-free: mountApp injects its one data-access instance, lazy module loaders, and live state.
+// The workspace's contextual surfaces: Conversation and the keyboard-shortcut sheet. This
+// controller is deliberately transport-free: mountApp injects its one data-access instance, lazy
+// module loaders, and live state.
+//
+// History used to live here too. It is artifact-scoped — history.js keys on slug AND path — so
+// the 2026-09-04 workbench brief §6 moved it inside the pane that holds its artifact, where it
+// can honestly describe one document. artifact-pane.js owns it now.
+
+/** Every binding the workbench answers to, in the reader's own words. §9 makes documenting the
+ * single-pointer equivalents to dragging a release requirement, not a nicety — this sheet and
+ * each pane's "Move tab to" menu are where they are findable. */
+export const SHORTCUTS = [
+  ["\u2318 / Ctrl + 1", "Preview"],
+  ["\u2318 / Ctrl + 2", "Annotate"],
+  ["\u2318 / Ctrl + 3", "Edit"],
+  ["Ctrl + Tab", "Next tab in this pane"],
+  ["Ctrl + Shift + Tab", "Previous tab in this pane"],
+  ["\u2318 / Ctrl + \u2325 + \u2192", "Focus the pane to the right"],
+  ["\u2318 / Ctrl + \u2325 + \u2190", "Focus the pane to the left"],
+  ["\u2318 / Ctrl + \\", "Move this tab into a new split"],
+  ["\u2318 / Ctrl + W", "Close this tab"],
+  ["Esc", "Close the artifact drawer"],
+];
 
 export function createContextSurfaceController({
   dataAccess,
   elements,
   getState,
-  loadHistoryPane,
   loadConversationPane,
   createElement,
   returnFocus,
 }) {
-  const { historyEl, conversationEl, shortcutsEl, historyToggle, conversationToggle, shortcutsToggle } = elements;
-  let historyVisible = false;
+  const { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle } = elements;
   let conversationVisible = false;
   let shortcutsVisible = false;
   let stopConversation = null;
 
   function closeContextSurfaces(except = null) {
-    if (except !== "history") {
-      historyVisible = false;
-      historyEl.hidden = true;
-      historyToggle.setAttribute("aria-expanded", "false");
-    }
     if (except !== "conversation") setConversationVisible(false);
     if (except !== "shortcuts") {
       shortcutsVisible = false;
       shortcutsEl.hidden = true;
       shortcutsToggle.setAttribute("aria-expanded", "false");
-    }
-  }
-
-  async function renderHistory() {
-    const { slug } = getState();
-    if (!historyVisible || !slug) return;
-    try {
-      const mountHistoryPane = await loadHistoryPane();
-      if (!historyVisible || getState().slug !== slug) return;
-      const { artifactPath, mode } = getState();
-      mountHistoryPane(historyEl, {
-        dataAccess,
-        slug,
-        path: artifactPath,
-        canRestore: mode === "edit",
-        onClose: () => {
-          historyVisible = false;
-          historyEl.hidden = true;
-          historyToggle.setAttribute("aria-expanded", "false");
-          returnFocus();
-        },
-      });
-      queueMicrotask(() => historyEl.querySelector("h3")?.focus({ preventScroll: true }));
-    } catch {
-      if (!historyVisible || getState().slug !== slug) return;
-      historyEl.setAttribute("role", "alert");
-      historyEl.textContent = "History couldn't be loaded. Close this panel and try again.";
     }
   }
 
@@ -90,15 +77,6 @@ export function createContextSurfaceController({
     }
   }
 
-  function onHistoryToggle() {
-    const nextVisible = !historyVisible;
-    if (nextVisible) closeContextSurfaces("history");
-    historyVisible = nextVisible;
-    historyEl.hidden = !historyVisible;
-    historyToggle.setAttribute("aria-expanded", String(historyVisible));
-    void renderHistory();
-  }
-
   function onConversationToggle() {
     const nextVisible = !conversationVisible;
     if (nextVisible) closeContextSurfaces("conversation");
@@ -125,24 +103,21 @@ export function createContextSurfaceController({
         returnFocus();
       },
     });
-    shortcutsEl.append(
-      createElement("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }),
-      createElement("p", { textContent: "⌘/Ctrl+1 Preview · ⌘/Ctrl+2 Annotate · ⌘/Ctrl+3 Edit" }),
-      close,
-    );
+    const sheet = createElement("dl", { className: "glosa-shortcut-list" });
+    for (const [keys, action] of SHORTCUTS) {
+      sheet.append(createElement("dt", { textContent: keys }), createElement("dd", { textContent: action }));
+    }
+    shortcutsEl.append(createElement("h3", { tabIndex: -1, textContent: "Keyboard shortcuts" }), sheet, close);
     queueMicrotask(() => shortcutsEl.querySelector("h3")?.focus({ preventScroll: true }));
   }
 
-  historyToggle.addEventListener("click", onHistoryToggle);
   conversationToggle.addEventListener("click", onConversationToggle);
   shortcutsToggle.addEventListener("click", onShortcutsToggle);
 
   return {
     closeContextSurfaces,
-    renderHistory,
     renderConversation,
     destroy() {
-      historyToggle.removeEventListener("click", onHistoryToggle);
       conversationToggle.removeEventListener("click", onConversationToggle);
       shortcutsToggle.removeEventListener("click", onShortcutsToggle);
       stopConversation?.();

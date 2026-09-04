@@ -110,6 +110,14 @@ const SPA_ASSETS: Record<string, string> = {
   "vendor/prosemirror.js": "text/javascript; charset=utf-8",
   // Shared confirm dialog (discard-edits and restore guards).
   "dialog.js": "text/javascript; charset=utf-8",
+  // Multi-artifact workbench (design brief docs/design/2026-09-04-multi-artifact-workbench-brief.md):
+  // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
+  "dock.js": "text/javascript; charset=utf-8",
+  "artifact-pane.js": "text/javascript; charset=utf-8",
+  "diff-pane.js": "text/javascript; charset=utf-8",
+  "vendor/dockview.js": "text/javascript; charset=utf-8",
+  // Served as a real stylesheet rather than injected inline, so it lands under `style-src 'self'`.
+  "vendor/dockview.css": "text/css; charset=utf-8",
 };
 
 export interface ApiContext {

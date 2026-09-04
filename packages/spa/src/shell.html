@@ -9,6 +9,10 @@
          boot/error screens and the workspace never flash through the system theme. -->
     <script src="/app/appearance-preload.js"></script>
     <link rel="icon" href="/app/glosa-mark.svg" type="image/svg+xml" />
+    <!-- dockview's own stylesheet for the multi-artifact dock. app.css's .glosa-dock-theme block
+         remaps every visual value in it onto glosa's tokens, so this loads FIRST and app.css wins
+         every tie. -->
+    <link rel="stylesheet" href="/app/vendor/dockview.css" />
     <!-- The visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md),
          served from the same allowlist as bootstrap.js. -->
     <link rel="stylesheet" href="/app/app.css" />

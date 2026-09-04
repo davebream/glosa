@@ -212,6 +212,19 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     };
   }
 
+  // Since the multi-artifact workbench, several artifacts can be on screen at once and each
+  // carries its own bar, manuscript, margin and history. An assertion about "the artifact" means
+  // the ACTIVE pane's, so these helpers scope every artifact-level query to it.
+  const activePane = (root: any) =>
+    (root.querySelector('.glosa-pane[data-active="true"]') ?? root.querySelector(".glosa-pane")) as any;
+  const inPane = (root: any, selector: string) => activePane(root)?.querySelector(selector) as any;
+  const paneFor = (root: any, path: string) => {
+    for (const pane of root.querySelectorAll(".glosa-pane")) {
+      if ((pane as any).querySelector(".glosa-artifact-id")?.getAttribute("title") === path) return pane as any;
+    }
+    return null;
+  };
+
   test("mounts, auto-selects the sole workspace, lists its artifacts, and opens one on click", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
@@ -231,11 +244,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     artifactRows[0]!.click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const content = root.querySelector(".glosa-content")!;
+    const content = inPane(root, ".glosa-content");
     expect(content.innerHTML).toContain("Title");
+
+    // The tab strip carries the file, and the navigator says it is open (§5).
+    expect(root.querySelector(".glosa-tab-label")?.textContent).toBe("notes.md");
+    expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("data-open")).toBe("true");
   });
 
-  test("artifact_index refreshes the navigator and replaces a removed current artifact", async () => {
+  test("artifact_index refreshes the navigator; a deleted artifact's tab dims but is never closed", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     let artifacts = [{ path: "notes.md", class: "R" }];
@@ -263,7 +280,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       (element) => element.textContent,
     );
     expect(labels).toEqual(["fresh.md"]);
-    expect(dom.document.title).toBe("ws-1 — fresh.md");
+
+    // §11: never close a tab the reader opened — that silently destroys their layout. The tab
+    // dims, the pane says the file is gone, and closing it stays the reader's decision.
+    expect(root.querySelectorAll(".glosa-tab")).toHaveLength(1);
+    expect(root.querySelector(".glosa-tab-label")?.textContent).toBe("notes.md");
+    expect(root.querySelector('.glosa-tab[data-missing="true"]')).not.toBeNull();
+    expect(activePane(root).getAttribute("data-missing")).toBe("true");
+    expect(inPane(root, ".glosa-empty-title")?.textContent).toBe("This artifact is gone.");
+    expect(dom.document.title).toBe("ws-1 — notes.md");
   });
 
   test("workspace switcher hides at <=1 workspace (MCP/CLI scope), appears and lists all at >=2", async () => {
@@ -297,15 +322,18 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const unmount = mountApp(root, { dataAccess: fakeDataAccess() });
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const tools = root.querySelector(".glosa-tools") as any;
-    const trigger = root.querySelector(".glosa-tools-trigger") as any;
+    const tools = root.querySelector(".glosa-topbar .glosa-tools") as any;
+    const trigger = tools.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
+    // Workspace-scoped only (§6): the attention tray, Conversation, Appearance and the keyboard
+    // sheet. Copy source, Print and History moved into the pane that holds their artifact.
     expect(
       menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance"),
-    ).toHaveLength(7);
-    expect((menu.querySelector(".glosa-tools-copy-source") as any).hidden).toBe(true);
-    expect((menu.querySelector(".glosa-tools-print") as any).hidden).toBe(true);
+    ).toHaveLength(4);
+    expect(menu.querySelector(".glosa-tools-copy-source")).toBeNull();
+    expect(menu.querySelector(".glosa-tools-print")).toBeNull();
+    expect(menu.querySelector(".glosa-history-toggle")).toBeNull();
 
     trigger.click();
     await Promise.resolve();
@@ -313,7 +341,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(dom.document.activeElement as any).toBe(menu.querySelector("button:not(:disabled)") as any);
 
-    (menu.querySelector(".glosa-history-toggle") as any).click();
+    (menu.querySelector(".glosa-conversation-toggle") as any).click();
     await Promise.resolve();
     expect(tools.dataset.open).toBe("false");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -354,15 +382,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const copy = root.querySelector(".glosa-tools-copy-source") as any;
-    const printButton = root.querySelector(".glosa-tools-print") as any;
+    const copy = inPane(root, ".glosa-tools-copy-source");
+    const printButton = inPane(root, ".glosa-tools-print");
     expect(copy.hidden).toBe(false);
     expect(printButton.hidden).toBe(false);
 
     copy.click();
     await Promise.resolve();
     expect(writes).toEqual(["# Title\n\nBody.\n"]);
-    expect(root.querySelector(".glosa-tools-status")?.textContent).toBe("Source copied.");
+    expect(inPane(root, ".glosa-tools-status")?.textContent).toBe("Source copied.");
 
     printButton.click();
     expect(printCalls).toBe(1);
@@ -377,7 +405,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     copy.click();
     await Promise.resolve();
-    const status = root.querySelector(".glosa-tools-status") as any;
+    const status = inPane(root, ".glosa-tools-status");
     expect(status.hidden).toBe(false);
     expect(status.getAttribute("data-error")).toBe("true");
     expect(status.textContent).toContain("Couldn't copy source");
@@ -436,23 +464,33 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     rowFor("notes.md").click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(opened.at(-1)).toBe("notes.md");
-    expect((root.querySelector(".glosa-content") as unknown as HTMLElement).textContent).toContain("notes.md");
-    expect((root.querySelector(".glosa-artifact-name") as unknown as HTMLElement).textContent).toBe("notes.md");
+    expect(inPane(root, ".glosa-content").textContent).toContain("notes.md");
+    // A root-level artifact's tab says everything, so the bar's identity slot stays empty.
+    expect((inPane(root, ".glosa-artifact-id") as any).hidden).toBe(true);
+    expect(activePane(root).getAttribute("aria-label")).toBe("notes.md");
     expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("aria-current")).toBe("page");
 
-    // A different row opens the file that was actually clicked, not the one already open.
+    // A different row opens the file that was actually clicked. The first stays open in its own
+    // tab — comparison is the point — but the ACTIVE pane, the URL and the title all follow the
+    // one just opened.
     root
       .querySelector('[data-node-id="d:drafts"] .glosa-tree-row')
       ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
     rowFor("drafts/outline.md").click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(opened.at(-1)).toBe("drafts/outline.md");
-    expect((root.querySelector(".glosa-content") as unknown as HTMLElement).textContent).toContain("drafts/outline.md");
+    expect(inPane(root, ".glosa-content").textContent).toContain("drafts/outline.md");
     expect(root.querySelector('[data-node-id="f:drafts/outline.md"]')?.getAttribute("aria-current")).toBe("page");
     expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("aria-current")).toBeNull();
-    expect((root.querySelector(".glosa-artifact-name") as unknown as HTMLElement).textContent).toBe("outline.md");
-    expect((root.querySelector(".glosa-artifact-dir") as unknown as HTMLElement).textContent).toBe("drafts/");
-    expect(dom.document.title).toBe("ws-1 — outline.md"); // the opened file reaches the tab title
+    // Both remain open, and the tree says so.
+    expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("data-open")).toBe("true");
+    expect(paneFor(root, "notes.md")).not.toBeNull();
+    // The tab names the file; the bar shows only the path the tab left out, so a filename is
+    // never printed twice in two adjacent rows.
+    expect((root.querySelectorAll(".glosa-tab-label")[1] as any).textContent).toBe("outline.md");
+    expect(inPane(root, ".glosa-artifact-name").textContent).toBe("");
+    expect(inPane(root, ".glosa-artifact-dir").textContent).toBe("drafts/");
+    expect(dom.document.title).toBe("ws-1 — outline.md"); // the active pane's file reaches the tab title
   });
 
   test("at desk widths the navigator is a column: opening an artifact leaves it in place", async () => {
@@ -499,7 +537,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(next.getAttribute("data-nav-open")).toBe("true");
   });
 
-  test("a compact viewport gets a transient drawer whose state is never persisted", async () => {
+  test("the navigator is a column at every width — never an overlay, and opening an artifact leaves it alone", async () => {
+    // A narrow window changes nothing about what the navigator IS. The workbench keeps its floors
+    // and lets the viewport clip it, the way a desktop editor does, rather than swapping the tree
+    // for a scrim exactly when the reader is navigating between two documents.
     dom.window.matchMedia = ((query: string) => ({
       matches: query === "(max-width: 1023px)",
     })) as typeof dom.window.matchMedia;
@@ -508,20 +549,18 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     mountApp(root, { dataAccess: fakeDataAccess() });
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    expect(root.getAttribute("data-nav-open")).toBe("false"); // a column would starve the measure
-
-    (root.querySelector(".glosa-nav-toggle") as any).click();
     expect(root.getAttribute("data-nav-open")).toBe("true");
-    dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(root.getAttribute("data-nav-open")).toBe("false");
+    expect(root.querySelector(".glosa-backdrop")).toBeNull();
 
-    (root.querySelector(".glosa-nav-toggle") as any).click();
+    // Opening an artifact never dismisses a column; there is nothing in the way to dismiss.
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect(root.getAttribute("data-nav-open")).toBe("false"); // the drawer was in the way of the artifact
+    expect(root.getAttribute("data-nav-open")).toBe("true");
 
-    // None of that touched the desk-width preference, so a wide viewport still opens its column.
-    expect(globalThis.localStorage.getItem("glosa_nav_open")).toBeNull();
+    // Hiding it is the reader's decision, and it is remembered — at this width like any other.
+    (root.querySelector(".glosa-nav-toggle") as any).click();
+    expect(root.getAttribute("data-nav-open")).toBe("false");
+    expect(globalThis.localStorage.getItem("glosa_nav_open")).toBe("false");
   });
 
   test("the workspace switcher collapses independently of the tree, and the choice persists", async () => {
@@ -557,10 +596,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect((next.querySelector(".glosa-workspace-list") as unknown as HTMLElement).hidden).toBe(true);
   });
 
-  test("a closed compact navigator is inert and returns to the focus order only while open", async () => {
-    dom.window.matchMedia = ((query: string) => ({
-      matches: query === "(max-width: 1023px)",
-    })) as typeof dom.window.matchMedia;
+  test("a hidden navigator is inert and returns to the focus order only while shown", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
 
@@ -569,17 +605,20 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     const sidebar = root.querySelector(".glosa-sidebar") as unknown as HTMLElement;
     const navToggle = root.querySelector(".glosa-nav-toggle") as unknown as HTMLButtonElement;
-    const backdrop = root.querySelector(".glosa-backdrop") as unknown as HTMLElement;
+    expect(sidebar.inert).toBe(false);
+    expect(sidebar.hasAttribute("aria-hidden")).toBe(false);
+
+    navToggle.click();
     expect(sidebar.inert).toBe(true);
     expect(sidebar.getAttribute("aria-hidden")).toBe("true");
+    // Hiding it returns focus to the control that hid it, rather than stranding it in a column
+    // that is no longer there.
+    await Promise.resolve();
+    expect(dom.document.activeElement).toBe(navToggle as any);
 
     navToggle.click();
     expect(sidebar.inert).toBe(false);
     expect(sidebar.hasAttribute("aria-hidden")).toBe(false);
-
-    backdrop.click();
-    expect(sidebar.inert).toBe(true);
-    expect(sidebar.getAttribute("aria-hidden")).toBe("true");
   });
 
   test("switching to Edit mode + Source face shows the textarea with the artifact's raw content; Save calls putArtifact", async () => {
@@ -592,10 +631,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    const main = root.querySelector(".glosa-main") as unknown as HTMLElement;
+    const main = inPane(root, ".glosa-pane-main");
     main.scrollTop = 600;
-    (root.querySelector('[data-mode="edit"]') as any).click();
+    inPane(root, '.glosa-modebar [data-mode="edit"]').click();
     expect(main.scrollTop).toBe(0);
+    // §8: the measure follows the face. Rich is prose; Source is markdown and gets the pane.
+    expect(activePane(root).getAttribute("data-editor-face")).toBe("rich");
     const richTextbox = root.querySelector('.ProseMirror[role="textbox"]');
     if (richTextbox) {
       expect(richTextbox.getAttribute("aria-label")).toBe("Artifact editor");
@@ -604,19 +645,23 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // The rich face is Edit's default (or the automatic fallback already picked Source in DOMs
     // that can't host a ProseMirror view); the Source face is the byte-exact editing contract
     // this test pins down either way.
-    (root.querySelector(".glosa-face-source") as any).click();
+    inPane(root, ".glosa-face-source").click();
+    expect(activePane(root).getAttribute("data-editor-face")).toBe("source");
 
-    const textarea = root.querySelector(".glosa-edit-area") as any;
+    const textarea = inPane(root, ".glosa-edit-area");
     expect(textarea.hidden).toBe(false);
     expect(textarea.value).toBe("# Title\n\nBody.\n");
 
     textarea.value = "# Title\n\nEdited.\n";
     textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    // An unsaved edit shows on the tab, so a reader with six open can see which one is dirty.
+    expect(root.querySelector(".glosa-tab-dirty")).not.toBeNull();
 
-    (root.querySelector(".glosa-save") as any).click();
+    inPane(root, ".glosa-save").click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
     expect(da.put).toEqual([{ path: "notes.md", content: "# Title\n\nEdited.\n" }]);
+    expect(root.querySelector(".glosa-tab-dirty")).toBeNull();
   });
 
   test("matching approval request renders the contextual strip and clean confirmation approves without saving", async () => {
@@ -765,17 +810,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    (root.querySelector('[data-mode="annotate"]') as any).click();
+    inPane(root, '.glosa-modebar [data-mode="annotate"]').click();
 
-    const content = root.querySelector(".glosa-content")!;
+    const content = inPane(root, ".glosa-content");
     const heading = content.querySelector("h1")!;
     const textNode = heading.firstChild!;
-    const mediaQueries: string[] = [];
     let scrollIntoViewCalls = 0;
-    dom.window.matchMedia = ((query: string) => {
-      mediaQueries.push(query);
-      return { matches: query === "(max-width: 1279px)" };
-    }) as typeof dom.window.matchMedia;
     (heading as unknown as HTMLElement).scrollIntoView = () => {
       scrollIntoViewCalls += 1;
     };
@@ -794,7 +834,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const composerInput = root.querySelector(".glosa-composer-input") as any;
     expect(composerInput).not.toBeNull();
     expect(focusOptions.at(-1)).toEqual({ preventScroll: true });
-    expect(mediaQueries).toContain("(max-width: 1279px)");
+    // §7: rail-or-tray is decided from the PANE's observed inline size, never a viewport media
+    // query. An unmeasured pane is below the rail floor, so the composer is the compact tray and
+    // scrolls the selected passage clear of it first.
     expect(scrollIntoViewCalls).toBe(1);
     composerInput.value = "tighten this";
     (root.querySelector(".glosa-composer-send") as any).click();
@@ -805,6 +847,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(record.body).toBe("tighten this");
     expect(record.intent).toBe("content");
     expect(record.target.quote.exact).toBe("Title");
+
+    // The open-annotation count reaches the tab, so one pane's unresolved feedback is visible
+    // while the reader is looking at another (§5).
+    expect(root.querySelector(".glosa-tab-count")?.textContent).toBe("1");
 
     // The submitted annotation renders as a margin card with its honest delivery state.
     const card = root.querySelector(".glosa-annotation") as any;
@@ -826,6 +872,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(da.withdrawn).toEqual(["inb-1"]);
     expect(root.querySelector(".glosa-annotation")).toBeNull();
+    expect(root.querySelector(".glosa-tab-count")).toBeNull();
   });
 
   test("Annotate mode: a focused passage opens the composer with Enter and Cancel restores passage focus", async () => {
@@ -837,15 +884,19 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    (root.querySelector('[data-mode="annotate"]') as any).click();
+    inPane(root, '.glosa-modebar [data-mode="annotate"]').click();
 
-    const heading = root.querySelector('.glosa-content > h1[data-line="0"]') as any;
-    const body = root.querySelector('.glosa-content > p[data-line="2"]') as any;
-    const content = root.querySelector(".glosa-content") as any;
+    const heading = inPane(root, '.glosa-content > h1[data-line="0"]');
+    const body = inPane(root, '.glosa-content > p[data-line="2"]');
+    const content = inPane(root, ".glosa-content");
     expect(heading.getAttribute("tabindex")).toBe("0");
     expect(body.getAttribute("tabindex")).toBe("-1");
     expect(heading.hasAttribute("aria-describedby")).toBe(false);
-    expect(content.getAttribute("aria-describedby")).toBe("glosa-annotate-instructions");
+    // Each pane owns its own instructions node, so the id is per pane rather than global — six
+    // open artifacts must not share one element id.
+    const instructions = activePane(root).querySelector(".glosa-visually-hidden[id]");
+    expect(instructions.id).toStartWith("glosa-annotate-instructions-");
+    expect(content.getAttribute("aria-describedby")).toBe(instructions.id);
     heading.focus();
     heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(dom.document.activeElement).toBe(body);
@@ -855,9 +906,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
     heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    const quote = root.querySelector(".glosa-composer-quote") as any;
+    const quote = inPane(root, ".glosa-composer-quote");
     expect(quote.textContent).toContain("Title");
-    (root.querySelector(".glosa-composer-actions .glosa-btn-ghost") as any).click();
+    inPane(root, ".glosa-composer-actions .glosa-btn-ghost").click();
     await Promise.resolve();
     expect(dom.document.activeElement).toBe(heading);
   });
@@ -875,13 +926,19 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     mountApp(root, { dataAccess: da });
     for (let i = 0; i < 5; i++) await Promise.resolve();
+    // History lives in a pane now, so there has to be one open to compare the two scopes.
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
 
     const toggle = root.querySelector(".glosa-conversation-toggle") as any;
     const pane = root.querySelector(".glosa-conversation") as any;
-    const historyToggle = root.querySelector(".glosa-history-toggle") as any;
-    const historyPane = root.querySelector(".glosa-history") as any;
+    // §6: Conversation is workspace-scoped (conversation.js keys on slug alone) so it stays in
+    // the top bar. History is artifact-scoped and lives in the pane that holds its artifact.
+    const historyToggle = inPane(root, ".glosa-history-toggle");
+    const historyPane = inPane(root, ".glosa-history");
     expect(pane.parentElement).toBe(root);
-    expect(historyPane.parentElement).toBe(root);
+    expect(historyPane.parentElement).toBe(activePane(root));
+    expect(root.querySelector(".glosa-topbar .glosa-history-toggle")).toBeNull();
     expect(pane.hidden).toBe(true);
     expect(toggle.getAttribute("aria-controls")).toBe("glosa-conversation");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -897,13 +954,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(pane.querySelector(".glosa-conv-composer-input")).toBeNull();
     expect(pane.textContent).toContain("Agent context");
 
+    // The pane's History opens beside its own manuscript and leaves Conversation alone — they
+    // describe different scopes now, so one no longer has to close the other.
     historyToggle.click();
-    expect(pane.hidden).toBe(true);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     expect(historyPane.hidden).toBe(false);
     expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(pane.hidden).toBe(false);
 
-    toggle.click();
+    historyToggle.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(historyPane.hidden).toBe(true);
     expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
@@ -959,7 +1018,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.getAttribute("data-preview-lock")).toBe("true");
     const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map((el) => (el as any).dataset.mode);
     expect(modes).toEqual(["preview"]);
-    expect(root.getAttribute("data-mode")).toBe("preview");
+    // Mode is pane state now, so it is stamped on the pane rather than on the app root.
+    expect(activePane(root).getAttribute("data-mode")).toBe("preview");
   });
 
   // --- issue #81: the wiring badge + point-of-action init consent dialog ---

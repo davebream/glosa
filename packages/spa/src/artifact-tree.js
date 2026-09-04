@@ -166,6 +166,10 @@ export function createArtifactTreeNavigator(container, options) {
   let workspace = "";
   /** @type {string | null} */
   let currentPath = null;
+  /** Every artifact open in some pane. The tree says what is already on screen, not only where
+   * the reader last clicked — the workbench can hold six documents at once (2026-09-04 brief §5).
+   * @type {Set<string>} */
+  let openPaths = new Set();
   /** @type {string | null} */
   let focusedId = null;
   /** @type {Set<string>} */
@@ -259,8 +263,18 @@ export function createArtifactTreeNavigator(container, options) {
       }
     } else {
       const isCurrent = node.path === currentPath;
+      const isOpen = openPaths.has(node.path);
       item.setAttribute("aria-selected", String(isCurrent));
       if (isCurrent) item.setAttribute("aria-current", "page");
+      if (isOpen) {
+        // Not color alone: the row carries a mark AND names its state to assistive technology.
+        item.setAttribute("data-open", "true");
+        const openMark = document.createElement("span");
+        openMark.className = "glosa-tree-open";
+        openMark.setAttribute("aria-hidden", "true");
+        row.prepend(openMark);
+        row.setAttribute("aria-label", `${node.name}, ${isCurrent ? "open in the active pane" : "open in a pane"}`);
+      }
       if (node.artifact.stale) {
         const stale = document.createElement("span");
         stale.className = "glosa-tree-stale";
@@ -399,6 +413,14 @@ export function createArtifactTreeNavigator(container, options) {
       const validDirectories = collectDirectoryIds(root);
       expanded = new Set([...expanded].filter((id) => validDirectories.has(id)));
       saveExpansion();
+      render();
+    },
+
+    /** @param {Iterable<string>} paths */
+    setOpenPaths(paths) {
+      const next = new Set(paths ?? []);
+      if (next.size === openPaths.size && [...next].every((path) => openPaths.has(path))) return;
+      openPaths = next;
       render();
     },
 
