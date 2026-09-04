@@ -465,8 +465,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(opened.at(-1)).toBe("notes.md");
     expect(inPane(root, ".glosa-content").textContent).toContain("notes.md");
-    // A root-level artifact's tab says everything, so the bar's identity slot stays empty.
-    expect((inPane(root, ".glosa-artifact-id") as any).hidden).toBe(true);
+    // A root-level artifact's tab says everything, so the bar's identity slot stays empty — but
+    // keeps its place, so the controls do not shift edge to edge between artifacts.
+    expect(inPane(root, ".glosa-artifact-id").getAttribute("data-empty")).toBe("true");
+    expect(inPane(root, ".glosa-artifact-id").textContent).toBe("");
     expect(activePane(root).getAttribute("aria-label")).toBe("notes.md");
     expect(root.querySelector('[data-node-id="f:notes.md"]')?.getAttribute("aria-current")).toBe("page");
 

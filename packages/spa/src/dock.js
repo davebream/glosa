@@ -358,6 +358,53 @@ export function createDock(host, deps) {
     return direction;
   }
 
+  /** Width a pane borrowed from its siblings, per group id, so it can be handed back. */
+  const claimedWidths = new Map();
+
+  /**
+   * Gives the group holding `panelId` up to `target` px of width, taking it from its siblings and
+   * never pushing any of them below MIN_PANE_WIDTH. Returns the width actually claimed.
+   *
+   * This is what lets Annotate work in a split at all: the rail needs ~1200px and an even split
+   * never has it, so the annotating pane borrows and the companion narrows. It is a layout move,
+   * not an overlay — the other document stays on screen and stays readable.
+   */
+  function claimWidth(panelId, target) {
+    const panel = api.getPanel(panelId);
+    const group = panel?.api.group;
+    if (!group) return 0;
+    const siblings = api.groups.filter((candidate) => candidate !== group);
+    if (siblings.length === 0) return 0;
+    const current = group.api.width;
+    if (current >= target) return 0;
+    // Only siblings sharing this row can give width back; a group stacked above or below is not
+    // competing for the same pixels.
+    const rowSiblings = siblings.filter((candidate) => Math.abs(candidate.api.height - group.api.height) < 2);
+    const spare = rowSiblings.reduce(
+      (total, candidate) => total + Math.max(0, candidate.api.width - MIN_PANE_WIDTH),
+      0,
+    );
+    if (spare <= 0) return 0;
+    const next = Math.min(target, current + spare);
+    if (next - current < 24) return 0; // not worth a reflow the reader will notice
+    claimedWidths.set(group.api.id, { previous: current, claimed: next });
+    group.api.setSize({ width: next });
+    return next;
+  }
+
+  /** Hands back what `claimWidth` borrowed — but only if the reader has not since moved the sash
+   * themselves. A deliberate drag outranks a mode's opinion about width. */
+  function releaseWidth(panelId) {
+    const panel = api.getPanel(panelId);
+    const group = panel?.api.group;
+    if (!group) return;
+    const record = claimedWidths.get(group.api.id);
+    if (!record) return;
+    claimedWidths.delete(group.api.id);
+    if (Math.abs(group.api.width - record.claimed) > 4) return;
+    group.api.setSize({ width: record.previous });
+  }
+
   function focusAdjacentGroup(direction) {
     const group = api.activeGroup;
     if (!group) return;
@@ -375,6 +422,8 @@ export function createDock(host, deps) {
     requestClose,
     moveActivePanel,
     focusAdjacentGroup,
+    claimWidth,
+    releaseWidth,
     activatePreviousTab: () => api.activatePrevious({ includePanel: true }),
     activateNextTab: () => api.activateNext({ includePanel: true }),
     /** The single-pointer equivalents §9 requires, offered in every pane's `⋯` menu. */

@@ -57,6 +57,15 @@ const STATE_LABELS = {
 // together, and re-measure `.glosa-content`'s painted width if `--measure` ever moves.
 export const MARGIN_RAIL_FLOOR = 1205;
 
+// What Annotate asks a split for. Deliberately NOT the floor: a pane handed exactly 1205px lands
+// on 1204.5 after the grid's own rounding and the rail silently fails to engage — balancing on a
+// threshold is fragile by construction. This is clear of it, and buys a ~280px rail rather than
+// the bare 240px minimum. It is also deliberately short of the 1363px the rail saturates at,
+// which would take the companion pane all the way down to its 360px floor: the reader split the
+// workbench to keep two documents legible, and annotating one of them should not cost the other
+// its legibility.
+export const MARGIN_RAIL_COMFORT = 1290;
+
 export function initialModeState(mode = "preview") {
   return { mode: MODES.includes(mode) ? mode : "preview", dirty: false, blocked: null };
 }
@@ -170,6 +179,11 @@ export function createArtifactPane(host, deps) {
     maybeOfferWiring = () => Promise.resolve(),
     openArtifactInThisPane = () => Promise.resolve(false),
     openDiffTab = null,
+    // How a pane asks the dock for room. Entering Annotate in a pane too narrow for the rail
+    // borrows width from its siblings and gives it back on the way out; with no siblings, or no
+    // room to borrow, both are no-ops and the compact tray stays the honest answer.
+    claimWidth = () => {},
+    releaseWidth = () => {},
     onStateChange = () => {},
     paneCommands = [],
     // What this artifact's tab already says. The bar shows only the remainder, so a filename is
@@ -279,7 +293,18 @@ export function createArtifactPane(host, deps) {
   ]);
   const tools = el("div", { className: "glosa-pane-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
-  const artifactBar = el("div", { className: "glosa-artifact-bar" }, [artifactIdEl, modeBar, historyToggle, tools]);
+  // What an unfocused pane shows instead of a live mode control. Two segmented switchers on one
+  // screen read as two offers when only one of them is the one ⌘1/2/3 and the keyboard address —
+  // but a pane in Preview and a pane in Annotate with nothing annotated yet look identical, so
+  // the state still has to be legible. A quiet label states it without offering it.
+  const modeLabel = el("span", { className: "glosa-pane-mode-label" });
+  const artifactBar = el("div", { className: "glosa-artifact-bar" }, [
+    artifactIdEl,
+    modeLabel,
+    modeBar,
+    historyToggle,
+    tools,
+  ]);
 
   // ---------- pane body ----------
 
@@ -652,6 +677,7 @@ export function createArtifactPane(host, deps) {
       if (!currentArtifact) btn.disabled = true;
       modeBar.append(btn);
     }
+    modeLabel.textContent = modeState.mode;
     if (restoreModeFocus) {
       queueMicrotask(() => modeBar.querySelector(`[data-mode="${modeState.mode}"]`)?.focus({ preventScroll: true }));
     }
@@ -677,7 +703,10 @@ export function createArtifactPane(host, deps) {
     artifactDirEl.hidden = !context;
     artifactNameEl.textContent = tabLabel === null ? name : "";
     artifactNameEl.hidden = tabLabel !== null;
-    artifactIdEl.hidden = !context && tabLabel !== null;
+    // The identity slot keeps its place in the row even with nothing to say, so the control
+    // cluster sits at the same edge whether or not this artifact happens to live in a
+    // subdirectory. Its tooltip still carries the full path, so the empty space is hoverable.
+    artifactIdEl.setAttribute("data-empty", String(!context && tabLabel !== null));
     // The tooltip always carries the full path, whatever the bar had room to paint (§5), and the
     // pane names itself for assistive technology even when it paints nothing.
     artifactIdEl.title = artifactPath;
@@ -1116,10 +1145,12 @@ export function createArtifactPane(host, deps) {
     }
   }
 
-  /** Compact gutter dots: one per annotation at its anchor's height. Rebuilt with the margin. */
+  /** Gutter dots: one per annotation at its anchor's height, whenever the cards are NOT already
+   * beside their passages. Like the underlines, they are not an Annotate affordance — they are
+   * how a reader in any mode can tell that a passage carries feedback, and reach it. */
   function renderMarkers() {
     markersEl.textContent = "";
-    if (modeState.mode !== "annotate" || !currentArtifact || isSideMargin()) return;
+    if (!currentArtifact || isSideMargin()) return;
     const mainTop = paneMain.getBoundingClientRect().top;
     for (const item of annotations) {
       const range = rangeForTarget(item.record?.target);
@@ -1130,12 +1161,19 @@ export function createArtifactPane(host, deps) {
         type: "button",
         "aria-label": "Go to annotation",
         onClick: () => {
-          const cardEl = [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
-          const reducedMotion =
-            typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-          cardEl?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-          cardEl?.classList.add("glosa-annotation-flash");
-          setTimeout(() => cardEl?.classList.remove("glosa-annotation-flash"), 1200);
+          // Outside Annotate there is no card to jump to yet, so the dot's job is to get the
+          // reader to one: it opens the mode that has them, then reveals its own.
+          if (modeState.mode !== "annotate") setMode("annotate");
+          const reveal = () => {
+            const cardEl = [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
+            const reducedMotion =
+              typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+            cardEl?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+            cardEl?.classList.add("glosa-annotation-flash");
+            setTimeout(() => cardEl?.classList.remove("glosa-annotation-flash"), 1200);
+          };
+          if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(reveal);
+          else reveal();
         },
       });
       dot.style.top = `${Math.round(top)}px`;
@@ -1165,12 +1203,17 @@ export function createArtifactPane(host, deps) {
 
   let anchoredRanges = []; // [{item, range}] cache from the last underline pass — hit-testing reuses it
 
-  /** Every annotated passage carries a permanent quiet underline (the pencil line that says
-   * "someone wrote in this margin"); rebuilt whenever the card set or content changes.
-   * CSS Custom Highlight API — progressive: browsers below the floor simply don't get it. */
+  /** Every annotated passage carries a permanent quiet underline — the pencil line that says
+   * "someone wrote in this margin" — in EVERY mode, not only Annotate.
+   *
+   * It used to be an Annotate affordance, which meant leaving Annotate erased every trace that a
+   * passage had ever been marked: a heavily reviewed chapter read as untouched in Preview. Cards
+   * need width and can honestly fall back to a tray or disappear; a 2px underline and a gutter dot
+   * need none, so they stay. That is also what makes a narrow companion pane worth having beside
+   * a wide one — it can still show you where the marks are. */
   function paintAnchorUnderlines() {
     anchoredRanges = [];
-    if (modeState.mode === "annotate" && currentArtifact) {
+    if (currentArtifact) {
       for (const item of annotations) {
         const range = rangeForTarget(item.record?.target);
         if (range) anchoredRanges.push({ item, range });
@@ -1203,7 +1246,7 @@ export function createArtifactPane(host, deps) {
   }
 
   contentEl.addEventListener("mousemove", (e) => {
-    if (modeState.mode !== "annotate" || anchoredRanges.length === 0 || hoverRafPending) return;
+    if (anchoredRanges.length === 0 || hoverRafPending) return;
     hoverRafPending = true;
     const { clientX, clientY } = e;
     const hitTest = () => {
@@ -1243,6 +1286,14 @@ export function createArtifactPane(host, deps) {
     if (modeState.mode !== "annotate" || !currentArtifact) {
       if (composer) composer = null;
       paintComposerSelection();
+      // The cards are gone; the marks they point at are not. layoutMargin also runs so the rail
+      // class does not linger on an empty margin after leaving Annotate.
+      const marks = () => {
+        layoutMargin();
+        paintAnnotationMarks();
+      };
+      if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(marks);
+      else marks();
       return;
     }
     marginEl.append(el("p", { className: "glosa-margin-title", textContent: "Annotations" }));
@@ -1309,12 +1360,18 @@ export function createArtifactPane(host, deps) {
     // Absolute positioning needs painted card heights — align on the next frame.
     const align = () => {
       layoutMargin();
-      renderMarkers();
-      paintAnchorUnderlines();
+      paintAnnotationMarks();
       paintComposerSelection();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(align);
     else align();
+  }
+
+  /** The underlines and gutter dots, repainted. Called from every render and every content
+   * change, in every mode — not from renderMargin, which returns early outside Annotate. */
+  function paintAnnotationMarks() {
+    paintAnchorUnderlines();
+    renderMarkers();
   }
 
   function setMode(mode) {
@@ -1347,6 +1404,12 @@ export function createArtifactPane(host, deps) {
     }
     modeState = next;
     if (modeState.mode !== "preview") classFInteractive = true;
+    // §7's rail needs about 1200px, and an evenly split pane never has it on any display anyone
+    // owns. So Annotate takes the room it needs from its siblings rather than silently degrading
+    // to the tray — the focus is expressed as WIDTH, not as depth: nothing floats, nothing covers
+    // the other document, and the arrangement comes back when Annotate is left.
+    if (modeState.mode === "annotate" && previousMode !== "annotate") claimWidth(MARGIN_RAIL_COMFORT);
+    else if (previousMode === "annotate" && modeState.mode !== "annotate") releaseWidth();
     renderModeBar();
     renderContent();
     void renderHistory();
@@ -1526,11 +1589,9 @@ export function createArtifactPane(host, deps) {
       : new ResizeObserver((entries) => {
           const width = entries[0]?.contentRect?.width ?? paneEl.clientWidth;
           if (Math.round(width) === Math.round(paneWidth)) return;
-          const crossedRail = width >= MARGIN_RAIL_FLOOR !== paneWidth >= MARGIN_RAIL_FLOOR;
           paneWidth = width;
           layoutMargin();
-          renderMarkers();
-          if (crossedRail) paintAnchorUnderlines();
+          paintAnnotationMarks();
         });
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
@@ -1588,8 +1649,7 @@ export function createArtifactPane(host, deps) {
       contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when Edit closes
     }
     layoutMargin(); // anchors may have moved with the new content
-    renderMarkers();
-    paintAnchorUnderlines();
+    paintAnnotationMarks();
   }
 
   /** The artifact this pane holds was deleted while the tab was open (§11). The tab dims and the
@@ -1677,6 +1737,7 @@ export function createArtifactPane(host, deps) {
     },
     destroy() {
       destroyed = true;
+      if (modeState.mode === "annotate") releaseWidth();
       document.removeEventListener("click", onDocumentClick);
       observer?.disconnect();
       teardownRichFace();

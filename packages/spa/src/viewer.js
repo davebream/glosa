@@ -312,6 +312,8 @@ export function mountApp(
       // A presented single document has no tab strip, so its pane carries the whole identity.
       getTabLabel: () => (singlePane ? null : (tabLabels().get(id) ?? id.split("/").pop())),
       openDiffTab: openDiff,
+      claimWidth: (target) => dock?.claimWidth(id, target),
+      releaseWidth: () => dock?.releaseWidth(id),
       paneCommands: singlePane ? [] : (dock?.moveCommands() ?? []),
       onStateChange: () => {
         refreshTabs();
@@ -377,6 +379,7 @@ export function mountApp(
       minimumWidth: singlePane ? undefined : MIN_PANE_WIDTH,
       ...(group ? { position: { referenceGroup: group } } : {}),
     });
+    markActivePane();
     markNavigatorOpenSet();
     return true;
   }

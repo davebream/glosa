@@ -28,6 +28,14 @@ describe("the multi-artifact workbench", () => {
     for (let i = 0; i < n; i++) await Promise.resolve();
   };
 
+  /** Marker and card alignment happen on the next animation frame, so anything that asserts on
+   * painted geometry has to let a real frame pass, not just the microtask queue. */
+  const paint = async () => {
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+  };
+
   function memoryStorage() {
     const map = new Map<string, string>();
     return {
@@ -192,12 +200,72 @@ describe("the multi-artifact workbench", () => {
     // A root-level artifact's tab already says everything. The bar's identity slot disappears
     // rather than repeating it under the tab that just said it.
     const root_ = barOf("notes.md");
-    expect(root_.querySelector(".glosa-artifact-id").hidden).toBe(true);
+    expect(root_.querySelector(".glosa-artifact-id").getAttribute("data-empty")).toBe("true");
+    expect(root_.querySelector(".glosa-artifact-id").textContent).toBe("");
 
     // Opening a sibling that forces the tab to grow to the full path empties the bar in turn —
     // the two rows always partition the path between them, never duplicate part of it.
     await open("notes.md");
-    expect(barOf("notes.md").querySelector(".glosa-artifact-id").hidden).toBe(true);
+    expect(barOf("notes.md").querySelector(".glosa-artifact-id").getAttribute("data-empty")).toBe("true");
+  });
+
+  test("annotation marks survive every mode — leaving Annotate never erases where the marks are", async () => {
+    const { root } = await mountWithTwoTabs();
+    const pane = activePane(root);
+    pane.querySelector('.glosa-modebar [data-mode="annotate"]').click();
+    await flush();
+
+    const content = pane.querySelector(".glosa-content");
+    const block = content.querySelector("p[data-line]");
+    const range = dom.document.createRange();
+    range.setStart(block.firstChild, 0);
+    range.setEnd(block.firstChild, 4);
+    const selection = dom.window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
+    await flush();
+    const input = pane.querySelector(".glosa-composer-input");
+    input.value = "tighten this";
+    pane.querySelector(".glosa-composer-send").click();
+    await flush();
+    await paint();
+    expect(pane.querySelectorAll(".glosa-annotation")).toHaveLength(1);
+    expect(pane.querySelectorAll(".glosa-marker").length).toBeGreaterThan(0);
+
+    // The cards belong to Annotate. The pencil line that says someone wrote here does not — a
+    // heavily reviewed chapter must not read as untouched the moment you leave the mode.
+    pane.querySelector('.glosa-modebar [data-mode="preview"]').click();
+    await paint();
+    expect(pane.querySelectorAll(".glosa-annotation")).toHaveLength(0);
+    expect(pane.querySelectorAll(".glosa-marker").length).toBeGreaterThan(0);
+
+    // And a mark is a way back in: it opens the mode that has the cards.
+    pane.querySelector(".glosa-marker").click();
+    await flush();
+    expect(pane.getAttribute("data-mode")).toBe("annotate");
+  });
+
+  test("only the focused pane offers controls; the rest state their mode and stay quiet", async () => {
+    const { root } = await mountWithTwoTabs();
+    const dockRoot = root.querySelector(".glosa-dock-host") as any;
+    (activePane(root).querySelector(".glosa-pane-menu-move:last-of-type") as any).click();
+    await flush();
+    expect(dockRoot.querySelectorAll(".dv-groupview").length).toBe(2);
+
+    const panes = [...root.querySelectorAll(".glosa-pane")] as any[];
+    const focused = panes.filter((p) => p.getAttribute("data-active") === "true");
+    const unfocused = panes.filter((p) => p.getAttribute("data-active") === "false");
+    expect(focused).toHaveLength(1);
+    expect(unfocused.length).toBeGreaterThan(0);
+
+    // Exactly one live switcher on screen, whatever the layout.
+    expect(focused[0].querySelector(".glosa-modebar")).not.toBeNull();
+    for (const pane of unfocused) {
+      // The controls stay in the DOM for the moment focus returns, but CSS takes them out of the
+      // offer — and out of the tab order with it.
+      expect(pane.querySelector(".glosa-pane-mode-label").textContent).toBe(pane.getAttribute("data-mode"));
+    }
   });
 
   test("§9: the ⋯ menu splits without a drag, and ⌘\\ moves rather than copies", async () => {

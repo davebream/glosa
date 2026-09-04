@@ -1465,7 +1465,7 @@ button {
   height: 100%;
   min-width: 0;
   display: grid;
-  grid-template-rows: var(--artifact-bar-height) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
     "bar"
     "body";
@@ -1492,32 +1492,57 @@ button {
   overflow: hidden;
 }
 
-/* The artifact bar (§6): one row, flat, a quiet bottom border, and no elevation. It is the pane's
-   own chrome, not a second top bar — it never gains a shadow, a fill, or a control that is not
-   about THIS artifact.
+/* The artifact bar (§6). Not a bar: a bordered, rounded toolbar object inset on the pane's paper,
+   spanning the artifact container.
 
-   It sits on the READING surface rather than the control surface, which §6 names. §9 asks for the
-   active tab to take `--bg` "so the active tab reads as the same sheet as the manuscript below
-   it" — and a control-surface bar between the two is the one thing that stops it doing that. Two
-   near-identical 35px bars also taxed the common case the brief says the dock must not tax. On
-   paper the tab, the bar and the manuscript are one continuous sheet, and only the tab strip
-   above them is chrome. */
+   §6 specifies a flush control-surface row with a bottom border, and built that way it read as a
+   second top bar — two near-identical 35px chrome bands stacked, taxing exactly the single-tab
+   case the brief says the dock must not tax, and breaking §9's reason for giving the active tab
+   the reading surface ("so the active tab reads as the same sheet as the manuscript below it").
+   Inset and bordered, the pane's paper runs unbroken from the tab down and the toolbar sits ON it
+   instead of banding across it. Still flat — a border and a radius are not elevation. */
 .glosa-artifact-bar {
   grid-area: bar;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  padding: 0 var(--space-2) 0 var(--space-3);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  height: var(--artifact-bar-height);
+  margin: var(--space-2) var(--space-2) 0;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
-/* With the filename on the tab, this slot carries only the path the tab left out — and nothing
-   at all for an artifact at the workspace root. */
-.glosa-artifact-id:empty,
-.glosa-artifact-id[hidden] {
+/* Only the pane the mode control, the shortcuts and the address bar are all addressing offers
+   them. The rest state their mode and stay out of the way. */
+.glosa-pane-mode-label {
+  flex: 0 0 auto;
+  padding-right: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: capitalize;
+}
+
+.glosa-pane[data-active="true"] .glosa-pane-mode-label,
+.glosa-pane[data-active="false"] .glosa-modebar,
+.glosa-pane[data-active="false"] .glosa-artifact-bar .glosa-history-toggle,
+.glosa-pane[data-active="false"] .glosa-pane-tools {
   display: none;
+}
+
+/* An unfocused pane's toolbar has nothing to offer, so it stops looking like something to press. */
+.glosa-pane[data-active="false"] .glosa-artifact-bar {
+  background: none;
+  border-color: transparent;
+}
+
+/* With the filename on the tab, this slot carries only the path the tab left out — and nothing at
+   all for an artifact at the workspace root. It keeps its place in the row either way, so the
+   controls do not jump edge to edge depending on whether a file sits in a subdirectory. */
+.glosa-artifact-id[data-empty="true"] {
+  pointer-events: none;
 }
 
 .glosa-artifact-id {
@@ -1565,14 +1590,6 @@ button {
   color: var(--faint);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
-}
-
-/* Only one pane is being addressed by the mode control, the shortcuts, and the address bar at a
-   time. The others let their identity go quiet rather than competing for it — no accent, no
-   dimming of the manuscript, just less insistence from the chrome. */
-.glosa-pane[data-active="false"] .glosa-artifact-name {
-  color: var(--muted);
-  font-weight: 500;
 }
 
 .glosa-pane-tools {
@@ -2448,10 +2465,14 @@ button {
 }
 
 /* Compact gutter markers: quiet dots at anchor heights along the right edge. */
+/* Gutter dots ride the manuscript's right edge, not the pane's. The manuscript is centred, so in
+   a wide pane the pane edge can be hundreds of pixels from the text a dot is marking — which is
+   only invisible while the dots are an Annotate-and-compact-only affordance. They are neither now.
+   The `max()` collapses to the pane edge as soon as the manuscript fills the pane. */
 .glosa-markers {
   position: absolute;
   top: 0;
-  right: 2px;
+  right: max(2px, calc(50% - var(--manuscript-block) / 2 - 16px));
   width: 14px;
   pointer-events: none;
 }
