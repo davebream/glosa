@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] - 2026-09-04
+
 ### Added
 
 - Several artifacts can be open at once. Open them as tabs, drag a tab to a pane edge to read two
