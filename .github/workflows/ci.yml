@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_full_checks:
+        description: "Run the full suite even for a documentation-only diff"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,27 +29,86 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # The gate is STEP-level, never workflow-level. `ci` is a required status check on main
+      # (alongside `security`), and a workflow skipped by a `paths-ignore` filter never reports a
+      # check at all — branch protection then waits for it forever and the PR can never merge.
+      # A job that always runs and skips its own steps keeps reporting `ci`, so no branch
+      # protection change is needed and no PR can get wedged.
+      #
+      # `predicate-quantifier: some-with-excludes` is load-bearing. Under the default quantifier a
+      # `!pattern` entry is evaluated as its own positive match rather than as an exclusion, so
+      # `code` would resolve true for every diff and the gate would silently do nothing.
+      - name: Detect whether anything outside documentation changed
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: "some-with-excludes"
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/assets/**'
+              - '!LICENSE'
+              - '!.github/ISSUE_TEMPLATE/**'
+
+      # The exclusion list is an allowlist of inert paths, not a denylist of code paths, so it
+      # fails closed: any path nobody anticipated runs the full suite rather than skipping it.
+      # No tracked markdown is a code dependency — the suite writes its own .md fixtures at
+      # runtime with writeFileSync — so excluding `**/*.md` cannot hide a real regression.
+      #
+      # A push to main always runs everything regardless of its diff. main carries the T8 release
+      # gate, and it is the one branch where a wrong answer here is expensive to discover later.
+      - name: Resolve whether the full suite runs
+        env:
+          CODE_CHANGED: ${{ steps.filter.outputs.code }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCED: ${{ inputs.force_full_checks }}
+        run: |
+          set -euo pipefail
+          if [ "$CODE_CHANGED" = "true" ] || [ "$EVENT_NAME" = "push" ] || [ "$FORCED" = "true" ]; then
+            echo "RUN_FULL=true" >> "$GITHUB_ENV"
+          else
+            echo "RUN_FULL=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Report a documentation-only diff
+        if: env.RUN_FULL != 'true'
+        run: echo "Documentation-only change — the full suite adds no signal. Secret and dependency scanning still ran in the security job."
+
       - name: Set up Bun
+        if: env.RUN_FULL == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.2.7
       - name: Install dependencies
+        if: env.RUN_FULL == 'true'
         run: bun install --frozen-lockfile
       - name: Lint full repository
+        if: env.RUN_FULL == 'true'
         run: bun run lint
       - name: Typecheck
+        if: env.RUN_FULL == 'true'
         run: bun run typecheck
       - name: Acceptance suites (T8 deterministic gate)
+        if: env.RUN_FULL == 'true'
         run: bun run test:acceptance
       - name: Test (first pass)
+        if: env.RUN_FULL == 'true'
         run: bun test
       - name: Test (second pass)
+        if: env.RUN_FULL == 'true'
         run: bun test
       - name: Audit production dependency licenses
+        if: env.RUN_FULL == 'true'
         run: bun run audit:licenses
       - name: Inspect and smoke-test npm tarball
+        if: env.RUN_FULL == 'true'
         run: bun run package:check
 
+  # Never gated. A markdown file is a plausible place to paste a token by accident, so secret
+  # scanning must see every diff including a documentation-only one. osv-scanner is cheap and
+  # runs on ubuntu, so splitting it out to follow the gate would buy nothing.
   security:
     name: security
     runs-on: ubuntu-latest
