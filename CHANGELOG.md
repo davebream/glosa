@@ -30,6 +30,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The Attention tray sends the reader to the artifact a request concerns rather than offering a
   second place to answer it. A request with no artifact keeps its inline answer.
 
+### Fixed
+
+- A session's question is reachable in a narrow pane. The compact tray counted annotations only,
+  so a question with nothing else in the margin left the tray's toggle disabled and its list
+  collapsed — the question was on the page and no reviewer could open it, while the agent's turn
+  sat blocked on the answer.
+- A session's mark sits beside the words it points at. It was placed against the content box
+  rather than the text column, which put it 45px out and made it read as furniture instead of a
+  mark on those lines.
+- Answer options are distinguishable in dark appearance. A native radio renders from
+  `color-scheme`, and an unchecked one was painted as a solid light disc on the dark ground, so
+  every option looked like the chosen one.
+
 ## [0.1.0-alpha.16] - 2026-09-05
 
 The release makes an annotation something the workspace holds rather than something one browser tab
