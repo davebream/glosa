@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.16] - 2026-09-05
+
+The release makes an annotation something the workspace holds rather than something one browser tab
+remembers, and makes the apply-lease behind it work at all outside a lab.
+
+### Fixed
+
+- An annotation now survives closing the tab. Reload the page, open the same manuscript in a second
+  pane, or come back tomorrow, and the cards, the underline under each annotated passage, the
+  gutter dots and the offer to undo an applied change are all still there. The entries were always
+  durable — journal lines, still queued for the session — but the pane held them only in memory, so
+  a reload showed an untouched document with work still pending on it.
+- Undo appears on an applied annotation. It never did: the offer was looked up in the checkpoint
+  list, and a lease taken against a clean worktree writes no checkpoint at all, so there was nothing
+  to find. The rollback target now comes from `apply_end`, the one event that states it, and the
+  fold carries it onto the entry so it outlives the tab that watched the lease close.
+- `glosa apply-begin` and `glosa resolve` accept `--workspace`, so an agent working in one directory
+  can act on a review of a document in another. They previously read the current working directory
+  and nothing else, which made a lease impossible to take from anywhere but the workspace itself.
+- A matched artifact the project gitignores no longer kills every checkpoint in the workspace. `git
+  add` exits non-zero on an ignored pathspec unless forced, and the whole apply-lease mechanism is
+  built on checkpoints, so one ignored file — a `tmp/` note, a generated report — silently stopped
+  proven attribution for that workspace and surfaced only as "internal error".
+- `glosa apply-begin` refuses an entry the workspace does not own, with a 404 naming the reason,
+  instead of taking the one lease slot for the full TTL on a misrouted id. A lease proves "this
+  session changed this workspace because of THIS entry", so a foreign id makes the proof
+  meaningless.
+- The tab strip no longer grows a vertical scrollbar. Its horizontal scrollbar lane was drawn inside
+  the strip's own height, which made a full-height row of tabs too tall for its box and produced a
+  second scrollbar beside a single row. It was also taking 11 of the strip's 36 pixels.
+
+### Added
+
+- `GET /w/:slug/annotations` (A1 §5.6a) lists a workspace's annotations, optionally scoped to one
+  artifact, each with the payload it was written with, its status, its delivery-attempt count and
+  the commit an undo would restore to. Notes withdrawn in glosa are not listed; the journal keeps
+  them, but a removed card must not come back on the next page load.
+- A withdrawal is recorded as `detail.withdrawn` on its transition. A human taking a note back and a
+  session declining one both land on the terminal `rejected`, and only one of them should reappear
+  on the page.
+- The presentation an agent receives for an annotation now spells out the apply-lease protocol —
+  take the lease before editing, resolve after — so a session that has never seen glosa before
+  attributes its own work instead of leaving it `unknown`.
+
 ## [0.1.0-alpha.15] - 2026-09-05
 
 ### Fixed
@@ -382,7 +426,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.16...HEAD
+[0.1.0-alpha.16]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...v0.1.0-alpha.16
 [0.1.0-alpha.15]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
