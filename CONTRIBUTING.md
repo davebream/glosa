@@ -31,6 +31,23 @@ bun run package:check
 
 Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `AGENTS.md` and `docs/requirements.md`.
 
+### Running glosa from your checkout
+
+A checkout runs against its own daemon, not the one your installed `glosa` uses. With `GLOSA_HOME`
+and `GLOSA_PORT` unset it derives `~/.glosa-dev/<install-id>` and a deterministic port in
+60000–65498, and prints both once. That is why `bun run packages/cli/src/main.ts status` shows no
+workspaces even when your installed glosa has several: the checkout deliberately does not read
+`~/.glosa`, so working on glosa cannot disturb the glosa you use for real documents.
+
+To point a checkout at your real state anyway, say so explicitly:
+
+```sh
+GLOSA_HOME=~/.glosa GLOSA_PORT=4646 bun run packages/cli/src/main.ts status
+```
+
+Be aware that this reintroduces exactly the contention the defaults exist to prevent: your checkout
+and your installed glosa will both try to own that daemon.
+
 ## AI-assisted contributions
 
 AI tools are allowed, but they do not reduce the contributor's responsibility for a change.

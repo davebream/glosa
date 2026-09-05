@@ -3,6 +3,7 @@
 // handshake, signal, and replacement paths without importing the production lifecycle.
 import { existsSync } from "node:fs";
 import { ensureHomeDir, lockPath } from "../../src/lifecycle/home.ts";
+import { INSTALL_ID } from "../../src/lifecycle/install.ts";
 import { type DaemonLock, removeLockIfOwned, writeLockExclusive } from "../../src/lifecycle/lock.ts";
 
 const home = ensureHomeDir(Bun.env.GLOSA_HOME as string);
@@ -10,6 +11,10 @@ const port = Number(Bun.env.GLOSA_PORT);
 const instanceId = Bun.env.GLOSA_FIXTURE_INSTANCE ?? "gl-versioned-fixture";
 const protocolVersion = Bun.env.GLOSA_FIXTURE_PROTOCOL ?? "1.0";
 const buildId = Bun.env.GLOSA_FIXTURE_BUILD_ID;
+// Defaults to the REAL install id: this fixture genuinely runs out of this checkout, so
+// presenting itself as the same install is honest, not a fudge. Tests that need the
+// cross-install refusal set a foreign value explicitly.
+const installId = Bun.env.GLOSA_FIXTURE_INSTALL_ID ?? INSTALL_ID;
 const startedAt = new Date().toISOString();
 const repairIntervalMs = Number(Bun.env.GLOSA_FIXTURE_REPAIR_INTERVAL_MS ?? 0);
 const slowHandshakeAfter = Number(Bun.env.GLOSA_FIXTURE_SLOW_HANDSHAKE_AFTER ?? -1);
@@ -22,6 +27,7 @@ const record: DaemonLock = {
   port,
   protocol_version: protocolVersion,
   ...(buildId === undefined ? {} : { build_id: buildId }),
+  ...(installId === "" ? {} : { install_id: installId }),
   started_at: startedAt,
   host: "127.0.0.1",
   bun: Bun.version,
@@ -46,6 +52,7 @@ const server = Bun.serve({
     return Response.json({
       protocol_version: protocolVersion,
       ...(buildId === undefined ? {} : { build_id: buildId }),
+      ...(installId === "" ? {} : { install_id: installId }),
       instance_id: instanceId,
       pid: process.pid,
       started_at: startedAt,

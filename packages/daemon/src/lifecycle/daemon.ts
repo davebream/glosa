@@ -22,13 +22,15 @@ import { CapabilityStore } from "../security/capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
-import { createApiFetch, createClassFFetch } from "../transport/http.ts";
+import { createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
+import { INSTALL_ID } from "./install.ts";
+import { glosaClassFPort, glosaPort } from "./port.ts";
 import {
   type DaemonLock,
   isPidAlive,
@@ -39,7 +41,6 @@ import {
 } from "./lock.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
 
-const DEFAULT_PORT = 4646;
 const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
 const RESTART_LOCK_WAIT_MS = 5000;
@@ -174,8 +175,8 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
 // ---------------------------------------------------------------------------------------------
 export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never> {
   const home = ensureHomeDir(glosaHome());
-  const port = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
-  const classFPort = Number(Bun.env.GLOSA_CLASSF_PORT ?? port + 1);
+  const port = glosaPort();
+  const classFPort = glosaClassFPort(port);
   const lockFile = lockPath(home);
   const instanceId = `gl-${randomUUID()}`;
   const startedAt = new Date().toISOString();
@@ -199,6 +200,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     port,
     protocol_version: PROTOCOL_VERSION,
     build_id: BUILD_ID,
+    install_id: INSTALL_ID,
     started_at: startedAt,
     host: "127.0.0.1",
     bun: Bun.version,
@@ -242,6 +244,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
     home,
+    recordRejection: createRejectionRecorder((line) => log(home, `${instanceId} ${line}`)),
     // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
     runWorkspaceInit: createInitRunner({ home, port }),
   });
@@ -457,6 +460,8 @@ export interface DaemonConnection {
   instanceId: string;
   protocolVersion: string;
   buildId: string;
+  /** Absent only when the daemon predates install identity (A5 §F13). */
+  installId?: string;
   pid: number;
   startedAt: string;
 }
@@ -489,6 +494,9 @@ function sameLockInstance(current: DaemonLock | null, expected: DaemonLock): boo
     current.port === expected.port &&
     current.protocol_version === expected.protocol_version &&
     current.build_id === expected.build_id &&
+    // Ownership, not just liveness: this predicate gates `removeLockIfOwned`, so leaving install
+    // identity out of it would let one install delete another's ownership record.
+    current.install_id === expected.install_id &&
     current.started_at === expected.started_at &&
     current.host === expected.host &&
     current.bun === expected.bun
@@ -538,13 +546,21 @@ function locklessHandshakeResult(
   const repaired = readLock(lockFile);
   if (repaired && repaired.port === port && daemonPeerMismatchReason(repaired, hs) === null) return null;
 
-  const buildDecision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
+  const buildDecision = decideDaemonBuild({
+    clientBuildId: BUILD_ID,
+    clientInstallId: INSTALL_ID,
+    daemonBuildId: hs.build_id,
+    daemonInstallId: hs.install_id,
+    daemonProtocol: hs.protocol_version,
+  });
+  // The foreign-install failure is the MOST actionable case, not the least: it must keep the
+  // recovery text rather than degrade to a bare "cannot safely establish ownership".
   const manualRecovery =
     buildDecision.action === "restart"
-      ? `; this daemon build cannot self-repair — verify PID ${hs.pid} with ` +
-        `\`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, stop it with ` +
-        `\`kill -TERM ${hs.pid}\`, then retry`
-      : "";
+      ? `; this daemon build cannot self-repair — ${manualStopHint(port, hs.pid)}`
+      : buildDecision.action === "fail" && buildDecision.foreignInstall
+        ? `; ${buildDecision.reason} — ${manualStopHint(port, hs.pid)}`
+        : "";
   return {
     ok: false,
     reason: `glosa daemon answered on port ${port} ${
@@ -557,17 +573,46 @@ function locklessHandshakeResult(
 export type DaemonBuildDecision =
   | { action: "use" }
   | { action: "restart"; reason: "legacy" | "newer-client" | "same-version-different-build" }
-  | { action: "fail"; reason: string };
+  /** `foreignInstall` marks the one failure a user can act on directly: another install owns the
+   * daemon, so the fix is to stop that process rather than to change anything about this one. */
+  | { action: "fail"; reason: string; foreignInstall?: true };
+
+/** Everything the decision needs, as one object. Deliberately not positional: adding install
+ * identity as extra parameters would let every existing call site keep compiling while silently
+ * passing `undefined`, and `undefined` MUST NOT read as "the same install as mine". */
+export interface DaemonBuildInputs {
+  clientBuildId: string;
+  clientInstallId: string;
+  daemonBuildId: string | undefined;
+  daemonInstallId: string | undefined;
+  daemonProtocol: string;
+}
 
 const incompatibleVersionsReason = (daemonProtocol: string): string =>
   `incompatible glosa versions installed: daemon protocol ${daemonProtocol}, ` +
   `client protocol ${PROTOCOL_VERSION}; upgrade glosa`;
 
-export function decideDaemonBuild(
-  clientBuildId: string,
-  daemonBuildId: string | undefined,
-  daemonProtocol: string,
-): DaemonBuildDecision {
+const foreignInstallReason = (daemonBuildId: string): string =>
+  `the glosa daemon on this port was started by a different glosa install (daemon build ` +
+  `${daemonBuildId}, this client ${BUILD_ID}); refusing to stop a daemon this install did not start`;
+
+/**
+ * Whether this client may take over the daemon it just found — A5 §F13's singleton rule, with the
+ * ownership half made explicit: **a client only ever stops a daemon its own install started.**
+ *
+ * Two installs of one version on one machine (a source checkout beside a release, two globals)
+ * otherwise evict each other on every command, which is exactly the mutual-kill storm this rule
+ * exists to end. The two restart paths carry deliberately opposite burdens of proof:
+ *
+ * - **Upgrade** (client strictly newer) restarts unless the daemon can be PROVEN foreign. A daemon
+ *   predating install identity has nothing to compare, and refusing there would break the ordinary
+ *   upgrade path (issue #6) for every user exactly once.
+ * - **Same version, different bytes** restarts only when the daemon can be PROVEN ours. That case
+ *   means either a developer editing their own source (restart is wanted) or two installs sharing
+ *   a home (restart is destructive), and unknown identity must resolve to the safe one.
+ */
+export function decideDaemonBuild(inputs: DaemonBuildInputs): DaemonBuildDecision {
+  const { clientBuildId, clientInstallId, daemonBuildId, daemonInstallId, daemonProtocol } = inputs;
   const client = parseBuildId(clientBuildId);
   if (!client) return { action: "fail", reason: `invalid client build identity: ${clientBuildId}` };
   if (daemonBuildId === undefined) return { action: "restart", reason: "legacy" };
@@ -576,8 +621,16 @@ export function decideDaemonBuild(
   if (!daemon) return { action: "fail", reason: `invalid daemon build identity: ${daemonBuildId}` };
 
   const versionOrder = Bun.semver.order(client.version, daemon.version);
-  if (versionOrder > 0) return { action: "restart", reason: "newer-client" };
+  if (versionOrder > 0) {
+    if (daemonInstallId !== undefined && daemonInstallId !== clientInstallId) {
+      return { action: "fail", reason: foreignInstallReason(daemonBuildId), foreignInstall: true };
+    }
+    return { action: "restart", reason: "newer-client" };
+  }
   if (versionOrder === 0 && client.sourceHash !== daemon.sourceHash) {
+    if (daemonInstallId !== clientInstallId) {
+      return { action: "fail", reason: foreignInstallReason(daemonBuildId), foreignInstall: true };
+    }
     return { action: "restart", reason: "same-version-different-build" };
   }
 
@@ -585,6 +638,25 @@ export function decideDaemonBuild(
     return { action: "fail", reason: incompatibleVersionsReason(daemonProtocol) };
   }
   return { action: "use" };
+}
+
+/** The decision for a peer this client has just handshaken with, using its own identity. */
+function decideForPeer(hs: HandshakeResponse): DaemonBuildDecision {
+  return decideDaemonBuild({
+    clientBuildId: BUILD_ID,
+    clientInstallId: INSTALL_ID,
+    daemonBuildId: hs.build_id,
+    daemonInstallId: hs.install_id,
+    daemonProtocol: hs.protocol_version,
+  });
+}
+
+/** How a human stops a daemon this process refuses to stop for them. */
+function manualStopHint(port: number, pid: number): string {
+  return (
+    `verify PID ${pid} with \`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, ` +
+    `stop it with \`kill -TERM ${pid}\`, then retry`
+  );
 }
 
 export function daemonPeerMismatchReason(lock: DaemonLock, hs: HandshakeResponse): string | null {
@@ -597,6 +669,13 @@ export function daemonPeerMismatchReason(lock: DaemonLock, hs: HandshakeResponse
   if (lock.build_id !== hs.build_id) {
     return "daemon lock and handshake report different build identities";
   }
+  // AFTER the build check, so an older peer that has neither field keeps reporting the build
+  // reason it always did. Lock and handshake are written by the same process, so absent-on-both is
+  // agreement and present-on-one-side alone is a genuine disagreement — the rule `build_id`
+  // already follows.
+  if (lock.install_id !== hs.install_id) {
+    return "daemon lock and handshake report different install identities";
+  }
   return null;
 }
 
@@ -606,6 +685,7 @@ function toConnection(port: number, hs: HandshakeResponse): DaemonConnection {
     instanceId: hs.instance_id,
     protocolVersion: hs.protocol_version,
     buildId: hs.build_id as string,
+    installId: hs.install_id,
     pid: hs.pid,
     startedAt: hs.started_at,
   };
@@ -639,7 +719,7 @@ function malformedLockBuildIdentity(lockFile: string): string | null {
 export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<EnsureDaemonResult> {
   const home = ensureHomeDir(glosaHome());
   const lockFile = lockPath(home);
-  const seedPort = Number(Bun.env.GLOSA_PORT ?? DEFAULT_PORT);
+  const seedPort = glosaPort();
   const timeoutMs = options.timeoutMs ?? DEFAULT_ENSURE_TIMEOUT_MS;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
     return spawnFailed(home, `invalid daemon discovery timeout: ${String(timeoutMs)}`);
@@ -691,7 +771,8 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
         return spawnFailed(
           home,
           `a process is bound to port ${preferredPort} but is not answering the glosa handshake; ` +
-            "ownership cannot be established safely, so no daemon was spawned",
+            "ownership cannot be established safely, so no daemon was spawned — find it with " +
+            `\`lsof -nP -iTCP:${preferredPort} -sTCP:LISTEN\``,
         );
       }
 
@@ -723,9 +804,22 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           return { ok: false, reason: mismatch, logPath: logPath(home) };
         }
 
-        const decision = decideDaemonBuild(BUILD_ID, hs.build_id, hs.protocol_version);
+        const decision = decideForPeer(hs);
         if (decision.action === "use") return { ok: true, ...toConnection(lock.port, hs) };
-        if (decision.action === "fail") return { ok: false, reason: decision.reason };
+        if (decision.action === "fail") {
+          // A refusal has to be as traceable as a takeover, and as actionable: this is the branch
+          // a user meets when a second install owns the port, so it carries the log pointer the
+          // neighbouring failures already had, plus how to stop the other daemon by hand.
+          if (decision.foreignInstall) {
+            log(home, `refusing ${hs.instance_id}: foreign install (${hs.install_id ?? "unknown"} != ${INSTALL_ID})`);
+            return {
+              ok: false,
+              reason: `${decision.reason} — ${manualStopHint(lock.port, hs.pid)}`,
+              logPath: logPath(home),
+            };
+          }
+          return { ok: false, reason: decision.reason, logPath: logPath(home) };
+        }
 
         log(home, `refreshing ${hs.instance_id}: ${decision.reason} (${hs.build_id ?? "legacy"} -> ${BUILD_ID})`);
         try {
@@ -763,7 +857,8 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           ok: false,
           reason:
             `a process is bound to port ${lock.port} but is not answering the glosa handshake; ` +
-            "the daemon may be hung or the port is taken by another process — not spawning a duplicate",
+            "the daemon may be hung or the port is taken by another process — not spawning a " +
+            `duplicate. To clear it: ${manualStopHint(lock.port, lock.pid)}`,
           logPath: logPath(home),
         };
       }

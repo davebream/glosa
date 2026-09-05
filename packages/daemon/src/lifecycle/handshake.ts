@@ -8,6 +8,8 @@ export interface HandshakeResponse {
   protocol_version: string;
   /** Absent only for compatibility with a pre-build-id daemon. */
   build_id?: string;
+  /** Which install started this daemon (A5 §F13). Absent means UNKNOWN, never "mine". */
+  install_id?: string;
   instance_id: string;
   pid: number;
   started_at: string;
@@ -19,6 +21,8 @@ function isHandshakeShape(value: unknown): value is HandshakeResponse {
   return (
     typeof v.protocol_version === "string" &&
     (v.build_id === undefined || typeof v.build_id === "string") &&
+    // Same reason as lock.ts: a non-string identity that parses is worse than one that doesn't.
+    (v.install_id === undefined || typeof v.install_id === "string") &&
     typeof v.instance_id === "string" &&
     typeof v.pid === "number" &&
     typeof v.started_at === "string"

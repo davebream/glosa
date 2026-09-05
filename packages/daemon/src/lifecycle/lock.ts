@@ -12,6 +12,9 @@ export interface DaemonLock {
   protocol_version: string;
   /** Absent only when reading a lock written by a pre-build-id daemon. */
   build_id?: string;
+  /** Which install started this daemon. Absent only for a pre-install-id daemon; an absent value
+   * is UNKNOWN identity, never "the same install as mine" (A5 §F13). */
+  install_id?: string;
   started_at: string;
   host: string;
   bun: string;
@@ -26,6 +29,9 @@ function isDaemonLockShape(value: unknown): value is DaemonLock {
     typeof v.port === "number" &&
     typeof v.protocol_version === "string" &&
     (v.build_id === undefined || typeof v.build_id === "string") &&
+    // Validated, not merely tolerated: an unchecked `install_id: 42` would parse as a usable lock
+    // and then compare unequal to every real identity forever, permanently wedging discovery.
+    (v.install_id === undefined || typeof v.install_id === "string") &&
     typeof v.started_at === "string" &&
     typeof v.host === "string" &&
     typeof v.bun === "string"

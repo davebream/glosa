@@ -5,9 +5,25 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { INSTALL_ID, isSourceCheckout } from "./install.ts";
+
+/**
+ * A source checkout never shares `~/.glosa` with a published install: they would share one lock,
+ * one pairing token and one workspace index, and each would evict the other's daemon.
+ *
+ * OUTSIDE the working tree, deliberately. Putting this under the checkout would leave a plaintext
+ * bearer credential inside a git repository, where `.gitignore` protects only git-mediated paths —
+ * not backup/sync, and above all not the coding agents that read a whole repository, which is
+ * exactly the tooling glosa is built to sit beside.
+ */
+function devHome(): string {
+  return join(homedir(), ".glosa-dev", INSTALL_ID);
+}
 
 export function glosaHome(): string {
-  return Bun.env.GLOSA_HOME ?? join(homedir(), ".glosa");
+  const explicit = Bun.env.GLOSA_HOME;
+  if (explicit !== undefined) return explicit;
+  return isSourceCheckout() ? devHome() : join(homedir(), ".glosa");
 }
 
 export function ensureHomeDir(home: string = glosaHome()): string {

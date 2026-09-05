@@ -49,6 +49,13 @@ describe("lock.ts (pure, hermetic — no subprocesses)", () => {
     expect(legacy).not.toBeNull();
     expect(legacy?.build_id).toBeUndefined();
     expect(parseLock(JSON.stringify({ ...sampleLock(), build_id: 42 }))).toBeNull();
+    // Install identity gets the same treatment as build identity: absent is a legacy daemon, but a
+    // non-string value must not parse. A lock carrying `install_id: 42` would read as usable and
+    // then compare unequal to every real identity forever, wedging discovery permanently.
+    const preInstallId = parseLock(JSON.stringify(sampleLock({ install_id: undefined })));
+    expect(preInstallId).not.toBeNull();
+    expect(preInstallId?.install_id).toBeUndefined();
+    expect(parseLock(JSON.stringify({ ...sampleLock(), install_id: 42 }))).toBeNull();
   });
 
   test("readLock returns null for a missing file", () => {

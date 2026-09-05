@@ -70,12 +70,7 @@ describe("repository quality gates", () => {
     // An allowlist of inert paths, never a denylist of code paths: anything unanticipated must
     // run the full suite rather than silently skip it. `**` is what makes it an allowlist.
     expect(ci).toContain("- '**'\n");
-    for (const excluded of [
-      "- '!**/*.md'",
-      "- '!docs/assets/**'",
-      "- '!LICENSE'",
-      "- '!.github/ISSUE_TEMPLATE/**'",
-    ]) {
+    for (const excluded of ["- '!**/*.md'", "- '!docs/assets/**'", "- '!LICENSE'", "- '!.github/ISSUE_TEMPLATE/**'"]) {
       expect(ci).toContain(excluded);
     }
 

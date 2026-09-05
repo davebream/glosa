@@ -2,11 +2,13 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import packageMetadata from "../../../../package.json" with { type: "json" };
+import { PACKAGE_ROOT } from "./install.ts";
 
 const HASH_HEX_LENGTH = 16;
-const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
+// Install identity owns the root (install.ts) — build identity only hashes the files under it, so
+// the two can never disagree about which tree they describe.
+const REPO_ROOT = PACKAGE_ROOT;
 
 export const APP_VERSION = packageMetadata.version;
 

@@ -101,3 +101,59 @@ The resulting glosa design is:
 - Provider-specific config paths, detection, desired nodes, and activation help come from
   `packages/providers/*`. The generic CLI owns selection, transaction/rollback, backups, and the
   ownership manifest; it does not gain Claude Code or Codex branches.
+
+## A glosa install never stops a daemon it did not start
+
+`build_id` answers "which bytes is this daemon running"; it cannot answer "whose daemon is this".
+Those are different questions, and conflating them made every command a takeover: a source checkout
+and a published install of the same version each read the other as a divergent build and SIGTERMed
+it, so the two evicted each other continuously. Observed in the wild as seven daemons from three
+source trees contending for one port, with the process count halving every few seconds.
+
+Daemons therefore publish an `install_id` — `sha256(realpath(<package root>))`, truncated — in the
+lock and the handshake, and a client refuses to signal a daemon that identity proves belongs to
+somewhere else.
+
+Three deliberate consequences:
+
+- **An absent `install_id` is unknown, never "mine".** Two `undefined`s do not compare equal for
+  this purpose. Equal-version-different-bytes is ambiguous — a developer editing their own source,
+  or two installs sharing a home — so it needs proof of ownership and resolves the unknown case to
+  refusal.
+- **An upgrade is exempt from that burden.** A strictly newer client replacing an older daemon is
+  the documented path, and every existing daemon predates the field, so requiring proof there would
+  break every user's next upgrade exactly once. It restarts unless the daemon is provably foreign.
+- **The id is a hash, not the path.** `/api/handshake` is tokenless, and a filesystem path on an
+  unauthenticated endpoint is a privacy regression for a tool holding manuscripts. The hash is not
+  a secrecy boundary either — its input is guessable, and A3's threat model is hostile web content,
+  not a same-uid process, which can read `<home>/token` directly regardless.
+
+## A source checkout gets its own home and port
+
+Running glosa from a checkout used to mean sharing `~/.glosa` and port 4646 with whatever the user
+had installed: one lock, one pairing token, one workspace index, two mutually hostile daemons. A
+checkout now derives `~/.glosa-dev/<install_id>` and a deterministic port in 60000–65498.
+
+The home lives **outside** the working tree deliberately. `.gitignore` protects only git-mediated
+paths — not backups, not sync, and above all not the coding agents that read an entire repository,
+which is exactly the tooling glosa is built to sit beside. A plaintext bearer credential inside a
+checkout is a credential in the blast radius of every "read all the files in this project".
+
+Deriving rather than refusing: a developer who edits source genuinely wants their own daemon
+restarted, and an error would leave the default still pointing at `~/.glosa` for anyone who ignored
+it. The cost is that a checkout no longer sees state created before this change; the CLI says which
+values it derived, once, on an interactive terminal, and `GLOSA_HOME=~/.glosa` restores the old
+behaviour.
+
+## Rejected requests are logged by reason, never by request
+
+A de-pair report could not be settled after the fact, because nothing recorded why a 401 was
+returned — "the tab held a stale credential" and "this daemon held no credential" are the same
+response on the wire and completely different diagnoses. The daemon now records the reason.
+
+It records nothing else. The request path is attacker-controlled, so logging it would be both an
+injection vector into a line-oriented log and unbounded key cardinality — and a throttle keyed on
+the path is no throttle at all, since varying the path makes every request a fresh first
+occurrence. The key is the reason alone, first occurrence immediate, then at most one line per
+minute carrying the suppressed count.
+
