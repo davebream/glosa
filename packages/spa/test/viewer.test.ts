@@ -3,13 +3,13 @@
 // wrapper (happy-dom), and a mounted-app integration test against a fake data-access object (no
 // real daemon, no real fetch — mountApp never gets to touch either directly).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { initialModeState, mountApp, modeReducer, morphArtifactContent } from "../src/viewer.js";
+import { initialModeState, isParked, mountApp, modeReducer, morphArtifactContent } from "../src/viewer.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
 describe("modeReducer — pure Read/Review/Edit state machine", () => {
-  test("preview -> annotate -> edit, all legal, none dirty", () => {
+  test("read -> review -> edit, all legal, none dirty", () => {
     let state = initialModeState();
-    expect(state).toEqual({ mode: "read", dirty: false, blocked: null });
+    expect(state).toEqual({ mode: "read", dirty: false });
 
     state = modeReducer(state, { type: "set_mode", mode: "review" });
     expect(state.mode).toBe("review");
@@ -37,37 +37,59 @@ describe("modeReducer — pure Read/Review/Edit state machine", () => {
     expect(next).toBe(state);
   });
 
-  test("leaving edit mode while dirty is BLOCKED, not applied", () => {
+  test("leaving edit while dirty PARKS the draft — the switch goes through and dirty survives", () => {
     let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
     state = modeReducer(state, { type: "edited" });
     expect(state.dirty).toBe(true);
 
-    const blocked = modeReducer(state, { type: "set_mode", mode: "read" });
-    expect(blocked.mode).toBe("edit"); // still in edit — the switch did NOT go through
-    expect(blocked.dirty).toBe(true);
-    expect(blocked.blocked).toBe("read"); // the requested mode is parked for the caller to resolve
+    const left = modeReducer(state, { type: "set_mode", mode: "read" });
+    // The switch is never refused now. That is the whole point: an agent pulling the pane into
+    // Read must not be able to fail, and a reviewer must not be asked to choose between
+    // answering and keeping their work.
+    expect(left.mode).toBe("read");
+    expect(left.dirty).toBe(true);
+    expect(isParked(left)).toBe(true);
   });
 
-  test("'saved' clears dirty (and any parked block) without changing mode", () => {
+  test("returning to edit un-parks: same dirty draft, no longer parked", () => {
+    let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
+    state = modeReducer(state, { type: "edited" });
+    state = modeReducer(state, { type: "set_mode", mode: "review" });
+    expect(isParked(state)).toBe(true);
+
+    state = modeReducer(state, { type: "set_mode", mode: "edit" });
+    expect(state).toEqual({ mode: "edit", dirty: true });
+    expect(isParked(state)).toBe(false);
+  });
+
+  test("a clean editor is never parked, in any mode", () => {
+    const state = modeReducer(initialModeState(), { type: "set_mode", mode: "review" });
+    expect(isParked(state)).toBe(false);
+  });
+
+  test("'saved' clears dirty without changing mode, and nothing stays parked", () => {
     let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
     state = modeReducer(state, { type: "edited" });
     state = modeReducer(state, { type: "saved" });
-    expect(state).toEqual({ mode: "edit", dirty: false, blocked: null });
+    expect(state).toEqual({ mode: "edit", dirty: false });
+    expect(isParked(state)).toBe(false);
   });
 
-  test("'discard' switches to the parked mode and clears dirty", () => {
+  test("'discard' drops the draft where it stands — it never moves the reviewer", () => {
     let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
     state = modeReducer(state, { type: "edited" });
-    state = modeReducer(state, { type: "set_mode", mode: "review" }); // blocked, parks "review"
+    state = modeReducer(state, { type: "set_mode", mode: "review" });
     state = modeReducer(state, { type: "discard" });
-    expect(state).toEqual({ mode: "review", dirty: false, blocked: null });
+    // Discard is now only reachable from closing a pane, so it settles the draft and leaves the
+    // mode alone rather than completing a transition the reducer already performed.
+    expect(state).toEqual({ mode: "review", dirty: false });
   });
 
-  test("re-requesting edit mode while already dirty in edit mode is a no-op transition, not a block", () => {
+  test("re-requesting the mode already active keeps dirty rather than resetting it", () => {
     let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
     state = modeReducer(state, { type: "edited" });
     const next = modeReducer(state, { type: "set_mode", mode: "edit" });
-    expect(next).toEqual({ mode: "edit", dirty: false, blocked: null }); // set_mode always resets dirty for the mode it lands on
+    expect(next).toEqual({ mode: "edit", dirty: true });
   });
 });
 

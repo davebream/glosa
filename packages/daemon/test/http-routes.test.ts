@@ -1603,6 +1603,11 @@ describe("A1 §5 route catalog", () => {
           target: "notes.md",
           target_path: "notes.md",
           approval_mode: true,
+          // An approval request carries no passage, no session label, and no answer options —
+          // present as explicit nulls so a client never has to tell "absent" from "unsupported".
+          agent_label: null,
+          passage: null,
+          answer_options: null,
         },
       ],
     });

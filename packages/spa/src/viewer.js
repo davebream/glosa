@@ -47,7 +47,7 @@ function loadRichEditor() {
 
 // Re-exported so importers (and tests) keep one name for the mode vocabulary even though the
 // state machine itself now lives per pane.
-export { MODES, INTENTS, initialModeState, modeReducer, morphArtifactContent } from "./artifact-pane.js";
+export { MODES, INTENTS, initialModeState, isParked, modeReducer, morphArtifactContent } from "./artifact-pane.js";
 
 /**
  * Mounts the whole ready-state app (top bar + navigator + dock) into `root`. `dataAccess`
@@ -195,7 +195,11 @@ export function mountApp(
 
   function setAttentionEntries(entries) {
     attentionEntries = Array.isArray(entries) ? entries : [];
-    for (const pane of panes.values()) pane.refreshApproval?.();
+    for (const pane of panes.values()) {
+      pane.refreshApproval?.();
+      // The rail carries the session's asks now, so a changed inbox has to repaint it too.
+      pane.refreshAgentRequests?.();
+    }
   }
 
   // Not `navigator` — that name is the browser's own global, which a pane's copy-source reads.
@@ -315,6 +319,7 @@ export function mountApp(
       loadRichEditor,
       getAttentionEntries: () => attentionEntries,
       refreshAttention: () => attentionTray.refresh(),
+      getProviderName: () => feedbackController.providerName() ?? "An agent session",
       maybeOfferWiring,
       openArtifactInThisPane: (nextPath) => replacePanel(id, nextPath),
       // A presented single document has no tab strip, so its pane carries the whole identity.
