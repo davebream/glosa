@@ -63,7 +63,7 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
 ```
 Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy frontend framework**
 (server-rendered HTML + small vanilla ES modules); **markdown-it** (+ `data-line` stamping),
-**idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), **chokidar v4**
+**idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), **chokidar v5**
 (directory watch), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
 providers/codex, cli}`. Three invariant boundaries (review-blockers if violated):

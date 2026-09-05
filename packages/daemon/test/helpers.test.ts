@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupHome, lockOf, randomPort } from "./helpers.ts";
+import { assertDefined, cleanupHome, lockOf, randomPort, waitForFile } from "./helpers.ts";
 
 const childHelperPath = join(import.meta.dir, "helpers.ts");
 const childScript = `
@@ -516,4 +516,137 @@ test("exhausting the block range fails with a message that says what to do", asy
   expect(message).not.toBe("no error");
   expect(message).toContain(`${first}-${first + PORT_BLOCK_SIZE - 1}`); // names the exact range it searched
   expect(message).toContain("lsof"); // hands the reader a command that shows who is holding it
+});
+
+// --- waitForFile ------------------------------------------------------------------------------
+// A poll loop asks "is it true yet?" on a fixed cadence and learns nothing in between. Under a
+// loaded runner both sides of that arrangement starve at once — the process being watched gets
+// descheduled, and so does the loop watching it — so the same wall-clock budget buys fewer checks
+// exactly when more of them are needed. These tests pin what a filesystem-triggered wait owes its
+// callers, so a deadline can be generous enough to survive a slow runner without the happy path
+// paying for that generosity.
+
+function waitDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "glosa-wait-for-file-"));
+  cleanupDirs.push(dir);
+  return dir;
+}
+
+test("waitForFile returns true without waiting when the predicate already holds", async () => {
+  const target = join(waitDir(), "already-there");
+  writeFileSync(target, "ready");
+
+  const startedAt = Date.now();
+  const settled = await waitForFile(target, () => existsSync(target), 5_000);
+
+  expect(settled).toBe(true);
+  expect(Date.now() - startedAt).toBeLessThan(500);
+});
+
+test("waitForFile returns true when the file appears after the wait begins", async () => {
+  const target = join(waitDir(), "appears-later");
+  const waiting = waitForFile(target, () => existsSync(target), 10_000);
+
+  await Bun.sleep(100);
+  writeFileSync(target, "here now");
+
+  expect(await waiting).toBe(true);
+});
+
+test("waitForFile returns true when the file's contents change after the wait begins", async () => {
+  const target = join(waitDir(), "changes-later");
+  writeFileSync(target, "before");
+  const waiting = waitForFile(target, () => readFileSync(target, "utf8") === "after", 10_000);
+
+  await Bun.sleep(100);
+  writeFileSync(target, "after");
+
+  expect(await waiting).toBe(true);
+});
+
+test("waitForFile returns true when the file is removed after the wait begins", async () => {
+  const target = join(waitDir(), "removed-later");
+  writeFileSync(target, "present");
+  const waiting = waitForFile(target, () => !existsSync(target), 10_000);
+
+  await Bun.sleep(100);
+  rmSync(target);
+
+  expect(await waiting).toBe(true);
+});
+
+test("waitForFile returns false at the deadline instead of hanging or throwing", async () => {
+  const target = join(waitDir(), "never-appears");
+
+  const startedAt = Date.now();
+  const settled = await waitForFile(target, () => existsSync(target), 400);
+  const elapsed = Date.now() - startedAt;
+
+  expect(settled).toBe(false);
+  expect(elapsed).toBeGreaterThanOrEqual(350); // it really waited
+  expect(elapsed).toBeLessThan(5_000); // and it really stopped
+});
+
+test("waitForFile still resolves when the filesystem reports no event at all", async () => {
+  // Watchers miss things: events coalesce, atomic renames arrive as a replace, and some filesystems
+  // report nothing. A missed event must cost latency, never correctness — otherwise a helper meant
+  // to remove a flake introduces a hang. This predicate flips on a timer that touches no file, so
+  // only a backstop re-check can ever see it become true.
+  const target = join(waitDir(), "silent");
+  let satisfied = false;
+  const flip = setTimeout(() => {
+    satisfied = true;
+  }, 150);
+
+  try {
+    expect(await waitForFile(target, () => satisfied, 10_000)).toBe(true);
+  } finally {
+    clearTimeout(flip);
+  }
+});
+
+test("waitForFile releases its watcher, so a process that used it can still exit", async () => {
+  // A leaked watcher holds the event loop open. In-process that stays invisible until the whole
+  // suite hangs at teardown, so prove it from outside: this child does nothing after the wait
+  // resolves, and can only reach exit if the watcher was actually closed.
+  const target = join(waitDir(), "exit-proof");
+  const script = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { waitForFile } from ${JSON.stringify(childHelperPath)};
+    const target = ${JSON.stringify(target)};
+    setTimeout(() => writeFileSync(target, "go"), 100);
+    if (!(await waitForFile(target, () => existsSync(target), 10_000))) process.exit(3);
+  `;
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e", script],
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  const outcome = await Promise.race([child.exited, Bun.sleep(15_000).then(() => "hung" as const)]);
+  if (outcome === "hung") child.kill("SIGKILL");
+
+  expect(outcome).toBe(0);
+});
+
+// --- assertDefined ----------------------------------------------------------------------------
+// `expect(x).not.toBeNull()` is a runtime check the compiler cannot read, which is why the
+// lifecycle suite is dotted with `x!` immediately afterwards. Every one of those suppressions is a
+// place where a genuine null surfaces as a confusing property access instead of a named failure.
+
+test("assertDefined passes a present value through and narrows it for the compiler", () => {
+  const handshake: { instance_id: string } | null = { instance_id: "gl-abc" };
+
+  assertDefined(handshake, "handshake");
+
+  // No `!` below. If the narrowing regresses, `bun run typecheck` fails even while this passes.
+  expect(handshake.instance_id).toBe("gl-abc");
+});
+
+test("assertDefined throws naming what was missing when the value is null", () => {
+  expect(() => assertDefined(null, "handshake")).toThrow(/handshake/);
+});
+
+test("assertDefined throws naming what was missing when the value is undefined", () => {
+  expect(() => assertDefined(undefined, "ownership lock")).toThrow(/ownership lock/);
 });
