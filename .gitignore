@@ -23,6 +23,7 @@ build/
 .claude/session.md
 
 # local agent/tool state (serena, impeccable etc.)
+graphify-out/
 .conductor/settings.local.toml
 .serena/
 .impeccable/config.local.json
