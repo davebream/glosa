@@ -30,7 +30,14 @@ const TOKEN_KEY = "glosa_token";
  *   randFn?: () => number,
  * }} StreamOptions */
 /** @typedef {StreamOptions & { slug: string }} OpenStreamOptions */
-/** @typedef {{ fetchFn?: FetchFn, storage?: TokenStorage, onUnauthorized?: () => void }} DataAccessDeps */
+/** @typedef {{ contract_version?: unknown, paired?: boolean, install_id?: unknown }} Handshake */
+/** @typedef {{
+ *   fetchFn?: FetchFn,
+ *   storage?: TokenStorage,
+ *   onUnauthorized?: () => void,
+ *   expectedInstallId?: string | null,
+ *   onForeignDaemon?: () => void,
+ * }} DataAccessDeps */
 /** @typedef {{ method?: string, headers?: Record<string, string>, body?: string }} RequestOptions */
 
 /** Thrown by every data-access call that gets a non-2xx response. Carries the parsed
@@ -158,7 +165,10 @@ function openEventStream(
 
     const res = await /** @type {FetchFn} */ (fetchFn)(path, { headers });
     if (res.status === 401) {
-      storage?.removeItem(TOKEN_KEY);
+      // Deliberately does NOT drop the credential here. Whether a 401 means "revoked" or "a
+      // different daemon holds this port" is one decision, and it lives in `handleUnauthorized`
+      // (R6: one data-access module, one place that decides). This loop only stops — the
+      // foreign-daemon path recovers by reloading the page, not by resuming a dead stream.
       stopped = true;
       onUnauthorized?.();
       return false;
@@ -303,18 +313,63 @@ export function openTranscriptStream(
 export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
   const storage = deps.storage ?? (typeof sessionStorage !== "undefined" ? sessionStorage : undefined);
+  const expectedInstallId = deps.expectedInstallId ?? null;
   let unauthorizedHandled = false;
   const onUnauthorized =
     deps.onUnauthorized ??
     (() => {
       if (typeof window !== "undefined") window.location.reload();
     });
+  const onForeignDaemon = deps.onForeignDaemon ?? onUnauthorized;
+
+  /** Reads the tokenless handshake. Carries NO credential — that is the point: once a 401 is in
+   * doubt, nothing authenticated goes to whatever is answering until it is identified. */
+  async function readHandshake() {
+    try {
+      const res = await /** @type {FetchFn} */ (fetchFn)("/api/handshake", {});
+      if (!res.ok) return null;
+      return /** @type {Handshake} */ (await res.json());
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What a 401 actually meant. Three outcomes, and only one of them is "your credential is gone":
+   *
+   * - `unreachable` — nothing answered the handshake either. The daemon is down, not hostile; the
+   *   credential is untouched and the caller may classify again on the next attempt.
+   * - `foreign` — a daemon is up and paired, but it is NOT the one this tab paired with. Its 401
+   *   says nothing about our credential's validity with our own daemon, so discarding it here
+   *   would destroy the only thing that can still recover.
+   * - `revoked` — same daemon, or one that cannot be told apart, said no. A3 §55 applies.
+   */
+  async function classifyRejection() {
+    const handshake = await readHandshake();
+    if (!handshake) return "unreachable";
+    if (handshake.paired === false) return "revoked";
+    const seen = handshake.install_id;
+    if (expectedInstallId && typeof seen === "string" && seen !== expectedInstallId) return "foreign";
+    return "revoked";
+  }
 
   function handleUnauthorized() {
-    storage?.removeItem(TOKEN_KEY);
     if (unauthorizedHandled) return;
     unauthorizedHandled = true;
-    onUnauthorized();
+    void classifyRejection().then((verdict) => {
+      if (verdict === "foreign") {
+        onForeignDaemon();
+        return;
+      }
+      if (verdict === "unreachable") {
+        // An outage is not a verdict. Re-arm so the next 401 is classified afresh rather than
+        // leaving the tab wedged on a transient failure.
+        unauthorizedHandled = false;
+        return;
+      }
+      storage?.removeItem(TOKEN_KEY);
+      onUnauthorized();
+    });
   }
 
   /** @param {Record<string, string> | undefined} extra */
@@ -461,6 +516,12 @@ export function createDataAccess(deps = {}) {
           ...(revisionId ? { revision_id: revisionId } : {}),
         }),
       });
+    },
+    /** `GET /api/handshake`, tokenless. The one way any other module may ask who is answering this
+     * port — R6 keeps every `fetch` in this file, so the foreign-daemon wait loop cannot poll on
+     * its own. Returns null when nothing answers. */
+    daemonIdentity() {
+      return readHandshake();
     },
     /** @param {string} slug
      *  @param {{ onEvent?: StreamEventHandler, onReconnect?: () => void,

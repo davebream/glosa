@@ -157,3 +157,29 @@ the path is no throttle at all, since varying the path makes every request a fre
 occurrence. The key is the reason alone, first occurrence immediate, then at most one line per
 minute carrying the suppressed count.
 
+## A 401 from a daemon we did not pair with is not a revocation
+
+The SPA treated every 401 as proof that its credential had been revoked: it removed
+`sessionStorage.glosa_token` and reloaded. Bootstrap has already stripped `#t=` from the URL by
+then, so nothing could put the credential back — the tab was unpaired permanently, and the only
+recovery was a fresh `glosa open`.
+
+That inference is wrong whenever the daemon answering is not the one that issued the credential,
+which is precisely what happens when a second glosa install takes the port. The rejection says
+nothing about the credential; discarding it destroys the only route back.
+
+Tabs now record the issuing daemon's `install_id` beside the token, and a 401 is classified against
+the tokenless handshake before anything is discarded: unreachable (an outage, no verdict), a
+different install (foreign), or anything else (revoked, exactly as before).
+
+The safety of keeping a credential in the foreign case rests on not transmitting it, not on
+possession. In that state the tab stops sending authenticated requests altogether and polls only the
+tokenless handshake, so a process that seizes the port receives strictly less than it does today —
+where every stream reconnect re-offers the Bearer to whatever is listening. The wait is bounded at
+ten minutes, after which the tab falls back to discarding the credential.
+
+`install_id` is not a proof of possession and is not treated as one. Anything that can bind
+127.0.0.1 as this user can also read `<home>/token` directly, so it defends against a coexisting
+install, which is an accident, and not against a same-uid attacker, who is outside A3's threat
+model either way.
+

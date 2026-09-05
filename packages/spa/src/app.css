@@ -243,7 +243,7 @@ input,
   scrollbar-color: var(--border-strong) transparent;
 }
 
-/* ---------- 3. Boot screens (down / unpaired / mismatch) ---------- */
+/* ---------- 3. Boot screens (down / unpaired / mismatch / foreign-daemon) ---------- */
 
 .glosa-screen {
   height: 100%;

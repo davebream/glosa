@@ -1,7 +1,7 @@
 # Design — surviving a machine that runs glosa more than once
 
 **Date:** 2026-09-05
-**Status:** PR A implemented. PR B and PR C are confirmed direction, not yet built.
+**Status:** PR A and PR B implemented. PR C is confirmed direction, not yet built.
 Revised after adversarial and security review (§8) before any code was written.
 **Surfaces:** `packages/daemon/src/lifecycle`, `packages/daemon/src/transport`,
 `packages/daemon/src/transcript`, `packages/cli/src`, `packages/providers/claude-code/src`,
@@ -321,7 +321,7 @@ Adversarially reviewed and revised before implementation. Findings adopted:
 
 1. **PR A** — done. A1 → A2 → A3 → A4 → A5, each with tests, then `decisions.md`, the A5
    appendix, `CHANGELOG.md`, `CONTRIBUTING.md`.
-2. **PR B** — the SPA foreign-daemon state (needs A1's handshake field).
+2. **PR B** — done. The SPA foreign-daemon state, on A1's handshake field.
 3. **PR C** — Claude config roots, transcripts first.
 
 Gate for each: the narrowest relevant suites, then `bun run typecheck`, `bun test`, `bun run lint`,

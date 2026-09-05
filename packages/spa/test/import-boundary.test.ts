@@ -147,12 +147,11 @@ const BOOTSTRAP_SANCTIONED_CALLS = new Map<string, string>([
       "the durable pairing token. Necessarily pre-pairing and un-routable through data-access.js, " +
       "which needs the very credential this call mints.",
   ],
-  [
-    "GET /api/handshake",
-    "A1 §3 — the one tokenless route, read to choose which of R5's four screens to render " +
-      "(down / unpaired / mismatch / ready). Nothing to route through yet: mountApp has not run.",
-  ],
 ]);
+// `GET /api/handshake` used to be sanctioned here too. It no longer needs to be: bootstrap reads it
+// through `dataAccess.daemonIdentity()`, so the same call that chooses the boot screen is the one
+// the foreign-daemon wait loop polls, and there is exactly one place that decides what a rejection
+// meant. The exception is now a single call — the direction this list is supposed to move.
 
 describe("no SPA module reaches the daemon except through data-access.js (R6)", () => {
   test("the daemon boundary and token bootstrap retain active static checking", () => {
