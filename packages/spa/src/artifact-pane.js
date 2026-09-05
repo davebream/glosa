@@ -102,6 +102,10 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
 
+/** How far a session's sideline sits from the text column. Close enough to read as a mark on
+ * those lines rather than as chrome beside them; far enough not to crowd the measure. */
+const SIDELINE_GUTTER = 14;
+
 export function initialModeState(mode = "read") {
   return { mode: MODES.includes(mode) ? mode : "read", dirty: false };
 }
@@ -1425,9 +1429,23 @@ export function createArtifactPane(host, deps) {
       trayEl.removeAttribute("data-open");
       return;
     }
-    const count = annotations.length;
+    // The tray holds everything the rail would have held, so it must COUNT everything the rail
+    // holds. Counting annotations alone disabled the toggle whenever a session's question was the
+    // only thing in the margin, which at compact widths made that question unreachable while a
+    // turn sat blocked on the answer.
+    const asking = agentRequests().length;
+    const notes = annotations.length;
+    const count = asking + notes;
+    const askingLabel = asking === 1 ? "1 session asking" : `${asking} sessions asking`;
+    const notesLabel = notes === 1 ? "1 annotation" : `${notes} annotations`;
     trayCountEl.textContent =
-      count === 0 ? "No annotations yet" : count === 1 ? "1 annotation" : `${count} annotations`;
+      count === 0
+        ? "No annotations yet"
+        : asking === 0
+          ? notesLabel
+          : notes === 0
+            ? askingLabel
+            : `${askingLabel} · ${notesLabel}`;
     trayToggle.setAttribute("aria-expanded", String(trayOpen && count > 0));
     trayToggle.disabled = count === 0;
     trayEl.toggleAttribute("data-open", trayOpen && count > 0);
@@ -1636,18 +1654,26 @@ export function createArtifactPane(host, deps) {
   function paintAgentSidelines() {
     sidelinesEl.textContent = "";
     if (!currentArtifact || modeState.mode === "edit") return;
-    const mainTop = paneMain.getBoundingClientRect().top;
+    const main = paneMain.getBoundingClientRect();
     for (const request of agentRequests()) {
       const range = rangeForPassage(request.passage);
       if (!range) continue;
       // The union box, not per-line rects: a sideline spans the passage from the top of its first
       // line to the bottom of its last, which is exactly what a bounding rect already is.
       const box = range.getBoundingClientRect();
-      const top = box.top - mainTop + paneMain.scrollTop;
-      const bottom = box.bottom - mainTop + paneMain.scrollTop;
+      // Measured from the TEXT's own left edge, not from a CSS offset against the content box.
+      // The manuscript keeps a 2rem inner gutter, so a rule placed against the box sat 45px out
+      // and read as detached furniture rather than as a mark on those particular lines. A block
+      // the quote starts inside is the honest reference: the rule tracks the text column even
+      // when the measure, the padding or the pane width change.
+      const startNode = range.startContainer;
+      const startEl = startNode.nodeType === 1 ? startNode : startNode.parentElement;
+      const block = startEl?.closest("p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th") ?? contentEl;
+      const blockLeft = block.getBoundingClientRect().left;
       const rule = el("div", { className: "glosa-sideline", "data-entry": request.id });
-      rule.style.top = `${top}px`;
-      rule.style.height = `${Math.max(bottom - top, 12)}px`;
+      rule.style.top = `${box.top - main.top + paneMain.scrollTop}px`;
+      rule.style.height = `${Math.max(box.bottom - box.top, 12)}px`;
+      rule.style.left = `${Math.max(0, blockLeft - main.left + paneMain.scrollLeft - SIDELINE_GUTTER)}px`;
       if (focusedRequestId === request.id) rule.setAttribute("data-focused", "true");
       sidelinesEl.append(rule);
     }

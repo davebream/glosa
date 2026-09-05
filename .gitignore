@@ -29,5 +29,8 @@ graphify-out/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
 
+# browser-automation scratch output from manual UI verification
+.playwright-mcp/
+
 # local-only historical/private notes
 docs/archive/

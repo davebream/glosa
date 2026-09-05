@@ -248,14 +248,40 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(quote.tabIndex).not.toBe(0);
   });
 
-  test("at compact widths the cards move to the pane's tray rather than vanishing", async () => {
-    // The rail needs room it does not have in a narrow pane. The agent's asks must follow the
-    // annotations into the tray, not silently disappear with the rail.
+  test("at compact widths a session's question is REACHABLE in the tray, not merely present in it", async () => {
+    // Being appended to the tray is not enough. The tray counted annotations only, so a question
+    // with no annotations beside it left the toggle disabled and the list collapsed: the card was
+    // in the DOM and the reviewer could not get to it, while a turn sat blocked on the answer.
+    // happy-dom reports zero widths, so this pane is below the rail floor and the tray is the
+    // path actually exercised here.
     const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
     expect(qa(host, ".glosa-agent-card").length).toBe(1);
-    // happy-dom reports zero widths, so this pane is already below the rail floor — which makes
-    // the tray the path actually exercised here, and the side rail the one a browser check owes.
-    expect(q(host, ".glosa-agent-card").closest(".glosa-margin, .glosa-tray-list")).not.toBeNull();
+
+    const toggle = q(host, ".glosa-tray-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle.disabled).toBe(false);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking");
+  });
+
+  test("the tray names both kinds when the margin holds both", async () => {
+    const da = fakeDataAccess([askAboutPremise()], {
+      async getAnnotations() {
+        return {
+          annotations: [
+            {
+              id: "inb-9",
+              artifact_path: "notes.md",
+              body: "my own note",
+              intent: "content",
+              target: { quote: { exact: "readers accept" } },
+              status: "pending",
+            },
+          ],
+        };
+      },
+    });
+    const { host } = await mountPane(da);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking · 1 annotation");
   });
 
   test("a request for another artifact never appears in this pane's rail", async () => {

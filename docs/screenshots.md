@@ -65,7 +65,7 @@ reviewing plans/first-90-days.md in glosa right now — when my review comments 
 what they ask for, nothing else." > session.jsonl
 ```
 
-While it runs, in the browser: switch to **Annotate**, select the weak sentence, pick an intent, write
+While it runs, in the browser: switch to **Review**, select the weak sentence, pick an intent, write
 the comment, send it, and repeat for a second passage. Capture two frames here — the composer
 mid-write (this becomes the hero's right pane) and the margin with both cards saved.
 
@@ -89,7 +89,7 @@ with `[…]` where a paragraph ran long. Keep the wording verbatim; that pane is
 
 | Image | State to reach |
 |---|---|
-| `annotate-*.png` | Annotate mode, both margin cards saved, scrolled to the annotated section. |
+| `annotate-*.png` | Review mode, both margin cards saved, scrolled to the annotated section. |
 | `history-*.png` | Make one edit in **Edit → Source** and Save (that is the `human_edit` checkpoint), then open **⋯ → History**, select the oldest version, and press *Compare selected with current*. |
 | `approval-*.png` | Run `glosa request-review plans/first-90-days.md --wait 6m --require-approval --message "…"` from the workspace; the strip appears in the browser. Shoot both themes first, then approve in the second one so the verdict returns to the waiting command. |
 
