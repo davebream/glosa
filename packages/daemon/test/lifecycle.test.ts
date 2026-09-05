@@ -13,6 +13,7 @@ import { ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
 import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
 import {
+  assertDefined,
   cleanupHome,
   deadPid,
   ensureTestDaemon as ensureDaemon,
@@ -25,6 +26,19 @@ import {
   waitUntil,
   writeUnparseableLock,
 } from "./helpers.ts";
+
+/** Long enough that the daemon's 250ms lock-repair watchdog has certainly had several turns.
+ *
+ * The tests using this prove a negative — the watchdog looked at this file and declined to touch
+ * it — and declining is silent, so there is no event to wait for and a settle window is the only
+ * instrument available. The risk it guards against is not flakiness but a vacuous pass: too short a
+ * window and the assertion holds because the watchdog never ran at all, which proves nothing. */
+const WATCHDOG_SETTLE_MS = 1_500;
+
+/** Long enough for a signal to have killed the process if it were going to. A different timescale
+ * from the watchdog's: signal delivery and exit are prompt, and the test that uses this backs the
+ * window with a positive proof — the daemon answers a handshake afterwards. */
+const SIGNAL_SETTLE_MS = 300;
 
 function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
   return {
@@ -87,11 +101,11 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       expect(race.code).toBe(0);
 
       const hs = await waitForHandshake(port);
-      expect(hs).not.toBeNull();
+      assertDefined(hs, "handshake");
 
       const lock = lockOf(home);
-      expect(lock).not.toBeNull();
-      expect(lock!.instance_id).toBe(hs!.instance_id);
+      assertDefined(lock, "ownership lock");
+      expect(lock.instance_id).toBe(hs.instance_id);
 
       await stopDaemon(home, race.other);
     } finally {
@@ -210,22 +224,30 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     const proc = spawnDaemon(home, port);
     try {
       const hs = await waitForHandshake(port);
-      expect(hs).not.toBeNull();
+      assertDefined(hs, "handshake");
       unlinkSync(lockPath(home));
 
-      await waitUntil(() => lockOf(home)?.instance_id === hs!.instance_id, 3000);
+      // The watchdog lives in a separate OS process on its own 250ms timer, and a loaded runner can
+      // starve that process for seconds at a stretch — which is what failed here once at 3s. The
+      // budget is now 8s inside a 20s test, deliberately leaving room for the wait to lose, say so,
+      // and still let `finally` stop the daemon. Asserting the result is the other half: without it
+      // a timeout arrives as `toMatchObject` against null, which names nothing.
+      expect(await waitUntil(() => lockOf(home)?.instance_id === hs.instance_id, 8000)).toBe(true);
 
       expect(lockOf(home)).toMatchObject({
-        instance_id: hs!.instance_id,
-        pid: hs!.pid,
+        instance_id: hs.instance_id,
+        pid: hs.pid,
         port,
-        build_id: hs!.build_id,
+        build_id: hs.build_id,
       });
       expect(readFileSync(logPath(home), "utf8")).toContain("recreated missing ownership lock");
     } finally {
       await stopDaemon(home, proc);
     }
-  }, 10000);
+    // 20s, not 10s: the wait above may spend 8s, and `stopDaemon` needs its own room afterwards.
+    // A test timeout that only just covers its longest wait converts a clean "timed out" into a
+    // killed test with a daemon still running.
+  }, 20000);
 
   test("watchdog never overwrites an existing malformed ownership file", async () => {
     ensureHomeDir(home);
@@ -236,7 +258,7 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       expect(await waitForHandshake(port)).not.toBeNull();
       await Bun.write(lockPath(home), malformed);
 
-      await Bun.sleep(350);
+      await Bun.sleep(WATCHDOG_SETTLE_MS);
 
       expect(readFileSync(lockPath(home), "utf8")).toBe(malformed);
     } finally {
@@ -257,8 +279,9 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       proc.kill("SIGTERM");
       const code = await proc.exited;
       expect(code).toBe(0);
-      await Bun.sleep(350);
-      expect(lockOf(home)).toBeNull();
+      // A positive proof — the lock really does go away — so wait for it and say so, rather than
+      // sleeping a guessed interval and asserting into the dark.
+      expect(await waitUntil(() => lockOf(home) === null, 3000)).toBe(true);
     } finally {
       try {
         proc.kill("SIGKILL");
@@ -279,7 +302,7 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       // Simulate the lock having been reclaimed by someone else out from under this daemon.
       reclaimStaleLock(lockPath(home), sampleLock({ instance_id: "gl-someone-else", port }));
 
-      await Bun.sleep(350);
+      await Bun.sleep(WATCHDOG_SETTLE_MS);
       expect(lockOf(home)?.instance_id).toBe("gl-someone-else");
 
       proc.kill("SIGTERM");
@@ -304,19 +327,24 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     const proc = spawnDaemon(home, port);
     try {
       const hs = await waitForHandshake(port);
-      expect(hs).not.toBeNull();
+      assertDefined(hs, "handshake");
 
       proc.kill("SIGINT");
-      await Bun.sleep(300);
+      await Bun.sleep(SIGNAL_SETTLE_MS);
       proc.kill("SIGHUP");
-      await Bun.sleep(300);
+      await Bun.sleep(SIGNAL_SETTLE_MS);
 
-      const stillAlive = await Promise.race([proc.exited.then(() => false), Bun.sleep(200).then(() => true)]);
+      const stillAlive = await Promise.race([
+        proc.exited.then(() => false),
+        Bun.sleep(SIGNAL_SETTLE_MS).then(() => true),
+      ]);
       expect(stillAlive).toBe(true);
 
-      const hs2 = await waitForHandshake(port, 1000);
-      expect(hs2?.instance_id).toBe(hs!.instance_id);
-      expect(lockOf(home)?.instance_id).toBe(hs!.instance_id);
+      // Staying alive is only half of it — it must still be serving. This is the positive proof
+      // that carries the test, so it gets the ordinary handshake budget rather than a tight one.
+      const hs2 = await waitForHandshake(port);
+      expect(hs2?.instance_id).toBe(hs.instance_id);
+      expect(lockOf(home)?.instance_id).toBe(hs.instance_id);
     } finally {
       await stopDaemon(home, proc);
     }
@@ -897,7 +925,7 @@ describe("ensureDaemon — client", () => {
     const daemonProc = spawnDaemon(home, lockPort);
     try {
       const hs = await waitForHandshake(lockPort);
-      expect(hs).not.toBeNull();
+      assertDefined(hs, "handshake");
       expect(lockOf(home)?.port).toBe(lockPort);
 
       process.env.GLOSA_HOME = home;
@@ -907,7 +935,7 @@ describe("ensureDaemon — client", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.port).toBe(lockPort);
-        expect(result.instanceId).toBe(hs!.instance_id);
+        expect(result.instanceId).toBe(hs.instance_id);
       }
     } finally {
       await stopDaemon(home, daemonProc);

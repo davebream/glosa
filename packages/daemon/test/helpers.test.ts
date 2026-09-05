@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupHome, lockOf, randomPort } from "./helpers.ts";
+import { assertDefined, cleanupHome, lockOf, randomPort } from "./helpers.ts";
 
 const childHelperPath = join(import.meta.dir, "helpers.ts");
 const childScript = `
@@ -516,4 +516,26 @@ test("exhausting the block range fails with a message that says what to do", asy
   expect(message).not.toBe("no error");
   expect(message).toContain(`${first}-${first + PORT_BLOCK_SIZE - 1}`); // names the exact range it searched
   expect(message).toContain("lsof"); // hands the reader a command that shows who is holding it
+});
+
+// --- assertDefined ----------------------------------------------------------------------------
+// `expect(x).not.toBeNull()` is a runtime check the compiler cannot read, which is why the
+// lifecycle suite is dotted with `x!` immediately afterwards. Every one of those suppressions is a
+// place where a genuine null surfaces as a confusing property access instead of a named failure.
+
+test("assertDefined passes a present value through and narrows it for the compiler", () => {
+  const handshake: { instance_id: string } | null = { instance_id: "gl-abc" };
+
+  assertDefined(handshake, "handshake");
+
+  // No `!` below. If the narrowing regresses, `bun run typecheck` fails even while this passes.
+  expect(handshake.instance_id).toBe("gl-abc");
+});
+
+test("assertDefined throws naming what was missing when the value is null", () => {
+  expect(() => assertDefined(null, "handshake")).toThrow(/handshake/);
+});
+
+test("assertDefined throws naming what was missing when the value is undefined", () => {
+  expect(() => assertDefined(undefined, "ownership lock")).toThrow(/ownership lock/);
 });

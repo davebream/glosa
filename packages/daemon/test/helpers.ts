@@ -362,6 +362,19 @@ export async function waitForHandshake(
   return null;
 }
 
+/** Waits until `fn` holds, or gives up at `deadlineMs`.
+ *
+ * Two things this asks of every caller, both learned from a real failure:
+ *
+ * **Assert the returned boolean.** A discarded `false` does not stop the test — it lets it walk on
+ * to an assertion about a value that was never going to arrive, so a timeout reports as a baffling
+ * value mismatch instead of "this timed out".
+ *
+ * **Keep the deadline well under the enclosing test's timeout.** Most waits here are on another OS
+ * process reacting on its own timer, so the temptation is to be generous. But a deadline at or near
+ * the test timeout can never lose gracefully: the test is killed before the wait returns, and its
+ * `finally` never runs — which for these suites means a real daemon is left behind. Leave room for
+ * the wait to fail, report, and clean up. */
 export async function waitUntil(fn: () => boolean, deadlineMs = 3000, intervalMs = 50): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
@@ -369,6 +382,17 @@ export async function waitUntil(fn: () => boolean, deadlineMs = 3000, intervalMs
     await Bun.sleep(intervalMs);
   }
   return fn();
+}
+
+/** Narrows away null/undefined and says what was missing when it fails.
+ *
+ * `expect(x).not.toBeNull()` proves nothing to the compiler, which is why every such check tends to
+ * be followed by `x!`. Those suppressions turn a genuine absence into a property access on null
+ * several lines further down; this turns it into a named failure at the point it is discovered. */
+export function assertDefined<T>(value: T, what: string): asserts value is NonNullable<T> {
+  if (value === null || value === undefined) {
+    throw new Error(`expected ${what} to be present, got ${value === null ? "null" : "undefined"}`);
+  }
 }
 
 export function lockOf(home: string) {
