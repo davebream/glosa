@@ -1279,4 +1279,77 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       dom.document.body.textContent = ""; // clean mount root between iterations
     }
   });
+
+  describe("an arriving question brings itself to the reader", () => {
+    /** Mounts the workspace, then pushes an inbox that gained one anchored question. The tray
+     * refreshes on a journal frame, which is the real path — nothing here reaches past the
+     * seam the daemon actually drives. */
+    async function arrive(entries: unknown[], da = fakeDataAccess()) {
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      let inbox: unknown[] = [];
+      (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
+      mountApp(root, { dataAccess: da });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+
+      inbox = entries;
+      (da as any).stream.handlers?.onEvent?.({ event: "journal", data: { entry: "inb-1" } });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      return root;
+    }
+
+    const question = {
+      id: "inb-1",
+      created_at: "2026-09-05T10:00:00Z",
+      status: "open",
+      action: "ask",
+      target_path: "notes.md",
+      message: "Is argument X covered enough?",
+      passage: { quote: { exact: "Body." } },
+      approval_mode: false,
+    };
+
+    test("opens the artifact it concerns and switches that pane to Review", async () => {
+      const root = await arrive([question]);
+      const pane = root.querySelector(".glosa-pane");
+      expect(pane).not.toBeNull();
+      expect(pane?.getAttribute("data-mode")).toBe("review");
+    });
+
+    test("says so out loud, because the view moved on its own", async () => {
+      const root = await arrive([question]);
+      const live = root.querySelector('.glosa-visually-hidden[role="status"]');
+      expect(live?.textContent).toContain("notes.md");
+      expect(live?.textContent).toContain("unsaved work is kept");
+    });
+
+    test("a bare pointer earns a mark, never the reader's place in the document", async () => {
+      const root = await arrive([{ ...question, message: null, action: "point" }]);
+      // Still on the workspace with nothing forced open: a pointer is not an interruption.
+      expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
+    });
+
+    test("waits for a gap in typing rather than landing mid-sentence", async () => {
+      const da = fakeDataAccess();
+      const root = dom.document.createElement("div");
+      dom.document.body.append(root);
+      let inbox: unknown[] = [];
+      (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
+      mountApp(root, { dataAccess: da });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+
+      // Someone is mid-word when the question lands.
+      dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+      inbox = [question];
+      (da as any).stream.handlers?.onEvent?.({ event: "journal", data: { entry: "inb-1" } });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+
+      // Nothing has been yanked out from under the keystroke.
+      expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
+    });
+  });
 });

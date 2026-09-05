@@ -10,7 +10,7 @@ import {
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { GlosaApiClient } from "../src/api-client.ts";
+import type { EntryStatus, GlosaApiClient } from "../src/api-client.ts";
 import type { DaemonHookClient, DrainResult, RegisterSessionInput } from "../src/daemon-client.ts";
 import { createMcpServer, GLOSA_MCP_TOOL_NAMES, type GlosaMcpServer, type McpDeps, runMcpServer } from "../src/mcp.ts";
 import {
@@ -622,6 +622,130 @@ describe("official TypeScript MCP SDK contract", () => {
     const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
     input.end();
     await expect(running).resolves.toBeUndefined();
+  });
+
+  describe("glosa_ask — the blocking half, exercised through the real SDK", () => {
+    /** An api-client double whose entry-status honours `wait_ms` the way the daemon does: it does
+     * not answer until the answer exists. Anything that turned the wait back into a poll, or
+     * dropped the wait entirely, shows up here as the wrong outcome. */
+    function askApi(answerAfterCalls: number, detail: Record<string, unknown> | null) {
+      const calls: Array<{ waitMs?: number }> = [];
+      const api: Partial<GlosaApiClient> = {
+        createAttentionRequest: async (_path, opts) => {
+          created.push(opts as Record<string, unknown>);
+          return { id: "inb-1", slug: "ws-1", status: "open" };
+        },
+        getEntryStatus: async (_path, _entry, waitMs) => {
+          calls.push({ waitMs });
+          const open = { id: "inb-1", kind: "attention", status: "open", detail: null };
+          if (calls.length < answerAfterCalls || detail === null) return open as EntryStatus;
+          return { id: "inb-1", kind: "attention", status: "done", detail } as unknown as EntryStatus;
+        },
+      };
+      const created: Array<Record<string, unknown>> = [];
+      return { api, calls, created };
+    }
+
+    test("an answered question returns the human's words and their chosen option", async () => {
+      const { api, calls, created } = askApi(1, { outcome: "done", response: "Thin — say why.", chose: "thin" });
+      const connected = await connect(deps(new HookClient(), api));
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_ask",
+          arguments: {
+            path: "notes.md",
+            question: "Is argument X covered enough?",
+            quote: { exact: "the premise readers accept" },
+            options: ["covered", "thin"],
+            label: "api-refactor",
+            wait_seconds: 30,
+          },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(structured(result)).toMatchObject({
+          id: "inb-1",
+          outcome: "answered",
+          answer: "Thin — say why.",
+          chose: "thin",
+          anchored: true,
+        });
+        // The passage, the label and the options reached the daemon as sent.
+        expect(created[0]).toMatchObject({
+          agentLabel: "api-refactor",
+          target: { quote: { exact: "the premise readers accept" } },
+          answerOptions: ["covered", "thin"],
+        });
+        // And it WAITED — a wait_ms was actually passed, rather than the tool polling a bare read.
+        expect(calls[0]?.waitMs).toBeGreaterThan(0);
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("an empty answer is 'declined', never reported as an answer the human did not give", async () => {
+      const { api } = askApi(1, { outcome: "done", response: "" });
+      const connected = await connect(deps(new HookClient(), api));
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_ask",
+          arguments: { path: "notes.md", question: "Ready?", wait_seconds: 5 },
+        });
+        expect(structured(result)).toMatchObject({ outcome: "declined" });
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("a wait that elapses is 'unanswered' — distinct from declined, because nobody saw it", async () => {
+      // Never goes terminal, and the deadline is immediate.
+      const { api } = askApi(1, null);
+      const connected = await connect(deps(new HookClient(), api));
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_ask",
+          arguments: { path: "notes.md", question: "Ready?", wait_seconds: 0 },
+        });
+        expect(result.isError).not.toBe(true);
+        // Collapsing this into "declined" would have the agent report a refusal from a human who
+        // was never there.
+        expect(structured(result)).toMatchObject({ id: "inb-1", outcome: "unanswered" });
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("a pointer with no question returns at once and never waits", async () => {
+      const { api, calls, created } = askApi(1, null);
+      const connected = await connect(deps(new HookClient(), api));
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_ask",
+          arguments: { path: "notes.md", quote: { exact: "the premise readers accept" } },
+        });
+        expect(structured(result)).toMatchObject({ id: "inb-1", outcome: "posted" });
+        // No status was ever read: pointing is a side effect, not a request for something back.
+        expect(calls).toHaveLength(0);
+        expect(created[0]).toMatchObject({ action: "point" });
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("a question is action 'ask', so answering it asserts no verdict nobody gave", async () => {
+      const { api, created } = askApi(1, { outcome: "done", response: "Fine." });
+      const connected = await connect(deps(new HookClient(), api));
+      try {
+        await callTool(connected.client, {
+          name: "glosa_ask",
+          arguments: { path: "notes.md", question: "Ready?", wait_seconds: 5 },
+        });
+        // `review` would force approved|changes_requested, and neither is true of "the human
+        // answered a question".
+        expect(created[0]).toMatchObject({ action: "ask" });
+      } finally {
+        await connected.close();
+      }
+    });
   });
 
   test("glosa_present preview returns a p= URL without binding, never launches a browser, never returns durable t=", async () => {

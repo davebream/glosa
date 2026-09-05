@@ -349,10 +349,6 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
 
   renderTrigger();
   return {
-    /** Proven provider name for the bound session, or null. See `boundProviderName`. */
-    providerName() {
-      return boundProviderName(connection);
-    },
     setState(next) {
       wiring = next.wiring ?? null;
       connection = deriveAgentConnection(next.status, next.slug);

@@ -224,6 +224,40 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(q(host, ".glosa-agent-message")).toBeNull();
   });
 
+  test("the quoted passage is reachable and activatable by keyboard, not pointer-only", async () => {
+    const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+    const quote = q(host, ".glosa-agent-quote");
+    expect(quote.getAttribute("role")).toBe("button");
+    expect(quote.tabIndex).toBe(0);
+    expect(quote.getAttribute("aria-label")).toBe("Go to this passage");
+
+    quote.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await paint();
+    // Activation marks this request's rule as the focused one — the same thing a click does.
+    expect(q(host, ".glosa-sideline").getAttribute("data-focused")).toBe("true");
+  });
+
+  test("an unanchored quote is NOT presented as somewhere you can be taken", async () => {
+    const { host } = await mountPane(
+      fakeDataAccess([askAboutPremise({ passage: { quote: { exact: "a sentence deleted last week" } } })]),
+    );
+    const quote = q(host, ".glosa-agent-quote");
+    // No role, no tab stop: offering "go to this passage" for a passage that cannot be located
+    // would be a control that does nothing.
+    expect(quote.getAttribute("role")).toBeNull();
+    expect(quote.tabIndex).not.toBe(0);
+  });
+
+  test("at compact widths the cards move to the pane's tray rather than vanishing", async () => {
+    // The rail needs room it does not have in a narrow pane. The agent's asks must follow the
+    // annotations into the tray, not silently disappear with the rail.
+    const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+    expect(qa(host, ".glosa-agent-card").length).toBe(1);
+    // happy-dom reports zero widths, so this pane is already below the rail floor — which makes
+    // the tray the path actually exercised here, and the side rail the one a browser check owes.
+    expect(q(host, ".glosa-agent-card").closest(".glosa-margin, .glosa-tray-list")).not.toBeNull();
+  });
+
   test("a request for another artifact never appears in this pane's rail", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ target_path: "elsewhere.md" })]));
     expect(q(host, ".glosa-agent-card")).toBeNull();

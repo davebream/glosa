@@ -2,6 +2,8 @@
 // Workspace connection/wiring lifecycle. All I/O and dialogs are caller-injected so this module
 // stays transport-free and the SPA retains one data-access boundary.
 
+import { boundProviderName, deriveAgentConnection } from "./agent-feedback.js";
+
 export function createViewerFeedbackController({
   dataAccess,
   view,
@@ -102,6 +104,12 @@ export function createViewerFeedbackController({
 
   return {
     refresh,
+    /** The provider's own display name for the session bound to this workspace, or null when
+     * it cannot be proven. Feeds the margin's identity line, which must never present a
+     * session's self-reported label as something glosa verified. */
+    providerName() {
+      return boundProviderName(deriveAgentConnection(status, getWorkspaceSlug()));
+    },
     selectWorkspace,
     wireWorkspace,
     maybeOfferWiring,
