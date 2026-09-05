@@ -82,6 +82,24 @@ describe("actionable inbox presentations", () => {
     expect(orphaned?.text).toContain('"reason":"hash_mismatch_no_match"');
   });
 
+  test("every annotation tells the agent how to take the apply-lease and resolve the entry", () => {
+    // A4 §F05's lease is the only thing that can attribute a change to a session, and the only
+    // thing that leaves a `pre_apply` checkpoint for the human to roll back to. Both commands
+    // shipped and were tested, but nothing told the agent they existed — so no lease was ever
+    // taken, annotations stayed `pending` however faithfully they were acted on, and every edit
+    // was attributed `unknown`. The instruction is the half that was missing.
+    const result = buildDeliveryPresentation("inb-a", annotation("Tighten this."), { status: "pending" });
+    const text = result?.text ?? "";
+    expect(text).toContain("glosa apply-begin inb-a --session");
+    expect(text).toContain("glosa resolve inb-a applied --session");
+    // The other verdicts are named too, so "I am not doing this" has an honest terminal state
+    // instead of an entry left open forever.
+    expect(text).toContain("rejected");
+    expect(text).toContain("deferred");
+    // And it stays inside the entry budget rather than being appended past it.
+    expect(utf8Bytes(text)).toBeLessThanOrEqual(MAX_ENTRY_PRESENTATION_BYTES);
+  });
+
   test("UTF-8 truncation is byte-exact and gives stable CLI/MCP continuation instructions", () => {
     const result = buildDeliveryPresentation("inb-u", annotation("żółć🙂".repeat(10_000)), { status: "pending" });
     expect(result).not.toBeNull();

@@ -57,6 +57,30 @@ function stringOf(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** The two commands that turn "an agent edited a file" into a provable, reversible fact.
+ *
+ * A4 §F05's lease is the ONLY thing that can attribute a change to a session: `apply-begin`
+ * checkpoints the artifact as it stands (`pre_sha`) and opens the lease; `resolve` checkpoints the
+ * result (`post_sha`) and closes it, and the proven `pre..post` interval is what carries
+ * `session:<id>`. Both halves already existed and were tested — but nothing ever TOLD the agent
+ * they existed, so in practice no lease was taken: annotations sat `pending` forever however
+ * faithfully they were acted on, every edit was attributed `unknown`, and the reader was never
+ * offered the rollback the pre-apply checkpoint would have made possible.
+ *
+ * It rides on every annotation because the entry is where the agent is looking, and it is worth
+ * its ~230 bytes of the 16KB budget: without it the honest-provenance invariant is a mechanism
+ * with no caller. Kept imperative and literal so it survives being read by a small model. */
+const APPLY_PROTOCOL = (id: string) =>
+  [
+    "how to act on this:",
+    `1. before editing: glosa apply-begin ${id} --session <your-session-id>`,
+    "2. make the change",
+    `3. when done: glosa resolve ${id} applied --session <your-session-id>`,
+    `   (or 'rejected' with --note if you are not making the change, 'deferred' to re-surface it)`,
+    "the lease is what proves the change was yours and what lets the human undo it; skipping it",
+    "leaves the annotation open forever and the edit attributed to nobody.",
+  ].join("\n");
+
 export interface BuildPresentationOptions {
   status: string;
   resolution?: Resolution;
@@ -90,7 +114,10 @@ function annotationPresentation(
   ].join("\n");
   const maxBytes = opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES;
   const markerReserve = 512;
-  const allowedBodyBytes = Math.max(0, maxBytes - utf8Bytes(fixed) - markerReserve);
+  // The protocol is part of the entry, so it is part of the entry's budget. Appending it after
+  // the body was sized against `maxBytes` would push every large annotation over the cap.
+  const protocol = APPLY_PROTOCOL(id);
+  const allowedBodyBytes = Math.max(0, maxBytes - utf8Bytes(fixed) - utf8Bytes(protocol) - 1 - markerReserve);
   const sliced = truncateUtf8(remainingBody, allowedBodyBytes);
   const nextOffset = offset + sliced.value.length;
   const cursor = sliced.omitted > 0 ? encodeCursor(id, nextOffset) : undefined;
@@ -98,7 +125,7 @@ function annotationPresentation(
   const marker = cursor
     ? `\n[truncated: ${sliced.omitted} UTF-8 bytes omitted; retrieve with ${retrieve.command} or MCP ${retrieve.mcp_tool}]`
     : "";
-  const text = `${fixed}\n${sliced.value}${marker}`;
+  const text = `${fixed}\n${sliced.value}${marker}\n${protocol}`;
   return {
     id,
     kind: "annotation",

@@ -45,6 +45,41 @@ const STATE_LABELS = {
   stale: "Out of date",
 };
 
+// ---------- the document-global highlight registry ----------
+//
+// `CSS.highlights` is keyed by NAME across the whole document, and a static stylesheet can only
+// style a name it can spell. Panes therefore cannot each own a private key: giving every pane a
+// random suffix (`glosa-anchors-k3f9x2`) did stop panes from overwriting each other, but it also
+// meant no `::highlight()` rule in app.css ever matched, so the annotation underline, the anchor
+// wash and the composer's selection wash silently stopped painting for every artifact.
+//
+// The registry is global, so it is coordinated globally. Every pane contributes its ranges under
+// the SAME three names, and the union is rewritten whenever any pane's contribution changes. A
+// `Highlight` holds any number of ranges and ranges are document-scoped, so panes coexist inside
+// one key instead of fighting over it. Keep these three names in step with app.css §10.
+const HL_ANCHORS = "glosa-anchors";
+const HL_ANCHOR = "glosa-anchor";
+const HL_COMPOSER = "glosa-composer-selection";
+
+const highlightsAvailable = () => typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
+
+/** name -> (pane token -> that pane's ranges). A Map keyed by object identity so a torn-down
+ * pane's contribution is dropped with it and never leaks into another artifact's marks. */
+const highlightContributions = new Map();
+
+/** Replaces one pane's ranges under `name` and repaints the union. An empty array withdraws this
+ * pane's contribution; the key itself is deleted only once no pane contributes to it. */
+function contributeHighlight(name, token, ranges) {
+  if (!highlightsAvailable()) return;
+  let byPane = highlightContributions.get(name);
+  if (!byPane) highlightContributions.set(name, (byPane = new Map()));
+  if (ranges.length) byPane.set(token, ranges);
+  else byPane.delete(token);
+  const all = [...byPane.values()].flat();
+  if (all.length) CSS.highlights.set(name, new Highlight(...all));
+  else CSS.highlights.delete(name);
+}
+
 // The pane inline size at which the right-hand whitespace beside the manuscript stops holding a
 // 240px annotation rail (§7). Below it the compact bottom tray is the honest answer.
 //
@@ -200,7 +235,16 @@ export function createArtifactPane(host, deps) {
   let richMountRequest = 0;
   let richEditorLoading = false;
   let annotations = []; // [{record, id, state, attempts?, error?}] for THIS pane's one artifact
-  let composer = null; // {record, ...} while the annotation composer is open
+  let composer = null; // {record, replacing?, ...} while the annotation composer is open
+  let trayOpen = false; // the compact collection tray: collapsed to its count strip by default
+  // entry id -> the `pre_apply` checkpoint taken when an agent took the apply-lease for it. This
+  // is the artifact's state immediately BEFORE that annotation was acted on, so it is exactly
+  // what "undo this" restores to. Read from the shadow-git history, never cached from a live
+  // event: a reader who reloads after the agent finished must still be offered the rollback.
+  let rollbackPoints = new Map();
+  let rollbackLoaded = false;
+  let previewItem = null; // the annotation whose passage the pointer is currently over
+  let previewCloseTimer = null;
   let annotatableFocusIndex = 0;
   let stopClassFViewer = null;
   let classFInteractive = false;
@@ -363,7 +407,27 @@ export function createArtifactPane(host, deps) {
   });
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
   const markersEl = el("div", { className: "glosa-markers", "aria-hidden": "true" });
+  const previewEl = el("div", { className: "glosa-annotation-preview", hidden: true });
   const historyEl = el("section", { className: "glosa-history", hidden: true, "aria-label": "Version history" });
+
+  // The collection, at compact widths. The composer goes to the passage; the SET of annotations
+  // on this artifact needs somewhere permanent to live, and the end of a 4000px manuscript is not
+  // it. A tray on the PANE — not inside its scroll container, and not the window (§7: with two
+  // artifacts open, a viewport-bound tray lies about which document it belongs to).
+  const trayCountEl = el("span", { className: "glosa-tray-count" });
+  const trayToggle = el("button", {
+    className: "glosa-tray-toggle",
+    type: "button",
+    onClick: () => setTrayOpen(!trayOpen),
+  });
+  trayToggle.append(el("span", { className: "glosa-tray-chevron", "aria-hidden": "true" }), trayCountEl);
+  const trayListEl = el("div", { className: "glosa-tray-list" });
+  const trayEl = el("aside", {
+    className: "glosa-annotations-tray",
+    hidden: true,
+    "aria-label": "Annotations on this artifact",
+  });
+  trayEl.append(trayToggle, trayListEl);
 
   const paneMain = el("main", { className: "glosa-pane-main" }, [
     approvalStrip,
@@ -375,10 +439,12 @@ export function createArtifactPane(host, deps) {
     editWrap,
     marginEl,
     markersEl,
+    previewEl,
   ]);
   const paneEl = el("section", { className: "glosa-pane", "aria-label": "Artifact" }, [
     artifactBar,
     paneMain,
+    trayEl,
     historyEl,
   ]);
   paneEl.setAttribute("data-mode", modeState.mode);
@@ -900,27 +966,36 @@ export function createArtifactPane(host, deps) {
     });
   }
 
-  // --- annotation composer: selection → composer → intent + comment → post. ONE component; CSS
-  // places it in the margin at rail widths and as a bottom tray in the compact pane. ---
+  // --- annotation composer: selection → composer → intent + comment → post. ONE component,
+  // two placements: a card in the side rail when the pane is wide enough for one, and a popover
+  // anchored under its own passage when it is not. Both put the draft beside the words it is
+  // about; neither is a bar at the bottom of the window pretending to belong to a passage 3000px
+  // above it. ---
 
-  function openComposer(record, { returnFocus = null } = {}) {
-    composer = { record, returnFocus, draft: "", error: "", submitting: false };
-    // Compact (bottom-tray) pane widths: keep the selected passage visible in the unobscured
-    // upper area before the tray covers the bottom of the window.
+  function openComposer(record, { returnFocus = null, replacing = null, draft = "" } = {}) {
+    closePreview();
+    composer = { record, returnFocus, replacing, draft, error: "", submitting: false };
+    // Compact widths: the composer opens AT the passage, so the passage has to be on screen for
+    // it to have anywhere to open. Centring it also leaves room for the popover below it.
     if (!isSideMargin()) {
-      const anchorNode = window.getSelection()?.anchorNode;
-      const anchorEl = anchorNode && (anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement);
-      anchorEl?.scrollIntoView?.({ block: "center" });
+      const box = anchorBox(record?.target);
+      if (box) {
+        const centred = box.top - Math.max(0, (paneMain.clientHeight - (box.bottom - box.top)) / 2 - 40);
+        paneMain.scrollTop = Math.max(0, centred);
+      } else {
+        const anchorNode = window.getSelection()?.anchorNode;
+        const anchorEl = anchorNode && (anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement);
+        anchorEl?.scrollIntoView?.({ block: "center" });
+      }
     }
     // Moving focus into the composer ends the browser's transient selection paint. Keep the
     // captured range visibly marked for the whole composition step, so the reviewer can still
     // see exactly what their feedback will attach to.
     paintComposerSelection();
     renderMargin();
-    // The composer is rendered in the margin, not at the selection itself. Native focus normally
-    // scrolls the nearest scroll container until that newly inserted control is visible; for a
-    // long artifact this can reset the reader's viewport after they release a selection. Keep
-    // keyboard focus moving into the composer, but leave the manuscript exactly where it was.
+    // Native focus normally scrolls the nearest scroll container until the newly inserted control
+    // is visible; for a long artifact that would undo the anchor scroll above. Keep keyboard focus
+    // moving into the composer, but leave the manuscript exactly where this put it.
     marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true });
   }
 
@@ -949,6 +1024,7 @@ export function createArtifactPane(host, deps) {
     // Point-of-action wiring offer (issue #81) — strictly BEFORE the POST but never a gate on
     // it: whatever the user chooses (or if wiring itself fails), the save below proceeds.
     await maybeOfferWiring();
+    const replacing = composer.replacing;
     try {
       const result = await dataAccess.postAnnotation(slug, record);
       // Delivery is a separate axis from status (R3): the POST response only picks the honest
@@ -959,6 +1035,10 @@ export function createArtifactPane(host, deps) {
         id: result?.id ?? null,
         state: result?.status === "delivered" ? "delivered" : "waiting",
       });
+      // A revision is complete only once the superseded entry is withdrawn. It runs AFTER the new
+      // entry exists, so a failure here leaves two visible notes rather than none; the old card
+      // stays with an honest label instead of quietly vanishing while still queued for delivery.
+      if (replacing) await removeAnnotation(replacing, { failureLabel: "Still queued — remove it by hand" });
       closeComposer();
       onStateChange();
     } catch (error) {
@@ -973,8 +1053,12 @@ export function createArtifactPane(host, deps) {
   }
 
   function buildComposer() {
-    const { record } = composer;
-    const form = el("form", { className: "glosa-composer", "aria-label": "New annotation" });
+    const { record, replacing } = composer;
+    const form = el("form", {
+      className: "glosa-composer",
+      "aria-label": replacing ? "Edit annotation" : "New annotation",
+    });
+    if (replacing) form.setAttribute("data-editing", "true");
     if (record.target?.quote?.exact) {
       // Inner span so the anchor wash hugs the quoted words instead of striping the whole card.
       form.append(
@@ -1020,7 +1104,7 @@ export function createArtifactPane(host, deps) {
     const send = el("button", {
       className: "glosa-composer-send",
       type: "button",
-      textContent: "Send",
+      textContent: replacing ? "Replace" : "Send",
       onClick: () => void submitComposer(input),
     });
     send.disabled = Boolean(composer.submitting);
@@ -1033,6 +1117,20 @@ export function createArtifactPane(host, deps) {
     if (composer.error) status.setAttribute("data-error", "true");
     form.addEventListener("submit", (e) => e.preventDefault());
     form.append(intents, input, status, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
+    // The journal never rewrites an entry, so say what "Replace" actually does — and say the
+    // extra part out loud when the session has already been handed the note being replaced.
+    if (replacing) {
+      form.insertBefore(
+        el("p", {
+          className: "glosa-composer-note",
+          textContent:
+            replacing.state === "delivered" || replacing.state === "seen"
+              ? "Replaces a note the session already has: it will be withdrawn and this one sent in its place."
+              : "Replaces the note on this passage. The original is withdrawn.",
+        }),
+        intents,
+      );
+    }
     return form;
   }
 
@@ -1058,13 +1156,14 @@ export function createArtifactPane(host, deps) {
   /** Withdraws the entry (terminal `rejected` — the journal keeps it, delivery stops) and drops
    * the card. A 404/409 means the entry is already gone or closed daemon-side, so dropping the
    * card is still honest; any other failure keeps the card and says so. */
-  async function removeAnnotation(item) {
+  async function removeAnnotation(item, { failureLabel = "Couldn't remove — try again" } = {}) {
+    closePreview();
     try {
       if (item.id) await dataAccess.withdrawAnnotation(slug, item.id);
     } catch (err) {
       if (err?.status !== 404 && err?.status !== 409) {
         item.state = "waiting";
-        item.error = true;
+        item.error = failureLabel;
         renderMargin();
         return;
       }
@@ -1139,15 +1238,191 @@ export function createArtifactPane(host, deps) {
     return modeState.mode === "annotate" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
 
+  /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`), so
+   * there is nothing left to withdraw and nothing to revise. */
+  const isTerminalState = (state) => state === "applied" || state === "rejected" || state === "stale";
+
+  /** Loads the entry→pre-apply-checkpoint map from shadow-git history. Called when the annotation
+   * set first contains something an agent has applied; a workspace where nothing was ever applied
+   * never pays for it. Failure is silent by design — history is an ENHANCEMENT to the card (it
+   * adds an undo), and losing it must never take the card itself down with it. */
+  async function loadRollbackPoints() {
+    if (rollbackLoaded || !slug || typeof dataAccess.getCheckpoints !== "function") return;
+    rollbackLoaded = true;
+    try {
+      const rows = await dataAccess.getCheckpoints(slug, { limit: 200 });
+      const next = new Map();
+      for (const row of Array.isArray(rows) ? rows : []) {
+        // Only `pre_apply`. An `applied` checkpoint is the state AFTER the agent's edit; restoring
+        // to it would be a no-op dressed up as an undo.
+        if (row?.summary === "pre_apply" && row.entry && row.checkpoint_id) next.set(row.entry, row.checkpoint_id);
+      }
+      rollbackPoints = next;
+      if (!destroyed) renderMargin();
+    } catch {
+      rollbackLoaded = false; // a transient failure should not permanently disable undo
+    }
+  }
+
+  /** Restores the artifact to the state it was in before an agent applied this annotation. Same
+   * machinery, guard and force-confirmation as the history pane's restore — an undo is a restore
+   * to a particular checkpoint, not a second, weaker mechanism that could disagree with it. */
+  async function undoApplied(item, { force = false } = {}) {
+    const to = rollbackPoints.get(item.id);
+    if (!to || !currentArtifact) return;
+    if (!force) {
+      const proceed = await confirmDialog({
+        title: "Undo this change?",
+        body: "Restores this artifact to how it read before the session applied this annotation. Anything written since is replaced.",
+        confirmLabel: "Undo the change",
+        danger: true,
+      });
+      if (!proceed) return;
+    }
+    try {
+      await dataAccess.restore(slug, { path: currentArtifact.source_path, to, force });
+      item.error = "";
+      onStateChange();
+    } catch (err) {
+      if (err?.status === 409 && err.problem?.would_be_lost_diff) {
+        // The dirty-worktree guard (A6 §F31). The reader is told what is at stake in their own
+        // words before a second, explicit confirmation — never a silent overwrite.
+        const proceed = await confirmDialog({
+          title: "This artifact has unsaved changes",
+          body: "It changed since its last saved version. Undoing now throws those changes away.",
+          confirmLabel: "Undo anyway",
+          danger: true,
+        });
+        if (proceed) await undoApplied(item, { force: true });
+        return;
+      }
+      item.error = err instanceof Error ? `Couldn't undo: ${err.message}` : "Couldn't undo — try again";
+      renderMargin();
+    }
+  }
+
+  /** An anchor's box in the SAME scroll space `layoutMargin` and `renderMarkers` already use:
+   * offsets inside `.glosa-pane-main`'s scrollable content, so a card placed at these coordinates
+   * scrolls glued to the words it points at. */
+  function anchorBox(target) {
+    const range = rangeForTarget(target);
+    const rects = range ? [...range.getClientRects()] : [];
+    if (!rects.length) return null;
+    const main = paneMain.getBoundingClientRect();
+    return {
+      top: Math.min(...rects.map((r) => r.top)) - main.top + paneMain.scrollTop,
+      bottom: Math.max(...rects.map((r) => r.bottom)) - main.top + paneMain.scrollTop,
+    };
+  }
+
+  /** Places a floating surface directly under the passage it belongs to, flipping above when the
+   * space below is too tight, and clamped into the pane's visible band so it can never open
+   * off-screen. Positioned in scroll space, so it travels with the passage as the reader scrolls
+   * — the popover IS at the text, which is the whole contract. */
+  function placeAtAnchor(node, target, { gap = 10 } = {}) {
+    const box = anchorBox(target);
+    const height = node.offsetHeight;
+    const viewTop = paneMain.scrollTop;
+    const viewBottom = viewTop + paneMain.clientHeight;
+    // No live anchor (the passage was edited away): park it in the visible band rather than at a
+    // stale offset, so an orphaned draft is still reachable instead of scrolled into nowhere.
+    let top = box ? box.bottom + gap : viewTop + gap;
+    if (box && top + height > viewBottom - gap && box.top - gap - height >= viewTop) top = box.top - gap - height;
+    top = Math.max(viewTop + gap, Math.min(top, Math.max(viewTop + gap, viewBottom - height - gap)));
+    node.style.top = `${Math.round(top)}px`;
+  }
+
+  // ---------- the compact collection tray ----------
+
+  function setTrayOpen(open) {
+    trayOpen = open;
+    renderTray();
+    // No focus move. This is a disclosure, not a dialog: the cards follow their toggle in DOM
+    // order, so Tab reaches them anyway, and stealing focus on a click paints a focus ring on a
+    // control the pointer user never asked for.
+  }
+
+  /** The tray states its count even when collapsed — the one honest thing a reader scrolling a
+   * long manuscript needs from it — and only becomes a scrollable sheet when asked. */
+  function renderTray() {
+    const show = modeState.mode === "annotate" && Boolean(currentArtifact) && !isSideMargin();
+    trayEl.hidden = !show;
+    if (!show) {
+      trayOpen = false;
+      trayEl.removeAttribute("data-open");
+      return;
+    }
+    const count = annotations.length;
+    trayCountEl.textContent =
+      count === 0 ? "No annotations yet" : count === 1 ? "1 annotation" : `${count} annotations`;
+    trayToggle.setAttribute("aria-expanded", String(trayOpen && count > 0));
+    trayToggle.disabled = count === 0;
+    trayEl.toggleAttribute("data-open", trayOpen && count > 0);
+  }
+
+  // ---------- the passage's own preview ----------
+
+  function scheduleClosePreview() {
+    if (previewCloseTimer) clearTimeout(previewCloseTimer);
+    // Long enough to cross the gap between the passage and the card that describes it.
+    previewCloseTimer = setTimeout(closePreview, 260);
+  }
+
+  function closePreview() {
+    if (previewCloseTimer) clearTimeout(previewCloseTimer);
+    previewCloseTimer = null;
+    previewItem = null;
+    previewEl.hidden = true;
+    previewEl.textContent = "";
+  }
+
+  /** Hovering an annotated passage shows what was written there, without leaving the text. Only
+   * in Annotate: the Preview Boundary Rule keeps anything that sends or changes feedback behind
+   * an explicit mode transition, and the gutter dot is how a reader in Preview gets here. */
+  function openAnnotationPreview(item) {
+    if (modeState.mode !== "annotate" || composer) return;
+    if (previewCloseTimer) clearTimeout(previewCloseTimer);
+    previewCloseTimer = null;
+    if (previewItem === item && !previewEl.hidden) return;
+    previewItem = item;
+    previewEl.textContent = "";
+    previewEl.append(buildAnnotationCard(item));
+    previewEl.hidden = false;
+    placeAtAnchor(previewEl, item.record?.target, { gap: 8 });
+  }
+
+  previewEl.addEventListener("mouseenter", () => {
+    if (previewCloseTimer) clearTimeout(previewCloseTimer);
+    previewCloseTimer = null;
+  });
+  previewEl.addEventListener("mouseleave", scheduleClosePreview);
+
+  /** Revise an annotation. The journal is append-only (invariant 2) and the API has no patch, so
+   * this is honestly a withdraw-and-rewrite: the composer reopens on the same passage carrying
+   * the old wording, and sending posts a NEW entry before withdrawing the old one. Posting first
+   * means the worst failure is a visible duplicate the reader can remove, never a lost note. */
+  function editAnnotation(item) {
+    closePreview();
+    openComposer(
+      { ...item.record, target: item.record.target, intent: item.record.intent },
+      { replacing: item, draft: item.record.body },
+    );
+  }
+
   /** Aligns each margin card (and the open composer) beside its anchor: anchor rect → offset in
    * the shared scroll space → absolute top, collision-stacked downward so cards never overlap.
    * No-op in compact, where CSS lays the margin out in flow. */
   function layoutMargin() {
     const side = isSideMargin();
     marginEl.classList.toggle("glosa-margin-side", side);
+    // Compact: the margin is not a block under the manuscript any more, it is the coordinate
+    // space the open composer floats in beside its own passage.
+    marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "annotate");
     const positioned = [...marginEl.querySelectorAll(".glosa-annotation, .glosa-composer")];
     if (!side) {
       for (const cardEl of positioned) cardEl.style.top = "";
+      const form = marginEl.querySelector(".glosa-composer");
+      if (form && composer) placeAtAnchor(form, composer.record?.target);
       return;
     }
     const mainTop = paneMain.getBoundingClientRect().top;
@@ -1169,20 +1444,46 @@ export function createArtifactPane(host, deps) {
     markersEl.textContent = "";
     if (!currentArtifact || isSideMargin()) return;
     const mainTop = paneMain.getBoundingClientRect().top;
+    // Anchors are per-SELECTION, not per-block: five words carry their own mark, and a paragraph
+    // can hold as many as the reader cares to write. Several of them landing on one rendered line
+    // therefore produce dots at the same height — stacked exactly, so seven notes read as one.
+    // Measure every dot first, order them down the page, then push each clear of the one above:
+    // the gutter shows a countable run instead of a single dot hiding a pile.
+    const DOT_STEP = 12; // the 10px dot plus 2px of air
+    const placed = [];
     for (const item of annotations) {
       const range = rangeForTarget(item.record?.target);
       if (!range) continue;
-      const top = range.getBoundingClientRect().top - mainTop + paneMain.scrollTop;
+      placed.push({ item, top: range.getBoundingClientRect().top - mainTop + paneMain.scrollTop });
+    }
+    placed.sort((a, b) => a.top - b.top);
+    let prev = -Infinity;
+    for (const entry of placed) {
+      entry.top = prev + DOT_STEP > entry.top ? prev + DOT_STEP : entry.top;
+      prev = entry.top;
+    }
+    for (const { item, top } of placed) {
+      // Several dots in one gutter are only useful if they say which note each one is. Screen
+      // readers get the note itself, not seven identical "Go to annotation" buttons.
+      const gist = (item.record?.body ?? "").trim();
       const dot = el("button", {
         className: "glosa-marker",
         type: "button",
-        "aria-label": "Go to annotation",
+        "aria-label": gist
+          ? `Go to annotation: ${gist.length > 60 ? `${gist.slice(0, 60)}…` : gist}`
+          : "Go to annotation",
         onClick: () => {
           // Outside Annotate there is no card to jump to yet, so the dot's job is to get the
           // reader to one: it opens the mode that has them, then reveals its own.
           if (modeState.mode !== "annotate") setMode("annotate");
+          // The cards are in the rail at wide widths and in the collection tray at compact ones,
+          // and the tray may be collapsed — open it before trying to scroll a card into view.
+          if (!isSideMargin()) setTrayOpen(true);
           const reveal = () => {
-            const cardEl = [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
+            const cardEl = [
+              ...marginEl.querySelectorAll(".glosa-annotation"),
+              ...trayListEl.querySelectorAll(".glosa-annotation"),
+            ].find((c) => c._glosaItem === item);
             const reducedMotion =
               typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
             cardEl?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
@@ -1198,24 +1499,14 @@ export function createArtifactPane(host, deps) {
     }
   }
 
-  const highlightsAvailable = () => typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
-
-  // CSS.highlights is a document-global registry, so panes cannot each own a key called
-  // "glosa-anchors" — the last writer would erase every other pane's underlines. Each pane gets
-  // its own suffix and only ever writes its own three keys.
-  const highlightId = `${Math.random().toString(36).slice(2, 9)}`;
-  const HL_ANCHORS = `glosa-anchors-${highlightId}`;
-  const HL_ANCHOR = `glosa-anchor-${highlightId}`;
-  const HL_COMPOSER = `glosa-composer-selection-${highlightId}`;
+  const paneHighlightToken = {}; // this pane's identity in the document-global highlight registry
 
   /** The open composer owns a temporary, persistent selection wash. It deliberately lives in a
    * separate highlight from saved annotation underlines, so closing/sending a draft cannot erase
    * the durable annotation state. */
   function paintComposerSelection() {
-    if (!highlightsAvailable()) return;
     const range = composer ? rangeForTarget(composer.record?.target) : null;
-    if (range) CSS.highlights.set(HL_COMPOSER, new Highlight(range));
-    else CSS.highlights.delete(HL_COMPOSER);
+    contributeHighlight(HL_COMPOSER, paneHighlightToken, range ? [range] : []);
   }
 
   let anchoredRanges = []; // [{item, range}] cache from the last underline pass — hit-testing reuses it
@@ -1236,9 +1527,11 @@ export function createArtifactPane(host, deps) {
         if (range) anchoredRanges.push({ item, range });
       }
     }
-    if (!highlightsAvailable()) return;
-    if (anchoredRanges.length) CSS.highlights.set(HL_ANCHORS, new Highlight(...anchoredRanges.map((a) => a.range)));
-    else CSS.highlights.delete(HL_ANCHORS);
+    contributeHighlight(
+      HL_ANCHORS,
+      paneHighlightToken,
+      anchoredRanges.map((a) => a.range),
+    );
   }
 
   /** The reverse thread: hovering an underlined passage in the text highlights its card (and
@@ -1252,14 +1545,12 @@ export function createArtifactPane(host, deps) {
     for (const cardEl of marginEl.querySelectorAll(".glosa-annotation")) {
       cardEl.classList.toggle("glosa-annotation-hover", Boolean(item) && cardEl._glosaItem === item);
     }
-    if (highlightsAvailable()) {
-      if (item) {
-        const hit = anchoredRanges.find((a) => a.item === item);
-        if (hit) CSS.highlights.set(HL_ANCHOR, new Highlight(hit.range));
-      } else {
-        CSS.highlights.delete(HL_ANCHOR);
-      }
-    }
+    const hit = item ? anchoredRanges.find((a) => a.item === item) : null;
+    contributeHighlight(HL_ANCHOR, paneHighlightToken, hit ? [hit.range] : []);
+    // The pointer thread's other half: the passage itself offers what the rail would have shown
+    // beside it — the note, its delivery state, and the two things you can still do to it.
+    if (item) openAnnotationPreview(item);
+    else scheduleClosePreview();
   }
 
   contentEl.addEventListener("mousemove", (e) => {
@@ -1284,25 +1575,121 @@ export function createArtifactPane(host, deps) {
 
   contentEl.addEventListener("mouseleave", () => setHoveredItem(null));
 
+  // Escape dismisses the passage preview wherever focus happens to be; the composer's own input
+  // handles its own Escape, and a preview is never open at the same time as one.
+  paneEl.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && previewItem) closePreview();
+  });
+
   /** Hover/focus on a card washes its own anchor fully — the thread from margin back to text. */
   function connectAnchorHighlight(cardEl, item) {
-    if (!highlightsAvailable()) return;
     const on = () => {
       const range = rangeForTarget(item.record?.target ?? item.target);
-      if (range) CSS.highlights.set(HL_ANCHOR, new Highlight(range));
+      contributeHighlight(HL_ANCHOR, paneHighlightToken, range ? [range] : []);
     };
-    const off = () => CSS.highlights.delete(HL_ANCHOR);
+    const off = () => contributeHighlight(HL_ANCHOR, paneHighlightToken, []);
     cardEl.addEventListener("mouseenter", on);
     cardEl.addEventListener("mouseleave", off);
     cardEl.addEventListener("focusin", on);
     cardEl.addEventListener("focusout", off);
   }
 
+  /** One annotation card. The same component in the side rail, in the compact collection tray,
+   * and inside the passage's hover preview — only its container changes. */
+  function buildAnnotationCard(item, { actions = true } = {}) {
+    const { record, state } = item;
+    const intentLabel = INTENTS.find((i) => i.value === record.intent)?.label ?? record.intent;
+    // Honest anchoring: if the quoted passage no longer exists in the current text (edited
+    // away, rewritten), the card says "Lost its place" and keeps the original quote — it never
+    // underlines different words (client echo of A5 §F10; the daemon's resolver is the
+    // authority at delivery time).
+    const anchored = Boolean(rangeForTarget(record.target));
+    const card = el("div", { className: "glosa-annotation", "data-state": state, "data-anchored": String(anchored) });
+    if (record.target?.quote?.exact) {
+      card.append(
+        el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]),
+      );
+    }
+    if (!anchored) {
+      card.append(
+        el("p", {
+          className: "glosa-annotation-lost",
+          textContent: "Lost its place — the passage changed since this was written.",
+        }),
+      );
+    }
+    const stateRow = el("p", { className: "glosa-annotation-state" }, [
+      el("span", { className: "glosa-state-dot", "aria-hidden": "true" }),
+      el("span", {
+        role: "status",
+        "aria-live": "polite",
+        textContent:
+          item.error || (STATE_LABELS[state] ?? state) + (item.attempts > 1 ? ` · nudged ×${item.attempts}` : ""),
+      }),
+      el("span", { className: "glosa-annotation-intent", textContent: intentLabel }),
+    ]);
+    if (actions) {
+      // The verbs sit in their own group so the state and intent read as one metadata run and the
+      // actions as another, instead of "Change the words Edit Remove" running together.
+      const actionGroup = el("span", { className: "glosa-annotation-actions" });
+      // Revising is withdraw-then-write, never an in-place patch: the journal is append-only
+      // (invariant 2), so a terminal entry has nothing left to revise and offers no Edit.
+      if (!isTerminalState(state)) {
+        actionGroup.append(
+          el("button", {
+            className: "glosa-annotation-edit",
+            type: "button",
+            textContent: "Edit",
+            "aria-label": "Edit this annotation",
+            onClick: () => editAnnotation(item),
+          }),
+        );
+      }
+      // An applied annotation is history, not a task — but history a reader can still walk back.
+      // The offer appears only when the lease actually left a `pre_apply` checkpoint to return to,
+      // so glosa never promises an undo it cannot perform (a session that edited without taking a
+      // lease leaves no proven "before", and the card stays honestly silent about it).
+      if (state === "applied" && rollbackPoints.has(item.id)) {
+        actionGroup.append(
+          el("button", {
+            className: "glosa-annotation-undo",
+            type: "button",
+            textContent: "Undo",
+            "aria-label": "Undo the change this annotation asked for",
+            onClick: () => void undoApplied(item),
+          }),
+        );
+      }
+      // On a live entry this really withdraws it (terminal `rejected`, delivery stops). On a
+      // settled one there is nothing left to withdraw — the journal is append-only and the entry
+      // has already left the state machine — so the verb says what it actually does: it clears the
+      // card from this view and the record stays in the journal. Same action, honest label.
+      const settled = isTerminalState(state);
+      actionGroup.append(
+        el("button", {
+          className: "glosa-annotation-remove",
+          type: "button",
+          textContent: settled ? "Dismiss" : "Remove",
+          "aria-label": settled ? "Dismiss this annotation from the list" : "Remove this annotation",
+          onClick: () => void removeAnnotation(item),
+        }),
+      );
+      stateRow.append(actionGroup);
+    }
+    card.append(el("p", { className: "glosa-annotation-body", textContent: record.body }), stateRow);
+    card._glosaItem = item;
+    connectAnchorHighlight(card, item);
+    return card;
+  }
+
   function renderMargin() {
     marginEl.textContent = "";
+    trayListEl.textContent = "";
     if (modeState.mode !== "annotate" || !currentArtifact) {
       if (composer) composer = null;
+      closePreview();
       paintComposerSelection();
+      renderTray();
       // The cards are gone; the marks they point at are not. layoutMargin also runs so the rail
       // class does not linger on an empty margin after leaving Annotate.
       const marks = () => {
@@ -1313,60 +1700,37 @@ export function createArtifactPane(host, deps) {
       else marks();
       return;
     }
+    // Where the SET of cards lives. Beside their passages when the rail has room; in the pane's
+    // own collection tray when it does not. The composer stays in the margin either way — it is
+    // anchored to one passage, which is the whole point of it.
+    const cardHost = isSideMargin() ? marginEl : trayListEl;
+    // Synchronously, not on the next frame: the layout class decides whether the margin is an
+    // in-flow block at the end of a 4000px document or the anchored layer, and a frame spent in
+    // the wrong one is a visible jump.
+    marginEl.classList.toggle("glosa-margin-side", cardHost === marginEl);
+    marginEl.classList.toggle("glosa-margin-anchored", cardHost !== marginEl);
     marginEl.append(el("p", { className: "glosa-margin-title", textContent: "Annotations" }));
     if (composer) {
       const form = buildComposer();
       form._glosaItem = composer.record ? { record: composer.record } : null;
       marginEl.append(form);
     }
-    for (const item of annotations) {
-      const { record, state } = item;
-      const intentLabel = INTENTS.find((i) => i.value === record.intent)?.label ?? record.intent;
-      // Honest anchoring: if the quoted passage no longer exists in the current text (edited
-      // away, rewritten), the card says "Lost its place" and keeps the original quote — it never
-      // underlines different words (client echo of A5 §F10; the daemon's resolver is the
-      // authority at delivery time).
-      const anchored = Boolean(rangeForTarget(record.target));
-      const card = el("div", { className: "glosa-annotation", "data-state": state, "data-anchored": String(anchored) });
-      if (record.target?.quote?.exact) {
-        card.append(
-          el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]),
-        );
-      }
-      if (!anchored) {
-        card.append(
-          el("p", {
-            className: "glosa-annotation-lost",
-            textContent: "Lost its place — the passage changed since this was written.",
-          }),
-        );
-      }
-      card.append(
-        el("p", { className: "glosa-annotation-body", textContent: record.body }),
-        el("p", { className: "glosa-annotation-state" }, [
-          el("span", { className: "glosa-state-dot", "aria-hidden": "true" }),
-          el("span", {
-            role: "status",
-            "aria-live": "polite",
-            textContent: item.error
-              ? "Couldn't remove — try again"
-              : (STATE_LABELS[state] ?? state) + (item.attempts > 1 ? ` · nudged ×${item.attempts}` : ""),
-          }),
-          el("span", { className: "glosa-annotation-intent", textContent: intentLabel }),
-          el("button", {
-            className: "glosa-annotation-remove",
-            type: "button",
-            textContent: "Remove",
-            "aria-label": "Remove this annotation",
-            onClick: () => void removeAnnotation(item),
-          }),
-        ]),
-      );
-      card._glosaItem = item;
-      connectAnchorHighlight(card, item);
-      marginEl.append(card);
+    // Open work first, settled work after it under its own heading. An annotation a session has
+    // already applied is a record of what happened, not something still asking to be read — but it
+    // stays on the page, because "what did we change and can I take it back" is the question this
+    // surface exists to answer.
+    const open = annotations.filter((item) => !isTerminalState(item.state));
+    const resolved = annotations.filter((item) => isTerminalState(item.state));
+    for (const item of open) cardHost.append(buildAnnotationCard(item));
+    if (resolved.length) {
+      // Named even when it is the whole list: "Resolved" is the state of the work, and a reader
+      // opening a tray of settled cards should not have to infer that from the dots.
+      cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
+      for (const item of resolved) cardHost.append(buildAnnotationCard(item));
     }
-    if (!composer && annotations.length === 0) {
+    if (resolved.some((item) => item.state === "applied")) void loadRollbackPoints();
+    renderTray();
+    if (!composer && annotations.length === 0 && cardHost === marginEl) {
       marginEl.append(
         el("p", {
           className: "glosa-margin-empty",
@@ -1759,11 +2123,10 @@ export function createArtifactPane(host, deps) {
       observer?.disconnect();
       teardownRichFace();
       stopClassFViewer?.();
-      if (highlightsAvailable()) {
-        CSS.highlights.delete(HL_ANCHORS);
-        CSS.highlights.delete(HL_ANCHOR);
-        CSS.highlights.delete(HL_COMPOSER);
-      }
+      // Withdraw only THIS pane's ranges: the three keys are shared, so deleting them outright
+      // would erase every other open artifact's marks.
+      for (const name of [HL_ANCHORS, HL_ANCHOR, HL_COMPOSER]) contributeHighlight(name, paneHighlightToken, []);
+      closePreview();
       paneEl.remove();
     },
   };

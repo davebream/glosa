@@ -1558,6 +1558,11 @@ input,
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden; /* pre/tables scroll internally; a pane itself never pans sideways */
+  /* Reserve the scrollbar's track in every mode. Edit sets `overflow: hidden` below, and without
+     a stable gutter the centred manuscript slid sideways by a scrollbar width on entering and
+     leaving Edit — the horizontal half of the "jumpy" mode switch. Harmless where the platform
+     draws overlay scrollbars; load-bearing everywhere it does not. */
+  scrollbar-gutter: stable;
   background: var(--bg);
   display: flex;
   flex-direction: column;
@@ -2291,6 +2296,15 @@ input,
 
 /* ---------- 8. Editor ---------- */
 
+/* §8: Edit is the SAME PAGE with a caret in it, not a different component.
+   `--measure` is `68ch`, and `ch` resolves in whatever font the declaring element is set in. This
+   wrap is product chrome, so it inherits 13px system-ui, where `68ch` measures 557px — while the
+   manuscript declares its own `68ch` inside 17px Iowan Old Style, where it measures 643px. Written
+   as `calc(var(--measure) + 2 * var(--space-8))` here, the editor column therefore came out 86px
+   narrower than the very text it was editing, and the mode switch read as the document shrinking
+   and jumping left. `--manuscript-block` exists for exactly this: the manuscript's painted width
+   as a resolved length, usable from outside the serif context. Same token, same column, so the
+   inner surface's own serif `68ch` lands inside it exactly. */
 .glosa-edit-wrap {
   flex: 1;
   display: flex;
@@ -2298,10 +2312,12 @@ input,
   height: 100%;
   min-height: 0;
   width: 100%;
-  max-width: calc(var(--measure) + 2 * var(--space-8));
+  max-width: var(--manuscript-block);
   margin: 0 auto;
-  padding: var(--space-6) var(--space-8) var(--space-8);
-  gap: var(--space-3);
+  /* The toolbar takes the air the manuscript spends on its 4rem opening, so the first line still
+     lands on the same horizon rather than 55px lower — see .glosa-rich-surface below. */
+  padding: var(--space-2) var(--space-8) var(--space-8);
+  gap: var(--space-2);
 }
 
 /* §8: the measure follows the FACE. Rich is prose and keeps the 68ch reading measure the
@@ -2369,6 +2385,33 @@ input,
 .glosa-edit-topbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+}
+
+/* One editor control row, not two. Stacked, the Rich/Source toggle and the formatting toolbar put
+   59px of chrome between the artifact bar and the first line — the manuscript opens on 4rem of
+   air, and Edit opened on two bands of buttons, which is most of why the mode switch read as a
+   different component rather than the same page with a caret in it. The toggle rides the toolbar's
+   own row at its right edge (there is room: the toolbar is a short run of icons), so the text
+   lands on the manuscript's horizon.
+
+   Rich face only. In the source face the topbar stays in flow above the textarea, where the
+   100ch mono column is a different shape and there is no toolbar to share a row with. */
+.glosa-pane[data-editor-face="rich"] .glosa-edit-wrap {
+  position: relative;
+}
+
+.glosa-pane[data-editor-face="rich"] .glosa-edit-topbar {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-8);
+  height: 35px; /* the toolbar's own height, so the two read as one row */
+  z-index: 1;
+}
+
+/* Keep the formatting buttons clear of the toggle sharing their row. */
+.glosa-pane[data-editor-face="rich"] .glosa-rich-toolbar {
+  padding-right: 7rem;
 }
 
 /* Rich | Source face toggle: the same chip vocabulary as the composer's intents. */
@@ -2451,13 +2494,16 @@ input,
 }
 
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding
-   (the edit-wrap already provides the frame). */
+   (the edit-wrap already provides the frame). The top padding is what remains of the manuscript's
+   4rem opening once the toolbar above has taken its share, so switching modes moves the first
+   line by a couple of pixels instead of by a paragraph. */
 .glosa-rich-surface.glosa-content {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4) 0 var(--space-8);
-  margin: 0;
+  padding: var(--space-3) 0 var(--space-8);
+  margin: 0 auto;
   max-width: var(--measure);
+  width: 100%;
 }
 
 .glosa-rich-surface .ProseMirror {
@@ -2608,7 +2654,12 @@ input,
 }
 
 /* The card↔anchor thread (CSS Custom Highlight API): every annotated passage carries a quiet
-   pencil underline; hovering its card deepens that to the full wash. */
+   pencil underline; hovering its card deepens that to the full wash.
+
+   These three names are DOCUMENT-GLOBAL registry keys, and artifact-pane.js writes exactly these
+   spellings — every pane contributing its own ranges to the same key. A per-pane suffix would
+   stop panes overwriting each other but would also make every name here unmatchable, which is
+   precisely how all three silently stopped painting. Keep in step with the HL_* constants. */
 ::highlight(glosa-anchors) {
   text-decoration: underline;
   text-decoration-color: oklch(0.8 0.07 110);
@@ -2616,8 +2667,21 @@ input,
   text-underline-offset: 3px;
 }
 
+/* In Annotate the manuscript is a marked-up manuscript: the passages carrying feedback take the
+   wash as well as the line, so a reader scrolling four thousand pixels of prose can SEE where the
+   marks are instead of having to consult a list. Quiet enough to read straight through — this is
+   still the reading surface — and the mode gates it so Preview stays clean paper.
+
+   Scoped through the originating element, which is how highlight pseudo-elements take context. */
+.glosa-pane[data-mode="annotate"] .glosa-content::highlight(glosa-anchors) {
+  background-color: color-mix(in oklch, var(--anchor-wash) 55%, transparent);
+}
+
+/* The hovered or focused one, in any mode: full wash, and the pencil line goes olive so the
+   thread between text and card is not carried by the wash alone. */
 ::highlight(glosa-anchor) {
   background-color: var(--anchor-wash);
+  text-decoration-color: var(--primary);
 }
 
 /* Browser selection paint disappears as soon as focus moves into the annotation composer. Keep
@@ -2644,7 +2708,11 @@ input,
 .glosa-markers {
   position: absolute;
   top: 0;
-  right: max(2px, calc(50% - var(--manuscript-block) / 2 - 16px));
+  /* The floor is the scrollbar's width plus air, not 2px: in a compact pane the `calc()` goes
+     negative and the dots were being painted underneath the pane's own scrollbar, which is where
+     they matter most — a narrow pane is exactly the one that cannot show cards beside the text.
+     There is room for them: `.glosa-content` keeps a 2rem gutter inside the measure. */
+  right: max(var(--space-3), calc(50% - var(--manuscript-block) / 2 - 16px));
   width: 14px;
   pointer-events: none;
 }
@@ -2742,9 +2810,20 @@ input,
 .glosa-annotation-state {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  flex-wrap: wrap;
+  gap: 2px var(--space-1);
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+/* Metadata on the left, verbs on the right, with real air between them — in a 240px rail card the
+   whole row wraps rather than crushing the two groups into one another. */
+.glosa-annotation-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  padding-left: var(--space-2);
 }
 
 /* Status needs shape: the dot is reinforcement, the label is the channel (brief §7.5). */
@@ -2787,7 +2866,6 @@ input,
 /* Intent on a saved card is metadata, not an affordance: plain muted text with a middot,
    no pill that pretends to be a button. */
 .glosa-annotation-intent {
-  margin-left: auto;
   font-size: var(--text-xs);
   color: var(--muted); /* metadata, but still AA-readable */
 }
@@ -2816,7 +2894,9 @@ input,
   font-weight: 600;
 }
 
-/* Remove is a quiet last resort: visible but recessive until hovered, red only on intent. */
+/* Edit and Remove share one recessive vocabulary — quiet underlined text, never buttons
+   competing with the note itself. Only the hover colour separates revising from withdrawing. */
+.glosa-annotation-edit,
 .glosa-annotation-remove {
   font-size: var(--text-xs);
   color: var(--muted);
@@ -2825,6 +2905,44 @@ input,
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--muted) 40%, transparent);
   text-underline-offset: 2px;
+}
+
+.glosa-annotation-edit:hover,
+.glosa-annotation-undo:hover {
+  color: var(--primary);
+  text-decoration-color: currentColor;
+}
+
+/* Undo restores real bytes, so it is offered — never pre-selected — in the same recessive
+   vocabulary as its neighbours. The confirmation carries the weight, not the control. */
+.glosa-annotation-undo {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  border-radius: var(--radius-micro);
+  padding: 0 var(--space-1);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--muted) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+/* Settled work reads as settled: the card recedes but stays legible, and its quote keeps the
+   strike-through only when the passage itself is gone (handled above). */
+.glosa-annotation[data-state="applied"] {
+  background: var(--surface);
+}
+
+/* The divider between what is still open and what is already history. */
+.glosa-margin-subhead {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.glosa-margin-subhead:first-child {
+  margin-top: 0;
 }
 
 .glosa-annotation-remove:hover {
@@ -3496,24 +3614,165 @@ input,
   }
 }
 
-/* Until the annotation rail has room beside the manuscript, the composer is a tray pinned to the
-   bottom of ITS OWN PANE. A viewport-bound tray was right when there was one artifact on screen;
-   with several, a tray from the third pane covering the whole window would be a lie about which
-   document it belongs to. Paired with the 1130px rail floor above so there is no dead band where
-   a focused composer renders after the document. */
-@container pane (max-width: 1204px) {
-  .glosa-composer {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: var(--z-tray);
-    border-radius: var(--radius-overlay) var(--radius-overlay) 0 0;
-    border-bottom: none;
-    box-shadow: var(--shadow-tray);
-    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
-    animation: glosa-tray-up var(--dur-base) var(--ease-out);
+/* Until the annotation rail has room beside the manuscript, the composer opens AT its passage.
+
+   It used to be declared as a tray pinned to the bottom of the pane — and it never was one. Its
+   containing block is `.glosa-pane-main`, a SCROLL CONTAINER: an absolutely positioned child of
+   one resolves `bottom: 0` against the padding box at scroll origin and then scrolls away with
+   the content, so the composer sat frozen one viewport down the document and was hundreds of
+   pixels off-screen for anyone reading past the first screenful. `position: fixed` is not the
+   fix either — §7 is right that with two artifacts open, a viewport-bound tray lies about which
+   document it belongs to.
+
+   So the same scroll-space positioning is used deliberately instead of accidentally: JS places
+   the composer at its anchor's offset (artifact-pane.js `placeAtAnchor`), which means it travels
+   with the passage exactly like the rail cards do at wide widths. Same component, same contract,
+   one width apart. The collection of saved cards moves to the pane's own tray below. */
+.glosa-margin-anchored {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  display: block;
+  pointer-events: none; /* a coordinate space; only the composer inside it is interactive */
+}
+
+.glosa-margin-anchored .glosa-margin-title,
+.glosa-margin-anchored .glosa-margin-empty {
+  display: none; /* the tray names the collection; this layer holds one anchored draft */
+}
+
+.glosa-margin-anchored .glosa-composer {
+  position: absolute;
+  /* The manuscript measure, so the draft sits over the column it belongs to rather than spanning
+     chrome-to-chrome, and never wider than the pane can hold. */
+  width: min(var(--manuscript-block), calc(100% - 2 * var(--space-4)));
+  left: 50%;
+  translate: -50% 0;
+  z-index: var(--z-tray);
+  pointer-events: auto;
+  box-shadow: var(--shadow-menu);
+  animation: glosa-anchor-in var(--dur-base) var(--ease-out);
+}
+
+/* A revision states what it will do before it does it. */
+.glosa-composer-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+@keyframes glosa-anchor-in {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
   }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ---------- 10a. The collection tray ---------- */
+
+/* Where the SET of annotations lives when the rail cannot hold it. On the PANE (grid area
+   "body"), not inside the scroll container and not the window — so it stays put while the
+   manuscript scrolls under it, and still belongs to exactly one document. Collapsed it is a
+   count strip; it only becomes a sheet when asked, because the manuscript is the surface that
+   matters and this is commentary about it. */
+.glosa-annotations-tray {
+  grid-area: body;
+  align-self: end;
+  z-index: var(--z-tray);
+  display: grid;
+  grid-template-rows: auto 0fr;
+  min-height: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-tray);
+  transition: grid-template-rows var(--dur-base) var(--ease-out);
+}
+
+.glosa-annotations-tray[data-open] {
+  grid-template-rows: auto 1fr;
+}
+
+.glosa-tray-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-align: left;
+}
+
+.glosa-tray-toggle:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-tray-toggle:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Drawn, not a glyph: one 1.5px chevron that turns to face the state it will move to. */
+.glosa-tray-chevron {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  rotate: -135deg;
+  translate: 0 2px;
+  transition:
+    rotate var(--dur-base) var(--ease-out),
+    translate var(--dur-base) var(--ease-out);
+}
+
+.glosa-annotations-tray[data-open] .glosa-tray-chevron {
+  rotate: 45deg;
+  translate: 0 -2px;
+}
+
+.glosa-tray-list {
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Collapsed, the row still occupies the grid track at 0fr; keep its padding out of the way so
+     it contributes no height until the tray opens. */
+  padding: 0 var(--space-4);
+  max-height: min(46vh, 380px);
+}
+
+.glosa-annotations-tray[data-open] .glosa-tray-list {
+  padding: var(--space-1) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom));
+}
+
+/* ---------- 10c. The passage's own preview ---------- */
+
+/* Hovering an annotated passage answers "what did I say here?" without a trip to the collection.
+   Positioned in the same scroll space as the composer, so it opens under its own words. */
+.glosa-annotation-preview {
+  position: absolute;
+  width: min(30rem, calc(100% - 2 * var(--space-4)));
+  left: 50%;
+  translate: -50% 0;
+  z-index: var(--z-tray);
+  animation: glosa-anchor-in var(--dur-fast) var(--ease-out);
+}
+
+.glosa-annotation-preview .glosa-annotation {
+  box-shadow: var(--shadow-menu);
+  border-color: var(--border-strong);
 }
 
 /* Phone widths and 200% desktop zoom. The top bar stays a single row now that the mode control
@@ -3583,19 +3842,8 @@ input,
   }
 }
 
-@keyframes glosa-tray-up {
-  from {
-    transform: translateY(24px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* In the 1024–1279 band the navigator stays while annotation cards flow below the manuscript;
-   the active composer remains the fixed tray defined above. */
+/* In the 1024–1279 band the navigator stays while the saved cards live in the pane's collection
+   tray; the active composer opens at its own passage. */
 
 /* Coarse pointers need forgiving hit areas even on wide touch laptops. The visible component
    vocabulary stays compact; only the interactive box grows to the platform-standard 44px. */
