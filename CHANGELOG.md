@@ -49,7 +49,12 @@ rather than in a terminal the reader is not looking at.
   `color-scheme`, and an unchecked one was painted as a solid light disc on the dark ground, so
   every option looked like the chosen one.
 
-## [0.1.0-alpha.16] - 2026-09-05
+## 0.1.0-alpha.16 - 2026-09-05
+
+**Never published.** The tag was placed on the wrong commit, the release refused to publish a
+version that disagreed with it, and by then the next release was ready. Everything below shipped in
+0.1.0-alpha.17 instead; there is no 0.1.0-alpha.16 on npm and no tag to compare against. The section
+stays because it records when these changes actually landed.
 
 The release makes an annotation something the workspace holds rather than something one browser tab
 remembers, and makes the apply-lease behind it work at all outside a lab.
@@ -469,8 +474,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.16...HEAD
-[0.1.0-alpha.16]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...v0.1.0-alpha.16
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.17...HEAD
+[0.1.0-alpha.17]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...v0.1.0-alpha.17
 [0.1.0-alpha.15]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
