@@ -34,6 +34,11 @@ export interface DerivedEntryState {
    * the immutable inbox payload. Absent on legacy events, which callers must handle explicitly. */
   approval_mode?: boolean;
   target_path?: string;
+  /** The shadow-git commit the artifact read at when a session took the apply-lease that closed
+   * on this entry (`apply_end.detail.pre_sha`, A4 §F05) — i.e. what "undo this" restores to.
+   * Absent until a lease has actually closed, and on entries applied before `apply_end` recorded
+   * both ends of the interval. */
+  rollbackPreSha?: string;
   [key: string]: unknown;
 }
 
@@ -122,6 +127,15 @@ export const defaultReducer: Reducer = (state, event) => {
       if (state.applyLease && typeof leaseId === "string" && state.applyLease.leaseId === leaseId) {
         state.applyLease = null;
       }
+      // `apply_end.detail.pre_sha` is the ONE place the proven "what it read before this session
+      // touched it" commit is stated (A4 §F05), and until now it was only ever seen by whoever
+      // happened to be listening on the SSE stream at that instant. Carrying it onto the entry
+      // makes the offer to undo an applied annotation a property of the journal rather than of
+      // one browser tab's uptime: replay rebuilds it, so a reader who reloads — or arrives an
+      // hour later — is still offered the same rollback. `apply_expired` never carries one (the
+      // interval it closes is attributed to nobody), so the guard below skips it by itself.
+      const entryState = event.entry ? state.entries[event.entry] : undefined;
+      if (entryState && typeof d?.pre_sha === "string") entryState.rollbackPreSha = d.pre_sha;
       return;
     }
     case "adoption_sealed": {

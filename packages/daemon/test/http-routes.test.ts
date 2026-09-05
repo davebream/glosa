@@ -797,6 +797,10 @@ describe("A1 §5 route catalog", () => {
     const transition = lines.find((l) => l.event === "transition_committed" && l.entry === id);
     expect(transition.detail.to).toBe("rejected");
     expect(transition.by).toBe("human");
+    // A session declining a note lands on this same terminal status, and only one of the two is a
+    // card the pane must stop showing. `note` is prose for whoever reads the journal; this flag is
+    // the fact anything downstream is allowed to branch on.
+    expect(transition.detail.withdrawn).toBe(true);
   });
 
   test("POST withdraw on an already-terminal entry → 409 conflict (a session may have closed it first)", async () => {
@@ -865,6 +869,175 @@ describe("A1 §5 route catalog", () => {
       }),
     );
     expect(res.status).toBe(404);
+  });
+
+  // --- GET /w/:slug/annotations (5.6b) ---
+  //
+  // The route the artifact pane loads its own state back from. Before it existed, a note lived in
+  // the browser tab that wrote it: the entry was durable and the session still had it queued, but
+  // reloading the page showed an untouched manuscript with no cards, no underlines and no way to
+  // undo a change a session had already applied.
+
+  async function postAnnotation(overrides: Record<string, unknown> = {}): Promise<string> {
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(annotationBody(overrides)),
+      }),
+    );
+    expect(res.status).toBe(201);
+    return (await res.json()).id as string;
+  }
+
+  async function listAnnotationsFor(path?: string) {
+    const qs = path === undefined ? "" : `?path=${encodeURIComponent(path)}`;
+    const res = await fetchFn(req(`/w/${slug}/annotations${qs}`));
+    expect(res.status).toBe(200);
+    return (await res.json()).annotations as Array<Record<string, any>>;
+  }
+
+  /** Everything in-memory forgotten and rebuilt from the journal on disk — what a `glosa restart`,
+   * a crash, or simply a machine coming back the next morning actually does to the daemon. */
+  async function restartDaemon(): Promise<void> {
+    await busRegistry.close(root);
+    busRegistry = new WorkspaceBusRegistry();
+    workspaceIndex.setOnHardRemove((p) => busRegistry.evict(p));
+    ctx = { ...ctx, getWorkspaceBus: (r) => busRegistry.get(r) };
+    fetchFn = createApiFetch(ctx);
+  }
+
+  test("GET annotations returns the note with the payload it was written with, so a reloaded pane can repaint it", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const id = await postAnnotation();
+
+    const [row, ...rest] = await listAnnotationsFor("notes.md");
+    expect(rest).toEqual([]);
+    expect(row).toMatchObject({
+      id,
+      status: "pending",
+      artifact_path: "notes.md",
+      body: "consider tightening this",
+      intent: "content",
+      attempts: 0,
+    });
+    // The anchor is the whole point: without the target the pane knows a note exists but not which
+    // words it belongs to, so no underline and no gutter dot can be drawn.
+    expect(row!.target.quote.exact).toBe("some text");
+    expect(row!.target.position).toEqual({ start: 10, end: 19 });
+    // Nothing has proven a "before" yet, so no undo is offered.
+    expect(row!.rollback_pre_sha).toBeUndefined();
+  });
+
+  test("the listing survives a daemon restart — it is replayed from the journal, not held in memory", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const id = await postAnnotation();
+
+    await restartDaemon();
+
+    const rows = await listAnnotationsFor("notes.md");
+    expect(rows.map((r) => r.id)).toEqual([id]);
+    expect(rows[0]!.body).toBe("consider tightening this");
+  });
+
+  test("a note the human withdrew stays withdrawn across a reload; one a SESSION declined comes back as history", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const withdrawn = await postAnnotation({ body: "never mind" });
+    const declined = await postAnnotation({ body: "please do this" });
+
+    await fetchFn(stateChangingReq(`/w/${slug}/annotations/${withdrawn}/withdraw`, { method: "POST" }));
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+    await bus.applyBegin(declined, "sess-1");
+    await bus.resolveEntry(declined, "rejected", "sess-1");
+
+    // Both are the terminal `rejected`. They are not the same fact, and the pane must not show
+    // them the same way: taking a note back removes it, a session saying no is the answer the
+    // reader was waiting for.
+    await restartDaemon();
+    const rows = await listAnnotationsFor("notes.md");
+    expect(rows.map((r) => r.body)).toEqual(["please do this"]);
+    expect(rows[0]!.status).toBe("rejected");
+
+    // And the withdrawal is still in the journal — hiding it from a listing is not deleting it.
+    const lines = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    expect(lines.some((l) => l.entry === withdrawn && l.detail?.to === "rejected")).toBe(true);
+  });
+
+  test("a withdrawal recorded by an earlier alpha — note text, no `withdrawn` flag — is still read back as withdrawn", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const id = await postAnnotation();
+    // Exactly what the previous release appended. Journals written by it are on real machines; a
+    // reader who withdrew a note last week must not find it back on the page today.
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.commitTransition(id, "rejected", { by: "human", note: "withdrawn in glosa" });
+
+    await restartDaemon();
+    expect(await listAnnotationsFor("notes.md")).toEqual([]);
+  });
+
+  test("an applied note carries the lease's own pre_sha as its undo target, and still does after a restart", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const id = await postAnnotation();
+
+    // The real lease cycle, not a fabricated checkpoint row: apply-begin proves a "before",
+    // the session edits, resolve closes the interval (A4 §F05).
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.reconcile();
+    const { preSha } = await bus.applyBegin(id, "sess-1");
+    writeFileSync(join(root, "notes.md"), "some text here, tightened\n");
+    await bus.resolveEntry(id, "applied", "sess-1");
+
+    await restartDaemon();
+    const [row] = await listAnnotationsFor("notes.md");
+    expect(row!.status).toBe("applied");
+    expect(row!.rollback_pre_sha).toBe(preSha);
+  });
+
+  test("only annotations are listed — a human_edit entry is another surface's record, not a card", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const id = await postAnnotation();
+    // What saving in glosa's own editor appends. It shares the `common` transition table with an
+    // annotation, so nothing but the payload kind separates them.
+    const bus = ctx.getWorkspaceBus(root);
+    await bus.createEntry("edit-1", { kind: "human_edit", artifact_path: "notes.md", diff: "@@ -1 +1 @@" });
+
+    await restartDaemon();
+    expect((await listAnnotationsFor("notes.md")).map((r) => r.id)).toEqual([id]);
+  });
+
+  test("?path scopes the listing to one artifact — a pane repaints its own manuscript, not the workspace's", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    writeFileSync(join(root, "other.md"), "some text here\n");
+    const mine = await postAnnotation({ body: "on notes" });
+    await postAnnotation({ artifact_path: "other.md", body: "on other" });
+
+    expect((await listAnnotationsFor("notes.md")).map((r) => r.id)).toEqual([mine]);
+    expect((await listAnnotationsFor()).map((r) => r.body).sort()).toEqual(["on notes", "on other"]);
+  });
+
+  test("one unreadable inbox payload costs the reader that note, not every note on the page", async () => {
+    writeFileSync(join(root, "notes.md"), "some text here\n");
+    const damaged = await postAnnotation({ body: "first" });
+    const intact = await postAnnotation({ body: "second" });
+    writeFileSync(inboxEntryPath(root, damaged), "{ this is not json");
+
+    await restartDaemon();
+    const rows = await listAnnotationsFor("notes.md");
+    expect(rows.map((r) => r.id)).toEqual([intact]);
+  });
+
+  test("GET annotations on unknown slug → 404", async () => {
+    const res = await fetchFn(req("/w/does-not-exist/annotations"));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET annotations with a foreign Origin → 403 (authed-read class)", async () => {
+    const res = await fetchFn(req(`/w/${slug}/annotations`, { headers: { Origin: "http://evil.example" } }));
+    expect(res.status).toBe(403);
   });
 
   // --- GET /w/:slug/diff (5.7) ---

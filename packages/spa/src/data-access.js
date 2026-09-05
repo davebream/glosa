@@ -434,6 +434,17 @@ export function createDataAccess(deps = {}) {
         body: JSON.stringify(record),
       });
     },
+    /** `GET /w/:slug/annotations?path=…` (A1 §5.6a, authed read) — every annotation still on the
+     * record for one artifact, oldest first, each with the payload it was written with plus its
+     * status, delivery-attempt count and (once a lease has proven one) the commit an undo would
+     * restore to. Notes the human withdrew are not listed: the journal keeps them, but the pane
+     * must not put a removed card back on the page. 404 against a daemon that predates the route
+     * — callers open the artifact anyway and simply have no cards to repaint. */
+    /** @param {string} slug @param {string} [path] */
+    getAnnotations(slug, path) {
+      const qs = path === undefined ? "" : `?path=${encodeURIComponent(path)}`;
+      return requestJson(`/w/${encodeURIComponent(slug)}/annotations${qs}`);
+    },
     /** `GET /w/:slug/wiring` (A1 §5.18, authed read) — the 3-state delivery-wiring signal the
      * topbar badge renders: `live` (delivery reaches a session) / `wired` (init installed, no
      * bound session) / `unwired` (init never ran), plus `pending_count`. 404 against a daemon

@@ -82,6 +82,11 @@ describe("the annotation surface", () => {
         this.restored.push(opts);
         return { ok: true };
       },
+      listedFor: [] as Array<string | undefined>,
+      async getAnnotations(_slug: string, path?: string) {
+        this.listedFor.push(path);
+        return { annotations: [] };
+      },
       ...overrides,
     };
   }
@@ -338,5 +343,170 @@ describe("the annotation surface", () => {
     expect(card.getAttribute("data-state")).toBe("applied");
     expect(card.querySelector(".glosa-annotation-undo")).toBeNull();
     expect(da.restored).toEqual([]);
+  });
+
+  // --- what survives closing the tab ---
+  //
+  // Everything above drives a note the pane itself just wrote. The harder case is the one a
+  // reader actually hits: they annotate, close the tab, and come back. The entries were always
+  // durable — journal lines, still queued for the session — but the pane held its cards, its
+  // underlines and its gutter dots only in the tab that created them, so reopening the manuscript
+  // showed it untouched. What the daemon can list is what the page can put back.
+
+  /** The manuscript's plain text, as `rangeForTarget` walks it — the heading runs straight into
+   * the paragraph with no separator. Offsets are computed from it rather than counted by hand, so
+   * a stored anchor in these fixtures is one the pane can genuinely resolve. */
+  const PLAIN = "KonspektAlpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu.";
+
+  function targetFor(word: string) {
+    const start = PLAIN.indexOf(word);
+    expect(start).toBeGreaterThan(-1);
+    return { quote: { exact: word }, position: { start, end: start + word.length } };
+  }
+
+  function listing(...rows: Array<Record<string, unknown>>) {
+    return {
+      async getAnnotations() {
+        return { annotations: rows };
+      },
+    };
+  }
+
+  test("reopening the artifact puts back the cards, the marks and the anchors the journal already holds", async () => {
+    const da = fakeDataAccess(
+      listing(
+        {
+          id: "inb-7",
+          status: "pending",
+          artifact_path: "notes.md",
+          body: "tighten this",
+          intent: "content",
+          target: targetFor("gamma"),
+          attempts: 0,
+        },
+        {
+          id: "inb-8",
+          status: "delivered",
+          artifact_path: "notes.md",
+          body: "and this",
+          intent: "style",
+          target: targetFor("lambda"),
+          attempts: 2,
+        },
+      ),
+    );
+    const { host } = await mountPane(da);
+
+    // Nothing was posted in this tab — every card on the page came back off the wire.
+    expect(da.posted).toEqual([]);
+    expect(qa(host, ".glosa-annotation-body").map((n) => n.textContent)).toEqual(["tighten this", "and this"]);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("2 annotations");
+
+    // Each note is back on its OWN passage, so the underline and the gutter dot land where the
+    // reader put them rather than on the block or on nothing at all.
+    const dots = qa(host, ".glosa-marker");
+    expect(dots).toHaveLength(2);
+    expect(dots.map((d) => d.getAttribute("aria-label")).sort()).toEqual([
+      "Go to annotation: and this",
+      "Go to annotation: tighten this",
+    ]);
+
+    // The wire's initial `pending` reads as the SPA's `waiting`, exactly as a just-sent note does.
+    const cards = qa(host, ".glosa-annotation");
+    expect(cards.map((c) => c.getAttribute("data-state"))).toEqual(["waiting", "delivered"]);
+  });
+
+  test("a note that came back from the daemon can still be withdrawn — its real entry id survived the round trip", async () => {
+    const da = fakeDataAccess(
+      listing({
+        id: "inb-7",
+        status: "pending",
+        artifact_path: "notes.md",
+        body: "tighten this",
+        intent: "content",
+        target: targetFor("gamma"),
+        attempts: 0,
+      }),
+    );
+    const { host } = await mountPane(da);
+
+    q(host, ".glosa-annotation-remove").click();
+    await paint();
+
+    // Not a fresh local id: the entry the daemon named. A card that cannot name its own entry is
+    // a card whose Remove silently does nothing to the queue the session is still reading.
+    expect(da.withdrawn).toEqual(["inb-7"]);
+    expect(qa(host, ".glosa-annotation")).toHaveLength(0);
+  });
+
+  test("undo survives the tab too: an applied note listed with its rollback point offers it with no live frame", async () => {
+    const da = fakeDataAccess(
+      listing({
+        id: "inb-7",
+        status: "applied",
+        artifact_path: "notes.md",
+        body: "tighten this",
+        intent: "content",
+        target: targetFor("gamma"),
+        attempts: 1,
+        rollback_pre_sha: "89115cd",
+      }),
+    );
+    const { host } = await mountPane(da);
+
+    const card = q(host, ".glosa-annotation");
+    expect(card.getAttribute("data-state")).toBe("applied");
+    // This pane never saw the `apply_end` frame — it was notified hours ago, to a tab that is
+    // gone. The rollback target is a property of the journal, so the offer is still here.
+    const undo = q(card, ".glosa-annotation-undo");
+    expect(undo).not.toBeNull();
+
+    (dom.window as any).HTMLDialogElement.prototype.showModal = function () {
+      this.setAttribute("open", "");
+    };
+    undo.click();
+    await flush();
+    q(dom.document, "dialog.glosa-dialog .glosa-btn-danger").click();
+    await paint();
+
+    expect(da.restored).toEqual([{ path: "notes.md", to: "89115cd", force: false }]);
+  });
+
+  test("an applied note the daemon lists with no rollback point still offers no undo", async () => {
+    const da = fakeDataAccess(
+      listing({
+        id: "inb-7",
+        status: "applied",
+        artifact_path: "notes.md",
+        body: "tighten this",
+        intent: "content",
+        target: targetFor("gamma"),
+        attempts: 1,
+      }),
+    );
+    const { host } = await mountPane(da);
+    expect(q(host, ".glosa-annotation").getAttribute("data-state")).toBe("applied");
+    expect(q(host, ".glosa-annotation-undo")).toBeNull();
+  });
+
+  test("a daemon that cannot list annotations still opens the manuscript", async () => {
+    // An older daemon (404 on a route it does not have) or a transient failure. Losing the cards
+    // is bad; refusing to show the document because of it would be worse.
+    const da = fakeDataAccess({
+      async getAnnotations() {
+        throw Object.assign(new Error("not found"), { status: 404 });
+      },
+    });
+    const { host } = await mountPane(da);
+
+    expect(q(host, ".glosa-content").innerHTML).toContain("Konspekt");
+    expect(qa(host, ".glosa-annotation")).toHaveLength(0);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("No annotations yet");
+  });
+
+  test("the pane asks for its own artifact's notes, not the whole workspace's", async () => {
+    const da = fakeDataAccess();
+    await mountPane(da);
+    expect(da.listedFor).toEqual(["notes.md"]);
   });
 });

@@ -75,3 +75,32 @@ do not invent.
 
 `glosa` — a *glosa* is a marginal commentary on an authoritative text; the product's core act. Never
 shorten to "gloss" in user-facing copy.
+
+## graphify
+
+This repo carries a knowledge graph at `graphify-out/` — god nodes, community structure and
+cross-file relationships, derived from the AST.
+
+**Check for it at the start of any building, planning, investigating or reviewing task**, before
+reaching for grep. If `graphify-out/graph.json` is absent, or the `graphify` CLI is not installed,
+that is fine: say nothing and work the usual way. If it is present, refresh it and use it.
+
+- **Refresh before you rely on it, and again after you change code.** `graphify update .` is
+  AST-only — no API cost, no network. A graph that describes the tree as it was two branches ago
+  is worse than no graph.
+- **Ask it before grepping the tree.** `graphify query "<question>"` for "where does X happen",
+  `graphify path "<A>" "<B>"` for how two things connect, `graphify explain "<concept>"` for one
+  focused area. Each returns a scoped subgraph, usually far smaller than `GRAPH_REPORT.md` or a
+  raw grep across `packages/`.
+- **Verify what it tells you.** The graph is an index, not an authority: it points at files and
+  symbols, and the source is what decides. Read the code it names before acting on it.
+- `graphify-out/wiki/index.md`, when present, is the better entry point for broad navigation than
+  browsing `packages/` by hand. Read `graphify-out/GRAPH_REPORT.md` only for whole-architecture
+  review, or when query/path/explain do not surface enough.
+- Dirty files under `graphify-out/` are normal after a hook or an incremental update, and are never
+  a reason to skip it. Skip only when the task is about the graph output being stale or wrong, or
+  when the maintainer says not to use it.
+- `graphify-out/` is gitignored, so refreshing it never shows up in a diff and never needs to be
+  mentioned in a commit or a PR.
+
+When the user types `/graphify`, use the installed graphify skill before anything else.
