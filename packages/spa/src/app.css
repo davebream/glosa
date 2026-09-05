@@ -18,8 +18,8 @@
   --ink: oklch(0.24 0.01 110); /* primary text — ~16:1 on bg */
   --muted: oklch(0.46 0.012 110); /* secondary text — ~7:1 on bg */
   --faint: oklch(0.62 0.01 110); /* disabled/tertiary, large glyphs only */
-  --border: oklch(0.9 0.005 110);
-  --border-strong: oklch(0.82 0.008 110);
+  --border: oklch(0.885 0.006 110); /* structural rules — visible on paper and on the desk */
+  --border-strong: oklch(0.79 0.01 110); /* interactive edges and hairlines that must be seen */
   --primary: oklch(0.5 0.1 110); /* workbench accent — actions, selection, focus */
   --focus: var(--primary);
   --primary-hover: oklch(0.44 0.1 110);
@@ -30,11 +30,15 @@
   --ok: oklch(0.52 0.1 150);
 
   /* Typography (macOS-only v1 → system stacks, zero webfonts; brief §4). */
-  --font-serif: ui-serif, "Iowan Old Style", Georgia, serif;
+  /* Iowan Old Style is named first on purpose: `ui-serif` resolves to New York in Safari and to
+     nothing in Chromium, and the two faces differ by 65px over a 68ch measure. Naming the book
+     face makes every engine agree with --manuscript-block below; Charter shares its width. */
+  --font-serif: "Iowan Old Style", Charter, ui-serif, Georgia, serif;
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
+  --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
   --text-xs: 0.75rem; /* 12 — state labels, timestamps */
   --text-sm: 0.8125rem; /* 13 — chrome default, annotations */
   --text-base: 0.9375rem; /* 15 — panel body */
@@ -50,6 +54,26 @@
   --space-6: 1.5rem;
   --space-8: 2rem;
   --space-12: 3rem;
+
+  /* Radii — DESIGN.md's rounded scale, one name per role. A nested corner is its container's
+     radius minus the padding between them (menu 8px − 4px padding = 4px rows; segmented track
+     8px − 2px = 6px segments), so concentric shapes stay parallel instead of pinching. */
+  --radius-focus: 2px;
+  --radius-micro: 4px;
+  --radius-tool: 5px;
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --radius-composer: 10px;
+  --radius-overlay: 12px;
+  --radius-pill: 999px;
+
+  /* Elevation — only for what genuinely floats (DESIGN.md §4). Two layers each: a tight edge that
+     separates, and a broad lift with an offset so the light has a direction. */
+  --shadow-ink: 0.24 0.01 110;
+  --shadow-rest: 0 1px 2px oklch(var(--shadow-ink) / 0.06);
+  --shadow-menu: 0 1px 2px oklch(var(--shadow-ink) / 0.06), 0 10px 28px -6px oklch(var(--shadow-ink) / 0.16);
+  --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.05), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.16);
+  --shadow-dialog: 0 2px 6px oklch(var(--shadow-ink) / 0.08), 0 24px 56px -12px oklch(var(--shadow-ink) / 0.24);
 
   /* Semantic z scale. */
   --z-sticky: 10;
@@ -69,11 +93,13 @@
   --margin-width: 320px;
   --topbar-height: 3rem;
   --artifact-bar-height: 36px;
+  --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
   --measure: 68ch;
   /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
      Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
      serif context, where `68ch` would measure the sans face and lie by ~110px. MEASURED from the
-     built page, not estimated — the shipped serif is wider than the brief's 642px guess, and the
+     built page, not estimated — the shipped serif (Iowan Old Style: 643px plus two 2rem gutters)
+     is wider than the brief's 642px guess, which was New York's 68ch measure, and the
      difference is the whole 1130–1187px band where a rail derived from the guess would have
      overlapped the text. Keep in step with --measure, .glosa-content's padding, and
      artifact-pane.js's MARGIN_RAIL_FLOOR. */
@@ -109,6 +135,14 @@
   --danger: oklch(0.7 0.14 25);
   --warn: oklch(0.74 0.11 75);
   --ok: oklch(0.7 0.09 150);
+
+  /* Under low light a shadow is a darker patch of the same desk, not haze: black-based and
+     tighter, and nothing at rest casts one at all. */
+  --shadow-ink: 0 0 0;
+  --shadow-rest: none;
+  --shadow-menu: 0 1px 2px oklch(var(--shadow-ink) / 0.35), 0 10px 28px -6px oklch(var(--shadow-ink) / 0.5);
+  --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.3), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.5);
+  --shadow-dialog: 0 2px 6px oklch(var(--shadow-ink) / 0.4), 0 24px 56px -12px oklch(var(--shadow-ink) / 0.6);
 }
 
 /* ---------- 2. Base ---------- */
@@ -180,11 +214,33 @@ button {
 :focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-focus);
 }
 
 ::selection {
   background: var(--anchor-wash);
+}
+
+/* Browser-drawn surfaces carry the palette too: the caret is the pencil, and a scrollbar that
+   must show (a mouse, or "always" in System Settings) is a thin rule in the desk's own colour. */
+textarea,
+input,
+[contenteditable="true"] {
+  caret-color: var(--primary);
+}
+
+.glosa-sidebar,
+.glosa-pane-main,
+.glosa-history,
+.glosa-conv-feed,
+.glosa-attention-tray,
+.glosa-agent-feedback-popover,
+.glosa-content pre,
+.glosa-rich-surface,
+.glosa-edit-area,
+.glosa-diff-pane {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 /* ---------- 3. Boot screens (down / unpaired / mismatch) ---------- */
@@ -234,7 +290,7 @@ button {
   font-size: var(--text-sm);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: var(--space-1) var(--space-2);
   color: var(--ink);
 }
@@ -325,7 +381,7 @@ button {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -385,14 +441,19 @@ button {
 }
 
 .glosa-agent-feedback-trigger {
+  min-height: 1.75rem;
   border: none;
+  border-radius: var(--radius-control);
   background: transparent;
   font: inherit;
   font-size: var(--text-xs);
   color: var(--muted);
   line-height: 1.2;
   text-align: left;
-  padding: 0 var(--space-1);
+  padding: 0 var(--space-2);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-agent-feedback-trigger[data-state="connected"] {
@@ -410,8 +471,8 @@ button {
 
 .glosa-agent-feedback-trigger:not(:disabled):hover,
 .glosa-agent-feedback-trigger[aria-expanded="true"] {
+  background: var(--surface-sunken);
   color: var(--ink);
-  text-decoration: underline;
 }
 
 .glosa-agent-feedback-trigger:disabled {
@@ -429,9 +490,9 @@ button {
   overflow-y: auto;
   padding: var(--space-4);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--surface);
-  box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-agent-feedback-heading {
@@ -451,7 +512,7 @@ button {
   width: 2rem;
   height: 2rem;
   flex: 0 0 auto;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-size: 1.25rem;
   line-height: 1;
@@ -484,7 +545,7 @@ button {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--bg);
   font-size: var(--text-sm);
 }
@@ -523,7 +584,7 @@ button {
 .glosa-agent-feedback-prompt {
   width: 100%;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--bg);
   color: var(--ink);
 }
@@ -621,7 +682,7 @@ button {
   height: 2rem;
   display: grid;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -649,7 +710,7 @@ button {
   width: 0.4rem;
   height: 0.4rem;
   border: 1px solid var(--surface);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--primary);
 }
 
@@ -665,9 +726,9 @@ button {
   gap: 0;
   padding: var(--space-1);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--surface);
-  box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-tools[data-open="true"] .glosa-tools-menu {
@@ -694,7 +755,7 @@ button {
   justify-content: flex-start;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-micro); /* 8px panel − 4px padding: concentric */
   text-align: left;
   color: var(--muted);
 }
@@ -758,7 +819,7 @@ button {
   height: 2rem;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -809,10 +870,10 @@ button {
   margin: 0;
   padding: var(--space-1);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-composer);
   background: var(--surface);
   color: var(--ink);
-  box-shadow: 0 8px 24px oklch(0.24 0.01 110 / 0.14);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-appearance-menu::backdrop {
@@ -827,7 +888,7 @@ button {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   text-align: left;
 }
@@ -856,24 +917,28 @@ button {
   outline-offset: -2px;
 }
 
-/* Mode control: one stable segmented control, active state never color-alone (weight + bg).
-   Inside the artifact bar it carries NO track of its own — the bar already is one, and a bordered
-   control in a bordered cluster on a bordered pane is three rules doing one rule's job. */
+/* Mode control: one stable segmented control on the sunken track DESIGN.md §2 reserves for it.
+   The active segment is a sheet of paper with a hairline edge; the state is carried by weight,
+   fill, and edge together, never by colour alone. Track 8px, segments 6px: concentric. */
 .glosa-modebar {
   display: flex;
   padding: 2px;
   gap: 2px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-panel);
 }
 
 .glosa-modebar button {
-  padding: var(--space-1) var(--space-3);
-  border-radius: 6px;
+  height: 24px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-weight: 500;
   text-transform: capitalize;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .glosa-modebar button:not([aria-pressed="true"]):hover {
@@ -885,6 +950,7 @@ button {
   background: var(--bg);
   color: var(--ink);
   font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 .glosa-modebar button:disabled {
@@ -898,7 +964,7 @@ button {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-weight: 500;
   transition:
@@ -946,7 +1012,7 @@ button {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-weight: 500;
 }
@@ -978,7 +1044,7 @@ button {
   display: inline-grid;
   place-items: center;
   padding: 0 var(--space-1);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--primary);
   color: var(--on-primary);
   font-size: var(--text-xs);
@@ -994,9 +1060,9 @@ button {
   overflow: auto;
   padding: var(--space-4);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-composer);
   background: var(--bg);
-  box-shadow: 0 6px 8px oklch(0.24 0.01 110 / 0.12);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-attention-heading,
@@ -1020,7 +1086,7 @@ button {
 
 .glosa-attention-close {
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
 }
 
@@ -1068,7 +1134,7 @@ button {
   min-height: 4rem;
   padding: var(--space-2);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -1093,7 +1159,7 @@ button {
 .glosa-secondary-button {
   min-height: 2rem;
   padding: var(--space-1) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   font-weight: 600;
 }
 
@@ -1141,16 +1207,24 @@ button {
   overflow-y: auto;
   background: var(--surface);
   border-right: 1px solid var(--border);
-  padding: var(--space-4) var(--space-3) var(--space-8);
+  /* No top padding: the first heading row is exactly one strip tall, so "Artifacts" sits on the
+     same line as the tab labels across the divider — one horizon through the whole desk. */
+  padding: 0 var(--space-3) var(--space-8);
 }
 
 .glosa-sidebar h2 {
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 var(--space-2) var(--space-2);
+  margin: 0 0 0 var(--space-2);
+}
+
+.glosa-sidebar-section > h2 {
+  min-height: var(--strip-height);
+  display: flex;
+  align-items: center;
 }
 
 /* The workspace switcher collapses out of the way; the artifact tree is what the navigator is
@@ -1162,7 +1236,7 @@ button {
   width: 100%;
   margin-left: calc(var(--space-2) * -1);
   padding: 2px var(--space-2) 2px 0;
-  border-radius: 5px;
+  border-radius: var(--radius-tool);
   color: inherit;
   /* The UA stylesheet forces `text-transform: none` on buttons, which `font: inherit` does not
      undo — without these the disclosure would read "Workspaces" beside an uppercase "ARTIFACTS". */
@@ -1193,7 +1267,7 @@ button {
   height: 13px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1207,12 +1281,11 @@ button {
 }
 
 .glosa-sidebar-heading {
-  min-height: 28px;
+  min-height: var(--strip-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  margin-bottom: var(--space-1);
 }
 
 .glosa-sidebar-heading h2 {
@@ -1230,7 +1303,7 @@ button {
   height: 26px;
   display: grid;
   place-items: center;
-  border-radius: 5px;
+  border-radius: var(--radius-tool);
   color: var(--muted);
   transition:
     color var(--dur-fast) var(--ease-out),
@@ -1252,7 +1325,7 @@ button {
   height: 15px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1272,7 +1345,7 @@ button {
   width: 100%;
   text-align: left;
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-tool);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -1295,7 +1368,7 @@ button {
 }
 
 .glosa-artifact-list [role="group"] {
-  padding-left: 16px;
+  padding-left: 21px; /* disclosure (15) + gap (6): a child's mark sits under its parent's icon */
 }
 
 .glosa-artifact-list [role="treeitem"] {
@@ -1304,13 +1377,14 @@ button {
 }
 
 .glosa-tree-row {
+  position: relative; /* the open mark sits in the disclosure slot without displacing the row */
   height: 28px;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 6px 0 2px;
-  border-radius: 5px;
+  gap: 6px;
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border-radius: var(--radius-tool);
   color: var(--ink);
   cursor: default;
   user-select: none;
@@ -1342,13 +1416,17 @@ button {
   font-weight: 500;
 }
 
+/* Open-in-a-pane is a dot in the disclosure slot a file never uses — inside the row's own
+   geometry, so open rows and closed rows keep their icons on one vertical line. */
 .glosa-tree-open {
-  width: 3px;
-  height: 14px;
-  flex: 0 0 3px;
-  margin-left: -2px;
-  border-radius: 999px;
-  background: var(--border-strong);
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--muted);
 }
 
 [aria-current="page"] > .glosa-tree-row > .glosa-tree-open {
@@ -1387,7 +1465,7 @@ button {
 .glosa-tree-icon svg {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1490,8 +1568,8 @@ button {
   overflow: hidden;
 }
 
-/* The artifact bar (§6). Not a bar: a bordered, rounded toolbar object inset on the pane's paper,
-   spanning the artifact container.
+/* The artifact bar (§6). Not a bar: a transparent header row on the pane's paper, spanning the
+   manuscript measure.
 
    §6 specifies a flush control-surface row with a bottom border, and built that way it read as a
    second top bar — two near-identical 35px chrome bands stacked, taxing exactly the single-tab
@@ -1505,9 +1583,11 @@ button {
    document's toolbar, so it is the document's width; spanning the pane made it chrome again and
    parked the mode control in a far corner the eye never travels to.
 
-   One container, no border. The sunken surface is what DESIGN.md §2 already reserves for
-   segmented tracks and hover beds, and a fill plus a radius says "control cluster" without a rule
-   around it. Everything inside it is therefore borderless too — see .glosa-modebar below. */
+   No container at all. A filled slab the width of the text read as a second header stacked on
+   the tab strip; the row is transparent paper, and the one object in it is the segmented mode
+   control on its own sunken track — the tab strip's active-sheet idiom at control scale. The
+   directory sits at the left edge of the measure and the controls at its right, so the row reads
+   as the document's own header line rather than as chrome laid over it. */
 .glosa-artifact-bar {
   grid-area: bar;
   container-type: inline-size;
@@ -1516,19 +1596,20 @@ button {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  width: min(calc(var(--manuscript-block) - 2 * var(--space-8)), calc(100% - 2 * var(--space-2)));
+  width: min(calc(var(--manuscript-block) - 2 * var(--space-8)), calc(100% - 2 * var(--space-4)));
   height: var(--artifact-bar-height);
   margin: var(--space-2) auto 0;
-  padding: 0 var(--space-1) 0 var(--space-3);
-  background: var(--surface-sunken);
-  border-radius: 8px;
+  padding: 0;
 }
 
 /* Only the pane the mode control, the shortcuts and the address bar are all addressing offers
    them. The rest state their mode and stay out of the way. */
 .glosa-pane-mode-label {
   flex: 0 0 auto;
-  padding-right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--space-3);
   color: var(--muted);
   font-size: var(--text-xs);
   text-transform: capitalize;
@@ -1539,11 +1620,6 @@ button {
 .glosa-pane[data-active="false"] .glosa-artifact-bar .glosa-history-toggle,
 .glosa-pane[data-active="false"] .glosa-pane-tools {
   display: none;
-}
-
-/* An unfocused pane's toolbar has nothing to offer, so it stops looking like something to press. */
-.glosa-pane[data-active="false"] .glosa-artifact-bar {
-  background: none;
 }
 
 /* With the filename on the tab, this slot carries only the path the tab left out — and nothing at
@@ -1617,10 +1693,10 @@ button {
   padding: var(--space-1);
   background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   /* A menu is genuinely above the work while it is open, which is the one case the
      Flat-Until-Floating Rule admits. */
-  box-shadow: 0 6px 20px oklch(0.24 0.01 110 / 0.14);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-pane-tools[data-open="true"] .glosa-pane-menu {
@@ -1632,7 +1708,7 @@ button {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  border-radius: 5px;
+  border-radius: var(--radius-micro); /* 8px panel − 4px padding: concentric */
   color: var(--muted);
   font-size: var(--text-sm);
   text-align: left;
@@ -1687,7 +1763,7 @@ button {
 .glosa-pane-menu-heading {
   margin: 0;
   padding: var(--space-1) var(--space-2) 0;
-  color: var(--faint);
+  color: var(--muted); /* 12px text: faint ink would not clear AA here */
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -1706,9 +1782,11 @@ button {
   grid-auto-flow: column;
   place-items: center;
   gap: var(--space-1);
-  height: 26px;
+  width: auto;
+  min-width: 28px;
+  height: 28px;
   padding: 0 var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -1717,12 +1795,12 @@ button {
 
 .glosa-artifact-bar .glosa-history-toggle:hover,
 .glosa-artifact-bar .glosa-tools-trigger:hover {
-  background: var(--bg);
+  background: var(--surface-sunken);
   color: var(--ink);
 }
 
 .glosa-artifact-bar .glosa-history-toggle[aria-expanded="true"] {
-  background: var(--bg);
+  background: var(--surface-sunken);
   color: var(--primary);
 }
 
@@ -1895,11 +1973,13 @@ button {
   width: 100%;
   max-width: calc(var(--measure) + 2 * var(--space-8));
   margin: 0 auto;
-  padding: var(--space-12) var(--space-8) var(--space-12);
+  padding: 4rem var(--space-8) 6rem;
   font-family: var(--font-serif);
   font-size: var(--text-md);
   line-height: 1.65;
   text-wrap: pretty;
+  hanging-punctuation: first;
+  --prose-gap: 1.2em; /* the space between blocks, in the body's own em so it scales with it */
 }
 
 /* Rendered-markdown element vocabulary. Quiet, book-like; no line numbers in Preview/Annotate
@@ -1912,54 +1992,107 @@ button {
   font-weight: 600;
 }
 
+/* An editorial scale, not a document outline: the title is a title, a section opens with air
+   above it, and a subhead sits close to what it introduces. Display sizes tighten a touch — the
+   serif's default tracking is cut for 17px body, not 32px titles. */
 .glosa-content h1 {
-  font-size: 1.75rem;
-  margin: 0 0 var(--space-6);
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin: 0 0 var(--space-8);
 }
 
 .glosa-content h2 {
-  font-size: 1.375rem;
-  margin: var(--space-8) 0 var(--space-3);
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin: var(--space-12) 0 var(--space-3);
 }
 
 .glosa-content h3 {
   font-size: 1.125rem;
+  line-height: 1.35;
+  margin: var(--space-8) 0 var(--space-2);
+}
+
+.glosa-content h4,
+.glosa-content h5,
+.glosa-content h6 {
+  font-size: var(--text-md);
+  line-height: 1.4;
+  font-weight: 600;
   margin: var(--space-6) 0 var(--space-2);
 }
 
+/* A subhead directly under its section heading closes up; the section's air is already above. */
+.glosa-content h2 + h3,
+.glosa-content h3 + h4 {
+  margin-top: var(--space-3);
+}
+
+.glosa-content > :first-child {
+  margin-top: 0;
+}
+
 .glosa-content p {
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--prose-gap);
+}
+
+/* The serif's true bold is a shout at 17px; semibold is the copy editor's emphasis. */
+.glosa-content strong,
+.glosa-content b {
+  font-weight: 600;
 }
 
 .glosa-content blockquote {
   margin: var(--space-6) 0;
-  padding: 0 var(--space-6);
+  padding: 0 0 0 var(--space-4);
+  border-left: 1px solid var(--border-strong);
   color: var(--muted);
   font-style: italic;
+}
+
+.glosa-content blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .glosa-content ul,
 .glosa-content ol {
   padding-left: var(--space-6);
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--prose-gap);
 }
 
 .glosa-content li {
-  margin-bottom: var(--space-1);
+  margin-bottom: 0.3em;
 }
 
+.glosa-content li > p:last-child {
+  margin-bottom: 0;
+}
+
+/* Markers are wayfinding, not content: they step back to the muted ink, and numerals line up. */
+.glosa-content li::marker {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.glosa-content li > ul,
+.glosa-content li > ol {
+  margin: var(--space-1) 0 0;
+}
+
+/* A section break is a short deliberate rule, not a faint line that ran out of page. */
 .glosa-content hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-strong);
   margin: var(--space-8) auto;
-  width: 40%;
+  width: 4rem;
 }
 
 .glosa-content code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   background: var(--surface);
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
   padding: 0.1em 0.35em;
 }
 
@@ -1969,10 +2102,10 @@ button {
   line-height: 1.6;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   padding: var(--space-4);
   overflow-x: auto;
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--prose-gap);
 }
 
 .glosa-content pre code {
@@ -1981,23 +2114,39 @@ button {
   padding: 0;
 }
 
+/* Tables are set editorially: horizontal rules only, a firmer rule under the head, no cell walls
+   and no filled header band. Figures align on tabular numerals. */
 .glosa-content table {
   border-collapse: collapse;
   font-family: var(--font-sans);
   font-size: var(--text-base);
-  margin: 0 0 var(--space-4);
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 var(--space-6);
 }
 
 .glosa-content th,
 .glosa-content td {
-  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: var(--space-2) var(--space-3);
   text-align: left;
+  vertical-align: top;
 }
 
 .glosa-content th {
-  background: var(--surface);
+  border-bottom-color: var(--border-strong);
+  color: var(--muted);
+  font-size: var(--text-sm);
   font-weight: 600;
+}
+
+.glosa-content th:first-child,
+.glosa-content td:first-child {
+  padding-left: 0;
+}
+
+.glosa-content th:last-child,
+.glosa-content td:last-child {
+  padding-right: 0;
 }
 
 .glosa-content img {
@@ -2014,7 +2163,7 @@ button {
 /* Annotate mode exposes each rendered block as an explicit keyboard target. The focus ring is
    intentionally inset so enlarged text and narrow layouts never acquire horizontal overflow. */
 .glosa-content .glosa-annotatable-block {
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
 }
 
 .glosa-content .glosa-annotatable-block:focus-visible {
@@ -2051,7 +2200,7 @@ button {
   margin-bottom: var(--space-3);
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--bg);
 }
 .glosa-classf-frame {
@@ -2113,7 +2262,7 @@ button {
 .glosa-skeleton > i {
   display: block;
   height: 1em;
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
   background: var(--surface-sunken);
   animation: glosa-pulse 1.6s var(--ease-out) infinite;
 }
@@ -2196,7 +2345,7 @@ button {
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   padding: var(--space-4);
 }
 
@@ -2231,7 +2380,7 @@ button {
 .glosa-editor-face button {
   padding: 2px var(--space-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: var(--text-xs);
   transition:
@@ -2272,7 +2421,7 @@ button {
 
 .glosa-rich-toolbar button {
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-size: var(--text-xs);
   min-width: 1.75rem;
@@ -2331,7 +2480,7 @@ button {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border-strong);
   background: var(--bg);
   color: var(--ink);
@@ -2558,7 +2707,7 @@ button {
 .glosa-annotation {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   padding: var(--space-3);
   display: grid;
   gap: var(--space-2);
@@ -2671,7 +2820,7 @@ button {
 .glosa-annotation-remove {
   font-size: var(--text-xs);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
   padding: 0 var(--space-1);
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--muted) 40%, transparent);
@@ -2687,11 +2836,11 @@ button {
 .glosa-composer {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-composer);
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
-  box-shadow: 0 1px 3px oklch(0.24 0.01 110 / 0.06);
+  box-shadow: var(--shadow-rest);
 }
 
 .glosa-composer-quote {
@@ -2717,7 +2866,7 @@ button {
 .glosa-composer-intents button {
   padding: 2px var(--space-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: var(--text-xs);
   white-space: nowrap;
@@ -2744,7 +2893,7 @@ button {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: var(--space-2);
   min-height: 3.5rem;
   resize: vertical;
@@ -2775,12 +2924,12 @@ button {
 
 .glosa-dialog {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-overlay);
   background: var(--bg);
   color: var(--ink);
   padding: var(--space-6);
   max-width: 26rem;
-  box-shadow: 0 12px 40px oklch(0.24 0.01 110 / 0.18);
+  box-shadow: var(--shadow-dialog);
 }
 
 .glosa-dialog::backdrop {
@@ -2847,7 +2996,7 @@ button {
 .glosa-context-close {
   padding: var(--space-1) var(--space-2);
   color: var(--muted);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 .glosa-context-close:hover {
   background: var(--surface-sunken);
@@ -2886,7 +3035,7 @@ button {
   margin-bottom: var(--space-3);
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--bg);
   font-weight: 500;
 }
@@ -2907,7 +3056,7 @@ button {
   margin: 0 0 var(--space-4);
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--bg);
   overflow: hidden;
 }
@@ -2932,7 +3081,7 @@ button {
 
 .glosa-history-row > button {
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
 }
 
@@ -2945,7 +3094,7 @@ button {
 .glosa-history-attribution {
   font-size: var(--text-xs);
   font-weight: 600;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 var(--space-2);
   border: 1px solid var(--border-strong);
   white-space: nowrap;
@@ -2974,7 +3123,7 @@ button {
 
 .glosa-diff-pane {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--bg);
   overflow: auto;
   font-size: var(--text-xs);
@@ -3022,10 +3171,9 @@ button {
   opacity: 1;
 }
 
-/* On a dark ground a broad soft shadow reads as haze, not as height. The pane menu keeps its
-   priority through a stronger border instead. */
+/* On a dark ground the menu lifts on the surface step and a stronger border; the shadow token
+   already carries the tighter, black-based dark value every menu shares. */
 :root[data-theme="dark"] .glosa-pane-menu {
-  box-shadow: none;
   border-color: var(--border-strong);
   background: var(--surface);
 }
@@ -3079,7 +3227,7 @@ button {
   height: 2rem;
   display: grid;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-size: var(--text-lg);
   line-height: 1;
@@ -3113,7 +3261,7 @@ button {
   margin: 0 0 var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--surface);
 }
 
@@ -3148,7 +3296,7 @@ button {
 .glosa-conv-session-picker select {
   min-width: 12rem;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: var(--space-1) var(--space-2);
   background: var(--bg);
   color: var(--ink);
@@ -3197,7 +3345,7 @@ button {
 .glosa-conv-user {
   align-self: flex-end;
   padding: var(--space-3) var(--space-4);
-  border-radius: 12px;
+  border-radius: var(--radius-composer);
   background: color-mix(in oklch, var(--primary) 10%, var(--surface));
 }
 
@@ -3229,7 +3377,7 @@ button {
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 
 .glosa-conv-tool-use summary:hover,
@@ -3242,7 +3390,7 @@ button {
 .glosa-conv-tool-input,
 .glosa-conv-tool-result {
   background: var(--surface-sunken);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: var(--space-2);
   overflow-x: auto;
   margin: var(--space-1) 0 0;
@@ -3260,7 +3408,7 @@ button {
   gap: var(--space-2);
   margin: 0 auto;
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-composer);
   padding: var(--space-2);
   background: var(--bg);
 }
@@ -3273,7 +3421,7 @@ button {
   font: inherit;
   line-height: 1.5;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
   padding: var(--space-1) var(--space-2);
   background: var(--bg);
   color: var(--ink);
@@ -3308,7 +3456,7 @@ button {
 .glosa-conv-composer-send {
   min-height: 2rem;
   padding: var(--space-1) var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--primary);
   color: var(--on-primary);
   font-weight: 500;
@@ -3344,7 +3492,7 @@ button {
     width: 100%;
     max-height: min(70vh, calc(100vh - var(--topbar-height)));
     border-inline: 0;
-    border-radius: 0 0 10px 10px;
+    border-radius: 0 0 var(--radius-composer) var(--radius-composer);
   }
 }
 
@@ -3360,9 +3508,9 @@ button {
     right: 0;
     bottom: 0;
     z-index: var(--z-tray);
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--radius-overlay) var(--radius-overlay) 0 0;
     border-bottom: none;
-    box-shadow: 0 -4px 16px oklch(0.24 0.01 110 / 0.12);
+    box-shadow: var(--shadow-tray);
     padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
     animation: glosa-tray-up var(--dur-base) var(--ease-out);
   }
@@ -3497,10 +3645,10 @@ button {
 
   /* The tab strip is the control surface, like every other piece of chrome. */
   --dv-tabs-and-actions-container-background-color: var(--surface);
-  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-height: var(--strip-height);
   --dv-tabs-and-actions-container-font-size: var(--text-sm);
   --dv-tab-font-size: var(--text-sm);
-  --dv-tab-divider-color: var(--border);
+  --dv-tab-divider-color: transparent; /* glosa draws its own, label-height, below */
   --dv-tabs-container-scrollbar-color: var(--border-strong);
   --dv-scrollbar-background-color: var(--border-strong);
 
@@ -3508,18 +3656,19 @@ button {
      directly below it; the inactive tabs stay on the control surface behind it. */
   --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
   --dv-activegroup-visiblepanel-tab-color: var(--ink);
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--surface-sunken);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-activegroup-hiddenpanel-tab-color: var(--muted);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg);
   --dv-inactivegroup-visiblepanel-tab-color: var(--muted);
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--surface-sunken);
-  --dv-inactivegroup-hiddenpanel-tab-color: var(--faint);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  /* Muted, not faint: a 13px label has to clear AA on the strip, whichever group it is in. */
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted);
 
   /* Square. A rounded tab is a card, and a card floats. */
   --dv-tab-border-radius: 0;
   --dv-border-radius: 0;
   --dv-sash-border-radius: 0;
-  --dv-dropdown-border-radius: 8px;
+  --dv-dropdown-border-radius: var(--radius-panel);
   --dv-tab-margin: 0;
   --dv-tab-margin-block: 0;
   --dv-tab-margin-inline: 0;
@@ -3564,32 +3713,70 @@ button {
   background: var(--bg);
 }
 
-/* The strip is a track and the tabs sit in it — the same idiom as the segmented mode control, and
-   the reason an inactive tab is legible at all in light appearance, where --surface and --bg are
-   under three percent apart. */
-.glosa-dock-theme .dv-tabs-and-actions-container,
+/* The strip is the desk's control surface. Its bottom rule is an inset shadow rather than a
+   border so the active tab — the only opaque thing in the row — paints over it, and the paper of
+   the tab runs unbroken into the paper of the manuscript: an index tab on a sheet, not a button
+   on a bar. */
+.glosa-dock-theme .dv-tabs-and-actions-container {
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
 .glosa-dock-theme .dv-void-container {
-  background: var(--surface-sunken);
-  border-bottom: 1px solid var(--border);
+  background: none;
 }
 
 .glosa-dock-theme .dv-tab {
   position: relative;
   padding: 0;
-  border-right: 1px solid var(--border);
   transition:
-    background var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
+}
+
+/* Between two resting tabs, a hairline the height of the label — not a full-height cell wall.
+   It steps aside on either side of the active tab, whose own edges do the separating. */
+.glosa-dock-theme .dv-tab + .dv-tab {
+  background-image: linear-gradient(var(--border-strong), var(--border-strong));
+  background-repeat: no-repeat;
+  background-size: 1px 14px;
+  background-position: 0 50%;
+}
+
+.glosa-dock-theme .dv-tab.dv-active-tab + .dv-tab,
+.glosa-dock-theme .dv-tab:has(+ .dv-tab.dv-active-tab),
+.glosa-dock-theme .dv-tab.dv-active-tab {
+  background-image: none;
+}
+
+/* Written at dockview's own specificity so the hover bed outranks its group-state fill. */
+.glosa-dock-theme .dv-groupview > .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab.dv-inactive-tab:hover {
+  background-color: var(--surface-sunken);
+}
+
+/* The sheet's edges: one-pixel sides in the structural rule, painted inside the box so the strip
+   never reflows when the active tab changes. The first tab shares the navigator's edge. */
+.glosa-dock-theme .dv-tab.dv-active-tab {
+  box-shadow:
+    inset 1px 0 0 var(--border),
+    inset -1px 0 0 var(--border);
+}
+
+.glosa-dock-theme .dv-tab.dv-active-tab:first-child {
+  box-shadow: inset -1px 0 0 var(--border);
 }
 
 /* The active tab's mark: a 2px olive top edge, painted rather than added to the box, so switching
    tabs never nudges the strip by two pixels. Weight and the surface change carry it too — the
-   edge is never the only signal. */
+   edge is never the only signal. dockview reuses ::before for its own 1px divider, so the width
+   is restated here or the edge would be one pixel wide on every tab but the first. */
 .glosa-dock-theme .dv-active-group .dv-tab.dv-active-tab::before {
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
+  width: auto;
   height: 2px;
+  z-index: 1;
   background: var(--primary);
 }
 
@@ -3599,8 +3786,33 @@ button {
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
+  width: auto;
   height: 2px;
+  z-index: 1;
   background: var(--border-strong);
+}
+
+/* Tab overflow: dockview's free single-row strip with a chevron dropdown, in glosa's clothes. */
+.glosa-dock-theme .dv-tabs-overflow-dropdown-default {
+  height: calc(100% - 2 * var(--space-1));
+  margin: var(--space-1);
+  padding: 0 var(--space-2);
+  gap: 2px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.glosa-dock-theme .dv-tabs-overflow-dropdown-default > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.glosa-dock-theme .dv-tabs-overflow-dropdown-default:hover {
+  border-radius: var(--radius-control);
+  background-color: var(--surface-sunken);
+  color: var(--ink);
 }
 
 .glosa-dock-theme .dv-active-group .dv-tab.dv-active-tab .glosa-tab-label {
@@ -3617,7 +3829,7 @@ button {
 .glosa-tab {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 7px;
   min-width: 0;
   max-width: 15rem;
   height: 100%;
@@ -3630,6 +3842,10 @@ button {
   display: grid;
   place-items: center;
   color: var(--faint);
+}
+
+.dv-active-tab .glosa-tab-glyph {
+  color: var(--muted);
 }
 
 .glosa-tab-glyph svg {
@@ -3674,11 +3890,11 @@ button {
 .glosa-tab-count {
   min-width: 1.05rem;
   padding: 0 0.25rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-sunken);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
   line-height: 1.05rem;
   text-align: center;
 }
@@ -3701,7 +3917,7 @@ button {
   place-items: center;
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: var(--radius-micro);
   color: var(--muted);
   opacity: 0;
   transition:
@@ -3761,7 +3977,7 @@ button {
   flex: 0 0 auto;
   margin: 0;
   padding: 0.125rem var(--space-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-sunken);
   color: var(--muted);
   font-family: var(--font-mono);
@@ -3878,7 +4094,7 @@ button {
     max-width: none;
     margin: 0;
     padding: 0;
-    font-family: ui-serif, "Iowan Old Style", Georgia, serif;
+    font-family: "Iowan Old Style", Charter, ui-serif, Georgia, serif;
     font-size: 12pt;
     line-height: 1.55;
     text-wrap: wrap;
@@ -3893,8 +4109,7 @@ button {
     border-color: #c8cec5 !important;
   }
   .glosa-content code,
-  .glosa-content pre,
-  .glosa-content th {
+  .glosa-content pre {
     background: #f3f5f1 !important;
   }
   .glosa-content pre {
@@ -3928,7 +4143,9 @@ button {
   .glosa-save,
   .glosa-composer-send,
   .glosa-approval-button,
-  .glosa-conv-composer {
+  .glosa-conv-composer,
+  .glosa-agent-feedback-trigger,
+  .glosa-dock-theme .dv-tab {
     transition: none;
   }
 

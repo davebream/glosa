@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The workbench chrome is quieter and better proportioned. Tabs read as an index tab on the
+  sheet: the active tab's paper runs into the manuscript, resting tabs are separated by a short
+  hairline instead of a full-height wall, and every tab label clears AA contrast. The filled
+  toolbar above each manuscript is gone; the directory, the mode control on its own segmented
+  track, History and More sit on a transparent row at the manuscript's width. The navigator's
+  first heading shares the tab strip's line, and a file open in a pane is marked by a dot in the
+  disclosure slot instead of a bar that pushed its icon out of line.
+- The rendered manuscript is set more like a typeset page: a larger title, more air above each
+  section, subheads closed up under their section, semibold rather than bold emphasis, muted
+  list markers, a short section rule, a hairline beside quotations, and tables ruled horizontally.
+  Iowan Old Style is now named first in the serif stack so Safari and Chromium render the same
+  face and the same measure.
+- Radii and shadows are tokens; nested corners follow their container's radius, menus and trays
+  share one lift, and the caret and any visible scrollbar take the palette.
+
 ## [0.1.0-alpha.12] - 2026-09-04
 
 ### Added
