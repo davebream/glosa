@@ -14,6 +14,7 @@
 
 import { mountAgentFeedback } from "./agent-feedback.js";
 import { mountAppearanceControl } from "./appearance.js";
+import { selectRequestToReveal } from "./agent-request.js";
 import { createArtifactPane, MODES } from "./artifact-pane.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
@@ -25,6 +26,11 @@ import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
 import { createViewerShell, createElement as el } from "./viewer-shell.js";
+
+/** How long the workbench waits for a gap in typing before an agent-caused switch. */
+const REVEAL_TYPING_IDLE_MS = 900;
+/** ...and how long it will wait at most, so steady typing cannot suppress a question forever. */
+const REVEAL_MAX_WAIT_MS = 15_000;
 
 let historyPaneLoader;
 let conversationPaneLoader;
@@ -86,6 +92,10 @@ export function mountApp(
   root.setAttribute("data-surface", surface === "document" ? "document" : "workspace");
   if (readLock) root.setAttribute("data-preview-lock", "true");
   let attentionEntries = [];
+  /** Request ids already seen, so an arrival is distinguishable from a refresh. */
+  const seenRequestIds = new Set();
+  let seenAnyInbox = false;
+  let lastKeystrokeAt = 0;
   // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
   // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
   let currentSlug = null;
@@ -193,13 +203,76 @@ export function mountApp(
   };
   document.addEventListener("click", onDocumentClick);
 
+  // Capture phase, so a keystroke inside an editor or a composer counts even though those
+  // handlers stop propagation. Records a timestamp and nothing else — never the key.
+  const onDocumentKeydown = () => {
+    lastKeystrokeAt = Date.now();
+  };
+  document.addEventListener("keydown", onDocumentKeydown, true);
+
+  /** One polite live region for changes the reader did not initiate. */
+  const announcerEl = el("p", {
+    className: "glosa-visually-hidden",
+    role: "status",
+    "aria-live": "polite",
+  });
+  root.append(announcerEl);
+
+  function announce(text) {
+    // Cleared first: an identical message twice in a row is otherwise silent, and "another
+    // question arrived" is exactly the message that repeats.
+    announcerEl.textContent = "";
+    queueMicrotask(() => {
+      announcerEl.textContent = text;
+    });
+  }
+
   function setAttentionEntries(entries) {
-    attentionEntries = Array.isArray(entries) ? entries : [];
+    const next = Array.isArray(entries) ? entries : [];
+    const arrival = selectRequestToReveal(seenRequestIds, next, { firstLoad: !seenAnyInbox });
+    seenAnyInbox = true;
+    for (const entry of next) seenRequestIds.add(entry.id);
+    attentionEntries = next;
     for (const pane of panes.values()) {
       pane.refreshApproval?.();
       // The rail carries the session's asks now, so a changed inbox has to repaint it too.
       pane.refreshAgentRequests?.();
     }
+    if (arrival) revealWhenIdle(arrival);
+  }
+
+  /**
+   * Brings a newly-arrived question to the reader.
+   *
+   * This is the one place glosa moves someone who did not ask to be moved, so it is bounded on
+   * both sides. Nothing is ever lost: the pane parks an unsaved draft and a half-written note
+   * before the mode changes, and one control puts the reader back. And it waits for a gap in
+   * typing — a switch that lands mid-sentence is hostile even when it costs nothing, and people
+   * pause constantly, so the wait is short in practice. The cap exists for the case where they do
+   * not: a question that never arrives because someone is typing steadily is a worse failure than
+   * a slightly rude interruption.
+   */
+  function revealWhenIdle(request) {
+    const path = request.target_path ?? request.target;
+    if (!path) return;
+    const deadline = Date.now() + REVEAL_MAX_WAIT_MS;
+    const attempt = () => {
+      const typingRecently = Date.now() - lastKeystrokeAt < REVEAL_TYPING_IDLE_MS;
+      if (typingRecently && Date.now() < deadline) {
+        setTimeout(attempt, REVEAL_TYPING_IDLE_MS);
+        return;
+      }
+      void openArtifact(path, { mode: "review" }).then((opened) => {
+        if (!opened) return;
+        panes.get(path)?.revealRequest?.(request.id);
+        // Said out loud, because the view moved on its own. Screen readers get it from the live
+        // region; everyone else gets the mode control and the sideline they are now looking at.
+        announce(
+          `A session is asking about ${path.split("/").pop()}. Switched to Review; your unsaved work is kept.`,
+        );
+      });
+    };
+    attempt();
   }
 
   // Not `navigator` — that name is the browser's own global, which a pane's copy-source reads.
@@ -709,6 +782,7 @@ export function mountApp(
   return () => {
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
+    document.removeEventListener("keydown", onDocumentKeydown, true);
     sidebarNav.destroy();
     feedbackController.destroy();
     stopStream?.();

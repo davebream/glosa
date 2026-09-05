@@ -1655,6 +1655,156 @@ describe("A1 §5 route catalog", () => {
     expect(next.status).toBe(201);
   });
 
+  test("a passage question round-trips its anchor, label and options, and answers with a chosen option", async () => {
+    writeFileSync(join(root, "notes.md"), "# Konspekt\n\nThe premise readers accept.\n");
+    const create = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({
+          path: root,
+          target_path: "notes.md",
+          action: "review",
+          message: "Is argument X covered enough?",
+          agent_label: "api-refactor",
+          target: { quote: { exact: "The premise readers accept.", prefix: "\n\n" } },
+          answer_options: ["covered", "thin"],
+        }),
+      }),
+    );
+    expect(create.status).toBe(201);
+    const created = await create.json();
+    // Stored verbatim and immutably: the session's own words, never rewritten by the daemon.
+    expect(ctx.getWorkspaceBus(root).readEntry(created.id)?.payload).toMatchObject({
+      agent_label: "api-refactor",
+      target: { quote: { exact: "The premise readers accept.", prefix: "\n\n" } },
+      answer_options: ["covered", "thin"],
+    });
+
+    const inbox = await (await fetchFn(req(`/w/${slug}/inbox`))).json();
+    expect(inbox.attention[0]).toMatchObject({
+      agent_label: "api-refactor",
+      passage: { quote: { exact: "The premise readers accept." } },
+      answer_options: ["covered", "thin"],
+    });
+
+    const answered = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "changes_requested", response: "Thin — say why.", chose: "thin" }),
+      }),
+    );
+    expect(await answered.json()).toMatchObject({
+      status: "done",
+      detail: { outcome: "changes_requested", response: "Thin — say why.", chose: "thin" },
+    });
+  });
+
+  test("a chosen option the request never offered is refused — a client cannot invent a verdict", async () => {
+    const create = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, action: "review", answer_options: ["covered", "thin"] }),
+      }),
+    );
+    const created = await create.json();
+    const refused = await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "changes_requested", chose: "perfect" }),
+      }),
+    );
+    expect(refused.status).toBe(400);
+    // Still open: a refused answer must not half-complete the request.
+    const inbox = await (await fetchFn(req(`/w/${slug}/inbox`))).json();
+    expect(inbox.pending_count).toBe(1);
+  });
+
+  test("an empty options array is refused rather than stored as 'options were offered'", async () => {
+    const refused = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, action: "review", answer_options: [] }),
+      }),
+    );
+    expect(refused.status).toBe(400);
+  });
+
+  test("a rejected request leaves nothing behind — no entry is minted for an invalid anchor", async () => {
+    const before = await (await fetchFn(req(`/w/${slug}/inbox`))).json();
+    const refused = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, action: "review", target: { quote: { exact: "" } } }),
+      }),
+    );
+    expect(refused.status).toBe(400);
+    const after = await (await fetchFn(req(`/w/${slug}/inbox`))).json();
+    expect(after.pending_count).toBe(before.pending_count);
+  });
+
+  test("entry-status with wait_ms HOLDS until the answer, and is woken by it rather than timing out", async () => {
+    const create = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, action: "review", message: "Ready?" }),
+      }),
+    );
+    const created = await create.json();
+
+    // A generous wait, deliberately: if the hold were really a timer this test would take the
+    // whole 30s. It returning promptly is the proof that the journal write woke it.
+    const started = Date.now();
+    const held = fetchFn(
+      req(
+        `/api/workspaces/entry-status?path=${encodeURIComponent(root)}&entry=${encodeURIComponent(created.id)}&wait_ms=30000`,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "changes_requested", response: "Not yet." }),
+      }),
+    );
+
+    const settled = await (await held).json();
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(settled).toMatchObject({ status: "done", waited: true, detail: { response: "Not yet." } });
+  });
+
+  test("an already-terminal entry returns immediately even when a wait was requested", async () => {
+    const create = await fetchFn(
+      stateChangingReq("/api/workspaces/attention-request", {
+        method: "POST",
+        body: JSON.stringify({ path: root, action: "review" }),
+      }),
+    );
+    const created = await create.json();
+    await fetchFn(
+      stateChangingReq(`/w/${slug}/inbox/${created.id}/response`, {
+        method: "POST",
+        body: JSON.stringify({ outcome: "approved" }),
+      }),
+    );
+    const settled = await (
+      await fetchFn(
+        req(
+          `/api/workspaces/entry-status?path=${encodeURIComponent(root)}&entry=${encodeURIComponent(created.id)}&wait_ms=30000`,
+        ),
+      )
+    ).json();
+    // `waited: false` is the observable difference between "answered before I asked" and "I held
+    // the connection" — the CLI uses it to tell a resumed turn from an instant one.
+    expect(settled).toMatchObject({ status: "done", waited: false });
+  });
+
+  test("a wait longer than the daemon's cap is refused rather than silently shortened", async () => {
+    const refused = await fetchFn(
+      req(`/api/workspaces/entry-status?path=${encodeURIComponent(root)}&entry=whatever&wait_ms=99999999`),
+    );
+    expect(refused.status).toBe(400);
+  });
+
   test("approval creation is atomic per target and revision mismatch leaves the winner open", async () => {
     writeFileSync(join(root, "notes.md"), "# Approval\n");
     const createRequest = () =>

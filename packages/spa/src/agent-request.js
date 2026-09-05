@@ -136,6 +136,32 @@ export function requestsForArtifact(entries, artifactPath) {
 }
 
 /**
+ * Which request, if any, should pull the workbench to it.
+ *
+ * Pure, and deliberately conservative — this is the one thing in the feature that moves the
+ * reviewer without being asked, so every branch here is a reason NOT to:
+ *
+ * - Nothing on the first load. Opening glosa onto three questions asked overnight would throw the
+ *   reader at the last one before they had seen the document.
+ * - Only requests that arrived since the last look. A refresh is not an event.
+ * - Only one, the oldest, even when several land together. Two jumps is not twice as helpful.
+ * - Only requests that carry a question. A pointer is worth a mark in the margin, not the
+ *   reader's place in the document.
+ *
+ * @param {Set<string>} seenIds ids observed on the previous read
+ * @param {Array<any>} entries the inbox as it stands now
+ * @param {{ firstLoad?: boolean }} [options]
+ */
+export function selectRequestToReveal(seenIds, entries, { firstLoad = false } = {}) {
+  if (firstLoad) return null;
+  const arrived = (entries ?? [])
+    .filter((entry) => entry && !seenIds.has(entry.id))
+    .filter((entry) => entry.approval_mode !== true && typeof entry.message === "string" && entry.message.length > 0)
+    .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+  return arrived[0] ?? null;
+}
+
+/**
  * How a session is named on a card.
  *
  * Two halves with different standing, and the card must not blur them: the provider is derived

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { agentIdentity, locateQuote, requestsForArtifact } from "../src/agent-request.js";
+import { agentIdentity, locateQuote, requestsForArtifact, selectRequestToReveal } from "../src/agent-request.js";
 
 const RENDERED =
   "The argument rests on the premise that readers already accept the frame. " +
@@ -88,6 +88,40 @@ describe("requestsForArtifact", () => {
 
   test("no open artifact means no cards, not every card", () => {
     expect(requestsForArtifact(entries, null)).toEqual([]);
+  });
+});
+
+describe("selectRequestToReveal — the one thing that moves the reader unasked", () => {
+  const ask = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    created_at: `2026-09-05T10:00:0${id.slice(-1)}Z`,
+    target_path: "notes.md",
+    message: "Is argument X covered enough?",
+    ...over,
+  });
+
+  test("the first inbox read never jumps — opening onto overnight questions is not an arrival", () => {
+    expect(selectRequestToReveal(new Set(), [ask("a"), ask("b")], { firstLoad: true })).toBeNull();
+  });
+
+  test("a request already seen is a refresh, not an arrival", () => {
+    expect(selectRequestToReveal(new Set(["a"]), [ask("a")])).toBeNull();
+  });
+
+  test("a genuinely new question is the one to reveal", () => {
+    expect(selectRequestToReveal(new Set(["a"]), [ask("a"), ask("b")])?.id).toBe("b");
+  });
+
+  test("several arriving at once yield ONE jump, the oldest — two jumps is not twice as helpful", () => {
+    expect(selectRequestToReveal(new Set(), [ask("c"), ask("b")])?.id).toBe("b");
+  });
+
+  test("a pointer with no question never moves the reader — it earns a mark, not their place", () => {
+    expect(selectRequestToReveal(new Set(), [ask("a", { message: null })])).toBeNull();
+  });
+
+  test("an approval request is the approval strip's business, not the margin's", () => {
+    expect(selectRequestToReveal(new Set(), [ask("a", { approval_mode: true })])).toBeNull();
   });
 });
 

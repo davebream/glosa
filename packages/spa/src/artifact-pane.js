@@ -1637,10 +1637,11 @@ export function createArtifactPane(host, deps) {
     for (const request of agentRequests()) {
       const range = rangeForPassage(request.passage);
       if (!range) continue;
-      const rects = [...range.getClientRects()];
-      if (!rects.length) continue;
-      const top = Math.min(...rects.map((r) => r.top)) - mainTop + paneMain.scrollTop;
-      const bottom = Math.max(...rects.map((r) => r.bottom)) - mainTop + paneMain.scrollTop;
+      // The union box, not per-line rects: a sideline spans the passage from the top of its first
+      // line to the bottom of its last, which is exactly what a bounding rect already is.
+      const box = range.getBoundingClientRect();
+      const top = box.top - mainTop + paneMain.scrollTop;
+      const bottom = box.bottom - mainTop + paneMain.scrollTop;
       const rule = el("div", { className: "glosa-sideline", "data-entry": request.id });
       rule.style.top = `${top}px`;
       rule.style.height = `${Math.max(bottom - top, 12)}px`;
@@ -2411,6 +2412,12 @@ export function createArtifactPane(host, deps) {
     refreshAgentRequests: () => {
       renderMargin();
       paintAgentSidelines();
+    },
+    /** Brings one session request's passage into view and marks its rule as the focused one. The
+     * workspace calls this after it has switched the pane to Review for an arriving question. */
+    revealRequest: (entryId) => {
+      const request = agentRequests().find((candidate) => candidate.id === entryId);
+      if (request) revealRequest(request);
     },
     applyJournalEvent,
     markMissing,
