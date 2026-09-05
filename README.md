@@ -12,7 +12,7 @@
 <p><strong>The review surface for writing with coding agents.</strong></p>
 
 <p>
-  Read Markdown, HTML, and text as documents. Annotate exact passages, edit source,<br>
+  Read Markdown, HTML, and text as documents. Review exact passages, edit source,<br>
   and route feedback back to Claude Code or Codex without moving the work to a cloud service.
 </p>
 
@@ -49,8 +49,8 @@ agent drafts -> glosa renders -> you annotate or edit -> feedback reaches the bo
 
 | Surface | What it is for |
 |---|---|
-| **Preview** | Read rendered Markdown, trusted text, or isolated HTML without terminal noise. |
-| **Annotate** | Select a passage and attach content, classification, or presentation feedback to its durable source anchor. |
+| **Read** | Read rendered Markdown, trusted text, or isolated HTML without terminal noise. |
+| **Review** | The margin, both ways. Attach feedback to a passage's durable source anchor, and answer the questions an agent session attaches to one. |
 | **Edit** | Change the source directly; glosa saves and re-renders it as a human edit. |
 | **History** | Compare versions and restore an earlier checkpoint without touching your repository's Git history. |
 
@@ -152,7 +152,7 @@ glosa init --agent claude-code
 `glosa init` defaults to workspace scope and accepts repeatable `--agent claude-code|codex` flags
 (`--agent all` installs both). Without a flag it selects one locally detected provider or prompts
 once when interactive; scripts and `--json` callers must resolve ambiguity explicitly. Use
-`--scope user` for a user-wide integration. Preview-only `glosa open` and `glosa_present` do not
+`--scope user` for a user-wide integration. Read-only `glosa open` and `glosa_present` do not
 require init or an agent session. Run `glosa doctor` to verify effective provider installations,
 or `glosa --help` to see every command.
 
