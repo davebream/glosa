@@ -39,10 +39,45 @@ describe("attention tray", () => {
     (host.querySelector(".glosa-attention-trigger") as any).click();
     await flush();
     expect(calls).toEqual([["seen", "ws-one", "a1"]]);
+    // A request about an artifact is answered in that artifact's margin, next to the words it
+    // concerns. The tray finds it; it does not offer a second, contextless place to answer.
     expect(
       Array.from(host.querySelectorAll(".glosa-attention-actions button")).map((button) => button.textContent),
-    ).toEqual(["Approve", "Request changes"]);
+    ).toEqual(["Go to the passage"]);
+    expect(host.querySelector(".glosa-attention-response")).toBeNull();
     expect(host.textContent).toContain("Seen");
+  });
+
+  test("a request with no artifact keeps its inline answer — it has no margin to be sent to", async () => {
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const responded: Array<Record<string, unknown>> = [];
+    const tray = mountAttentionTray(host, {
+      dataAccess: {
+        getInbox: async () => ({
+          pending_count: 1,
+          attention: [{ id: "a1", status: "open", message: "Is the release note accurate?", action: "review" }],
+        }),
+        markAttentionSeen: async (_slug: string, id: string) => ({ id, status: "seen" }),
+        respondToAttention: async (_slug: string, id: string, body: Record<string, unknown>) => {
+          responded.push({ id, ...body });
+          return { status: "done" };
+        },
+      },
+    });
+    tray.setWorkspace("ws-one");
+    await flush();
+    (host.querySelector(".glosa-attention-trigger") as any).click();
+    await flush();
+
+    // The residue case: nowhere to send the reader, so the tray stays answerable rather than
+    // leaving a workspace-level question with no way to answer it at all.
+    const input = host.querySelector(".glosa-attention-response") as any;
+    expect(input).not.toBeNull();
+    input.value = "Yes, it matches the changelog.";
+    (host.querySelector(".glosa-attention-actions button") as any).click();
+    await flush();
+    expect(responded).toEqual([{ id: "a1", outcome: "approved", response: "Yes, it matches the changelog." }]);
   });
 
   test("generic requests show Done; Escape closes and restores focus", async () => {

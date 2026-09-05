@@ -40,6 +40,24 @@ export function deriveAgentConnection(status, slug) {
   };
 }
 
+/**
+ * The provider's own display name for the session bound to this workspace, or null.
+ *
+ * Null whenever it cannot be proven: no explicit binding, or more than one provider bound and
+ * therefore no single answer to "who is asking". A margin card falls back to the generic phrase
+ * in that case rather than picking the likelier provider — the same rule the connection banner
+ * follows, and the reason cwd fallback is invisible there.
+ *
+ * The name itself is the PROVIDER's word for itself (R7), not the daemon's and not the SPA's.
+ */
+export function boundProviderName(connection) {
+  const providers = new Set((connection?.sessions ?? []).map((session) => session.provider).filter(Boolean));
+  if (providers.size !== 1) return null;
+  const [id] = [...providers];
+  const match = connection?.workspace?.connect?.providers?.find((candidate) => candidate.provider === id);
+  return typeof match?.display_name === "string" && match.display_name.length > 0 ? match.display_name : null;
+}
+
 /** The wrapper is generic; the identity-discovery sentence comes verbatim from the provider. */
 export function buildAgentConnectPrompt(connection, providerId) {
   const provider = connection?.workspace?.connect?.providers?.find((candidate) => candidate.provider === providerId);

@@ -32,7 +32,7 @@ describe("viewer contextual surfaces", () => {
   test("a delayed conversation mount receives the current workspace and mode through injected state", async () => {
     const controls = elements();
     const dataAccess = { marker: "one shared instance" };
-    let state = { slug: "workspace", mode: "preview" };
+    let state = { slug: "workspace", mode: "read" };
     let releaseLoader: ((mount: unknown) => void) | undefined;
     const mounted: unknown[] = [];
     const controller = createContextSurfaceController({
@@ -45,7 +45,7 @@ describe("viewer contextual surfaces", () => {
     });
 
     controls.conversationToggle.click();
-    state = { slug: "workspace", mode: "annotate" };
+    state = { slug: "workspace", mode: "review" };
     releaseLoader?.((_container: unknown, options: unknown) => {
       mounted.push(options);
       return () => {};
@@ -64,7 +64,7 @@ describe("viewer contextual surfaces", () => {
     const controller = createContextSurfaceController({
       dataAccess: {},
       elements: controls,
-      getState: () => ({ slug: "workspace", mode: "annotate" }),
+      getState: () => ({ slug: "workspace", mode: "review" }),
       loadConversationPane: async () => () => {
         stopped += 1;
       },
@@ -88,7 +88,7 @@ describe("viewer contextual surfaces", () => {
     const controller = createContextSurfaceController({
       dataAccess: {},
       elements: controls,
-      getState: () => ({ slug: "workspace", mode: "preview" }),
+      getState: () => ({ slug: "workspace", mode: "read" }),
       loadConversationPane: async () => () => {},
       createElement,
       returnFocus: () => {},

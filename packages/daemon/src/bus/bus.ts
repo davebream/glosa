@@ -75,6 +75,10 @@ export interface PlannedDelivery {
 export interface StandardAttentionVerdict {
   outcome: "done" | "approved" | "changes_requested";
   response?: string;
+  /** The option the human picked, when the request offered any. Always accompanied by whatever
+   * they typed: glosa's escape hatch is unconditional, so `chose` narrows an answer, never
+   * replaces it. */
+  chose?: string;
 }
 
 export interface ApprovalVerdict {
@@ -86,6 +90,17 @@ export interface ApprovalVerdict {
 
 export type AttentionVerdict = StandardAttentionVerdict | ApprovalVerdict;
 
+/** The passage an attention request points at, in the same W3C-ish shape annotations use
+ * (`packages/spa/src/annotate.js` builds it, `anchoring.ts` resolves it). A request without one
+ * concerns the whole artifact — that is `glosa request-review`'s existing shape, not a new case.
+ *
+ * `position` is deliberately absent: a session quotes SOURCE text it just wrote and has no view
+ * of the rendered container's UTF-16 offsets, so an offset here would be a guess. The quote is
+ * the whole anchor. */
+export interface AttentionTarget {
+  quote: { exact: string; prefix?: string; suffix?: string };
+}
+
 export interface AttentionRequestPayload {
   kind: "attention_request";
   message?: string;
@@ -93,6 +108,14 @@ export interface AttentionRequestPayload {
   path?: string;
   target_path?: string;
   approval_mode?: true;
+  /** Session-supplied display name ("api-refactor"). CLAIMED, never verified — the daemon stores
+   * it verbatim and the SPA must render it as a claim beside the provider identity, which is the
+   * only half a session binding actually proves (invariant 3). */
+  agent_label?: string;
+  target?: AttentionTarget;
+  /** Session-supplied answer options. glosa always offers free text alongside them; a session
+   * cannot close the human's vocabulary. */
+  answer_options?: string[];
 }
 
 export class ApprovalConflictError extends Error {

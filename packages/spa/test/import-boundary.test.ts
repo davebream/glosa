@@ -251,6 +251,8 @@ describe("the fetch matchers fire on a real call and stay silent on a comment", 
 describe("viewer.js and its UI modules import only from data-access.js, their sanctioned set, and vendor/ — never a raw daemon URL helper", () => {
   const ALLOWED_RELATIVE_IMPORTS = new Set([
     "./data-access.js",
+    // The agent's half of the Review margin: quote resolution and card shaping, no daemon reach.
+    "./agent-request.js",
     "./annotate.js",
     "./history.js",
     "./classf-viewer.js",

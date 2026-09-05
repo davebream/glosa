@@ -303,6 +303,26 @@ that stored `path` are projected into both fields. `approval_mode` is always a b
 path and permits at most one non-terminal approval-mode request per workspace/path. A duplicate
 returns **409 approval-conflict**. Omitting the flag preserves ordinary review behavior.
 
+It also accepts three optional fields that let a session point at a passage and ask about it:
+
+| Field | Shape | Bound |
+|---|---|---|
+| `agent_label` | string | 64 bytes |
+| `target` | `{ "quote": { "exact", "prefix"?, "suffix"? } }` | exact 2048 bytes, context 256 each |
+| `answer_options` | array of distinct non-empty strings | 1–8 entries, 96 bytes each |
+
+`target` carries no offsets by design: a session quotes source markdown it just wrote and has no
+view of the rendered container, so the SPA resolves the quote source→rendered and reports an
+unlocatable or ambiguous quote as unanchored rather than marking a guess.
+
+`agent_label` is CLAIMED, never verified. The daemon stores it verbatim and the SPA renders it
+beside — never merged into — the provider identity, which is the only half a session binding
+proves.
+
+`answer_options` never closes the human's vocabulary: glosa always offers free text alongside them.
+All three are validated before the workspace is registered or an entry id is minted, so a rejected
+request leaves nothing behind. Violations return **400 validation-failed**.
+
 ### 5.10 `POST /w/:slug/inbox/:id/seen`
 Bearer required, Origin-gated. Advances a delivered attention request to `seen`. If presentation and
 the user action race, the daemon appends any required `delivered` then `seen` transitions under the
@@ -314,10 +334,13 @@ workspace mutex. Repeats are idempotent.
 Bearer required, Origin-gated. Completes attention through `seen→done` and stores the structured result
 in `done.detail`.
 ```json
-{ "outcome": "done | approved | changes_requested", "response": "optional bounded text" }
+{ "outcome": "done | approved | changes_requested", "response": "optional bounded text", "chose": "optional option" }
 ```
 For action `review`, only `approved` and `changes_requested` are valid; generic actions require `done`.
-The optional response is at most 4096 UTF-8 bytes. Repeating a completed request returns its original
+The optional response is at most 4096 UTF-8 bytes. `chose` names the option the human picked and is
+rejected with **400 validation-failed** unless the request actually offered it — accepting an
+unlisted string would let a client invent a verdict the session never wrote. It never replaces the
+response text; the two travel together. Repeating a completed request returns its original
 terminal result and appends no journal event.
 - **200** `{ "id":"inb-…", "status":"done", "detail":{...} }`
 - **400 validation-failed** for an invalid action/outcome pair or oversized response.
@@ -339,6 +362,25 @@ this exact terminal detail:
 ```
 Mismatch returns **409 artifact-revision-changed** without completing the request. Terminal retries
 return the original detail without re-validating the later working tree or appending a journal event.
+
+### 5.11a `GET /api/workspaces/entry-status`
+Bearer required. Reports one entry's derived status and terminal detail: `?path=<workspace>&entry=<id>`.
+
+The optional `wait_ms` turns the read into a HELD request. The daemon subscribes to the workspace
+journal and answers as soon as the entry reaches a terminal status, when the client disconnects, or
+when the wait elapses — whichever comes first. This is what makes a blocking agent turn a single
+waiting request rather than a poll loop: the journal write that answers the question is what wakes
+it, so the turn resumes at the moment the human sends.
+
+- **200** `{ "id", "kind", "status", "detail", "waited" }` — `waited:false` means the entry was
+  already terminal when asked, which is the observable difference between "answered before I asked"
+  and "I held the connection".
+- **400 validation-failed** when `wait_ms` is not an integer in `0…900000`. A wait beyond the cap is
+  refused rather than silently shortened, so a caller is never told it waited longer than it did; a
+  caller wanting longer reissues the request.
+
+The subscription is taken BEFORE the status is re-read. An entry can go terminal between an initial
+read and the subscription, and that gap would otherwise strand the caller until its deadline.
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Explicitly binds a registered session to the artifact workspace. This

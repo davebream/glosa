@@ -96,6 +96,8 @@ const SPA_ASSETS: Record<string, string> = {
   "agent-feedback.js": "text/javascript; charset=utf-8",
   "artifact-tree.js": "text/javascript; charset=utf-8",
   "annotate.js": "text/javascript; charset=utf-8",
+  // The agent's half of the Review margin: source→rendered quote resolution and card shaping.
+  "agent-request.js": "text/javascript; charset=utf-8",
   "vendor/idiomorph.js": "text/javascript; charset=utf-8",
   // P3.5 additions — the checkpoint/diff timeline pane and its ONE vendored rendering dependency.
   "history.js": "text/javascript; charset=utf-8",

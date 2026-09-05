@@ -516,14 +516,15 @@ export function createDataAccess(deps = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/seen`, { method: "POST" });
     },
     /** @param {string} slug @param {string} id
-     *  @param {{ outcome?: string, response?: string, revisionId?: string }} [options] */
-    respondToAttention(slug, id, { outcome, response, revisionId } = {}) {
+     *  @param {{ outcome?: string, response?: string, chose?: string, revisionId?: string }} [options] */
+    respondToAttention(slug, id, { outcome, response, chose, revisionId } = {}) {
       return requestJson(`/w/${encodeURIComponent(slug)}/inbox/${encodeURIComponent(id)}/response`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           outcome,
           ...(response ? { response } : {}),
+          ...(chose ? { chose } : {}),
           ...(revisionId ? { revision_id: revisionId } : {}),
         }),
       });

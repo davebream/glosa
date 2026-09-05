@@ -38,8 +38,8 @@ describe("open-presentation shared contract", () => {
         slug: "review-a1b2c3",
         focus: "draft.md",
         surface: "document",
-        mode: "preview",
-        previewLock: true,
+        mode: "read",
+        readLock: true,
         pairing: { kind: "presentation", token: "ephemeral-secret" },
       }),
     );
@@ -53,8 +53,8 @@ describe("open-presentation shared contract", () => {
       w: "review-a1b2c3",
       a: "draft.md",
       surface: "document",
-      mode: "preview",
-      lock: "preview",
+      mode: "read",
+      lock: "read",
     });
   });
 
@@ -89,8 +89,8 @@ describe("open-presentation shared contract", () => {
     const result = await runOpenPresentation("/work/review/draft.md", undefined, "document", deps, {
       launchBrowser: false,
       usePresentationToken: true,
-      previewLock: true,
-      mode: "preview",
+      readLock: true,
+      mode: "read",
     });
 
     expect(result.ok).toBe(true);
@@ -101,6 +101,6 @@ describe("open-presentation shared contract", () => {
     expect(result.data.url).toContain("p=single-use-token");
     expect(result.data.url).not.toContain("t=");
     expect(result.data.url).not.toContain("durable-token-must-not-leak");
-    expect(result.data).toMatchObject({ surface: "document", mode: "preview", preview: true });
+    expect(result.data).toMatchObject({ surface: "document", mode: "read", preview: true });
   });
 });

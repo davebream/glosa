@@ -87,7 +87,7 @@ export function createDiffPane(host, { dataAccess, slug, path, from, to, describ
     path,
     ready,
     kind: "diff",
-    getMode: () => "preview",
+    getMode: () => "read",
     setMode: () => {},
     isDirty: () => false,
     annotationCount: () => 0,

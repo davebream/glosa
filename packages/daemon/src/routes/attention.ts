@@ -8,6 +8,8 @@ import {
   createAttention,
   listAttention,
   markAttentionSeen,
+  MAX_ENTRY_WAIT_MS,
+  waitForEntryTerminal,
 } from "../services/attention.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { problem } from "../transport/problem.ts";
@@ -29,6 +31,40 @@ function mapError(error: unknown, pathname: string): Response {
       return problem(400, "validation-failed", "message must be at most 4096 bytes", undefined, pathname);
     case "action-too-large":
       return problem(400, "validation-failed", "action must be at most 64 bytes", undefined, pathname);
+    case "agent-label-too-large":
+      return problem(400, "validation-failed", "agent_label must be at most 64 bytes", undefined, pathname);
+    case "invalid-target":
+      return problem(
+        400,
+        "validation-failed",
+        "target must be {quote:{exact, prefix?, suffix?}} with a non-empty exact",
+        undefined,
+        pathname,
+      );
+    case "quote-too-large":
+      return problem(
+        400,
+        "validation-failed",
+        "target quote exceeds its size limit (exact 2048 bytes, prefix/suffix 256 bytes)",
+        undefined,
+        pathname,
+      );
+    case "invalid-answer-options":
+      return problem(
+        400,
+        "validation-failed",
+        "answer_options must be 1-8 distinct non-empty strings of at most 96 bytes",
+        undefined,
+        pathname,
+      );
+    case "unoffered-choice":
+      return problem(
+        400,
+        "validation-failed",
+        "chose must be one of the options this request offered",
+        undefined,
+        pathname,
+      );
     case "invalid-target-path":
       return problem(400, "invalid-path", "target_path must be workspace-relative and confined", undefined, pathname);
     case "approval-target-required":
@@ -137,11 +173,16 @@ async function respond(deps: AttentionDependencies, slug: string, id: string, re
   if (response !== undefined && (typeof response !== "string" || Buffer.byteLength(response, "utf8") > 4096)) {
     return problem(400, "validation-failed", "response must be a string of at most 4096 bytes", undefined, pathname);
   }
+  const chose = parsed?.chose;
+  if (chose !== undefined && typeof chose !== "string") {
+    return problem(400, "validation-failed", "chose must be a string", undefined, pathname);
+  }
   try {
     return Response.json(
       await completeAttention(deps, slug, id, {
         outcome,
         ...(typeof response === "string" ? { response } : {}),
+        ...(typeof chose === "string" ? { chose } : {}),
         ...(typeof parsed?.revision_id === "string" ? { revisionId: parsed.revision_id } : {}),
       }),
     );
@@ -165,6 +206,9 @@ async function create(deps: AttentionDependencies, req: Request) {
   if (parsed.approval_mode !== undefined && typeof parsed.approval_mode !== "boolean") {
     return problem(400, "validation-failed", "approval_mode must be a boolean", undefined, pathname);
   }
+  if (parsed.agent_label !== undefined && typeof parsed.agent_label !== "string") {
+    return problem(400, "validation-failed", "agent_label must be a string", undefined, pathname);
+  }
   try {
     const result = await createAttention(deps, {
       path: parsed.path,
@@ -172,6 +216,9 @@ async function create(deps: AttentionDependencies, req: Request) {
       approvalMode: parsed.approval_mode === true,
       ...(typeof parsed.message === "string" ? { message: parsed.message } : {}),
       ...(typeof parsed.target_path === "string" ? { targetPath: parsed.target_path } : {}),
+      ...(typeof parsed.agent_label === "string" ? { agentLabel: parsed.agent_label } : {}),
+      ...(parsed.target !== undefined ? { target: parsed.target } : {}),
+      ...(parsed.answer_options !== undefined ? { answerOptions: parsed.answer_options } : {}),
     });
     return new Response(JSON.stringify(result), { status: 201, headers: { "Content-Type": "application/json" } });
   } catch (error) {
@@ -186,8 +233,25 @@ async function entryStatus(deps: AttentionDependencies, req: Request) {
   if (!path || !id) {
     return problem(400, "validation-failed", "path and entry query params are required", undefined, url.pathname);
   }
+  // `wait_ms` turns this read into a held request that the journal write wakes. Absent or zero, it
+  // stays the immediate read every existing caller expects.
+  const rawWait = url.searchParams.get("wait_ms");
+  let waitMs = 0;
+  if (rawWait !== null) {
+    waitMs = Number(rawWait);
+    if (!Number.isFinite(waitMs) || !Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_ENTRY_WAIT_MS) {
+      return problem(
+        400,
+        "validation-failed",
+        `wait_ms must be an integer between 0 and ${MAX_ENTRY_WAIT_MS}`,
+        undefined,
+        url.pathname,
+      );
+    }
+  }
   try {
-    return Response.json(await attentionEntryStatus(deps, path, id));
+    if (waitMs === 0) return Response.json(await attentionEntryStatus(deps, path, id));
+    return Response.json(await waitForEntryTerminal(deps, path, id, waitMs, req.signal));
   } catch (error) {
     return mapError(error, url.pathname);
   }

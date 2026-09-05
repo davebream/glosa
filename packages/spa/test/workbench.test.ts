@@ -209,10 +209,10 @@ describe("the multi-artifact workbench", () => {
     expect(barOf("notes.md").querySelector(".glosa-artifact-id").getAttribute("data-empty")).toBe("true");
   });
 
-  test("annotation marks survive every mode — leaving Annotate never erases where the marks are", async () => {
+  test("annotation marks survive every mode — leaving Review never erases where the marks are", async () => {
     const { root } = await mountWithTwoTabs();
     const pane = activePane(root);
-    pane.querySelector('.glosa-modebar [data-mode="annotate"]').click();
+    pane.querySelector('.glosa-modebar [data-mode="review"]').click();
     await flush();
 
     const content = pane.querySelector(".glosa-content");
@@ -235,7 +235,7 @@ describe("the multi-artifact workbench", () => {
 
     // The cards belong to Annotate. The pencil line that says someone wrote here does not — a
     // heavily reviewed chapter must not read as untouched the moment you leave the mode.
-    pane.querySelector('.glosa-modebar [data-mode="preview"]').click();
+    pane.querySelector('.glosa-modebar [data-mode="read"]').click();
     await paint();
     expect(pane.querySelectorAll(".glosa-annotation")).toHaveLength(0);
     expect(pane.querySelectorAll(".glosa-marker").length).toBeGreaterThan(0);
@@ -243,7 +243,7 @@ describe("the multi-artifact workbench", () => {
     // And a mark is a way back in: it opens the mode that has the cards.
     pane.querySelector(".glosa-marker").click();
     await flush();
-    expect(pane.getAttribute("data-mode")).toBe("annotate");
+    expect(pane.getAttribute("data-mode")).toBe("review");
   });
 
   test("only the focused pane offers controls; the rest state their mode and stay quiet", async () => {
@@ -407,7 +407,7 @@ describe("the multi-artifact workbench", () => {
     expect(tabLabels(root)).toEqual(["notes.md"]);
   });
 
-  test("§7: entering and leaving Annotate never moves the manuscript, and no space is reserved", async () => {
+  test("§7: entering and leaving Review never moves the manuscript, and no space is reserved", async () => {
     const { root } = await mountWithTwoTabs();
     const pane = activePane(root);
     const main = pane.querySelector(".glosa-pane-main");
@@ -416,15 +416,15 @@ describe("the multi-artifact workbench", () => {
     // The old defect reserved margin space on MODE, at a VIEWPORT width. Nothing may do that now:
     // the rail lives in whitespace the manuscript was never using, or it is not placed at all.
     expect(main.style.paddingRight).toBe("");
-    pane.querySelector('.glosa-modebar [data-mode="annotate"]').click();
+    pane.querySelector('.glosa-modebar [data-mode="review"]').click();
     await flush();
-    expect(pane.getAttribute("data-mode")).toBe("annotate");
+    expect(pane.getAttribute("data-mode")).toBe("review");
     expect(main.style.paddingRight).toBe("");
     // An unmeasured pane is below the rail floor, so the margin is the in-flow tray, never a rail
     // that overlaps text.
     expect(margin.classList.contains("glosa-margin-side")).toBe(false);
 
-    pane.querySelector('.glosa-modebar [data-mode="preview"]').click();
+    pane.querySelector('.glosa-modebar [data-mode="read"]').click();
     await flush();
     expect(main.style.paddingRight).toBe("");
   });
@@ -435,7 +435,7 @@ describe("the multi-artifact workbench", () => {
       expect(text).toContain("container-type: inline-size");
       expect(text).toContain("@container pane (min-width: 1205px)");
       // The defect this brief removes: margin space reserved on mode, at a viewport width.
-      expect(text).not.toContain('.glosa-app[data-mode="annotate"] .glosa-main');
+      expect(text).not.toContain('.glosa-app[data-mode="review"] .glosa-main');
     });
   });
 

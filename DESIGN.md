@@ -180,7 +180,7 @@ The top bar owns one quiet, icon-only appearance control at its far edge. Its na
 
 **The Prose Rhythm Rule.** Blocks in the manuscript are separated by `1.2em` of the body size, lists by a third of an em per item, and the page opens with four rems above the title and closes with six below the last line. Headings always carry more space above than below.
 
-**The Preview Boundary Rule.** Preview keeps only artifact access, the mode switch, and More in persistent chrome. Navigation, version comparison, agent context, appearance, and shortcuts open as contextual surfaces; anything that changes an artifact or sends feedback requires an explicit Annotate or Edit transition. Honest state signals — the connection banner and the compact Agent feedback control — are admitted persistent chrome: they report whether the workbench's promises currently hold, at Metadata typography with no elevation, and carry at most the single contextual popover their state describes.
+**The Read Boundary Rule.** Read keeps only artifact access, the mode switch, and More in persistent chrome. Navigation, version comparison, agent context, appearance, and shortcuts open as contextual surfaces; anything that changes an artifact or sends feedback requires a Review or Edit transition. A session's arriving question performs that transition on the reader's behalf rather than smuggling a composer into Read, and never at the cost of unsaved work. Honest state signals — the connection banner and the compact Agent feedback control — are admitted persistent chrome: they report whether the workbench's promises currently hold, at Metadata typography with no elevation, and carry at most the single contextual popover their state describes.
 
 **The No Display Labels Rule.** Buttons, tabs, chips, paths, and state labels never use expressive display typography.
 
@@ -213,7 +213,7 @@ Four tokens, each two layers: a tight edge that separates and a broad offset lif
 - **State:** Selection uses a restrained olive tint plus weight and border so it is never color-alone. Provenance chips use distinct solid, tinted, and dashed shapes.
 
 ### Segmented Control
-- **Style:** The Preview / Annotate / Edit switch sits on a 28px Sunken Surface track with eight-pixel corners; segments are 24px with six-pixel corners (track radius minus its 2px padding, so the shapes stay concentric). The active segment is Reading Surface with a one-pixel Quiet Border ring, Ink text, and semibold weight — fill, edge, and weight together, never colour alone.
+- **Style:** The Read / Review / Edit switch sits on a 28px Sunken Surface track with eight-pixel corners; segments are 24px with six-pixel corners (track radius minus its 2px padding, so the shapes stay concentric). The active segment is Reading Surface with a one-pixel Quiet Border ring, Ink text, and semibold weight — fill, edge, and weight together, never colour alone.
 - **Placement:** In the artifact header row, which is transparent paper at the manuscript's width: directory in Metadata type at the left edge of the measure, the control and its History and More companions at the right edge. An unfocused pane shows the mode as a Metadata label in the same slot.
 
 ### Cards / Containers
@@ -240,7 +240,8 @@ Four tokens, each two layers: a tight edge that separates and a broad offset lif
 
 ### Manuscript and Contextual Margin
 - **Style:** The rendered artifact remains centered and serif-led. Annotation cards align with their source passages at wide widths; the same composer becomes a bottom tray in compact mode.
-- **Behavior:** Preview removes annotation affordances, Annotate reveals anchors and marginalia, and Edit preserves the same reading measure. Live updates preserve selection and scroll position.
+- **Behavior:** Read removes annotation affordances, Review reveals anchors and marginalia — the reviewer's own and a session's — and Edit preserves the same reading measure. Live updates preserve selection and scroll position.
+- **Three marking vocabularies share the manuscript and must stay distinguishable without colour.** Browser selection is transient; a reviewer's annotation lives ON the words as an underline deepening to a wash; a session's pointer stands BESIDE them as a graphite sideline in the gutter, olive only while its card has focus. Position, not hue, carries the difference, so an agent mark and an annotation can cover the same sentence without either becoming unreadable.
 
 ## 6. Do's and Don'ts
 

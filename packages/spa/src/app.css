@@ -2673,7 +2673,7 @@ input,
    still the reading surface — and the mode gates it so Preview stays clean paper.
 
    Scoped through the originating element, which is how highlight pseudo-elements take context. */
-.glosa-pane[data-mode="annotate"] .glosa-content::highlight(glosa-anchors) {
+.glosa-pane[data-mode="review"] .glosa-content::highlight(glosa-anchors) {
   background-color: color-mix(in oklch, var(--anchor-wash) 55%, transparent);
 }
 
@@ -2698,6 +2698,192 @@ input,
 
 .glosa-margin-side .glosa-annotation-quote {
   -webkit-line-clamp: 1;
+}
+
+/* ---------- the agent's marks ----------
+
+   Three highlight vocabularies now share one manuscript: the browser's transient selection, the
+   reviewer's own annotations, and a session pointing at a passage. The first two both live ON the
+   words and already share --anchor-wash, so a third wash would be indistinguishable from either.
+
+   A session's mark therefore goes BESIDE the words — an editor's sideline down the margin. The
+   distinction is carried by POSITION, so it survives greyscale, and an agent mark can sit on the
+   same sentence as a human annotation without the two fighting for the same pixels.
+
+   At rest the rule is graphite: a session pointing at something is not the reviewer's own action,
+   so it spends nothing from the accent budget. It goes olive only while it is the passage being
+   answered, which is exactly what --primary is for. */
+.glosa-sidelines {
+  position: absolute;
+  top: 0;
+  /* Mirrors .glosa-markers on the opposite edge of the measure: dots right, sidelines left. */
+  left: max(var(--space-3), calc(50% - var(--manuscript-block) / 2 - 16px));
+  width: 3px;
+  pointer-events: none;
+}
+
+.glosa-sideline {
+  position: absolute;
+  left: 0;
+  width: 2px;
+  border-radius: var(--radius-focus);
+  background: var(--border-strong);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-sideline[data-focused="true"] {
+  background: var(--primary);
+  width: 3px;
+}
+
+/* The rail card for a session's request. Same paper, same border, same radius as an annotation —
+   it is the same kind of object in the same rail. What separates them is authorship, and that is
+   said in words at the top of the card rather than by giving the card its own colour. */
+.glosa-agent-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* Proven and claimed, side by side and visibly unequal. The provider comes from a session binding
+   glosa verified; the label is a string the session sent about itself. Same line, different
+   weight and a quiet outline on the claim — the reader can see which half is which without being
+   told (invariant 3). */
+.glosa-agent-who {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.glosa-agent-provider {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.glosa-agent-claimed {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-micro);
+  padding: 0 var(--space-1);
+}
+
+.glosa-agent-quote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* The quoted words carry the sideline's own shape rather than the annotation wash: a rule to the
+   left of the quote, matching the mark it points at in the manuscript. */
+.glosa-agent-quote[role="button"] {
+  cursor: pointer;
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--space-2);
+}
+
+.glosa-agent-quote[role="button"]:hover {
+  border-left-color: var(--primary);
+  color: var(--ink);
+}
+
+.glosa-agent-lost {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--warn);
+}
+
+.glosa-agent-message {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.glosa-agent-answer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.glosa-agent-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
+.glosa-agent-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.glosa-agent-option:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--anchor-wash);
+  font-weight: 600;
+}
+
+.glosa-agent-input {
+  font: inherit;
+  font-size: var(--text-sm);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: var(--space-2);
+  resize: vertical;
+}
+
+.glosa-agent-input:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 16%, transparent);
+}
+
+.glosa-agent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.glosa-agent-status {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Parked work is invisible by nature — the editor holding it is off screen. A dot on the Edit
+   segment is the only evidence, so it is drawn, not implied. */
+.glosa-mode-bar button[data-parked="true"] {
+  position: relative;
+}
+
+.glosa-mode-bar button[data-parked="true"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
 }
 
 /* Compact gutter markers: quiet dots at anchor heights along the right edge. */

@@ -25,6 +25,9 @@ export interface RequestReviewArgs {
   action?: string;
   requireApproval?: boolean;
   waitMs?: number; // undefined = don't wait
+  agentLabel?: string;
+  target?: { quote: { exact: string; prefix?: string; suffix?: string } };
+  answerOptions?: string[];
 }
 
 export interface RequestReviewData {
@@ -72,6 +75,9 @@ export async function runRequestReview(
       action: args.action ?? "review",
       targetPath: args.path,
       ...(args.requireApproval ? { approvalMode: true } : {}),
+      ...(args.agentLabel !== undefined ? { agentLabel: args.agentLabel } : {}),
+      ...(args.target !== undefined ? { target: args.target } : {}),
+      ...(args.answerOptions !== undefined ? { answerOptions: args.answerOptions } : {}),
     });
   } catch (err) {
     if (isApiError(err)) {
@@ -106,10 +112,15 @@ export async function runRequestReview(
   const deadline = deps.now() + args.waitMs;
   for (;;) {
     let entryStatus: EntryStatus | null;
+    // A HELD request, not a poll: the daemon wakes it from the journal write that answers the
+    // question, so the turn resumes the moment the human sends rather than up to a second later.
+    // The loop remains because one hold is capped daemon-side (MAX_ENTRY_WAIT_MS) and because a
+    // dropped connection must not end a wait the caller asked to last longer.
+    const remaining = Math.max(0, deadline - deps.now());
     try {
-      entryStatus = await client.getEntryStatus(args.dir, created.id);
+      entryStatus = await client.getEntryStatus(args.dir, created.id, remaining);
     } catch {
-      entryStatus = null; // a transient poll failure isn't fatal — keep polling until the deadline
+      entryStatus = null; // a transient failure isn't fatal — keep waiting until the deadline
     }
     if (entryStatus && ATTENTION_TERMINALS.has(entryStatus.status)) {
       return {

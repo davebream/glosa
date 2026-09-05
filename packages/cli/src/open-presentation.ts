@@ -9,7 +9,7 @@ import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope } from "./e
 import { type ManifestDriftResult, checkScopedManifestDrift } from "./scoped-init.ts";
 
 export type OpenSurface = "document" | "workspace";
-export type PresentationMode = "preview" | "annotate" | "edit";
+export type PresentationMode = "read" | "review" | "edit";
 export type OpenSurfaceOverride = OpenSurface | "auto";
 
 export interface ClassifiedOpenTarget {
@@ -27,8 +27,8 @@ export interface PresentFragmentOptions {
   focus?: string;
   surface: OpenSurface;
   mode: PresentationMode;
-  /** When true, emit `lock=preview` (CLI `--preview` / MCP `mode:"preview"`). */
-  previewLock: boolean;
+  /** When true, emit `lock=preview` (CLI `--preview` / MCP `mode:"read"`). */
+  readLock: boolean;
   /** Durable pairing token (`t=`) or ephemeral presentation token (`p=`). Exactly one. */
   pairing: { kind: "durable"; token: string } | { kind: "presentation"; token: string };
 }
@@ -51,7 +51,7 @@ export interface OpenPresentationData {
 export interface OpenPresentationOptions {
   launchBrowser?: boolean;
   externalState?: boolean;
-  previewLock?: boolean;
+  readLock?: boolean;
   mode?: PresentationMode;
   bindSessionId?: string;
   /** When true, mint a short-TTL presentation token and put `p=` in the URL (MCP). */
@@ -193,7 +193,7 @@ export function buildPresentationUrl(port: number, opts: PresentFragmentOptions)
   if (opts.focus) params.set("a", opts.focus);
   params.set("surface", opts.surface);
   params.set("mode", opts.mode);
-  if (opts.previewLock) params.set("lock", "preview");
+  if (opts.readLock) params.set("lock", "read");
   return `http://127.0.0.1:${port}/#${params.toString()}`;
 }
 
@@ -227,11 +227,11 @@ export async function runOpenPresentation(
     };
   }
 
-  const mode: PresentationMode = options.mode ?? "preview";
-  const previewLock = Boolean(options.previewLock);
+  const mode: PresentationMode = options.mode ?? "read";
+  const readLock = Boolean(options.readLock);
   const warnings: { code: string; message: string }[] = [];
 
-  if (previewLock && options.bindSessionId) {
+  if (readLock && options.bindSessionId) {
     warnings.push({
       code: "preview-bind-conflict",
       message: "--preview hides annotate/edit controls while --bind wires feedback routing to a session",
@@ -370,7 +370,7 @@ export async function runOpenPresentation(
     focus: focusRel,
     surface: classified.surface,
     mode,
-    previewLock,
+    readLock,
     pairing,
   });
 
@@ -388,7 +388,7 @@ export async function runOpenPresentation(
       ...(opened.kind ? { kind: opened.kind } : {}),
       surface: classified.surface,
       mode,
-      preview: previewLock,
+      preview: readLock,
       ...(boundSession ? { bound_session: boundSession } : {}),
       ...(opened.state_dir ? { state_dir: opened.state_dir } : {}),
     },

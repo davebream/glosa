@@ -123,25 +123,25 @@ describe("readRoute — surface/mode/lock + secrets", () => {
   test("parses surface, mode, lock, and both pairing secret forms", () => {
     expect(
       readRoute({
-        hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=annotate&lock=preview",
+        hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=review&lock=read",
       }),
     ).toEqual({
       slug: "essays-abc",
       artifact: "note.md",
       surface: "document",
-      mode: "annotate",
-      previewLock: true,
+      mode: "review",
+      readLock: true,
       durableToken: "SECRET",
       presentationToken: null,
     });
-    expect(readRoute({ hash: "#p=PRESENT&w=x&a=y&surface=workspace&mode=preview" }).presentationToken).toBe("PRESENT");
+    expect(readRoute({ hash: "#p=PRESENT&w=x&a=y&surface=workspace&mode=read" }).presentationToken).toBe("PRESENT");
   });
 });
 
 describe("scrubSecrets — preserves non-secret route state", () => {
   test("scrubs t= while keeping w/a/surface/mode/lock", () => {
     const loc = {
-      hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=preview&lock=preview",
+      hash: "#t=SECRET&w=essays-abc&a=note.md&surface=document&mode=read&lock=read",
       pathname: "/",
       search: "",
     };
@@ -154,7 +154,7 @@ describe("scrubSecrets — preserves non-secret route state", () => {
     expect(result).toBe("SECRET");
     expect(session.getItem("glosa_token")).toBe("SECRET");
     const [, , url] = history.calls[0]!;
-    expect(url).toBe("/#w=essays-abc&a=note.md&surface=document&mode=preview&lock=preview");
+    expect(url).toBe("/#w=essays-abc&a=note.md&surface=document&mode=read&lock=read");
     expect(url).not.toContain("t=");
     expect(url).not.toContain("SECRET");
   });

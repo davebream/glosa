@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- An agent can point at a passage and ask about it, and wait for the answer. The question appears in
+  the margin beside the words it concerns, with a mark on the passage; the human answers there and
+  the agent's turn resumes. The new `glosa_ask` MCP tool blocks on a held request rather than a poll
+  loop, so a turn resumes the moment the answer is sent. Omitting the question makes it a pointer,
+  which returns immediately.
+- An agent may offer answer options in its own vocabulary. glosa always adds a free-text field
+  beside them, so offering options never stops a human answering something the agent did not
+  anticipate.
+
+### Changed
+
+- The artifact modes are now **Read**, **Review** and **Edit**, named for what the human is doing
+  rather than for who the counterparty is. Review is the anchored two-way margin: the reviewer's own
+  comments and a session's questions about a passage, answered where the words are. The former names
+  remain valid on the wire — `mode=preview`, `mode=annotate`, `lock=preview`, `--preview` and
+  `glosa_present`'s enum all normalize to the new vocabulary.
+- Leaving Edit with unsaved source no longer discards it. Drafts and half-written margin notes are
+  kept across mode switches, including one an agent causes, and the Edit control shows that held
+  work exists. Closing a pane still asks before discarding.
+- The Attention tray sends the reader to the artifact a request concerns rather than offering a
+  second place to answer it. A request with no artifact keeps its inline answer.
+
 ## [0.1.0-alpha.16] - 2026-09-05
 
 The release makes an annotation something the workspace holds rather than something one browser tab

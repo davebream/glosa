@@ -44,10 +44,25 @@ const FOREIGN_DAEMON_TIMEOUT_MS = 10 * 60 * 1000;
 const FOREIGN_DAEMON_POLL_MS = 3000;
 
 const SURFACES = new Set(["document", "workspace"]);
-const MODES = new Set(["preview", "annotate", "edit"]);
+const MODES = new Set(["read", "review", "edit"]);
+
+/** Modes were named Preview and Annotate before Review absorbed the agent's half of the margin.
+ * A link or an `--mode` flag written under the old names still resolves; only the new names are
+ * ever WRITTEN back, so the vocabulary converges instead of forking. */
+const MODE_ALIASES = new Map([
+  ["preview", "read"],
+  ["annotate", "review"],
+]);
+
+/** @param {string | null} raw */
+export function canonicalMode(raw) {
+  if (raw === null) return null;
+  const aliased = MODE_ALIASES.get(raw) ?? raw;
+  return MODES.has(aliased) ? aliased : null;
+}
 
 /** @typedef {"document" | "workspace"} Surface */
-/** @typedef {"preview" | "annotate" | "edit"} Mode */
+/** @typedef {"read" | "review" | "edit"} Mode */
 /** @typedef {"down" | "unpaired" | "mismatch" | "foreign-daemon" | "ready"} Screen */
 /** @typedef {{ hash: string }} FragmentLocation */
 /** @typedef {FragmentLocation & { pathname: string, search: string }} AddressLocation */
@@ -58,7 +73,7 @@ const MODES = new Set(["preview", "annotate", "edit"]);
  *   artifact: string | null,
  *   surface: Surface | null,
  *   mode: Mode | null,
- *   previewLock: boolean,
+ *   readLock: boolean,
  *   durableToken: string | null,
  *   presentationToken: string | null,
  * }} Route */
@@ -67,7 +82,7 @@ const MODES = new Set(["preview", "annotate", "edit"]);
  *   artifact?: string | null,
  *   surface?: Surface | null,
  *   mode?: Mode | null,
- *   previewLock?: boolean,
+ *   readLock?: boolean,
  * }} Focus */
 /** One definition, in the module that owns the daemon boundary — two copies of this shape drifted
  * apart the moment `install_id` was added to one of them.
@@ -79,7 +94,7 @@ const MODES = new Set(["preview", "annotate", "edit"]);
  *   initialArtifact?: string,
  *   surface: Surface,
  *   initialMode: Mode,
- *   previewLock: boolean,
+ *   readLock: boolean,
  *   appearance: ReturnType<typeof createAppearanceController> | null,
  *   onFocusChange: (next: FocusChange) => void,
  * }} BootstrapMountOptions */
@@ -99,8 +114,8 @@ export function readRoute(loc) {
     slug: params.get("w"),
     artifact: params.get("a"),
     surface: surfaceRaw !== null && SURFACES.has(surfaceRaw) ? /** @type {Surface} */ (surfaceRaw) : null,
-    mode: modeRaw !== null && MODES.has(modeRaw) ? /** @type {Mode} */ (modeRaw) : null,
-    previewLock: lockRaw === "preview",
+    mode: /** @type {Mode | null} */ (canonicalMode(modeRaw)),
+    readLock: lockRaw === "read" || lockRaw === "preview",
     durableToken: params.get("t"),
     presentationToken: params.get("p"),
   };
@@ -132,7 +147,7 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
       artifact: route.artifact,
       surface: route.surface,
       mode: route.mode,
-      previewLock: route.previewLock,
+      readLock: route.readLock,
     });
     history.replaceState(null, "", loc.pathname + loc.search + nextHash);
   }
@@ -145,13 +160,13 @@ export function scrubSecrets(loc, storage, history, route = readRoute(loc), rede
  * re-expose pairing secrets that bootstrap deliberately stripped (A3 §3/F24).
  */
 /** @param {Focus} [focus] */
-export function focusHash({ slug, artifact, surface, mode, previewLock } = {}) {
+export function focusHash({ slug, artifact, surface, mode, readLock } = {}) {
   const params = new URLSearchParams();
   if (slug) params.set("w", slug);
   if (artifact) params.set("a", artifact);
   if (surface) params.set("surface", surface);
   if (mode) params.set("mode", mode);
-  if (previewLock) params.set("lock", "preview");
+  if (readLock) params.set("lock", "read");
   const query = params.toString();
   return query ? `#${query}` : "";
 }
@@ -308,8 +323,8 @@ async function main() {
   if (screen === "ready") {
     const readyEl = document.querySelector('[data-screen="ready"]');
     const surface = route.surface ?? "workspace";
-    const initialMode = route.mode ?? "preview";
-    const previewLock = Boolean(route.previewLock);
+    const initialMode = route.mode ?? "read";
+    const readLock = Boolean(route.readLock);
     // viewer.js is intentionally not yet checked; adapt its incomplete inferred parameter type
     // at this one import seam while keeping bootstrap's full call contract explicit.
     const mountReadyApp = /** @type {(root: Element, options: BootstrapMountOptions) => unknown} */ (
@@ -323,14 +338,14 @@ async function main() {
       initialArtifact: route.artifact ?? undefined,
       surface,
       initialMode,
-      previewLock,
+      readLock,
       appearance,
       onFocusChange: (next) =>
         writeFocus(window.location, window.history, {
           ...next,
           surface,
           mode: next.mode ?? initialMode,
-          previewLock,
+          readLock,
         }),
     });
   }

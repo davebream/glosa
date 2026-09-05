@@ -49,7 +49,7 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
           class: "F",
           order: 1,
           derived_from: { path: "source.md", via: "render" },
-          manifest: { path: "manifest.json", component: "preview" },
+          manifest: { path: "manifest.json", component: "read" },
         },
       ],
     });
@@ -127,7 +127,7 @@ describe("declarative metadata adapter — HTTP hydration and class-F resolution
     );
     expect((await transformed.json()).resolution).toEqual({
       kind: "pipeline_feedback",
-      target: { adapter: "external-renderer", component: "preview", chunk_id: "chunk-1", source_line_range: [0, 3] },
+      target: { adapter: "external-renderer", component: "read", chunk_id: "chunk-1", source_line_range: [0, 3] },
       intent: "content",
       body: "Please revise",
     });
