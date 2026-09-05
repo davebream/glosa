@@ -1289,7 +1289,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       dom.document.body.append(root);
       let inbox: unknown[] = [];
       (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
-      mountApp(root, { dataAccess: da });
+      const unmount = mountApp(root, { dataAccess: da });
       for (let i = 0; i < 12; i++) await Promise.resolve();
 
       inbox = entries;
@@ -1297,7 +1297,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       for (let i = 0; i < 12; i++) await Promise.resolve();
       await new Promise((resolve) => setTimeout(resolve, 0));
       for (let i = 0; i < 12; i++) await Promise.resolve();
-      return root;
+      return { root, unmount };
     }
 
     const question = {
@@ -1312,44 +1312,66 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     };
 
     test("opens the artifact it concerns and switches that pane to Review", async () => {
-      const root = await arrive([question]);
+      const { root, unmount } = await arrive([question]);
       const pane = root.querySelector(".glosa-pane");
       expect(pane).not.toBeNull();
       expect(pane?.getAttribute("data-mode")).toBe("review");
+      unmount();
     });
 
     test("says so out loud, because the view moved on its own", async () => {
-      const root = await arrive([question]);
+      const { root, unmount } = await arrive([question]);
       const live = root.querySelector('.glosa-visually-hidden[role="status"]');
       expect(live?.textContent).toContain("notes.md");
       expect(live?.textContent).toContain("unsaved work is kept");
+      unmount();
     });
 
     test("a bare pointer earns a mark, never the reader's place in the document", async () => {
-      const root = await arrive([{ ...question, message: null, action: "point" }]);
+      const { root, unmount } = await arrive([{ ...question, message: null, action: "point" }]);
       // Still on the workspace with nothing forced open: a pointer is not an interruption.
       expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
+      unmount();
     });
 
-    test("waits for a gap in typing rather than landing mid-sentence", async () => {
+    /** Arms a reveal while a keystroke is still fresh, so it is parked on its retry timer. */
+    async function arriveMidKeystroke() {
       const da = fakeDataAccess();
       const root = dom.document.createElement("div");
       dom.document.body.append(root);
       let inbox: unknown[] = [];
       (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
-      mountApp(root, { dataAccess: da });
+      const unmount = mountApp(root, { dataAccess: da });
       for (let i = 0; i < 12; i++) await Promise.resolve();
 
-      // Someone is mid-word when the question lands.
       dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
       inbox = [question];
       (da as any).stream.handlers?.onEvent?.({ event: "journal", data: { entry: "inb-1" } });
       for (let i = 0; i < 12; i++) await Promise.resolve();
       await new Promise((resolve) => setTimeout(resolve, 0));
       for (let i = 0; i < 12; i++) await Promise.resolve();
+      return { root, unmount };
+    }
 
+    test("waits for a gap in typing rather than landing mid-sentence", async () => {
+      const { root, unmount } = await arriveMidKeystroke();
       // Nothing has been yanked out from under the keystroke.
       expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
+      unmount();
+    });
+
+    test("unmounting cancels a deferred reveal — it never reaches into a destroyed dock", async () => {
+      // The retry timer outlived the workspace: it fired after teardown, called openArtifact on a
+      // torn-down dock, and dockview threw on a missing ResizeObserver. Bun attributed that stray
+      // async error to whichever unrelated test file happened to be running, which is how a
+      // leak in the viewer surfaced as a failure in the adoption suite.
+      const { root, unmount } = await arriveMidKeystroke();
+      unmount();
+      root.remove();
+
+      // Past the idle window the timer was waiting on. Nothing should still be trying to open.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(root.querySelector(".glosa-pane")).toBeNull();
     });
   });
 });

@@ -96,6 +96,10 @@ export function mountApp(
   const seenRequestIds = new Set();
   let seenAnyInbox = false;
   let lastKeystrokeAt = 0;
+  /** The pending typing-idle retry, and whether this app is still mounted. A reveal is the one
+   * deferred action here that reaches back into the dock, so it must not outlive the dock. */
+  let revealTimer = null;
+  let unmounted = false;
   // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
   // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
   let currentSlug = null;
@@ -257,13 +261,17 @@ export function mountApp(
     if (!path) return;
     const deadline = Date.now() + REVEAL_MAX_WAIT_MS;
     const attempt = () => {
+      revealTimer = null;
+      if (unmounted) return;
       const typingRecently = Date.now() - lastKeystrokeAt < REVEAL_TYPING_IDLE_MS;
       if (typingRecently && Date.now() < deadline) {
-        setTimeout(attempt, REVEAL_TYPING_IDLE_MS);
+        revealTimer = setTimeout(attempt, REVEAL_TYPING_IDLE_MS);
         return;
       }
       void openArtifact(path, { mode: "review" }).then((opened) => {
-        if (!opened) return;
+        // The open is async, so the workspace can be torn down between the decision and the
+        // result. Without this, a deferred reveal reaches into a destroyed dock.
+        if (!opened || unmounted) return;
         panes.get(path)?.revealRequest?.(request.id);
         // Said out loud, because the view moved on its own. Screen readers get it from the live
         // region; everyone else gets the mode control and the sideline they are now looking at.
@@ -780,6 +788,8 @@ export function mountApp(
   void refreshWorkspaces().catch(showWorkspaceError);
 
   return () => {
+    unmounted = true;
+    if (revealTimer !== null) clearTimeout(revealTimer);
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onDocumentKeydown, true);
