@@ -41,7 +41,15 @@
   | Scope | Claude Code provider | Codex provider |
   |---|---|---|
   | `workspace` | `<ws>/.claude/settings.json` (hooks), `<ws>/.mcp.json` (MCP) | `<ws>/.codex/hooks.json` (hooks), `<ws>/.codex/config.toml` (MCP) |
-  | `user` | `~/.claude/settings.json` (hooks), `~/.claude.json` (user-scoped MCP entry) | `~/.codex/hooks.json` (hooks), `~/.codex/config.toml` (MCP) |
+  | `user` | `$CLAUDE_CONFIG_DIR/settings.json` + `$CLAUDE_CONFIG_DIR/.claude.json` when set, else `~/.claude/settings.json` (hooks) and `~/.claude.json` (user-scoped MCP entry) | `~/.codex/hooks.json` (hooks), `~/.codex/config.toml` (MCP) |
+
+  `$CLAUDE_CONFIG_DIR` relocates Claude Code's whole user configuration, and account switchers use
+  it to give each account its own root. `--scope user` therefore targets the root the ASKING
+  session actually reads; ignoring it wrote a file that session never loads and reported success.
+  One `init` still wires one root — `doctor`'s `claude-config-roots` check names the others so an
+  unwired instance is visible rather than silently unsupported. The provider resolves the variable
+  (its name is Claude's knowledge, not the core's); the core supplies only a generic, injectable
+  environment-read capability.
 
 - **Provider targeting.** `--agent claude-code|codex` is repeatable; `--agent all` is the convenience
   form for both v1 providers and cannot be combined with another `--agent`. Explicit values are
@@ -266,7 +274,7 @@
   `approval-conflict`. Any other API failure before the review request is created maps to exit 70
   `internal`, preserving the problem title but not its detail or instance. Exit 9 does not apply:
   no primary operation completed successfully.
-- doctor 15 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), pending-delivery(WARN when entries are queued for this workspace but the hooks check is not passing; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR).
+- doctor 16 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), pending-delivery(WARN when entries are queued for this workspace but the hooks check is not passing; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), optional Channel status (SKIP when unverifiable), transcript-root(under allowed CLAUDE_CONFIG_DIR), claude-config-roots(WARN when a Claude config root exists besides the active one — e.g. an account switcher's per-account instance directories — naming each, since user-scope agent wiring reaches only the active root while transcripts are readable from all of them).
 
 ## Metadata and binding output
 

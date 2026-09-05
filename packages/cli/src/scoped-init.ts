@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import type {
   InitScope,
   InstallRoots,
+  ProviderDetectionDeps,
   ProviderId,
   ProviderInstallDescriptor,
   ProviderInstallTarget,
@@ -93,6 +94,10 @@ export interface ScopedInitOptions {
   now?: () => Date;
   resolveGlosaBin?: (glosaRoot: string) => GlosaBinResolution;
   writeFileAtomic?: WriteFileAtomic;
+  /** Pins the environment an install is planned against. Production reads the real one; a test
+   * uses this so a developer's own `CLAUDE_CONFIG_DIR` can never aim an install at live config. */
+  env?: (name: string) => string | undefined;
+  which?: (executable: string) => string | null;
 }
 
 export interface InitFileResult {
@@ -203,15 +208,32 @@ function migrateLegacy(path: string): ScopedOwnershipManifest | null {
   return { version: 2, scope: "workspace", glosa_bin: legacy.glosa_bin, providers };
 }
 
-export function detectInstallProviders(
-  dir: string,
-  opts: { homeDir?: string; glosaHomeDir?: string; which?: (executable: string) => string | null } = {},
-): ProviderId[] {
-  const roots = rootsFor(dir, opts.homeDir, opts.glosaHomeDir);
-  const deps = {
+/** The host capabilities a provider may use to decide where its configuration lives. Generic on
+ * purpose: the core supplies filesystem and environment access and learns nothing about which
+ * paths or variable names any particular agent cares about (invariant 1). Every field is
+ * injectable so an install can be planned against a pinned environment in a test. */
+function hostDeps(opts: {
+  which?: (executable: string) => string | null;
+  env?: (name: string) => string | undefined;
+}): ProviderDetectionDeps {
+  return {
     exists: existsSync,
     which: opts.which ?? ((executable: string) => Bun.which(executable) ?? null),
+    env: opts.env ?? ((name: string) => Bun.env[name]),
   };
+}
+
+export function detectInstallProviders(
+  dir: string,
+  opts: {
+    homeDir?: string;
+    glosaHomeDir?: string;
+    which?: (executable: string) => string | null;
+    env?: (name: string) => string | undefined;
+  } = {},
+): ProviderId[] {
+  const roots = rootsFor(dir, opts.homeDir, opts.glosaHomeDir);
+  const deps = hostDeps(opts);
   return PROVIDERS.filter((provider) => provider.detect(roots, deps)).map((provider) => provider.id);
 }
 
@@ -439,7 +461,7 @@ async function runScopedInitLocked(
   try {
     for (const providerId of selected) {
       const descriptor = PROVIDER_BY_ID.get(providerId) as ProviderInstallDescriptor;
-      for (const target of descriptor.targets(scope, roots, bin)) {
+      for (const target of descriptor.targets(scope, roots, bin, hostDeps(opts))) {
         const prior = existing.providers[providerId]?.files[target.key];
         if (target.kind === "mcp-toml") {
           const before = existsSync(target.path) ? readFileSync(target.path, "utf8") : null;

@@ -100,7 +100,7 @@ export type { ConfineTranscriptResult } from "./transcript/root.ts";
 // P5.1 — `glosa doctor`'s "transcript-root" check (A6 §F30) needs the SAME `$CLAUDE_CONFIG_DIR`
 // resolution the daemon uses to confine a live session's transcript_path (A2 §F16) — never a
 // second, independently-hardcoded `~/.claude` guess.
-export { claudeConfigDir, confineTranscriptPath } from "./transcript/root.ts";
+export { claudeConfigDir, claudeConfigRoots, confineTranscriptPath } from "./transcript/root.ts";
 export type { ContractCheck } from "./transport/contract.ts";
 export { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./transport/contract.ts";
 export type { ApiContext, HandshakeBody } from "./transport/http.ts";

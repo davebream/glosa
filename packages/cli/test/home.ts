@@ -32,14 +32,24 @@ export function tempGlosaHome(): string {
  */
 export function useTempHome(): void {
   let saved: string | undefined;
+  let savedClaudeConfigDir: string | undefined;
   beforeEach(() => {
     saved = process.env.GLOSA_HOME;
+    savedClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    // The claude-code provider resolves its user-scope target from `$CLAUDE_CONFIG_DIR` when set.
+    // A developer running the suite from inside an account-switcher session has it pointed at a
+    // real per-account config directory — so leaving it set would aim install tests at live agent
+    // configuration. Cleared here rather than per-suite: this is the one isolation seam
+    // home-isolation.test.ts already requires every root-reaching CLI test to use.
+    delete process.env.CLAUDE_CONFIG_DIR;
     current = mkdtempSync(join(tmpdir(), "glosa-cli-home-"));
     process.env.GLOSA_HOME = current;
   });
   afterEach(() => {
     if (saved === undefined) delete process.env.GLOSA_HOME;
     else process.env.GLOSA_HOME = saved;
+    if (savedClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = savedClaudeConfigDir;
     if (current !== null) rmSync(current, { recursive: true, force: true });
     current = null;
   });
