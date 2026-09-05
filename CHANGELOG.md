@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A glosa install no longer stops a daemon another install started. Daemons publish an `install_id`
+  (a hash of their package root) in the lock and handshake, and a client that finds a divergent
+  build refuses to signal it unless identity proves the daemon is its own. Two installs on one
+  machine — typically a source checkout beside a published install — previously evicted each other
+  on every command, producing a continuous spawn-and-kill storm on port 4646. An upgrade still
+  replaces an older daemon, including one that predates the field.
+- Running glosa from a source checkout no longer shares `~/.glosa` or port 4646 with a published
+  install. A checkout derives `GLOSA_HOME=~/.glosa-dev/<install-id>` and a deterministic port in
+  60000-65498; an explicit `GLOSA_HOME`, `GLOSA_PORT` or `--port` still wins, and the CLI reports
+  the derived values once on an interactive terminal. **A checkout will no longer see workspaces
+  registered in `~/.glosa`** — set `GLOSA_HOME=~/.glosa` to keep the previous behaviour.
+- "A process is bound to this port but is not answering the handshake" now names the PID and prints
+  the `lsof` and `kill -TERM` commands that clear it, instead of leaving the user to find the
+  process themselves.
+
+### Added
+
+- The daemon records rejected requests in `daemon.log` by reason (`no-token-on-daemon`,
+  `bearer-mismatch`, `credential-rotated`), throttled to one line per reason per minute with a
+  suppressed count. It records no request path and no credential, so a caller cannot use it to grow
+  the log or inject a line. Without this, a report of a browser tab losing its pairing could not be
+  diagnosed after the fact.
+
 ## [0.1.0-alpha.14] - 2026-09-05
 
 ### Fixed
