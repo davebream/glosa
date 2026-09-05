@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - "A process is bound to this port but is not answering the handshake" now names the PID and prints
   the `lsof` and `kill -TERM` commands that clear it, instead of leaving the user to find the
   process themselves.
+- A browser tab no longer loses its pairing for good when a different glosa install takes the port.
+  A 401 is now attributed before anything is discarded: if the daemon answering is not the one that
+  issued the tab's credential, the tab keeps it, stops sending it, waits on the tokenless handshake,
+  and resumes on its own once its daemon is back. A genuine revocation still clears the credential
+  exactly as before. Previously any 401 wiped `sessionStorage` and reloaded, and since the pairing
+  token had already been stripped from the URL there was no way back short of `glosa open`.
 
 ### Added
 

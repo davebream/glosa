@@ -38,7 +38,9 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   `POST /api/presentation-token/mint`; redeem via same-origin Host-checked
   `POST /api/presentation-token/redeem`. Expired/unknown/replayed collapse to one 401. Token
   rotation/revocation clears outstanding presentation tokens alongside class-F capabilities.
-- Storage: **sessionStorage** (not localStorage) — bounded to tab lifetime.
+- Storage: **sessionStorage** (not localStorage) — bounded to tab lifetime. The issuing daemon's
+  `install_id` is recorded beside it as `glosa_install`; it is not a secret (the tokenless
+  handshake publishes it) and exists so a rejection can be attributed.
 - Token state has two durable forms: **active** = `~/.glosa/token` contains one 128-bit hex token at
   mode 0600; **revoked** = that file is absent. `glosa token rotate` writes a fresh mode-0600 temp,
   fsyncs it, then atomically renames it over the active file. `glosa token revoke` atomically unlinks
@@ -52,8 +54,16 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   It compares against CURRENT only, with no grace: every request reaching auth after the atomic commit
   rejects the previous Bearer with 401. A generation change aborts existing SSE/transcript streams and
   clears all in-memory class-F capabilities, so revocation is kill-all across API and browser
-  credentials. The SPA treats any 401 as credential invalidation: remove `sessionStorage.glosa_token`,
-  stop reconnecting with it, and render the unpaired state. Re-pair only through `glosa open`.
+  credentials. The SPA treats a 401 as credential invalidation **when the rejecting daemon is the one it
+  paired with, or cannot be distinguished from it**: remove `sessionStorage.glosa_token`, stop
+  reconnecting with it, and render the unpaired state. Re-pair only through `glosa open`. A 401
+  from a daemon whose `install_id` differs from the one recorded at pairing is NOT evidence about
+  this credential — a second install taking the port produces exactly that — so the tab keeps the
+  credential, **stops transmitting it entirely**, polls only the tokenless handshake, and reloads
+  once its own daemon answers again. Safety comes from not sending it to an unidentified peer, not
+  from discarding it. Bounded: after 10 minutes the tab gives up and falls back to the unpaired
+  state above. A tab with no recorded pairing identity has nothing to compare and behaves exactly
+  as before.
 - Both token commands use the stable A6 envelope and never include token material in human or JSON
   output. The daemon stats the token file on refresh and warns once per observed permission drift;
   drift is non-fatal so the warning cannot lock the user out of rotation/revocation.

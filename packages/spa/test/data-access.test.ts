@@ -212,17 +212,174 @@ describe("createDataAccess — request shape", () => {
     }
   });
 
-  test("401 clears the stale credential and requests the unpaired screen exactly once", async () => {
+  // A 401 alone does not say the credential is bad — it says THIS daemon rejected it. Which of the
+  // three things that can mean is settled by the tokenless handshake, and only one of them is
+  // "your credential is gone". Getting this wrong is what let a daemon restart permanently unpair
+  // a tab: any 401 wiped sessionStorage and reloaded, and the fragment holding the token was long
+  // since stripped, so nothing could put it back.
+  /** @param {(path: string) => Response | null} handshakeFn */
+  function rejectingFetch(handshake: Record<string, unknown> | null, status = 401) {
+    return async (path: string) => {
+      if (path === "/api/handshake") {
+        return handshake ? jsonResponse(200, handshake) : jsonResponse(503, {});
+      }
+      return jsonResponse(status, { title: "missing or invalid bearer token" });
+    };
+  }
+
+  /** The classification runs after the rejected call settles; let its microtasks drain. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("401 from the daemon this tab paired with clears the credential, once", async () => {
     const storage = fakeStorage({ glosa_token: "stale" });
     let unauthorized = 0;
     const da = createDataAccess({
       storage,
-      fetchFn: async () => jsonResponse(401, { title: "missing or invalid bearer token" }),
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: rejectingFetch({ contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" }),
       onUnauthorized: () => unauthorized++,
     });
 
     await expect(da.getArtifacts("ws")).rejects.toThrow(DataAccessError);
     await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+
+    expect(storage.getItem("glosa_token")).toBeNull();
+    expect(unauthorized).toBe(1);
+  });
+
+  test("401 from a daemon holding no credential at all is also a revocation", async () => {
+    const storage = fakeStorage({ glosa_token: "stale" });
+    let unauthorized = 0;
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: rejectingFetch({ contract_version: "1.6", paired: false, install_id: "aaaaaaaaaaaaaaaa" }),
+      onUnauthorized: () => unauthorized++,
+    });
+
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+
+    expect(storage.getItem("glosa_token")).toBeNull();
+    expect(unauthorized).toBe(1);
+  });
+
+  test("401 from ANOTHER install keeps the credential and stops sending it", async () => {
+    const storage = fakeStorage({ glosa_token: "still-good" });
+    let unauthorized = 0;
+    let foreign = 0;
+    const paths: string[] = [];
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: async (path: string) => {
+        paths.push(path);
+        if (path === "/api/handshake") {
+          return jsonResponse(200, { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" });
+        }
+        return jsonResponse(401, { title: "missing or invalid bearer token" });
+      },
+      onUnauthorized: () => unauthorized++,
+      onForeignDaemon: () => foreign++,
+    });
+
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+
+    // The credential is still ours — a daemon we never paired with rejecting it proves nothing
+    // about our own daemon, and discarding it here destroys the only route back.
+    expect(storage.getItem("glosa_token")).toBe("still-good");
+    expect(foreign).toBe(1);
+    expect(unauthorized).toBe(0);
+    // And the probe that decided this carried no credential.
+    expect(paths).toContain("/api/handshake");
+  });
+
+  test("the handshake probe sends no Authorization header", async () => {
+    // The whole safety argument for keeping the credential rests on not transmitting it while the
+    // peer is unidentified. If the probe itself carried a Bearer, that argument is void.
+    const storage = fakeStorage({ glosa_token: "secret" });
+    const seen: Array<[string, RequestInit]> = [];
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: async (path: string, init: RequestInit) => {
+        seen.push([path, init]);
+        if (path === "/api/handshake") {
+          return jsonResponse(200, { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" });
+        }
+        return jsonResponse(401, {});
+      },
+      onForeignDaemon: () => {},
+    });
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+
+    const probe = seen.find(([path]) => path === "/api/handshake");
+    expect(probe).toBeDefined();
+    expect(new Headers(probe?.[1].headers ?? {}).has("Authorization")).toBe(false);
+  });
+
+  test("a 401 while the daemon is unreachable is not a verdict — nothing is discarded", async () => {
+    const storage = fakeStorage({ glosa_token: "still-good" });
+    let unauthorized = 0;
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: rejectingFetch(null),
+      onUnauthorized: () => unauthorized++,
+    });
+
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+
+    expect(storage.getItem("glosa_token")).toBe("still-good");
+    expect(unauthorized).toBe(0);
+  });
+
+  test("an outage re-arms the decision instead of wedging the tab on it", async () => {
+    // `unauthorizedHandled` latches so one rejection produces one verdict. If a transient outage
+    // latched it too, the tab could never be told the truth afterwards.
+    const storage = fakeStorage({ glosa_token: "stale" });
+    let unauthorized = 0;
+    let handshake: Record<string, unknown> | null = null;
+    const da = createDataAccess({
+      storage,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: async (path: string) => {
+        if (path === "/api/handshake") {
+          return handshake ? jsonResponse(200, handshake) : jsonResponse(503, {});
+        }
+        return jsonResponse(401, {});
+      },
+      onUnauthorized: () => unauthorized++,
+    });
+
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+    expect(unauthorized).toBe(0);
+
+    handshake = { contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" };
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
+    expect(unauthorized).toBe(1);
+    expect(storage.getItem("glosa_token")).toBeNull();
+  });
+
+  test("with no recorded pairing identity the old behaviour is preserved exactly", async () => {
+    // A tab paired before install identity existed has nothing to compare, so an unknown daemon
+    // must not be treated as foreign — it falls through to A3 §55 as it always did.
+    const storage = fakeStorage({ glosa_token: "stale" });
+    let unauthorized = 0;
+    const da = createDataAccess({
+      storage,
+      fetchFn: rejectingFetch({ contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" }),
+      onUnauthorized: () => unauthorized++,
+    });
+
+    await expect(da.getWorkspaces()).rejects.toThrow(DataAccessError);
+    await settle();
 
     expect(storage.getItem("glosa_token")).toBeNull();
     expect(unauthorized).toBe(1);
@@ -445,7 +602,7 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
     expect(new Headers(requests[1]!.headers).has("Last-Event-ID")).toBe(false);
   });
 
-  test("401 stops reconnecting, removes the stale token, and returns the tab to unpaired", async () => {
+  test("401 stops reconnecting and hands the decision up, without touching the credential", async () => {
     const storage = fakeStorage({ glosa_token: "stale" });
     let requests = 0;
     let stop: (() => void) | null = null;
@@ -466,6 +623,9 @@ describe("openStream — reconnect + Last-Event-ID + onReconnect", () => {
     stop!();
 
     expect(requests).toBe(1);
-    expect(storage.getItem("glosa_token")).toBeNull();
+    // The stream loop no longer decides what a 401 meant. Whether the credential survives is
+    // `createDataAccess`'s single decision — this layer only stops and reports, so a foreign
+    // daemon's rejection cannot destroy a credential on its way past.
+    expect(storage.getItem("glosa_token")).toBe("stale");
   });
 });

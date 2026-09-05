@@ -3,7 +3,16 @@
 // (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/history stand in for the
 // real browser objects — bootstrap.js takes them as parameters for exactly this reason.
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, focusHash, readRoute, scrubSecrets, selectScreen, writeFocus } from "../src/bootstrap.js";
+import {
+  CONTRACT_VERSION,
+  focusHash,
+  readRoute,
+  rememberDaemonIdentity,
+  scrubSecrets,
+  selectScreen,
+  waitForOwnDaemon,
+  writeFocus,
+} from "../src/bootstrap.js";
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -242,5 +251,122 @@ describe("selectScreen", () => {
   test("token present + paired:true + matching major → ready", () => {
     const handshake = { contract_version: "1.9", daemon_version: "0.1.0", paired: true };
     expect(selectScreen(handshake, "some-token")).toBe("ready");
+  });
+
+  // A daemon can be up, paired and contract-compatible and still not be the one that issued this
+  // tab's credential — a second glosa install taking the port is exactly that. Rendering `ready`
+  // there produced a 401 on the first call, which used to be read as "revoked" and threw the
+  // credential away for good.
+  test("a paired daemon from another install → foreign-daemon, not ready", () => {
+    const handshake = { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
+    expect(selectScreen(handshake, "some-token", "aaaaaaaaaaaaaaaa")).toBe("foreign-daemon");
+  });
+
+  test("the same install → ready", () => {
+    const handshake = { contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" };
+    expect(selectScreen(handshake, "some-token", "aaaaaaaaaaaaaaaa")).toBe("ready");
+  });
+
+  test("unknown identity on either side is never 'foreign' — old tabs behave exactly as before", () => {
+    const known = { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
+    expect(selectScreen(known, "some-token", null)).toBe("ready");
+    const legacyDaemon = { contract_version: "1.6", paired: true };
+    expect(selectScreen(legacyDaemon, "some-token", "aaaaaaaaaaaaaaaa")).toBe("ready");
+  });
+
+  test("an unpaired or down daemon still wins over the identity check", () => {
+    const unpaired = { contract_version: "1.6", paired: false, install_id: "ffffffffffffffff" };
+    expect(selectScreen(unpaired, "some-token", "aaaaaaaaaaaaaaaa")).toBe("unpaired");
+    expect(selectScreen(null, "some-token", "aaaaaaaaaaaaaaaa")).toBe("down");
+  });
+});
+
+describe("rememberDaemonIdentity", () => {
+  test("records the issuing daemon alongside the credential", () => {
+    const storage = fakeStorage();
+    const handshake = { contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" };
+    expect(rememberDaemonIdentity(storage, handshake, "tok")).toBe("aaaaaaaaaaaaaaaa");
+    expect(storage.getItem("glosa_install")).toBe("aaaaaaaaaaaaaaaa");
+  });
+
+  test("records nothing without a credential or without an identity to record", () => {
+    const noToken = fakeStorage();
+    rememberDaemonIdentity(noToken, { contract_version: "1.6", paired: true, install_id: "a" }, null);
+    expect(noToken.getItem("glosa_install")).toBeNull();
+
+    const legacyDaemon = fakeStorage();
+    rememberDaemonIdentity(legacyDaemon, { contract_version: "1.6", paired: true }, "tok");
+    expect(legacyDaemon.getItem("glosa_install")).toBeNull();
+  });
+});
+
+describe("waitForOwnDaemon", () => {
+  const paired = "aaaaaaaaaaaaaaaa";
+
+  test("resumes as soon as this tab's own daemon answers again", async () => {
+    let calls = 0;
+    const outcome = await waitForOwnDaemon(
+      {
+        daemonIdentity: async () => {
+          calls += 1;
+          if (calls < 3) return { contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" };
+          return { contract_version: "1.6", paired: true, install_id: paired };
+        },
+      },
+      paired,
+      { sleep: async () => {}, pollMs: 0 },
+    );
+    expect(outcome).toBe("recovered");
+    expect(calls).toBe(3);
+  });
+
+  test("an unreachable daemon is waited through, not given up on", async () => {
+    let calls = 0;
+    const outcome = await waitForOwnDaemon(
+      {
+        daemonIdentity: async () => {
+          calls += 1;
+          return calls < 3 ? null : { contract_version: "1.6", paired: true, install_id: paired };
+        },
+      },
+      paired,
+      { sleep: async () => {}, pollMs: 0 },
+    );
+    expect(outcome).toBe("recovered");
+  });
+
+  test("gives up after its window so a tab cannot hold a credential it can no longer place", async () => {
+    let clock = 0;
+    const outcome = await waitForOwnDaemon(
+      { daemonIdentity: async () => ({ contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" }) },
+      paired,
+      {
+        now: () => clock,
+        sleep: async () => {
+          clock += 60_000;
+        },
+        timeoutMs: 600_000,
+        pollMs: 0,
+      },
+    );
+    expect(outcome).toBe("timeout");
+  });
+
+  test("checks once before consulting the clock, so a daemon already back never waits", async () => {
+    let slept = 0;
+    const outcome = await waitForOwnDaemon(
+      { daemonIdentity: async () => ({ contract_version: "1.6", paired: true, install_id: paired }) },
+      paired,
+      {
+        now: () => 0,
+        sleep: async () => {
+          slept += 1;
+        },
+        timeoutMs: 0,
+        pollMs: 0,
+      },
+    );
+    expect(outcome).toBe("recovered");
+    expect(slept).toBe(0);
   });
 });

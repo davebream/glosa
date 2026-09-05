@@ -327,19 +327,76 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[2]).not.toContain("t="); // no `t=` survives into browser history
 
-    const authorizations: Array<string | null> = [];
+    // A3 §55 still holds — a rejected credential is cleared — but it now has an identity
+    // precondition: the rejection has to come from the daemon this tab paired with, or from one
+    // that cannot be told apart from it. `install_id` matching (or being absent) is that case.
+    const authorizations: Array<[string, string | null]> = [];
     const dataAccess = createDataAccess({
       storage: session,
-      fetchFn: async (_path: string, init: RequestInit) => {
-        authorizations.push(new Headers(init.headers).get("Authorization"));
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: async (path: string, init: RequestInit) => {
+        authorizations.push([path, new Headers(init.headers).get("Authorization")]);
+        if (path === "/api/handshake") {
+          return new Response(
+            JSON.stringify({ contract_version: "1.6", paired: true, install_id: "aaaaaaaaaaaaaaaa" }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
         return new Response(JSON.stringify({ title: "missing or invalid bearer token" }), { status: 401 });
       },
       onUnauthorized: () => {},
     });
     await expect(dataAccess.getWorkspaces()).rejects.toBeInstanceOf(DataAccessError);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the verdict settles after the throw
 
-    expect(authorizations).toEqual(["Bearer SUPERSECRET"]);
+    expect(authorizations[0]).toEqual(["/api/workspaces", "Bearer SUPERSECRET"]);
     expect(session.getItem("glosa_token")).toBeNull();
+    // The probe that decided this carried no credential of its own.
+    expect(authorizations.find(([path]) => path === "/api/handshake")?.[1]).toBeNull();
+  });
+
+  test("a 401 from a DIFFERENT install keeps the credential but stops transmitting it", async () => {
+    // The other half of the same rule. A daemon this tab never paired with rejecting the token
+    // proves nothing about the token, so clearing it there destroys the only route back — that is
+    // how a second glosa install taking port 4646 used to unpair a tab permanently. Safety comes
+    // from not SENDING it while the peer is unidentified, not from throwing it away.
+    const session = fakeStorage();
+    session.setItem("glosa_token", "SUPERSECRET");
+    const authorizations: Array<[string, string | null]> = [];
+    let unauthorized = 0;
+    let foreign = 0;
+
+    const dataAccess = createDataAccess({
+      storage: session,
+      expectedInstallId: "aaaaaaaaaaaaaaaa",
+      fetchFn: async (path: string, init: RequestInit) => {
+        authorizations.push([path, new Headers(init.headers).get("Authorization")]);
+        if (path === "/api/handshake") {
+          return new Response(
+            JSON.stringify({ contract_version: "1.6", paired: true, install_id: "ffffffffffffffff" }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ title: "missing or invalid bearer token" }), { status: 401 });
+      },
+      onUnauthorized: () => unauthorized++,
+      onForeignDaemon: () => foreign++,
+    });
+    await expect(dataAccess.getWorkspaces()).rejects.toBeInstanceOf(DataAccessError);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(session.getItem("glosa_token")).toBe("SUPERSECRET");
+    expect(foreign).toBe(1);
+    expect(unauthorized).toBe(0);
+    // Exactly one authenticated request reached the foreign daemon — the one that produced the
+    // 401. Everything after it is the tokenless probe.
+    expect(authorizations.filter(([, auth]) => auth !== null)).toHaveLength(1);
   });
 
   test("production main wires scrubSecrets to window.sessionStorage and contains no executable localStorage reference", () => {

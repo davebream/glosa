@@ -18,6 +18,7 @@ export const CONTRACT_VERSION = "1.6";
 // file's own bun-test importers) — viewer.js/data-access.js/annotate.js/vendor/idiomorph.js all
 // touch `window`/`document` only inside function bodies, never at module load.
 import { mountApp } from "./viewer.js";
+import { createDataAccess } from "./data-access.js";
 import { createAppearanceController } from "./appearance.js";
 
 // Constructed before `main()` performs its handshake so all four screens inherit appearance.
@@ -29,14 +30,25 @@ const MESSAGES = {
   down: "glosa daemon isn't running — run `glosa open`.",
   unpaired: "not paired — run `glosa open` to open this workspace.",
   mismatch: "contract mismatch — reload the page.",
+  "foreign-daemon": "another glosa is serving this port — waiting for yours to come back.",
 };
+
+/** Which daemon this tab paired with, kept beside the token (A5 §F13's `install_id`). Not a
+ * secret: it is a hash the tokenless handshake already publishes to anyone who asks. */
+const INSTALL_KEY = "glosa_install";
+
+/** How long to wait for a tab's own daemon to reclaim the port before giving up and asking the
+ * user to re-pair. Long enough to cover a restart or an upgrade, short enough that a tab does not
+ * sit on a stale credential forever. */
+const FOREIGN_DAEMON_TIMEOUT_MS = 10 * 60 * 1000;
+const FOREIGN_DAEMON_POLL_MS = 3000;
 
 const SURFACES = new Set(["document", "workspace"]);
 const MODES = new Set(["preview", "annotate", "edit"]);
 
 /** @typedef {"document" | "workspace"} Surface */
 /** @typedef {"preview" | "annotate" | "edit"} Mode */
-/** @typedef {"down" | "unpaired" | "mismatch" | "ready"} Screen */
+/** @typedef {"down" | "unpaired" | "mismatch" | "foreign-daemon" | "ready"} Screen */
 /** @typedef {{ hash: string }} FragmentLocation */
 /** @typedef {FragmentLocation & { pathname: string, search: string }} AddressLocation */
 /** @typedef {Pick<Storage, "getItem" | "setItem">} TokenStorage */
@@ -57,9 +69,12 @@ const MODES = new Set(["preview", "annotate", "edit"]);
  *   mode?: Mode | null,
  *   previewLock?: boolean,
  * }} Focus */
-/** @typedef {{ contract_version: unknown, paired?: boolean }} Handshake */
+/** One definition, in the module that owns the daemon boundary — two copies of this shape drifted
+ * apart the moment `install_id` was added to one of them.
+ * @typedef {import("./data-access.js").Handshake} Handshake */
 /** @typedef {{ slug?: string, artifact?: string, mode?: Mode }} FocusChange */
 /** @typedef {{
+ *   dataAccess: ReturnType<typeof createDataAccess>,
  *   initialSlug?: string,
  *   initialArtifact?: string,
  *   surface: Surface,
@@ -156,14 +171,31 @@ export function writeFocus(loc, history, focus) {
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
  * or null if the fetch failed/threw. `token` is whatever scrub returned.
  */
-/** @param {Handshake | null} handshake @param {string | null} token @returns {Screen} */
-export function selectScreen(handshake, token) {
+/** @param {Handshake | null} handshake @param {string | null} token
+ *  @param {string | null} [pairedInstall] @returns {Screen} */
+export function selectScreen(handshake, token, pairedInstall = null) {
   if (!handshake) return "down";
   const daemonMajor = String(handshake.contract_version).split(".")[0];
   const spaMajor = CONTRACT_VERSION.split(".")[0];
   if (daemonMajor !== spaMajor) return "mismatch";
   if (!token || handshake.paired === false) return "unpaired";
+  // A daemon can be perfectly paired and still not be OURS — a second glosa install taking the
+  // port is exactly that. Without this the tab renders `ready` and 401s on its first call, which
+  // used to read as "your credential was revoked" and threw the credential away.
+  if (pairedInstall && typeof handshake.install_id === "string" && handshake.install_id !== pairedInstall) {
+    return "foreign-daemon";
+  }
   return "ready";
+}
+
+/** Remember which daemon issued the credential this tab holds, so a later 401 can be attributed.
+ * Only recorded alongside a token, and only when the daemon publishes an identity — a tab paired
+ * before either existed simply has nothing to compare and behaves exactly as it did before. */
+/** @param {TokenStorage} storage @param {Handshake | null} handshake @param {string | null} token */
+export function rememberDaemonIdentity(storage, handshake, token) {
+  if (!token || !handshake || typeof handshake.install_id !== "string") return null;
+  storage.setItem(INSTALL_KEY, handshake.install_id);
+  return handshake.install_id;
 }
 
 /** @param {Screen} screen */
@@ -198,6 +230,45 @@ async function redeemPresentationToken(presentationToken) {
   return typeof body?.token === "string" ? body.token : null;
 }
 
+/**
+ * Wait for the daemon this tab paired with to answer on this port again — nothing else. Polls only
+ * the tokenless handshake, so while another install holds the port it receives no credential at
+ * all. That is what makes keeping the credential safe: it is retained, not transmitted.
+ */
+/** @param {{ daemonIdentity: () => Promise<Handshake | null> }} dataAccess
+ *  @param {string} pairedInstall
+ *  @param {{ now?: () => number, sleep?: (ms: number) => Promise<unknown>,
+ *            timeoutMs?: number, pollMs?: number }} [deps]
+ *  @returns {Promise<"recovered" | "timeout">} */
+export async function waitForOwnDaemon(dataAccess, pairedInstall, deps = {}) {
+  const now = deps.now ?? (() => Date.now());
+  const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + (deps.timeoutMs ?? FOREIGN_DAEMON_TIMEOUT_MS);
+  for (;;) {
+    const handshake = await dataAccess.daemonIdentity();
+    if (handshake && handshake.install_id === pairedInstall) return "recovered";
+    if (now() >= deadline) return "timeout";
+    await sleep(deps.pollMs ?? FOREIGN_DAEMON_POLL_MS);
+  }
+}
+
+/** @param {{ daemonIdentity: () => Promise<Handshake | null> }} dataAccess @param {string} paired */
+async function enterForeignDaemon(dataAccess, paired) {
+  render("foreign-daemon");
+  const outcome = await waitForOwnDaemon(dataAccess, paired);
+  if (outcome === "recovered") {
+    // Recover by reloading rather than resuming: the streams were torn down at the 401, and a
+    // fresh bootstrap re-establishes every one of them from the credential still in sessionStorage.
+    window.location.reload();
+    return;
+  }
+  // Gave up. Now — and only now — A3 §55's "treat it as invalidated" applies: the tab has waited
+  // out its window and is not going to hold a credential it can no longer place.
+  window.sessionStorage.removeItem("glosa_token");
+  window.sessionStorage.removeItem(INSTALL_KEY);
+  render("unpaired");
+}
+
 async function main() {
   const route = readRoute(window.location); // before scrub — it strips secrets from the fragment
   let redeemed = null;
@@ -209,18 +280,26 @@ async function main() {
     }
   }
   const token = scrubSecrets(window.location, window.sessionStorage, window.history, route, redeemed);
+  const pairedInstall = window.sessionStorage.getItem(INSTALL_KEY);
+
+  /** @type {ReturnType<typeof createDataAccess> | null} */
+  let dataAccess = null;
+  dataAccess = createDataAccess({
+    expectedInstallId: pairedInstall,
+    onForeignDaemon: () => {
+      if (dataAccess && pairedInstall) void enterForeignDaemon(dataAccess, pairedInstall);
+    },
+  });
 
   /** @type {Handshake | null} */
-  let handshake = null;
-  try {
-    const res = await fetch("/api/handshake");
-    if (res.ok) handshake = await res.json();
-  } catch {
-    handshake = null; // daemon unreachable → "down" screen
-  }
+  const handshake = await dataAccess.daemonIdentity(); // null → daemon unreachable → "down" screen
 
-  const screen = selectScreen(handshake, token);
+  const screen = selectScreen(handshake, token, pairedInstall);
   render(screen);
+  if (screen === "foreign-daemon" && pairedInstall) {
+    void enterForeignDaemon(dataAccess, pairedInstall);
+  }
+  if (screen === "ready") rememberDaemonIdentity(window.sessionStorage, handshake, token);
   if (screen === "mismatch") {
     // R5's third failure screen reloads to fetch the fresh shell + bootstrap the daemon
     // just advertised (A1 §3).
@@ -237,6 +316,9 @@ async function main() {
       /** @type {unknown} */ (mountApp)
     );
     mountReadyApp(/** @type {Element} */ (readyEl), {
+      // The SAME data-access instance the handshake came from, so the app inherits the identity
+      // check rather than building a second, unconfigured client (R6: one module, one decision).
+      dataAccess,
       initialSlug: route.slug ?? undefined,
       initialArtifact: route.artifact ?? undefined,
       surface,
