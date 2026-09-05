@@ -554,9 +554,11 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           dir,
           path,
           ...(question !== undefined ? { message: question } : {}),
-          // `review` is the daemon's outcome vocabulary for "a verdict is expected"; a bare
-          // pointer expects nothing, so it stays a generic entry that completes with `done`.
-          action: question === undefined ? "point" : "review",
+          // Neither `approved` nor `changes_requested` is true of "the human answered a
+          // question", and action `review` forces one of them. So a question is action `ask`,
+          // which completes with `done` and asserts no verdict nobody gave; a bare pointer is
+          // `point`, for the same reason. `review` stays what `glosa request-review` means.
+          action: question === undefined ? "point" : "ask",
           ...(label !== undefined ? { agentLabel: label } : {}),
           ...(quote !== undefined ? { target: { quote } } : {}),
           ...(options !== undefined ? { answerOptions: options } : {}),

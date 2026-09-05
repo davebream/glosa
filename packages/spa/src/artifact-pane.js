@@ -252,6 +252,9 @@ export function createArtifactPane(host, deps) {
   let parkedComposer = null;
   /** The session request the reader is currently on, if any — drives the active sideline. */
   let focusedRequestId = null;
+  /** Half-written answers, by entry id. The rail is rebuilt on every journal event, so an
+   * answer held only in the card's DOM would be erased by an unrelated session's activity. */
+  const answerDrafts = new Map();
   let richEditorLoading = false;
   let annotations = []; // [{record, id, state, attempts?, error?}] for THIS pane's one artifact
   let composer = null; // {record, replacing?, ...} while the annotation composer is open
@@ -1671,6 +1674,7 @@ export function createArtifactPane(host, deps) {
     status.textContent = "Sending your answer…";
     try {
       await dataAccess.respondToAttention(slug, request.id, { outcome, response, chose });
+      answerDrafts.delete(request.id);
       // The entry is terminal now, so the next inbox refresh drops the card. Ask for that refresh
       // rather than removing the card here: the journal decides what is open, not this view.
       await refreshAttention();
@@ -1745,15 +1749,17 @@ export function createArtifactPane(host, deps) {
     // thing left to do is acknowledge it. A question gets an answer surface.
     const options = Array.isArray(request.answer_options) ? request.answer_options : [];
     const group = el("div", { className: "glosa-agent-answer" });
-    let chosen = null;
+    const draft = answerDrafts.get(request.id) ?? { text: "", chose: null };
+    answerDrafts.set(request.id, draft);
     if (options.length > 0) {
       const name = `glosa-agent-choice-${request.id}`;
       const list = el("div", { className: "glosa-agent-options", role: "radiogroup", "aria-label": "Answer" });
       for (const option of options) {
         const id = `${name}-${list.childElementCount}`;
         const input = el("input", { type: "radio", name, id, value: option });
+        input.checked = draft.chose === option;
         input.addEventListener("change", () => {
-          chosen = option;
+          draft.chose = option;
         });
         list.append(el("label", { className: "glosa-agent-option", htmlFor: id }, [input, el("span", { textContent: option })]));
       }
@@ -1769,6 +1775,10 @@ export function createArtifactPane(host, deps) {
       placeholder: options.length > 0 ? "Or answer in your own words…" : "Your answer…",
       "aria-label": "Your answer",
     });
+    input.value = draft.text;
+    input.addEventListener("input", () => {
+      draft.text = input.value;
+    });
     group.append(input);
 
     const status = el("p", { className: "glosa-agent-status", hidden: true, role: "status", "aria-live": "polite" });
@@ -1780,7 +1790,7 @@ export function createArtifactPane(host, deps) {
         void submitAnswer(request, card, {
           outcome: request.action === "review" ? "changes_requested" : "done",
           response: input.value,
-          ...(chosen ? { chose: chosen } : {}),
+          ...(draft.chose ? { chose: draft.chose } : {}),
         }),
     });
     const decline = el("button", {

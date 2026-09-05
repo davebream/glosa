@@ -188,6 +188,36 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(da.answered[0]!.chose).toBeUndefined();
   });
 
+  test("a half-typed answer survives the rail being rebuilt by unrelated session activity", async () => {
+    // The rail repaints on every journal event, including ones caused by a different session
+    // entirely. An answer held only in the card's DOM would be silently erased mid-sentence —
+    // the same class of loss parking exists to prevent, one surface over.
+    const da = fakeDataAccess([askAboutPremise({ answer_options: ["covered", "thin"] })]);
+    const { host, pane } = await mountPane(da);
+
+    qa(host, ".glosa-agent-option input")[1].click();
+    const input = q(host, ".glosa-agent-input");
+    input.value = "Half an answer";
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+    pane.refreshAgentRequests();
+    await paint();
+
+    expect(q(host, ".glosa-agent-input").value).toBe("Half an answer");
+    expect(qa(host, ".glosa-agent-option input")[1].checked).toBe(true);
+  });
+
+  test("answering a question completes it without asserting a verdict nobody gave", async () => {
+    // `approved` and `changes_requested` are review verdicts. Neither is true of "the human
+    // answered a question", so an ask completes as `done`.
+    const da = fakeDataAccess([askAboutPremise({ action: "ask" })]);
+    const { host } = await mountPane(da);
+    q(host, ".glosa-agent-input").value = "Yes, that reads fine.";
+    q(host, ".glosa-agent-actions .glosa-primary-button").click();
+    await paint();
+    expect(da.answered[0]).toMatchObject({ outcome: "done", response: "Yes, that reads fine." });
+  });
+
   test("a pointer with no question still marks the passage", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
     expect(qa(host, ".glosa-sideline").length).toBe(1);

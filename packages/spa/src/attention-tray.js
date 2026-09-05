@@ -138,9 +138,16 @@ export function mountAttentionTray(
         }
       };
 
-      if (entry.approval_mode === true) {
+      // Anything that concerns an artifact is answered in that artifact's margin, beside the words
+      // it is about — so the tray sends the reader there instead of offering a second, contextless
+      // answering surface. What stays here is the residue: a request with no artifact to open,
+      // which has no margin and would otherwise be unanswerable.
+      const answeredInTheMargin = entry.approval_mode === true || Boolean(targetPath);
+
+      if (answeredInTheMargin) {
         const isCurrent = targetPath && targetPath === getCurrentArtifact();
-        const label = isCurrent ? "Continue review" : "Open artifact";
+        const label =
+          entry.approval_mode === true ? (isCurrent ? "Continue review" : "Open artifact") : "Go to the passage";
         const button = node("button", {
           className: "glosa-primary-button",
           type: "button",
@@ -195,7 +202,7 @@ export function mountAttentionTray(
           className: "glosa-attention-message",
           textContent: entry.message ?? "A session requested your attention.",
         }),
-        ...(entry.approval_mode === true ? [] : [response]),
+        ...(answeredInTheMargin ? [] : [response]),
         actions,
         status,
       ];

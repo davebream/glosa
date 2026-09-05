@@ -25,7 +25,7 @@ normative product contract.
 
 ## 0. What changed from v1 (orientation for anyone who read v1)
 - **No cmux coupling** anywhere. SPA runs in any browser over localhost; delivery uses each agent's own hooks/MCP, not keystroke injection.
-- **In-app editor is IN scope** (Preview / Annotate / Edit modes). v1's "no editing" non-goal is removed.
+- **In-app editor is IN scope** (Read / Review / Edit modes). v1's "no editing" non-goal is removed.
 - **Explicit session binding** is authoritative; terminal cwd is only a generic fallback (F01).
 - **Declarative workspace metadata** replaces embedded producer/domain adapters. An external
   integration describes artifacts through the public CLI or MCP contract; glosa owns no integration
@@ -52,7 +52,7 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
 ```
  user's terminal: interactive `claude` (or `codex`) session(s)      browser (any: Safari-dock / tab / later Electron)
    hooks → register/drain · receive channel push · run `glosa            glosa SPA (served by daemon over http://127.0.0.1)
-   resolve`/`apply-begin` via Bash · MCP shim (`glosa mcp`)               Preview/Annotate/Edit · 4 viewers · workspace switcher
+   resolve`/`apply-begin` via Bash · MCP shim (`glosa mcp`)               Read/Review/Edit · 4 viewers · workspace switcher
                     │ hooks, MCP(stdio), CLI                                        │ fetch + streaming-SSE, Bearer (SPA origin)
              ┌──────▼──────────────────────────────────────────────────────────────▼──────┐
              │ glosa daemon — singleton per machine, TWO fixed ports (4646 SPA/API, 4647    │
@@ -230,8 +230,11 @@ the entry survives.
   (same-origin fetch today). This is a v1 build constraint, not future scope: it is what makes a future
   hosted-shell/Electron topology a config change rather than a refactor (the L0→L3 distribution ladder).
   No SPA component talks to the daemon except through that module.
-- **Three modes per artifact**: **Preview** (rendered, reading-only canvas: navigation and read-only context are progressive disclosures; annotation, restore, and agent composition require an explicit mode transition), **Annotate** (margin comments on the
-  rendered view — extends the existing annotate.js Preview/Annotate toggle), **Edit** (modify source,
+- **Three modes per artifact**, named for what the HUMAN is doing rather than for who the counterparty
+  is: **Read** (rendered, reading-only canvas: navigation and read-only context are progressive
+  disclosures; annotation, restore, and agent composition require an explicit mode transition),
+  **Review** (the anchored two-way margin — the reviewer's own comments AND a session's questions and
+  pointers about a passage, answered where the words are), **Edit** (modify source,
   save → re-render). v1 editor is deliberately minimal (source editing + save; fancy live-preview/
   inline-annotate-while-editing deferred). Human edits in glosa → attributed `human` by construction.
 - **Class R viewer (markdown)**: markdown-it + `data-line` stamping; SSE-driven updates morphed via
@@ -242,7 +245,7 @@ the entry survives.
   separate origin) makes it safe even opened top-level and enforces "no external calls"; annotation via
   nonce-authenticated **MessageChannel** bridge to the parent (A3 §1-2). **Edit mode on class F**
   follows the generic **derived-from edge** (see R7) → opens the source artifact; if the artifact has no
-  derived-from edge it is opaque (Preview + Annotate only, no Edit).
+  derived-from edge it is opaque (Read + Review only, no Edit).
 - **Diff pane**: shadow-git diffs via diff2html; **full history** (compare any two checkpoints, `restore`
   with dirty-worktree guard) per the user scope decision (A6 §F31 3.B). Human vs session vs unknown
   attribution shown; writer-register labels.
@@ -365,7 +368,7 @@ the entry survives.
   fallback still delivers; asyncRewake rearms across ≥3 sequential entries; journal records correct
   transport `outcome`.
 - **T3 — SPA shell + class R viewer + three modes + diff/history**: handshake/pairing screens; switcher/
-  sidebar/tabs/follow-mode; markdown Preview/Annotate/Edit; streaming-SSE (fetch) with reconnect replay;
+  sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
   reconnect loses no events.
