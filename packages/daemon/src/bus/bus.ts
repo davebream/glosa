@@ -22,6 +22,7 @@ import {
   leaseHeldError,
   leaseSessionMismatchError,
   noActiveLeaseError,
+  unknownEntryError,
 } from "./lease.ts";
 import {
   type DeliveryAttemptRecord,
@@ -977,6 +978,12 @@ export class WorkspaceBus {
       this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+
+      // BEFORE anything is written or claimed: this workspace cannot lease an entry it does not
+      // have. A lease proves "this session changed this workspace because of THIS entry", so a
+      // foreign id makes the proof meaningless — and taking the slot first would lock the
+      // workspace out of its own applies for the whole TTL on nothing but a misrouted id.
+      if (!this.state.entries[entry]) throw unknownEntryError(entry);
 
       const active = this.state.applyLease;
       if (active) {

@@ -874,6 +874,7 @@ describe("A1 §5 route catalog", () => {
     await bus.reconcile(); // establishes the baseline commit
 
     // File A: edited under a proven apply-lease -> attributed session:<id>.
+    await bus.createEntry("entry-1", { kind: "annotation" });
     const { leaseId: _leaseId, preSha: from } = await bus.applyBegin("entry-1", "sess-a");
     writeFileSync(join(root, "leased.md"), "edited under lease\n");
     await bus.resolveEntry("entry-1", "applied", "sess-a");
@@ -950,6 +951,7 @@ describe("A1 §5 route catalog", () => {
     const bus = ctx.getWorkspaceBus(root);
     await bus.reconcile(); // baseline: unknown/baseline
 
+    await bus.createEntry("entry-1", { kind: "annotation" });
     await bus.applyBegin("entry-1", "sess-a");
     writeFileSync(join(root, "notes.md"), "v2 — leased\n");
     await bus.resolveEntry("entry-1", "applied", "sess-a");
@@ -1925,6 +1927,26 @@ describe("A1 §5 route catalog", () => {
       return bus;
     }
 
+    test("apply-begin for an entry this workspace does not own → 404 naming the reason, never a detail-free 500", async () => {
+      // Both lease commands default to the caller's cwd, so the likeliest mistake here is an id
+      // that belongs to a different workspace. Unhandled, it reached the last-resort 500 whose
+      // body is deliberately empty of detail (A3), telling the operator nothing about a mistake
+      // they could have corrected in one flag.
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      await busWithReconcileAlreadyConsumed(() => new Date());
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/apply-begin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "inb-owned-by-another-workspace", session: "sess-a" }),
+        }),
+      );
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { title?: string; detail?: string };
+      expect(`${body.title} ${body.detail ?? ""}`).toContain("--workspace");
+    });
+
     test("resolve on a lease past its TTL → 409 problem+json telling the caller to re-run apply-begin, never a 200 with a session attribution", async () => {
       writeFileSync(join(root, "notes.md"), "v1\n");
       // The bus must be constructed with this test's clock BEFORE any route touches the root —
@@ -1932,6 +1954,7 @@ describe("A1 §5 route catalog", () => {
       // and the 15-minute TTL is not something a test can wait out in wall-clock time.
       let nowMs = 1_700_000_000_000;
       const bus = await busWithReconcileAlreadyConsumed(() => new Date(nowMs));
+      await bus.createEntry("entry-1", { kind: "annotation" });
       const { leaseId, preSha } = await bus.applyBegin("entry-1", "sess-a");
 
       nowMs += APPLY_LEASE_TTL_MS + 1_000;
@@ -1968,6 +1991,7 @@ describe("A1 §5 route catalog", () => {
     test("resolve with a live lease still succeeds through the same route (the 409 is expiry-specific, not a blanket refusal)", async () => {
       writeFileSync(join(root, "notes.md"), "v1\n");
       const bus = await busWithReconcileAlreadyConsumed(() => new Date());
+      await bus.createEntry("entry-1", { kind: "annotation" });
       await bus.applyBegin("entry-1", "sess-a");
       writeFileSync(join(root, "notes.md"), "v2 — edited under a live lease\n");
 

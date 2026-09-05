@@ -1242,6 +1242,18 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
         url.pathname,
       );
     }
+    // The entry belongs to another workspace, or does not exist. A 404 naming the reason, not the
+    // detail-free 500 an unhandled throw would produce — this is the likeliest mistake a caller
+    // can make here, and it was previously indistinguishable from a daemon fault.
+    if ((err as { code?: string }).code === "UNKNOWN_ENTRY") {
+      return problem(
+        404,
+        "not-found",
+        "this workspace has no such inbox entry — pass --workspace to name the one that owns it",
+        undefined,
+        url.pathname,
+      );
+    }
     throw err;
   }
 }

@@ -23,8 +23,8 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 
 ## F05 — apply-lease proven attribution
 - Exactly ONE active apply-lease/workspace; 2nd `apply-begin` while active → reject `LEASE_HELD` (retry), never queue.
-- `apply-begin <entry> --session <sid>` (under git+journal mutex): checkpoint→`pre_sha`; append `apply_begin{lease_id,entry,session,pre_sha,expires_at=now+APPLY_LEASE_TTL_MS(15min)}`; fsync; return lease_id.
-- `resolve <entry> applied|rejected|stale --session <sid>`: checkpoint→`post_sha`; `git diff pre_sha post_sha` = proven interval → `session:<sid>`; append `apply_end` + `transition_committed{to:resolved}`; fsync.
+- `apply-begin <entry> --session <sid>` (under git+journal mutex): reject `UNKNOWN_ENTRY` (404) when the workspace has no such entry — a lease over a foreign entry proves nothing and would still consume the one slot; then checkpoint→`pre_sha`; append `apply_begin{lease_id,entry,session,pre_sha,expires_at=now+APPLY_LEASE_TTL_MS(15min)}`; fsync; return lease_id.
+- `resolve <entry> applied|rejected|stale --session <sid>`: checkpoint→`post_sha`; `git diff pre_sha post_sha` = proven interval → `session:<sid>`; append `apply_end{lease_id,pre_sha,post_sha}` (BOTH ends — the interval must be computable from the event that declares it) + `transition_committed{to:resolved}`; fsync.
 - Attribution: pre..post lease diff → session (proven); glosa-editor-API writes → human by construction; **EVERYTHING ELSE → unknown, never human**. Lease expiry → apply_expired, diff→unknown.
 - Watcher: autonomous save-burst checkpoints during a lease still commit (full history), but the ATTRIBUTION edge is the single pre..post→session interval; intermediate commits are unattributed history folded inside, not false `unknown` slices.
 

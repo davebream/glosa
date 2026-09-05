@@ -34,6 +34,10 @@ export function leaseHeldError(activeLeaseId: string): LeaseHeldError {
   return err;
 }
 
+export interface UnknownEntryError extends Error {
+  code: "UNKNOWN_ENTRY";
+}
+
 export interface NoActiveLeaseError extends Error {
   code: "NO_ACTIVE_LEASE";
 }
@@ -86,6 +90,23 @@ export function leaseSessionMismatchError(
   err.entry = entry;
   err.leaseSession = leaseSession;
   err.callerSession = callerSession;
+  return err;
+}
+
+/** An `apply-begin` naming an entry this workspace has never seen. F05's lease is the ONLY thing
+ * that attributes a change to a session, so a lease over an entry this workspace does not own is a
+ * lease that proves nothing: it checkpoints this workspace, hands back a `pre_sha` pointing into
+ * it, and attributes whatever happens next to a session acting on somebody else's entry.
+ *
+ * It also consumes the single per-workspace lease slot ("exactly ONE active apply-lease/workspace"),
+ * so a mistyped id — or a command run from the wrong directory before `--workspace` existed —
+ * silently locks a real workspace out of its own applies for the full TTL. Refuse before either
+ * side effect happens. */
+export function unknownEntryError(entry: string): UnknownEntryError {
+  const err = new Error(
+    `apply-begin(${entry}): this workspace has no such inbox entry — check --workspace`,
+  ) as UnknownEntryError;
+  err.code = "UNKNOWN_ENTRY";
   return err;
 }
 

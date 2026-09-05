@@ -170,6 +170,7 @@ describe("WorkspaceBus cursor tracking (A1 §8.1/§8.2)", () => {
     const seen: { cursor: number; event: string }[] = [];
     bus.subscribe(({ cursor, event }) => seen.push({ cursor, event: event.event }));
 
+    await bus.createEntry("entry-x", { kind: "annotation" });
     await bus.applyBegin("entry-x", "sess-a"); // may checkpoint — at least 1 event (apply_begin)
     const cursorBeforeResolve = bus.currentCursor();
     await bus.resolveEntry("entry-x", "applied", "sess-a");

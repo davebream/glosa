@@ -63,6 +63,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     await bus.reconcile();
 
     // The lease cycle completes rather than throwing out of the staging step.
+    await bus.createEntry("e1", { kind: "annotation" });
     const { preSha } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "ignored-by-project/report.md", "edited by sess-1");
     const { postSha } = await bus.resolveEntry("e1", "applied", "sess-1");
@@ -70,6 +71,29 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
 
     // And the edit really is inside the proven interval, not silently dropped from history.
     expect(await diffShas(root, preSha, postSha)).toContain("edited by sess-1");
+  });
+
+  test("an entry this workspace does not own is refused, without taking the lease slot", async () => {
+    // A lease is the only thing that attributes a change to a session, so leasing an entry this
+    // workspace has never seen produces a proof of nothing — while still consuming the single slot
+    // F05 allows. Before `--workspace` existed, `apply-begin` run from the wrong directory did
+    // exactly that: it opened a real lease in a real workspace for an entry living somewhere else,
+    // locking that workspace out of its own applies for the full TTL.
+    writeFile(root, "notes.md", "original");
+    const clock = settableClock(1_700_000_000_000);
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
+    await bus.reconcile();
+
+    await expect(bus.applyBegin("inb-from-another-workspace", "sess-1")).rejects.toThrow(/no such inbox entry/);
+
+    // The slot is still free, so the workspace's own entry leases normally straight after.
+    const journal = readFileSync(journalPath(root), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as JournalEvent);
+    expect(foldEvents(journal).applyLease).toBeNull();
+    await bus.createEntry("e1", { kind: "annotation" });
+    expect((await bus.applyBegin("e1", "sess-1")).leaseId).toBeTruthy();
   });
 
   test("apply_end states BOTH ends of the proven interval, including when the lease left no pre_apply commit", async () => {
@@ -85,6 +109,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     await bus.reconcile();
 
     const headBefore = await headSha(root);
+    await bus.createEntry("e1", { kind: "annotation" });
     const { preSha } = await bus.applyBegin("e1", "sess-1"); // worktree clean: no new commit
     expect(preSha).toBe(headBefore);
     expect(await commitTrailers(root, preSha)).not.toContain("Glosa-Kind: pre_apply");
@@ -110,6 +135,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile(); // establishes the baseline via offline catch-up
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId, preSha } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "notes.md", "edited by sess-1");
     const { postSha } = await bus.resolveEntry("e1", "applied", "sess-1");
@@ -139,6 +165,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     // case A4 §F05 says must never be attributed to a session.
     writeFile(root, "notes.md", "v2, edited with no lease active");
     const before = await headSha(root);
+    await bus.createEntry("e1", { kind: "annotation" });
     const { preSha } = await bus.applyBegin("e1", "sess-1");
 
     expect(preSha).not.toBe(before); // applyBegin's own checkpoint captured the pre-existing drift
@@ -166,6 +193,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     writeFile(root, "notes.md", "v1");
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { preSha } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "notes.md", "edited under the lease, mid-flight");
 
@@ -199,6 +227,7 @@ describe("LEASE_SESSION_MISMATCH — resolve requires the lease's own session, n
     writeFile(root, "notes.md", "v1");
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { preSha } = await bus.applyBegin("e1", "sess-A");
     writeFile(root, "notes.md", "edited by sess-A, but sess-EVIL tries to claim the resolve");
 
@@ -237,7 +266,9 @@ describe("LEASE_HELD — exactly one active apply-lease per workspace", () => {
     writeFile(root, "notes.md", "v1");
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const first = bus.applyBegin("e1", "sess-1");
+    await bus.createEntry("e2", { kind: "annotation" });
     const second = bus.applyBegin("e2", "sess-2");
 
     const firstResult = await first;
@@ -260,8 +291,10 @@ describe("LEASE_HELD — exactly one active apply-lease per workspace", () => {
     writeFile(root, "notes.md", "v1");
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId: firstLease } = await bus.applyBegin("e1", "sess-1");
     await bus.resolveEntry("e1", "applied", "sess-1");
+    await bus.createEntry("e2", { kind: "annotation" });
     const { leaseId: secondLease } = await bus.applyBegin("e2", "sess-2");
     expect(secondLease).not.toBe(firstLease);
     await bus.resolveEntry("e2", "applied", "sess-2");
@@ -282,6 +315,7 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "notes.md", "edited under the lease, but never resolved before it expired");
 
@@ -302,6 +336,7 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
     clock.advance(1_000); // well under the 15-minute TTL
     const result = await bus.reconcile();
@@ -353,7 +388,9 @@ describe("concurrency — checkpoint/applyBegin serialize through the shared wor
     await bus.reconcile();
 
     const started = Date.now();
+    await bus.createEntry("e1", { kind: "annotation" });
     const first = bus.applyBegin("e1", "sess-1");
+    await bus.createEntry("e2", { kind: "annotation" });
     const second = bus.applyBegin("e2", "sess-2").catch((err) => err);
 
     await first;
@@ -474,6 +511,7 @@ describe("LEASE_EXPIRED — a lease past its TTL proves nothing, on either path 
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-A");
     clock.advance(APPLY_LEASE_TTL_MS + 1_000);
 
@@ -489,9 +527,11 @@ describe("LEASE_EXPIRED — a lease past its TTL proves nothing, on either path 
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId: firstLease } = await bus.applyBegin("e1", "sess-1");
     clock.advance(APPLY_LEASE_TTL_MS + 1_000);
     writeFile(root, "notes.md", "drift while the first lease was already dead");
+    await bus.createEntry("e2", { kind: "annotation" });
     const { leaseId: secondLease } = await bus.applyBegin("e2", "sess-2");
     expect(secondLease).not.toBe(firstLease);
 
@@ -528,8 +568,10 @@ describe("LEASE_EXPIRED — a lease past its TTL proves nothing, on either path 
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
     await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
     clock.advance(APPLY_LEASE_TTL_MS - 1_000); // one second short of the TTL
+    await bus.createEntry("e2", { kind: "annotation" });
     await expect(bus.applyBegin("e2", "sess-2")).rejects.toMatchObject({ code: "LEASE_HELD" });
     expect(journalEvents().some((e) => e.event === "apply_expired")).toBe(false);
     expect(bus.state.applyLease?.leaseId).toBe(leaseId);
@@ -558,6 +600,7 @@ describe("WorkspaceBus never reclaims an index.lock it cannot prove it owns (A4 
 
     mkdirSync(shadowGitDir(root), { recursive: true });
     writeFileSync(indexLockPath(root), "");
+    await bus.createEntry("e1", { kind: "annotation" });
     const err = await bus.applyBegin("e1", "sess-1").catch((e: Error) => e);
     expect((err as { code?: string }).code).toBe("INDEX_LOCK_NOT_OWNED");
     // The whole point: a lock a live `git` might own is still there for that `git` to release.
@@ -573,6 +616,7 @@ describe("WorkspaceBus never reclaims an index.lock it cannot prove it owns (A4 
     claimTestDaemonIdentity(root);
     mkdirSync(shadowGitDir(root), { recursive: true });
     writeFileSync(indexLockPath(root), "");
+    await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
     expect(leaseId).toBeTruthy();
     expect(existsSync(indexLockPath(root))).toBe(false);
