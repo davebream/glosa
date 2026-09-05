@@ -98,7 +98,7 @@ describe("the annotation surface", () => {
       dataAccess: da,
       slug: "ws-1",
       path: "notes.md",
-      initialMode: "annotate",
+      initialMode: "review",
     });
     await pane.ready;
     await paint();

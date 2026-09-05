@@ -445,11 +445,11 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ path, mode, session_id: requestedSession }) => {
       const hostSession = deps.sessionId?.();
-      const previewLock = mode === "preview";
-      if (!previewLock && hostSession && requestedSession && requestedSession !== hostSession) {
+      const readLock = mode === "read";
+      if (!readLock && hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
       }
-      const bindSessionId = previewLock ? undefined : (hostSession ?? requestedSession);
+      const bindSessionId = readLock ? undefined : (hostSession ?? requestedSession);
       const result = await runOpenPresentation(
         path,
         undefined,
@@ -488,7 +488,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         {
           launchBrowser: false,
           usePresentationToken: true,
-          previewLock,
+          readLock,
           mode,
           bindSessionId,
         },

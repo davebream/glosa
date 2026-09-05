@@ -64,7 +64,7 @@ export function createContextSurfaceController({
       stopConversation = mountConversationPane(conversationEl, {
         dataAccess,
         slug,
-        readOnly: mode === "preview",
+        readOnly: mode === "read",
         onClose: () => {
           setConversationVisible(false);
           returnFocus();

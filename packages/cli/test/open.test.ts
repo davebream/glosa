@@ -156,14 +156,14 @@ describe("glosa open", () => {
     expect(result.ok).toBe(true);
     expect(result.data.slug).toBe("abc123");
     expect(result.data.surface).toBe("workspace");
-    expect(result.data.mode).toBe("preview");
+    expect(result.data.mode).toBe("read");
     expect(result.data.preview).toBe(false);
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(1);
     expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#");
     expect(browserCalls[0]).toContain("t=test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
-    expect(browserCalls[0]).toContain("mode=preview");
+    expect(browserCalls[0]).toContain("mode=read");
     expect(browserCalls[0]).toContain("a=01-first.md");
     expect(browserCalls[0]).not.toContain("lock=");
   });
@@ -295,13 +295,13 @@ describe("glosa open", () => {
     expect(result.exitCode).toBe(2);
   });
 
-  test("--preview locks the visit and emits lock=preview", async () => {
+  test("--read locks the visit and emits lock=read", async () => {
     const dir = freshDir();
     const { deps, browserCalls } = makeDeps();
-    const result = await runOpen(dir, deps, { previewLock: true });
+    const result = await runOpen(dir, deps, { readLock: true });
     expect(result.data.preview).toBe(true);
-    expect(result.data.mode).toBe("preview");
-    expect(browserCalls[0]).toContain("lock=preview");
+    expect(result.data.mode).toBe("read");
+    expect(browserCalls[0]).toContain("lock=read");
   });
 
   test("--bind success records bound_session", async () => {
@@ -332,7 +332,7 @@ describe("glosa open", () => {
     const dir = freshDir();
     const { deps } = makeDeps();
     const result = await runOpen(dir, deps, {
-      previewLock: true,
+      readLock: true,
       bindSessionId: "sess-1",
       launchBrowser: false,
     });
@@ -383,7 +383,7 @@ describe("glosa open", () => {
       path: dir,
       url: result.data.url,
       surface: "workspace",
-      mode: "preview",
+      mode: "read",
       preview: false,
     });
     expect(browserCalls).toHaveLength(0);

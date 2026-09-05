@@ -656,7 +656,7 @@ describe("official TypeScript MCP SDK contract", () => {
       try {
         const result = await callTool(connected.client, {
           name: "glosa_present",
-          arguments: { path: file, mode: "preview", session_id: "explicit-session" },
+          arguments: { path: file, mode: "read", session_id: "explicit-session" },
         });
         expect(result.isError).not.toBe(true);
         const body = structured(result) as {
@@ -668,11 +668,11 @@ describe("official TypeScript MCP SDK contract", () => {
           warnings?: Array<{ code: string; message: string }>;
         };
         expect(body.url).toContain("p=ephemeral-present-token");
-        expect(body.url).toContain("lock=preview");
+        expect(body.url).toContain("lock=read");
         expect(body.url).not.toContain("t=");
         expect(body.preview).toBe(true);
         expect(body.surface).toBe("document");
-        expect(body.mode).toBe("preview");
+        expect(body.mode).toBe("read");
         expect(body.bound_session).toBeUndefined();
         expect(body.warnings?.some((w) => w.code === "bind-failed")).not.toBe(true);
         expect(body.warnings?.some((w) => w.code === "preview-bind-conflict")).not.toBe(true);
@@ -719,7 +719,7 @@ describe("official TypeScript MCP SDK contract", () => {
       try {
         const result = await callTool(connected.client, {
           name: "glosa_present",
-          arguments: { path: file, mode: "annotate" },
+          arguments: { path: file, mode: "review" },
         });
         expect(result.isError).not.toBe(true);
         const body = structured(result) as {
@@ -729,8 +729,8 @@ describe("official TypeScript MCP SDK contract", () => {
           bound_session?: string;
         };
         expect(body.url).toContain("p=ephemeral-annotate-token");
-        expect(body.url).not.toContain("lock=preview");
-        expect(body.mode).toBe("annotate");
+        expect(body.url).not.toContain("lock=read");
+        expect(body.mode).toBe("review");
         expect(body.preview).toBe(false);
         expect(body.bound_session).toBe("host-session");
         expect(calls.some((c) => c.startsWith("bind:"))).toBe(true);

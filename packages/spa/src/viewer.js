@@ -61,7 +61,7 @@ export { MODES, INTENTS, initialModeState, modeReducer, morphArtifactContent } f
  *   initialArtifact?: string,
  *   surface?: string,
  *   initialMode?: string,
- *   previewLock?: boolean,
+ *   readLock?: boolean,
  *   appearance?: any,
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
@@ -74,8 +74,8 @@ export function mountApp(
     initialSlug,
     initialArtifact,
     surface = "workspace",
-    initialMode = "preview",
-    previewLock = false,
+    initialMode = "read",
+    readLock = false,
     appearance,
     onFocusChange,
     layoutStorage,
@@ -84,7 +84,7 @@ export function mountApp(
   root.textContent = "";
   root.classList.add("glosa-app");
   root.setAttribute("data-surface", surface === "document" ? "document" : "workspace");
-  if (previewLock) root.setAttribute("data-preview-lock", "true");
+  if (readLock) root.setAttribute("data-preview-lock", "true");
   let attentionEntries = [];
   // NOT pre-seeded from initialSlug: selection is an act (selectWorkspace), not a default —
   // pre-seeding made refreshWorkspaces' "already selected" guard skip the deep-link entirely.
@@ -95,7 +95,7 @@ export function mountApp(
   /** @type {Map<string, any>} */
   const panes = new Map(); // panel id → pane handle
   let activePanelId = null;
-  let requestedMode = MODES.includes(initialMode) ? initialMode : "preview";
+  let requestedMode = MODES.includes(initialMode) ? initialMode : "read";
 
   // A single presented document is one document: no tab strip, no dock (brief §4).
   const singlePane = surface === "document";
@@ -310,7 +310,7 @@ export function mountApp(
       slug: currentSlug,
       path: id,
       initialMode: params.mode ?? requestedMode,
-      previewLock,
+      readLock,
       loadHistoryPane,
       loadRichEditor,
       getAttentionEntries: () => attentionEntries,
@@ -472,7 +472,7 @@ export function mountApp(
     const idx = ["1", "2", "3"].indexOf(e.key);
     if (idx === -1) return;
     e.preventDefault();
-    if (previewLock && idx !== 0) return; // preview lock: only ⌘1 (Preview) remains meaningful
+    if (readLock && idx !== 0) return; // preview lock: only ⌘1 (Preview) remains meaningful
     activePane()?.setMode?.(MODES[idx]);
   }
   document.addEventListener("keydown", onShortcut);
@@ -480,7 +480,7 @@ export function mountApp(
   const contextSurfaces = createContextSurfaceController({
     dataAccess,
     elements: { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle },
-    getState: () => ({ slug: currentSlug, mode: activePane()?.getMode?.() ?? "preview" }),
+    getState: () => ({ slug: currentSlug, mode: activePane()?.getMode?.() ?? "read" }),
     loadConversationPane,
     createElement: el,
     returnFocus: () => toolsTrigger.focus({ preventScroll: true }),

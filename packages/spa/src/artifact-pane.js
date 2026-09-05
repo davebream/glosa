@@ -25,7 +25,7 @@ import { confirmDialog } from "./dialog.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
 
-export const MODES = ["preview", "annotate", "edit"];
+export const MODES = ["read", "review", "edit"];
 
 // Writer-register labels for R3's annotation `intent` enum (2026-07-21 brief §7.5): the wire
 // value is the enum, the label is what the reviewer reads. Order = the enum's declaration order.
@@ -101,8 +101,8 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
 
-export function initialModeState(mode = "preview") {
-  return { mode: MODES.includes(mode) ? mode : "preview", dirty: false, blocked: null };
+export function initialModeState(mode = "read") {
+  return { mode: MODES.includes(mode) ? mode : "read", dirty: false, blocked: null };
 }
 
 /**
@@ -126,7 +126,7 @@ export function modeReducer(state, action) {
     case "saved":
       return { ...state, dirty: false, blocked: null };
     case "discard":
-      return { mode: state.blocked ?? "preview", dirty: false, blocked: null };
+      return { mode: state.blocked ?? "read", dirty: false, blocked: null };
     default:
       return state;
   }
@@ -176,9 +176,9 @@ export function splitDirectory(dir) {
 const MODE_ICONS = {
   // Drawn to the chrome icon set's own spec: 20x20 box, 1.6 stroke, round caps and joins, no
   // fill. Unicode glyphs would not sit on the same grid as the navigator and history marks.
-  preview:
+  read:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M1.8 10S4.7 4.8 10 4.8 18.2 10 18.2 10 15.3 15.2 10 15.2 1.8 10 1.8 10Z"/><circle cx="10" cy="10" r="2.4"/></svg>',
-  annotate:
+  review:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.2h8M3 8h8M3 11.8h5"/><path d="M17 3.4 13 7.4l-.6 2.4 2.4-.6 4-4a1.3 1.3 0 0 0-1.8-1.8Z"/></svg>',
   edit: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9.5 3.5H4.6A1.6 1.6 0 0 0 3 5.1v10.3A1.6 1.6 0 0 0 4.6 17h10.3a1.6 1.6 0 0 0 1.6-1.6v-4.9"/><path d="M15.1 2.9a1.7 1.7 0 0 1 2.4 2.4L11 11.8l-3.2.8.8-3.2Z"/></svg>',
 };
@@ -205,8 +205,8 @@ export function createArtifactPane(host, deps) {
     dataAccess,
     slug,
     path,
-    initialMode = "preview",
-    previewLock = false,
+    initialMode = "read",
+    readLock = false,
     loadHistoryPane,
     loadRichEditor,
     getAttentionEntries = () => [],
@@ -229,7 +229,7 @@ export function createArtifactPane(host, deps) {
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?}
   let loading = true;
-  let modeState = initialModeState(previewLock ? "preview" : initialMode);
+  let modeState = initialModeState(readLock ? "read" : initialMode);
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
   let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   let richMountRequest = 0;
@@ -753,7 +753,7 @@ export function createArtifactPane(host, deps) {
     // Preview lock is a UI affordance expressing intent ("not for review"), not authorization —
     // Annotate/Edit controls and shortcuts are omitted for this visit; the annotation API still
     // accepts authenticated POSTs.
-    const visibleModes = previewLock ? ["preview"] : MODES;
+    const visibleModes = readLock ? ["read"] : MODES;
     for (const mode of visibleModes) {
       // Opaque class F gets no Edit affordance at all rather than a permanently disabled one —
       // but only once an artifact is open; before that the control stays whole.
@@ -859,7 +859,7 @@ export function createArtifactPane(host, deps) {
     }
     annotateInstructions.hidden = true;
     contentEl.removeAttribute("aria-describedby");
-    if (loading || modeState.mode !== "annotate" || !currentArtifact || currentArtifact.class === "F") return;
+    if (loading || modeState.mode !== "review" || !currentArtifact || currentArtifact.class === "F") return;
     annotateInstructions.hidden = false;
     contentEl.setAttribute("aria-describedby", annotateInstructions.id);
     const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]")).filter((block) =>
@@ -939,7 +939,7 @@ export function createArtifactPane(host, deps) {
     stopClassFViewer?.();
     classFEl.setAttribute("data-path", currentArtifact.source_path);
     classFEl.textContent = "";
-    const interactive = modeState.mode !== "preview" || classFInteractive;
+    const interactive = modeState.mode !== "read" || classFInteractive;
     const frameHost = el("div", { className: "glosa-classf-frame" });
     const status = el("p", {
       className: "glosa-classf-status",
@@ -963,7 +963,7 @@ export function createArtifactPane(host, deps) {
       artifactPath: currentArtifact.source_path,
       interactive,
       onSelection: (target) => {
-        if (modeState.mode !== "annotate") return;
+        if (modeState.mode !== "review") return;
         openComposer({ body: "", intent: "content", target });
       },
       onError: (message) => {
@@ -1248,7 +1248,7 @@ export function createArtifactPane(host, deps) {
    * manuscript. Keyed on THIS PANE's inline size (§7), never the viewport: a pane changes width
    * when a sash moves and the window does not. */
   function isSideMargin() {
-    return modeState.mode === "annotate" && paneWidth >= MARGIN_RAIL_FLOOR;
+    return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
 
   /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`), so
@@ -1336,7 +1336,7 @@ export function createArtifactPane(host, deps) {
   /** The tray states its count even when collapsed — the one honest thing a reader scrolling a
    * long manuscript needs from it — and only becomes a scrollable sheet when asked. */
   function renderTray() {
-    const show = modeState.mode === "annotate" && Boolean(currentArtifact) && !isSideMargin();
+    const show = modeState.mode === "review" && Boolean(currentArtifact) && !isSideMargin();
     trayEl.hidden = !show;
     if (!show) {
       trayOpen = false;
@@ -1371,7 +1371,7 @@ export function createArtifactPane(host, deps) {
    * in Annotate: the Preview Boundary Rule keeps anything that sends or changes feedback behind
    * an explicit mode transition, and the gutter dot is how a reader in Preview gets here. */
   function openAnnotationPreview(item) {
-    if (modeState.mode !== "annotate" || composer) return;
+    if (modeState.mode !== "review" || composer) return;
     if (previewCloseTimer) clearTimeout(previewCloseTimer);
     previewCloseTimer = null;
     if (previewItem === item && !previewEl.hidden) return;
@@ -1408,7 +1408,7 @@ export function createArtifactPane(host, deps) {
     marginEl.classList.toggle("glosa-margin-side", side);
     // Compact: the margin is not a block under the manuscript any more, it is the coordinate
     // space the open composer floats in beside its own passage.
-    marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "annotate");
+    marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "review");
     const positioned = [...marginEl.querySelectorAll(".glosa-annotation, .glosa-composer")];
     if (!side) {
       for (const cardEl of positioned) cardEl.style.top = "";
@@ -1466,7 +1466,7 @@ export function createArtifactPane(host, deps) {
         onClick: () => {
           // Outside Annotate there is no card to jump to yet, so the dot's job is to get the
           // reader to one: it opens the mode that has them, then reveals its own.
-          if (modeState.mode !== "annotate") setMode("annotate");
+          if (modeState.mode !== "review") setMode("review");
           // The cards are in the rail at wide widths and in the collection tray at compact ones,
           // and the tray may be collapsed — open it before trying to scroll a card into view.
           if (!isSideMargin()) setTrayOpen(true);
@@ -1676,7 +1676,7 @@ export function createArtifactPane(host, deps) {
   function renderMargin() {
     marginEl.textContent = "";
     trayListEl.textContent = "";
-    if (modeState.mode !== "annotate" || !currentArtifact) {
+    if (modeState.mode !== "review" || !currentArtifact) {
       if (composer) composer = null;
       closePreview();
       paintComposerSelection();
@@ -1746,7 +1746,7 @@ export function createArtifactPane(host, deps) {
   }
 
   function setMode(mode) {
-    if (previewLock && mode !== "preview") return;
+    if (readLock && mode !== "read") return;
     // Class-F Edit follows the derived-from edge (R6/R7) rather than switching THIS artifact into
     // edit mode: with an edge, open the source (class-R) artifact and edit that; with none, Edit
     // is absent from the mode control entirely — a programmatic call is a no-op.
@@ -1774,13 +1774,13 @@ export function createArtifactPane(host, deps) {
       return;
     }
     modeState = next;
-    if (modeState.mode !== "preview") classFInteractive = true;
+    if (modeState.mode !== "read") classFInteractive = true;
     // §7's rail needs about 1200px, and an evenly split pane never has it on any display anyone
     // owns. So Annotate takes the room it needs from its siblings rather than silently degrading
     // to the tray — the focus is expressed as WIDTH, not as depth: nothing floats, nothing covers
     // the other document, and the arrangement comes back when Annotate is left.
-    if (modeState.mode === "annotate" && previousMode !== "annotate") claimWidth(MARGIN_RAIL_COMFORT);
-    else if (previousMode === "annotate" && modeState.mode !== "annotate") releaseWidth();
+    if (modeState.mode === "review" && previousMode !== "review") claimWidth(MARGIN_RAIL_COMFORT);
+    else if (previousMode === "review" && modeState.mode !== "review") releaseWidth();
     renderModeBar();
     renderContent();
     void renderHistory();
@@ -1887,7 +1887,7 @@ export function createArtifactPane(host, deps) {
   // Annotate mode: a text selection inside the rendered content opens the composer with the
   // selected quote; the record is only posted when the reviewer submits.
   contentEl.addEventListener("mouseup", () => {
-    if (modeState.mode !== "annotate" || !slug || !currentArtifact) return;
+    if (modeState.mode !== "review" || !slug || !currentArtifact) return;
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
     const record = buildAnnotationRecordFromSelection(selection, contentEl, { body: "", intent: "content" });
     if (!record) return;
@@ -1904,7 +1904,7 @@ export function createArtifactPane(host, deps) {
   contentEl.addEventListener("keydown", (event) => {
     const block = event.target;
     if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
-    if (modeState.mode !== "annotate") return;
+    if (modeState.mode !== "review") return;
     const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
     if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       event.preventDefault();
@@ -2156,7 +2156,7 @@ export function createArtifactPane(host, deps) {
     },
     destroy() {
       destroyed = true;
-      if (modeState.mode === "annotate") releaseWidth();
+      if (modeState.mode === "review") releaseWidth();
       document.removeEventListener("click", onDocumentClick);
       observer?.disconnect();
       teardownRichFace();

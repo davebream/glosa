@@ -2673,7 +2673,7 @@ input,
    still the reading surface — and the mode gates it so Preview stays clean paper.
 
    Scoped through the originating element, which is how highlight pseudo-elements take context. */
-.glosa-pane[data-mode="annotate"] .glosa-content::highlight(glosa-anchors) {
+.glosa-pane[data-mode="review"] .glosa-content::highlight(glosa-anchors) {
   background-color: color-mix(in oklch, var(--anchor-wash) 55%, transparent);
 }
 

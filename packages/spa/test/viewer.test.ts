@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// P3.3 — viewer.js: the pure Preview/Annotate/Edit mode reducer (no DOM), the idiomorph morph
+// P3.3 — viewer.js: the pure Read/Review/Edit mode reducer (no DOM), the idiomorph morph
 // wrapper (happy-dom), and a mounted-app integration test against a fake data-access object (no
 // real daemon, no real fetch — mountApp never gets to touch either directly).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { initialModeState, mountApp, modeReducer, morphArtifactContent } from "../src/viewer.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
-describe("modeReducer — pure Preview/Annotate/Edit state machine", () => {
+describe("modeReducer — pure Read/Review/Edit state machine", () => {
   test("preview -> annotate -> edit, all legal, none dirty", () => {
     let state = initialModeState();
-    expect(state).toEqual({ mode: "preview", dirty: false, blocked: null });
+    expect(state).toEqual({ mode: "read", dirty: false, blocked: null });
 
-    state = modeReducer(state, { type: "set_mode", mode: "annotate" });
-    expect(state.mode).toBe("annotate");
+    state = modeReducer(state, { type: "set_mode", mode: "review" });
+    expect(state.mode).toBe("review");
 
     state = modeReducer(state, { type: "set_mode", mode: "edit" });
     expect(state.mode).toBe("edit");
@@ -42,10 +42,10 @@ describe("modeReducer — pure Preview/Annotate/Edit state machine", () => {
     state = modeReducer(state, { type: "edited" });
     expect(state.dirty).toBe(true);
 
-    const blocked = modeReducer(state, { type: "set_mode", mode: "preview" });
+    const blocked = modeReducer(state, { type: "set_mode", mode: "read" });
     expect(blocked.mode).toBe("edit"); // still in edit — the switch did NOT go through
     expect(blocked.dirty).toBe(true);
-    expect(blocked.blocked).toBe("preview"); // the requested mode is parked for the caller to resolve
+    expect(blocked.blocked).toBe("read"); // the requested mode is parked for the caller to resolve
   });
 
   test("'saved' clears dirty (and any parked block) without changing mode", () => {
@@ -58,9 +58,9 @@ describe("modeReducer — pure Preview/Annotate/Edit state machine", () => {
   test("'discard' switches to the parked mode and clears dirty", () => {
     let state = modeReducer(initialModeState(), { type: "set_mode", mode: "edit" });
     state = modeReducer(state, { type: "edited" });
-    state = modeReducer(state, { type: "set_mode", mode: "annotate" }); // blocked, parks "annotate"
+    state = modeReducer(state, { type: "set_mode", mode: "review" }); // blocked, parks "review"
     state = modeReducer(state, { type: "discard" });
-    expect(state).toEqual({ mode: "annotate", dirty: false, blocked: null });
+    expect(state).toEqual({ mode: "review", dirty: false, blocked: null });
   });
 
   test("re-requesting edit mode while already dirty in edit mode is a no-op transition, not a block", () => {
@@ -796,7 +796,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     );
   });
 
-  test("Annotate mode: a text selection opens the composer; submitting it posts a well-formed annotation record", async () => {
+  test("Review mode: a text selection opens the composer; submitting it posts a well-formed annotation record", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
@@ -812,7 +812,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    inPane(root, '.glosa-modebar [data-mode="annotate"]').click();
+    inPane(root, '.glosa-modebar [data-mode="review"]').click();
 
     const content = inPane(root, ".glosa-content");
     const heading = content.querySelector("h1")!;
@@ -877,7 +877,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector(".glosa-tab-count")).toBeNull();
   });
 
-  test("Annotate mode: a focused passage opens the composer with Enter and Cancel restores passage focus", async () => {
+  test("Review mode: a focused passage opens the composer with Enter and Cancel restores passage focus", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     const da = fakeDataAccess();
@@ -886,7 +886,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    inPane(root, '.glosa-modebar [data-mode="annotate"]').click();
+    inPane(root, '.glosa-modebar [data-mode="review"]').click();
 
     const heading = inPane(root, '.glosa-content > h1[data-line="0"]');
     const body = inPane(root, '.glosa-content > p[data-line="2"]');
@@ -1007,21 +1007,21 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.title).toBe("ws-1 — notes.md");
   });
 
-  test("preview lock shows only Preview and ignores Annotate/Edit shortcuts", async () => {
+  test("read lock shows only Read and ignores Review/Edit shortcuts", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     (mountApp as any)(root, {
       dataAccess: fakeDataAccess(),
-      previewLock: true,
+      readLock: true,
       initialSlug: "ws-1",
       initialArtifact: "notes.md",
     });
     for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(root.getAttribute("data-preview-lock")).toBe("true");
     const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map((el) => (el as any).dataset.mode);
-    expect(modes).toEqual(["preview"]);
+    expect(modes).toEqual(["read"]);
     // Mode is pane state now, so it is stamped on the pane rather than on the app root.
-    expect(activePane(root).getAttribute("data-mode")).toBe("preview");
+    expect(activePane(root).getAttribute("data-mode")).toBe("read");
   });
 
   // --- issue #81: the wiring badge + point-of-action init consent dialog ---
@@ -1153,7 +1153,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     await flush();
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     await flush();
-    (root.querySelector('[data-mode="annotate"]') as any).click();
+    (root.querySelector('[data-mode="review"]') as any).click();
 
     const content = root.querySelector(".glosa-content")!;
     const textNode = content.querySelector("h1")!.firstChild!;
@@ -1184,7 +1184,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect((da as any).posted).toHaveLength(1); // the save happened regardless
 
     // Second annotation, same workspace + session -> no second dialog.
-    (root.querySelector('[data-mode="annotate"]') as any).click();
+    (root.querySelector('[data-mode="review"]') as any).click();
     const content = root.querySelector(".glosa-content")!;
     const textNode = content.querySelector("h1")!.firstChild!;
     const range = dom.document.createRange();

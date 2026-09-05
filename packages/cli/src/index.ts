@@ -329,9 +329,13 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
           description: "Artifact to focus inside a workspace directory",
         },
         url: { type: "boolean", description: "Print the ready URL without opening a browser" },
+        read: {
+          type: "boolean",
+          description: "Open locked in Read mode (hides Review/Edit affordances)",
+        },
         preview: {
           type: "boolean",
-          description: "Open locked in Preview mode (hides Annotate/Edit affordances)",
+          description: "Deprecated alias for --read",
         },
         bind: {
           type: "string",
@@ -384,7 +388,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         {
           launchBrowser: !urlOnly,
           externalState: Boolean(values["external-state"]),
-          previewLock: Boolean(values.preview),
+          readLock: Boolean(values.read) || Boolean(values.preview),
           bindSessionId: typeof values.bind === "string" ? values.bind : undefined,
           focus: values.focus as string | undefined,
           surface: document ? "document" : workspace ? "workspace" : "auto",

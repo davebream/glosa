@@ -198,17 +198,23 @@ const absoluteFilePath = z
   .refine((value) => value.startsWith("/"), { message: "path must be absolute" })
   .describe("Absolute path to an existing regular file to present.");
 
+/** Accepts both vocabularies and emits only the current one, so an agent written against the
+ * Preview/Annotate names keeps working while the wire converges on Read/Review. */
+const presentationMode = z
+  .enum(["read", "review", "edit", "preview", "annotate"])
+  .transform((value) => (value === "preview" ? "read" : value === "annotate" ? "review" : value))
+  .pipe(z.enum(["read", "review", "edit"]));
+
 export const presentInputSchema = z
   .object({
     path: absoluteFilePath,
-    mode: z
-      .enum(["preview", "annotate", "edit"])
-      .describe(
-        "Initial presentation mode. preview creates a preview-locked visit; annotate and edit select an unlocked initial mode.",
-      ),
+    mode: presentationMode.describe(
+      "Initial presentation mode. read creates a read-locked visit; review and edit select an unlocked initial " +
+        "mode. The former names preview and annotate are accepted and normalize to read and review.",
+    ),
     session_id: sessionId
       .optional()
-      .describe("Session to bind for annotate/edit when the MCP host does not provide one; ignored for mode preview."),
+      .describe("Session to bind for review/edit when the MCP host does not provide one; ignored for mode read."),
   })
   .strict();
 
@@ -222,7 +228,7 @@ export const presentOutputSchema = z
     path: z.string().min(1).describe("Workspace work-tree path."),
     focus: z.string().min(1).optional().describe("Workspace-relative artifact path when known."),
     surface: z.enum(["document", "workspace"]),
-    mode: z.enum(["preview", "annotate", "edit"]),
+    mode: z.enum(["read", "review", "edit"]),
     preview: z.boolean().describe("True when the visit is preview-locked."),
     bound_session: z
       .string()
