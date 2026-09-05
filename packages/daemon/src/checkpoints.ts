@@ -18,6 +18,12 @@ export interface CheckpointRow {
   bytes_changed: number;
   origin: "workspace" | "lineage";
   lineage_id?: string;
+  /** Present on `pre_apply` (and `applied`) checkpoints: the inbox entry whose apply-lease
+   * produced this checkpoint. It is the durable link between an annotation and the state of the
+   * artifact immediately BEFORE an agent acted on it — i.e. what a rollback restores to. Read
+   * from the commit's `Glosa-Entry` trailer, so it survives a daemon restart and a reload, unlike
+   * anything the SPA could have cached from a live `apply_begin` event it happened to witness. */
+  entry?: string;
 }
 
 interface LineageSourcePath {
@@ -166,16 +172,20 @@ const FIELD_SEP = "\x1f";
 async function commitMeta(
   root: WorkspaceTarget,
   sha: string,
-): Promise<{ id: string; at: string; by: string; kind: string }> {
+): Promise<{ id: string; at: string; by: string; kind: string; entry?: string }> {
   const format = [
     "%h",
     "%cI",
     "%(trailers:key=Glosa-Attribution,valueonly)",
     "%(trailers:key=Glosa-Kind,valueonly)",
+    // `apply-begin` stamps the entry it took the lease for onto its `pre_apply` checkpoint
+    // (git/shadow.ts writes the `Glosa-Entry` trailer). Reading it back is what lets a reader see
+    // WHICH annotation a checkpoint is the "before" of, and therefore what undoing it would mean.
+    "%(trailers:key=Glosa-Entry,valueonly)",
   ].join(FIELD_SEP);
   const result = await runGit(root, ["show", "-s", `--format=${format}`, sha]);
-  const [id, at, by, kind] = result.stdout.split(FIELD_SEP).map((s) => s.trim());
-  return { id: id ?? sha, at: at ?? "", by: by || "unknown", kind: kind || "unknown" };
+  const [id, at, by, kind, entry] = result.stdout.split(FIELD_SEP).map((s) => s.trim());
+  return { id: id ?? sha, at: at ?? "", by: by || "unknown", kind: kind || "unknown", ...(entry ? { entry } : {}) };
 }
 
 async function bytesChanged(root: WorkspaceTarget, sha: string): Promise<number> {
@@ -237,6 +247,7 @@ export async function listCheckpoints(
       bytes_changed: await bytesChanged(root, sha),
       origin: origin.origin,
       ...(origin.lineageId ? { lineage_id: origin.lineageId } : {}),
+      ...(meta.entry ? { entry: meta.entry } : {}),
     });
     if (opts.limit !== undefined && rows.length >= opts.limit) break;
   }
