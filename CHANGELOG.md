@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `glosa init --scope user` now targets `$CLAUDE_CONFIG_DIR` when Claude Code's configuration has
+  been relocated — which is what account switchers do to give each account its own root. It
+  previously always wrote `~/.claude/settings.json`, a file the asking session never reads, and
+  reported success.
+- Conversation transcripts from a session under a non-default Claude config root are no longer
+  refused. The daemon is a singleton and inherits one `CLAUDE_CONFIG_DIR` while serving sessions
+  from all of them, so single-root confinement rejected those paths with a 400 and the conversation
+  view was dead for them. Confinement now accepts any of the discovered roots, each realpath-confined
+  exactly as before.
+
 - A glosa install no longer stops a daemon another install started. Daemons publish an `install_id`
   (a hash of their package root) in the lock and handshake, and a client that finds a divergent
   build refuses to signal it unless identity proves the daemon is its own. Two installs on one
@@ -30,6 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   token had already been stripped from the URL there was no way back short of `glosa open`.
 
 ### Added
+
+- `glosa doctor` reports every Claude Code config root it can find and which are not wired. An
+  account switcher gives each account its own root, and user-scope wiring reaches only the active
+  one; the check names the others instead of leaving the gap silent.
 
 - The daemon records rejected requests in `daemon.log` by reason (`no-token-on-daemon`,
   `bearer-mismatch`, `credential-rotated`), throttled to one line per reason per minute with a

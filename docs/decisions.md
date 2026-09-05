@@ -183,3 +183,43 @@ ten minutes, after which the tab falls back to discarding the credential.
 install, which is an accident, and not against a same-uid attacker, who is outside A3's threat
 model either way.
 
+## Claude Code has more than one config root, and glosa has to see all of them
+
+`$CLAUDE_CONFIG_DIR` relocates Claude Code's entire user configuration. Account switchers use
+exactly that to give each account its own root, so a machine running one has several live Claude
+config directories, each with its own settings, its own MCP registry and its own transcripts.
+
+glosa assumed one. Two consequences, in opposite directions:
+
+- **`init --scope user` wrote the wrong file.** It resolved `~/.claude/settings.json` from the home
+  directory and never read the variable, so running it inside a switcher session wired a file that
+  session does not load — and reported success. It now targets the root the asking session actually
+  reads.
+- **Transcripts from every other root were refused.** The daemon is a singleton: it inherits one
+  `CLAUDE_CONFIG_DIR` from whichever process spawned it, but serves sessions from all of them. A
+  session under another root reports a `transcript_path` outside the daemon's, and single-root
+  confinement rejected it with a 400 that looks like a path attack. Confinement now takes a set.
+
+Several roots never weaken confinement. Each is realpath'd independently, an unresolvable one is
+simply not a root, and a path is admitted only by resolving inside one of them — so more roots is
+more chances to be confined, never a looser check. A symlink escape out of one root is still
+refused, because confinement applies to the resolved path.
+
+One `init` still wires one root. Writing to all of them at once means merging into several files
+glosa does not own — including per-account `.claude.json` registries a switcher actively rewrites —
+and that deserves its own change with its own confinement rules, not a silent widening of what
+`--scope user` already means. `doctor` reports the roots it found and which are not wired, so the
+gap is visible rather than assumed absent.
+
+Discovery recognises a list of known layouts rather than searching: `$CLAUDE_CONFIG_DIR`,
+`~/.claude`, and `~/.ccs/instances/<account>` — the one switcher convention supported so far. A
+switcher that arranges its directories differently needs its own entry, and until it has one its
+sessions are covered only while they are the active `CLAUDE_CONFIG_DIR`. There is deliberately no
+sweep of the home directory for anything Claude-shaped: a wrong guess there widens a confinement
+boundary, which is the one kind of mistake this code must not make.
+
+Root discovery is filesystem-only and read-only: no network, no process inspection, nothing
+launched (invariant 5). Which variable and which directories matter is provider knowledge and lives
+in the claude-code provider; the core supplies only a generic, injectable capability to read the
+environment, so it still knows nothing about any particular agent (invariant 1).
+

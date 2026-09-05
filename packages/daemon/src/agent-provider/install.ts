@@ -38,6 +38,10 @@ export type ProviderInstallTarget =
 export interface ProviderDetectionDeps {
   exists(path: string): boolean;
   which(executable: string): string | null;
+  /** Read one environment variable. The CAPABILITY is generic; WHICH variable matters is the
+   * provider's own knowledge, so the core never learns an agent's variable names (invariant 1).
+   * Injectable so a test can pin the environment an install is planned against. */
+  env(name: string): string | undefined;
 }
 
 export interface ProviderInstallDescriptor {
@@ -45,6 +49,6 @@ export interface ProviderInstallDescriptor {
   displayName: string;
   supportedScopes: readonly InitScope[];
   detect(roots: InstallRoots, deps: ProviderDetectionDeps): boolean;
-  targets(scope: InitScope, roots: InstallRoots, bin: InstallBin): ProviderInstallTarget[];
+  targets(scope: InitScope, roots: InstallRoots, bin: InstallBin, deps: ProviderDetectionDeps): ProviderInstallTarget[];
   activationHelp: readonly string[];
 }

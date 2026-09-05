@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type {
   InstallBin,
   InstallRoots,
+  ProviderDetectionDeps,
   ProviderInstallDescriptor,
   ProviderInstallTarget,
 } from "../../../daemon/src/index.ts";
@@ -20,6 +21,23 @@ function configPaths(roots: InstallRoots): string[] {
   ];
 }
 
+/**
+ * Where THIS Claude Code reads its user-scope configuration.
+ *
+ * `$CLAUDE_CONFIG_DIR` relocates the whole directory, and account switchers use exactly that to
+ * give each account its own config root. Ignoring it means `glosa init --scope user` run inside
+ * such a session writes `~/.claude/settings.json` — a file that session never reads — and reports
+ * success. The variable name is Claude's, so resolving it belongs here and not in the generic core.
+ *
+ * The two files are NOT siblings by default: settings live in `~/.claude/`, while `.claude.json`
+ * sits beside it in the home directory. When the directory is relocated, both move inside it.
+ */
+function userConfig(roots: InstallRoots, deps: ProviderDetectionDeps): { settings: string; mcp: string } {
+  const configured = deps.env("CLAUDE_CONFIG_DIR");
+  if (configured) return { settings: join(configured, "settings.json"), mcp: join(configured, ".claude.json") };
+  return { settings: join(roots.home, ".claude", "settings.json"), mcp: join(roots.home, ".claude.json") };
+}
+
 export const claudeCodeInstallDescriptor: ProviderInstallDescriptor = {
   id: "claude-code",
   displayName: "Claude Code",
@@ -27,15 +45,15 @@ export const claudeCodeInstallDescriptor: ProviderInstallDescriptor = {
   detect(roots, deps) {
     return deps.which("claude") !== null || configPaths(roots).some(deps.exists);
   },
-  targets(scope, roots, bin): ProviderInstallTarget[] {
+  targets(scope, roots, bin, deps): ProviderInstallTarget[] {
     const user = scope === "user";
-    const base = user ? roots.home : roots.workspace;
+    const config = userConfig(roots, deps);
     const matcher = "startup|resume|clear|compact";
     return [
       {
         key: "hooks",
         kind: "hooks-json",
-        path: join(base, ".claude", "settings.json"),
+        path: user ? config.settings : join(roots.workspace, ".claude", "settings.json"),
         hooks: [
           {
             event: "SessionStart",
@@ -65,7 +83,7 @@ export const claudeCodeInstallDescriptor: ProviderInstallDescriptor = {
       {
         key: "mcp",
         kind: "mcp-json",
-        path: user ? join(roots.home, ".claude.json") : join(roots.workspace, ".mcp.json"),
+        path: user ? config.mcp : join(roots.workspace, ".mcp.json"),
       },
     ];
   },

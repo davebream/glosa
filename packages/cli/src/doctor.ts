@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
 import {
   claudeConfigDir,
+  claudeConfigRoots,
   journalPath,
   PROTOCOL_VERSION,
   protocolCompatible,
@@ -41,6 +42,7 @@ export interface DoctorDeps {
   runVersionProbe: (cmd: string[]) => string | null;
   glosaHome: () => string;
   claudeConfigDir: () => string;
+  claudeConfigRoots: () => string[];
 }
 
 function realRunVersionProbe(cmd: string[]): string | null {
@@ -64,6 +66,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     runVersionProbe: realRunVersionProbe,
     glosaHome,
     claudeConfigDir,
+    claudeConfigRoots,
   };
 }
 
@@ -429,6 +432,25 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
           "transcript-root",
           "warn",
           `${configDir} does not exist yet — Claude Code may not have run on this machine`,
+        ),
+  );
+
+  // 16. claude-config-roots — every directory a Claude session on this machine might root its
+  // transcripts in. An account switcher runs Claude with its own CLAUDE_CONFIG_DIR, so sessions
+  // exist that this active root knows nothing about. Reporting them makes an unwired switcher
+  // instance visible instead of silently unsupported.
+  const roots = deps.claudeConfigRoots().filter((root) => existsSync(root));
+  const otherRoots = roots.filter((root) => root !== configDir);
+  checks.push(
+    otherRoots.length === 0
+      ? check("claude-config-roots", "pass", `1 Claude config root in use: ${configDir}`)
+      : check(
+          "claude-config-roots",
+          "warn",
+          `${roots.length} Claude config roots found (${otherRoots.join(", ")} besides ${configDir}). ` +
+            "Transcripts from all of them are readable; agent wiring installed at user scope reaches " +
+            "only the active root — run `glosa init --scope user` with CLAUDE_CONFIG_DIR set to each " +
+            "of the others to wire them too",
         ),
   );
 

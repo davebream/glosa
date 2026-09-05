@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 15 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 16 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -54,6 +54,9 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
     },
     glosaHome: () => home,
     claudeConfigDir: () => freshDir(),
+    // A machine with no account switcher: the active root is the only root. Tests that care about
+    // several roots override this — nothing here may read the developer's real `~/.ccs`.
+    claudeConfigRoots: () => [],
     ...overrides,
   };
   return { deps, client, home };
@@ -79,6 +82,7 @@ describe("glosa doctor", () => {
     expect(deps.which("bun")).toBe(Bun.which("bun", { PATH: Bun.env.PATH ?? "" }));
     expect(deps.runVersionProbe([join(home, "definitely-missing-binary"), "--version"])).toBeNull();
     expect(deps.claudeConfigDir()).toBeTruthy();
+    expect(deps.claudeConfigRoots()).toContain(deps.claudeConfigDir());
   });
 
   test("realDoctorDeps scrubs ANTHROPIC_API_KEY from successful version probes", () => {
@@ -123,6 +127,36 @@ describe("glosa doctor", () => {
     expect(statSync(tokenPath(home)).mode & 0o777).not.toBe(0o600);
   });
 
+  test("claude-config-roots: one root passes, several WARN and name the ones not wired", async () => {
+    // An account switcher runs Claude with its own CLAUDE_CONFIG_DIR per account, so sessions exist
+    // that the active root knows nothing about. Silence there reads as "glosa supports this" when
+    // in fact user-scope wiring never reaches those sessions.
+    const active = freshDir();
+    const other = freshDir();
+
+    const only = makeDeps({ claudeConfigDir: () => active, claudeConfigRoots: () => [active] });
+    const onlyResult = await runDoctor(freshDir(), only.deps);
+    expect(findCheck(onlyResult.data.checks, "claude-config-roots")?.status).toBe("pass");
+
+    const several = makeDeps({ claudeConfigDir: () => active, claudeConfigRoots: () => [active, other] });
+    const severalResult = await runDoctor(freshDir(), several.deps);
+    const check = findCheck(severalResult.data.checks, "claude-config-roots");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain(other);
+    // A warning must not fail the run: an unwired switcher instance is a gap to report, not a break.
+    expect(severalResult.exitCode).not.toBe(9);
+  });
+
+  test("claude-config-roots ignores a root that does not exist on disk", async () => {
+    const active = freshDir();
+    const { deps } = makeDeps({
+      claudeConfigDir: () => active,
+      claudeConfigRoots: () => [active, join(active, "never-created")],
+    });
+    const result = await runDoctor(freshDir(), deps);
+    expect(findCheck(result.data.checks, "claude-config-roots")?.status).toBe("pass");
+  });
+
   test("token file absent -> WARN, not fail (not yet paired)", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
@@ -151,7 +185,7 @@ describe("glosa doctor", () => {
     expect(workspaceCheck?.detail).toContain("1 tracked artifact");
   });
 
-  test("workspace reports journal bytes and physical line count without adding a sixteenth check", async () => {
+  test("workspace reports journal bytes and physical line count without adding a seventeenth check", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
     writeFileSync(join(dir, "notes.md"), "# hello\n");
@@ -164,7 +198,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(15);
+    expect(result.data.checks).toHaveLength(16);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -210,7 +244,7 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(15);
+    expect(unreadable.data.checks).toHaveLength(16);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
@@ -269,7 +303,7 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(15);
+    expect(parsed.data.checks).toHaveLength(16);
   });
 
   test("pending-delivery: queued entries without wiring -> WARN; with wiring -> pass; daemon down -> SKIP", async () => {

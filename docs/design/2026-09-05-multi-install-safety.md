@@ -1,7 +1,8 @@
 # Design — surviving a machine that runs glosa more than once
 
 **Date:** 2026-09-05
-**Status:** PR A and PR B implemented. PR C is confirmed direction, not yet built.
+**Status:** PR A and PR B implemented. PR C partly implemented — §5.1, §5.2 and §5.6
+shipped; §5.3–§5.5 (writing to every root in one command) remain confirmed direction, not yet built.
 Revised after adversarial and security review (§8) before any code was written.
 **Surfaces:** `packages/daemon/src/lifecycle`, `packages/daemon/src/transport`,
 `packages/daemon/src/transcript`, `packages/cli/src`, `packages/providers/claude-code/src`,
@@ -322,7 +323,13 @@ Adversarially reviewed and revised before implementation. Findings adopted:
 1. **PR A** — done. A1 → A2 → A3 → A4 → A5, each with tests, then `decisions.md`, the A5
    appendix, `CHANGELOG.md`, `CONTRIBUTING.md`.
 2. **PR B** — done. The SPA foreign-daemon state, on A1's handshake field.
-3. **PR C** — Claude config roots, transcripts first.
+3. **PR C** — Claude config roots. Shipped: honouring `$CLAUDE_CONFIG_DIR` in init (§5.1),
+   multi-root transcript confinement (§5.2), and doctor reporting (§5.6). Still to build: §5.3–§5.5,
+   which write to every discovered root in one command. Held back deliberately — that step merges
+   into several files glosa does not own, including per-account `.claude.json` registries a switcher
+   actively rewrites, and it needs §5.4's confinement rule implemented and reviewed on its own
+   rather than folded into a change that also fixes two live bugs. Until then one `init` wires one
+   root and `doctor` names the rest.
 
 Gate for each: the narrowest relevant suites, then `bun run typecheck`, `bun test`, `bun run lint`,
 `bun run format:check`. None gets auto-merge — all three touch surfaces AGENTS.md marks
