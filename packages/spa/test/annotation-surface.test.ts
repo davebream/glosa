@@ -256,44 +256,35 @@ describe("the annotation surface", () => {
     expect(bodies).toEqual(["second wording"]);
   });
 
-  test("a session applying a note turns it into reversible history: Resolved, with Undo to its pre-apply checkpoint", async () => {
-    const da = fakeDataAccess({
-      async getCheckpoints(this: any) {
-        this.checkpointCalls++;
-        return [
-          // The lease's own "before" — stamped with the entry by `apply-begin` (Glosa-Entry).
-          {
-            checkpoint_id: "pre111",
-            at: "2026-09-05T10:00:00Z",
-            by: "unknown",
-            summary: "pre_apply",
-            bytes_changed: 20,
-            origin: "workspace",
-            entry: "inb-1",
-          },
-          // The "after". Restoring to THIS would be a no-op dressed up as an undo.
-          {
-            checkpoint_id: "post22",
-            at: "2026-09-05T10:02:00Z",
-            by: "session:s1",
-            summary: "applied",
-            bytes_changed: 40,
-            origin: "workspace",
-            entry: "inb-1",
-          },
-        ];
-      },
+  /** The two journal events `glosa resolve <id> applied --session <sid>` actually appends, in the
+   * order the daemon notifies them (bus.ts `resolveEntry`): the lease closes first, stating the
+   * proven `pre_sha..post_sha` interval, then the status transition flips the entry.
+   *
+   * The previous version of these tests invented the shape instead of copying it — a
+   * `getCheckpoints` row with `summary: "pre_apply"` carrying the entry — and every assertion
+   * passed against a premise the daemon does not hold. Undo was dead in a published release and
+   * the suite was green. Drive the real sequence, or the test only proves the fake agrees. */
+  function resolveApplied(pane: any, entry: string, { preSha = "pre111", postSha = "post222" } = {}) {
+    pane.applyJournalEvent({
+      event: "apply_end",
+      entry,
+      by: "session:s1",
+      detail: { lease_id: "lease-1", pre_sha: preSha, post_sha: postSha },
     });
+    pane.applyJournalEvent({
+      event: "transition_committed",
+      entry,
+      by: "session:s1",
+      detail: { to: "applied", outcome: "applied" },
+    });
+  }
+
+  test("a session applying a note turns it into reversible history: Resolved, with Undo to the lease's own pre_sha", async () => {
+    const da = fakeDataAccess();
     const { host, pane } = await mountPane(da);
     await annotate(host, 0, 10, "tighten this");
 
-    // Exactly what the daemon streams when `glosa resolve inb-1 applied --session s1` closes the lease.
-    pane.applyJournalEvent({
-      event: "transition_committed",
-      entry: "inb-1",
-      detail: { to: "applied", lease_id: "lease-1", post_sha: "post22" },
-      by: "session:s1",
-    });
+    resolveApplied(pane, "inb-1", { preSha: "89115cd" });
     await paint();
     await paint();
 
@@ -307,7 +298,6 @@ describe("the annotation surface", () => {
     expect(card.querySelector(".glosa-annotation-edit")).toBeNull();
     expect(card.querySelector(".glosa-annotation-remove").textContent).toBe("Dismiss");
 
-    // Undo is offered because the lease left a proven "before" to return to.
     const undo = q(card, ".glosa-annotation-undo");
     expect(undo).not.toBeNull();
 
@@ -321,34 +311,25 @@ describe("the annotation surface", () => {
     q(dialog, ".glosa-btn-danger").click();
     await paint();
 
-    // It restores to the PRE-apply checkpoint for this entry, on this artifact.
-    expect(da.restored).toEqual([{ path: "notes.md", to: "pre111", force: false }]);
+    // The sha the lease itself recorded — never a commit guessed at from the checkpoint list.
+    expect(da.restored).toEqual([{ path: "notes.md", to: "89115cd", force: false }]);
+    // And it never needed the checkpoint history to find it.
+    expect(da.checkpointCalls).toBe(0);
   });
 
-  test("no proven pre-apply checkpoint, no undo offer — glosa never promises a rollback it cannot perform", async () => {
-    const da = fakeDataAccess({
-      async getCheckpoints(this: any) {
-        this.checkpointCalls++;
-        // A session that edited WITHOUT taking an apply-lease leaves no entry-stamped "before".
-        return [
-          {
-            checkpoint_id: "aaa",
-            at: "2026-09-05T10:00:00Z",
-            by: "unknown",
-            summary: "auto_checkpoint",
-            bytes_changed: 20,
-            origin: "workspace",
-          },
-        ];
-      },
-    });
+  test("an applied note whose lease never closed offers no undo — glosa cannot prove a 'before'", async () => {
+    const da = fakeDataAccess();
     const { host, pane } = await mountPane(da);
     await annotate(host, 0, 10, "tighten this");
+
+    // A session that edited and resolved without the pane ever seeing the lease close (it
+    // connected late, or the edit was made with no lease at all). The status is still honest;
+    // the rollback offer is simply absent rather than pointing somewhere unproven.
     pane.applyJournalEvent({
       event: "transition_committed",
       entry: "inb-1",
-      detail: { to: "applied" },
       by: "session:s1",
+      detail: { to: "applied", outcome: "applied" },
     });
     await paint();
     await paint();
@@ -356,5 +337,6 @@ describe("the annotation surface", () => {
     const card = q(host, ".glosa-annotation");
     expect(card.getAttribute("data-state")).toBe("applied");
     expect(card.querySelector(".glosa-annotation-undo")).toBeNull();
+    expect(da.restored).toEqual([]);
   });
 });

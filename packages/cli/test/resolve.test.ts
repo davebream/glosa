@@ -17,6 +17,26 @@ function makeClientDeps(client: FakeGlosaApiClient = new FakeGlosaApiClient()) {
   return { deps: { createClient: async () => client as unknown as GlosaApiClient }, client };
 }
 
+describe("cross-workspace scoping (the entry names the workspace, not the cwd)", () => {
+  // An agent working in its own repo while reviewing documents elsewhere must be able to act on
+  // its own inbox. Before `--workspace`, both commands were scoped to the caller's cwd, so such a
+  // call silently targeted whatever workspace that directory belonged to and failed inside it.
+  test("apply-begin sends the named workspace, not the caller's directory", async () => {
+    const { deps, client } = makeClientDeps();
+    const result = await runApplyBegin({ dir: "/vault/notes", id: "inb-1", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(0);
+    expect(client.calls[0]).toMatchObject({ method: "applyBegin", args: ["/vault/notes", "inb-1", "sess-1"] });
+    expect((client.calls[0] as { args: string[] }).args[0]).not.toBe(process.cwd());
+  });
+
+  test("resolve sends the named workspace, not the caller's directory", async () => {
+    const { deps, client } = makeClientDeps();
+    const result = await runResolve({ dir: "/vault/notes", id: "inb-1", outcome: "applied", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(0);
+    expect((client.calls[0] as { args: string[] }).args[0]).toBe("/vault/notes");
+  });
+});
+
 describe("glosa resolve", () => {
   test("missing <id> -> exit 2 (usage), never touches the daemon", async () => {
     const client = new FakeGlosaApiClient();

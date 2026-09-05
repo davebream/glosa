@@ -1065,7 +1065,14 @@ export class WorkspaceBus {
         entry,
         event: "apply_end",
         by: `session:${attributedSession}`,
-        detail: { lease_id: lease.leaseId, post_sha: postSha },
+        // BOTH ends of the interval. `apply_end` is the event that declares the proven
+        // `pre_sha..post_sha` diff (F05), so recording only the post half left every consumer
+        // unable to compute the very thing this event exists to describe — including the reader
+        // being offered "undo what the session just applied", whose rollback target IS `pre_sha`.
+        // It is not recoverable from the checkpoint graph either: `checkpoint()` is idempotent, so
+        // a lease taken against a clean worktree writes no `pre_apply` commit at all and `pre_sha`
+        // is simply whatever HEAD already was (a `baseline`, a prior `post_apply`, ...).
+        detail: { lease_id: lease.leaseId, pre_sha: lease.preSha, post_sha: postSha },
       };
       appendEvent(this.writer, endEvent);
       applyEvent(this.state, endEvent, this.reducer);

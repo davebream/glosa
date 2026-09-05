@@ -92,6 +92,9 @@ describe("actionable inbox presentations", () => {
     const text = result?.text ?? "";
     expect(text).toContain("glosa apply-begin inb-a --session");
     expect(text).toContain("glosa resolve inb-a applied --session");
+    // Both commands default to the caller's cwd, which is not necessarily this entry's workspace
+    // — an agent reviewing documents outside its own repo would otherwise act on the wrong one.
+    expect(text).toContain("--workspace");
     // The other verdicts are named too, so "I am not doing this" has an honest terminal state
     // instead of an entry left open forever.
     expect(text).toContain("rejected");

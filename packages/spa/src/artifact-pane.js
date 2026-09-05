@@ -237,12 +237,19 @@ export function createArtifactPane(host, deps) {
   let annotations = []; // [{record, id, state, attempts?, error?}] for THIS pane's one artifact
   let composer = null; // {record, replacing?, ...} while the annotation composer is open
   let trayOpen = false; // the compact collection tray: collapsed to its count strip by default
-  // entry id -> the `pre_apply` checkpoint taken when an agent took the apply-lease for it. This
-  // is the artifact's state immediately BEFORE that annotation was acted on, so it is exactly
-  // what "undo this" restores to. Read from the shadow-git history, never cached from a live
-  // event: a reader who reloads after the agent finished must still be offered the rollback.
+  // entry id -> the shadow-git sha the artifact was at when a session took the apply-lease for it
+  // (`apply_end.detail.pre_sha`, A4 F05). That is the state immediately BEFORE the annotation was
+  // acted on, so it is exactly what "undo this" restores to.
+  //
+  // Read from the lease-closing journal event, because that is the only place it is stated. The
+  // first version of this scanned the checkpoint list for a `pre_apply` commit carrying the entry
+  // and found nothing in the ordinary case: `checkpoint()` is idempotent, so a lease taken while
+  // the worktree is clean writes no commit, and `pre_sha` is just the existing HEAD — a
+  // `baseline`, or the `post_apply` of an earlier cycle. Undo silently never appeared.
+  //
+  // Cards are session-local (`annotations` is only ever filled by a POST in this pane), so an
+  // in-memory map lives exactly as long as the cards that consult it.
   let rollbackPoints = new Map();
-  let rollbackLoaded = false;
   let previewItem = null; // the annotation whose passage the pointer is currently over
   let previewCloseTimer = null;
   let annotatableFocusIndex = 0;
@@ -1143,6 +1150,11 @@ export function createArtifactPane(host, deps) {
     if (!item) return false;
     if (event.event === "transition_committed" && typeof event.detail?.to === "string") {
       item.state = event.detail.to === "pending" ? "waiting" : event.detail.to;
+    } else if (event.event === "apply_end" && typeof event.detail?.pre_sha === "string") {
+      // The lease closing is the ONLY place the rollback target is stated. It is notified just
+      // before the `transition_committed` that flips this card to `applied`, so by the time the
+      // card re-renders and asks whether to offer Undo, the answer is already here.
+      rollbackPoints.set(event.entry, event.detail.pre_sha);
     } else if (event.event === "delivery_attempt") {
       item.attempts = (item.attempts ?? 0) + 1;
     } else {
@@ -1241,28 +1253,6 @@ export function createArtifactPane(host, deps) {
   /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`), so
    * there is nothing left to withdraw and nothing to revise. */
   const isTerminalState = (state) => state === "applied" || state === "rejected" || state === "stale";
-
-  /** Loads the entry→pre-apply-checkpoint map from shadow-git history. Called when the annotation
-   * set first contains something an agent has applied; a workspace where nothing was ever applied
-   * never pays for it. Failure is silent by design — history is an ENHANCEMENT to the card (it
-   * adds an undo), and losing it must never take the card itself down with it. */
-  async function loadRollbackPoints() {
-    if (rollbackLoaded || !slug || typeof dataAccess.getCheckpoints !== "function") return;
-    rollbackLoaded = true;
-    try {
-      const rows = await dataAccess.getCheckpoints(slug, { limit: 200 });
-      const next = new Map();
-      for (const row of Array.isArray(rows) ? rows : []) {
-        // Only `pre_apply`. An `applied` checkpoint is the state AFTER the agent's edit; restoring
-        // to it would be a no-op dressed up as an undo.
-        if (row?.summary === "pre_apply" && row.entry && row.checkpoint_id) next.set(row.entry, row.checkpoint_id);
-      }
-      rollbackPoints = next;
-      if (!destroyed) renderMargin();
-    } catch {
-      rollbackLoaded = false; // a transient failure should not permanently disable undo
-    }
-  }
 
   /** Restores the artifact to the state it was in before an agent applied this annotation. Same
    * machinery, guard and force-confirmation as the history pane's restore — an undo is a restore
@@ -1646,9 +1636,9 @@ export function createArtifactPane(host, deps) {
         );
       }
       // An applied annotation is history, not a task — but history a reader can still walk back.
-      // The offer appears only when the lease actually left a `pre_apply` checkpoint to return to,
-      // so glosa never promises an undo it cannot perform (a session that edited without taking a
-      // lease leaves no proven "before", and the card stays honestly silent about it).
+      // The offer appears only when a closed lease actually stated the sha to return to, so glosa
+      // never promises an undo it cannot perform: a session that edited without taking a lease
+      // proves no "before", and the card stays honestly silent about it.
       if (state === "applied" && rollbackPoints.has(item.id)) {
         actionGroup.append(
           el("button", {
@@ -1728,7 +1718,6 @@ export function createArtifactPane(host, deps) {
       cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
       for (const item of resolved) cardHost.append(buildAnnotationCard(item));
     }
-    if (resolved.some((item) => item.state === "applied")) void loadRollbackPoints();
     renderTray();
     if (!composer && annotations.length === 0 && cardHost === marginEl) {
       marginEl.append(

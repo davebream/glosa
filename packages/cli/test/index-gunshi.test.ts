@@ -114,6 +114,11 @@ describe("Gunshi command surface", () => {
     expect(root.stdout).not.toContain("checkpoints");
     expect(root.stderr).toBe("");
     expect(runCli(["request-review", "--help"]).stdout).toContain("--require-approval");
+    // An entry id already names one workspace, so both lease commands must let a caller standing
+    // somewhere else say which — `inbox get`, the other entry-id command, always could.
+    for (const command of ["resolve", "apply-begin", "inbox"]) {
+      expect(runCli([command, "--help"]).stdout).toContain("--workspace");
+    }
   });
 
   test("no-args and version output preserve their contracts", () => {
