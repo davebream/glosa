@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.17] - 2026-09-05
+
+The release gives an agent a way to ask the person reading its work a question about a
+particular passage, and to wait for the answer — in the margin, beside the words it is about,
+rather than in a terminal the reader is not looking at.
+
 ### Added
 
 - An agent can point at a passage and ask about it, and wait for the answer. The question appears in
