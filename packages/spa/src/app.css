@@ -2713,18 +2713,16 @@ input,
    At rest the rule is graphite: a session pointing at something is not the reviewer's own action,
    so it spends nothing from the accent budget. It goes olive only while it is the passage being
    answered, which is exactly what --primary is for. */
+/* Spans the pane; each rule carries its own measured `left`, because the distance that matters
+   is to the TEXT column, which a CSS offset against the content box cannot see. */
 .glosa-sidelines {
   position: absolute;
-  top: 0;
-  /* Mirrors .glosa-markers on the opposite edge of the measure: dots right, sidelines left. */
-  left: max(var(--space-3), calc(50% - var(--manuscript-block) / 2 - 16px));
-  width: 3px;
+  inset: 0;
   pointer-events: none;
 }
 
 .glosa-sideline {
   position: absolute;
-  left: 0;
   width: 2px;
   border-radius: var(--radius-focus);
   background: var(--border-strong);
@@ -2834,6 +2832,47 @@ input,
   cursor: pointer;
 }
 
+/* The radio is drawn, not inherited. A native one renders from `color-scheme`, and under an
+   explicit dark theme Chromium paints an UNCHECKED radio as a solid light disc — every option
+   reads as the selected one, which is worse than no indicator at all. Drawing it also puts the
+   control on the palette, the way the caret and the scrollbar already are. */
+.glosa-agent-option input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg);
+  display: grid;
+  place-content: center;
+}
+
+.glosa-agent-option input[type="radio"]::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: scale(0);
+  background: var(--primary);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.glosa-agent-option input[type="radio"]:checked {
+  border-color: var(--primary);
+}
+
+.glosa-agent-option input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+.glosa-agent-option input[type="radio"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Selection is fill, edge AND weight together — never colour alone (Status Needs Shape). */
 .glosa-agent-option:has(input:checked) {
   border-color: var(--primary);
   background: var(--anchor-wash);
