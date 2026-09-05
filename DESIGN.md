@@ -28,17 +28,22 @@ colors:
   dark-workbench-olive: "oklch(0.68 0.085 110)"
 typography:
   manuscript-title:
-    fontFamily: "ui-serif, Iowan Old Style, Georgia, serif"
-    fontSize: "1.75rem"
+    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
+    fontSize: "2rem"
+    fontWeight: 600
+    lineHeight: 1.15
+  manuscript-section:
+    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
+    fontSize: "1.5rem"
     fontWeight: 600
     lineHeight: 1.25
   manuscript-subhead:
-    fontFamily: "ui-serif, Iowan Old Style, Georgia, serif"
+    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
     fontSize: "1.125rem"
     fontWeight: 600
     lineHeight: 1.4
   headline:
-    fontFamily: "ui-serif, Iowan Old Style, Georgia, serif"
+    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
     fontSize: "1.375rem"
     fontWeight: 600
     lineHeight: 1.5
@@ -48,7 +53,7 @@ typography:
     fontWeight: 600
     lineHeight: 1.5
   body:
-    fontFamily: "ui-serif, Iowan Old Style, Georgia, serif"
+    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
     fontSize: "1.0625rem"
     fontWeight: 400
     lineHeight: 1.6
@@ -153,15 +158,16 @@ The top bar owns one quiet, icon-only appearance control at its far edge. Its na
 
 ## 3. Typography
 
-**Display Font:** `ui-serif` with Iowan Old Style and Georgia fallbacks
-**Body Font:** `ui-serif` with Iowan Old Style and Georgia fallbacks for rendered writing; `system-ui` for product prose
+**Display Font:** Iowan Old Style, with Charter, `ui-serif`, and Georgia fallbacks
+**Body Font:** Iowan Old Style (same fallbacks) for rendered writing; `system-ui` for product prose. The book face is named first because `ui-serif` resolves to New York in Safari and to nothing in Chromium, and the two differ by 65px over the 68ch measure the annotation rail is calibrated to.
 **Label/Mono Font:** `system-ui` for controls; `ui-monospace` with SF Mono and Menlo fallbacks for paths and technical metadata
 
-**Character:** Editorial manuscript plus quiet humanist product chrome. The serif/sans contrast separates the artifact from commentary on the artifact; mono appears only when the content is genuinely technical.
+**Character:** Editorial manuscript plus quiet humanist product chrome. The serif/sans contrast separates the artifact from commentary on the artifact; mono appears only when the content is genuinely technical. Inside the manuscript, emphasis is semibold rather than the serif's full bold, titles carry a touch of negative tracking, list markers step back to Muted Ink, a blockquote hangs from a one-pixel Strong Border rule, the section break is a short 4rem rule, and tables are set with horizontal rules only. The caret and any visible scrollbar take the palette too.
 
 ### Hierarchy
-- **Manuscript Title** (600, 1.75rem): First-party artifact `h1`; editorial content rather than product chrome.
-- **Manuscript Subhead** (600, 1.125rem): First-party artifact `h3`; preserves the authored document hierarchy.
+- **Manuscript Title** (600, 2rem, 1.15): First-party artifact `h1`; editorial content rather than product chrome, with a touch of negative tracking.
+- **Manuscript Section** (600, 1.5rem): First-party artifact `h2`, opened by three rems of air above it.
+- **Manuscript Subhead** (600, 1.125rem): First-party artifact `h3`; two rems above, half a rem below, and closed up when it follows its section heading directly.
 - **Headline** (600, 1.375rem): Boot-screen and dialog headlines; balanced wrapping.
 - **Title** (600, 0.9375rem): Panel and grouped-control titles.
 - **Body** (400, 1.0625rem, 1.6): Rendered manuscripts at a 68ch maximum measure with pretty wrapping.
@@ -172,6 +178,8 @@ The top bar owns one quiet, icon-only appearance control at its far edge. Its na
 
 **The Reading Measure Rule.** Manuscript prose stays between 65ch and 75ch with generous line-height. Operational panels may be denser; writing never becomes a data table.
 
+**The Prose Rhythm Rule.** Blocks in the manuscript are separated by `1.2em` of the body size, lists by a third of an em per item, and the page opens with four rems above the title and closes with six below the last line. Headings always carry more space above than below.
+
 **The Preview Boundary Rule.** Preview keeps only artifact access, the mode switch, and More in persistent chrome. Navigation, version comparison, agent context, appearance, and shortcuts open as contextual surfaces; anything that changes an artifact or sends feedback requires an explicit Annotate or Edit transition. Honest state signals — the connection banner and the compact Agent feedback control — are admitted persistent chrome: they report whether the workbench's promises currently hold, at Metadata typography with no elevation, and carry at most the single contextual popover their state describes.
 
 **The No Display Labels Rule.** Buttons, tabs, chips, paths, and state labels never use expressive display typography.
@@ -181,9 +189,11 @@ The top bar owns one quiet, icon-only appearance control at its far edge. Its na
 The workspace is flat at rest. Spacing, one-pixel borders, and tonal layering establish structure; elevation appears only when a component genuinely floats over the work, such as a dialog, compact drawer, or bottom composer tray. Focus halos communicate interaction state, not physical depth.
 
 ### Shadow Vocabulary
-- **Composer Rest:** A tight 1px/3px shadow separates the margin composer without turning it into a card.
-- **Drawer Edge:** A narrow directional shadow clarifies that the compact navigator overlays the manuscript.
-- **Dialog Float:** A broad shadow is reserved for the blocking native dialog and is paired with a dim backdrop because it is an actual overlay.
+Four tokens, each two layers: a tight edge that separates and a broad offset lift so the light has a direction. In dark appearance they become black-based and tighter, and nothing at rest casts one.
+- **Composer Rest** (`--shadow-rest`): A 1px/2px edge separates the margin composer without turning it into a card.
+- **Menu Lift** (`--shadow-menu`): Every menu and popover — More, appearance, pane tools, agent feedback, attention.
+- **Tray Edge** (`--shadow-tray`): The upward shadow on the compact bottom composer tray.
+- **Dialog Float** (`--shadow-dialog`): Reserved for the blocking native dialog and paired with a dim backdrop because it is an actual overlay.
 
 ### Named Rules
 
@@ -202,8 +212,12 @@ The workspace is flat at rest. Spacing, one-pixel borders, and tonal layering es
 - **Style:** Annotation intent is a free-wrapping pill with a quiet full border, not a segmented tub.
 - **State:** Selection uses a restrained olive tint plus weight and border so it is never color-alone. Provenance chips use distinct solid, tinted, and dashed shapes.
 
+### Segmented Control
+- **Style:** The Preview / Annotate / Edit switch sits on a 28px Sunken Surface track with eight-pixel corners; segments are 24px with six-pixel corners (track radius minus its 2px padding, so the shapes stay concentric). The active segment is Reading Surface with a one-pixel Quiet Border ring, Ink text, and semibold weight — fill, edge, and weight together, never colour alone.
+- **Placement:** In the artifact header row, which is transparent paper at the manuscript's width: directory in Metadata type at the left edge of the measure, the control and its History and More companions at the right edge. An unfocused pane shows the mode as a Metadata label in the same slot.
+
 ### Cards / Containers
-- **Corner Style:** Eight pixels for panels, ten for the composer, twelve only for overlays.
+- **Corner Style:** Eight pixels for panels, ten for the composer, twelve only for overlays. Every radius is a token (`--radius-micro` 4, `--radius-tool` 5, `--radius-control` 6, `--radius-panel` 8, `--radius-composer` 10, `--radius-overlay` 12, `--radius-pill`); a shape nested inside a padded container takes the container's radius minus that padding.
 - **Background:** Reading Surface for focused work inside Control Surface chrome.
 - **Shadow Strategy:** Flat at rest; the composer gets only a tight separation shadow.
 - **Border:** Full quiet borders. Colored side stripes are prohibited.
@@ -215,7 +229,10 @@ The workspace is flat at rest. Spacing, one-pixel borders, and tonal layering es
 - **Error / Disabled:** Semantic color is accompanied by text; user-entered text is never discarded on failure.
 
 ### Navigation
-- **Style:** A 260px sage-tinted navigator with small sans headings, compact 28px tree rows, and no resting elevation. Current rows use a sunken background plus olive text and weight. Below 1024px it becomes an explicit drawer over a backdrop.
+- **Style:** A 260px sage-tinted navigator with small sans headings, compact 28px tree rows, and no resting elevation. The first heading row is exactly one tab strip tall, so "Artifacts" sits on the same horizon as the tab labels across the divider. Current rows use a sunken background plus olive text and weight; a file open in some pane carries a 5px Muted Ink dot in the disclosure slot it never uses (olive when it is the current one), so open and closed rows keep their icons on one vertical line.
+
+### Tabs
+- **Style:** The strip is Control Surface with a one-pixel bottom rule painted as an inset shadow. Resting tabs are transparent with Muted Ink labels, separated by a 14px hairline rather than a full-height wall; the hairline steps aside on both sides of the active tab. The active tab is Reading Surface with one-pixel side edges and a 2px olive top edge, and it covers the strip's bottom rule so its paper runs unbroken into the manuscript — an index tab on a sheet, not a button on a bar. An unfocused group's visible tab keeps the sheet with a Strong Border top edge.
 
 ### Appearance Control
 - **Style:** A 32px icon button with a 44px invisible hit target, separated from the work modes by a quiet divider. Its popover is a compact 176px menu with three 36px rows and a checkmark for the selected value.
