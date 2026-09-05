@@ -781,6 +781,45 @@ describe("ensureDaemon — client", () => {
     }
   }, 25000);
 
+  test("a same-semver divergent daemon from ANOTHER install is refused, never signalled", async () => {
+    // The regression this whole rule exists for: a source checkout and a release install of the
+    // same version each read the other as "different build" and SIGTERM it, forever. The daemon
+    // here is byte-divergent exactly like the convergence test above — the ONLY difference is that
+    // it belongs to someone else, and that alone must flip takeover into refusal.
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    const divergentBuild = `${APP_VERSION}-${BUILD_ID.endsWith("0000000000000000") ? "1111111111111111" : "0000000000000000"}`;
+    const daemon = spawnVersionedDaemon(home, port, divergentBuild, {
+      GLOSA_FIXTURE_INSTALL_ID: "ffffffffffffffff",
+    });
+    try {
+      expect((await waitForHandshake(port))?.build_id).toBe(divergentBuild);
+      process.env.GLOSA_HOME = home;
+      process.env.GLOSA_PORT = String(port);
+
+      const result = await ensureDaemon();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain("different glosa install");
+        // Refusing is only useful if the user is told how to proceed by hand.
+        expect(result.reason).toContain(`kill -TERM ${daemon.pid}`);
+        expect(result.logPath).toBe(logPath(home));
+      }
+      // The load-bearing assertion: still running, still the lock owner. Nothing was signalled.
+      expect(daemon.exitCode).toBeNull();
+      expect(lockOf(home)?.pid).toBe(daemon.pid);
+    } finally {
+      await stopDaemon(home, daemon);
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 15000);
+
   test("retries when a replacement changes ownership between the lock read and handshake", async () => {
     const home = freshHome();
     const savedHome = process.env.GLOSA_HOME;

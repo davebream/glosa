@@ -21,6 +21,14 @@ describe("handshake migration parsing", () => {
     expect(parseHandshakeResponse({ ...base, build_id: 42 })).toBeNull();
     expect(parseHandshakeResponse({ ...base, pid: "42" })).toBeNull();
   });
+
+  test("accepts an absent install identity but rejects a non-string one", () => {
+    // Absent means "peer predates install identity" — unknown, never "same install as mine".
+    expect(parseHandshakeResponse(base)?.install_id).toBeUndefined();
+    const withInstall = { ...base, install_id: "0123456789abcdef" };
+    expect(parseHandshakeResponse(withInstall)).toEqual(withInstall);
+    expect(parseHandshakeResponse({ ...base, install_id: 42 })).toBeNull();
+  });
 });
 
 describe("pollHandshake", () => {

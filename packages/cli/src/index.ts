@@ -1061,6 +1061,40 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
   return normalized;
 }
 
+/** Commands whose stderr is consumed by a machine, not read by a person: the detached daemon logs
+ * it, the agent hooks and the MCP server hand it to their host. None of them should carry advice. */
+const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "complete"]);
+
+let devNoticeShown = false;
+
+/**
+ * Tell a developer, once, that this checkout is talking to its own daemon rather than the one their
+ * published `glosa` uses (A5 §F13). Without it the difference shows up as an inexplicably empty
+ * workspace list — the state is in `~/.glosa`, and a checkout deliberately no longer looks there.
+ *
+ * Emitted from the CLI boundary rather than the resolvers so `glosaHome()`/`glosaPort()` stay pure
+ * and safe to call anywhere, any number of times.
+ */
+async function noticeDevDefaults(argv: readonly string[]): Promise<void> {
+  if (devNoticeShown) return;
+  const command = argv[0];
+  if (command === undefined || command.startsWith("-") || DEV_NOTICE_SILENT_COMMANDS.has(command)) return;
+  // A6's output contract is that a successful command writes NOTHING to stderr, and the command
+  // surface tests hold it exactly. An interactive terminal is the one place this advice can go
+  // without becoming output some caller has to parse around: a pipe, a capture or a `--json`/
+  // `--quiet` consumer sees the same bytes it always did.
+  if (!process.stderr.isTTY) return;
+  if (argv.includes("--json") || argv.includes("--quiet")) return;
+  const { usingDevDefaults, glosaPort } = await import("../../daemon/src/lifecycle/port.ts");
+  if (!usingDevDefaults()) return;
+  const { glosaHome } = await import("../../daemon/src/lifecycle/home.ts");
+  devNoticeShown = true;
+  process.stderr.write(
+    `glosa: running from a source checkout — using GLOSA_HOME=${glosaHome()} and GLOSA_PORT=${glosaPort()} ` +
+      "so this checkout cannot disturb an installed glosa. Set either variable to override.\n",
+  );
+}
+
 /** Run the glosa CLI and return an A6 process exit code. */
 export async function run(argv: readonly string[], deps: CliRunDependencies = {}): Promise<number> {
   if (argv.length === 1 && argv[0] === "--build-id") {
@@ -1068,6 +1102,8 @@ export async function run(argv: readonly string[], deps: CliRunDependencies = {}
     process.stdout.write(`${BUILD_ID}\n`);
     return EXIT_CODES.OK;
   }
+
+  await noticeDevDefaults(argv);
 
   let exitCode: number = EXIT_CODES.OK;
   const root = define({

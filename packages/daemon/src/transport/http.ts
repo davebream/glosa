@@ -24,6 +24,7 @@ import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes }
 import { probeInitManifest } from "../init-probe.ts";
 import type { InitRunner } from "../init-runner.ts";
 import { BUILD_ID } from "../lifecycle/build-id.ts";
+import { INSTALL_ID } from "../lifecycle/install.ts";
 import { glosaHome } from "../lifecycle/home.ts";
 import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
@@ -172,6 +173,11 @@ export interface ApiContext {
   artifactWatcherRegistry?: ArtifactWatcherRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
   shutdownSignal?: AbortSignal;
+  /** Throttled 401 diagnostics (A3 §4). Optional so every hand-built test context keeps compiling;
+   * production wires `createRejectionRecorder` over the daemon log in lifecycle.ts. Scoped to the
+   * SPA/API listener — class-F carries its capability in the URL path and must never reach a
+   * recorder that could one day be asked to include one. */
+  recordRejection?: (reason: RejectionReason) => void;
   /** GLOSA_HOME for the orphaned-state scan in `GET /api/status` (issue #79). Optional and
    * defaulted to `glosaHome()` at the use site so every hand-built test context keeps compiling;
    * production wires the boot-time home (lifecycle.ts) so a custom `GLOSA_HOME` is honored. */
@@ -214,6 +220,10 @@ export interface HandshakeBody {
   contract_version: string;
   daemon_version: string;
   build_id: string;
+  /** Which install started this daemon (A5 §F13). A hash, never a path — this endpoint is
+   * tokenless. Lets `ensureDaemon` refuse to stop a daemon another install owns, and lets the SPA
+   * tell "my daemon restarted" apart from "something else is on this port". */
+  install_id: string;
   paired: boolean;
   protocol_version: string;
   instance_id: string;
@@ -223,6 +233,42 @@ export interface HandshakeBody {
 
 function checkHost(req: Request, port: number): boolean {
   return req.headers.get("Host") === `127.0.0.1:${port}`;
+}
+
+/** Why a request was refused, at the coarsest granularity that still answers "was the tab holding a
+ * stale credential, or had this daemon no credential at all?" — the question a de-pair report can
+ * never be settled without after the fact. */
+export type RejectionReason = "no-token-on-daemon" | "bearer-mismatch" | "credential-rotated";
+
+const REJECTION_THROTTLE_MS = 60_000;
+
+/**
+ * Throttled 401 recorder (A3 §4). Two deliberate omissions:
+ *
+ * - **No request path.** It is attacker-controlled, so logging it is both an injection vector into
+ *   a line-oriented log and unbounded key cardinality. A throttle keyed on the path is no throttle
+ *   at all: vary the path and every request is a fresh "first occurrence", which turns a diagnostic
+ *   into a disk-filling primitive for any local page. The key is the REASON alone.
+ * - **No credential, not even a prefix.** The whole point of the log is to be safe to read.
+ */
+export function createRejectionRecorder(
+  write: (line: string) => void,
+  now: () => number = () => Date.now(),
+): (reason: RejectionReason) => void {
+  const lastLoggedAt = new Map<RejectionReason, number>();
+  const suppressed = new Map<RejectionReason, number>();
+  return (reason) => {
+    const at = now();
+    const previous = lastLoggedAt.get(reason);
+    if (previous !== undefined && at - previous < REJECTION_THROTTLE_MS) {
+      suppressed.set(reason, (suppressed.get(reason) ?? 0) + 1);
+      return;
+    }
+    const held = suppressed.get(reason) ?? 0;
+    suppressed.delete(reason);
+    lastLoggedAt.set(reason, at);
+    write(held > 0 ? `401 ${reason} (${held} more suppressed in the last 60s)` : `401 ${reason}`);
+  };
 }
 
 function currentToken(token: ApiContext["token"]): string | null {
@@ -289,6 +335,7 @@ function handleHandshake(ctx: ApiContext): () => Response {
       contract_version: CONTRACT_VERSION,
       daemon_version: DAEMON_VERSION,
       build_id: BUILD_ID,
+      install_id: INSTALL_ID,
       paired: currentToken(ctx.token) !== null,
       protocol_version: PROTOCOL_VERSION,
       instance_id: ctx.instanceId,
@@ -1681,6 +1728,12 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         token: authSnapshot.token,
       });
       if (!authResult.ok) {
+        if (authResult.status === 401) {
+          // "This daemon holds no credential" and "the caller's credential is not this daemon's"
+          // are the same 401 on the wire (no oracle), but they are different diagnoses — and
+          // without the distinction a de-pair report cannot be settled after the fact.
+          ctx.recordRejection?.(authSnapshot.token === null ? "no-token-on-daemon" : "bearer-mismatch");
+        }
         const title = authResult.status === 401 ? "missing or invalid bearer token" : "origin not allowed";
         return withHeaders(problem(authResult.status, authResult.slug, title, undefined, url.pathname), csp);
       }
@@ -1724,6 +1777,7 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         // a stale request could otherwise create a capability after the generation subscriber ran.
         ctx.capabilityStore.clear();
         ctx.presentationTokenStore?.clear();
+        ctx.recordRejection?.("credential-rotated");
         return withHeaders(
           problem(401, "unauthorized", "missing or invalid bearer token", undefined, url.pathname),
           csp,
