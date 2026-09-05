@@ -6,17 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.0-alpha.15] - 2026-09-05
 
-- `glosa init --scope user` now targets `$CLAUDE_CONFIG_DIR` when Claude Code's configuration has
-  been relocated — which is what account switchers do to give each account its own root. It
-  previously always wrote `~/.claude/settings.json`, a file the asking session never reads, and
-  reported success.
-- Conversation transcripts from a session under a non-default Claude config root are no longer
-  refused. The daemon is a singleton and inherits one `CLAUDE_CONFIG_DIR` while serving sessions
-  from all of them, so single-root confinement rejected those paths with a 400 and the conversation
-  view was dead for them. Confinement now accepts any of the discovered roots, each realpath-confined
-  exactly as before.
+### Fixed
 
 - A glosa install no longer stops a daemon another install started. Daemons publish an `install_id`
   (a hash of their package root) in the lock and handshake, and a client that finds a divergent
@@ -29,27 +21,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   60000-65498; an explicit `GLOSA_HOME`, `GLOSA_PORT` or `--port` still wins, and the CLI reports
   the derived values once on an interactive terminal. **A checkout will no longer see workspaces
   registered in `~/.glosa`** — set `GLOSA_HOME=~/.glosa` to keep the previous behaviour.
-- "A process is bound to this port but is not answering the handshake" now names the PID and prints
-  the `lsof` and `kill -TERM` commands that clear it, instead of leaving the user to find the
-  process themselves.
 - A browser tab no longer loses its pairing for good when a different glosa install takes the port.
   A 401 is now attributed before anything is discarded: if the daemon answering is not the one that
   issued the tab's credential, the tab keeps it, stops sending it, waits on the tokenless handshake,
   and resumes on its own once its daemon is back. A genuine revocation still clears the credential
   exactly as before. Previously any 401 wiped `sessionStorage` and reloaded, and since the pairing
   token had already been stripped from the URL there was no way back short of `glosa open`.
+- `glosa init --scope user` now targets `$CLAUDE_CONFIG_DIR` when Claude Code's configuration has
+  been relocated — which is what account switchers do to give each account its own root. It
+  previously always wrote `~/.claude/settings.json`, a file the asking session never reads, and
+  reported success.
+- Conversation transcripts from a session under a non-default Claude config root are no longer
+  refused. The daemon is a singleton and inherits one `CLAUDE_CONFIG_DIR` while serving sessions
+  from all of them, so single-root confinement rejected those paths with a 400 and the conversation
+  view was dead for them. Confinement now accepts any of the discovered roots, each realpath-confined
+  exactly as before.
+- "A process is bound to this port but is not answering the handshake" now names the PID and prints
+  the `lsof` and `kill -TERM` commands that clear it, instead of leaving the user to find the
+  process themselves.
 
 ### Added
-
-- `glosa doctor` reports every Claude Code config root it can find and which are not wired. An
-  account switcher gives each account its own root, and user-scope wiring reaches only the active
-  one; the check names the others instead of leaving the gap silent.
 
 - The daemon records rejected requests in `daemon.log` by reason (`no-token-on-daemon`,
   `bearer-mismatch`, `credential-rotated`), throttled to one line per reason per minute with a
   suppressed count. It records no request path and no credential, so a caller cannot use it to grow
   the log or inject a line. Without this, a report of a browser tab losing its pairing could not be
   diagnosed after the fact.
+- `glosa doctor` reports every Claude Code config root it can find and which are not wired. An
+  account switcher gives each account its own root, and user-scope wiring reaches only the active
+  one; the check names the others instead of leaving the gap silent.
 
 ## [0.1.0-alpha.14] - 2026-09-05
 
@@ -382,7 +382,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...HEAD
+[0.1.0-alpha.15]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
 [0.1.0-alpha.12]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.11...v0.1.0-alpha.12
