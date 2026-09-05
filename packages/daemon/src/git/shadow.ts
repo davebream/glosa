@@ -335,7 +335,16 @@ export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepo
   if (head.exitCode === 0) return; // a baseline (or later) commit already exists
 
   const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
-  if (tracked.length > 0) await runGit(root, ["add", "-A", "--", ...tracked.map(safePathspec)]);
+  // `-f` because the PROJECT's `.gitignore` has no authority over glosa's own history. The
+  // pathspec is already exactly what the matcher chose, so forcing cannot widen what gets staged;
+  // it only stops a rule written for the project's git from vetoing a checkpoint. Without it, one
+  // matched-but-ignored path (`graphify-out/`, a `tmp/` file, `spec/examples.txt`) makes `git add`
+  // exit 1 and takes the whole checkpoint down — and with it apply-begin, resolve, and offline
+  // catch-up, i.e. the entire proven-attribution mechanism, for that workspace. Observed in two
+  // unrelated real workspaces. The shadow repo is local-only storage under `.glosa/`, deliberately
+  // independent of the work-tree's own git (decisions.md: "`.gitignore` protects only git-mediated"
+  // paths), so tracking what glosa matched is the consistent behaviour.
+  if (tracked.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...tracked.map(safePathspec)]);
   await commit(root, {
     message: "checkpoint",
     trailers: { "Glosa-Attribution": "unknown", "Glosa-Kind": "baseline" },
@@ -399,7 +408,8 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
   // work-tree, including `.glosa/shadow.git/` itself (its own object store, refs, the journal) —
   // self-staging the shadow repo into its own history. Skip staging outright and fall through to
   // the same "nothing staged" idempotent return below.
-  if (union.length > 0) await runGit(root, ["add", "-A", "--", ...union.map(safePathspec)]);
+  // `-f` for the same reason as the baseline stage above.
+  if (union.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...union.map(safePathspec)]);
 
   const staged = await runGit(root, ["diff", "--cached", "--quiet"], { allowExitCodes: [0, 1] });
   if (staged.exitCode === 0) return headSha(root); // nothing staged -> idempotent, no commit

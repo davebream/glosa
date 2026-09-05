@@ -538,6 +538,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         },
         session: { type: "string", required: true, description: "Applying session ID" },
         note: { type: "string", description: "Optional resolution note" },
+        workspace: { type: "string", description: "Workspace directory (defaults to the cwd)" },
       },
     },
     async (context) => {
@@ -548,7 +549,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       ]);
       const result = await resolveModule.runResolve(
         {
-          dir: process.cwd(),
+          dir: (values.workspace as string | undefined) ?? process.cwd(),
           id: values.id as string,
           outcome: values.outcome as string,
           session: values.session as string,
@@ -569,6 +570,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         ...GLOBAL_ARGS,
         id: { type: "positional", required: true, description: "Inbox entry ID" },
         session: { type: "string", required: true, description: "Applying session ID" },
+        workspace: { type: "string", description: "Workspace directory (defaults to the cwd)" },
       },
     },
     async (context) => {
@@ -578,7 +580,11 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("./resolve.ts"),
       ]);
       const result = await resolveModule.runApplyBegin(
-        { dir: process.cwd(), id: values.id as string, session: values.session as string },
+        {
+          dir: (values.workspace as string | undefined) ?? process.cwd(),
+          id: values.id as string,
+          session: values.session as string,
+        },
         { createClient: createHttpGlosaClient },
       );
       resolveModule.printApplyBeginResult(result, Boolean(values.json));

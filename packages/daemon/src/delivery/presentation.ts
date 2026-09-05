@@ -73,10 +73,12 @@ function stringOf(value: unknown): string | null {
 const APPLY_PROTOCOL = (id: string) =>
   [
     "how to act on this:",
-    `1. before editing: glosa apply-begin ${id} --session <your-session-id>`,
+    `1. before editing: glosa apply-begin ${id} --session <your-session-id> --workspace <the workspace: path above>`,
     "2. make the change",
-    `3. when done: glosa resolve ${id} applied --session <your-session-id>`,
+    `3. when done: glosa resolve ${id} applied --session <your-session-id> --workspace <the workspace: path above>`,
     `   (or 'rejected' with --note if you are not making the change, 'deferred' to re-surface it)`,
+    "pass --workspace explicitly: both commands otherwise act on your current directory, which is",
+    "not necessarily the workspace this entry belongs to.",
     "the lease is what proves the change was yours and what lets the human undo it; skipping it",
     "leaves the annotation open forever and the edit attributed to nobody.",
   ].join("\n");

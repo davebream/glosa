@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — `glosa resolve <id> <applied|rejected|deferred|stale> --session <sid> [--note]`
-// and `glosa apply-begin <id> --session <sid>` (A4 §F05 / A6 §F26). Both operate on the CURRENT
-// WORKING DIRECTORY as the workspace root — neither command's documented argument grammar carries
-// a separate workspace path, and both are meant to be invoked by an agent session sitting inside
-// the workspace it's already working in (same as every `git`/`gh` subcommand's own cwd-scoping
-// convention). `apply-begin` opens the F05 lease; `resolve` with `applied|rejected|stale` closes
+// and `glosa apply-begin <id> --session <sid>` (A4 §F05 / A6 §F26). Both default to the CURRENT
+// WORKING DIRECTORY as the workspace root and both accept `--workspace <path>` to name another
+// one, exactly as `glosa inbox get` — the other entry-id command — already did.
+//
+// The cwd-only version reasoned by analogy with `git`/`gh` subcommand scoping, but the analogy
+// does not hold: those take paths, and these take an ENTRY ID, which belongs to exactly one
+// workspace already. An agent working in its own repo while reviewing documents somewhere else
+// could not act on its own inbox at all — the call silently targeted whatever workspace the cwd
+// happened to sit in, and surfaced as an unrelated failure from that other workspace's shadow git.
+// `apply-begin` opens the F05 lease; `resolve` with `applied|rejected|stale` closes
 // it (`WorkspaceBus.resolveEntry`, http.ts's `handleWorkspaceResolve`); `resolve ... deferred`
 // does neither (see http.ts's docstring on that route, and `commitTransition`'s in bus.ts, for why
 // deferred is a legal no-op transition rather than a lease-closing one).
