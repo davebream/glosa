@@ -2,10 +2,9 @@
 // Test-only helpers shared across the P1.2 daemon lifecycle suites. Every test gets its own
 // tmp GLOSA_HOME and collision-free high port block, and nothing here ever touches a real
 // `~/.glosa`.
-import { type FSWatcher, watch } from "chokidar";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type EnsureDaemonOptions,
@@ -308,7 +307,7 @@ export async function stopDetachedDaemon(home: string, daemon: { pid: number; in
   }
   if (!exited) throw new Error(`test daemon pid ${daemon.pid} did not exit after SIGTERM/SIGKILL`);
   ownedDetachedDaemons.delete(daemon.pid);
-  if (!(await waitForFile(lockPath(home), () => lockOf(home) === null))) {
+  if (!(await waitUntil(() => lockOf(home) === null, 3000))) {
     throw new Error(`test daemon pid ${daemon.pid} exited without releasing ${lockPath(home)}`);
   }
   releaseDaemonHome(home);
@@ -363,6 +362,19 @@ export async function waitForHandshake(
   return null;
 }
 
+/** Waits until `fn` holds, or gives up at `deadlineMs`.
+ *
+ * Two things this asks of every caller, both learned from a real failure:
+ *
+ * **Assert the returned boolean.** A discarded `false` does not stop the test — it lets it walk on
+ * to an assertion about a value that was never going to arrive, so a timeout reports as a baffling
+ * value mismatch instead of "this timed out".
+ *
+ * **Keep the deadline well under the enclosing test's timeout.** Most waits here are on another OS
+ * process reacting on its own timer, so the temptation is to be generous. But a deadline at or near
+ * the test timeout can never lose gracefully: the test is killed before the wait returns, and its
+ * `finally` never runs — which for these suites means a real daemon is left behind. Leave room for
+ * the wait to fail, report, and clean up. */
 export async function waitUntil(fn: () => boolean, deadlineMs = 3000, intervalMs = 50): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
@@ -370,81 +382,6 @@ export async function waitUntil(fn: () => boolean, deadlineMs = 3000, intervalMs
     await Bun.sleep(intervalMs);
   }
   return fn();
-}
-
-/** How long a filesystem-triggered wait may sit before giving up. Deliberately generous: what it is
- * usually waiting on is another OS process reacting on its own timer, and a loaded runner can
- * starve that process for seconds at a stretch. Filesystem events make the ordinary case cost
- * nothing, so the generosity is only ever spent on a genuine hang. */
-const FILE_WAIT_DEADLINE_MS = 10_000;
-
-/** Re-check cadence used when the filesystem reports nothing. Purely a correctness backstop —
- * events coalesce, atomic renames land as a replace, and some filesystems say nothing at all — so a
- * missed event costs this much latency rather than the entire deadline. */
-const FILE_WAIT_BACKSTOP_MS = 250;
-
-/** Waits until `predicate` holds, re-checking whenever `path`'s directory reports activity.
- *
- * A drop-in replacement for `waitUntil` wherever the thing being waited for is a file changing.
- * Polling asks on a fixed cadence and learns nothing in between; under load the watcher and the
- * watched starve together, so a fixed budget buys fewer checks exactly when more are needed. Here
- * the deadline is only reached when nothing happens at all, which is what a real failure looks
- * like. Always assert the returned boolean: a discarded `false` shows up later as a baffling value
- * mismatch instead of "this timed out". */
-export async function waitForFile(
-  path: string,
-  predicate: () => boolean,
-  deadlineMs = FILE_WAIT_DEADLINE_MS,
-): Promise<boolean> {
-  if (predicate()) return true;
-
-  let watcher: FSWatcher | null = null;
-  let backstop: ReturnType<typeof setInterval> | null = null;
-  let expiry: ReturnType<typeof setTimeout> | null = null;
-
-  try {
-    return await new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (value: boolean): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const recheck = (): void => {
-        // A predicate reading a file mid-write can throw; the next trigger reads it again.
-        try {
-          if (predicate()) finish(true);
-        } catch {
-          // keep waiting
-        }
-      };
-
-      expiry = setTimeout(() => {
-        try {
-          finish(predicate()); // one last look, matching waitUntil's final check
-        } catch {
-          finish(false);
-        }
-      }, deadlineMs);
-      backstop = setInterval(recheck, FILE_WAIT_BACKSTOP_MS);
-
-      // The directory, not the file: the file frequently does not exist yet, and its creation is
-      // exactly the event worth hearing about.
-      watcher = watch(dirname(path), { depth: 0, ignoreInitial: true });
-      watcher.on("all", recheck);
-      // Watcher trouble must never fail the wait — the backstop still carries it.
-      watcher.on("error", () => {});
-      // Subscribe-then-recheck, the same load-bearing ordering the daemon's held reads use: a
-      // change landing between the predicate call above and the watcher going live would otherwise
-      // be missed for good.
-      watcher.on("ready", recheck);
-    });
-  } finally {
-    if (expiry !== null) clearTimeout(expiry);
-    if (backstop !== null) clearInterval(backstop);
-    // A live watcher holds the event loop open, which strands any process that used this helper.
-    if (watcher !== null) await (watcher as FSWatcher).close();
-  }
 }
 
 /** Narrows away null/undefined and says what was missing when it fails.
@@ -479,7 +416,7 @@ export async function stopDaemon(home: string, proc: Bun.Subprocess): Promise<vo
     }
   }
   await proc.exited;
-  if (!(await waitForFile(lockPath(home), () => lockOf(home) === null))) {
+  if (!(await waitUntil(() => lockOf(home) === null, 3000))) {
     throw new Error(`test daemon pid ${proc.pid} exited without releasing ${lockPath(home)}`);
   }
   releaseDaemonHome(home);

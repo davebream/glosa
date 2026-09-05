@@ -22,7 +22,6 @@ import {
   randomPort,
   spawnDaemon,
   stopDaemon,
-  waitForFile,
   waitForHandshake,
   waitUntil,
   writeUnparseableLock,
@@ -195,7 +194,7 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       expect(hs).not.toBeNull();
       // The main listener intentionally becomes reachable before lock reclamation completes.
       // Wait for ownership rather than racing the bind-before-lock lifecycle contract.
-      expect(await waitForFile(lockPath(home), () => lockOf(home)?.pid === proc.pid)).toBe(true);
+      expect(await waitUntil(() => lockOf(home)?.pid === proc.pid)).toBe(true);
       const lock = lockOf(home);
       expect(lock!.instance_id).not.toBe("gl-fake");
       expect(lock!.pid).toBe(proc.pid);
@@ -228,11 +227,12 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       assertDefined(hs, "handshake");
       unlinkSync(lockPath(home));
 
-      // The watchdog lives in a separate OS process on its own 250ms timer. A loaded runner can
-      // starve that process for seconds, so the budget is generous — and costs nothing here,
-      // because the repair write is itself the event this returns on. Asserting the result is what
-      // makes a genuine timeout say "timed out" instead of failing the match below against null.
-      expect(await waitForFile(lockPath(home), () => lockOf(home)?.instance_id === hs.instance_id)).toBe(true);
+      // The watchdog lives in a separate OS process on its own 250ms timer, and a loaded runner can
+      // starve that process for seconds at a stretch — which is what failed here once at 3s. The
+      // budget is now 8s inside a 20s test, deliberately leaving room for the wait to lose, say so,
+      // and still let `finally` stop the daemon. Asserting the result is the other half: without it
+      // a timeout arrives as `toMatchObject` against null, which names nothing.
+      expect(await waitUntil(() => lockOf(home)?.instance_id === hs.instance_id, 8000)).toBe(true);
 
       expect(lockOf(home)).toMatchObject({
         instance_id: hs.instance_id,
@@ -244,7 +244,10 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
     } finally {
       await stopDaemon(home, proc);
     }
-  }, 10000);
+    // 20s, not 10s: the wait above may spend 8s, and `stopDaemon` needs its own room afterwards.
+    // A test timeout that only just covers its longest wait converts a clean "timed out" into a
+    // killed test with a daemon still running.
+  }, 20000);
 
   test("watchdog never overwrites an existing malformed ownership file", async () => {
     ensureHomeDir(home);
@@ -276,9 +279,9 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       proc.kill("SIGTERM");
       const code = await proc.exited;
       expect(code).toBe(0);
-      // A positive proof — the lock really goes away — so wait on the removal itself rather than
-      // guessing how long it takes.
-      expect(await waitForFile(lockPath(home), () => lockOf(home) === null)).toBe(true);
+      // A positive proof — the lock really does go away — so wait for it and say so, rather than
+      // sleeping a guessed interval and asserting into the dark.
+      expect(await waitUntil(() => lockOf(home) === null, 3000)).toBe(true);
     } finally {
       try {
         proc.kill("SIGKILL");
@@ -879,7 +882,7 @@ describe("ensureDaemon — client", () => {
       const delayedClient = ensureDaemon();
       await delayedHandshakeObserved;
       const replacementClient = ensureDaemon();
-      expect(await waitForFile(lockPath(home), () => lockOf(home)?.build_id === BUILD_ID)).toBe(true);
+      expect(await waitUntil(() => lockOf(home)?.build_id === BUILD_ID, 5000)).toBe(true);
       releaseDelayedHandshake();
 
       const results = await Promise.all([delayedClient, replacementClient]);
