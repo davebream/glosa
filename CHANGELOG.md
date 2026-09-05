@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.14] - 2026-09-05
+
+### Fixed
+
+- Annotating in a pane too narrow for the side rail works. The composer opens under the passage
+  it is attached to and travels with it while you scroll, instead of being pinned inside the
+  scroll container where it sat one screen above the visible area for anyone reading past the
+  first screenful.
+- Annotated passages carry their mark again. Since 0.1.0-alpha.12 each pane registered its
+  highlights under a per-pane key that no stylesheet rule could match, so the passage underline,
+  the hover wash and the composer's selection wash had all been invisible: a heavily annotated
+  manuscript read as untouched. The keys are shared now, with each pane contributing and
+  withdrawing only its own ranges.
+- Saved annotations no longer flow off the end of the manuscript. They live in a collapsible tray
+  on the pane, which states its count while collapsed.
+- Gutter dots for several notes on one line no longer stack on top of each other, and each names
+  its own note for assistive technology.
+- Edit keeps the manuscript's measure. The editor column was derived from `68ch` resolved in the
+  chrome's sans face rather than the manuscript's serif, so it came out 86px narrower than the
+  text it was editing; switching modes now moves the first line by about a pixel.
+
+### Added
+
+- A session that applies an annotation is told how to prove it. Every delivered annotation now
+  carries the apply-lease protocol — `glosa apply-begin` before editing, `glosa resolve` after —
+  which is what attributes the change to that session and leaves a checkpoint to return to.
+  Both commands already existed; nothing had ever told an agent to use them, so annotations
+  stayed pending however faithfully they were acted on and every edit was attributed to nobody.
+- An applied annotation can be undone. Resolved notes group under their own heading, and one an
+  agent applied offers a rollback to the artifact as it read before that change, through the same
+  dirty-worktree guard the history pane uses. Where no lease was taken there is no checkpoint to
+  return to, and no offer is made.
+- Annotations can be revised. Editing one reopens the composer on the same passage; because the
+  journal is append-only, sending posts a new entry and then withdraws the original, and the
+  composer says so before you send.
+- Hovering an annotated passage shows what was written there, with the options to edit or remove
+  it, without leaving the text.
+
 ## [0.1.0-alpha.13] - 2026-09-05
 
 ### Changed
@@ -299,7 +337,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...HEAD
+[0.1.0-alpha.14]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
 [0.1.0-alpha.13]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.12...v0.1.0-alpha.13
 [0.1.0-alpha.12]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.11...v0.1.0-alpha.12
 [0.1.0-alpha.11]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.10...v0.1.0-alpha.11
