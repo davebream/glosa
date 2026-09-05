@@ -25,9 +25,17 @@ export function claudeConfigDir(): string {
   return Bun.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 }
 
-/** Where account switchers keep their per-account Claude config directories. A switcher runs Claude
+/**
+ * Where account switchers keep their per-account Claude config directories. A switcher runs Claude
  * with `CLAUDE_CONFIG_DIR` pointed at one of these, so its sessions write transcripts here and
- * nowhere near `~/.claude`. */
+ * nowhere near `~/.claude`.
+ *
+ * This is a LIST OF KNOWN LAYOUTS, not a general mechanism: `~/.ccs/instances/<account>` is the one
+ * convention recognised so far. A switcher that arranges its directories differently needs its own
+ * entry here — and until it has one, its sessions are covered only while they are the active
+ * `CLAUDE_CONFIG_DIR`. There is deliberately no scan of the whole home directory looking for
+ * anything Claude-shaped: guessing wrong here would widen a confinement boundary.
+ */
 const SWITCHER_ROOT_PARENTS = [join(".ccs", "instances")];
 
 /**

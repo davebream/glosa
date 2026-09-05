@@ -211,6 +211,13 @@ and that deserves its own change with its own confinement rules, not a silent wi
 `--scope user` already means. `doctor` reports the roots it found and which are not wired, so the
 gap is visible rather than assumed absent.
 
+Discovery recognises a list of known layouts rather than searching: `$CLAUDE_CONFIG_DIR`,
+`~/.claude`, and `~/.ccs/instances/<account>` — the one switcher convention supported so far. A
+switcher that arranges its directories differently needs its own entry, and until it has one its
+sessions are covered only while they are the active `CLAUDE_CONFIG_DIR`. There is deliberately no
+sweep of the home directory for anything Claude-shaped: a wrong guess there widens a confinement
+boundary, which is the one kind of mistake this code must not make.
+
 Root discovery is filesystem-only and read-only: no network, no process inspection, nothing
 launched (invariant 5). Which variable and which directories matter is provider knowledge and lives
 in the claude-code provider; the core supplies only a generic, injectable capability to read the
