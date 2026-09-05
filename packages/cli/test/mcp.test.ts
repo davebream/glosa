@@ -207,7 +207,7 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(response.result.protocolVersion).toBe("2025-06-18");
   });
 
-  test("tools/list is SDK-generated from the eight Zod registrations", async () => {
+  test("tools/list is SDK-generated from the nine Zod registrations", async () => {
     const connected = await connect(deps(new HookClient()));
     try {
       const tools = (await connected.client.listTools()).tools;

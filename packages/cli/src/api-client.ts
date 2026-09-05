@@ -176,9 +176,19 @@ export interface GlosaApiClient {
   applyBegin(path: string, entry: string, session: string): Promise<ApplyBeginResult>;
   createAttentionRequest(
     path: string,
-    opts: { message?: string; action?: string; targetPath?: string; approvalMode?: boolean },
+    opts: {
+      message?: string;
+      action?: string;
+      targetPath?: string;
+      approvalMode?: boolean;
+      agentLabel?: string;
+      target?: { quote: { exact: string; prefix?: string; suffix?: string } };
+      answerOptions?: string[];
+    },
   ): Promise<AttentionRequestResult>;
-  getEntryStatus(path: string, entry: string): Promise<EntryStatus | null>;
+  /** `waitMs > 0` holds the request open until the entry goes terminal or the wait elapses — one
+   * blocked request rather than a poll loop. Omit it for the immediate read. */
+  getEntryStatus(path: string, entry: string, waitMs?: number): Promise<EntryStatus | null>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
   setMetadata?(
@@ -268,11 +278,16 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
           ...(opts.action !== undefined ? { action: opts.action } : {}),
           ...(opts.targetPath !== undefined ? { target_path: opts.targetPath } : {}),
           ...(opts.approvalMode === true ? { approval_mode: true } : {}),
+          ...(opts.agentLabel !== undefined ? { agent_label: opts.agentLabel } : {}),
+          ...(opts.target !== undefined ? { target: opts.target } : {}),
+          ...(opts.answerOptions !== undefined ? { answer_options: opts.answerOptions } : {}),
         })
       ).json();
     },
-    async getEntryStatus(path, entry) {
-      const qs = new URLSearchParams({ path, entry }).toString();
+    async getEntryStatus(path, entry, waitMs) {
+      const params: Record<string, string> = { path, entry };
+      if (waitMs !== undefined && waitMs > 0) params.wait_ms = String(Math.floor(waitMs));
+      const qs = new URLSearchParams(params).toString();
       try {
         return await (await call("GET", `/api/workspaces/entry-status?${qs}`)).json();
       } catch (err) {

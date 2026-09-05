@@ -15,6 +15,8 @@ import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.
 import type { GlosaApiClient } from "./api-client.ts";
 import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
 import {
+  askInputSchema,
+  askOutputSchema,
   conversationAckInputSchema,
   conversationAckOutputSchema,
   inboxGetInputSchema,
@@ -33,6 +35,7 @@ import {
   sessionBindOutputSchema,
 } from "./mcp-schemas.ts";
 import { runOpenPresentation } from "./open-presentation.ts";
+import { realRequestReviewDeps, runRequestReview } from "./request-review.ts";
 import { CLI_VERSION } from "./version.ts";
 
 interface PendingAck {
@@ -58,6 +61,7 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_session_bind",
   "glosa_conversation_ack",
   "glosa_present",
+  "glosa_ask",
 ] as const;
 
 const readOnlyClosedWorld = {
@@ -521,6 +525,69 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         ...(data.bound_session ? { bound_session: data.bound_session } : {}),
         ...(data.state_dir ? { state_dir: data.state_dir } : {}),
         warnings: result.warnings,
+      });
+    },
+  );
+
+
+  server.registerTool(
+    "glosa_ask",
+    {
+      title: "Ask the human about a passage",
+      description:
+        "Mark a passage in an artifact and ask the human about it, in their margin, beside the words. BLOCKS " +
+        "until they answer — this is a real wait, not a queued notification, so use it when you genuinely " +
+        "cannot proceed without the answer. Omit `question` to point at a passage without asking anything; " +
+        "that returns immediately. Supply `options` when the answer is one of a few things you can name, and " +
+        "leave them out when it is open-ended; the human always keeps a free-text field either way.",
+      inputSchema: askInputSchema,
+      outputSchema: askOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: false }),
+        title: "Ask the human about a passage",
+      },
+    },
+    async ({ workspace, path, question, quote, options, label, wait_seconds: waitSeconds }) => {
+      const dir = workspace ?? (deps.cwd ?? process.cwd)();
+      const result = await runRequestReview(
+        {
+          dir,
+          path,
+          ...(question !== undefined ? { message: question } : {}),
+          // `review` is the daemon's outcome vocabulary for "a verdict is expected"; a bare
+          // pointer expects nothing, so it stays a generic entry that completes with `done`.
+          action: question === undefined ? "point" : "review",
+          ...(label !== undefined ? { agentLabel: label } : {}),
+          ...(quote !== undefined ? { target: { quote } } : {}),
+          ...(options !== undefined ? { answerOptions: options } : {}),
+          // No question, no wait: pointing is a side effect, not a request for something back.
+          ...(question === undefined ? {} : { waitMs: (waitSeconds ?? 600) * 1000 }),
+        },
+        realRequestReviewDeps(deps.createApiClient),
+      );
+
+      if (!result.ok && result.error?.kind !== "review_timeout") {
+        throw new Error(result.error?.message ?? "glosa_ask failed");
+      }
+      const id = result.data.id;
+      if (!id) throw new Error("glosa_ask did not create a request");
+      if (question === undefined) return toolResult({ id, outcome: "posted", anchored: true });
+
+      const detail = result.data.detail;
+      const answer = detail && "response" in detail && typeof detail.response === "string" ? detail.response : "";
+      const chose = detail && "chose" in detail && typeof detail.chose === "string" ? detail.chose : undefined;
+      // The three endings are genuinely different and the caller has to be able to tell them
+      // apart: an answer, an explicit "I can't", and a wait that ran out with the question still
+      // sitting in the margin. Collapsing the last two would have the agent report that the human
+      // declined when nobody ever saw the question.
+      const outcome =
+        result.error?.kind === "review_timeout" ? "unanswered" : answer.length > 0 || chose ? "answered" : "declined";
+      return toolResult({
+        id,
+        outcome,
+        ...(answer.length > 0 ? { answer } : {}),
+        ...(chose ? { chose } : {}),
+        anchored: quote !== undefined,
       });
     },
   );

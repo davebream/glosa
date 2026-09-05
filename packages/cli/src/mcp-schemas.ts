@@ -198,6 +198,90 @@ const absoluteFilePath = z
   .refine((value) => value.startsWith("/"), { message: "path must be absolute" })
   .describe("Absolute path to an existing regular file to present.");
 
+export const askInputSchema = z
+  .object({
+    workspace: workspacePath.optional(),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .describe("Workspace-relative artifact the question concerns. Required — a question needs a document."),
+    question: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe(
+        "What you want the human to answer. OMIT IT to simply point at a passage: the mark appears in their " +
+          "margin with nothing to answer, and the call returns immediately instead of waiting.",
+      ),
+    quote: z
+      .object({
+        exact: z
+          .string()
+          .min(1)
+          .max(2048)
+          .describe("Text copied verbatim from the artifact SOURCE. glosa maps it onto the rendered passage."),
+        prefix: z
+          .string()
+          .max(256)
+          .optional()
+          .describe("Source text immediately before `exact`. Supply it when the quote may occur more than once."),
+        suffix: z.string().max(256).optional().describe("Source text immediately after `exact`."),
+      })
+      .strict()
+      .optional()
+      .describe("The passage to mark. Omit for a question about the artifact as a whole."),
+    options: z
+      .array(z.string().min(1).max(96))
+      .min(1)
+      .max(8)
+      .optional()
+      .describe(
+        "Answer choices in your own words, when the question has a small set of sensible answers " +
+          "(\"covered\", \"thin\", \"missing\"). glosa ALWAYS adds a free-text field beside them, so " +
+          "offering options never stops the human answering something you did not anticipate. Omit for an " +
+          "open question.",
+      ),
+    label: z
+      .string()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        "A short name for this session shown beside your provider ('api-refactor'). glosa renders it as a " +
+          "claim, not a verified identity.",
+      ),
+    wait_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(900)
+      .optional()
+      .describe(
+        "How long to block waiting for the answer. Defaults to 600. The call returns as soon as the human " +
+          "answers. On timeout it returns outcome 'unanswered' and the question STAYS in their margin, so a " +
+          "later answer still reaches you through the inbox.",
+      ),
+  })
+  .strict();
+
+export const askOutputSchema = z
+  .object({
+    id: inboxId,
+    outcome: z
+      .enum(["answered", "declined", "unanswered", "posted"])
+      .describe(
+        "answered: the human replied. declined: they explicitly could not answer. unanswered: the wait " +
+          "elapsed and the question is still open in glosa. posted: no question was asked, so nothing was " +
+          "waited for.",
+      ),
+    answer: z.string().optional().describe("What the human typed, when they typed anything."),
+    chose: z.string().optional().describe("The option they picked, when the question offered options."),
+    anchored: z.boolean().describe("False when the quote could not be located in the current text."),
+  })
+  .strict();
+
 /** Accepts both vocabularies and emits only the current one, so an agent written against the
  * Preview/Annotate names keeps working while the wire converges on Read/Review. */
 const presentationMode = z
