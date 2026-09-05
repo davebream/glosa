@@ -148,3 +148,37 @@ describe("nesting is bounded by usable width, not by an arbitrary depth cap (§9
     expect(MIN_PANE_WIDTH).toBe(360);
   });
 });
+
+describe("the tab strip has one axis", () => {
+  /** dockview ships `.dv-tabs-container` as `height: 100%; overflow: auto` with a 3px horizontal
+   * scrollbar lane drawn inside that height. The lane makes a full-height row of tabs 3px too
+   * tall for its own box, and `auto` answers by opening a vertical scrollbar next to a single row
+   * — 15px of chrome on any machine set to show scrollbars always, plus a second axis the strip
+   * can be scrolled along, out of alignment with the artifact bar beneath it.
+   *
+   * app.css overrides it, and nothing but the class NAME ties the two files together: a dockview
+   * upgrade that renames the container leaves the override matching nothing and the scrollbar
+   * quietly back. Pin both halves here, the way the highlight-key contract is pinned in
+   * annotation-surface.test.ts. */
+  test("glosa pins the vendored strip to the horizontal axis, and still targets the class it ships", async () => {
+    const vendor = await Bun.file(new URL("../src/vendor/dockview.css", import.meta.url)).text();
+    const css = await Bun.file(new URL("../src/app.css", import.meta.url)).text();
+
+    // The defect is still in the vendored file — this override is not dead weight...
+    expect(vendor).toMatch(/\.dv-tabs-container \{[^}]*overflow:\s*auto/);
+    expect(vendor).toMatch(/\.dv-tabs-container::-webkit-scrollbar \{\s*height:\s*3px/);
+
+    // ...and glosa answers it on the same class, on the horizontal strip only.
+    const override = css.match(
+      /\.glosa-dock-theme \.dv-tabs-container:not\(\.dv-tabs-container-vertical\):not\(\.dv-tabs-container--wrap\) \{([^}]*)\}/,
+    );
+    expect(override).not.toBeNull();
+    expect(override![1]).toContain("overflow-y: hidden");
+    expect(override![1]).toContain("scrollbar-width: none");
+    // Firefox takes `scrollbar-width`; WebKit needs its own pseudo-element, so both are required
+    // — shipping only one leaves the lane painted in the browsers glosa actually runs in.
+    expect(css).toContain(
+      ".glosa-dock-theme .dv-tabs-container:not(.dv-tabs-container-vertical):not(.dv-tabs-container--wrap)::-webkit-scrollbar",
+    );
+  });
+});

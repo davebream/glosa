@@ -21,6 +21,7 @@ import {
 } from "../anchoring.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "../artifact-render.ts";
 import { isTerminal } from "../bus/lifecycle.ts";
+import type { DerivedEntryState } from "../bus/replay.ts";
 import { buildDiffHunks, commitExists } from "../checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "../checkpoints.ts";
 import { buildDeliveryPresentation, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
@@ -299,8 +300,118 @@ export async function withdrawAnnotation(deps: ArtifactAccessDependencies, slug:
   if (isTerminal(entry.kind === "attention" ? "attention" : "common", entry.status)) {
     throw new ArtifactError("annotation-closed", { status: entry.status });
   }
-  await bus.commitTransition(entryId, "rejected", { by: "human", note: "withdrawn in glosa" });
+  // `withdrawn` is what tells a later reader that this `rejected` came from the human taking the
+  // note back — not from a session declining it. Both land on the same terminal status, and the
+  // pane must show one and not the other, so the journal states which rather than leaving the
+  // listing to guess from the note text.
+  await bus.commitTransition(entryId, "rejected", {
+    by: "human",
+    note: "withdrawn in glosa",
+    detail: { withdrawn: true },
+  });
   return { id: entryId, status: bus.state.entries[entryId]?.status ?? "rejected" };
+}
+
+/** One annotation as the artifact pane needs it back: the immutable payload it was written with,
+ * plus the two derived facts that decide how its card reads — where the entry got to, and what an
+ * undo would restore to. */
+export interface AnnotationListItem {
+  id: string;
+  status: string;
+  artifact_path: string;
+  body: unknown;
+  intent: unknown;
+  target: unknown;
+  captured_rendered_sha256?: string;
+  /** Delivery attempts recorded against this entry — a separate axis from `status` (R3), which is
+   * why a re-nudged note can read "sent 3 times" while its status has not moved. */
+  attempts: number;
+  /** Present only once a lease closed on this entry AND recorded both ends of its interval
+   * (A4 §F05). Its absence is the honest answer "there is no proven state to go back to". */
+  rollback_pre_sha?: string;
+}
+
+/** Pure: derived entry + its inbox payload -> the listed annotation, or `null` when this entry is
+ * not one the pane should repaint.
+ *
+ * Two entries are deliberately dropped rather than returned with a flag. A payload that is not an
+ * annotation for `artifactPath` belongs to another surface (a `human_edit`, another document).
+ * And a note the human withdrew is gone by their own decision: it stays in the journal forever,
+ * but bringing its card back on the next page load would undo the removal they just performed.
+ * A session DECLINING a note is a different fact on the same terminal status — that one is kept,
+ * because "they said no" is exactly what the reader opened the pane to find out. */
+export function annotationListItem(
+  id: string,
+  entry: DerivedEntryState,
+  payload: unknown,
+  artifactPath?: string,
+): AnnotationListItem | null {
+  const record = payload !== null && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  if (!record) return null;
+  const fields = record as Record<string, unknown>;
+  if (fields.kind !== "annotation" || typeof fields.artifact_path !== "string") return null;
+  if (artifactPath !== undefined && fields.artifact_path !== artifactPath) return null;
+  if (isWithdrawn(entry)) return null;
+  return {
+    id,
+    status: entry.status,
+    artifact_path: fields.artifact_path,
+    body: fields.body,
+    intent: fields.intent,
+    target: fields.target,
+    ...(typeof fields.captured_rendered_sha256 === "string"
+      ? { captured_rendered_sha256: fields.captured_rendered_sha256 }
+      : {}),
+    attempts: Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts.length : 0,
+    ...(typeof entry.rollbackPreSha === "string" ? { rollback_pre_sha: entry.rollbackPreSha } : {}),
+  };
+}
+
+/** Did the human take this note back in glosa, as opposed to a session declining it? Both are the
+ * terminal `rejected`, so the transition says which: `detail.withdrawn` since the release that
+ * added this listing, and before it, the exact note the withdraw path wrote — journals written by
+ * an earlier alpha are still read back correctly rather than resurrecting removed cards once. */
+function isWithdrawn(entry: DerivedEntryState): boolean {
+  if (entry.status !== "rejected") return false;
+  const detail = entry.detail as Record<string, unknown> | undefined;
+  return detail?.withdrawn === true || detail?.note === "withdrawn in glosa";
+}
+
+/** Every annotation still on the record for one artifact, oldest first (journal order).
+ *
+ * This is what makes the pane's annotation state a property of the workspace rather than of one
+ * browser tab: reload it, open the artifact in a second pane, or come back tomorrow, and the
+ * cards, the underlines under the annotated passages, the gutter dots and the offer to undo an
+ * applied change are all still there.
+ *
+ * An entry whose payload cannot be read is skipped, not fatal — one damaged inbox file must not
+ * cost the reader every other note on the page. */
+export async function listAnnotations(
+  deps: ArtifactAccessDependencies,
+  slug: string,
+  artifactPath?: string,
+): Promise<AnnotationListItem[]> {
+  const workspace = findWorkspace(deps, slug);
+  const bus = await workspaceBus(deps, workspace);
+  const items: AnnotationListItem[] = [];
+  for (const [id, entry] of Object.entries(bus.state.entries)) {
+    // A conversation-heavy workspace accumulates an entry per agent message, and this route runs
+    // every time a pane opens an artifact. The fold already separates those (and attention
+    // requests) into their own transition tables, so skip them without paying a file read each.
+    // `human_edit` still costs one — it shares the `common` table with an annotation — but those
+    // are bounded by how often a human saves, and the payload check below is what actually
+    // decides. This is a read the listing can skip, never a rule it relies on.
+    if (entry.kind === "attention" || entry.kind === "conversation") continue;
+    let payload: unknown;
+    try {
+      payload = bus.readEntry(id)?.payload;
+    } catch {
+      continue;
+    }
+    const item = annotationListItem(id, entry, payload, artifactPath);
+    if (item) items.push(item);
+  }
+  return items;
 }
 
 export async function artifactDiff(deps: ArtifactAccessDependencies, slug: string, from: string, to: string) {

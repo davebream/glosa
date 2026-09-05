@@ -247,8 +247,9 @@ export function createArtifactPane(host, deps) {
   // the worktree is clean writes no commit, and `pre_sha` is just the existing HEAD — a
   // `baseline`, or the `post_apply` of an earlier cycle. Undo silently never appeared.
   //
-  // Cards are session-local (`annotations` is only ever filled by a POST in this pane), so an
-  // in-memory map lives exactly as long as the cards that consult it.
+  // Filled from two places, which must agree: `hydrateAnnotations` reads the points the journal
+  // already holds when the artifact opens, and the live `apply_end` frame adds the one that was
+  // just proven. Cleared with the cards whenever the pane loads a different artifact.
   let rollbackPoints = new Map();
   let previewItem = null; // the annotation whose passage the pointer is currently over
   let previewCloseTimer = null;
@@ -1968,11 +1969,55 @@ export function createArtifactPane(host, deps) {
 
   // ---------- artifact loading ----------
 
+  /** Puts back everything about this artifact's annotations that outlives the tab: the cards, the
+   * underline under each annotated passage, the gutter dots, and the offer to undo a change a
+   * session already applied.
+   *
+   * Without this the pane's annotation state lived only in the browser tab that created it. The
+   * notes were durable — they are journal entries, and the session still had them queued — but
+   * reloading the page, or opening the same manuscript in a second pane, showed an untouched
+   * document. The reader had no way to see what they had already asked for.
+   *
+   * Best-effort by construction: a daemon that cannot answer (an older build, a transient
+   * failure) still gets the artifact opened, with exactly the capability the pane had before this
+   * existed. And because `loadArtifact` can be re-entered while this is in flight, the result is
+   * dropped unless the pane is still showing the artifact it was fetched for. */
+  async function hydrateAnnotations(artifactPath) {
+    let listed;
+    try {
+      listed = await dataAccess.getAnnotations(slug, artifactPath);
+    } catch {
+      return;
+    }
+    if (destroyed || currentArtifact?.source_path !== artifactPath) return;
+    for (const row of listed?.annotations ?? []) {
+      if (!row?.id) continue;
+      annotations.push({
+        record: {
+          kind: "annotation",
+          artifact_path: row.artifact_path,
+          body: row.body ?? "",
+          intent: row.intent,
+          target: row.target,
+          ...(row.captured_rendered_sha256 ? { captured_rendered_sha256: row.captured_rendered_sha256 } : {}),
+        },
+        id: row.id,
+        // `waiting` is the SPA's name for the wire's initial `pending` — same remap the POST
+        // response and the live journal frames go through, so a hydrated card and a just-sent one
+        // are indistinguishable from here on.
+        state: row.status === "pending" ? "waiting" : row.status,
+        ...(row.attempts ? { attempts: row.attempts } : {}),
+      });
+      if (row.rollback_pre_sha) rollbackPoints.set(row.id, row.rollback_pre_sha);
+    }
+  }
+
   async function loadArtifact(artifactPath) {
     loading = true;
     classFInteractive = false;
     composer = null;
     annotations = [];
+    rollbackPoints.clear();
     approvalResult = null;
     approvalError = "";
     teardownRichFace();
@@ -1992,6 +2037,10 @@ export function createArtifactPane(host, deps) {
       return false;
     }
     loading = false;
+    // Before the render, not after: the cards, underlines and dots then appear with the
+    // manuscript instead of arriving as a second, visible repaint a beat later.
+    await hydrateAnnotations(artifactPath);
+    if (destroyed) return false;
     contentEl.removeAttribute("data-path");
     renderModeBar();
     renderContent();

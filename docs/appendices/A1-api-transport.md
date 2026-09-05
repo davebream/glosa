@@ -209,6 +209,33 @@ Query param `?since=<cursor>` is the documented fallback for `Last-Event-ID` (se
 - **200**, `Content-Type: text/event-stream`, connection held open.
 - **404 not-found** — unknown `:slug`.
 
+### 5.6a `GET /w/:slug/annotations`
+Bearer required. Every annotation still on the record, oldest first (journal order). Optional
+`?path=<artifact path>` scopes it to one artifact — what a pane asks for when it opens one.
+This is the route that makes the annotation surface durable: cards, in-text underlines, gutter
+dots and the offer to undo an applied change are all repainted from it, so they survive a page
+reload, a second pane on the same artifact, and a daemon restart.
+```json
+{ "annotations": [
+  { "id": "inb-1721470000-a1c2", "status": "applied", "artifact_path": "07_manuscript.md",
+    "body": "consider tightening this", "intent": "content",
+    "target": { "quote": { "exact": "…" }, "position": { "start": 1204, "end": 1240 } },
+    "captured_rendered_sha256": "<sha256>", "attempts": 1,
+    "rollback_pre_sha": "<shadow-git sha>" } ] }
+```
+- `attempts` counts `delivery_attempt` events — a separate axis from `status` (R3).
+- `rollback_pre_sha` is `apply_end.detail.pre_sha` (A4 §F05): present only once a lease has closed
+  on the entry and recorded both ends of its interval. Its absence means glosa cannot prove a
+  "before", so no undo is offered.
+- A note the human withdrew in glosa is **not** listed. The journal keeps it (nothing is deleted);
+  the listing is the pane's live view, and putting a removed card back on the page would undo the
+  removal. A note a *session* declined — the same terminal `rejected`, distinguished by
+  `transition_committed.detail.withdrawn` — **is** listed, because "they said no" is the answer the
+  reader was waiting for.
+- An entry whose immutable inbox payload cannot be read is skipped rather than failing the
+  request: one damaged file must not cost the reader every other note on the page.
+- **404 not-found** — unknown `:slug`.
+
 ### 5.6 `POST /w/:slug/annotations`
 Bearer required, Origin-gated (state-changing route, per R5). Body per R3's `annotation`
 payload shape.

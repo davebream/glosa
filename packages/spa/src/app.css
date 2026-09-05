@@ -3970,6 +3970,30 @@ input,
   box-shadow: inset 0 -1px 0 var(--border);
 }
 
+/* A row of tabs scrolls sideways. It has no second axis, and it must not grow one.
+   dockview ships the strip as `height: 100%; overflow: auto` with a 3px horizontal scrollbar
+   lane, and those three facts fight: the lane is drawn INSIDE the strip's 36px, so a 36px row of
+   tabs is suddenly 3px too tall for its own box, and `auto` answers that by opening a vertical
+   scrollbar — 15px of macOS chrome standing beside a single row of tabs, on any machine set to
+   show scrollbars always. It also scrolls, so the tabs can be nudged out of alignment with the
+   artifact bar under them.
+
+   Both go. The strip keeps the full 36px, which is what lets the active tab's bottom edge run
+   unbroken into the manuscript below it — the whole point of the rule above, and something a
+   scrollbar lane painted across the bottom of the row undoes. Nothing is lost with it: the
+   overflow dropdown at the end of the strip names the tabs that do not fit and says how many,
+   the strip still scrolls to a wheel or a trackpad, and the clipped tab at the right edge is its
+   own hint. Scoped away from the vertical (edge-group) and wrapping strips, whose axes differ. */
+.glosa-dock-theme .dv-tabs-container:not(.dv-tabs-container-vertical):not(.dv-tabs-container--wrap) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.glosa-dock-theme .dv-tabs-container:not(.dv-tabs-container-vertical):not(.dv-tabs-container--wrap)::-webkit-scrollbar {
+  display: none;
+}
+
 .glosa-dock-theme .dv-void-container {
   background: none;
 }

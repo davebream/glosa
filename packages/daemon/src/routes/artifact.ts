@@ -9,6 +9,7 @@ import {
   createAnnotation,
   getArtifact,
   inboxPresentation,
+  listAnnotations,
   listArtifacts,
   mintArtifactCapability,
   type PreparedArtifactSave,
@@ -174,6 +175,16 @@ async function put(deps: ArtifactRouteDependencies, slug: string, path: string, 
   }
 }
 
+async function listAnnotationsRoute(deps: ArtifactRouteDependencies, slug: string, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const path = url.searchParams.get("path");
+  try {
+    return Response.json({ annotations: await listAnnotations(deps, slug, path ?? undefined) });
+  } catch (error) {
+    return mapError(error, url.pathname);
+  }
+}
+
 async function annotate(deps: ArtifactRouteDependencies, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const workspaceError = requireWorkspace(deps, slug, url.pathname);
@@ -333,6 +344,10 @@ export function artifactRoutes(deps: ArtifactRouteDependencies, method: string, 
     const slug = match[1] as string;
     const path = match[2] as string;
     return { routeClass: "state-changing", handle: (req) => put(deps, slug, path, req) };
+  }
+  if (method === "GET" && (match = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
+    const slug = match[1] as string;
+    return { routeClass: "authed-read", handle: (req) => listAnnotationsRoute(deps, slug, req) };
   }
   if (method === "POST" && (match = pathname.match(/^\/w\/([^/]+)\/annotations$/))) {
     return { routeClass: "state-changing", handle: (req) => annotate(deps, match![1] as string, req) };
