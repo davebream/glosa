@@ -34,6 +34,31 @@ function freshWorkspaceDir(): string {
   return d;
 }
 
+/** Creates a REAL inbox entry through the real annotation route, and returns its id.
+ *
+ * `apply-begin` refuses an entry this workspace does not own (A4 §F05: a lease over a foreign
+ * entry proves nothing and still consumes the one lease slot), so a lease test cannot invent an
+ * id. Going through `POST /w/:slug/annotations` also means this file exercises the chain a real
+ * caller walks — annotate, then lease, then resolve — rather than the lease in isolation. */
+async function createEntry(slug: string, artifactPath: string, body: string): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${Bun.env.GLOSA_PORT}/w/${slug}/annotations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Origin: `http://127.0.0.1:${Bun.env.GLOSA_PORT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      artifact_path: artifactPath,
+      body,
+      intent: "content",
+      target: { quote: { exact: "seed", prefix: "", suffix: "" }, position: { start: 0, end: 4 } },
+    }),
+  });
+  expect(res.status).toBe(201);
+  return ((await res.json()) as { id: string }).id;
+}
+
 beforeAll(async () => {
   savedHome = Bun.env.GLOSA_HOME;
   savedPort = Bun.env.GLOSA_PORT;
@@ -119,24 +144,28 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
 
   test("open -> apply-begin -> 2nd apply-begin conflicts (409) -> resolve(applied) proves a real pre..post diff -> status reflects it", async () => {
     const workspaceDir = freshWorkspaceDir();
+    writeFileSync(join(workspaceDir, "seed.md"), "seed\n");
 
     const opened = await client.openWorkspace(workspaceDir);
     expect(opened.slug).toBeTruthy();
     expect(opened.path).toBe(realpathSync(workspaceDir));
 
-    const begin = await client.applyBegin(workspaceDir, "entry-1", "sess-real-1");
+    const entry1 = await createEntry(opened.slug, "seed.md", "first");
+    const entry2 = await createEntry(opened.slug, "seed.md", "second");
+
+    const begin = await client.applyBegin(workspaceDir, entry1, "sess-real-1");
     expect(begin.lease_id).toBeTruthy();
     expect(begin.pre_sha).toBeTruthy();
 
     // A second apply-begin while one is already active for this workspace -> LEASE_HELD -> 409.
-    await expect(client.applyBegin(workspaceDir, "entry-2", "sess-real-1")).rejects.toMatchObject({ status: 409 });
+    await expect(client.applyBegin(workspaceDir, entry2, "sess-real-1")).rejects.toMatchObject({ status: 409 });
 
     // A real change between apply-begin and resolve — proves resolveEntry's post_sha checkpoint
     // actually captures something (an untouched workspace would idempotently return the SAME sha
     // as pre_sha, which would prove nothing about the pre..post mechanism).
     writeFileSync(join(workspaceDir, "change.md"), "a real change\n");
 
-    const resolved = await client.resolveEntry(workspaceDir, "entry-1", "applied", "sess-real-1", "looks good");
+    const resolved = await client.resolveEntry(workspaceDir, entry1, "applied", "sess-real-1", "looks good");
     expect(resolved.status).toBe("applied");
     expect(resolved.post_sha).toBeTruthy();
     expect(resolved.post_sha).not.toBe(begin.pre_sha);
@@ -145,7 +174,7 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     // 200 `{to: "deferred"}` that a client reading only `to` could misread as a real re-defer —
     // it must 409, the same honest-conflict signal LEASE_HELD/NO_ACTIVE_LEASE already use above.
     await expect(
-      client.resolveEntry(workspaceDir, "entry-1", "deferred", "sess-real-1", "too late"),
+      client.resolveEntry(workspaceDir, entry1, "deferred", "sess-real-1", "too late"),
     ).rejects.toMatchObject({
       status: 409,
     });

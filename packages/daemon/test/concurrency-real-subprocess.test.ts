@@ -70,16 +70,39 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     test(name, fn, SUBPROCESS_TEST_TIMEOUT_MS);
   }
 
+  /** Registers `root` and gives it one REAL inbox entry, returning that entry's id.
+   *
+   * `apply-begin` refuses an entry the workspace does not own (A4 §F05 — a lease over a foreign
+   * entry proves nothing and still consumes the one lease slot), so these tests seed a genuine
+   * entry through the real routes rather than leasing an invented id. Always called BEFORE a
+   * timed section: the timing assertions below measure apply-begin contention, not setup.
+   */
+  async function seedEntry(root: string): Promise<string> {
+    writeFileSync(join(root, "seed.md"), "seed\n");
+    const openRes = await fetch(apiReq("/api/workspaces/open", { path: root }));
+    expect(openRes.status).toBe(200);
+    const { slug } = (await openRes.json()) as { slug: string };
+    const res = await fetch(
+      apiReq(`/w/${slug}/annotations`, {
+        artifact_path: "seed.md",
+        body: "seed",
+        intent: "content",
+        target: { quote: { exact: "seed", prefix: "", suffix: "" }, position: { start: 0, end: 4 } },
+      }),
+    );
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: string }).id;
+  }
+
   it("N real concurrent apply-begin requests for the SAME entry, from N different sessions, over real sockets: exactly one lease wins, everyone else gets a real 409, and the journal ends up with exactly one apply_begin", async () => {
     const N = 8;
+    const entry = await seedEntry(workspaceRoot);
     const sessions = Array.from({ length: N }, (_, i) => `session-${i}`);
 
     // Genuinely concurrent: all N requests are fired in the same microtask, each traveling over
     // its own real TCP connection to the one live daemon process — not sequential awaits.
     const responses = await Promise.all(
-      sessions.map((session) =>
-        fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session })),
-      ),
+      sessions.map((session) => fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry, session }))),
     );
     const bodies = await Promise.all(responses.map((r) => r.json()));
 
@@ -89,7 +112,7 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     expect(conflicts).toHaveLength(N - 1);
     for (const body of bodies) {
       if (typeof body.lease_id === "string") {
-        expect(body.entry).toBe("e1"); // the winner really is for the entry we asked about
+        expect(body.entry).toBe(entry); // the winner really is for the entry we asked about
       } else {
         expect(body.type).toContain("lease-conflict");
       }
@@ -123,12 +146,21 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     const baselineWorkspaceRoot = mkdtempSync(join(tmpdir(), "glosa-concurrency-ws-baseline-"));
     const otherWorkspaceRoot = mkdtempSync(join(tmpdir(), "glosa-concurrency-ws2-"));
     try {
+      // All three workspaces get a real entry first, outside every timed window below.
+      const baselineEntry = await seedEntry(baselineWorkspaceRoot);
+      const loadEntry = await seedEntry(workspaceRoot);
+      const otherEntry = await seedEntry(otherWorkspaceRoot);
+
       // Baseline: one solo, uncontended apply-begin against its own fresh workspace — establishes
       // roughly what this daemon/machine's real per-call cost is right now (git spawns + fsync'd
       // journal append), with no queuing of any kind.
       const baselineStart = performance.now();
       const baselineRes = await fetch(
-        apiReq("/api/workspaces/apply-begin", { path: baselineWorkspaceRoot, entry: "e1", session: "sess-baseline" }),
+        apiReq("/api/workspaces/apply-begin", {
+          path: baselineWorkspaceRoot,
+          entry: baselineEntry,
+          session: "sess-baseline",
+        }),
       );
       const baselineMs = performance.now() - baselineStart;
       expect(baselineRes.status).toBe(201);
@@ -141,7 +173,9 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
       const N = 15;
       const loadResponses = Promise.all(
         Array.from({ length: N }, (_, i) =>
-          fetch(apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: "e1", session: `sess-load-${i}` })),
+          fetch(
+            apiReq("/api/workspaces/apply-begin", { path: workspaceRoot, entry: loadEntry, session: `sess-load-${i}` }),
+          ),
         ),
       );
 
@@ -150,7 +184,7 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
       // `otherWorkspaceRoot`. Only this call's own latency is timed.
       const bStart = performance.now();
       const resB = await fetch(
-        apiReq("/api/workspaces/apply-begin", { path: otherWorkspaceRoot, entry: "e1", session: "sess-b" }),
+        apiReq("/api/workspaces/apply-begin", { path: otherWorkspaceRoot, entry: otherEntry, session: "sess-b" }),
       );
       const bMs = performance.now() - bStart;
       expect(resB.status).toBe(201);
