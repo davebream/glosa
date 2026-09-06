@@ -217,6 +217,27 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     host: "127.0.0.1",
     bun: Bun.version,
   };
+  let shutdownRequested = false;
+  let shutdown: (() => Promise<void>) | null = null;
+  let startupShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+  // The main listener starts accepting as soon as Bun.serve returns, before the rest of boot has
+  // installed the fully wired shutdown function below. A client may therefore receive a valid
+  // handshake and immediately send SIGTERM while startup is still finishing. Remember that signal
+  // instead of falling through to the OS default, which exits without releasing daemon.lock.
+  process.on("SIGTERM", () => {
+    shutdownRequested = true;
+    if (shutdown) {
+      void shutdown();
+      return;
+    }
+    if (startupShutdownTimer !== null) return;
+    startupShutdownTimer = setTimeout(() => {
+      log(home, `${instanceId} startup shutdown exceeded ${SHUTDOWN_HARD_EXIT_MS}ms; releasing ownership and exiting`);
+      removeLockIfOwned(lockFile, instanceId);
+      releaseDaemonIdentity();
+      process.exit(0);
+    }, SHUTDOWN_HARD_EXIT_MS);
+  });
   let mayRepairLock = false;
   const repairLockOwnership = (): void => {
     // Only the process that already won the initial bind + O_EXCL race may repair its missing
@@ -322,9 +343,13 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   );
 
   let shuttingDown = false;
-  const shutdown = async () => {
+  shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    if (startupShutdownTimer !== null) {
+      clearTimeout(startupShutdownTimer);
+      startupShutdownTimer = null;
+    }
     mayRepairLock = false;
     clearInterval(lockRepairTimer);
     // A shutdown that hangs past this point still ends, and still ends with its lock released.
@@ -362,13 +387,12 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
     process.exit(0);
   };
-  process.on("SIGTERM", () => {
-    void shutdown();
-  });
   // Survive Ctrl-C in the terminal / the controlling terminal closing (A5 §F13) — the shim
   // dying must not take the daemon with it.
   process.on("SIGHUP", () => {});
   process.on("SIGINT", () => {});
+
+  if (shutdownRequested) void shutdown();
 
   log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
   return new Promise<never>(() => {
