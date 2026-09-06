@@ -93,8 +93,31 @@ Providers register through the daemon API; no hook writes registry files directl
 }
 ```
 
-Liveness is lease plus activity heartbeat, never `kill(pid,0)`. Transcript paths must remain under the
-configured Claude root after realpath confinement.
+Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registration, existing
+hooks, every MCP tool call, and an open session transport refresh it. Connection-held refreshes run
+every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then
+expires normally. Old timers cannot refresh a deregistered or replacement session. The generic
+connection handle is also the contract for future monitor (#151) and Codex subscription (#161)
+transports; those transports are not introduced here. Registration sources include `mcp`, `monitor`,
+and `codex-app-server`; existing hook sources remain accepted.
+
+The MCP shim discovers provider identity through provider-owned environment readers
+(`CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`), registers on first tool use, and heartbeats thereafter.
+An unknown-session heartbeat is a typed 404 and triggers re-registration. No host identity means one
+stable generic `mcp` identity per shim. A generic inbox pull retains its explicit `workspace`
+routing scope; identified host sessions always retain their actual process cwd. Explicit requested
+identities must match a known host.
+Registration merges preserve omitted bindings/transcripts, enrich generic provider identity, and
+reject conflicting concrete providers. Explicit bind registers an unknown ID or refreshes an expired
+lease; optional provider/cwd metadata comes from the caller, with generic `mcp` and target workspace
+fallbacks for a bare request. Binding and registration share one serialized registry writer.
+
+Transcript derivation is provider-owned and uses exact identity, never the newest file. Claude uses
+`<root>/projects/<encoded-cwd>/<session-id>.jsonl` under its configured/default/account-switcher roots.
+Codex searches the `sessions/YYYY/MM/DD/rollout-…-<thread-id>.jsonl` layout under configured
+`CODEX_HOME` and the default Codex home. Every candidate is confined to the provider allowlist;
+symlink escapes and ambiguous matches are rejected. Missing files are retried on mirror requests
+and leave registration usable with the fail-soft conversation mirror.
 
 Routing precedence is fixed:
 
@@ -119,7 +142,8 @@ Init is required only for provider delivery integration (hooks, feedback routing
 delivery, and optional Channels) and may be installed at workspace or user scope. `glosa doctor`
 reports the effective provider installation and its scope.
 
-Bindings are session-scoped. An external integration restores them after session registration rather
+Bindings are session-scoped and held only in memory. An explicit bind restores them after a daemon
+restart, including registration if needed, rather
 than persisting workflow-specific state inside glosa. Two live sessions bound to one workspace require
 an explicit hint or user choice; glosa never guesses and never auto-switches the SPA workspace.
 The SPA reports connected/stale/unbound from explicit `workspace_binding` plus lease liveness only;

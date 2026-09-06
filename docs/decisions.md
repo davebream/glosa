@@ -17,7 +17,12 @@ an integration's state schema, or infer workflow behavior from filenames.
 
 Providers register live sessions. An external integration may then bind a live session to a glosa
 workspace through `glosa session bind` or `glosa_session_bind`. Bindings are session-scoped and
-must be restored by the integration after session registration or daemon restart.
+must be restored explicitly after daemon restart. MCP activity restores registration automatically;
+explicit binding also registers unknown identities and renews expired leases. Provider identity comes
+from the provider environment or an explicit selector; absent evidence uses generic MCP, never a
+transcript-recency guess. Open transport connections refresh the shared registry lease; closing one
+stops refreshes and leaves expiry to the TTL. Monitor and Codex subscription transports consume this
+contract in their own follow-up issues.
 
 ## Runtime trust boundary
 

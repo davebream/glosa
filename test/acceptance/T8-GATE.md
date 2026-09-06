@@ -55,11 +55,16 @@ dropping out of it.
 | `fault` | `packages/daemon/test/bus/reconcile-fault-lease.test.ts` |
 | `fault` | `packages/daemon/test/bus/real-daemon-fault.test.ts` |
 | `fault` | `packages/daemon/test/wedged-daemon.test.ts` |
+| `concurrency` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/concurrency.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/mutex.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/approval-uniqueness.test.ts` |
 | `concurrency` | `packages/daemon/test/concurrency-real-subprocess.test.ts` |
 | `concurrency` | `packages/daemon/test/git/lease.test.ts` |
+| `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
+| `delivery` | `packages/cli/test/mcp.test.ts` |
+| `delivery` | `packages/cli/test/api-integration.test.ts` |
 | `delivery` | `packages/daemon/test/bus/delivery-reservation.test.ts` |
 | `delivery` | `packages/daemon/test/delivery/presentation.test.ts` |
 | `delivery` | `packages/daemon/test/agent-provider/push-registry.test.ts` |
@@ -94,6 +99,15 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
+
+**Session recovery (#141).** The delivery suite keeps one production MCP stdio process alive while
+its isolated daemon is killed/restarted, for both Claude and Codex environment identities. The next
+tool re-registers without a SessionStart hook; explicit binding restores the target. CLI recovery,
+HTTP error classification, concurrent registration/binding, and transcript confinement are covered.
+An injected clock advances past several lease TTLs with only a push stream open, then verifies
+expiry after cancellation, replacement, credential revocation, and shutdown. These fixtures do not
+launch vendor sessions, install integrations, or establish live-session rehearsal sign-off.
+
 
 The deterministic gate now crosses the three process boundaries that previously existed only in
 the manual rehearsal: a real production daemon process is killed through an injected composition

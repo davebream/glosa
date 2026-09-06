@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Running Claude and Codex sessions recover registration on their next MCP tool call after a daemon
+  restart. Explicit binding also registers unknown sessions and refreshes expired ones; no agent
+  restart is needed. Re-registration preserves existing binding and transcript metadata.
+- Open session streams refresh the shared liveness lease and clean up on disconnect, replacement,
+  token revocation, or shutdown. Stream closure lets the lease expire normally.
+- Providers discover transcripts by exact session identity within their allowed roots, failing soft
+  when files are missing or ambiguous. Unknown-session HTTP errors now report registration recovery
+  guidance instead of incorrectly claiming the daemon is unreachable.
+
 - A daemon that stops running takes the port with it instead of taking the machine down. When a
   daemon's event loop stalls it keeps its listening socket, answers no handshake, cannot repair its
   ownership record, and cannot honour SIGTERM — and once the connections glosa's own discovery keeps

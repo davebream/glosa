@@ -138,10 +138,17 @@ generic.**
   recursively moves or deletes source state (A4/A5).
 
 ### R2 — session registry & routing  (detail: A2 §F08, A5 §F19)
-- Providers register live agent sessions via hooks → daemon API (never direct file writes; serialized
-  by the daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
-  transcript_path, source, last_active_at, lease_expiry}`. Liveness = **lease + activity heartbeat**
-  (NOT `kill(pid,0)` — hook input has no documented PID).
+- Providers register live agent sessions through hooks, MCP activity, or explicit binding → daemon API
+  (never direct file writes; serialized by the daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
+  transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls, existing hooks, or an open
+  session transport connection every 20 seconds (never `kill(pid,0)`). Closing a connection stops
+  refreshes; it does not end the lease immediately. Sources include `mcp`, `monitor`, and
+  `codex-app-server`, alongside existing hook sources. The latter two transports ship separately.
+  MCP registers on first tool use and re-registers after an unknown-session heartbeat. Explicit bind
+  also registers unknown identities and refreshes stale ones; missing provider identity uses generic
+  `mcp`, which a subsequent concrete provider may enrich. Omitted registration fields preserve
+  bindings/transcripts; conflicting concrete providers fail. Bindings remain in memory and require
+  explicit restoration after daemon restart.
 - **Routing precedence**: (1) an **explicit session binding** supplied through the API, CLI, or MCP
   contract (authoritative); (2) the generic cwd-ancestor fallback. This supports artifact workspaces
   that differ from the agent process cwd without teaching glosa about an external workflow. Two sessions bound to one
@@ -223,7 +230,7 @@ the entry survives.
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.6: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.7: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, presentation-token mint/redeem) — schemas, status codes, 1 MiB body cap,
@@ -255,8 +262,11 @@ the entry survives.
   with dirty-worktree guard) per the user scope decision (A6 §F31 3.B). Human vs session vs unknown
   attribution shown; writer-register labels.
 - **Conversation viewer** = **read-only transcript view with an out-of-band composer** (F32): tails the
-  registered session's transcript (path from the registry, NOT a cwd→slug guess; root =
-  `$CLAUDE_CONFIG_DIR`). Renders by event type (prose turns; collapsed tool chips; grouped subagents;
+  registered session's transcript (registry path or exact provider-owned discovery, never a cwd→slug
+  guess). Missing paths are derived by exact session identity within
+  the provider’s configured transcript roots, retried when the mirror is requested, and confined
+  before reading; missing or ambiguous matches do not prevent registration. Renders by event type
+  (prose turns; collapsed tool chips; grouped subagents;
   meta hidden); vendored normalized `TranscriptEvent` layer with partial-line buffering, unknown-event
   quarantine, resume/clear/compact handling, tool-result caps (A2 §F16). **Fail soft**: any parse
   failure → "mirror unavailable — use the terminal", never worse; artifact/annotation workflow stays
@@ -281,7 +291,8 @@ the entry survives.
     capabilities(session): { push:bool, gate:bool, boundaryDrain:bool, mcpPull:bool }
     deliver(session, entry): DeliveryResult      // uses the best available capability; result → journal delivery_attempt
     liveness(session): "alive" | "stale"         // lease/heartbeat, never kill(pid,0)
-    transcriptPath(session): string | null       // for the conversation mirror
+    transcriptPath(session): string | null       // explicit path or exact provider-owned discovery
+    transcriptRoots?(): readonly string[]          // provider-owned confinement allowlist
   }
   ```
   v1 ships: **Claude Code provider** (deep: push=channels, gate+boundary=hooks, mcpPull=tools, transcript
