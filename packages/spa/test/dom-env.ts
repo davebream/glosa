@@ -62,3 +62,36 @@ export function installDom(): DomEnv {
     },
   };
 }
+
+/**
+ * Gives happy-dom's `<dialog>` the modal behaviour it does not implement, so `dialog.js` runs its
+ * real path instead of the `window.confirm` fallback. Returns a restore function.
+ *
+ * `HTMLDialogElement` comes from the happy-dom MODULE, so its prototype is shared by every
+ * `Window` in the process and a patch on it outlives `installDom()`'s teardown — which is exactly
+ * how a dialog test can make an unrelated file's `confirmDialog` hang, waiting for a button click
+ * that only its own test knows to perform. Call the returned function in `afterEach`.
+ */
+export function installModalDialogs(dom: DomEnv): () => void {
+  const proto = (dom.window as any).HTMLDialogElement.prototype;
+  const had = Object.hasOwn(proto, "showModal");
+  const previousShowModal = proto.showModal;
+  const previousClose = proto.close;
+  proto.showModal = function (this: any) {
+    this.open = true;
+  };
+  proto.close = function (this: any, returnValue = "") {
+    this.returnValue = returnValue;
+    this.open = false;
+    this.dispatchEvent(new (dom.window as any).Event("close"));
+  };
+  return () => {
+    if (had) {
+      proto.showModal = previousShowModal;
+      proto.close = previousClose;
+    } else {
+      delete proto.showModal;
+      delete proto.close;
+    }
+  };
+}

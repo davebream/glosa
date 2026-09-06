@@ -247,8 +247,11 @@ the entry survives.
   disclosures; annotation, restore, and agent composition require an explicit mode transition),
   **Review** (the anchored two-way margin — the reviewer's own comments AND a session's questions and
   pointers about a passage, answered where the words are), **Edit** (modify source,
-  save → re-render). v1 editor is deliberately minimal (source editing + save; fancy live-preview/
-  inline-annotate-while-editing deferred). Human edits in glosa → attributed `human` by construction.
+  save → re-render). Edit has two faces: a rich editor is the default and the byte-exact source
+  textarea stays one toggle away. Saves are **source-preserving** — only the blocks the writer
+  edited are re-serialized and everything else is byte-identical; where re-serializing an edited
+  block would still change bytes the writer did not touch, glosa shows that collateral and asks
+  before writing, never silently. Human edits in glosa → attributed `human` by construction.
 - **Class R viewer (markdown)**: markdown-it + `data-line` stamping; SSE-driven updates morphed via
   idiomorph (scroll/selection preserved); annotation → W3C record → POST.
 - **Class F viewer (foreign HTML)**: **source-preserving (bridge-augmented)** — served from the
@@ -406,7 +409,7 @@ the entry survives.
     state); concurrency; delivery (channels on/off, asyncRewake rearm, boundary, parked/resumed); browser
     security (the A3 §5 attacks); anchor corpus (Polish combining chars, md markup, duplicate quotes,
     stale hashes, transformed HTML); transcript suite; **explicit-binding topology** (agent cwd differs
-    from the artifact workspace and routing still succeeds).
+    from the artifact workspace and routing still succeeds); editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical).
   - Manual rehearsal: copy maintainer-selected real source and rendered artifacts into an ignored
     workspace under `.context/`, rename them neutrally, and add only private descriptor/manifest marker
     data needed for one verbatim and one transformed region. Run an isolated daemon and a real Claude

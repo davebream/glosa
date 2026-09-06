@@ -31,9 +31,19 @@ import {
   outlineDepths,
   scrollToOffset,
 } from "./outline.js";
-import { confirmDialog } from "./dialog.js";
+import { choiceDialog, confirmDialog } from "./dialog.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
+
+/**
+ * What `saveCurrentArtifact` returns when the writer was asked about a save that would change
+ * bytes they did not type, and answered anything other than "save anyway".
+ *
+ * Distinct from both the saved artifact and a thrown error, because a caller that acts on a save —
+ * the approval flow attaches its verdict to the revision the save produced — must not treat a
+ * declined save as a completed one and approve the bytes still sitting unsaved on screen.
+ */
+export const SAVE_DECLINED = Symbol("glosa.save-declined");
 
 export const MODES = ["read", "review", "edit"];
 
@@ -264,10 +274,19 @@ export function createArtifactPane(host, deps) {
   let loading = true;
   let modeState = initialModeState(readLock ? "read" : initialMode);
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
-  let richEditor = null; // {getMarkdown, isDirty, focus, destroy} while the rich face is mounted
+  let richEditor = null; // {getSave, getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   let richMountRequest = 0;
   /** Unsaved source, kept across mode switches. `{path, text}` — see `parkDrafts`. */
   let parkedSource = null;
+  /**
+   * The splice report for text the rich face handed to the source textarea, `{text, report}`.
+   *
+   * Without this the guard has a hole: switching Rich → Source and saving from there never calls
+   * `getSave()`, so a re-serialization the writer never agreed to would reach disk with no dialog.
+   * It only applies while the textarea still holds exactly the handed-over text — once the writer
+   * types, the bytes are theirs and nothing needs consenting to.
+   */
+  let carriedReport = null;
   /** A half-written margin note, kept the same way. `{path, state}`. */
   let parkedComposer = null;
   /** The session request the reader is currently on, if any — drives the active sideline. */
@@ -936,7 +955,12 @@ export function createArtifactPane(host, deps) {
     approvalBusy = true;
     renderApprovalStrip();
     try {
-      if (dirty) await saveCurrentArtifact({ onlyIfDirty: true });
+      if (dirty && (await saveCurrentArtifact({ onlyIfDirty: true })) === SAVE_DECLINED) {
+        // The reader was told "your pending edits will be saved first" and then declined the save.
+        // Approving now would attach the verdict to the revision on disk, not the one on screen.
+        approvalError = "Nothing was approved: your edits were not saved. Save them, then approve.";
+        return;
+      }
       const revisionId = currentArtifact?.source_sha256;
       if (!revisionId) throw new Error("The saved artifact has no revision identifier.");
       const result = await dataAccess.respondToAttention(slug, request.id, { outcome: "approved", revisionId });
@@ -2300,6 +2324,7 @@ export function createArtifactPane(host, deps) {
   }
 
   editArea.addEventListener("input", () => {
+    if (carriedReport && editArea.value !== carriedReport.text) carriedReport = null;
     modeState = modeReducer(modeState, { type: "edited" });
     editStatus.textContent = "";
     editStatus.removeAttribute("data-error");
@@ -2315,14 +2340,14 @@ export function createArtifactPane(host, deps) {
       renderContent();
       return;
     }
-    const carried =
-      richEditor && (richEditor.isDirty() || modeState.dirty)
-        ? richEditor.getMarkdown()
-        : (currentArtifact?.content ?? "");
+    const save = richEditor && (richEditor.isDirty() || modeState.dirty) ? richEditor.getSave() : null;
+    const carried = save ? save.markdown : (currentArtifact?.content ?? "");
     teardownRichFace();
     sourceFace = true;
     renderContent();
     editArea.value = carried; // after renderContent, so the artifact snapshot doesn't clobber it
+    // The report rides along: this text is still the rich face's splice until the writer edits it.
+    carriedReport = save && (save.collateral.length || save.degraded) ? { text: carried, report: save } : null;
   });
 
   faceRichBtn.addEventListener("click", () => {
@@ -2332,38 +2357,114 @@ export function createArtifactPane(host, deps) {
       return;
     }
     const carried = editArea.value;
+    carriedReport = null; // the rich face re-splices from this text; the old report is spent
     sourceFace = false;
     teardownRichFace();
     renderFaceToggle();
     void mountRichFace(carried);
   });
 
-  function currentEditorContent() {
-    if (!currentArtifact) return "";
-    return !sourceFace && richEditor
-      ? richEditor.isDirty() || modeState.dirty
-        ? richEditor.getMarkdown()
-        : (currentArtifact.content ?? "")
-      : editArea.value;
+  /**
+   * What a save would write, and what it would cost: `{content, report}`.
+   *
+   * The rich face answers both at once — its splice re-serializes only the blocks whose tree
+   * changed, so a clean editor returns the artifact's own bytes by construction rather than by a
+   * caller remembering to check `isDirty()` first. The source face is byte-exact and answers only
+   * with its text, except while it is still holding a splice the rich face handed it.
+   */
+  function pendingSave() {
+    if (!currentArtifact) return { content: "", report: null };
+    if (!sourceFace && richEditor) {
+      const report = richEditor.getSave();
+      return { content: report.markdown, report };
+    }
+    const content = editArea.value;
+    return { content, report: carriedReport?.text === content ? carriedReport.report : null };
   }
 
+  function currentEditorContent() {
+    return pendingSave().content;
+  }
+
+  /** The lines a re-serialization would change that the writer did not, shown verbatim so they can
+   * judge for themselves rather than take our word for it. */
+  function collateralDetail(report) {
+    if (report.degraded) return null;
+    return report.collateral
+      .slice(0, 3)
+      .map(({ original, faithful }) => `${original}\n\n    becomes\n\n${faithful}`)
+      .join("\n\n\u2014\u2014\n\n")
+      .concat(report.collateral.length > 3 ? `\n\n\u2026and ${report.collateral.length - 3} more.` : "");
+  }
+
+  /**
+   * Asks before a save that would change bytes the writer did not touch. Resolves to what to do:
+   * `"save"`, `"source"` (hand the text to the byte-exact textarea and let them fix it), or `null`
+   * for don't. A save is never allowed to invent an edit silently — every region this writes
+   * reaches the agent as a `human_edit`, where a fabricated change is indistinguishable from a
+   * real one.
+   */
+  function consentToCollateral(report) {
+    if (!report || (!report.collateral.length && !report.degraded)) return Promise.resolve("save");
+    const blocks = report.collateral.length;
+    return choiceDialog({
+      title: "This save would change words you didn't type",
+      body: report.degraded
+        ? "Glosa can't work out which parts of this file you changed, so saving rewrites the whole thing in its own formatting. Your words are kept; the layout around them may not be."
+        : blocks === 1
+          ? "The block you edited can't be written back exactly as it stands — re-writing it changes the markup shown below. Everything outside that block is untouched either way."
+          : `${blocks} of the blocks you edited can't be written back exactly as they stand. Everything outside them is untouched either way.`,
+      detail: collateralDetail(report) ?? undefined,
+      choices: [
+        { id: "source", label: "Edit as source" },
+        { id: "save", label: "Save anyway" },
+      ],
+    });
+  }
+
+  /**
+   * Writes the artifact. Returns the saved artifact, or `SAVE_DECLINED` when the writer was asked
+   * about collateral and said no — callers that act on a save (the approval flow) must check,
+   * because "nothing was written" is not the same as "nothing needed writing".
+   */
   async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
     if (!slug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
     const dirty = modeState.dirty || Boolean(richEditor?.isDirty());
     if (onlyIfDirty && !dirty) return currentArtifact;
+
+    // Everything the write needs, captured before any await: asking about collateral suspends
+    // this function, and an agent-driven reveal can swap the pane's artifact while a modal is up.
+    const artifact = currentArtifact;
+    const { content, report } = pendingSave();
+    const consent = await consentToCollateral(report);
+    if (artifact !== currentArtifact) return SAVE_DECLINED;
+    if (consent !== "save") {
+      // "Edit as source" keeps the edit and hands it to the byte-exact face, where the writer can
+      // fix the collateral by hand; nothing reaches disk either way.
+      if (consent === "source" && !sourceFace) {
+        teardownRichFace();
+        sourceFace = true;
+        renderContent();
+        editArea.value = content;
+        carriedReport = null; // they were shown the cost and chose to own these bytes
+        modeState = modeReducer(modeState, { type: "edited" });
+        editArea.focus();
+        onStateChange();
+      }
+      return SAVE_DECLINED;
+    }
+
     saveButton.disabled = true;
     editStatus.removeAttribute("data-error");
     editStatus.textContent = "Saving…";
     try {
-      // The rich face serializes ONLY when the document changed (its own edits, or source-face
-      // edits carried in via `modeState.dirty`); a clean editor saves the artifact's exact bytes.
-      const content = currentEditorContent();
-      const saved = await dataAccess.putArtifact(slug, currentArtifact.source_path, content, {
-        ifMatch: currentArtifact.source_sha256,
+      const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, {
+        ifMatch: artifact.source_sha256,
       });
-      currentArtifact = { ...currentArtifact, content, ...saved };
+      currentArtifact = { ...artifact, content, ...saved };
       modeState = modeReducer(modeState, { type: "saved" });
       clearParkedSource(); // the parked copy is now behind the file it was parked against
+      carriedReport = null;
       // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
       const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
       currentArtifact = fresh;

@@ -1,25 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { confirmDialog, noticeDialog } from "../src/dialog.js";
-import { installDom, type DomEnv } from "./dom-env.ts";
+import { choiceDialog, confirmDialog, noticeDialog } from "../src/dialog.js";
+import { type DomEnv, installDom, installModalDialogs } from "./dom-env.ts";
 
 describe("confirmDialog accessibility and focus lifecycle", () => {
   let dom: DomEnv;
+  let restoreDialogs: () => void;
 
   beforeEach(() => {
     dom = installDom();
-    const proto = (dom.window as any).HTMLDialogElement.prototype;
-    proto.showModal = function () {
-      this.open = true;
-    };
-    proto.close = function (returnValue = "") {
-      this.returnValue = returnValue;
-      this.open = false;
-      this.dispatchEvent(new dom.window.Event("close"));
-    };
+    restoreDialogs = installModalDialogs(dom);
   });
 
   afterEach(() => {
+    restoreDialogs();
     dom.teardown();
   });
 
@@ -75,5 +69,85 @@ describe("confirmDialog accessibility and focus lifecycle", () => {
     await Promise.resolve();
     expect(dom.document.activeElement).toBe(opener);
     expect(dom.document.querySelector("dialog")).toBeNull();
+  });
+});
+
+describe("choiceDialog — two named actions, and every way of not answering means no", () => {
+  let dom: DomEnv;
+  let restoreDialogs: () => void;
+
+  beforeEach(() => {
+    dom = installDom();
+    restoreDialogs = installModalDialogs(dom);
+  });
+
+  afterEach(() => {
+    restoreDialogs();
+    dom.teardown();
+  });
+
+  const ask = () =>
+    choiceDialog({
+      title: "This save would change words you didn't type",
+      body: "Re-writing that block changes the markup below.",
+      detail: "> [!info] one\n\n    becomes\n\n> \\[!info\\] one",
+      choices: [
+        { id: "source", label: "Edit as source" },
+        { id: "save", label: "Save anyway" },
+      ],
+    });
+
+  const button = (label: string) =>
+    [...dom.document.querySelectorAll("dialog button")].find((b: any) => b.textContent === label) as any;
+
+  test("names the modal, shows the bytes verbatim, and resolves the chosen action", async () => {
+    const opener = dom.document.createElement("button");
+    dom.document.body.append(opener);
+    opener.focus();
+
+    const result = ask();
+    const dialog = dom.document.querySelector("dialog")!;
+    expect(dialog.getAttribute("aria-labelledby")).toBe(dialog.querySelector("h2")!.id);
+    expect(dialog.getAttribute("aria-describedby")).toBe(dialog.querySelector("p")!.id);
+    // Cancel holds focus: the reader is being warned, so the safe answer is under their hand.
+    expect(dom.document.activeElement).toBe(button("Cancel"));
+    const detail = dialog.querySelector(".glosa-dialog-detail") as any;
+    expect(detail.textContent).toContain("\\[!info\\]");
+    expect(detail.tabIndex).toBe(0); // scrollable, so reachable without a pointer
+
+    button("Save anyway").click();
+    expect(await result).toBe("save");
+    await Promise.resolve();
+    expect(dom.document.activeElement).toBe(opener);
+    expect(dom.document.querySelector("dialog")).toBeNull();
+  });
+
+  test("the second action is its own answer, not a variant of the first", async () => {
+    const result = ask();
+    button("Edit as source").click();
+    expect(await result).toBe("source");
+  });
+
+  test("Cancel, Esc and the backdrop all mean do nothing", async () => {
+    const cancelled = ask();
+    button("Cancel").click();
+    expect(await cancelled).toBeNull();
+
+    // Esc closes a native dialog with an empty returnValue, the same shape as a backdrop dismiss.
+    const escaped = ask();
+    (dom.document.querySelector("dialog") as any).close("");
+    expect(await escaped).toBeNull();
+
+    const dismissed = ask();
+    const dialog = dom.document.querySelector("dialog")!;
+    dialog.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    expect(await dismissed).toBeNull();
+  });
+
+  test("a DOM that cannot show a modal answers no rather than assuming yes", async () => {
+    // A three-way question has no honest window.confirm fallback, and the caller gates a WRITE on
+    // the answer — so an environment that cannot ask must not answer on the reader's behalf.
+    delete (dom.window as any).HTMLDialogElement.prototype.showModal;
+    expect(await ask()).toBeNull();
   });
 });
