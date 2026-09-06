@@ -20,13 +20,30 @@
   replacement wait, and spawn wait. Hooks pass 3000 ms; explicit CLI and MCP clients default to
   12000 ms. Before removing any lock or spawning without one, the client must observe three
   consecutive clean `ECONNREFUSED` results 100 ms apart while the exact ownership state remains
-  unchanged. Any bound/timeout result, ownership change, or exhausted deadline fails closed without
-  mutation. One invocation may spawn at most one contender; EADDRINUSE remains terminal.
+  unchanged, **and then prove the port free by binding it**. A refused connect is not evidence that
+  a port is free: a daemon whose event loop has stopped keeps its listening socket but stops
+  accepting, and once the accept queue fills the kernel answers further connects with RST — so
+  connect-only evidence let a client delete a live daemon's ownership record and then fail to bind
+  the port it had just called free (issue #139). `bind(2)` has no such failure mode; a bind that
+  fails for any reason reads as bound. Any bound/timeout result, ownership change, or exhausted
+  deadline fails closed without mutation. One invocation may spawn at most one contender;
+  EADDRINUSE remains terminal.
+- A proven diagnosis outranks the deadline in what a client REPORTS: "a process is bound to the
+  port and is not answering the glosa handshake" is returned with its recovery even when the
+  handshake poll consumed the whole budget, because a bare "discovery exceeded its budget" leaves a
+  user with nothing to act on. Recovery text for an unresponsive owner names SIGTERM **and**
+  SIGKILL — a wedged daemon cannot run its own SIGTERM handler.
 - Replacement signals only the verified PID, waits ≤5s for that exact lock instance to disappear/change, then re-enters the ordinary read-or-spawn loop. Concurrent clients therefore converge through bind/O_EXCL/CAS; clients never unlink a replacement lock or spawn independently. If no live daemon exists, spawn = detachedSpawn + poll handshake ≤5s; timeout→FAIL w/ daemon.log path.
 - Detach (macOS, no setsid): `Bun.spawn stdio:["ignore",logfd,logfd]` (~/.glosa/daemon.log) + `child.unref()`; **daemon ignores SIGHUP/SIGINT** (survives Ctrl-C/terminal close), SIGTERM→graceful. Claude killing shim kills only shim.
 - Daemon boot: bind 127.0.0.1:port (EADDRINUSE + valid peer → exit0 benign race; EADDRINUSE foreign → exit3 + log) → `openSync(lock,"wx")` O_EXCL = CAS (EEXIST + live peer → exit0; else reclaim+retry once→exit4) → write+fsync lock → install signal handlers → serve (handshake→200). Bind-before-lock + O_EXCL → exactly one daemon wins.
 - reclaimStaleLock: unlink + re-openSync(wx). Stale = dead pid / unparseable / alive-but-foreign-port (PID reuse, detected by handshake fail).
-- Shutdown: SIGTERM → `server.stop(false)` on both listeners → SSE `event:bye` and close all journal/transcript streams → await active HTTP handlers and every workspace-bus mutex → fsync+close journal writers → unlink lock ONLY if `instance_id` matches → exit0. The drain is bounded at 3s; timeout force-closes both listeners, retains the ownership check, logs forced shutdown, and exits. SPA clients consume `bye` internally and reconnect immediately with their last cursor; later failures use normal backoff. A severed apply lease reconciles subsequent edits as `unknown`; only a completed matching lease may yield `session:<id>`, and shutdown never invents a `human` fallback. No idle self-shutdown in v1.
+- Stall watchdog: the daemon runs a Worker holding a `SharedArrayBuffer` heartbeat the main thread
+  increments every 250 ms. If the heartbeat stops for `GLOSA_STALL_WATCHDOG_MS` (default 30 s; `0`
+  disables, unparseable falls back to the default), the worker logs the stall, unlinks the ownership
+  lock **only if it still names this instance**, and SIGKILLs the process — the recovery a human
+  otherwise has to perform by PID, and the only signal a wedged process cannot fail to act on. A
+  watchdog that cannot start is logged and never blocks serving.
+- Shutdown: SIGTERM → `server.stop(false)` on both listeners → SSE `event:bye` and close all journal/transcript streams → await active HTTP handlers and every workspace-bus mutex → fsync+close journal writers → unlink lock ONLY if `instance_id` matches → exit0. The drain is bounded at 3s; timeout force-closes both listeners, retains the ownership check, logs forced shutdown, and exits. A shutdown that has begun is itself bounded at 8s: past that the daemon releases its lock and exits regardless, because `shuttingDown` already suppresses every later signal, so a drain that never finishes is indistinguishable from the ignored SIGTERM it was meant to answer. SPA clients consume `bye` internally and reconnect immediately with their last cursor; later failures use normal backoff. A severed apply lease reconciles subsequent edits as `unknown`; only a completed matching lease may yield `session:<id>`, and shutdown never invents a `human` fallback. No idle self-shutdown in v1.
 
 ## F19 — global workspace index `~/.glosa/workspaces.json`
 - **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/hooks/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.

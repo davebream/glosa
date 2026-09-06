@@ -17,7 +17,12 @@ an integration's state schema, or infer workflow behavior from filenames.
 
 Providers register live sessions. An external integration may then bind a live session to a glosa
 workspace through `glosa session bind` or `glosa_session_bind`. Bindings are session-scoped and
-must be restored by the integration after session registration or daemon restart.
+must be restored explicitly after daemon restart. MCP activity restores registration automatically;
+explicit binding also registers unknown identities and renews expired leases. Provider identity comes
+from the provider environment or an explicit selector; absent evidence uses generic MCP, never a
+transcript-recency guess. Open transport connections refresh the shared registry lease; closing one
+stops refreshes and leaves expiry to the TTL. Monitor and Codex subscription transports consume this
+contract in their own follow-up issues.
 
 ## Runtime trust boundary
 
@@ -223,3 +228,34 @@ launched (invariant 5). Which variable and which directories matter is provider 
 in the claude-code provider; the core supplies only a generic, injectable capability to read the
 environment, so it still knows nothing about any particular agent (invariant 1).
 
+## Edit keeps its rich face, and buys honesty by splicing rather than re-serializing
+
+Edit's default face is a rich editor over prosemirror-markdown's CommonMark schema, with the source
+textarea one toggle away. That schema models a subset of what people write: it has no node for YAML
+front matter, a `> [!info]` callout marker, a `%% ... %%` comment, raw HTML, or a soft line break,
+and it escapes brackets conservatively on the way out. Re-serializing a whole document therefore
+returns a structurally different file, and the collapsed line breaks are not recoverable.
+
+The available exits were to retreat to source-only editing, or to make saving preserve the source.
+We took the second. The editorial experience is the product, and every other writing tool people
+already trust — Typora, iA Writer, Obsidian — preserves the source rather than asking the writer to
+give up the rendered face.
+
+The mechanism is the one glosa already relies on elsewhere: prosemirror-markdown parses through
+markdown-it, whose block tokens carry the source line `map` that class-R anchoring's `data-line`
+stamping also uses. Recording each top-level block's character span at parse time makes two things
+possible at once — comparing the edited tree to the parsed original tells you which blocks changed,
+and the spans tell you where every other block's bytes are, so they can be copied through
+untouched.
+
+Two consequences worth stating plainly:
+
+- **Inside an edited block the schema is still lossy**, so re-serializing one can change markup the
+  writer did not touch. That is shown and consented to rather than written, because a save that
+  invents an edit is a correctness problem: the rewritten region reaches the agent as a `human_edit`
+  and becomes indistinguishable from the writer's own change. Modelling those constructs as opaque
+  nodes is what removes the prompt, and is sequenced separately.
+- **The splice checks its own work.** The spliced bytes are re-parsed and compared against the
+  document the writer is looking at; a mismatch falls back to a whole-document write and says so,
+  rather than trusting that every markdown construct was enumerated correctly. Enumeration is how
+  this class of bug happens in the first place.

@@ -5,7 +5,10 @@
 // and the real asyncRewake watcher process are the P5.4 rehearsal's job (they need a live Claude
 // Code session) — everything here proves the LADDER LOGIC with every transport injected.
 import { describe, expect, test } from "bun:test";
-import { ClaudeCodeProvider, type SessionLivenessSource } from "../src/provider.ts";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { discoverClaudeMcpSession, ClaudeCodeProvider, type SessionLivenessSource } from "../src/provider.ts";
 import type { DeliverableEntry, SessionBinding } from "@glosa/daemon";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
@@ -206,5 +209,44 @@ describe("ClaudeCodeProvider.deliver — the R4 ladder", () => {
       const result = await provider.deliver(SESSION, ENTRY);
       expect(result).toEqual({ via: "gate", outcome: "failed", error: "no_capability_available" });
     });
+  });
+});
+
+describe("provider-owned recovery discovery", () => {
+  test("MCP identity comes only from the provider environment", () => {
+    expect(discoverClaudeMcpSession({ CLAUDE_CODE_SESSION_ID: "exact-id" }, "/agent")).toEqual({
+      session_id: "exact-id",
+      provider: "claude-code",
+      cwd: "/agent",
+      channelPush: true,
+    });
+    expect(discoverClaudeMcpSession({}, "/agent")).toBeNull();
+  });
+  test("exact transcript discovery retries missing files and rejects ambiguity and symlink escape", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-provider-discovery-")));
+    const first = join(root, "first");
+    const second = join(root, "second");
+    mkdirSync(first);
+    mkdirSync(second);
+    const provider = new ClaudeCodeProvider({ liveness: liveness(), transcriptRoots: () => [first, second] });
+    const session = { session_id: "exact-id", workspace: "/agent/path", source: "mcp" };
+    const relative = join("projects", "-agent-path", "exact-id.jsonl");
+    try {
+      expect(provider.transcriptPath(session)).toBeNull();
+      for (const base of [first, second]) mkdirSync(dirname(join(base, relative)), { recursive: true });
+      writeFileSync(join(first, relative), "{}\n");
+      expect(provider.transcriptPath(session)).toBe(join(first, relative));
+      writeFileSync(join(second, relative), "{}\n");
+      expect(provider.transcriptPath(session)).toBeNull();
+      rmSync(join(second, relative));
+      rmSync(join(first, relative));
+      const outside = join(root, "outside.jsonl");
+      writeFileSync(outside, "{}\n");
+      symlinkSync(outside, join(first, relative));
+      expect(provider.transcriptPath(session)).toBeNull();
+      expect(provider.transcriptPath({ ...session, session_id: "../escape" })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

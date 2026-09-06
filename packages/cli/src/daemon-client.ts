@@ -5,6 +5,7 @@
 // the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes the handlers
 // testable with an in-memory fake instead of a live daemon subprocess.
 
+import { apiError, type ApiProblem } from "./api-client.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
 import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
 
@@ -70,6 +71,7 @@ export interface DaemonUnreachableError extends Error {
 
 export interface HttpDaemonClientOptions {
   ensureTimeoutMs?: number;
+  fetch?: typeof fetch;
 }
 
 function unreachableError(reason: string): DaemonUnreachableError {
@@ -92,19 +94,28 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
   const port = conn.port; // captured outside the closure below — narrowing doesn't cross into it
   const token = loadToken(glosaHome());
   const base = `http://127.0.0.1:${port}`;
+  const fetchRequest = options.fetch ?? fetch;
 
   async function call(path: string, body?: unknown): Promise<Response> {
-    const res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: {
-        Host: `127.0.0.1:${port}`,
-        Origin: base,
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw unreachableError(`${path} -> HTTP ${res.status}`);
+    let res: Response;
+    try {
+      res = await fetchRequest(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Origin: base,
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (error) {
+      throw unreachableError((error as Error).message);
+    }
+    if (!res.ok) {
+      const problem = (await res.json().catch(() => null)) as ApiProblem | null;
+      throw apiError(res.status, problem);
+    }
     return res;
   }
 
@@ -133,7 +144,7 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       });
     },
     async openConversationPush(sessionId, onEntry, signal) {
-      const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {
+      const res = await fetchRequest(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {
         headers: {
           Host: `127.0.0.1:${port}`,
           Origin: base,
@@ -141,7 +152,8 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         },
         signal,
       });
-      if (!res.ok || !res.body) throw unreachableError(`push-stream -> HTTP ${res.status}`);
+      if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as ApiProblem | null);
+      if (!res.body) throw new Error("push-stream response has no body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";

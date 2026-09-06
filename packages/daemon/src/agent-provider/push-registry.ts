@@ -5,6 +5,7 @@
 import type { DeliverableEntry } from "./interface.ts";
 
 interface Connection {
+  close?: () => void;
   send: (entry: DeliverableEntry) => void;
 }
 
@@ -17,11 +18,13 @@ export class SessionPushRegistry {
   private readonly connections = new Map<string, Connection>();
   private readonly pending = new Map<string, PendingAck>();
 
-  register(sessionId: string, send: Connection["send"]): () => void {
-    this.connections.set(sessionId, { send });
+  register(sessionId: string, send: Connection["send"], close?: () => void): () => void {
+    this.connections.get(sessionId)?.close?.();
+    this.connections.set(sessionId, { send, close });
     return () => {
       const current = this.connections.get(sessionId);
-      if (current?.send === send) this.connections.delete(sessionId);
+      if (current?.send !== send) return;
+      this.connections.delete(sessionId);
       for (const [key, pending] of this.pending) {
         if (!key.startsWith(`${sessionId}\0`)) continue;
         clearTimeout(pending.timer);

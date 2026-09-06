@@ -5,6 +5,103 @@ import { isCwdAncestorOf, SessionRegistry } from "../../src/registry/session-reg
 import { WorkspaceIndex, workspaceIndexPath } from "../../src/registry/workspace-index.ts";
 import { cleanup, deterministicClock, freshHome, manualClock } from "./helpers.ts";
 
+describe("session recovery and connection-held leases (#141)", () => {
+  test("concurrent recovery preserves explicit binding and enriches generic identity", async () => {
+    const registry = new SessionRegistry();
+    await registry.bind("s", "/target");
+    await Promise.all([
+      registry.register({
+        session_id: "s",
+        provider: "codex",
+        cwd: "/agent",
+        source: "hook",
+        transcript_path: "/transcript",
+      }),
+      registry.bind("s", "/target-two"),
+      registry.register({
+        session_id: "s",
+        provider: "mcp",
+        cwd: "/agent",
+        source: "mcp",
+        fallback_workspace_binding: "/fallback",
+      }),
+    ]);
+    expect(registry.get("s")).toMatchObject({
+      provider: "codex",
+      workspace_binding: "/target-two",
+      transcript_path: "/transcript",
+    });
+    await expect(
+      registry.register({ session_id: "s", provider: "claude-code", cwd: "/agent", source: "mcp" }),
+    ).rejects.toThrow("different provider");
+    expect(registry.get("s")?.provider).toBe("codex");
+  });
+
+  test("failed persistence never publishes registration or changes a prior binding", async () => {
+    let fail = false;
+    const index = {
+      upsertWorkspace: async () => {
+        if (fail) throw new Error("ENOSPC");
+      },
+    } as unknown as WorkspaceIndex;
+    const registry = new SessionRegistry({ index });
+    await registry.bind("s", "/before");
+    const prior = { ...registry.get("s")! };
+    fail = true;
+    await expect(registry.bind("s", "/after")).rejects.toThrow("ENOSPC");
+    await expect(registry.bind("new", "/after")).rejects.toThrow("ENOSPC");
+    expect(registry.get("s")).toEqual(prior);
+    expect(registry.get("new")).toBeNull();
+  });
+
+  test("connection ownership survives replacement and stale timers cannot resurrect a session", async () => {
+    let ms = 0;
+    const scheduled: Array<{ tick: () => void; cancelled: boolean }> = [];
+    const registry = new SessionRegistry({
+      now: () => new Date(ms),
+      scheduleRefresh: (tick, interval) => {
+        expect(interval).toBe(20_000);
+        const timer = { tick, cancelled: false };
+        scheduled.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    await registry.bind("s", "/target");
+    const releaseOld = registry.holdConnection("s");
+    for (let i = 0; i < 8; i++) {
+      ms += 20_000;
+      scheduled[0]!.tick();
+      await registry.heartbeat("unregistered-barrier");
+      expect(registry.liveness("s")).toBe("alive");
+    }
+    const releaseNew = registry.holdConnection("s");
+    expect(scheduled[0]!.cancelled).toBe(true);
+    releaseOld();
+    expect(scheduled[1]!.cancelled).toBe(false);
+    await registry.heartbeat("unregistered-barrier");
+    releaseNew();
+    ms += 60_000;
+    scheduled[0]!.tick();
+    scheduled[1]!.tick();
+    await registry.heartbeat("unregistered-barrier");
+    expect(registry.liveness("s")).toBe("stale");
+    await registry.bind("s", "/target");
+    registry.holdConnection("s");
+    await registry.deregister("s");
+    scheduled[2]!.tick();
+    await registry.heartbeat("unregistered-barrier");
+    expect(registry.get("s")).toBeNull();
+    await registry.bind("s", "/new-generation");
+    const expiry = registry.get("s")!.lease_expiry;
+    ms += 20_000;
+    scheduled[2]!.tick();
+    await registry.heartbeat("unregistered-barrier");
+    expect(registry.get("s")!.lease_expiry).toBe(expiry);
+  });
+});
+
 describe("SessionRegistry — concurrent registration (F08 race)", () => {
   test("N concurrent register() calls, distinct sessions across several workspaces, all land", async () => {
     const home = freshHome();
@@ -66,9 +163,9 @@ describe("SessionRegistry — liveness without PID", () => {
     expect(registry.liveness("nope")).toBe("stale");
   });
 
-  test("heartbeat on an unknown session_id is a silent no-op", async () => {
+  test("heartbeat on an unknown session_id reports missing registration", async () => {
     const registry = new SessionRegistry();
-    await expect(registry.heartbeat("nope")).resolves.toBeUndefined();
+    await expect(registry.heartbeat("nope")).resolves.toBe(false);
   });
 
   test("never checks PID liveness (grep guard: no process.kill / kill( call sites)", () => {

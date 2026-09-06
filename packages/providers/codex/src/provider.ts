@@ -18,6 +18,10 @@
 // with no core special-casing, and the easiest way to prove that is to keep their internal shape as
 // similar as the underlying mechanics allow. The real difference from Claude's provider is entirely
 // SUBTRACTIVE: no ChannelSender, no RewakeSignal, no rungs 1-2.
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
+import { homedir } from "node:os";
 import type {
   AgentProvider,
   DeliverableEntry,
@@ -38,6 +42,7 @@ export interface SessionLivenessSource {
 }
 
 export interface CodexProviderDeps {
+  transcriptRoots?: () => readonly string[];
   liveness: SessionLivenessSource;
 }
 
@@ -105,8 +110,44 @@ export class CodexProvider implements AgentProvider {
     return this.deps.liveness.liveness(session.session_id);
   }
 
+  transcriptRoots(): readonly string[] {
+    return (
+      this.deps.transcriptRoots?.() ?? [
+        ...new Set([process.env.CODEX_HOME ?? join(homedir(), ".codex"), join(homedir(), ".codex")]),
+      ]
+    );
+  }
+
   transcriptPath(session: SessionBinding): string | null {
-    return session.transcript_path ?? null;
+    if (session.transcript_path) return session.transcript_path;
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.session_id)) return null;
+    const candidates = new Set<string>();
+    // Only the documented YYYY/MM/DD layout, never a recursive home-directory scan.
+    const scan = (dir: string, depth: number, root: string) => {
+      try {
+        if (!confineTranscriptPath(dir, [root]).ok) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const path = join(dir, entry.name);
+          const rolloutIdentity = entry.name.replace(/^rollout-(?:\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-)?/, "");
+          if (depth < 3 && entry.isDirectory() && (depth === 0 ? /^\d{4}$/ : /^\d{2}$/).test(entry.name)) {
+            scan(path, depth + 1, root);
+          } else if (
+            depth === 3 &&
+            entry.isFile() &&
+            entry.name.startsWith("rollout-") &&
+            rolloutIdentity === `${session.session_id}.jsonl` &&
+            confineTranscriptPath(path, [root]).ok &&
+            lstatSync(path).isFile()
+          ) {
+            candidates.add(realpathSync(path));
+          }
+        }
+      } catch {
+        /* missing or unreadable transcripts do not prevent registration */
+      }
+    };
+    for (const root of this.transcriptRoots()) scan(join(root, "sessions"), 0, root);
+    return candidates.size === 1 ? [...candidates][0]! : null;
   }
 
   /** The R4 ladder minus channels, in rung order. Same `outcome` vocabulary discipline as the
@@ -142,4 +183,10 @@ export class CodexProvider implements AgentProvider {
     // reused as the vocabulary has no "none" value, same as Claude's own fallback.
     return { via: "gate", outcome: "failed", error: "no_capability_available" };
   }
+}
+
+/** Provider-owned identity discovery; transcript recency is never evidence of identity. */
+export function discoverCodexMcpSession(env: Record<string, string | undefined>, cwd: string) {
+  const session_id = env.CODEX_THREAD_ID;
+  return session_id ? { session_id, provider: "codex", cwd } : null;
 }

@@ -9,6 +9,8 @@ import { countJournalLines } from "../../daemon/src/bus/tail.ts";
 import {
   claudeConfigDir,
   claudeConfigRoots,
+  type DaemonDiagnosis,
+  diagnoseDaemon,
   journalPath,
   PROTOCOL_VERSION,
   protocolCompatible,
@@ -43,6 +45,10 @@ export interface DoctorDeps {
   glosaHome: () => string;
   claudeConfigDir: () => string;
   claudeConfigRoots: () => string[];
+  /** Read-only classification of an unreachable daemon, used ONLY to explain a `daemon+proto`
+   * failure. "Unreachable" covers four unrelated situations and only one of them asks the user to
+   * kill something, so doctor names which one it is (issue #139). Never spawns or signals. */
+  diagnoseDaemon: (home: string) => Promise<DaemonDiagnosis>;
 }
 
 function realRunVersionProbe(cmd: string[]): string | null {
@@ -67,6 +73,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     glosaHome,
     claudeConfigDir,
     claudeConfigRoots,
+    diagnoseDaemon: (home) => diagnoseDaemon(home),
   };
 }
 
@@ -213,7 +220,22 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
           ),
     );
   } catch (err) {
-    checks.push(check("daemon+proto", "fail", `daemon unreachable: ${(err as Error).message}`));
+    // The reason `createClient` gives is what the client could prove within its own budget, which
+    // in the wedged case is "discovery timed out". Diagnosing the port separately is the only way
+    // doctor can say WHICH unreachable this is, and it is the whole value of running doctor here.
+    let diagnosis: DaemonDiagnosis | null = null;
+    try {
+      diagnosis = await deps.diagnoseDaemon(deps.glosaHome());
+    } catch {
+      // A diagnosis is an explanation, never a precondition: doctor still reports the failure.
+    }
+    checks.push(
+      check(
+        "daemon+proto",
+        "fail",
+        `daemon unreachable: ${(err as Error).message}${diagnosis ? ` — ${diagnosis.detail}` : ""}`,
+      ),
+    );
   }
 
   // 7. token/pairing (file exists + mode 0600)

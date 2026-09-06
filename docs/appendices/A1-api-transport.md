@@ -96,7 +96,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.6", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.7", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -383,13 +383,29 @@ The subscription is taken BEFORE the status is re-read. An entry can go terminal
 read and the subscription, and that gap would otherwise strand the caller until its deadline.
 
 ### 5.12 `POST /w/:slug/session-binding`
-Bearer required, Origin-gated. Explicitly binds a registered session to the artifact workspace. This
+Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
 is the authoritative routing path for CLI, MCP, and SPA callers; cwd ancestry remains a fallback.
 ```json
 { "session_id": "2b7f19a3-…" }
 ```
 - **200** `{ "bound": true, "session_id": "2b7f19a3-…" }`
-- **404 not-found** — `:slug` unknown, or `session_id` not a live registry entry.
+Optional body fields: `provider`, `cwd`, and `source` (nonempty strings). CLI/MCP supply process cwd;
+a bare request defaults to the target workspace, provider `mcp`, and source `manual`. Known records
+retain omitted metadata; generic identity may be enriched, but concrete provider conflicts fail.
+- **404 not-found** — `:slug` unknown.
+- **400 validation-failed / invalid-path** — malformed metadata or cwd cannot resolve.
+- **409 session-provider-conflict** — a concrete provider conflicts with the existing identity.
+
+Session registration (`POST /api/sessions/register`) merges omitted binding/transcript fields and
+refreshes the lease. `POST /api/sessions/:id/heartbeat` returns 200 for known sessions, including
+expired leases, and **404 session-not-registered** for unknown identities. Unknown-session drain
+responses use the same type and title: “session not registered — re-register by calling any glosa
+tool”. Clients preserve HTTP application errors; only discovery/connection failures are “daemon
+unreachable”. `GET /api/status` session rows also expose `source` and `lease_expiry`.
+
+An authenticated session push stream refreshes the same lease every 20 seconds while open.
+Cancellation, replacement, credential revocation, and daemon shutdown release its handle. Closing
+stops refreshes rather than immediately ending the session; existing lease expiry remains the truth.
 
 ### 5.13 `POST /w/:slug/capability/:artifactPath`
 Bearer required, Origin-gated. Issues a capability URL for a class-F artifact. Full mechanics in §7.

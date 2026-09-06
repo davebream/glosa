@@ -315,6 +315,10 @@ describe("internal protocol compatibility", () => {
     }
   });
 
+  // Issue #139: the error a user meets must say what was FOUND, not merely that time ran out. A
+  // held port with nothing answering on it is a proven diagnosis and outranks the budget that
+  // expired while proving it — "discovery exceeded its budget" left a user with nothing to act on
+  // while a wedged daemon sat on the port.
   test("an explicit daemon client keeps the actionable discovery error", async () => {
     const port = randomPort();
     const squatter = Bun.serve({
@@ -326,7 +330,10 @@ describe("internal protocol compatibility", () => {
     try {
       await expect(createHttpDaemonClient({ ensureTimeoutMs: 100 })).rejects.toMatchObject({
         code: "DAEMON_UNREACHABLE",
-        message: expect.stringContaining("100ms wall-clock budget"),
+        message: expect.stringContaining(`a process is bound to port ${port}`),
+      });
+      await expect(createHttpDaemonClient({ ensureTimeoutMs: 100 })).rejects.toMatchObject({
+        message: expect.stringContaining("lsof"),
       });
     } finally {
       squatter.stop();

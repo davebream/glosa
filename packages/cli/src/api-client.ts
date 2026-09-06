@@ -32,7 +32,7 @@ function isApiError(err: unknown): err is ApiError {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "API_ERROR";
 }
 
-function apiError(status: number, problem: ApiProblem | null): ApiError {
+export function apiError(status: number, problem: ApiProblem | null): ApiError {
   const err = new Error(problem?.title ?? `glosa daemon request failed with status ${status}`) as ApiError;
   err.code = "API_ERROR";
   err.status = status;
@@ -65,6 +65,8 @@ export interface WorkspaceStatusSummary {
 }
 
 export interface SessionStatusSummary {
+  source?: string;
+  lease_expiry?: string;
   session_id: string;
   provider: string;
   cwd: string;
@@ -197,7 +199,11 @@ export interface GlosaApiClient {
   ): Promise<{ metadata: WorkspaceMetadataDescriptor; replaced: boolean }>;
   getMetadata?(path: string): Promise<WorkspaceMetadataDescriptor | null>;
   clearMetadata?(path: string): Promise<{ cleared: boolean }>;
-  bindSession?(path: string, sessionId: string): Promise<{ bound: true; session_id: string }>;
+  bindSession?(
+    path: string,
+    sessionId: string,
+    metadata?: { provider?: string; cwd?: string; source?: string },
+  ): Promise<{ bound: true; session_id: string }>;
   /** Mint a short-TTL single-use presentation token for MCP/present URLs (`p=`). */
   mintPresentationToken?(): Promise<{ token: string; expires_in_s: number }>;
 }
@@ -328,10 +334,13 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
       const workspace = await openWorkspace(path);
       return (await call("DELETE", `/w/${encodeURIComponent(workspace.slug)}/metadata`)).json();
     },
-    async bindSession(path, sessionId) {
+    async bindSession(path, sessionId, metadata) {
       const workspace = await openWorkspace(path);
       return (
-        await call("POST", `/w/${encodeURIComponent(workspace.slug)}/session-binding`, { session_id: sessionId })
+        await call("POST", `/w/${encodeURIComponent(workspace.slug)}/session-binding`, {
+          session_id: sessionId,
+          ...metadata,
+        })
       ).json();
     },
     async mintPresentationToken() {

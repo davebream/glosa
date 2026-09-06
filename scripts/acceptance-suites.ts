@@ -18,7 +18,7 @@
 
 /**
  * Suite ids, verbatim from `docs/requirements.md` §5 T8 "Deterministic suites (mandatory)".
- * `AGENTS.md` summarizes the same gate but omits `delivery`; `requirements.md` governs.
+ * `AGENTS.md` summarizes the same gate; `requirements.md` governs where a summary disagrees.
  */
 export const REQUIRED_SUITES = [
   "fault",
@@ -28,6 +28,7 @@ export const REQUIRED_SUITES = [
   "anchor",
   "transcript",
   "explicit-binding-topology",
+  "editor-roundtrip",
 ] as const;
 
 export type SuiteName = (typeof REQUIRED_SUITES)[number];
@@ -42,6 +43,8 @@ export const SUITE_CLAUSES: Record<SuiteName, string> = {
   transcript: "transcript suite",
   "explicit-binding-topology":
     "explicit-binding topology (agent cwd differs from the artifact workspace and routing still succeeds)",
+  "editor-roundtrip":
+    "editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical)",
 };
 
 /** Suite → the test files that discharge it. Paths are repo-root-relative and POSIX-separated. */
@@ -54,8 +57,10 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/bus/reconcile-fault.test.ts",
     "packages/daemon/test/bus/reconcile-fault-lease.test.ts",
     "packages/daemon/test/bus/real-daemon-fault.test.ts",
+    "packages/daemon/test/wedged-daemon.test.ts",
   ],
   concurrency: [
+    "packages/daemon/test/registry/session-registry.test.ts",
     "packages/daemon/test/bus/concurrency.test.ts",
     "packages/daemon/test/bus/mutex.test.ts",
     "packages/daemon/test/bus/approval-uniqueness.test.ts",
@@ -63,6 +68,10 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/git/lease.test.ts",
   ],
   delivery: [
+    "packages/daemon/test/provider-topology-real-subprocess.test.ts",
+    "packages/daemon/test/sessions-routes.test.ts",
+    "packages/cli/test/mcp.test.ts",
+    "packages/cli/test/api-integration.test.ts",
     "packages/daemon/test/bus/delivery-reservation.test.ts",
     "packages/daemon/test/delivery/presentation.test.ts",
     "packages/daemon/test/agent-provider/push-registry.test.ts",
@@ -104,6 +113,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/sessions-routes.test.ts",
     "packages/daemon/test/provider-topology-real-subprocess.test.ts",
   ],
+  "editor-roundtrip": ["packages/spa/test/rich-editor.test.ts", "packages/spa/test/edit-save-guard.test.ts"],
 };
 
 /** The guard itself runs inside the gate, so a broken mapping fails the gate rather than the full suite. */
@@ -113,5 +123,5 @@ export const GATE_GUARD_FILE = "test/acceptance/gate-membership.test.ts";
 export function acceptanceFiles(): string[] {
   const files = REQUIRED_SUITES.flatMap((suite) => [...ACCEPTANCE_SUITES[suite]]);
   files.push(GATE_GUARD_FILE);
-  return files;
+  return [...new Set(files)];
 }

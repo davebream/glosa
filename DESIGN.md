@@ -241,6 +241,7 @@ Four tokens, each two layers: a tight edge that separates and a broad offset lif
 ### Manuscript and Contextual Margin
 - **Style:** The rendered artifact remains centered and serif-led. Annotation cards align with their source passages at wide widths; the same composer becomes a bottom tray in compact mode.
 - **Behavior:** Read removes annotation affordances, Review reveals anchors and marginalia — the reviewer's own and a session's — and Edit preserves the same reading measure. Live updates preserve selection and scroll position.
+- **A save never quietly reformats.** Edit writes back only the blocks the writer changed; the rest of the file is left byte for byte as they wrote it. Where writing an edited block back would change markup they did not touch, the workbench shows those exact bytes and asks — save anyway, or drop to the source face and fix it by hand. The reason is not tidiness: every region a save rewrites reaches the agent as the human's own edit, and an invented one is indistinguishable from a real one.
 - **Three marking vocabularies share the manuscript and must stay distinguishable without colour.** Browser selection is transient; a reviewer's annotation lives ON the words as an underline deepening to a wash; a session's pointer stands BESIDE them as a graphite sideline in the gutter, olive only while its card has focus. Position, not hue, carries the difference, so an agent mark and an annotation can cover the same sentence without either becoming unreadable.
 
 ### Fore-Edge Index

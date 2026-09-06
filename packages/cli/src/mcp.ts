@@ -4,15 +4,23 @@
 import { existsSync, lstatSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { CallToolResult, JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { z } from "zod";
+import type {
+  CallToolResult,
+  JSONRPCMessage,
+  RequestId,
+  ServerRequest,
+  ServerNotification,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
-import type { GlosaApiClient } from "./api-client.ts";
+import { isApiError, type GlosaApiClient } from "./api-client.ts";
 import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
 import {
   askInputSchema,
@@ -50,6 +58,7 @@ export interface McpDeps {
   createApiClient: () => Promise<GlosaApiClient>;
   cwd?: () => string;
   sessionId?: () => string | undefined;
+  session?: (provider?: string) => { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null;
 }
 
 export const GLOSA_MCP_TOOL_NAMES = [
@@ -241,6 +250,53 @@ export interface GlosaMcpServer {
 }
 
 export function createMcpServer(deps: McpDeps): GlosaMcpServer {
+  let syntheticClient: DaemonHookClient | undefined;
+  const syntheticId = `mcp-${process.pid}-${randomUUID()}`;
+  const host = (provider?: string) =>
+    deps.session?.(provider) ??
+    (deps.sessionId?.() ? { session_id: deps.sessionId()!, provider: "mcp", cwd: (deps.cwd ?? process.cwd)() } : null);
+  const identity = (requested?: string, provider?: string, genericWorkspace?: string) => {
+    const current = host(provider);
+    if (current && requested && requested !== current.session_id)
+      throw new Error("session_id does not match the MCP host session");
+    if (current && provider && current.provider !== "mcp" && provider !== current.provider)
+      throw new Error("provider does not match the MCP host session");
+    return {
+      session_id: current?.session_id ?? requested ?? syntheticId,
+      provider: provider ?? current?.provider ?? "mcp",
+      cwd: current?.cwd ?? (!requested ? genericWorkspace : undefined) ?? (deps.cwd ?? process.cwd)(),
+    };
+  };
+  const registrations = new Map<string, Promise<void>>();
+  const registered = new Map<string, string>();
+  const ensureSession = async (requested?: string, provider?: string, genericWorkspace?: string) => {
+    const session = identity(requested, provider, genericWorkspace);
+    const registrationKey = JSON.stringify([session.provider, session.cwd]);
+    // Serialize only activity for this identity; unrelated tool execution remains concurrent.
+    const prior = registrations.get(session.session_id) ?? Promise.resolve();
+    const activity = prior
+      .catch(() => {})
+      .then(async () => {
+        const client = await deps.createHookClient();
+        if (session.session_id === syntheticId) syntheticClient = client;
+        if (registered.get(session.session_id) === registrationKey) {
+          try {
+            await client.heartbeat(session.session_id);
+            return;
+          } catch (error) {
+            if (!isApiError(error) || error.status !== 404) throw error;
+          }
+        }
+        await client.register({ ...session, source: "mcp" });
+        registered.set(session.session_id, registrationKey);
+      });
+    registrations.set(session.session_id, activity);
+    try {
+      await activity;
+    } finally {
+      if (registrations.get(session.session_id) === activity) registrations.delete(session.session_id);
+    }
+  };
   const acknowledgements = new DeliveryAcknowledgements();
   const pushAbort = new AbortController();
   let pushTask: Promise<void> | null = null;
@@ -256,7 +312,23 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  function registerTool<I extends z.ZodType, O extends z.ZodType>(
+    name: string,
+    config: Parameters<typeof server.registerTool<O, I>>[1],
+    handler: (
+      args: z.output<I>,
+      extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+    ) => Promise<CallToolResult>,
+  ) {
+    const wrapped = async (args: z.output<I>, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
+      const hints = args as { session_id?: string; provider?: string; workspace?: string };
+      await ensureSession(hints.session_id, hints.provider, name === "glosa_inbox_pull" ? hints.workspace : undefined);
+      return handler(args, extra);
+    };
+    return server.registerTool(name, config, wrapped as ToolCallback<I>);
+  }
+
+  registerTool(
     "glosa_inbox_pull",
     {
       title: "Pull glosa inbox",
@@ -266,20 +338,13 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       outputSchema: inboxPullOutputSchema,
       annotations: { ...readOnlyClosedWorld, title: "Pull glosa inbox" },
     },
-    async ({ workspace, limit = 8, session_id: requestedSession }, extra) => {
-      const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const hostSession = deps.sessionId?.();
+    async ({ limit = 8, session_id: requestedSession }, extra) => {
+      const hostSession = host()?.session_id;
       if (hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
       }
-      const explicitSession = hostSession ?? requestedSession;
-      const sessionId = explicitSession ?? `mcp-${process.pid}-${randomUUID()}`;
+      const sessionId = identity(requestedSession).session_id;
       const client = await deps.createHookClient();
-      if (explicitSession) {
-        await client.heartbeat(sessionId);
-      } else {
-        await client.register({ session_id: sessionId, provider: "mcp", cwd: root, source: "mcp_pull" });
-      }
       const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
       const text =
         drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
@@ -295,18 +360,16 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
             client,
             sessionId,
             deliveryId: drained.delivery_id,
-            deregister: !explicitSession,
+            deregister: false,
           },
           extra.signal,
         );
-      } else if (!explicitSession) {
-        await client.deregister(sessionId);
       }
       return toolResult(structuredContent, text);
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_inbox_get",
     {
       title: "Get glosa inbox entry",
@@ -324,7 +387,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_metadata_set",
     {
       title: "Set workspace metadata",
@@ -347,7 +410,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_metadata_show",
     {
       title: "Show workspace metadata",
@@ -364,7 +427,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_metadata_clear",
     {
       title: "Clear workspace metadata",
@@ -383,11 +446,12 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_session_bind",
     {
       title: "Bind agent session",
-      description: "Explicitly bind a live registered agent session to a workspace (authoritative routing).",
+      description:
+        "Register or refresh an agent session and explicitly bind it to a workspace (authoritative routing).",
       inputSchema: sessionBindInputSchema,
       outputSchema: sessionBindOutputSchema,
       annotations: {
@@ -395,15 +459,19 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         title: "Bind agent session",
       },
     },
-    async ({ session_id: sessionId, workspace }) => {
+    async ({ session_id: sessionId, workspace, provider }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      await (await deps.createHookClient()).heartbeat(sessionId);
-      const structuredContent = await (await deps.createApiClient()).bindSession!(root, sessionId);
+      const session = identity(sessionId, provider);
+      const structuredContent = await (await deps.createApiClient()).bindSession!(root, sessionId, {
+        provider: session.provider,
+        cwd: session.cwd,
+        source: "mcp",
+      });
       return toolResult(structuredContent);
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_conversation_ack",
     {
       title: "Acknowledge conversation message",
@@ -417,7 +485,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       },
     },
     async ({ message_id: messageId, session_id: requestedSession }) => {
-      const hostSession = deps.sessionId?.();
+      const hostSession = host()?.session_id;
       if (hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
       }
@@ -434,7 +502,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "glosa_present",
     {
       title: "Present an artifact",
@@ -448,7 +516,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       },
     },
     async ({ path, mode, session_id: requestedSession }) => {
-      const hostSession = deps.sessionId?.();
+      const hostSession = host()?.session_id;
       const readLock = mode === "read";
       if (!readLock && hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
@@ -529,8 +597,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-
-  server.registerTool(
+  registerTool(
     "glosa_ask",
     {
       title: "Ask the human about a passage",
@@ -595,8 +662,14 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   );
 
   const startPush = () => {
-    const sessionId = deps.sessionId?.();
-    if (!sessionId || pushTask) return;
+    let session: ReturnType<typeof host>;
+    try {
+      session = host();
+    } catch {
+      return;
+    } // conflicting identity is reported by the next tool call
+    const sessionId = session?.session_id;
+    if (!sessionId || pushTask || !(session?.channelPush || deps.sessionId)) return;
     pushTask = (async () => {
       while (!pushAbort.signal.aborted) {
         try {
@@ -643,6 +716,13 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       await server.close();
       if (pushTask) await pushTask.catch(() => {});
       await acknowledgements.failAll("MCP server closed before its response was written");
+      if (registered.has(syntheticId)) {
+        try {
+          await syntheticClient?.deregister(syntheticId);
+        } catch {
+          /* lease expires if daemon is unavailable */
+        }
+      }
     },
   };
 }

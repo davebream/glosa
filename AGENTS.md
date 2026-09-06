@@ -65,8 +65,8 @@ remain pending. This is not yet approved for a live document week.
 Implementation behavior follows `docs/requirements.md`; current work follows accepted GitHub issues.
 Tasks T0–T8 have A-level detail in the appendices.
 **T8 is the release gate**: the deterministic acceptance suites (fault,
-concurrency, security, anchor, transcript, explicit-binding topology) must pass AND a manual rehearsal
-against a copy of a real past document must pass. **"Green CI" is not the acceptance bar** — the
+concurrency, delivery, security, anchor, transcript, explicit-binding topology, editor-roundtrip)
+must pass AND a manual rehearsal against a copy of a real past document must pass. **"Green CI" is not the acceptance bar** — the
 fault-injection/security/concurrency suites are, because a model's self-written happy-path tests will
 not catch the hard invariants. When in doubt about a subsystem's contract, the appendix is authoritative;
 do not invent.

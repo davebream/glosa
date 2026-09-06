@@ -6,11 +6,124 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { fileURLToPath } from "node:url";
+const MAIN_PATH = fileURLToPath(new URL("../../cli/src/main.ts", import.meta.url));
 import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
 
 const TOKEN = "provider-topology-real-process-token-0123456789";
 const roots: string[] = [];
+
+describe("T8 live MCP process recovers after daemon restart (#141)", () => {
+  for (const [provider, identityVariable] of [
+    ["claude-code", "CLAUDE_CODE_SESSION_ID"],
+    ["codex", "CODEX_THREAD_ID"],
+  ] as const) {
+    test(`${provider}: first tool registers, restart recovers, explicit bind restores routing`, async () => {
+      const home = freshHome();
+      const agentCwd = realpathSync(mkdtempSync(join(tmpdir(), "glosa-recovery-agent-")));
+      const workspace = realpathSync(mkdtempSync(join(tmpdir(), "glosa-recovery-target-")));
+      roots.push(home, agentCwd, workspace);
+      writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
+      writeFileSync(join(workspace, "notes.md"), "# Recovery fixture\n");
+      const port = randomPort();
+      const sessionId = `recovery-${provider}`;
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key, value]) =>
+            value !== undefined && !["ANTHROPIC_API_KEY", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"].includes(key),
+        ),
+      ) as Record<string, string>;
+      Object.assign(env, { GLOSA_HOME: home, GLOSA_PORT: String(port), [identityVariable]: sessionId });
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: [MAIN_PATH, "mcp"],
+        cwd: agentCwd,
+        env,
+        stderr: "pipe",
+      });
+      const client = new Client({ name: "recovery-fixture", version: "1" });
+      let daemon = spawnDaemon(home, port);
+      const status = async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/api/status`, {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()) as {
+          sessions: Array<{
+            session_id: string;
+            provider: string;
+            cwd: string;
+            workspace_binding: string | null;
+            source: string;
+          }>;
+        };
+      };
+      try {
+        expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
+        await client.connect(transport);
+        // A non-pull tool must register too; no SessionStart participates.
+        expect((await client.callTool({ name: "glosa_metadata_show", arguments: { workspace } })).isError).not.toBe(
+          true,
+        );
+        expect((await status()).sessions).toContainEqual(
+          expect.objectContaining({
+            session_id: sessionId,
+            provider,
+            cwd: agentCwd,
+            source: "mcp",
+            workspace_binding: null,
+          }),
+        );
+        expect(
+          (await client.callTool({ name: "glosa_session_bind", arguments: { session_id: sessionId, workspace } }))
+            .isError,
+        ).not.toBe(true);
+        expect((await status()).sessions.find((s) => s.session_id === sessionId)?.workspace_binding).toBe(workspace);
+        daemon.kill("SIGKILL");
+        await daemon.exited;
+        daemon = spawnDaemon(home, port);
+        expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
+        expect((await status()).sessions).toHaveLength(0);
+        // The SAME client and stdio process survive. Heartbeat 404 triggers registration.
+        expect((await client.callTool({ name: "glosa_inbox_pull", arguments: {} })).isError).not.toBe(true);
+        expect((await status()).sessions).toContainEqual(
+          expect.objectContaining({ session_id: sessionId, provider, workspace_binding: null }),
+        );
+        expect(
+          (await client.callTool({ name: "glosa_session_bind", arguments: { session_id: sessionId, workspace } }))
+            .isError,
+        ).not.toBe(true);
+        expect((await status()).sessions.find((s) => s.session_id === sessionId)?.workspace_binding).toBe(workspace);
+        // CLI also recovers an entirely unknown identity using only explicit metadata.
+        const cliEnv = { ...env };
+        delete cliEnv[identityVariable];
+        const cli = Bun.spawn(
+          [process.execPath, MAIN_PATH, "session", "bind", "manual-recovery", "--workspace", workspace, "--json"],
+          { cwd: agentCwd, env: cliEnv, stdout: "pipe", stderr: "pipe" },
+        );
+        const output = await new Response(cli.stdout).text();
+        expect(await cli.exited).toBe(0);
+        expect(JSON.parse(output)).toMatchObject({ ok: true, data: { bound: true, session_id: "manual-recovery" } });
+        expect((await status()).sessions).toContainEqual(
+          expect.objectContaining({
+            session_id: "manual-recovery",
+            provider: "mcp",
+            cwd: agentCwd,
+            workspace_binding: workspace,
+          }),
+        );
+      } finally {
+        await client.close();
+        await transport.close();
+        await stopDaemon(home, daemon);
+        cleanupHome(home);
+      }
+    }, 45_000);
+  }
+});
 
 function request(port: number, path: string, body: unknown): Request {
   return new Request(`http://127.0.0.1:${port}${path}`, {

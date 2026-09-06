@@ -41,8 +41,10 @@ export type { ParsedBuildId } from "./lifecycle/build-id.ts";
 export { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "./lifecycle/build-id.ts";
 export type { DaemonConnection, EnsureDaemonResult } from "./lifecycle/daemon.ts";
 export { bootDaemon, buildChildEnv, ensureDaemon } from "./lifecycle/daemon.ts";
+export type { DaemonDiagnosis, DaemonDiagnosisKind } from "./lifecycle/diagnose.ts";
+export { diagnoseDaemon } from "./lifecycle/diagnose.ts";
 export type { HandshakeResponse } from "./lifecycle/handshake.ts";
-export { fetchHandshake, pollHandshake, probePortBound } from "./lifecycle/handshake.ts";
+export { fetchHandshake, pollHandshake, probePortBindable, probePortBound } from "./lifecycle/handshake.ts";
 export { ensureHomeDir, glosaHome, lockPath, logPath } from "./lifecycle/home.ts";
 export type { DaemonLock } from "./lifecycle/lock.ts";
 export {

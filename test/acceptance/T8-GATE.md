@@ -23,9 +23,8 @@ dependence and state leakage that a subset run cannot see.
 
 ### 1.1 The named suites
 
-`docs/requirements.md` §5 names seven mandatory deterministic suites. `AGENTS.md` summarizes the
-same gate but lists six, omitting `delivery`; where the two disagree, `requirements.md` governs,
-so `delivery` is in the gate.
+`docs/requirements.md` §5 names eight mandatory deterministic suites, and `AGENTS.md` summarizes
+the same eight. `requirements.md` governs where any summary of it disagrees.
 
 | Suite | Requirement clause (`docs/requirements.md` §5) |
 |---|---|
@@ -36,6 +35,7 @@ so `delivery` is in the gate.
 | `anchor` | anchor corpus (Polish combining chars, md markup, duplicate quotes, stale hashes, transformed HTML) |
 | `transcript` | transcript suite |
 | `explicit-binding-topology` | explicit-binding topology (agent cwd differs from the artifact workspace and routing still succeeds) |
+| `editor-roundtrip` | editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical) |
 
 ### 1.2 Suite membership
 
@@ -54,11 +54,17 @@ dropping out of it.
 | `fault` | `packages/daemon/test/bus/reconcile-fault.test.ts` |
 | `fault` | `packages/daemon/test/bus/reconcile-fault-lease.test.ts` |
 | `fault` | `packages/daemon/test/bus/real-daemon-fault.test.ts` |
+| `fault` | `packages/daemon/test/wedged-daemon.test.ts` |
+| `concurrency` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/concurrency.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/mutex.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/approval-uniqueness.test.ts` |
 | `concurrency` | `packages/daemon/test/concurrency-real-subprocess.test.ts` |
 | `concurrency` | `packages/daemon/test/git/lease.test.ts` |
+| `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
+| `delivery` | `packages/cli/test/mcp.test.ts` |
+| `delivery` | `packages/cli/test/api-integration.test.ts` |
 | `delivery` | `packages/daemon/test/bus/delivery-reservation.test.ts` |
 | `delivery` | `packages/daemon/test/delivery/presentation.test.ts` |
 | `delivery` | `packages/daemon/test/agent-provider/push-registry.test.ts` |
@@ -91,8 +97,19 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/sessions-routes.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `editor-roundtrip` | `packages/spa/test/rich-editor.test.ts` |
+| `editor-roundtrip` | `packages/spa/test/edit-save-guard.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
+
+**Session recovery (#141).** The delivery suite keeps one production MCP stdio process alive while
+its isolated daemon is killed/restarted, for both Claude and Codex environment identities. The next
+tool re-registers without a SessionStart hook; explicit binding restores the target. CLI recovery,
+HTTP error classification, concurrent registration/binding, and transcript confinement are covered.
+An injected clock advances past several lease TTLs with only a push stream open, then verifies
+expiry after cancellation, replacement, credential revocation, and shutdown. These fixtures do not
+launch vendor sessions, install integrations, or establish live-session rehearsal sign-off.
+
 
 The deterministic gate now crosses the three process boundaries that previously existed only in
 the manual rehearsal: a real production daemon process is killed through an injected composition

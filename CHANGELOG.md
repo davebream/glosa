@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving from Edit mode no longer rewrites the whole file. A save now re-serializes only the blocks
+  you actually changed and leaves everything else byte for byte as you wrote it, so YAML front
+  matter, `> [!info]` callouts, `%% ... %%` comments, line breaks inside paragraphs and bracketed
+  text all survive a save that happened somewhere else in the document. This was worse than a
+  formatting annoyance: every rewritten region reached the agent as your own edit, so a session
+  could not tell what you had changed from what the editor had invented, and each further save
+  fabricated a fresh diff on top.
+- Where writing an edited block back would still change markup you did not touch — glosa's markdown
+  editor has no notion of a callout marker or a soft line break yet — the save now shows you those
+  exact bytes and asks, offering to save anyway or to hand your edit to the source face so you can
+  fix it by hand. Nothing is written until you choose.
+- A final approval that saves your pending edits first no longer records the approval when that save
+  did not happen. Declining the save leaves the request open and says so.
+- Running Claude and Codex sessions recover registration on their next MCP tool call after a daemon
+  restart. Explicit binding also registers unknown sessions and refreshes expired ones; no agent
+  restart is needed. Re-registration preserves existing binding and transcript metadata.
+- Open session streams refresh the shared liveness lease and clean up on disconnect, replacement,
+  token revocation, or shutdown. Stream closure lets the lease expire normally.
+- Providers discover transcripts by exact session identity within their allowed roots, failing soft
+  when files are missing or ambiguous. Unknown-session HTTP errors now report registration recovery
+  guidance instead of incorrectly claiming the daemon is unreachable.
+
+- A daemon that stops running takes the port with it instead of taking the machine down. When a
+  daemon's event loop stalls it keeps its listening socket, answers no handshake, cannot repair its
+  ownership record, and cannot honour SIGTERM — and once the connections glosa's own discovery keeps
+  opening fill the kernel's accept queue, that live daemon starts refusing connections. A client
+  read those refusals as "the port is free", deleted the ownership record of a daemon that was very
+  much alive, and then could neither reach it nor replace it, with `kill -9` as the only way out.
+  Clients now prove a port is free by binding it rather than by failing to connect to it, so a live
+  owner is never mistaken for an absent one.
+- A daemon in that state now ends itself. A watchdog on its own thread notices the main loop has
+  stopped, releases the ownership lock, and stops the process, so the next glosa command starts a
+  replacement instead of a person hunting for a PID. `GLOSA_STALL_WATCHDOG_MS` sets the threshold
+  (default 30 s) or disables it with `0`. A shutdown that has already begun is bounded too: past
+  8 seconds the daemon releases its lock and exits rather than hanging with every later signal
+  suppressed.
+- The error a user actually meets says what happened. A held port with nothing answering on it is
+  reported as exactly that, with the PID and the way out, instead of being replaced by "daemon
+  discovery exceeded its budget" whenever waiting for the handshake used up the time. Recovery text
+  for an unresponsive daemon names SIGKILL, because a wedged daemon cannot run its own SIGTERM
+  handler. `glosa doctor` names the state too, distinguishing a wedged daemon from a stale lock,
+  an occupied port, and no daemon at all.
+
 ## [0.1.0-alpha.17] - 2026-09-05
 
 The release gives an agent a way to ask the person reading its work a question about a
