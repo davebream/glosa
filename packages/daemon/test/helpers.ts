@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   type EnsureDaemonOptions,
   type EnsureDaemonResult,
+  SHUTDOWN_HARD_EXIT_MS,
   ensureDaemon as ensureProductionDaemon,
 } from "../src/lifecycle/daemon.ts";
 import { glosaHome, lockPath } from "../src/lifecycle/home.ts";
@@ -400,14 +401,18 @@ export function lockOf(home: string) {
 }
 
 /** SIGTERM, then bounded SIGKILL fallback, proving the owned child actually exited before its
- * temporary home can be removed. */
+ * temporary home can be removed. The helper must outwait the daemon's own hard-exit deadline:
+ * using the graceful-drain deadline here races the daemon immediately before lock cleanup. */
 export async function stopDaemon(home: string, proc: Bun.Subprocess): Promise<void> {
   try {
     proc.kill("SIGTERM");
   } catch {
     // already dead
   }
-  const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(3000).then(() => false)]);
+  const exited = await Promise.race([
+    proc.exited.then(() => true),
+    Bun.sleep(SHUTDOWN_HARD_EXIT_MS + 1000).then(() => false),
+  ]);
   if (!exited && proc.exitCode === null) {
     try {
       proc.kill("SIGKILL");
