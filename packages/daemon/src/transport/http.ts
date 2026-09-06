@@ -28,7 +28,7 @@ import { INSTALL_ID } from "../lifecycle/install.ts";
 import { glosaHome } from "../lifecycle/home.ts";
 import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
-import type { SessionRegistry } from "../registry/session-registry.ts";
+import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
 import {
   AdoptionError,
@@ -447,11 +447,20 @@ function artifactAccess(ctx: ApiContext): ArtifactAccessDependencies {
   };
 }
 
-/** `POST /w/:slug/session-binding` (A1 §5.11) — the explicit user pick from the session picker
- * (R2). There's no separate "rebind" mutation on `SessionRegistry`; `register()` already
- * documents that a repeat call for a known `session_id` replaces its record, so binding is
- * "re-register this session with an explicit `workspace_binding`", carrying every other field
- * of its existing record forward unchanged. */
+/** Provider-owned exact identity discovery; absence must never prevent registration. */
+function discoverTranscript(
+  ctx: ApiContext,
+  session: { session_id: string; provider: string; cwd: string; source: string },
+): string | undefined {
+  const provider = ctx.providerRegistry?.get(session.provider);
+  try {
+    const path = provider?.transcriptPath({ ...session, workspace: session.cwd });
+    return path && confineTranscriptPath(path, provider?.transcriptRoots?.()).ok ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
@@ -463,17 +472,37 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
   } catch {
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
-  const sessionId = (body as Record<string, unknown> | null)?.session_id;
+  const b = body as Record<string, unknown> | null;
+  const sessionId = b?.session_id;
   if (typeof sessionId !== "string" || sessionId.length === 0) {
     return problem(400, "validation-failed", "session_id is required", undefined, url.pathname);
   }
-
-  const existing = ctx.sessionRegistry.get(sessionId);
-  if (!existing || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
-    return problem(404, "not-found", "unknown or not-live session", undefined, url.pathname);
+  for (const field of ["provider", "cwd", "source"] as const) {
+    if (b?.[field] !== undefined && (typeof b[field] !== "string" || b[field].length === 0)) {
+      return problem(400, "validation-failed", `${field} must be a nonempty string`, undefined, url.pathname);
+    }
+  }
+  const cwd = typeof b?.cwd === "string" ? canonicalOrNull(b.cwd) : undefined;
+  if (cwd === null)
+    return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
+  try {
+    await ctx.sessionRegistry.bind(sessionId, resolved.entry.canonical_path, {
+      provider: b?.provider as string | undefined,
+      cwd,
+      source: b?.source as string | undefined,
+      transcript_path: discoverTranscript(ctx, {
+        session_id: sessionId,
+        provider: (b?.provider as string | undefined) ?? ctx.sessionRegistry.get(sessionId)?.provider ?? "mcp",
+        cwd: cwd ?? ctx.sessionRegistry.get(sessionId)?.cwd ?? resolved.entry.canonical_path,
+        source: (b?.source as string | undefined) ?? "manual",
+      }),
+    });
+  } catch (error) {
+    if (error instanceof SessionProviderConflict)
+      return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
+    throw error;
   }
 
-  await ctx.sessionRegistry.register({ ...existing, workspace_binding: resolved.entry.canonical_path });
   return Response.json({ bound: true, session_id: sessionId });
 }
 
@@ -554,7 +583,7 @@ function canonicalOrNull(path: string): string | null {
   }
 }
 
-/** `POST /api/sessions/register` — A2 §F08's SessionStart registration. It records the session and
+/** `POST /api/sessions/register` — A2 §F08's merge-safe session registration. It records the session and
  * returns the identity the caller resolved to; it never pushes or delivers. R2's "no live session
  * -> park; next registration for that workspace drains it" is NOT settled here: a park is an entry
  * left non-terminal in the workspace journal, and the drain is the separate
@@ -592,6 +621,7 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
     return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
 
   let workspaceBinding: string | undefined;
+  let fallbackBinding: string | undefined;
   if (typeof b?.workspace_binding === "string" && b.workspace_binding.length > 0) {
     const canonicalBinding = canonicalOrNull(b.workspace_binding);
     if (!canonicalBinding) {
@@ -612,21 +642,31 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
     const adapterBinding = ctx.adapterRegistry.resolveSessionBinding(hint);
     if (adapterBinding !== null) {
       const canonicalAdapterBinding = canonicalOrNull(adapterBinding);
-      if (canonicalAdapterBinding) workspaceBinding = canonicalAdapterBinding;
+      if (canonicalAdapterBinding) fallbackBinding = canonicalAdapterBinding;
     }
   }
 
   const transcriptPath =
-    typeof b?.transcript_path === "string" && b.transcript_path.length > 0 ? b.transcript_path : undefined;
+    typeof b?.transcript_path === "string" && b.transcript_path.length > 0
+      ? b.transcript_path
+      : discoverTranscript(ctx, { session_id: sessionId, provider, cwd: canonicalCwd, source });
 
-  const record = await ctx.sessionRegistry.register({
-    session_id: sessionId,
-    provider,
-    cwd: canonicalCwd,
-    source,
-    ...(workspaceBinding !== undefined ? { workspace_binding: workspaceBinding } : {}),
-    ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
-  });
+  let record: SessionRecord;
+  try {
+    record = await ctx.sessionRegistry.register({
+      session_id: sessionId,
+      provider,
+      cwd: canonicalCwd,
+      source,
+      ...(workspaceBinding !== undefined ? { workspace_binding: workspaceBinding } : {}),
+      fallback_workspace_binding: fallbackBinding,
+      ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
+    });
+  } catch (error) {
+    if (error instanceof SessionProviderConflict)
+      return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
+    throw error;
+  }
 
   return Response.json({
     session_id: record.session_id,
@@ -634,12 +674,11 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   });
 }
 
-/** `POST /api/sessions/:id/heartbeat` — UserPromptSubmit/Stop's lease refresh (A2 §F08: "the
- * lease... refreshed on each hook"). An unknown session_id is a silent no-op on the registry side
- * (see `SessionRegistry.heartbeat`'s own docstring) — mirrored here as a 200, not a 404, since a
- * heartbeat racing a session that just ended is expected, not an error. */
+/** Unknown sessions return a typed 404 so MCP activity can recover registration after restart. */
 async function handleSessionHeartbeat(ctx: ApiContext, sessionId: string): Promise<Response> {
-  await ctx.sessionRegistry.heartbeat(sessionId);
+  if (!(await ctx.sessionRegistry.heartbeat(sessionId))) {
+    return problem(404, "session-not-registered", "session not registered — re-register by calling any glosa tool");
+  }
   return Response.json({ ok: true });
 }
 
@@ -820,13 +859,18 @@ async function handleCompositeSessionDrain(
  * `via` MUST be told apart by the caller, since
  * `"gate"`/`"stop"`/`"userprompt"`/`"asyncRewake"` are distinct transports and only the caller
  * (`glosa hook stop` vs. `user-prompt-submit` vs. `rewake-watch`) knows which one is actually
- * surfacing this drain right now. An unknown session_id is 404 (unlike heartbeat/deregister,
- * there is no live-registry-race reading here to be lenient about — the caller just registered
- * this exact session moments earlier in the same hook invocation). */
+ * surfacing this drain right now. An unknown session_id is a typed 404, as on heartbeat; clients can re-register before retrying. */
 async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const record = ctx.sessionRegistry.get(sessionId);
-  if (!record) return problem(404, "not-found", "unknown session", undefined, url.pathname);
+  if (!record)
+    return problem(
+      404,
+      "session-not-registered",
+      "session not registered — re-register by calling any glosa tool",
+      undefined,
+      url.pathname,
+    );
 
   let limit = DRAIN_MAX;
   let via: DeliveryVia = "userprompt";
@@ -880,7 +924,14 @@ async function handleSessionDeliveryAck(
 ): Promise<Response> {
   const url = new URL(req.url);
   const record = ctx.sessionRegistry.get(sessionId);
-  if (!record) return problem(404, "not-found", "unknown session", undefined, url.pathname);
+  if (!record)
+    return problem(
+      404,
+      "session-not-registered",
+      "session not registered — re-register by calling any glosa tool",
+      undefined,
+      url.pathname,
+    );
   let body: unknown;
   try {
     body = await req.json();
@@ -924,6 +975,7 @@ function handleSessionPushStream(
   sessionId: string,
   req: Request,
   server: BunServer | undefined,
+  authSignal?: AbortSignal,
 ): Response {
   const record = ctx.sessionRegistry.get(sessionId);
   if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
@@ -936,20 +988,46 @@ function handleSessionPushStream(
     return problem(503, "internal", "session push is unavailable", undefined, new URL(req.url).pathname);
   }
   const encoder = new TextEncoder();
-  let unregister: (() => void) | null = null;
+  const signals = [req.signal, lifecycleSignal(ctx, authSignal)].filter((signal): signal is AbortSignal => !!signal);
+  const signal = AbortSignal.any(signals);
+  let unregister: (() => void) | undefined;
+  let releaseLease: (() => void) | undefined;
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    signal.removeEventListener("abort", close);
+    unregister?.();
+    releaseLease?.();
+    try {
+      controller.close();
+    } catch {
+      /* reader cancellation already closed the stream */
+    }
+  };
   const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
+    start(output) {
+      controller = output;
+      if (signal.aborted) {
+        close();
+        return;
+      }
       const send = (entry: DeliverableEntry) => {
-        controller.enqueue(encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`));
+        } catch (error) {
+          close();
+          throw error;
+        }
       };
-      unregister = ctx.pushRegistry?.register(sessionId, send) ?? null;
+      unregister = ctx.pushRegistry?.register(sessionId, send, close);
+      releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
       controller.enqueue(encoder.encode(": connected\n\n"));
+      signal.addEventListener("abort", close, { once: true });
     },
-    cancel() {
-      unregister?.();
-    },
+    cancel: close,
   });
-  req.signal.addEventListener("abort", () => unregister?.(), { once: true });
   server?.timeout(req, 0);
   return new Response(stream, {
     headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
@@ -1421,6 +1499,8 @@ function handleStatusAggregate(ctx: ApiContext): Response {
     provider: s.provider,
     cwd: s.cwd,
     workspace_binding: s.workspace_binding ?? null,
+    source: s.source,
+    lease_expiry: s.lease_expiry,
     last_active_at: s.last_active_at,
     liveness: ctx.sessionRegistry.liveness(s.session_id),
   }));
@@ -1494,7 +1574,16 @@ function handleTranscriptStream(
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
 
-  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).filter((s) => s.transcript_path);
+  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).flatMap((session) => {
+    const provider = ctx.providerRegistry?.get(session.provider);
+    let transcriptPath: string | null = session.transcript_path ?? null;
+    try {
+      transcriptPath = provider?.transcriptPath({ ...session, workspace: session.cwd }) ?? transcriptPath;
+    } catch {
+      transcriptPath = null;
+    }
+    return transcriptPath ? [{ ...session, transcript_path: transcriptPath }] : [];
+  });
   if (sessions.length === 0) {
     return problem(404, "not-found", "no session registered", undefined, url.pathname);
   }
@@ -1505,7 +1594,10 @@ function handleTranscriptStream(
   }
   const transcriptPath = sessions[0]!.transcript_path as string;
 
-  const confined = confineTranscriptPath(transcriptPath);
+  const confined = confineTranscriptPath(
+    transcriptPath,
+    ctx.providerRegistry?.get(sessions[0]!.provider)?.transcriptRoots?.(),
+  );
   if (!confined.ok) {
     return problem(
       400,
@@ -1621,7 +1713,7 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     const sessionId = m[1] as string;
     return {
       routeClass: "authed-read",
-      handle: (req, server) => handleSessionPushStream(ctx, sessionId, req, server),
+      handle: (req, server, authSignal) => handleSessionPushStream(ctx, sessionId, req, server, authSignal),
     };
   }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/conversation\/([^/]+)\/ack$/))) {

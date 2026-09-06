@@ -57,6 +57,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/wedged-daemon.test.ts",
   ],
   concurrency: [
+    "packages/daemon/test/registry/session-registry.test.ts",
     "packages/daemon/test/bus/concurrency.test.ts",
     "packages/daemon/test/bus/mutex.test.ts",
     "packages/daemon/test/bus/approval-uniqueness.test.ts",
@@ -64,6 +65,10 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/git/lease.test.ts",
   ],
   delivery: [
+    "packages/daemon/test/provider-topology-real-subprocess.test.ts",
+    "packages/daemon/test/sessions-routes.test.ts",
+    "packages/cli/test/mcp.test.ts",
+    "packages/cli/test/api-integration.test.ts",
     "packages/daemon/test/bus/delivery-reservation.test.ts",
     "packages/daemon/test/delivery/presentation.test.ts",
     "packages/daemon/test/agent-provider/push-registry.test.ts",
@@ -114,5 +119,5 @@ export const GATE_GUARD_FILE = "test/acceptance/gate-membership.test.ts";
 export function acceptanceFiles(): string[] {
   const files = REQUIRED_SUITES.flatMap((suite) => [...ACCEPTANCE_SUITES[suite]]);
   files.push(GATE_GUARD_FILE);
-  return files;
+  return [...new Set(files)];
 }

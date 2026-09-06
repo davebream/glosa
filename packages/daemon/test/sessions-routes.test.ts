@@ -12,6 +12,7 @@ import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 import { CapabilityStore } from "../src/security/capability.ts";
+import { SessionPushRegistry } from "../src/agent-provider/push-registry.ts";
 import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
 const TOKEN = "sessions-route-test-token-0123456789";
@@ -72,6 +73,83 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       intent: "content",
       target: { quote: { exact: "sentence" }, position: { start: 1, end: 9 } },
     };
+  }
+
+  test("binding registers an unknown generic session, revives an expired lease, and preserves metadata", async () => {
+    const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+    const bind = (body: unknown) =>
+      fetchFn(req(`/w/${workspace.slug}/session-binding`, { method: "POST", body: JSON.stringify(body) }));
+    expect((await bind({ session_id: "manual" })).status).toBe(200);
+    expect(sessionRegistry.get("manual")).toMatchObject({ provider: "mcp", cwd: root, workspace_binding: root });
+    await sessionRegistry.register({
+      session_id: "manual",
+      provider: "codex",
+      cwd: root,
+      source: "hook",
+      transcript_path: "/fixture.jsonl",
+      lease_expiry: new Date(0).toISOString(),
+    });
+    expect(sessionRegistry.liveness("manual")).toBe("stale");
+    expect((await bind({ session_id: "manual" })).status).toBe(200);
+    expect(sessionRegistry.liveness("manual")).toBe("alive");
+    expect(sessionRegistry.get("manual")).toMatchObject({ provider: "codex", transcript_path: "/fixture.jsonl" });
+    expect((await bind({ session_id: "manual", provider: "claude-code" })).status).toBe(409);
+    expect((await bind({ session_id: "bad", cwd: "/nonexistent-recovery-cwd" })).status).toBe(400);
+    expect(sessionRegistry.get("bad")).toBeNull();
+  });
+
+  for (const end of ["cancel", "shutdown", "revoke", "replace"] as const) {
+    test(`open stream alone keeps session alive; ${end} cleans up its lease handle`, async () => {
+      let ms = 0;
+      const callbacks = new Set<() => void>();
+      sessionRegistry = new SessionRegistry({
+        index: workspaceIndex,
+        now: () => new Date(ms),
+        scheduleRefresh: (callback) => {
+          callbacks.add(callback);
+          return () => {
+            callbacks.delete(callback);
+          };
+        },
+      });
+      ctx.sessionRegistry = sessionRegistry;
+      ctx.pushRegistry = new SessionPushRegistry();
+      const shutdown = new AbortController();
+      const generation = new AbortController();
+      ctx.shutdownSignal = shutdown.signal;
+      ctx.token = {
+        current: () => TOKEN,
+        generationSignal: () => generation.signal,
+        snapshot: () => ({ token: TOKEN, signal: generation.signal }),
+      };
+      await sessionRegistry.bind("stream-session", root);
+      const response = await fetchFn(req("/api/sessions/stream-session/push-stream"));
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      await reader.read();
+      for (let i = 0; i < 8; i++) {
+        ms += 20_000;
+        for (const callback of callbacks) callback();
+        await sessionRegistry.heartbeat("barrier");
+        expect(sessionRegistry.liveness("stream-session")).toBe("alive");
+      }
+      if (end === "cancel") await reader.cancel();
+      if (end === "shutdown") shutdown.abort();
+      if (end === "revoke") generation.abort();
+      if (end === "replace") {
+        const next = await fetchFn(req("/api/sessions/stream-session/push-stream"));
+        expect((await reader.read()).done).toBe(true);
+        expect(callbacks.size).toBe(1);
+        await reader.cancel(); // old reader cannot release the replacement
+        expect(callbacks.size).toBe(1);
+        await next.body!.cancel();
+      }
+      expect(callbacks.size).toBe(0);
+      expect(ctx.pushRegistry.has("stream-session")).toBe(false);
+      expect(sessionRegistry.liveness("stream-session")).toBe("alive");
+      ms += 60_000;
+      expect(sessionRegistry.liveness("stream-session")).toBe("stale");
+    });
   }
 
   async function ack(sessionId: string, deliveryId: string, outcome: "presented" | "failed" = "presented") {
@@ -151,9 +229,13 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 
-  test("POST /api/sessions/:id/heartbeat for an unknown session is a silent 200, not a 404", async () => {
+  test("POST /api/sessions/:id/heartbeat for an unknown session is a typed 404", async () => {
     const res = await fetchFn(req("/api/sessions/unknown-session/heartbeat", { method: "POST" }));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      type: "https://glosa.local/errors/session-not-registered",
+      title: "session not registered — re-register by calling any glosa tool",
+    });
   });
 
   test("POST /api/sessions/:id/deregister removes the session from the live registry", async () => {

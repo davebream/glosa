@@ -133,6 +133,8 @@ export interface AgentProvider {
   liveness(session: SessionBinding): Liveness;
   /** For the conversation mirror (R6) — `null` when this provider/session has none. */
   transcriptPath(session: SessionBinding): string | null;
+  /** Provider-owned allowlist; discovery never widens it based on a client-supplied path. */
+  transcriptRoots?(): readonly string[];
 }
 
 /** Generic provider lookup owned by the composition root. The daemon depends only on this

@@ -167,6 +167,7 @@ export const metadataClearOutputSchema = z
 export const sessionBindInputSchema = z
   .object({
     session_id: sessionId,
+    provider: z.string().min(1).optional(),
     workspace: workspacePath.optional(),
   })
   .strict();
@@ -239,7 +240,7 @@ export const askInputSchema = z
       .optional()
       .describe(
         "Answer choices in your own words, when the question has a small set of sensible answers " +
-          "(\"covered\", \"thin\", \"missing\"). glosa ALWAYS adds a free-text field beside them, so " +
+          '("covered", "thin", "missing"). glosa ALWAYS adds a free-text field beside them, so ' +
           "offering options never stops the human answering something you did not anticipate. Omit for an " +
           "open question.",
       ),

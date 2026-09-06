@@ -25,6 +25,7 @@ import { createTranscriptStreamResponse } from "../../src/transcript/stream.ts";
 import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
 import { type ParsedSseEvent, parseSseStream } from "../../src/transport/sse.ts";
 import { randomPort } from "../helpers.ts";
+import { CodexProvider } from "../../../providers/codex/src/provider.ts";
 
 const TOKEN = "transcript-test-token-0123456789abcdef";
 
@@ -40,6 +41,7 @@ interface Harness {
   slug: string;
   delivered: Array<{ session: SessionBinding; entry: DeliverableEntry }>;
   deliveryResult: { current: DeliveryResult };
+  providerRegistry: AgentProviderRegistry;
 }
 
 // `confineTranscriptPath` (transcript/root.ts) reads `Bun.env.CLAUDE_CONFIG_DIR` at call time —
@@ -108,6 +110,7 @@ async function buildHarness(
     slug: entry.slug,
     delivered,
     deliveryResult,
+    providerRegistry,
   };
 }
 
@@ -191,6 +194,25 @@ describe("GET /w/:slug/transcript/stream (A1 §5.8, A2 §F16)", () => {
     await h.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: h.root, source: "startup" });
     const res = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}` } });
     expect(res.status).toBe(404);
+  });
+
+  test("mirror requests retry provider-owned discovery after registration without a transcript", async () => {
+    h.providerRegistry.register(
+      new CodexProvider({ liveness: h.sessionRegistry, transcriptRoots: () => [h.claudeConfigDir] }),
+    );
+    await h.sessionRegistry.bind("exact-thread", h.root, { provider: "codex" });
+    const missing = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(missing.status).toBe(404);
+    const directory = join(h.claudeConfigDir, "sessions", "2026", "09", "06");
+    mkdirSync(directory, { recursive: true });
+    writeTranscriptLine(join(directory, "rollout-exact-thread.jsonl"), {
+      type: "user",
+      uuid: "fixture-turn",
+      message: { role: "user", content: "available later" },
+    });
+    const available = await fetch(transcriptStreamUrl(h), { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(available.status).toBe(200);
+    await available.body!.cancel();
   });
 
   test("multiple equally eligible transcript sessions require explicit selection instead of guessing", async () => {

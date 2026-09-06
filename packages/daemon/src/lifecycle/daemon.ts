@@ -217,6 +217,27 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     host: "127.0.0.1",
     bun: Bun.version,
   };
+  let shutdownRequested = false;
+  let shutdown: (() => Promise<void>) | null = null;
+  let startupShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+  // The main listener starts accepting as soon as Bun.serve returns, before the rest of boot has
+  // installed the fully wired shutdown function below. A client may therefore receive a valid
+  // handshake and immediately send SIGTERM while startup is still finishing. Remember that signal
+  // instead of falling through to the OS default, which exits without releasing daemon.lock.
+  process.on("SIGTERM", () => {
+    shutdownRequested = true;
+    if (shutdown) {
+      void shutdown();
+      return;
+    }
+    if (startupShutdownTimer !== null) return;
+    startupShutdownTimer = setTimeout(() => {
+      log(home, `${instanceId} startup shutdown exceeded ${SHUTDOWN_HARD_EXIT_MS}ms; releasing ownership and exiting`);
+      removeLockIfOwned(lockFile, instanceId);
+      releaseDaemonIdentity();
+      process.exit(0);
+    }, SHUTDOWN_HARD_EXIT_MS);
+  });
   let mayRepairLock = false;
   const repairLockOwnership = (): void => {
     // Only the process that already won the initial bind + O_EXCL race may repair its missing
@@ -234,6 +255,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       }
     }
   };
+  let markStartupReady!: () => void;
+  const startupReady = new Promise<void>((resolve) => {
+    markStartupReady = resolve;
+  });
 
   const apiFetch = createApiFetch({
     port,
@@ -260,7 +285,14 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
     runWorkspaceInit: createInitRunner({ home, port }),
   });
-  const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
+  // Bun.serve starts accepting as soon as it returns, but a successful handshake is the public
+  // readiness proof. Hold only that route until lock ownership, both listeners, and shutdown are
+  // fully wired so clients never observe a new process beside the previous process's stale lock.
+  const readyApiFetch = async (request: Request): Promise<Response> => {
+    if (new URL(request.url).pathname === "/api/handshake") await startupReady;
+    return apiFetch(request);
+  };
+  const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
   // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-
@@ -322,9 +354,13 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   );
 
   let shuttingDown = false;
-  const shutdown = async () => {
+  shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    if (startupShutdownTimer !== null) {
+      clearTimeout(startupShutdownTimer);
+      startupShutdownTimer = null;
+    }
     mayRepairLock = false;
     clearInterval(lockRepairTimer);
     // A shutdown that hangs past this point still ends, and still ends with its lock released.
@@ -362,15 +398,17 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     log(home, `${instanceId} ${drained ? "graceful" : "forced"} shutdown complete`);
     process.exit(0);
   };
-  process.on("SIGTERM", () => {
-    void shutdown();
-  });
   // Survive Ctrl-C in the terminal / the controlling terminal closing (A5 §F13) — the shim
   // dying must not take the daemon with it.
   process.on("SIGHUP", () => {});
   process.on("SIGINT", () => {});
 
-  log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+  if (shutdownRequested) {
+    void shutdown();
+  } else {
+    markStartupReady();
+    log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+  }
   return new Promise<never>(() => {
     // bootDaemon never resolves on the happy path; the process lives until a signal handler
     // (or one of the exit-code branches above) calls process.exit().

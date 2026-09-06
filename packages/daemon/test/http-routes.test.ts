@@ -1446,7 +1446,7 @@ describe("A1 §5 route catalog", () => {
     expect(sessionRegistry.get("sess-live")?.workspace_binding).toBe(root);
   });
 
-  test("POST session-binding with an unknown session_id → 404", async () => {
+  test("POST session-binding with an unknown session_id registers and binds", async () => {
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/session-binding`, {
         method: "POST",
@@ -1454,7 +1454,8 @@ describe("A1 §5 route catalog", () => {
         body: JSON.stringify({ session_id: "does-not-exist" }),
       }),
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(sessionRegistry.get("does-not-exist")).toMatchObject({ provider: "mcp", workspace_binding: root });
   });
 
   test("POST session-binding on an unknown workspace slug → 404", async () => {

@@ -12,6 +12,10 @@
 // rehearsal's job (see this package's test/ dir header comment); this file only has to prove the
 // LOGIC: try the best rung first, record what actually happened, fall back correctly when a rung
 // is unavailable OR fails.
+import { lstatSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
+import { claudeConfigRoots } from "../../../daemon/src/transcript/root.ts";
 import type {
   AgentProvider,
   DeliverableEntry,
@@ -43,6 +47,7 @@ export type ChannelSender = (session: SessionBinding, entry: DeliverableEntry) =
 export type RewakeSignal = (session: SessionBinding, entry: DeliverableEntry) => Promise<boolean>;
 
 export interface ClaudeCodeProviderDeps {
+  transcriptRoots?: () => readonly string[];
   liveness: SessionLivenessSource;
   /** Whether channels are active for THIS session (the `--dangerously-load-development-channels
    * server:glosa` activation, A2 §F06) — a provider-wide `sendChannel` existing doesn't imply a
@@ -115,8 +120,24 @@ export class ClaudeCodeProvider implements AgentProvider {
     return this.deps.liveness.liveness(session.session_id);
   }
 
+  transcriptRoots(): readonly string[] {
+    return this.deps.transcriptRoots?.() ?? claudeConfigRoots();
+  }
+
   transcriptPath(session: SessionBinding): string | null {
-    return session.transcript_path ?? null;
+    if (session.transcript_path) return session.transcript_path;
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.session_id)) return null;
+    const encodedCwd = session.workspace.replace(/[^a-zA-Z0-9]/g, "-");
+    const candidates = new Set<string>();
+    for (const root of this.transcriptRoots()) {
+      const path = join(root, "projects", encodedCwd, `${session.session_id}.jsonl`);
+      try {
+        if (lstatSync(path).isFile() && confineTranscriptPath(path, [root]).ok) candidates.add(realpathSync(path));
+      } catch {
+        /* a newly registered session may not have written its transcript yet */
+      }
+    }
+    return candidates.size === 1 ? [...candidates][0]! : null;
   }
 
   /** The R4 ladder, in rung order — each rung's `via` and `outcome` are A5 §F23's fixed
@@ -186,4 +207,10 @@ export class ClaudeCodeProvider implements AgentProvider {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Provider-owned identity discovery; transcript recency is never evidence of identity. */
+export function discoverClaudeMcpSession(env: Record<string, string | undefined>, cwd: string) {
+  const session_id = env.CLAUDE_CODE_SESSION_ID;
+  return session_id ? { session_id, provider: "claude-code", cwd, channelPush: true } : null;
 }

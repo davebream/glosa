@@ -1,32 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/daemon — the session registry (A2 §F08, R2). In-memory only: sessions re-register on
-// every SessionStart, so a daemon restart simply rebuilds this from scratch as live agent
-// sessions fire their next hook — no durability requirement here (unlike the journal or the
-// workspace index, which ARE the truth for their domains).
-//
-// Every mutation is serialized behind ONE mutex so concurrent SessionStart hooks (the F08
-// "registration race") never lose an entry, and a registration upserts the session's workspace
-// into the shared `WorkspaceIndex` in the SAME critical section — the index's own mutex still
-// does the actual file write, this just guarantees the two updates (in-memory record, on-disk
-// workspace entry) always happen together, never interleaved by a second concurrent register().
-//
-// R2's fourth rung — "no live session -> the entry parks; next session registration for that
-// workspace drains it" — is deliberately NOT modelled here. A park is just an inbox entry that is
-// still non-terminal in the workspace journal, and the drain is `POST /api/sessions/:id/drain`
-// replaying that journal for the registering session's workspace. Keeping the park in the journal
-// (AGENTS.md invariant 2: the journal is the single source of truth) is what makes it survive a
-// daemon restart; a Set of "parked workspaces" on this in-memory registry could not.
-//
-// Liveness NEVER calls `process.kill`/`kill(pid, 0)`. SessionStart hook input has no documented
-// PID (A2 §F08) — there is no process to check in the first place, so liveness here is lease +
-// activity heartbeat only, full stop. (Contrast with registry/lockfile-fallback.ts, which
-// legitimately uses `process.kill` — that's checking whether the OS process that wrote a lease
-// FILE is still alive, an entirely different question with a real, documented PID to check.)
-//
-// Production wiring (once the HTTP layer exists) is three lines:
-//   const index = new WorkspaceIndex();
-//   const registry = new SessionRegistry({ index });
-//   index.setLiveSessionPredicate((canonicalPath) => registry.forWorkspace(canonicalPath).length > 0);
+// In-memory sessions recover through MCP activity or explicit binding after a daemon restart.
+// The journal remains the durable delivery authority. All registration/activity mutations share
+// one mutex; lease expiry is the sole liveness rule, independent of provider or process IDs.
 import { AsyncMutex } from "../bus/mutex.ts";
 import type { WorkspaceIndex } from "./workspace-index.ts";
 
@@ -45,15 +20,17 @@ export interface SessionRecord {
 }
 
 export type RegisterInput = Omit<SessionRecord, "last_active_at" | "lease_expiry"> &
-  Partial<Pick<SessionRecord, "last_active_at" | "lease_expiry">>;
+  Partial<Pick<SessionRecord, "last_active_at" | "lease_expiry">> & { fallback_workspace_binding?: string };
 
 export type Liveness = "alive" | "stale";
 
 export interface SessionRegistryDeps {
   now?: () => Date;
-  /** A2 §F08: "auto-expires in 60s (heartbeat buffer); refreshed on each hook." */
+  /** A2 §F08: 60-second lease refreshed by hooks, MCP activity, or an open connection. */
   leaseTtlMs?: number;
   index?: WorkspaceIndex;
+  /** Injectable scheduler for deterministic connection/expiry tests. */
+  scheduleRefresh?: (refresh: () => void, intervalMs: number) => () => void;
 }
 
 const DEFAULT_LEASE_TTL_MS = 60_000;
@@ -64,61 +41,107 @@ export class SessionRegistry {
   private readonly now: () => Date;
   private readonly leaseTtlMs: number;
   private readonly index?: WorkspaceIndex;
+  private readonly connections = new Map<string, Map<string, () => void>>();
+  private readonly scheduleRefresh: NonNullable<SessionRegistryDeps["scheduleRefresh"]>;
 
   constructor(deps: SessionRegistryDeps = {}) {
     this.now = deps.now ?? (() => new Date());
     this.leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
     this.index = deps.index;
+    this.scheduleRefresh =
+      deps.scheduleRefresh ??
+      ((refresh, intervalMs) => {
+        const timer = setInterval(refresh, intervalMs);
+        timer.unref?.();
+        return () => clearInterval(timer);
+      });
   }
 
-  /** Registers (or re-registers) a session. Concurrent calls for distinct session_ids all land —
-   * this is the F08 race fix: the mutex means one register()'s workspace upsert always fully
-   * completes (index write included) before the next one starts, so slug assignment and the
-   * in-memory record never interleave. A repeat call for an already-known session_id just
-   * replaces its record (e.g. a fresh SessionStart with an updated transcript_path). */
+  /** Merge under the same lock as binding: an MCP refresh cannot erase a hook's transcript
+   * or a user's explicit binding. Publish only after workspace persistence succeeds. */
   register(input: RegisterInput): Promise<SessionRecord> {
-    return this.mutex.runExclusive(async () => {
-      const now = this.now();
-      const record: SessionRecord = {
-        ...input,
-        last_active_at: input.last_active_at ?? now.toISOString(),
-        lease_expiry: input.lease_expiry ?? new Date(now.getTime() + this.leaseTtlMs).toISOString(),
-      };
-
-      // Captured BEFORE the mutation, not read back after the index await: if the index upsert
-      // throws (e.g. ENOSPC/EACCES in `persist()`), roll the in-memory map back to exactly what
-      // it held before this call, so a failed registration never leaves a session routable for a
-      // workspace `workspaces.json` never actually recorded.
-      const priorRecord = this.sessions.get(record.session_id);
-      this.sessions.set(record.session_id, record);
-
-      const canonicalWorkspace = record.workspace_binding ?? record.cwd;
-      if (this.index) {
-        try {
-          await this.index.upsertWorkspace(canonicalWorkspace, "session");
-        } catch (err) {
-          if (priorRecord) this.sessions.set(record.session_id, priorRecord);
-          else this.sessions.delete(record.session_id);
-          throw err;
-        }
-      }
-
-      return record;
-    });
+    return this.mutex.runExclusive(() => this.upsert(input));
   }
 
-  /** Extends the lease and bumps `last_active_at` — called on every SessionStart/
-   * UserPromptSubmit/Stop hook (A2 §F08). A heartbeat for an unknown session_id is a silent
-   * no-op, never a throw: the session may have already deregistered (SessionEnd raced ahead of a
-   * stray hook firing), and a heartbeat is advisory, not a state transition worth failing over. */
-  heartbeat(sessionId: string): Promise<void> {
-    return this.mutex.runExclusive(() => {
-      const record = this.sessions.get(sessionId);
-      if (!record) return;
-      const now = this.now();
-      record.last_active_at = now.toISOString();
-      record.lease_expiry = new Date(now.getTime() + this.leaseTtlMs).toISOString();
-    });
+  bind(
+    sessionId: string,
+    workspace: string,
+    metadata: { provider?: string; cwd?: string; source?: string; transcript_path?: string } = {},
+  ): Promise<SessionRecord> {
+    return this.mutex.runExclusive(() =>
+      this.upsert({
+        session_id: sessionId,
+        provider: metadata.provider ?? this.sessions.get(sessionId)?.provider ?? "mcp",
+        cwd: metadata.cwd ?? this.sessions.get(sessionId)?.cwd ?? workspace,
+        source: metadata.source ?? "manual",
+        workspace_binding: workspace,
+        transcript_path: metadata.transcript_path,
+      }),
+    );
+  }
+
+  private async upsert(input: RegisterInput): Promise<SessionRecord> {
+    const prior = this.sessions.get(input.session_id);
+    if (prior && prior.provider !== "mcp" && input.provider !== "mcp" && prior.provider !== input.provider) {
+      throw new SessionProviderConflict();
+    }
+    const now = this.now();
+    const record: SessionRecord = {
+      ...prior,
+      ...Object.fromEntries(
+        Object.entries(input).filter(([key, value]) => value !== undefined && key !== "fallback_workspace_binding"),
+      ),
+      session_id: input.session_id,
+      provider: prior && input.provider === "mcp" ? prior.provider : input.provider,
+      cwd: input.cwd,
+      workspace_binding: input.workspace_binding ?? prior?.workspace_binding ?? input.fallback_workspace_binding,
+      source: input.source,
+      last_active_at: input.last_active_at ?? now.toISOString(),
+      lease_expiry: input.lease_expiry ?? new Date(now.getTime() + this.leaseTtlMs).toISOString(),
+    };
+    await this.index?.upsertWorkspace(record.workspace_binding ?? record.cwd, "session");
+    this.sessions.set(record.session_id, record);
+    return record;
+  }
+
+  /** Returns false for an unknown identity, allowing a client to recover registration. */
+  heartbeat(sessionId: string): Promise<boolean> {
+    return this.mutex.runExclusive(() => this.refresh(sessionId));
+  }
+
+  private refresh(sessionId: string): boolean {
+    const record = this.sessions.get(sessionId);
+    if (!record) return false;
+    const now = this.now();
+    record.last_active_at = now.toISOString();
+    record.lease_expiry = new Date(now.getTime() + this.leaseTtlMs).toISOString();
+    return true;
+  }
+
+  /** A transport owns one handle per connection key. Replacing it invalidates the old timer;
+   * closing it leaves the last refreshed lease to expire naturally. Future providers use this
+   * same handle while their local subscription is open. */
+  holdConnection(sessionId: string, key = "push"): () => void {
+    if (!this.sessions.has(sessionId)) throw new Error("session not registered");
+    this.connections.get(sessionId)?.get(key)?.();
+    const handles = this.connections.get(sessionId) ?? new Map<string, () => void>();
+    this.connections.set(sessionId, handles);
+    let cancel = () => {};
+    const release = () => {
+      cancel();
+      if (handles.get(key) !== release) return;
+      handles.delete(key);
+      if (handles.size === 0 && this.connections.get(sessionId) === handles) this.connections.delete(sessionId);
+    };
+    handles.set(key, release);
+    const refresh = () => {
+      void this.mutex.runExclusive(() => {
+        if (this.connections.get(sessionId)?.get(key) === release) this.refresh(sessionId);
+      });
+    };
+    cancel = this.scheduleRefresh(refresh, Math.min(20_000, this.leaseTtlMs / 3));
+    refresh();
+    return release;
   }
 
   /** Lease-based liveness ONLY (see module docstring — never PID-based). An unregistered/unknown
@@ -142,6 +165,7 @@ export class SessionRegistry {
 
   deregister(sessionId: string): Promise<void> {
     return this.mutex.runExclusive(() => {
+      for (const release of this.connections.get(sessionId)?.values() ?? []) release();
       this.sessions.delete(sessionId);
     });
   }
@@ -195,4 +219,10 @@ export function isCwdAncestorOf(cwd: string, workspace: string): boolean {
   if (cwd === workspace) return true;
   const prefix = cwd.endsWith("/") ? cwd : `${cwd}/`;
   return workspace.startsWith(prefix);
+}
+
+export class SessionProviderConflict extends Error {
+  constructor() {
+    super("session already belongs to a different provider");
+  }
 }

@@ -25,6 +25,64 @@ import {
   workspaceMetadataDescriptorSchema,
 } from "../src/mcp-schemas.ts";
 import { CLI_VERSION } from "../src/version.ts";
+import { apiError } from "../src/api-client.ts";
+import { discoverMcpIdentity } from "../src/session.ts";
+
+test("MCP host discovery rejects ambiguous providers and permits explicit selection", () => {
+  const claude = { session_id: "a", provider: "claude-code", cwd: "/agent" };
+  const codex = { session_id: "b", provider: "codex", cwd: "/agent" };
+  expect(() => discoverMcpIdentity([claude, codex])).toThrow("multiple provider");
+  expect(discoverMcpIdentity([claude, codex], "codex")).toEqual(codex);
+  expect(() => discoverMcpIdentity([codex], "claude-code")).toThrow("provider does not match");
+  expect(discoverMcpIdentity([null], "codex")).toBeNull();
+});
+
+test("generic pull preserves requested workspace scope while reusing its stable identity", async () => {
+  const hook = new HookClient();
+  hook.drained = { count: 0, drained: [] };
+  const connected = await connect(deps(hook));
+  try {
+    await callTool(connected.client, { name: "glosa_inbox_pull", arguments: { workspace: "/target-a" } });
+    const id = hook.registered?.session_id;
+    expect(hook.registered?.cwd).toBe("/target-a");
+    await callTool(connected.client, { name: "glosa_inbox_pull", arguments: { workspace: "/target-b" } });
+    expect(hook.registered).toMatchObject({ session_id: id, cwd: "/target-b" });
+    expect(hook.deregistered).toEqual([]);
+  } finally {
+    await connected.close();
+  }
+  expect(hook.deregistered).toEqual([hook.registered!.session_id]);
+});
+
+test("MCP heartbeats all tool activity, recovers only missing registration, and preserves auth errors", async () => {
+  const hook = new HookClient();
+  let registrations = 0;
+  const register = hook.register.bind(hook);
+  hook.register = async (input) => {
+    registrations++;
+    return register(input);
+  };
+  const connected = await connect({
+    ...deps(hook, { getMetadata: async () => null }),
+    session: () => ({ session_id: "s", provider: "codex", cwd: "/agent" }),
+  });
+  try {
+    await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
+    expect(registrations).toBe(1);
+    hook.heartbeat = async () => {
+      throw apiError(404, { title: "session not registered" });
+    };
+    expect((await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} })).isError).not.toBe(true);
+    expect(registrations).toBe(2);
+    hook.heartbeat = async () => {
+      throw apiError(401, { title: "unauthorized" });
+    };
+    expect((await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} })).isError).toBe(true);
+    expect(registrations).toBe(2);
+  } finally {
+    await connected.close();
+  }
+});
 
 function presentation(id: string, kind: "annotation" | "human_edit", text: string) {
   return {
@@ -421,7 +479,9 @@ describe("official TypeScript MCP SDK contract", () => {
         ["clear", "/w"],
         ["bind", "/w", "s1"],
       ]);
-      expect(hook.heartbeats).toEqual(["s1"]);
+      expect(hook.heartbeats).toHaveLength(2);
+      expect(new Set(hook.heartbeats).size).toBe(1);
+      expect(hook.registered?.session_id).toBe("s1");
     } finally {
       await connected.close();
     }
@@ -449,17 +509,17 @@ describe("official TypeScript MCP SDK contract", () => {
         expect.objectContaining({ type: "text", text: expect.stringContaining("Act on this.") }),
       );
       expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
-      expect(hook.registered).toMatchObject({ provider: "mcp", cwd: "/workspace", source: "mcp_pull" });
+      expect(hook.registered).toMatchObject({ provider: "mcp", cwd: "/workspace", source: "mcp" });
       expect(events).toEqual(["write", "presented"]);
       expect(hook.deliveryAcks[0]?.slice(1, 3)).toEqual(["delivery-1", "presented"]);
-      if (!hook.registered) throw new Error("expected temporary MCP registration");
-      expect(hook.deregistered).toEqual([hook.registered.session_id]);
+      if (!hook.registered) throw new Error("expected stable MCP registration");
+      expect(hook.deregistered).toEqual([]);
     } finally {
       await connected.close();
     }
   });
 
-  test("transport write failure records failed and cleans up the temporary MCP session", async () => {
+  test("transport write failure records failed and retains the shim session until close", async () => {
     const hook = new HookClient();
     const connected = await connect(deps(hook));
     const send = connected.serverTransport.send.bind(connected.serverTransport);
@@ -473,14 +533,14 @@ describe("official TypeScript MCP SDK contract", () => {
       void callTool(connected.client, { name: "glosa_inbox_pull", arguments: {} }).catch(() => {});
       await waitFor(() => hook.deliveryAcks.some((ack) => ack[2] === "failed"), "failed delivery acknowledgement");
       expect(hook.deliveryAcks[0]?.slice(1)).toEqual(["delivery-1", "failed", "stdout unavailable"]);
-      if (!hook.registered) throw new Error("expected temporary MCP registration");
-      expect(hook.deregistered).toEqual([hook.registered.session_id]);
+      if (!hook.registered) throw new Error("expected stable MCP registration");
+      expect(hook.deregistered).toEqual([]);
     } finally {
       await connected.close();
     }
   });
 
-  test("get retrieves the durable entry directly without registering or draining", async () => {
+  test("get refreshes registration and retrieves the durable entry without draining", async () => {
     const hook = new HookClient();
     hook.drained = { delivery_id: null, count: 0, drained: [] };
     const calls: unknown[] = [];
@@ -499,7 +559,7 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(result.content[0]).toEqual({ type: "text", text: "page opaque" });
       expect(result.content[1]).toEqual({ type: "text", text: JSON.stringify(result.structuredContent) });
       expect(calls).toEqual([["/workspace", "inb-2", "opaque"]]);
-      expect(hook.registered).toBeNull();
+      expect(hook.registered?.source).toBe("mcp");
       expect(hook.drainOptions).toBeUndefined();
       expect(hook.deliveryAcks).toEqual([]);
     } finally {
@@ -612,7 +672,7 @@ describe("official TypeScript MCP SDK contract", () => {
     input.end();
     await running;
     expect(hook.deliveryAcks[0]?.slice(1)).toEqual(["delivery-1", "failed", "broken stdout"]);
-    if (!hook.registered) throw new Error("expected temporary MCP registration");
+    if (!hook.registered) throw new Error("expected stable MCP registration");
     expect(hook.deregistered).toEqual([hook.registered.session_id]);
   });
 
@@ -780,7 +840,7 @@ describe("official TypeScript MCP SDK contract", () => {
       try {
         const result = await callTool(connected.client, {
           name: "glosa_present",
-          arguments: { path: file, mode: "read", session_id: "explicit-session" },
+          arguments: { path: file, mode: "read", session_id: "host-session" },
         });
         expect(result.isError).not.toBe(true);
         const body = structured(result) as {

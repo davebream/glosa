@@ -8,6 +8,7 @@ export async function runSessionBind(
   workspace: string,
   sessionId: string,
   createClient: () => Promise<GlosaApiClient>,
+  metadata: { provider?: string; cwd?: string } = {},
 ): Promise<CommandEnvelope<SessionData>> {
   let client: GlosaApiClient;
   try {
@@ -16,7 +17,11 @@ export async function runSessionBind(
     return { ...daemonUnreachableEnvelope("session", (error as Error).message), data: {} };
   }
   try {
-    const result = await client.bindSession!(workspace, sessionId);
+    const result = await client.bindSession!(workspace, sessionId, {
+      cwd: metadata.cwd ?? process.cwd(),
+      provider: metadata.provider,
+      source: "cli",
+    });
     return { ok: true, command: "session", exitCode: EXIT_CODES.OK, data: result, warnings: [] };
   } catch (error) {
     if (isApiError(error)) {
@@ -43,4 +48,18 @@ export function printSessionBindResult(result: CommandEnvelope<SessionData>, jso
     return;
   }
   process.stdout.write(`glosa session bind: ${result.data.session_id} bound\n`);
+}
+
+export function discoverMcpIdentity(
+  candidates: Array<{ session_id: string; provider: string; cwd: string; channelPush?: boolean } | null>,
+  provider?: string,
+) {
+  const matches = candidates.filter(
+    (candidate) => candidate !== null && (!provider || candidate.provider === provider),
+  );
+  if (provider && matches.length === 0 && candidates.some((candidate) => candidate !== null)) {
+    throw new Error("provider does not match the host session");
+  }
+  if (matches.length > 1) throw new Error("multiple provider session identities found; supply an explicit provider");
+  return matches[0] ?? null;
 }

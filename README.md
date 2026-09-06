@@ -183,6 +183,14 @@ runs only when you invoke it, and it sends no identifying data.
 glosa binds feedback to an explicit live session when possible. If more than one session matches, the
 browser asks instead of guessing. If none is live, the entry parks until a matching session registers.
 
+A running session survives a glosa daemon restart: its next MCP tool call re-registers it. Restore
+an explicit workspace connection with `glosa_session_bind` or
+`glosa session bind <session-id> --workspace <path>`; binding also registers an unknown session, so
+restarting the agent is unnecessary. Claude and Codex identity comes from their session environment;
+`--provider <id>` (or MCP `provider`) supplies it explicitly when needed. Without provider evidence,
+binding uses a generic MCP session. A missing transcript affects only the conversation mirror.
+Open session streams keep the session lease alive; once closed, the lease expires after its remaining TTL.
+
 ## Related tools
 
 glosa is one part of a useful ecosystem of human-in-the-loop tools. These projects solve adjacent
