@@ -243,6 +243,12 @@ Four tokens, each two layers: a tight edge that separates and a broad offset lif
 - **Behavior:** Read removes annotation affordances, Review reveals anchors and marginalia — the reviewer's own and a session's — and Edit preserves the same reading measure. Live updates preserve selection and scroll position.
 - **Three marking vocabularies share the manuscript and must stay distinguishable without colour.** Browser selection is transient; a reviewer's annotation lives ON the words as an underline deepening to a wash; a session's pointer stands BESIDE them as a graphite sideline in the gutter, olive only while its card has focus. Position, not hue, carries the difference, so an agent mark and an annotation can cover the same sentence without either becoming unreadable.
 
+### Fore-Edge Index
+- **Style:** One artifact's outline, drawn as a column of 2px hairlines in the gutter beside the text: one rule per heading, placed where that heading actually falls in the document and cut to a length that states its depth, right edges flush. Faint Ink moved toward Ink so a hairline reads at 4:1 rather than smudging; the section the reader is standing in takes full Ink at 3px. The column's right edge rides 44px clear of the text block. Its panel is the workbench's ordinary menu — paper, a Strong Border hairline, Menu Lift, 28px rows indented by depth, the current row on a sunken bed in olive.
+- **Behavior:** Hover, click, Enter, ⌘J, or the pane's More menu open it; it opens on the section the reader is in, filters on any word of a heading, keeps document order, and jumps with the caret in Edit's source face. It reads whichever surface is mounted — the rendered manuscript in Read and Review, the rich editor or the parsed source in Edit — and stands down entirely below two headings, because a list of one is a title the reader is already looking at.
+- **It is painted, never reserved.** The rail and its panel are absolutely positioned at every width and in every mode, so no gutter is ever subtracted from the measure. Once an artifact fills its pane the column folds into the 2rem padding the text already carries, and hover-to-open stands down there — below the panel's 200px floor, opening it means covering the writing, so it waits to be asked.
+- **It is pane furniture, not a fourth mark on the manuscript.** It pins to the pane and does not scroll with the content. Distance and stillness are what keep it distinct from the three marking vocabularies above.
+
 ## 6. Do's and Don'ts
 
 ### Do:

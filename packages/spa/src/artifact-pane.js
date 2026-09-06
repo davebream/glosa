@@ -22,6 +22,15 @@
 import { agentIdentity, locateQuote, requestsForArtifact } from "./agent-request.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
+import {
+  collectRenderedHeadings,
+  collectSourceHeadings,
+  createOutlineController,
+  currentHeadingIndex,
+  measureTextareaOffsets,
+  outlineDepths,
+  scrollToOffset,
+} from "./outline.js";
 import { confirmDialog } from "./dialog.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -101,6 +110,12 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // workbench to keep two documents legible, and annotating one of them should not cost the other
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
+
+/** The whitespace a pane needs beside its text block before the outline panel will open on hover
+ * alone: the panel's 200px floor plus its two 8px insets. Below it the panel can only open over
+ * the manuscript, so it waits to be asked. Keep in step with app.css's `.glosa-foreedge-panel`
+ * width clamp. */
+export const OUTLINE_PANEL_FLOOR = 216;
 
 /** How far a session's sideline sits from the text column. Close enough to read as a mark on
  * those lines rather than as chrome beside them; far enough not to crowd the measure. */
@@ -190,8 +205,7 @@ export function splitDirectory(dir) {
 const MODE_ICONS = {
   // Drawn to the chrome icon set's own spec: 20x20 box, 1.6 stroke, round caps and joins, no
   // fill. Unicode glyphs would not sit on the same grid as the navigator and history marks.
-  read:
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M1.8 10S4.7 4.8 10 4.8 18.2 10 18.2 10 15.3 15.2 10 15.2 1.8 10 1.8 10Z"/><circle cx="10" cy="10" r="2.4"/></svg>',
+  read: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M1.8 10S4.7 4.8 10 4.8 18.2 10 18.2 10 15.3 15.2 10 15.2 1.8 10 1.8 10Z"/><circle cx="10" cy="10" r="2.4"/></svg>',
   review:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.2h8M3 8h8M3 11.8h5"/><path d="M17 3.4 13 7.4l-.6 2.4 2.4-.6 4-4a1.3 1.3 0 0 0-1.8-1.8Z"/></svg>',
   edit: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9.5 3.5H4.6A1.6 1.6 0 0 0 3 5.1v10.3A1.6 1.6 0 0 0 4.6 17h10.3a1.6 1.6 0 0 0 1.6-1.6v-4.9"/><path d="M15.1 2.9a1.7 1.7 0 0 1 2.4 2.4L11 11.8l-3.2.8.8-3.2Z"/></svg>',
@@ -207,6 +221,8 @@ const ICONS = {
   compare:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3.5H4.4A1.4 1.4 0 0 0 3 4.9v10.2a1.4 1.4 0 0 0 1.4 1.4H7M13 3.5h2.6A1.4 1.4 0 0 1 17 4.9v10.2a1.4 1.4 0 0 1-1.4 1.4H13M10 2v16"/></svg>',
   move: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><path d="M11.5 4v12"/></svg>',
+  // The fore-edge itself, at icon scale: three rules of falling length, flush right.
+  outline: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M6.5 10H17M10 15h7"/></svg>',
 };
 
 /**
@@ -340,6 +356,12 @@ export function createArtifactPane(host, deps) {
     setToolsOpen(false, { restoreFocus: true });
     printArtifact();
   });
+  // The keyboard/pointer door to the fore-edge for readers who never hover it, and the ONLY door
+  // on a pane too narrow to paint the rail clear of the text. Same surface either way.
+  const outlineMenuItem = menuItem("glosa-tools-outline", ICONS.outline, "Outline", () => {
+    setToolsOpen(false);
+    outline.toggle();
+  });
   // Named for exactly what one click does. "Compare versions" would promise a version picker;
   // that picker is the History surface, one row above.
   const compareButton = menuItem("glosa-tools-compare", ICONS.compare, "Compare with last saved version", () => {
@@ -379,6 +401,7 @@ export function createArtifactPane(host, deps) {
 
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
+    outlineMenuItem,
     copySourceButton,
     printArtifactButton,
     compareButton,
@@ -490,11 +513,173 @@ export function createArtifactPane(host, deps) {
   paneEl.setAttribute("data-editor-face", "rich");
   host.append(paneEl);
 
+  // ---------- the fore-edge index ----------
+  //
+  // Painted, never reserved. The rail and its panel are absolutely positioned children of the
+  // pane, so no width and no mode ever subtracts a gutter from the measure — a pane narrow enough
+  // that the artifact fills it keeps the whole artifact, and the rail moves into the 2rem padding
+  // `.glosa-content` and `.glosa-edit-wrap` already carry. See outline.js for the three rules the
+  // instrument holds itself to.
+
+  const outline = createOutlineController({
+    host: paneEl,
+    id: `glosa-outline-${Math.random().toString(36).slice(2, 9)}`,
+  });
+  /** Heading offsets inside the CURRENT surface's scroll content, in document order. Kept beside
+   * the entries because tracking the reading position on every scroll frame must not re-measure
+   * the document. */
+  let outlineTops = [];
+  /** What the source-face outline was last computed from. Mirroring a textarea to measure wrapped
+   * line positions costs a layout flush per heading, so it runs when the text actually changed,
+   * not on every render. */
+  let outlineSourceKey = "";
+  let outlineFrame = 0;
+  let outlineSourceTimer = null;
+
+  /** Which surface the outline is describing, and where scrolling happens in it.
+   *
+   * Read and Review navigate the rendered manuscript. Edit navigates whichever FACE is mounted —
+   * the rich editor paints real headings, the source textarea has none and is parsed instead.
+   * An outline that describes the page the reader is not looking at is worse than no outline. */
+  function outlineSurface() {
+    if (!currentArtifact || currentArtifact.class === "F") return null;
+    if (!editWrap.hidden) {
+      if (!richEl.hidden && richEditor) {
+        const surface = richEl.querySelector(".glosa-rich-surface");
+        return surface ? { kind: "rich", root: surface, scroller: surface, block: editWrap } : null;
+      }
+      if (!editArea.hidden) return { kind: "source", root: editArea, scroller: editArea, block: editWrap };
+      return null;
+    }
+    if (contentEl.hidden) return null;
+    return { kind: "rendered", root: contentEl, scroller: paneMain, block: contentEl };
+  }
+
+  /** Publishes the measured left edge of the text block so the panel can size itself to the
+   * whitespace beside it rather than over it. One custom property; app.css does the clamping. */
+  function layoutOutline() {
+    const surface = outlineSurface();
+    const block = surface?.block;
+    const space = block ? Math.max(0, block.getBoundingClientRect().left - paneEl.getBoundingClientRect().left) : 0;
+    paneEl.style.setProperty("--outline-space", `${Math.round(space)}px`);
+    // Below this the panel's 200px floor no longer fits in the whitespace, so opening it means
+    // covering the writing. The rail keeps reporting position; it just stops volunteering.
+    outline.setCompact(space < OUTLINE_PANEL_FLOOR);
+    outline.remeasure();
+  }
+
+  function syncOutlineCurrent() {
+    const surface = outlineSurface();
+    if (!surface || !outlineTops.length) {
+      outline.setCurrent(-1);
+      return;
+    }
+    outline.setCurrent(currentHeadingIndex(outlineTops, surface.scroller.scrollTop));
+  }
+
+  function refreshOutline() {
+    const surface = outlineSurface();
+    if (!surface) {
+      outlineTops = [];
+      outlineSourceKey = "";
+      outline.setEntries([]);
+      renderArtifactTools();
+      return;
+    }
+
+    if (surface.kind === "source") {
+      const text = editArea.value ?? "";
+      const key = `${currentArtifact.source_path}:${editArea.clientWidth}:${text.length}:${text}`;
+      if (key === outlineSourceKey) return;
+      outlineSourceKey = key;
+      const headings = collectSourceHeadings(text);
+      const depths = outlineDepths(headings);
+      const tops = measureTextareaOffsets(
+        editArea,
+        headings.map((heading) => heading.offset),
+      );
+      const extent = Math.max(1, editArea.scrollHeight);
+      outlineTops = tops;
+      outline.setEntries(
+        headings.map((heading, index) => ({
+          level: heading.level,
+          depth: depths[index],
+          text: heading.text,
+          fraction: tops[index] / extent,
+          // Jumping in the source face moves the CARET too: the reader opened the outline to get
+          // somewhere in order to type there.
+          jump: () => {
+            editArea.focus({ preventScroll: true });
+            editArea.setSelectionRange(heading.offset, heading.offset);
+            scrollToOffset(editArea, tops[index]);
+          },
+        })),
+      );
+      syncOutlineCurrent();
+      renderArtifactTools();
+      return;
+    }
+
+    outlineSourceKey = "";
+    const headings = collectRenderedHeadings(surface.root);
+    const depths = outlineDepths(headings);
+    const scrollTop = surface.scroller.scrollTop;
+    const base = surface.scroller.getBoundingClientRect().top;
+    const tops = headings.map((heading) => heading.el.getBoundingClientRect().top - base + scrollTop);
+    const extent = Math.max(1, surface.scroller.scrollHeight);
+    outlineTops = tops;
+    outline.setEntries(
+      headings.map((heading, index) => ({
+        level: heading.level,
+        depth: depths[index],
+        text: heading.text,
+        fraction: tops[index] / extent,
+        jump: () => {
+          scrollToOffset(surface.scroller, tops[index]);
+          // Scrolling alone leaves a keyboard reader where they were. Focus follows the jump, on
+          // the same borrowed-tabindex pattern `focusPreview` uses, so the heading is not left
+          // permanently tabbable.
+          const target = heading.el;
+          if (!(target instanceof HTMLElement)) return;
+          const borrowed = !target.hasAttribute("tabindex");
+          if (borrowed) target.setAttribute("tabindex", "-1");
+          target.focus({ preventScroll: true });
+          if (borrowed) target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
+        },
+      })),
+    );
+    syncOutlineCurrent();
+    renderArtifactTools();
+  }
+
+  /** Scroll events do not bubble, but they DO capture — one listener on the pane therefore tracks
+   * the manuscript, the rich surface, and the source textarea without caring which is mounted. */
+  function onPaneScroll() {
+    if (outlineFrame) return;
+    outlineFrame = requestAnimationFrame(() => {
+      outlineFrame = 0;
+      syncOutlineCurrent();
+    });
+  }
+  paneEl.addEventListener("scroll", onPaneScroll, { capture: true, passive: true });
+
+  /** Typing in the source face changes the outline. Debounced, because re-measuring a mirrored
+   * textarea on every keystroke would be felt. */
+  function onSourceInputForOutline() {
+    if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
+    outlineSourceTimer = setTimeout(() => {
+      outlineSourceTimer = null;
+      refreshOutline();
+    }, 400);
+  }
+  editArea.addEventListener("input", onSourceInputForOutline);
+
   // ---------- artifact bar behavior ----------
 
   function paneMenuControls() {
     return [
       historyMenuItem,
+      outlineMenuItem,
       copySourceButton,
       printArtifactButton,
       compareButton,
@@ -552,6 +737,9 @@ export function createArtifactPane(host, deps) {
     const available = artifactPath !== null;
     copySourceButton.hidden = !available;
     printArtifactButton.hidden = !available;
+    // A document with fewer than two headings has no outline, and offering an empty one is worse
+    // than not offering it. `outline.hasEntries()` is the single source for that everywhere.
+    outlineMenuItem.hidden = !available || !outline.hasEntries();
     compareButton.hidden = !available || !openDiffTab;
     if (toolsStatusArtifactPath !== artifactPath) {
       toolsStatusArtifactPath = artifactPath;
@@ -981,12 +1169,16 @@ export function createArtifactPane(host, deps) {
     if (!currentArtifact) {
       updateAnnotatableBlocks();
       renderMargin();
+      refreshOutline();
       return;
     }
     if (isClassF) {
       updateAnnotatableBlocks();
       mountClassFArtifact();
       renderMargin();
+      // Class F is an iframe glosa deliberately cannot read into, so there is no outline to draw
+      // and the instrument says so by not being there.
+      refreshOutline();
       return;
     }
     // Leaving class F (a different artifact was opened into this pane) tears down any
@@ -1011,6 +1203,8 @@ export function createArtifactPane(host, deps) {
     }
     updateAnnotatableBlocks();
     renderMargin();
+    refreshOutline();
+    layoutOutline();
   }
 
   /** Mounts (or re-mounts, on a path change) the class-F viewer — P4.1. A fresh capability is
@@ -1733,7 +1927,11 @@ export function createArtifactPane(host, deps) {
       el("span", { className: "glosa-agent-provider", textContent: identity.provider }),
       ...(identity.claimed
         ? [
-            el("span", { className: "glosa-agent-claimed", textContent: identity.claimed, title: "Name this session gave itself" }),
+            el("span", {
+              className: "glosa-agent-claimed",
+              textContent: identity.claimed,
+              title: "Name this session gave itself",
+            }),
           ]
         : []),
     ]);
@@ -1787,7 +1985,9 @@ export function createArtifactPane(host, deps) {
         input.addEventListener("change", () => {
           draft.chose = option;
         });
-        list.append(el("label", { className: "glosa-agent-option", htmlFor: id }, [input, el("span", { textContent: option })]));
+        list.append(
+          el("label", { className: "glosa-agent-option", htmlFor: id }, [input, el("span", { textContent: option })]),
+        );
       }
       group.append(list);
     }
@@ -2275,6 +2475,11 @@ export function createArtifactPane(host, deps) {
           paneWidth = width;
           layoutMargin();
           paintAnnotationMarks();
+          // A narrower pane re-wraps the source face, which moves every heading in it, and it
+          // moves the text block the panel sizes itself against in every face.
+          outlineSourceKey = "";
+          refreshOutline();
+          layoutOutline();
         });
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
@@ -2382,6 +2587,7 @@ export function createArtifactPane(host, deps) {
     }
     layoutMargin(); // anchors may have moved with the new content
     paintAnnotationMarks();
+    refreshOutline(); // a session's edit can add or remove a section
   }
 
   /** The artifact this pane holds was deleted while the tab was open (§11). The tab dims and the
@@ -2433,6 +2639,9 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
+    /** ⌘J, and the pane menu's Outline row. Toggles, so the same key puts it away. */
+    toggleOutline: () => outline.toggle(),
+    hasOutline: () => outline.hasEntries(),
     isDirty,
     annotationCount: () => annotations.length,
     isMissing: () => paneEl.hasAttribute("data-missing"),
@@ -2468,6 +2677,9 @@ export function createArtifactPane(host, deps) {
       paneWidth = paneEl.clientWidth;
       layoutMargin();
       renderMarkers();
+      outlineSourceKey = "";
+      refreshOutline();
+      layoutOutline();
     },
     async confirmClose() {
       if (!isDirty()) return true;
@@ -2486,6 +2698,11 @@ export function createArtifactPane(host, deps) {
       destroyed = true;
       if (modeState.mode === "review") releaseWidth();
       document.removeEventListener("click", onDocumentClick);
+      paneEl.removeEventListener("scroll", onPaneScroll, { capture: true });
+      editArea.removeEventListener("input", onSourceInputForOutline);
+      if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
+      if (outlineFrame) cancelAnimationFrame(outlineFrame);
+      outline.destroy();
       observer?.disconnect();
       teardownRichFace();
       stopClassFViewer?.();

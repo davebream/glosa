@@ -2294,6 +2294,270 @@ input,
   }
 }
 
+/* ---------- 7b. The fore-edge index: this artifact's outline, in space it already leaves ---------- */
+
+/* A thick manuscript is navigated from its edge. This draws that edge: one hairline per heading,
+   placed where its section actually falls in the document and cut to a length that states its
+   depth. At rest it is graphite you read position and shape from without reading a word; hover it
+   or reach it with the keyboard and it becomes the labelled outline.
+
+   PAINTED, NEVER RESERVED. Everything here is `position: absolute` inside the pane, at every width
+   and in every mode. No gutter is ever subtracted from the measure, so a pane narrow enough that
+   the artifact fills it keeps the whole artifact — the rail simply moves into the 2rem padding
+   `.glosa-content` and `.glosa-edit-wrap` already carry, where it cannot touch a glyph. This is
+   the promise §7 of the 2026-09-04 brief makes about the annotation rail, held at the other edge.
+
+   PANE FURNITURE, NOT A MARK ON THE TEXT. It pins to the pane and does not scroll with the
+   content. The immediate gutter is already spent on two vocabularies — a reviewer's annotation ON
+   the words, a session's sideline BESIDE them — and a third hairline idiom 14px from the text
+   would be illegible against them. Distance and stillness are what keep this a fourth thing.
+
+   Keep in step with outline.js's RULE_WIDTHS. */
+/* The instrument occupies the whole gutter beside the text — the rail lives at its right edge and
+   the panel opens across it — but it is not itself a hit target, so the pointer only meets the
+   24px rail and, once open, the panel. Without that, crossing the whitespace on the way to the
+   text would open an outline nobody asked for.
+
+   `--outline-space` is the measured left offset of this pane's text block, published by
+   artifact-pane.js's layoutOutline. The gutter therefore stops 44px short of the block: near
+   enough that the rail belongs to this document, far enough that its hairlines never read against
+   the session sidelines 14px from the words.
+
+   `max(24px, …)` is what makes the promise hold on a narrow pane. Once the artifact fills its
+   pane there is no whitespace left, the gutter collapses to the rail's own width, and the rail
+   folds back into the 2rem padding `.glosa-content` and `.glosa-edit-wrap` already carry — 4px
+   in, ending 4px short of the first glyph. The measure is never touched at any width, because
+   none of this is in flow. */
+.glosa-foreedge {
+  position: absolute;
+  left: var(--space-1);
+  width: max(24px, calc(var(--outline-space, 0px) - 44px - var(--space-1)));
+  top: calc(var(--artifact-bar-height) + var(--space-2));
+  bottom: var(--space-4);
+  z-index: var(--z-sticky);
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.glosa-foreedge-rail {
+  flex: none;
+  width: 24px; /* WCAG 2.2 minimum target; the rules inside are 14px and flush right */
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--radius-tool);
+  cursor: default;
+  pointer-events: auto;
+}
+
+/* A 24px control 800px tall. An outline round it draws an empty olive capsule the height of the
+   page, which reads as a rendering fault rather than as focus — so the column lights up instead of
+   being framed: a sunken bed, an olive edge on the side facing the text, and every mark on it
+   going olive at once. Three channels, none of them a box. */
+.glosa-foreedge-rail:focus-visible {
+  outline: none;
+  background: var(--surface-sunken);
+  box-shadow: inset -2px 0 0 var(--focus);
+}
+
+/* Open, the panel is standing over the rail and is itself the answer to "where am I" — lighting
+   the column underneath it would only show at the edges. */
+.glosa-foreedge[data-open="true"] .glosa-foreedge-rail:focus-visible {
+  background: none;
+  box-shadow: none;
+}
+
+.glosa-foreedge-rules {
+  position: relative;
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+/* Right edges flush, lengths falling with depth: the labelled panel's indentation, turned on its
+   side and read a glance cheaper. Graphite at rest — present to a reader looking for it, quiet
+   enough that a reader in the prose never notices it. */
+.glosa-foreedge-rule {
+  position: absolute;
+  right: 0;
+  height: 2px;
+  border-radius: var(--radius-pill); /* a 2px rule: the pill token is what rounds both ends */
+  /* Faint, moved toward Ink until it reads — DESIGN.md's Manuscript Contrast Rule applied to a
+     mark rather than to copy. Faint alone measures 2.8:1 on paper, and a 2px hairline at that
+     weight is a smudge rather than an instrument; this lands at 4:1 in both appearances, because
+     Ink is the high-contrast end of the scale in each. */
+  background: color-mix(in oklch, var(--faint) 72%, var(--ink));
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
+}
+
+/* The section the reader is standing in. Ink and twice the weight, so it reads as position rather
+   than as a colour the rest of the rail lacks. */
+.glosa-foreedge-rule[data-current="true"] {
+  background: var(--ink);
+  height: 3px;
+}
+
+.glosa-foreedge-rail:hover .glosa-foreedge-rule,
+.glosa-foreedge-rail:focus-visible .glosa-foreedge-rule {
+  background: var(--muted);
+}
+
+.glosa-foreedge-rail:focus-visible .glosa-foreedge-rule {
+  background: var(--primary);
+}
+
+.glosa-foreedge-rail:hover .glosa-foreedge-rule[data-current="true"],
+.glosa-foreedge-rail:focus-visible .glosa-foreedge-rule[data-current="true"] {
+  background: var(--primary-hover);
+}
+
+/* Open, the rail IS the panel: the rules step aside rather than sitting under it, so the
+   instrument reads as one object expanding instead of two stacked. */
+.glosa-foreedge[data-open="true"] .glosa-foreedge-rules {
+  opacity: 0;
+}
+
+/* The panel fills the gutter the instrument already owns, capped at 288px and floored at 200px.
+   On a wide pane it therefore lands entirely BESIDE the manuscript and covers nothing. On a pane
+   whose gutter is narrower than the floor it overlays, the way every other transient popover in
+   the workbench does — a popover covering the page for a moment is not the same promise as a
+   column taking a slice of it forever, and below that floor hover-to-open stands down anyway
+   (`data-compact`, from OUTLINE_PANEL_FLOOR). */
+.glosa-foreedge-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max(200px, min(100%, 288px));
+  max-height: 100%;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  /* The workbench's one menu recipe, unchanged: paper on a strong hairline with the menu lift.
+     Two navigators should not have two personalities, and under low light the strong border is
+     what separates this paper from the pane's — the surfaces are deliberately close in value. */
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-menu);
+  padding: var(--space-1);
+  overflow: hidden;
+  animation: glosa-foreedge-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes glosa-foreedge-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+/* The panel's own header line rather than a field bolted above one: transparent, one hairline
+   under it, and the same 13px chrome voice as every row below. */
+.glosa-foreedge-filter {
+  flex: none;
+  height: 28px;
+  margin-bottom: var(--space-1);
+  padding: 0 var(--space-2);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.glosa-foreedge-filter::placeholder {
+  color: var(--muted);
+}
+
+.glosa-foreedge-filter:focus-visible {
+  outline: none;
+  border-bottom-color: var(--primary);
+}
+
+.glosa-foreedge-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Same 28px row, same sunken hover bed, same current-row treatment as the navigator's tree: two
+   navigators in one workbench should not have two personalities. Depth is indentation, and the
+   deeper a row sits the quieter it is — an outline read top to bottom should feel like scanning
+   sections, not like reading every line of every section. */
+.glosa-foreedge-row {
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + var(--outline-depth, 0) * 12px);
+  border: none;
+  background: none;
+  border-radius: var(--radius-tool);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 28px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-foreedge-row[data-depth="0"] {
+  font-weight: 500;
+}
+
+.glosa-foreedge-row[data-depth="2"],
+.glosa-foreedge-row[data-depth="3"],
+.glosa-foreedge-row[data-depth="4"],
+.glosa-foreedge-row[data-depth="5"] {
+  color: var(--muted);
+}
+
+.glosa-foreedge-row:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-foreedge-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.glosa-foreedge-row[aria-current="location"] {
+  background: var(--surface-sunken);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.glosa-foreedge-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* A pane that is not the one ⌘J addresses keeps its rail — the position it reports is still true
+   — but stands its rail down to the faintest step, so one workbench never shows two instruments
+   competing for the same glance. */
+.glosa-pane[data-active="false"] .glosa-foreedge-rule {
+  background: color-mix(in oklch, var(--faint) 35%, transparent);
+}
+
+.glosa-pane[data-active="false"] .glosa-foreedge-rule[data-current="true"] {
+  background: var(--muted);
+}
+
 /* ---------- 8. Editor ---------- */
 
 /* §8: Edit is the SAME PAGE with a caret in it, not a different component.
@@ -4567,6 +4831,7 @@ input,
   .glosa-sidebar,
   .glosa-banner,
   .glosa-artifact-bar,
+  .glosa-foreedge,
   .dv-tabs-and-actions-container,
   .glosa-watermark,
   .glosa-approval-strip,
@@ -4654,6 +4919,17 @@ input,
 
   .glosa-composer {
     animation: none;
+  }
+
+  /* The fore-edge's one authored moment is the panel arriving from under the rail. Removed here,
+     it simply is where it was going to be; the rules stop easing between states too. */
+  .glosa-foreedge-panel {
+    animation: none;
+  }
+
+  .glosa-foreedge-rule,
+  .glosa-foreedge-row {
+    transition: none;
   }
 
   .glosa-margin-side .glosa-annotation,

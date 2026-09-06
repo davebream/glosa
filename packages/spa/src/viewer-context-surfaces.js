@@ -14,6 +14,7 @@ export const SHORTCUTS = [
   ["\u2318 / Ctrl + 1", "Preview"],
   ["\u2318 / Ctrl + 2", "Annotate"],
   ["\u2318 / Ctrl + 3", "Edit"],
+  ["\u2318 / Ctrl + J", "Outline of this artifact"],
   ["Ctrl + Tab", "Next tab in this pane"],
   ["Ctrl + Shift + Tab", "Previous tab in this pane"],
   ["\u2318 / Ctrl + \u2325 + \u2192", "Focus the pane to the right"],
