@@ -6,8 +6,10 @@
 // Codex genuinely doesn't have. The real `glosa hook codex stop`/MCP wiring is a later T-task; this
 // only proves the LADDER LOGIC with capabilities injected/narrowed, same as the Claude suite.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { CodexProvider, type SessionLivenessSource } from "../src/provider.ts";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { discoverCodexMcpSession, CodexProvider, type SessionLivenessSource } from "../src/provider.ts";
 import type { DeliverableEntry, SessionBinding } from "@glosa/daemon";
 
 const SESSION: SessionBinding = { session_id: "sess-1", workspace: "/repo", source: "startup" };
@@ -170,5 +172,47 @@ describe("CodexProvider.deliver — the R4 ladder minus channels", () => {
     const provider = new SpuriousPushProvider({ liveness: liveness() });
     const result = await provider.deliver(SESSION, ENTRY);
     expect(result).toEqual({ via: "gate", outcome: "attempted" });
+  });
+});
+
+describe("provider-owned recovery discovery", () => {
+  test("MCP identity comes only from the provider environment", () => {
+    expect(discoverCodexMcpSession({ CODEX_THREAD_ID: "exact-id" }, "/agent")).toEqual({
+      session_id: "exact-id",
+      provider: "codex",
+      cwd: "/agent",
+    });
+    expect(discoverCodexMcpSession({}, "/agent")).toBeNull();
+  });
+  test("exact transcript discovery retries missing files and rejects ambiguity and symlink escape", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "glosa-provider-discovery-")));
+    const first = join(root, "first");
+    const second = join(root, "second");
+    mkdirSync(first);
+    mkdirSync(second);
+    const provider = new CodexProvider({ liveness: liveness(), transcriptRoots: () => [first, second] });
+    const session = { session_id: "exact-id", workspace: "/agent/path", source: "mcp" };
+    const relative = join("sessions", "2026", "09", "06", "rollout-2026-09-06T12-00-00-exact-id.jsonl");
+    try {
+      expect(provider.transcriptPath(session)).toBeNull();
+      for (const base of [first, second]) mkdirSync(dirname(join(base, relative)), { recursive: true });
+      const suffixCollision = join(dirname(join(first, relative)), "rollout-other-exact-id.jsonl");
+      writeFileSync(suffixCollision, "{}\n");
+      expect(provider.transcriptPath(session)).toBeNull();
+      rmSync(suffixCollision);
+      writeFileSync(join(first, relative), "{}\n");
+      expect(provider.transcriptPath(session)).toBe(join(first, relative));
+      writeFileSync(join(second, relative), "{}\n");
+      expect(provider.transcriptPath(session)).toBeNull();
+      rmSync(join(second, relative));
+      rmSync(join(first, relative));
+      const outside = join(root, "outside.jsonl");
+      writeFileSync(outside, "{}\n");
+      symlinkSync(outside, join(first, relative));
+      expect(provider.transcriptPath(session)).toBeNull();
+      expect(provider.transcriptPath({ ...session, session_id: "../escape" })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

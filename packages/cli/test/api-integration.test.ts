@@ -18,6 +18,29 @@ import { ensureToken, lockPath, readLock } from "@glosa/daemon";
 import { randomPort, stopDetachedDaemon, superviseDaemonHome, trackDetachedDaemon } from "../../daemon/test/helpers.ts";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
+
+test("session HTTP errors remain distinct from unreachable daemon failures (#141)", async () => {
+  const hook = await createHttpDaemonClient();
+  for (const request of [
+    () => hook.heartbeat("unknown-recovery-fixture"),
+    () => hook.drain("unknown-recovery-fixture"),
+  ]) {
+    await expect(request()).rejects.toMatchObject({
+      code: "API_ERROR",
+      status: 404,
+      message: "session not registered — re-register by calling any glosa tool",
+    });
+  }
+  const offline = await createHttpDaemonClient({
+    fetch: (async () => {
+      throw new Error("fixture connection refused");
+    }) as unknown as typeof fetch,
+  });
+  await expect(offline.heartbeat("unknown-recovery-fixture")).rejects.toMatchObject({
+    code: "DAEMON_UNREACHABLE",
+    message: "glosa daemon unreachable: fixture connection refused",
+  });
+});
 import { type OpenDeps, runOpen } from "../src/open.ts";
 import { runRequestReview } from "../src/request-review.ts";
 
@@ -102,7 +125,7 @@ afterAll(async () => {
 });
 
 describe("GlosaApiClient — real daemon end-to-end", () => {
-  test("open --bind registers the workspace and binds a live session in one HTTP-backed operation; unknown sessions stay nonfatal", async () => {
+  test("open --bind registers the workspace and binds a live session in one HTTP-backed operation; unknown sessions register and bind", async () => {
     const workspaceDir = freshWorkspaceDir();
     const sessionId = "live-open-bind-session";
     const hookClient = await createHttpDaemonClient();
@@ -138,8 +161,8 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     const unknown = await runOpen(unknownWorkspace, deps, { bindSessionId: "not-registered", launchBrowser: false });
     expect(unknown).toMatchObject({ ok: true, exitCode: 0 });
     expect(unknown.data.url).toBeTruthy();
-    expect(unknown.data.bound_session).toBeUndefined();
-    expect(unknown.warnings.some((warning) => warning.code === "bind-failed")).toBe(true);
+    expect(unknown.data.bound_session).toBe("not-registered");
+    expect(unknown.warnings.some((warning) => warning.code === "bind-failed")).toBe(false);
   }, 20000);
 
   test("open -> apply-begin -> 2nd apply-begin conflicts (409) -> resolve(applied) proves a real pre..post diff -> status reflects it", async () => {
