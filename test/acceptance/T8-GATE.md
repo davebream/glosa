@@ -23,9 +23,8 @@ dependence and state leakage that a subset run cannot see.
 
 ### 1.1 The named suites
 
-`docs/requirements.md` §5 names seven mandatory deterministic suites. `AGENTS.md` summarizes the
-same gate but lists six, omitting `delivery`; where the two disagree, `requirements.md` governs,
-so `delivery` is in the gate.
+`docs/requirements.md` §5 names eight mandatory deterministic suites, and `AGENTS.md` summarizes
+the same eight. `requirements.md` governs where any summary of it disagrees.
 
 | Suite | Requirement clause (`docs/requirements.md` §5) |
 |---|---|
@@ -36,6 +35,7 @@ so `delivery` is in the gate.
 | `anchor` | anchor corpus (Polish combining chars, md markup, duplicate quotes, stale hashes, transformed HTML) |
 | `transcript` | transcript suite |
 | `explicit-binding-topology` | explicit-binding topology (agent cwd differs from the artifact workspace and routing still succeeds) |
+| `editor-roundtrip` | editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical) |
 
 ### 1.2 Suite membership
 
@@ -97,6 +97,8 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/sessions-routes.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `editor-roundtrip` | `packages/spa/test/rich-editor.test.ts` |
+| `editor-roundtrip` | `packages/spa/test/edit-save-guard.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
 

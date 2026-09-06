@@ -51,6 +51,7 @@ describe("T8 acceptance gate membership", () => {
       "anchor",
       "transcript",
       "explicit-binding-topology",
+      "editor-roundtrip",
     ]);
     for (const suite of REQUIRED_SUITES) {
       expect(ACCEPTANCE_SUITES[suite].length, suite).toBeGreaterThan(0);
