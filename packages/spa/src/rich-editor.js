@@ -51,6 +51,29 @@ const mdSerializer = new MarkdownSerializer(
   defaultMarkdownSerializer.marks,
 );
 
+/**
+ * A single newline inside a paragraph stays a newline.
+ *
+ * prosemirror-markdown's stock handler turns markdown-it's `softbreak` into a space, which is the
+ * one loss in this file that no round trip undoes: once the save has written the joined line, the
+ * break the writer typed is gone from disk and nothing can put it back. It is also by far the most
+ * common one — a hand-wrapped paragraph or list item is most of the prose in this repo, so before
+ * this the collateral dialog fired on roughly two saves in five, and a dialog that noisy gets
+ * dismissed unread on the save where it is reporting an edit the serializer really did invent.
+ *
+ * A newline in a text node is enough; no new node or mark. `MarkdownSerializerState.text()` splits
+ * on `\n` and writes each line through the current block delimiter, so a break inside a blockquote
+ * or a list item comes back correctly prefixed. Leaving the schema alone is what keeps `Node.eq`
+ * block pairing and the reparse net below meaning exactly what they meant before.
+ *
+ * Patched onto the shared parser rather than passed in its token spec: that spec takes only
+ * `{block}`/`{node}`/`{mark}`/`{ignore}` descriptors and rejects a plain function. `tokenHandlers`
+ * is the object prosemirror-markdown derives from it, and it seeds this key with
+ * `handlers.softbreak ||= …`, so assigning here is the supported way past the default. Same shape
+ * as the daemon configuring its one renderer at module load (daemon/src/artifact-render.ts).
+ */
+defaultMarkdownParser.tokenHandlers.softbreak = (state) => state.addText("\n");
+
 /** DOM-free halves of the editor, exported for tests: what the rich face parses and persists. */
 export function parseMarkdown(markdown) {
   return defaultMarkdownParser.parse(markdown ?? "");
