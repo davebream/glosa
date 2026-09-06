@@ -275,9 +275,7 @@ export function mountApp(
         panes.get(path)?.revealRequest?.(request.id);
         // Said out loud, because the view moved on its own. Screen readers get it from the live
         // region; everyone else gets the mode control and the sideline they are now looking at.
-        announce(
-          `A session is asking about ${path.split("/").pop()}. Switched to Review; your unsaved work is kept.`,
-        );
+        announce(`A session is asking about ${path.split("/").pop()}. Switched to Review; your unsaved work is kept.`);
       });
     };
     attempt();
@@ -547,6 +545,15 @@ export function mountApp(
       // Moves rather than copies: splitting must never produce the same file twice (§5).
       e.preventDefault();
       dock?.moveActivePanel("new");
+      return;
+    }
+    if (!e.altKey && (e.key === "j" || e.key === "J")) {
+      // The outline of the artifact in the ACTIVE pane. Scoped to one pane on purpose: with two
+      // documents open, a workspace-wide jump list would have to guess which one you meant.
+      const pane = activePane();
+      if (!pane?.hasOutline?.()) return;
+      e.preventDefault();
+      pane.toggleOutline();
       return;
     }
     if (!e.altKey && (e.key === "w" || e.key === "W")) {

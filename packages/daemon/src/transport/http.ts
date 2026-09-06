@@ -117,6 +117,9 @@ const SPA_ASSETS: Record<string, string> = {
   // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
   "dock.js": "text/javascript; charset=utf-8",
   "artifact-pane.js": "text/javascript; charset=utf-8",
+  // The fore-edge index: one pane's document outline, drawn in the whitespace the manuscript
+  // already leaves. Pure DOM over entries the pane hands it — no transport of its own.
+  "outline.js": "text/javascript; charset=utf-8",
   "diff-pane.js": "text/javascript; charset=utf-8",
   "vendor/dockview.js": "text/javascript; charset=utf-8",
   // Served as a real stylesheet rather than injected inline, so it lands under `style-src 'self'`.
