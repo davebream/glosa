@@ -15,10 +15,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   formatting annoyance: every rewritten region reached the agent as your own edit, so a session
   could not tell what you had changed from what the editor had invented, and each further save
   fabricated a fresh diff on top.
+- A line break inside a paragraph now survives being edited, rather than being folded into a space.
+  Editing a hand-wrapped paragraph or list item was the most common way to trip the save dialog, and
+  the only kind of damage that could not be undone afterwards: once the joined line was on disk,
+  nothing could tell where the break had been. Editing a `%% ... %%` comment or the second line of a
+  callout no longer disturbs them either, since that damage was collapsed line breaks as well. On
+  this repo's own documents the dialog now comes up on about one edited block in ten, down from
+  four.
 - Where writing an edited block back would still change markup you did not touch — glosa's markdown
-  editor has no notion of a callout marker or a soft line break yet — the save now shows you those
-  exact bytes and asks, offering to save anyway or to hand your edit to the source face so you can
-  fix it by hand. Nothing is written until you choose.
+  editor has no notion of a callout marker or YAML front matter yet, and it escapes square brackets
+  in ordinary prose — the save shows you those exact bytes and asks, offering to save anyway or to
+  hand your edit to the source face so you can fix it by hand. Nothing is written until you choose.
 - A final approval that saves your pending edits first no longer records the approval when that save
   did not happen. Declining the save leaves the request open and says so.
 - Running Claude and Codex sessions recover registration on their next MCP tool call after a daemon

@@ -75,10 +75,28 @@ describe("prosemirror-markdown round-trip (what the serializer alone can carry)"
     // Pinned deliberately: this is the defect (#143) stated as a test. The splice is what stands
     // between this output and the file on disk, and Phase 1 (#164) is what removes it entirely.
     const mangled = roundtrip(FIXTURE);
-    expect(mangled).toContain("## title: Test status: draft"); // frontmatter → a setext heading
+    expect(mangled).toContain("## title: Test\nstatus: draft"); // frontmatter → a setext heading
     expect(mangled).toContain("\\[!info\\]"); // the callout marker escaped
-    expect(mangled).toContain("%% A comment block."); // the `%%` fence reflowed into its content
-    expect(mangled).toContain("deliberate single newline in the middle"); // soft break collapsed
+    expect(mangled).toContain("*\\[bracketed emphasis\\]*"); // brackets escaped in ordinary prose
+  });
+
+  test("a soft line break survives the serializer", () => {
+    // The one loss in #143 that no round trip undoes: a joined line cannot be split again from the
+    // file afterwards. So it has to survive the serializer, not merely be reported by the guard.
+    expect(roundtrip("one line\ntwo line")).toBe("one line\ntwo line");
+    expect(roundtrip("> one\n> two")).toBe("> one\n> two"); // re-prefixed inside a blockquote
+    expect(roundtrip("- one\n  two")).toBe("- one\n  two"); // re-indented inside a list item
+    // A setext heading spanning lines is where a soft break would be lost if this were carried by
+    // a new inline node: `heading` admits `(text | image)*` only, so the node would not build and
+    // the block would vanish, taking the whole file down the whole-document rewrite path.
+    expect(roundtrip("one\ntwo\n===")).toBe("# one\ntwo");
+  });
+
+  test("the `%%` block and the callout's second line now survive on their own", () => {
+    // Both were listed in the report as structural damage; both turn out to have been nothing but
+    // collapsed soft breaks. What is left in each is the bracket escaping, which is a separate fix.
+    expect(roundtrip(FIXTURE)).toContain("%%\nA comment block.\nSecond line of the comment.\n%%");
+    expect(roundtrip(FIXTURE)).toContain("A callout\n> with a second line.");
   });
 
   test("EditorState builds from a parsed markdown doc (DOM-free)", () => {

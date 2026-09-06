@@ -249,9 +249,11 @@ the entry survives.
   pointers about a passage, answered where the words are), **Edit** (modify source,
   save → re-render). Edit has two faces: a rich editor is the default and the byte-exact source
   textarea stays one toggle away. Saves are **source-preserving** — only the blocks the writer
-  edited are re-serialized and everything else is byte-identical; where re-serializing an edited
-  block would still change bytes the writer did not touch, glosa shows that collateral and asks
-  before writing, never silently. Human edits in glosa → attributed `human` by construction.
+  edited are re-serialized and everything else is byte-identical; a single newline inside a
+  paragraph is a line break the writer typed and is kept as one, since a joined line cannot be
+  split again from the file afterwards. Where re-serializing an edited block would still change
+  bytes the writer did not touch, glosa shows that collateral and asks before writing, never
+  silently. Human edits in glosa → attributed `human` by construction.
 - **Class R viewer (markdown)**: markdown-it + `data-line` stamping; SSE-driven updates morphed via
   idiomorph (scroll/selection preserved); annotation → W3C record → POST.
 - **Class F viewer (foreign HTML)**: **source-preserving (bridge-augmented)** — served from the
