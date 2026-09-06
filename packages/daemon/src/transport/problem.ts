@@ -3,6 +3,8 @@
 // route returns the same {type,title,status,detail?,instance?} shape with the right content
 // type, instead of each handler hand-rolling its own error body.
 export type ProblemSlug =
+  | "session-provider-conflict"
+  | "session-not-registered"
   | "invalid-origin"
   | "unauthorized"
   | "contract-mismatch"

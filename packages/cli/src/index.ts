@@ -775,6 +775,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         ...GLOBAL_ARGS,
         action: { type: "positional", required: true, description: "Session action (bind)" },
         id: { type: "positional", required: true, description: "Live session ID" },
+        provider: { type: "string", description: "Session provider when not available from the environment" },
         workspace: { type: "string", description: "Workspace directory" },
       },
     },
@@ -791,10 +792,18 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("./api-client.ts"),
         import("./session.ts"),
       ]);
+      const { discoverClaudeMcpSession } = await import("../../providers/claude-code/src/provider.ts");
+      const { discoverCodexMcpSession } = await import("../../providers/codex/src/provider.ts");
+      const identity = sessionModule.discoverMcpIdentity(
+        [discoverClaudeMcpSession(process.env, process.cwd()), discoverCodexMcpSession(process.env, process.cwd())],
+        values.provider as string | undefined,
+      );
+      if (identity && identity.session_id !== values.id) throw new Error("session_id does not match the host session");
       const result = await sessionModule.runSessionBind(
         (values.workspace as string | undefined) ?? process.cwd(),
         values.id as string,
         createHttpGlosaClient,
+        { provider: (values.provider as string | undefined) ?? identity?.provider, cwd: process.cwd() },
       );
       sessionModule.printSessionBindResult(result, Boolean(values.json));
       setExitCode(result.exitCode);
@@ -949,10 +958,17 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       import("./api-client.ts"),
       import("./mcp.ts"),
     ]);
+    const { discoverClaudeMcpSession } = await import("../../providers/claude-code/src/provider.ts");
+    const { discoverCodexMcpSession } = await import("../../providers/codex/src/provider.ts");
+    const { discoverMcpIdentity } = await import("./session.ts");
     await runMcpServer({
       createHookClient: createHttpDaemonClient,
       createApiClient: createHttpGlosaClient,
-      sessionId: () => process.env.CLAUDE_CODE_SESSION_ID,
+      session: (provider) =>
+        discoverMcpIdentity(
+          [discoverClaudeMcpSession(process.env, process.cwd()), discoverCodexMcpSession(process.env, process.cwd())],
+          provider,
+        ),
     });
   });
 
