@@ -2398,10 +2398,6 @@ export function createArtifactPane(host, deps) {
     return report && (report.collateral.length || report.degraded) ? { text, report } : null;
   }
 
-  function currentEditorContent() {
-    return pendingSave().content;
-  }
-
   /** The lines a re-serialization would change that the writer did not, shown verbatim so they can
    * judge for themselves rather than take our word for it. */
   function collateralDetail(report) {
