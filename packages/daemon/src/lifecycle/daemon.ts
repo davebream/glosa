@@ -255,6 +255,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       }
     }
   };
+  let markStartupReady!: () => void;
+  const startupReady = new Promise<void>((resolve) => {
+    markStartupReady = resolve;
+  });
 
   const apiFetch = createApiFetch({
     port,
@@ -281,7 +285,14 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
     runWorkspaceInit: createInitRunner({ home, port }),
   });
-  const server = await bindMainOrExit(home, port, apiFetch, spaCspHeaders(classFPort));
+  // Bun.serve starts accepting as soon as it returns, but a successful handshake is the public
+  // readiness proof. Hold only that route until lock ownership, both listeners, and shutdown are
+  // fully wired so clients never observe a new process beside the previous process's stale lock.
+  const readyApiFetch = async (request: Request): Promise<Response> => {
+    if (new URL(request.url).pathname === "/api/handshake") await startupReady;
+    return apiFetch(request);
+  };
+  const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
   // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-
@@ -392,9 +403,12 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   process.on("SIGHUP", () => {});
   process.on("SIGINT", () => {});
 
-  if (shutdownRequested) void shutdown();
-
-  log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+  if (shutdownRequested) {
+    void shutdown();
+  } else {
+    markStartupReady();
+    log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+  }
   return new Promise<never>(() => {
     // bootDaemon never resolves on the happy path; the process lives until a signal handler
     // (or one of the exit-code branches above) calls process.exit().
