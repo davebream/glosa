@@ -101,8 +101,14 @@ connection handle is also the contract for future monitor (#151) and Codex subsc
 transports; those transports are not introduced here. Registration sources include `mcp`, `monitor`,
 and `codex-app-server`; existing hook sources remain accepted.
 
-The MCP shim discovers provider identity through provider-owned environment readers
-(`CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`), registers on first tool use, and heartbeats thereafter.
+The MCP shim discovers provider identity through provider-owned environment readers, registers on
+first tool use, and heartbeats thereafter. Only Claude Code supplies one: a shim started by Claude
+Code — from a project `.mcp.json` or a plugin's own `.mcp.json` — reads `CLAUDE_CODE_SESSION_ID`.
+**Codex supplies nothing.** A server spawned from `[mcp_servers.*]` receives eight fixed environment
+variables and no Codex identity under any configuration, so a Codex shim has no host identity of its
+own and takes the thread id from an explicit bind carrying `CODEX_THREAD_ID`, which the agent reads
+from its own shell environment (`connectPrompt`). Measurements in
+`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`.
 An unknown-session heartbeat is a typed 404 and triggers re-registration. No host identity means one
 stable generic `mcp` identity per shim. A generic inbox pull retains its explicit `workspace`
 routing scope; identified host sessions always retain their actual process cwd. Explicit requested

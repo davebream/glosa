@@ -14,6 +14,12 @@ two sources agreed, that's marked **CONFIRMED**; where only inferred from source
 explicit docs statement, marked **INFERRED (source-grounded)**; where neither source answered the
 question, marked **UNCONFIRMED**.
 
+**Amended 2026-09-06.** Sections 6 and 7 carry corrections from the session-identity spike
+(`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`, Codex CLI 0.153.4): the
+`[mcp_servers.*]` environment carries no Codex identity, `codex mcp-server` now exists, and the
+app-server control socket is a real push path. Everything else below is the 2026-07-21 pass and was
+not re-verified.
+
 The headline finding: Codex CLI's hook system (as of mid-2026) is no longer the old single
 `notify`-on-turn-complete callback the Plannotator-era note assumed. It has grown into a
 multi-event hook framework (`hooks.json` / `config.toml [hooks]`) whose event names, JSON field
@@ -144,23 +150,37 @@ itself. The **JSONL line format itself** (per-event schema for the conversation-
 separate, later task (the conversation mirror's Codex event mapper), not required for the
 `AgentProvider` interface this task implements, and is flagged here rather than guessed.
 
-## 6. MCP — Codex as a client only **CONFIRMED (docs)**
+## 6. MCP — glosa is the server, Codex the client **CONFIRMED (docs + 2026-09-06 run)**
 
 Codex CLI's documented MCP support (`developers.openai.com/codex/mcp`, `codex mcp add/list/login`,
 config at `~/.codex/config.toml` `[mcp_servers.<name>]` or project-scoped `.codex/config.toml` for
-trusted projects) is **client-only** — Codex connects out to MCP servers; there is no documented
-`codex mcp-server`/equivalent making Codex itself callable as a server. This is exactly the shape
-`mcpPull` needs: glosa runs its own MCP server (the existing `glosa mcp` tool, same one the Claude
-provider's rung 4 targets), and a Codex session has `glosa` registered as one of its `mcp_servers` —
-the pull direction is "Codex calls glosa's tool," never "glosa calls into Codex." No Codex-side
-capability gap here; the mechanism is identical in shape to Claude's mcpPull, just configured via
-`config.toml` instead of `.mcp.json`.
+trusted projects) is what `mcpPull` needs: glosa runs its own MCP server (the existing `glosa mcp`
+tool, same one the Claude provider's rung 4 targets), and a Codex session has `glosa` registered as
+one of its `mcp_servers` — the pull direction is "Codex calls glosa's tool," never "glosa calls into
+Codex." The mechanism is identical in shape to Claude's mcpPull, just configured via `config.toml`
+instead of `.mcp.json`.
+
+**Amended 2026-09-06** (`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`,
+Codex CLI 0.153.4). Two statements in the 2026-07-21 pass no longer hold:
+
+- The claim that Codex is **client-only** and has "no documented `codex mcp-server`/equivalent" is
+  stale. `codex mcp-server` exists in the current CLI ("Start Codex as an MCP server (stdio)"), as
+  does `codex app-server`. Nothing in glosa depends on this either way; it is corrected so the doc is
+  not cited for it.
+- A server spawned from `[mcp_servers.<name>]` receives a **fixed eight-variable environment**
+  (`HOME LANG LOGNAME PATH SHELL TMPDIR USER __CF_USER_TEXT_ENCODING`) plus whatever the server's own
+  `env` table declares. It gets no `CODEX_THREAD_ID`, `CODEX_SESSION_ID` or `CODEX_HOME`, and
+  `shell_environment_policy.inherit = "all"` does not widen it. A glosa MCP server started by Codex
+  therefore cannot identify its own thread. The thread id reaches glosa through an explicit bind: the
+  agent's **shell tool** does see `CODEX_THREAD_ID` (verified equal to the session id Codex printed),
+  which is what `connectPrompt` in `packages/providers/codex/src/provider.ts` already asks it to
+  read.
 
 ## 7. The concrete provider contract this pins
 
 | R4 rung | Claude Code | Codex | Codex mechanism |
 |---|---|---|---|
-| push (async, idle) | channels | **none** | no equivalent exists (confirmed absent, not just unconfirmed) |
+| push (async, idle) | channels | **app-server socket** | `thread/resume` + `turn/start`/`turn/steer` over `$CODEX_HOME/app-server-control/app-server-control.sock`, verified 2026-09-06 (#161). Not present on a default install — see the spike note. The 2026-07-21 "no equivalent exists" finding was true of hooks and `notify`, and wrong about the app-server. |
 | gate (blocking) | Stop/UserPromptSubmit hook `decision:block` | Stop hook `decision:block` + non-empty `reason` | §2 above |
 | boundaryDrain (async) | Stop/UserPromptSubmit hook, non-blocking | Stop/UserPromptSubmit hook, non-blocking (plain stdout / `additionalContext`) | §3 above |
 | mcpPull | `glosa mcp` tool via `.mcp.json` | `glosa mcp` tool via `config.toml [mcp_servers.glosa]` | §6 above |
