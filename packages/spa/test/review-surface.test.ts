@@ -44,8 +44,7 @@ describe("Review mode — the agent's half of the margin", () => {
   const qa = (root: any, selector: string): any[] => [...root.querySelectorAll(selector)];
 
   const SOURCE = "# Konspekt\n\nThe argument rests on the premise that readers accept the frame.\n";
-  const RENDERED =
-    "<h1>Konspekt</h1><p id=\"para\">The argument rests on the premise that readers accept the frame.</p>";
+  const RENDERED = '<h1>Konspekt</h1><p id="para">The argument rests on the premise that readers accept the frame.</p>';
 
   function fakeDataAccess(entries: Array<Record<string, unknown>>, overrides: Record<string, unknown> = {}) {
     return {
