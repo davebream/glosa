@@ -91,9 +91,14 @@ generic.**
   and lock and handshake identity/PID/instance must agree before any signal is sent. Client-side
   discovery has one caller-supplied wall-clock budget (three seconds for hooks, twelve seconds for
   explicit CLI/MCP calls), permits at most one detached spawn, and requires three consecutive
-  `ECONNREFUSED` probes 100 ms apart before treating a port as free. Ownership changes or an
+  `ECONNREFUSED` probes 100 ms apart **and a successful bind of the port** before treating it as
+  free — a refused connection is not evidence a port is free, because a daemon that has stopped
+  accepting still holds its listening socket. Ownership changes or an
   exhausted budget fail closed without unlinking or spawning; hook discovery failure exits quietly
-  so another durable delivery rung can retry later.
+  so another durable delivery rung can retry later. A daemon that stops running its event loop
+  releases its own ownership record and ends its process rather than holding the port
+  indefinitely, and every client message about an unresponsive owner names the recovery a user can
+  actually perform on one.
   Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
   `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
 - **Workspace registration** separates an immutable registration ID, kind (`directory` or

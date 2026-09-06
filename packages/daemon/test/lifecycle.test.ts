@@ -360,6 +360,9 @@ describe("stable free-port confirmation", () => {
       deadline: performance.now() + 1000,
       ownershipUnchanged: () => true,
       probe: async () => observations[calls++] as boolean,
+      bindable: async () => {
+        throw new Error("a bound port must never reach the bind proof");
+      },
       sleep: async (ms) => {
         delays.push(ms);
       },
@@ -370,8 +373,9 @@ describe("stable free-port confirmation", () => {
     expect(delays).toEqual([100, 100]);
   });
 
-  test("reports free only after three consecutive refused connections", async () => {
+  test("reports free only after three consecutive refused connections AND a successful bind", async () => {
     let calls = 0;
+    let binds = 0;
     const result = await confirmPortFree(4646, {
       deadline: performance.now() + 1000,
       ownershipUnchanged: () => true,
@@ -379,11 +383,82 @@ describe("stable free-port confirmation", () => {
         calls += 1;
         return false;
       },
+      bindable: async () => {
+        binds += 1;
+        return true;
+      },
       sleep: async () => {},
     });
 
     expect(result).toBe("free");
     expect(calls).toBe(3);
+    expect(binds).toBe(1);
+  });
+
+  // Issue #139: the state that cost a user every glosa client on the machine. A daemon whose
+  // event loop has stopped keeps its listening socket but stops accepting; once the accept queue
+  // fills, macOS refuses further connects, so the refused sequence below is exactly what a client
+  // observed against a live, LISTENing daemon. Acting on it deleted that daemon's ownership record
+  // and left the port unreachable AND unbindable. Only the bind can tell these apart.
+  test("a refused sequence from a port that cannot be bound is bound, not free", async () => {
+    let binds = 0;
+    const result = await confirmPortFree(4646, {
+      deadline: performance.now() + 1000,
+      ownershipUnchanged: () => true,
+      probe: async () => false,
+      bindable: async () => {
+        binds += 1;
+        return false;
+      },
+      sleep: async () => {},
+    });
+
+    expect(result).toBe("bound");
+    expect(binds).toBe(1);
+  });
+
+  test("ownership changing during the bind proof yields ownership-changed, never free", async () => {
+    let owned = true;
+    const result = await confirmPortFree(4646, {
+      deadline: performance.now() + 1000,
+      ownershipUnchanged: () => owned,
+      probe: async () => false,
+      bindable: async () => {
+        owned = false;
+        return true;
+      },
+      sleep: async () => {},
+    });
+
+    expect(result).toBe("ownership-changed");
+  });
+
+  test("an exhausted deadline never reaches the bind proof", async () => {
+    let binds = 0;
+    let probes = 0;
+    let expired = false;
+    const start = performance.now();
+    const result = await confirmPortFree(4646, {
+      deadline: start + 1000,
+      ownershipUnchanged: () => true,
+      // The budget runs out on the last refused probe, so the sequence completes and the bind is
+      // exactly the step the deadline cuts off.
+      probe: async () => {
+        probes += 1;
+        if (probes === 3) expired = true;
+        return false;
+      },
+      bindable: async () => {
+        binds += 1;
+        return true;
+      },
+      sleep: async () => {},
+      now: () => (expired ? start + 5000 : start),
+    });
+
+    expect(result).toBe("deadline");
+    expect(probes).toBe(3);
+    expect(binds).toBe(0);
   });
 
   test("stops before another probe when ownership changes or the deadline expires", async () => {
@@ -399,6 +474,9 @@ describe("stable free-port confirmation", () => {
         probes += 1;
         return false;
       },
+      bindable: async () => {
+        throw new Error("a changed ownership record must never reach the bind proof");
+      },
       sleep: async () => {},
     });
     const expired = await confirmPortFree(4646, {
@@ -406,6 +484,9 @@ describe("stable free-port confirmation", () => {
       ownershipUnchanged: () => true,
       probe: async () => {
         throw new Error("deadline should prevent probing");
+      },
+      bindable: async () => {
+        throw new Error("deadline should prevent the bind proof");
       },
       now: () => 1,
     });
