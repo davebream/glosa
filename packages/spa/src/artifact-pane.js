@@ -279,14 +279,18 @@ export function createArtifactPane(host, deps) {
   /** Unsaved source, kept across mode switches. `{path, text}` — see `parkDrafts`. */
   let parkedSource = null;
   /**
-   * The splice report for text the rich face handed to the source textarea, `{text, report}`.
+   * A splice report that outlived the editor that produced it, `{text, report}`.
    *
-   * Without this the guard has a hole: switching Rich → Source and saving from there never calls
-   * `getSave()`, so a re-serialization the writer never agreed to would reach disk with no dialog.
-   * It only applies while the textarea still holds exactly the handed-over text — once the writer
-   * types, the bytes are theirs and nothing needs consenting to.
+   * The save gate would otherwise have two holes, both of which end with unconsented bytes on disk
+   * and no dialog. Switching Rich → Source and saving from there takes the source face's branch,
+   * which never calls `getSave()`. And parking a draft across a mode switch re-mounts the rich
+   * face over the SPLICED text, making it the new baseline — after which the editor is clean and
+   * has nothing to report, even though nobody ever agreed to it.
+   *
+   * So the report travels with the text, and applies for exactly as long as the text is still
+   * unchanged. Once the writer types, the bytes are theirs and nothing needs consenting to.
    */
-  let carriedReport = null;
+  let pendingReport = null;
   /** A half-written margin note, kept the same way. `{path, state}`. */
   let parkedComposer = null;
   /** The session request the reader is currently on, if any — drives the active sideline. */
@@ -1103,8 +1107,14 @@ export function createArtifactPane(host, deps) {
    */
   function parkDrafts() {
     if (currentArtifact && (modeState.dirty || richEditor?.isDirty())) {
-      const text = !sourceFace && richEditor ? richEditor.getMarkdown() : editArea.value;
-      if (typeof text === "string") parkedSource = { path: currentArtifact.source_path, text };
+      const save = !sourceFace && richEditor ? richEditor.getSave() : null;
+      const text = save ? save.markdown : editArea.value;
+      if (typeof text === "string") {
+        parkedSource = { path: currentArtifact.source_path, text };
+        // Re-mounting the rich face over this text makes it the baseline, so anything still
+        // needing the writer's say-so has to survive the round trip rather than being parked away.
+        pendingReport = reportToCarry(save, text) ?? (pendingReport?.text === text ? pendingReport : null);
+      }
     }
     if (composer) {
       const input = marginEl.querySelector(".glosa-composer-input");
@@ -2324,7 +2334,7 @@ export function createArtifactPane(host, deps) {
   }
 
   editArea.addEventListener("input", () => {
-    if (carriedReport && editArea.value !== carriedReport.text) carriedReport = null;
+    if (pendingReport && editArea.value !== pendingReport.text) pendingReport = null;
     modeState = modeReducer(modeState, { type: "edited" });
     editStatus.textContent = "";
     editStatus.removeAttribute("data-error");
@@ -2347,7 +2357,7 @@ export function createArtifactPane(host, deps) {
     renderContent();
     editArea.value = carried; // after renderContent, so the artifact snapshot doesn't clobber it
     // The report rides along: this text is still the rich face's splice until the writer edits it.
-    carriedReport = save && (save.collateral.length || save.degraded) ? { text: carried, report: save } : null;
+    pendingReport = reportToCarry(save, carried);
   });
 
   faceRichBtn.addEventListener("click", () => {
@@ -2357,7 +2367,9 @@ export function createArtifactPane(host, deps) {
       return;
     }
     const carried = editArea.value;
-    carriedReport = null; // the rich face re-splices from this text; the old report is spent
+    // The rich face re-splices from this text, so it becomes the new baseline — which is exactly
+    // when a report has to outlive its editor rather than being dropped.
+    if (pendingReport?.text !== carried) pendingReport = null;
     sourceFace = false;
     teardownRichFace();
     renderFaceToggle();
@@ -2370,16 +2382,20 @@ export function createArtifactPane(host, deps) {
    * The rich face answers both at once — its splice re-serializes only the blocks whose tree
    * changed, so a clean editor returns the artifact's own bytes by construction rather than by a
    * caller remembering to check `isDirty()` first. The source face is byte-exact and answers only
-   * with its text, except while it is still holding a splice the rich face handed it.
+   * with its text. Either way, a report that outlived its editor still applies while the text it
+   * was made for is untouched (see `pendingReport`).
    */
   function pendingSave() {
     if (!currentArtifact) return { content: "", report: null };
-    if (!sourceFace && richEditor) {
-      const report = richEditor.getSave();
-      return { content: report.markdown, report };
-    }
-    const content = editArea.value;
-    return { content, report: carriedReport?.text === content ? carriedReport.report : null };
+    const live = !sourceFace && richEditor ? richEditor.getSave() : null;
+    const content = live ? live.markdown : editArea.value;
+    if (live && (live.collateral.length || live.degraded)) return { content, report: live };
+    return { content, report: pendingReport?.text === content ? pendingReport.report : null };
+  }
+
+  /** A report worth carrying is one with something to consent to; anything else is just noise. */
+  function reportToCarry(report, text) {
+    return report && (report.collateral.length || report.degraded) ? { text, report } : null;
   }
 
   function currentEditorContent() {
@@ -2446,7 +2462,7 @@ export function createArtifactPane(host, deps) {
         sourceFace = true;
         renderContent();
         editArea.value = content;
-        carriedReport = null; // they were shown the cost and chose to own these bytes
+        pendingReport = null; // they were shown the cost and chose to own these bytes
         modeState = modeReducer(modeState, { type: "edited" });
         editArea.focus();
         onStateChange();
@@ -2464,7 +2480,7 @@ export function createArtifactPane(host, deps) {
       currentArtifact = { ...artifact, content, ...saved };
       modeState = modeReducer(modeState, { type: "saved" });
       clearParkedSource(); // the parked copy is now behind the file it was parked against
-      carriedReport = null;
+      pendingReport = null;
       // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
       const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
       currentArtifact = fresh;

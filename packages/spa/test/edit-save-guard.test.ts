@@ -47,19 +47,30 @@ describe("Edit mode — a save never invents an edit", () => {
 
   const SOURCE = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
 
-  /** What the real rich editor would return for `markdown`, without needing a ProseMirror view. */
+  /**
+   * What the real rich editor would return, without needing a ProseMirror view.
+   *
+   * The mount argument matters: the real splice is relative to whatever string the editor was
+   * opened over, so an editor re-mounted over ALREADY-spliced text is clean and has nothing to
+   * report. A stub that reported collateral no matter what it was mounted over would make the
+   * park-and-return test pass without testing anything.
+   */
   function stubRichEditor(save: { markdown: string; collateral?: unknown[]; degraded?: string | false }) {
-    const report = { collateral: [], degraded: false as string | false, ...save };
+    const dirty = { collateral: [] as unknown[], degraded: false as string | false, ...save };
     const calls = { destroyed: 0 };
-    const mount = () => ({
-      getSave: () => report,
-      getMarkdown: () => report.markdown,
-      isDirty: () => true,
-      focus: () => {},
-      destroy: () => {
-        calls.destroyed += 1;
-      },
-    });
+    const mount = (_container: unknown, { markdown }: { markdown: string }) => {
+      const report =
+        markdown === dirty.markdown ? { markdown, collateral: [], degraded: false as string | false } : dirty;
+      return {
+        getSave: () => report,
+        getMarkdown: () => report.markdown,
+        isDirty: () => true,
+        focus: () => {},
+        destroy: () => {
+          calls.destroyed += 1;
+        },
+      };
+    };
     return { loadRichEditor: async () => mount, calls };
   }
 
@@ -249,6 +260,24 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put).toEqual([]);
     expect(answered).toEqual([]);
     expect(host.querySelector(".glosa-approval-status")?.textContent).toContain("Nothing was approved");
+  });
+
+  test("parking a draft across a mode switch does not launder the collateral away", async () => {
+    // Leaving Edit parks the spliced text, and coming back re-mounts the rich face OVER it — so
+    // that text becomes the baseline and the editor is clean with nothing to report. Without the
+    // report surviving the round trip, the bytes nobody agreed to would save silently.
+    const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+    pane.setMode("read");
+    await paint();
+    pane.setMode("edit");
+    await paint();
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+    modalButton("Cancel").click();
+    await paint();
+    expect(da.put).toEqual([]);
   });
 
   test("once the writer edits the carried text the bytes are theirs and nothing is asked", async () => {
