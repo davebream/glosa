@@ -54,6 +54,7 @@ dropping out of it.
 | `fault` | `packages/daemon/test/bus/reconcile-fault.test.ts` |
 | `fault` | `packages/daemon/test/bus/reconcile-fault-lease.test.ts` |
 | `fault` | `packages/daemon/test/bus/real-daemon-fault.test.ts` |
+| `fault` | `packages/daemon/test/wedged-daemon.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/concurrency.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/mutex.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/approval-uniqueness.test.ts` |

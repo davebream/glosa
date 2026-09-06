@@ -27,7 +27,13 @@ import { internalErrorResponse } from "../transport/problem.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
-import { fetchHandshake, type HandshakeResponse, pollHandshake, probePortBound } from "./handshake.ts";
+import {
+  fetchHandshake,
+  type HandshakeResponse,
+  pollHandshake,
+  probePortBindable,
+  probePortBound,
+} from "./handshake.ts";
 import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
 import { INSTALL_ID } from "./install.ts";
 import { glosaClassFPort, glosaPort } from "./port.ts";
@@ -40,6 +46,7 @@ import {
   writeLockExclusive,
 } from "./lock.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "./protocol.ts";
+import { startStallWatchdog } from "./stall-watchdog.ts";
 
 const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
@@ -50,6 +57,11 @@ const LOCK_REPAIR_INTERVAL_MS = 250;
 const PORT_FREE_CONFIRMATIONS = 3;
 const PORT_FREE_CONFIRMATION_INTERVAL_MS = 100;
 export const SHUTDOWN_DRAIN_MS = 3000;
+/** Hard ceiling on a shutdown that has already begun. The drain itself is bounded, but the
+ * force-close that follows it is a runtime call this process does not control, and a shutdown that
+ * never finishes is indistinguishable from the ignored-SIGTERM the user reported: `shuttingDown`
+ * is already set, so no later signal starts a second attempt. Past this, exit anyway. */
+export const SHUTDOWN_HARD_EXIT_MS = 8000;
 
 interface DrainableServer {
   stop(closeActiveConnections?: boolean): Promise<void>;
@@ -271,6 +283,14 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // lock a live `git` owns. `lockFile` is captured with the id so the proof is always read back
   // from the home this process actually locked.
   claimDaemonIdentity({ instanceId, lockFile });
+  // Armed only now, for the same reason: the watchdog releases the ownership lock before it kills,
+  // and only a process that has won the CAS has an ownership record it is entitled to release.
+  const stallWatchdog = startStallWatchdog({
+    home,
+    lockFile,
+    instanceId,
+    log: (line) => log(home, line),
+  });
 
   try {
     await resumePendingAdoptions(
@@ -307,6 +327,18 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     shuttingDown = true;
     mayRepairLock = false;
     clearInterval(lockRepairTimer);
+    // A shutdown that hangs past this point still ends, and still ends with its lock released.
+    // Deliberately NOT unref'd: closing the listeners removes the last thing keeping this loop
+    // alive, so an unref'd timer would let the process fall out from under a stalled drain and
+    // leave its ownership record behind — the state a client then has to fail closed against. This
+    // costs nothing on the ordinary path, which reaches `process.exit(0)` long before it fires.
+    const hardExit = setTimeout(() => {
+      log(home, `${instanceId} shutdown exceeded ${SHUTDOWN_HARD_EXIT_MS}ms; exiting without a clean drain`);
+      removeLockIfOwned(lockFile, instanceId);
+      releaseDaemonIdentity();
+      process.exit(0);
+    }, SHUTDOWN_HARD_EXIT_MS);
+    stallWatchdog?.stop();
     // Calling stop(false) synchronously closes the listeners to new work while allowing active
     // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
     // long-lived responses from holding the drain open forever.
@@ -321,6 +353,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     if (!drained) {
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
     }
+    clearTimeout(hardExit);
     removeLockIfOwned(lockFile, instanceId);
     // Dropped AFTER the lock file is gone, so the two can never disagree in the direction that
     // matters: an identity outliving its lock only makes `reclaimIndexLock` fail closed, whereas
@@ -478,6 +511,7 @@ interface PortFreeConfirmationOptions {
   deadline: number;
   ownershipUnchanged: () => boolean;
   probe?: typeof probePortBound;
+  bindable?: typeof probePortBindable;
   sleep?: (ms: number) => Promise<unknown>;
   now?: () => number;
 }
@@ -507,12 +541,23 @@ function sameLockInstance(current: DaemonLock | null, expected: DaemonLock): boo
  * A single refused TCP connect is only a momentary observation. Require a short stable sequence
  * before a client is allowed to remove an ownership record or spawn a contender. Any ambiguity is
  * fail-closed, and ownership is re-read around every asynchronous step.
+ *
+ * The refused sequence is necessary but NOT sufficient, which is what issue #139 cost a user: a
+ * daemon whose event loop has stopped keeps its listening socket but stops accepting, its accept
+ * queue fills with the connections glosa's own discovery keeps opening, and macOS then answers
+ * further connects with a clean `ECONNREFUSED`. Three of those 100 ms apart is a routine
+ * observation under that load, so connect-evidence alone let a client delete a live daemon's
+ * ownership record — after which the wedged daemon could neither be reached nor replaced.
+ *
+ * So freedom is proven by BINDING the port, never by failing to connect to it. The refused
+ * sequence stays as the cheap fast path that decides whether the bind is worth attempting.
  */
 export async function confirmPortFree(
   port: number,
   options: PortFreeConfirmationOptions,
 ): Promise<PortFreeConfirmation> {
   const probe = options.probe ?? probePortBound;
+  const bindable = options.bindable ?? probePortBindable;
   const sleep = options.sleep ?? Bun.sleep;
   const now = options.now ?? (() => performance.now());
 
@@ -530,6 +575,11 @@ export async function confirmPortFree(
     }
   }
 
+  if (remainingMs(options.deadline, now) <= 0) return "deadline";
+  // The one observation that cannot be faked by a saturated accept queue. A port this process
+  // could not take is held by someone, so it reports `bound` exactly as a successful connect does.
+  if (!(await bindable(port))) return "bound";
+  if (!options.ownershipUnchanged()) return "ownership-changed";
   return remainingMs(options.deadline, now) > 0 ? "free" : "deadline";
 }
 
@@ -651,11 +701,25 @@ function decideForPeer(hs: HandshakeResponse): DaemonBuildDecision {
   });
 }
 
-/** How a human stops a daemon this process refuses to stop for them. */
+/** How a human stops a daemon this process refuses to stop for them. For a daemon that is still
+ * answering — a foreign install, an incompatible build — SIGTERM is the whole recovery. */
 function manualStopHint(port: number, pid: number): string {
   return (
     `verify PID ${pid} with \`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, ` +
     `stop it with \`kill -TERM ${pid}\`, then retry`
+  );
+}
+
+/** The same hint for a process that holds the port but answers nothing. SIGTERM is named first
+ * because it is the correct thing to try against a foreign squatter, and SIGKILL is named because
+ * a wedged glosa daemon cannot run its own SIGTERM handler: the signal is delivered to a process
+ * whose event loop has stopped, is queued, and is never dispatched (issue #139). Leaving SIGKILL
+ * out is what left a user with no documented way back other than guessing. */
+function unresponsiveStopHint(port: number, pid: number): string {
+  return (
+    `verify PID ${pid} with \`lsof -nP -iTCP:${port} -sTCP:LISTEN\`, then \`kill -TERM ${pid}\`; ` +
+    `a wedged daemon cannot run its own shutdown, so if the PID survives, \`kill -9 ${pid}\` ends it ` +
+    `and the next glosa command starts a replacement`
   );
 }
 
@@ -767,7 +831,11 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           if (!failure) continue;
           return failure;
         }
-        if (remainingMs(deadline) <= 0) return deadlineFailure(home, timeoutMs);
+        // Deliberately NOT gated on the remaining budget. This is a PROVEN diagnosis — the port
+        // is held and nothing there speaks glosa — and it names the recovery. Returning the
+        // generic "discovery exceeded its budget" instead, just because polling for a handshake
+        // consumed the deadline, is how issue #139 reached a user as a timeout with nothing to act
+        // on. A deadline is what we ran out of, never the most specific thing we learned.
         return spawnFailed(
           home,
           `a process is bound to port ${preferredPort} but is not answering the glosa handshake; ` +
@@ -857,8 +925,8 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           ok: false,
           reason:
             `a process is bound to port ${lock.port} but is not answering the glosa handshake; ` +
-            "the daemon may be hung or the port is taken by another process — not spawning a " +
-            `duplicate. To clear it: ${manualStopHint(lock.port, lock.pid)}`,
+            "the daemon may be wedged or the port is taken by another process — not spawning a " +
+            `duplicate. To clear it: ${unresponsiveStopHint(lock.port, lock.pid)}`,
           logPath: logPath(home),
         };
       }

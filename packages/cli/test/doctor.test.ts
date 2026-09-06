@@ -57,6 +57,12 @@ function makeDeps(overrides: Partial<DoctorDeps> = {}): { deps: DoctorDeps; clie
     // A machine with no account switcher: the active root is the only root. Tests that care about
     // several roots override this — nothing here may read the developer's real `~/.ccs`.
     claudeConfigRoots: () => [],
+    // Never probes a real port from the unit suite; tests that care about the diagnosis override it.
+    diagnoseDaemon: async () => ({
+      kind: "no-daemon" as const,
+      port: 4646,
+      detail: "no glosa daemon is running and 127.0.0.1:4646 is free",
+    }),
     ...overrides,
   };
   return { deps, client, home };
@@ -290,6 +296,45 @@ describe("glosa doctor", () => {
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "daemon+proto")?.status).toBe("fail");
     expect(result.exitCode).toBe(9);
+  });
+
+  // Issue #139: "daemon unreachable" was every command's answer while a live daemon sat on the
+  // port ignoring SIGTERM, and nothing in the CLI could tell that apart from "no daemon running".
+  test("daemon+proto: a wedged daemon is named, with the recovery that works", async () => {
+    const { deps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+      diagnoseDaemon: async () => ({
+        kind: "wedged" as const,
+        port: 4646,
+        pid: 4242,
+        detail:
+          "the glosa daemon (PID 4242) still holds 127.0.0.1:4646 but answers nothing — it is " +
+          "wedged, and `kill -9 4242` releases the port",
+      }),
+    });
+    const dir = freshDir();
+    const result = await runDoctor(dir, deps);
+    const detail = findCheck(result.data.checks, "daemon+proto")?.detail ?? "";
+    expect(findCheck(result.data.checks, "daemon+proto")?.status).toBe("fail");
+    expect(detail).toContain("wedged");
+    expect(detail).toContain("kill -9 4242");
+  });
+
+  test("daemon+proto: a failing diagnosis still leaves the underlying failure reported", async () => {
+    const { deps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+      diagnoseDaemon: async () => {
+        throw new Error("probe blew up");
+      },
+    });
+    const dir = freshDir();
+    const result = await runDoctor(dir, deps);
+    expect(findCheck(result.data.checks, "daemon+proto")?.status).toBe("fail");
+    expect(findCheck(result.data.checks, "daemon+proto")?.detail).toContain("daemon unreachable");
   });
 
   test("--json envelope has exactly the documented top-level keys", async () => {

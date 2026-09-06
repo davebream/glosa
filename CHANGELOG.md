@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A daemon that stops running takes the port with it instead of taking the machine down. When a
+  daemon's event loop stalls it keeps its listening socket, answers no handshake, cannot repair its
+  ownership record, and cannot honour SIGTERM — and once the connections glosa's own discovery keeps
+  opening fill the kernel's accept queue, that live daemon starts refusing connections. A client
+  read those refusals as "the port is free", deleted the ownership record of a daemon that was very
+  much alive, and then could neither reach it nor replace it, with `kill -9` as the only way out.
+  Clients now prove a port is free by binding it rather than by failing to connect to it, so a live
+  owner is never mistaken for an absent one.
+- A daemon in that state now ends itself. A watchdog on its own thread notices the main loop has
+  stopped, releases the ownership lock, and stops the process, so the next glosa command starts a
+  replacement instead of a person hunting for a PID. `GLOSA_STALL_WATCHDOG_MS` sets the threshold
+  (default 30 s) or disables it with `0`. A shutdown that has already begun is bounded too: past
+  8 seconds the daemon releases its lock and exits rather than hanging with every later signal
+  suppressed.
+- The error a user actually meets says what happened. A held port with nothing answering on it is
+  reported as exactly that, with the PID and the way out, instead of being replaced by "daemon
+  discovery exceeded its budget" whenever waiting for the handshake used up the time. Recovery text
+  for an unresponsive daemon names SIGKILL, because a wedged daemon cannot run its own SIGTERM
+  handler. `glosa doctor` names the state too, distinguishing a wedged daemon from a stale lock,
+  an occupied port, and no daemon at all.
+
 ## [0.1.0-alpha.17] - 2026-09-05
 
 The release gives an agent a way to ask the person reading its work a question about a

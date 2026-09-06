@@ -54,6 +54,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/bus/reconcile-fault.test.ts",
     "packages/daemon/test/bus/reconcile-fault-lease.test.ts",
     "packages/daemon/test/bus/real-daemon-fault.test.ts",
+    "packages/daemon/test/wedged-daemon.test.ts",
   ],
   concurrency: [
     "packages/daemon/test/bus/concurrency.test.ts",
