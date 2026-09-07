@@ -2477,7 +2477,11 @@ export function createArtifactPane(host, deps) {
     const artifact = currentArtifact;
     const { content, report } = pendingSave();
     const consent = await consentToCollateral(report);
-    if (artifact !== currentArtifact) return SAVE_DECLINED;
+    // Path, not identity: refreshArtifact assigns a NEW object for the SAME path on every frame,
+    // so identity would decline a save whenever the file merely refreshed under an open modal —
+    // exactly the moment the write is optimistic against `baselineSha` and can safely proceed into
+    // the 409 check instead. The optional chain keeps a markMissing-nulled currentArtifact declining.
+    if (artifact.source_path !== currentArtifact?.source_path) return SAVE_DECLINED;
     if (consent !== "save") {
       // "Edit as source" keeps the edit and hands it to the byte-exact face, where the writer can
       // fix the collateral by hand; nothing reaches disk either way.

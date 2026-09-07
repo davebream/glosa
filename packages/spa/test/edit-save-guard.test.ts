@@ -413,6 +413,49 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put).toEqual([{ path: "notes.md", content: myEdit, ifMatch: "sha-1" }]);
   });
 
+  test("AC-18: a same-path refresh under an open modal no longer declines the save; a swapped-path one still does", async () => {
+    // Same-path direction: refreshArtifact assigns a brand NEW object for the same file while the
+    // collateral modal is up. Object identity would decline this save; the file at this path
+    // didn't actually change out from under it.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+      saveButton(host).click();
+      await paint();
+      expect(modal()).toBeTruthy();
+
+      await pane.refreshArtifact(); // a same-path SSE frame while the writer is still deciding
+
+      modalButton("Save anyway").click();
+      await paint();
+
+      expect(da.put).toHaveLength(1); // proceeds — nothing about THIS path actually changed
+    }
+
+    // Swapped-path direction: the pane's artifact is swapped to a DIFFERENT file while the modal
+    // is up (an agent-driven reveal). The save must still decline — writing here would land on
+    // the wrong file.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+      saveButton(host).click();
+      await paint();
+      expect(modal()).toBeTruthy();
+
+      da.getArtifact = async () => ({
+        source_path: "other.md",
+        content: "Somewhere else entirely.\n",
+        rendered_html: "<p>Somewhere else entirely.</p>",
+        source_sha256: "sha-other",
+        class: "R",
+      });
+      await pane.refreshArtifact();
+
+      modalButton("Save anyway").click();
+      await paint();
+
+      expect(da.put).toEqual([]); // declined — this would write to the wrong artifact
+    }
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
