@@ -69,11 +69,12 @@ describe("Edit mode — a save never invents an edit", () => {
     { dirty = true }: { dirty?: boolean } = {},
   ) {
     const target = { collateral: [] as unknown[], degraded: false as string | false, ...save };
-    const calls = { destroyed: 0 };
+    const calls = { destroyed: 0, mountedWith: [] as string[] };
     const rebase: { report: { markdown: string; collateral: unknown[]; degraded: string | false } | null } = {
       report: null,
     };
     const mount = (_container: unknown, { markdown }: { markdown: string }) => {
+      calls.mountedWith.push(markdown); // what text this face was actually filled from
       const report =
         markdown === target.markdown ? { markdown, collateral: [], degraded: false as string | false } : target;
       return {
@@ -454,6 +455,34 @@ describe("Edit mode — a save never invents an edit", () => {
 
       expect(da.put).toEqual([]); // declined — this would write to the wrong artifact
     }
+  });
+
+  test("writeAndSettle clears the parked draft — the remount after a successful save uses the fresh bytes, not the stale park", async () => {
+    // Plan Task 4's own positive control names a test that clicks Cancel and so never reaches
+    // writeAndSettle at all — deleting clearParkedSource() from writeAndSettle left the whole
+    // suite green. This is the control the plan intended: it actually drives a save through a
+    // parked draft and inspects what the rich face remounts over afterward.
+    const parkedEdit = "> [!info] A callout\n> with a second line.\n\nParked, then saved.\n";
+    const stub = stubRichEditor({ markdown: parkedEdit });
+    const { host, pane, da } = await mountEditPane(stub);
+
+    // Park the dirty draft by leaving Edit and returning — the rich face remounts OVER the
+    // parked text, which becomes what the save below writes.
+    pane.setMode("read");
+    await paint();
+    pane.setMode("edit");
+    await paint();
+
+    stub.calls.mountedWith.length = 0; // isolate what the SAVE's own remount receives below
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull(); // plain text, nothing to consent to
+    expect(da.put).toEqual([{ path: "notes.md", content: parkedEdit, ifMatch: "sha-1" }]);
+    // writeAndSettle tears down and remounts the rich face after a successful save (:2491-2492
+    // area). If clearParkedSource() were skipped, parkedSourceFor would still match this path and
+    // the remount would carry the STALE parked text forward instead of the freshly re-read bytes.
+    expect(stub.calls.mountedWith.at(-1)).toBe(SOURCE);
   });
 
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {

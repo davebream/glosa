@@ -2463,6 +2463,51 @@ export function createArtifactPane(host, deps) {
   }
 
   /**
+   * The only place a save writes to disk and settles the pane afterward — a retry from the
+   * stale-save dialog (Keep mine) goes through here too, so none of these transitions can be
+   * skipped by a path that isn't the ordinary Save button.
+   *
+   * NOTE (T4 Task 4, deviation from the plan): the plan's Step 1 also calls `clearDiskChange()`
+   * here. That function doesn't exist yet — it and the `diskChange` state it clears are added in
+   * Phase 3 Task 6 (the disk-change banner), which hasn't landed. Omitted for now; Task 6 adds the
+   * call when it introduces the function, per the maintainer's instruction.
+   */
+  async function writeAndSettle(artifact, content, ifMatch) {
+    saveButton.disabled = true;
+    editStatus.removeAttribute("data-error");
+    editStatus.textContent = "Saving…";
+    try {
+      const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
+      currentArtifact = { ...artifact, content, ...saved };
+      modeState = modeReducer(modeState, { type: "saved" });
+      clearParkedSource(); // the parked copy is now behind the file it was parked against
+      pendingReport = null;
+      // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
+      const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
+      currentArtifact = fresh;
+      baselineSha = fresh.source_sha256; // the post-save re-read fills the face anew
+      endEditSession();
+      contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
+      teardownRichFace(); // remount the rich face from the freshly saved content
+      editStatus.textContent = "Saved.";
+      renderModeBar();
+      renderContent();
+      onStateChange();
+      void refreshHistory?.();
+      return currentArtifact;
+    } catch (error) {
+      editStatus.setAttribute("data-error", "true");
+      editStatus.textContent =
+        error instanceof Error
+          ? `Couldn't save this artifact: ${error.message}`
+          : "Couldn't save this artifact. Try again.";
+      throw error;
+    } finally {
+      saveButton.disabled = false;
+    }
+  }
+
+  /**
    * Writes the artifact. Returns the saved artifact, or `SAVE_DECLINED` when the writer was asked
    * about collateral and said no — callers that act on a save (the approval flow) must check,
    * because "nothing was written" is not the same as "nothing needed writing".
@@ -2498,38 +2543,7 @@ export function createArtifactPane(host, deps) {
       return SAVE_DECLINED;
     }
 
-    saveButton.disabled = true;
-    editStatus.removeAttribute("data-error");
-    editStatus.textContent = "Saving…";
-    try {
-      const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, {
-        ifMatch: baselineSha ?? artifact.source_sha256,
-      });
-      currentArtifact = { ...artifact, content, ...saved };
-      modeState = modeReducer(modeState, { type: "saved" });
-      clearParkedSource(); // the parked copy is now behind the file it was parked against
-      pendingReport = null;
-      // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
-      const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
-      currentArtifact = fresh;
-      contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
-      teardownRichFace(); // remount the rich face from the freshly saved content
-      editStatus.textContent = "Saved.";
-      renderModeBar();
-      renderContent();
-      onStateChange();
-      void refreshHistory?.();
-      return currentArtifact;
-    } catch (error) {
-      editStatus.setAttribute("data-error", "true");
-      editStatus.textContent =
-        error instanceof Error
-          ? `Couldn't save this artifact: ${error.message}`
-          : "Couldn't save this artifact. Try again.";
-      throw error;
-    } finally {
-      saveButton.disabled = false;
-    }
+    return await writeAndSettle(artifact, content, baselineSha ?? artifact.source_sha256);
   }
 
   saveButton.addEventListener("click", async () => {
