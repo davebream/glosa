@@ -5,6 +5,7 @@
 import type {
   ApplyBeginResult,
   AttentionRequestResult,
+  DismissResult,
   EntryStatus,
   GlosaApiClient,
   InboxListResult,
@@ -25,6 +26,7 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     | ((path: string, entry: string, outcome: ResolveOutcome, session: string, note?: string) => Promise<ResolveResult>)
     | null = null;
   applyBeginImpl: ((path: string, entry: string, session: string) => Promise<ApplyBeginResult>) | null = null;
+  dismissEntryImpl: ((path: string, entry: string, note?: string) => Promise<DismissResult>) | null = null;
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
   inboxListResult: InboxListResult = { entries: [] };
@@ -70,6 +72,12 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     this.calls.push({ method: "applyBegin", args: [path, entry, session] });
     if (this.applyBeginImpl) return this.applyBeginImpl(path, entry, session);
     return { entry, lease_id: "lease-1", pre_sha: "abc123" };
+  }
+
+  async dismissEntry(path: string, entry: string, note?: string): Promise<DismissResult> {
+    this.calls.push({ method: "dismissEntry", args: [path, entry, note] });
+    if (this.dismissEntryImpl) return this.dismissEntryImpl(path, entry, note);
+    return { entry, status: "dismissed", to: "dismissed" };
   }
 
   async createAttentionRequest(

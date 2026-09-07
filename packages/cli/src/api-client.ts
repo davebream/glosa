@@ -125,6 +125,14 @@ export interface ResolveResult {
   post_sha?: string;
 }
 
+/** `glosa inbox dismiss <id>`'s daemon-side result (issue #142) — always `to: "dismissed"`, no
+ * lease fields, since `dismissEntry` opens and closes none. */
+export interface DismissResult {
+  entry: string;
+  status: string;
+  to: string;
+}
+
 export interface ApplyBeginResult {
   entry: string;
   lease_id: string;
@@ -194,6 +202,9 @@ export interface GlosaApiClient {
     session: string,
     note?: string,
   ): Promise<ResolveResult>;
+  /** `glosa inbox dismiss <id>`'s daemon-side call (issue #142) — a human terminal transition with
+   * no session and no lease. See `resolveEntry`'s path-addressed POST shape, which this mirrors. */
+  dismissEntry(path: string, entry: string, note?: string): Promise<DismissResult>;
   applyBegin(path: string, entry: string, session: string): Promise<ApplyBeginResult>;
   createAttentionRequest(
     path: string,
@@ -292,6 +303,15 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
           entry,
           outcome,
           session,
+          ...(note !== undefined ? { note } : {}),
+        })
+      ).json();
+    },
+    async dismissEntry(path, entry, note) {
+      return (
+        await call("POST", "/api/workspaces/inbox/dismiss", {
+          path,
+          entry,
           ...(note !== undefined ? { note } : {}),
         })
       ).json();

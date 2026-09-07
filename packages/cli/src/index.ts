@@ -704,13 +704,14 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
   const inbox = lazyHandler(
     {
       name: "inbox",
-      description: "List inbox entries, or retrieve an actionable inbox presentation",
+      description: "List inbox entries, retrieve an actionable presentation, or dismiss one",
       args: {
         ...GLOBAL_ARGS,
-        action: { type: "positional", required: true, description: "Inbox action (list, get)" },
-        id: { type: "positional", required: false, description: "Inbox entry ID (required for get)" },
+        action: { type: "positional", required: true, description: "Inbox action (list, get, dismiss)" },
+        id: { type: "positional", required: false, description: "Inbox entry ID (required for get, dismiss)" },
         all: { type: "boolean", description: "Include terminal entries (list only)" },
         cursor: { type: "string", description: "Opaque continuation cursor" },
+        note: { type: "string", description: "Optional note recorded with the dismiss" },
         workspace: { type: "string", description: "Workspace directory" },
       },
     },
@@ -720,15 +721,22 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("./api-client.ts"),
         import("./inbox.ts"),
       ]);
+      const workspace = (values.workspace as string | undefined) ?? process.cwd();
       if (values.action === "list") {
         const result = await inboxModule.runInboxList(
-          {
-            workspace: (values.workspace as string | undefined) ?? process.cwd(),
-            all: Boolean(values.all),
-          },
+          { workspace, all: Boolean(values.all) },
           { createClient: createHttpGlosaClient },
         );
         inboxModule.printInboxListResult(result, Boolean(values.json));
+        setExitCode(result.exitCode);
+        return;
+      }
+      if (values.action === "dismiss") {
+        const result = await inboxModule.runInboxDismiss(
+          { workspace, id: values.id as string | undefined, note: values.note as string | undefined },
+          { createClient: createHttpGlosaClient },
+        );
+        inboxModule.printInboxDismissResult(result, Boolean(values.json));
         setExitCode(result.exitCode);
         return;
       }
@@ -744,7 +752,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       }
       const result = await inboxModule.runInboxGet(
         {
-          workspace: (values.workspace as string | undefined) ?? process.cwd(),
+          workspace,
           id: values.id as string,
           cursor: values.cursor as string | undefined,
         },

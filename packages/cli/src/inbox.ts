@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { GlosaApiClient, InboxListResult } from "./api-client.ts";
-import { type CommandEnvelope, daemonUnreachableEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
+import type { DismissResult, GlosaApiClient, InboxListResult } from "./api-client.ts";
+import {
+  type CommandEnvelope,
+  daemonUnreachableEnvelope,
+  EXIT_CODES,
+  printJsonEnvelope,
+  usageEnvelope,
+} from "./envelope.ts";
+import { mapEntryFailure } from "./resolve.ts";
 
 export interface InboxListOptions {
   workspace: string;
@@ -66,26 +73,103 @@ export interface InboxGetOptions {
   cursor?: string;
 }
 
-export interface InboxGetResult {
-  exitCode: number;
-  presentation: Awaited<ReturnType<GlosaApiClient["getInboxPresentation"]>>["presentation"];
+export interface InboxGetData {
+  presentation?: Awaited<ReturnType<GlosaApiClient["getInboxPresentation"]>>["presentation"];
 }
 
+/** `glosa inbox get <id> [--cursor <opaque>] [--workspace <path>]`'s CLI-side half. Brought onto
+ * the same `CommandEnvelope` path `list` and `dismiss` use (issue #142) — previously this had NO
+ * try/catch at all, so a daemon-unreachable failure escaped to `run()`'s last-resort boundary
+ * handler and exited **70** instead of the A6-mandated 3; an unknown entry likewise fell through
+ * to 70 instead of 8. Success output is unchanged: `printInboxGetResult` still emits the bare
+ * presentation object as `data`, not this envelope's own `data` field, which now wraps it under
+ * `.presentation` purely so the daemon-unreachable/entry-error paths have somewhere honest to put
+ * `{}`. */
 export async function runInboxGet(
   options: InboxGetOptions,
   deps: { createClient: () => Promise<GlosaApiClient> },
-): Promise<InboxGetResult> {
-  const client = await deps.createClient();
-  const result = await client.getInboxPresentation(options.workspace, options.id, options.cursor);
-  return { exitCode: EXIT_CODES.OK, presentation: result.presentation };
+): Promise<CommandEnvelope<InboxGetData>> {
+  let client: GlosaApiClient;
+  try {
+    client = await deps.createClient();
+  } catch (err) {
+    return { ...daemonUnreachableEnvelope("inbox get", (err as Error).message), data: {} };
+  }
+  try {
+    const result = await client.getInboxPresentation(options.workspace, options.id, options.cursor);
+    return { ok: true, command: "inbox get", exitCode: EXIT_CODES.OK, data: { presentation: result.presentation }, warnings: [] };
+  } catch (err) {
+    return { ...mapEntryFailure("inbox get", err), data: {} };
+  }
 }
 
-export function printInboxGetResult(result: InboxGetResult, json: boolean): void {
+export function printInboxGetResult(result: CommandEnvelope<InboxGetData>, json: boolean): void {
   if (json) {
+    if (!result.ok) {
+      printJsonEnvelope(result);
+      return;
+    }
+    // Byte-for-byte the same success shape this always emitted: `data` is the presentation
+    // object itself, not `{presentation: ...}` — the envelope's own nesting is a failure-path
+    // convenience only, never surfaced on success.
     process.stdout.write(
-      `${JSON.stringify({ glosa_json: 1, ok: true, command: "inbox get", exit_code: 0, data: result.presentation })}\n`,
+      `${JSON.stringify({ glosa_json: 1, ok: true, command: "inbox get", exit_code: 0, data: result.data.presentation })}\n`,
     );
     return;
   }
-  process.stdout.write(`${result.presentation.text}\n`);
+  if (!result.ok) {
+    process.stderr.write(`glosa inbox get: ${result.error?.message ?? "failed"}\n`);
+    return;
+  }
+  process.stdout.write(`${result.data.presentation?.text}\n`);
+}
+
+export interface InboxDismissOptions {
+  workspace: string;
+  id?: string;
+  note?: string;
+}
+
+export interface InboxDismissData {
+  entry?: string;
+  status?: string;
+  to?: string;
+}
+
+/** `glosa inbox dismiss <id> [--note "…"] [--workspace <path>]`'s CLI-side half (issue #142) — a
+ * human closing an entry unread, with no `--session` anywhere in its shape: `dismissEntry` opens
+ * no lease and claims no session, so there is nothing here for one to attribute. Entry failures
+ * (unknown id, already terminal) share `resolve.ts`'s `mapEntryFailure` mapping, exactly as the
+ * design calls for "one error contract for all three [entry-id] actions". */
+export async function runInboxDismiss(
+  options: InboxDismissOptions,
+  deps: { createClient: () => Promise<GlosaApiClient> },
+): Promise<CommandEnvelope<InboxDismissData>> {
+  if (!options.id) return usageEnvelope("inbox dismiss", "inbox dismiss: missing <id>");
+
+  let client: GlosaApiClient;
+  try {
+    client = await deps.createClient();
+  } catch (err) {
+    return { ...daemonUnreachableEnvelope("inbox dismiss", (err as Error).message), data: {} };
+  }
+
+  try {
+    const result: DismissResult = await client.dismissEntry(options.workspace, options.id, options.note);
+    return { ok: true, command: "inbox dismiss", exitCode: EXIT_CODES.OK, data: result, warnings: [] };
+  } catch (err) {
+    return { ...mapEntryFailure("inbox dismiss", err), data: {} };
+  }
+}
+
+export function printInboxDismissResult(result: CommandEnvelope<InboxDismissData>, json: boolean): void {
+  if (json) {
+    printJsonEnvelope(result);
+    return;
+  }
+  if (!result.ok) {
+    process.stderr.write(`glosa inbox dismiss: ${result.error?.message ?? "failed"}\n`);
+    return;
+  }
+  process.stdout.write(`glosa inbox dismiss: ${result.data.entry} -> ${result.data.to}\n`);
 }
