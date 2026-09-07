@@ -82,9 +82,12 @@ export function parseMarkdown(markdown) {
 export function serializeMarkdown(doc) {
   const raw = mdSerializer.serialize(doc);
   // The predicate here is RELATIVE — "does dropping the escapes change what the serializer's own
-  // output means?" — not absolute against `doc`. A document that reaches this path is by
-  // definition not a round-trip fixed point (that is why the whole-document write was needed at
-  // all), so an absolute check would fail for reasons that have nothing to do with escaping and
+  // output means?" — not absolute against `doc`. Reaching this path does not imply the document
+  // failed to round-trip: `wholeDocument()` also arrives here for a file refused over its lone-`\r`
+  // line endings, and the blank-source branch below calls in with nothing degraded at all. The
+  // relative predicate costs nothing on those, because for a document that IS a fixed point the two
+  // coincide exactly (`parseMarkdown(raw).eq(doc)`), and it is strictly better on the ones that are
+  // not, where an absolute check would fail for reasons that have nothing to do with escaping and
   // would refuse every relaxation on exactly the documents that need one.
   return relaxEscapes(raw, (relaxed) => parseMarkdown(relaxed).eq(parseMarkdown(raw)));
 }
@@ -96,7 +99,7 @@ function serializeNodes(nodes) {
 }
 
 /** The characters prosemirror-markdown's `esc()` escapes inside text, unconditionally: it does not
- * ask whether leaving one bare would actually mean anything. Line-start escapes (`\#`, `\-`,
+ * ask whether leaving one bare would actually mean anything. Line-start escapes (`\#`, `\-`, `\+ `,
  * `\>`, `\1.`) are a separate rule in the same function and are deliberately NOT in this set. */
 const ESCAPED_IN_TEXT = /\\([`*\\~[\]_])/g;
 

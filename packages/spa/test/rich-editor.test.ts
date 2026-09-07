@@ -321,4 +321,24 @@ describe("the serializer stops escaping what the file left bare (REQ-1, #174)", 
     expect(result.markdown).toBe("Alpha.\n\nSee [note] for details.\n");
     expect(result.degraded).toBe(false);
   });
+
+  test("SAFETY: a newly typed escaped emphasis marker stays escaped", () => {
+    // The two SAFETY tests above drive the edited-block path, which owns its source bytes: a
+    // relaxation that dropped too much there is recoverable from the spelling the file already
+    // had. A pure insertion owns none, so the relaxation's own verification is the only thing
+    // standing between an over-eager implementation and a document that means something new.
+    const result = save("Alpha.\n", "Alpha.\n\nThis is \\*not emphasis\\* here.\n");
+    expect(result.markdown).toBe("Alpha.\n\nThis is \\*not emphasis\\* here.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("editing a word leaves a `~` and a bare `*` in the same block unescaped", () => {
+    // Pins the whole character class rather than the brackets alone. `~/.claude` is a live
+    // spelling in this repo's own AGENTS.md, and a relaxation narrowed to brackets writes it back
+    // as `\~/.claude` while passing every other test in this file.
+    const source = "Paths like ~/.claude live here, and x*y too.\n";
+    const result = save(source, source.replace("live", "LIVE"));
+    expect(result.markdown).toBe("Paths like ~/.claude LIVE here, and x*y too.\n");
+    expect(result.degraded).toBe(false);
+  });
 });
