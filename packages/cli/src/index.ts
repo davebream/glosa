@@ -704,29 +704,55 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
   const inbox = lazyHandler(
     {
       name: "inbox",
-      description: "Retrieve an actionable inbox presentation",
+      description: "List inbox entries, retrieve an actionable presentation, or dismiss one",
       args: {
         ...GLOBAL_ARGS,
-        action: { type: "positional", required: true, description: "Inbox action (get)" },
-        id: { type: "positional", required: true, description: "Inbox entry ID" },
+        action: { type: "positional", required: true, description: "Inbox action (list, get, dismiss)" },
+        id: { type: "positional", required: false, description: "Inbox entry ID (required for get, dismiss)" },
+        all: { type: "boolean", description: "Include terminal entries (list only)" },
         cursor: { type: "string", description: "Opaque continuation cursor" },
+        note: { type: "string", description: "Optional note recorded with the dismiss" },
         workspace: { type: "string", description: "Workspace directory" },
       },
     },
     async (context) => {
       const values = withGlobals(context);
+      const [{ createHttpGlosaClient }, inboxModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./inbox.ts"),
+      ]);
+      const workspace = (values.workspace as string | undefined) ?? process.cwd();
+      if (values.action === "list") {
+        const result = await inboxModule.runInboxList(
+          { workspace, all: Boolean(values.all) },
+          { createClient: createHttpGlosaClient },
+        );
+        inboxModule.printInboxListResult(result, Boolean(values.json));
+        setExitCode(result.exitCode);
+        return;
+      }
+      if (values.action === "dismiss") {
+        const result = await inboxModule.runInboxDismiss(
+          { workspace, id: values.id as string | undefined, note: values.note as string | undefined },
+          { createClient: createHttpGlosaClient },
+        );
+        inboxModule.printInboxDismissResult(result, Boolean(values.json));
+        setExitCode(result.exitCode);
+        return;
+      }
       if (values.action !== "get") {
         process.stderr.write(`glosa inbox: unsupported action '${String(values.action)}'\n`);
         setExitCode(EXIT_CODES.USAGE);
         return;
       }
-      const [{ createHttpGlosaClient }, inboxModule] = await Promise.all([
-        import("./api-client.ts"),
-        import("./inbox.ts"),
-      ]);
+      if (!values.id) {
+        process.stderr.write("glosa inbox get: missing <id>\n");
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
       const result = await inboxModule.runInboxGet(
         {
-          workspace: (values.workspace as string | undefined) ?? process.cwd(),
+          workspace,
           id: values.id as string,
           cursor: values.cursor as string | undefined,
         },
