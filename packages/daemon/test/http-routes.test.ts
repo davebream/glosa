@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -25,7 +26,7 @@ import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
 import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
 import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
-import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
+import { inboxDir, inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
@@ -2426,6 +2427,133 @@ describe("A1 §5 route catalog", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ entries: [] });
       rmSync(unregistered, { recursive: true, force: true });
+    });
+  });
+
+  // --- POST /api/workspaces/inbox/dismiss — human terminal transition, no session (issue #142) ---
+  //
+  // The reproduction this closes: hand-moving an inbox `.json` file out of `.glosa/inbox/` left an
+  // entry permanently un-actionable, with no supported way to close it and no record that it was
+  // dropped rather than resolved. `dismiss` is that supported close — a human verb, attributed
+  // `by: "human"`, no lease opened or closed, no session claimed.
+
+  describe("POST /api/workspaces/inbox/dismiss", () => {
+    function countJournalLines(): number {
+      return readFileSync(journalPath(root), "utf8")
+        .split("\n")
+        .filter((line) => line.trim().length > 0).length;
+    }
+    function countInboxFiles(): number {
+      return readdirSync(inboxDir(root)).length;
+    }
+
+    test("dismisses a pending entry: exactly one journal line appended, no inbox file touched", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-1", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+
+      const linesBefore = countJournalLines();
+      const filesBefore = countInboxFiles();
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", note: "closing unread" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ entry: "entry-1", status: "dismissed", to: "dismissed" });
+
+      expect(countJournalLines() - linesBefore).toBe(1);
+      expect(countInboxFiles() - filesBefore).toBe(0);
+
+      const journal = readFileSync(journalPath(root), "utf8");
+      expect(journal).toContain(`"event":"transition_committed"`);
+      expect(journal).toContain(`"by":"human"`);
+      expect(journal).toContain(`"to":"dismissed"`);
+      expect(bus.state.entries["entry-1"]?.status).toBe("dismissed");
+    });
+
+    test("dismisses an entry whose inbox payload is already gone (the hand-move reproduction)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-1", { kind: "annotation", artifact_path: "notes.md", body: "orphaned" });
+      unlinkSync(inboxEntryPath(root, "orphan-1"));
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "orphan-1" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ entry: "orphan-1", status: "dismissed", to: "dismissed" });
+      expect(bus.state.entries["orphan-1"]?.status).toBe("dismissed");
+    });
+
+    test("unknown entry → 404", async () => {
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "does-not-exist" }),
+        }),
+      );
+      expect(res.status).toBe(404);
+    });
+
+    test("a second dismiss of the same entry → 409, and adds no journal line (the terminal guard is connected, not accidental idempotence)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-2", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+
+      const first = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-2" }),
+        }),
+      );
+      expect(first.status).toBe(200);
+
+      const linesBeforeSecond = countJournalLines();
+      const second = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-2" }),
+        }),
+      );
+      expect(second.status).toBe(409);
+      expect(second.headers.get("Content-Type")).toBe("application/problem+json");
+      expect(countJournalLines()).toBe(linesBeforeSecond);
+      expect(bus.state.entries["entry-2"]?.status).toBe("dismissed");
+    });
+
+    test("an entry already terminal via a different outcome (applied) → 409, not silently re-terminalized as dismissed", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-3", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+      await bus.commitTransition("entry-3", "applied", { by: "human" });
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-3" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect(bus.state.entries["entry-3"]?.status).toBe("applied");
+    });
+
+    test("path and entry are required", async () => {
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root }),
+        }),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

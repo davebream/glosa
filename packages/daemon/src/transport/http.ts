@@ -1288,6 +1288,46 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   }
 }
 
+/** `POST /api/workspaces/inbox/dismiss` — `glosa inbox dismiss <id>`'s daemon-side half (issue
+ * #142). Mirrors `handleWorkspaceResolve`'s `deferred` arm above exactly (404 → terminal-guard
+ * 409 → one `commitTransition` → JSON): a guarded transition that takes no lease. The difference
+ * is the attribution and the terminal it lands on — `by: "human"` (a person typed the command,
+ * never a session), `to: "dismissed"`, first-terminal-wins against `applied`/`rejected`/`stale`
+ * exactly as it does against a second dismiss. No lease is opened or closed and no inbox file is
+ * touched; this is precisely the supported, durably-recorded reconciliation the issue's hand-move
+ * workaround never left a trace of. */
+async function handleWorkspaceInboxDismiss(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const rawPath = typeof b?.path === "string" ? b.path : null;
+  const entry = typeof b?.entry === "string" ? b.entry : null;
+  const note = typeof b?.note === "string" ? b.note : undefined;
+  if (!rawPath || !entry) {
+    return problem(400, "validation-failed", "path and entry are required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
+
+  const entryState = bus.state.entries[entry];
+  if (!entryState) {
+    return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
+  }
+  const kind = entryState.kind === "attention" ? "attention" : "common";
+  if (isTerminal(kind, entryState.status)) {
+    return problem(409, "conflict", `entry is already ${entryState.status}`, undefined, url.pathname);
+  }
+  await bus.commitTransition(entry, "dismissed", { by: "human", ...(note !== undefined ? { note } : {}) });
+  return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "dismissed" });
+}
+
 /** `GET /api/workspaces/inbox?path=<ws>[&all=1]` — `glosa inbox list`'s daemon-side half (issue
  * #142). Read-only, no lease and no mutex: `listInboxEntries` folds the journal the same way
  * `GET /api/status`'s `pending_count` does, so this never blocks behind — and never observes a
@@ -1691,6 +1731,9 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   }
   if (method === "POST" && pathname === "/api/workspaces/resolve") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceResolve(ctx, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/inbox/dismiss") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceInboxDismiss(ctx, req) };
   }
   if (method === "GET" && pathname === "/api/workspaces/inbox") {
     return { routeClass: "authed-read", handle: (req) => handleWorkspaceInboxList(ctx, req) };
