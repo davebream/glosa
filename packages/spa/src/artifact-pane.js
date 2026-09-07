@@ -271,6 +271,13 @@ export function createArtifactPane(host, deps) {
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?}
+  // The sha of the bytes the editor face was FILLED FROM — separate from currentArtifact, which
+  // keeps tracking the file for display. A refresh never moves this, so a save can stay honest
+  // about what it would overwrite even while the pane's display races ahead of it.
+  let baselineSha = null;
+  // Pinned when an edit session begins: {openedCheckpointId, attributionCursor}. Compare's `from`
+  // and the disk-change attribution walk's origin (later tasks in this epic).
+  let editSession = null;
   let loading = true;
   let modeState = initialModeState(readLock ? "read" : initialMode);
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
@@ -1133,6 +1140,24 @@ export function createArtifactPane(host, deps) {
 
   function clearParkedSource() {
     parkedSource = null;
+  }
+
+  /**
+   * Pins `baselineSha` to the bytes a face is about to be filled from. Called from `setMode`'s
+   * Edit-entry transition and from `loadArtifact`'s tail when the pane opens directly in Edit.
+   *
+   * Gated on a parked draft for THIS path, not on `isDirty()`: `isDirty()` folds in
+   * `richEditor?.isDirty()`, so it would depend on whether the async `mountRichFace` had landed
+   * yet, and `modeState.dirty` survives opening a DIFFERENT artifact in this pane — neither is the
+   * question "is there already a live draft for the file about to fill this face".
+   */
+  function beginEditSession() {
+    if (currentArtifact?.class !== "R" || parkedSourceFor(currentArtifact) !== null) return;
+    baselineSha = currentArtifact.source_sha256;
+  }
+
+  function endEditSession() {
+    editSession = null;
   }
 
   /** Puts a parked margin note back when Review is re-entered on the artifact it was written
@@ -2330,7 +2355,10 @@ export function createArtifactPane(host, deps) {
     renderContent();
     void renderHistory();
     onStateChange();
-    if (modeState.mode === "edit" && previousMode !== "edit") paneMain.scrollTop = 0;
+    if (modeState.mode === "edit" && previousMode !== "edit") {
+      paneMain.scrollTop = 0;
+      beginEditSession();
+    }
   }
 
   editArea.addEventListener("input", () => {
@@ -2471,7 +2499,7 @@ export function createArtifactPane(host, deps) {
     editStatus.textContent = "Saving…";
     try {
       const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, {
-        ifMatch: artifact.source_sha256,
+        ifMatch: baselineSha ?? artifact.source_sha256,
       });
       currentArtifact = { ...artifact, content, ...saved };
       modeState = modeReducer(modeState, { type: "saved" });
@@ -2655,6 +2683,7 @@ export function createArtifactPane(host, deps) {
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
+      baselineSha = currentArtifact.source_sha256; // a newly loaded artifact fills the face
     } catch (err) {
       loading = false;
       currentArtifact = null;
@@ -2675,6 +2704,8 @@ export function createArtifactPane(host, deps) {
     contentEl.removeAttribute("data-path");
     renderModeBar();
     renderContent();
+    // A pane opened directly in Edit fills its face here rather than through setMode's transition.
+    if (modeState.mode === "edit") beginEditSession();
     void renderHistory();
     onStateChange();
     return true;

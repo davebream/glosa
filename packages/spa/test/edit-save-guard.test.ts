@@ -341,6 +341,78 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put[0]?.content).toContain("fixed by hand");
   });
 
+  test("AC-1: a dirty editor's save carries the baseline sha, not the sha an SSE refresh brought in", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, pane, da } = await mountEditPane(stubRichEditor(edited));
+
+    da.disk.source_sha256 = "sha-2"; // another writer's frame arrives while the editor is dirty
+    await pane.refreshArtifact();
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull(); // nothing to consent to
+    expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-1" }]);
+  });
+
+  test("AC-2: a clean pane still tracks the file — an SSE refresh advances the displayed artifact", async () => {
+    const { pane, da } = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
+    expect(pane.isDirty()).toBe(false);
+
+    da.disk.content = "> [!info] A callout\n> with a second line.\n\nSomeone else's change.\n";
+    da.disk.rendered_html = "<p>Someone else's change.</p>";
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+
+    expect(pane.artifact?.source_sha256).toBe("sha-2");
+    expect(pane.artifact?.content).toContain("Someone else's change.");
+  });
+
+  test("AC-3: a draft parked through a mode switch keeps its baseline", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, pane, da } = await mountEditPane(stubRichEditor(edited));
+    pane.setMode("read");
+    await paint();
+
+    da.disk.source_sha256 = "sha-2"; // arrives while the draft is parked, not mounted
+    await pane.refreshArtifact();
+
+    pane.setMode("edit");
+    await paint();
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-1" }]);
+  });
+
+  test("AC-4: a clean pane in Edit that takes a disk change and is then typed into saves against the sha the editor was mounted over, not the frame's", async () => {
+    const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
+    expect(pane.isDirty()).toBe(false);
+
+    // The frame arrives while the pane is still clean — the DSR-1 sequence.
+    da.disk.content = "> [!info] A callout\n> with a second line.\n\nSomeone else's change.\n";
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+
+    // Only now does the writer type — the source face is the harness's only way to dirty a pane
+    // without a real ProseMirror view.
+    (host.querySelector(".glosa-face-source") as any).click();
+    await paint();
+    const textarea = host.querySelector(".glosa-edit-area") as any;
+    const myEdit = "> [!info] A callout\n> with a second line.\n\nMy own edit.\n";
+    textarea.value = myEdit;
+    textarea.dispatchEvent(new dom.window.Event("input"));
+    await paint();
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(da.put).toEqual([{ path: "notes.md", content: myEdit, ifMatch: "sha-1" }]);
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
