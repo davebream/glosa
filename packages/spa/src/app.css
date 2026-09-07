@@ -1973,6 +1973,32 @@ input,
   }
 }
 
+/* A distinct component from `.glosa-approval-strip` above (own class, not shared) — it previews
+   what a stale save would refuse, `.glosa-approval-strip` asks for a sign-off on what saved. Also
+   distinct from `.glosa-banner` (workspace-level, offline/connection state): conflating either
+   pair would misuse a component for a fact it doesn't describe. Renders only in Edit (D7), where
+   `.glosa-pane-main` has `overflow: hidden` and the scrolling box is its `flex: 1` child — so
+   this sits as an ordinary flex sibling and never needs `position: sticky` to stay above it. */
+.glosa-disk-change {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.glosa-disk-change-copy {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 .glosa-content {
   flex: 1;
   width: 100%;

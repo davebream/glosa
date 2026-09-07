@@ -278,6 +278,9 @@ export function createArtifactPane(host, deps) {
   // Pinned when an edit session begins: {openedCheckpointId, attributionCursor}. Compare's `from`
   // and the disk-change attribution walk's origin (later tasks in this epic).
   let editSession = null;
+  // An observed disk state that differs from `baselineSha`: {seenAt, at, attribution, acknowledged}.
+  // Recorded in `refreshArtifact`, cleared on a completed save, a discard, or a fresh `loadArtifact`.
+  let diskChange = null;
   let loading = true;
   let modeState = initialModeState(readLock ? "read" : initialMode);
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
@@ -460,6 +463,16 @@ export function createArtifactPane(host, deps) {
     hidden: true,
     "aria-label": "Final approval",
   });
+  // Previews what a stale save would refuse — never steals focus (`role="status"`, the pattern
+  // `emptyEl` already uses) and renders only in Edit (D7: outside Edit, `.glosa-pane-main` is
+  // itself the scroller, and a flex sibling above `contentEl` would move the manuscript under an
+  // unchanged scrollTop).
+  const diskChangeCopyEl = el("p", { className: "glosa-disk-change-copy" });
+  const diskChangeEl = el(
+    "section",
+    { className: "glosa-disk-change", hidden: true, role: "status", "aria-live": "polite" },
+    [diskChangeCopyEl],
+  );
   const annotateInstructions = el("p", {
     className: "glosa-visually-hidden",
     textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
@@ -522,6 +535,7 @@ export function createArtifactPane(host, deps) {
 
   const paneMain = el("main", { className: "glosa-pane-main" }, [
     approvalStrip,
+    diskChangeEl,
     annotateInstructions,
     emptyEl,
     skeletonEl,
@@ -1154,6 +1168,11 @@ export function createArtifactPane(host, deps) {
   function beginEditSession() {
     if (currentArtifact?.class !== "R" || parkedSourceFor(currentArtifact) !== null) return;
     baselineSha = currentArtifact.source_sha256;
+    // The baseline just caught up to this sha, so any earlier "changed on disk" fact — recorded
+    // against the OLD baseline — no longer describes what a save would refuse. Without this, a
+    // clean pane that leaves Edit and returns would keep showing a banner the file has already
+    // caught up to.
+    clearDiskChange();
   }
 
   function endEditSession() {
@@ -2353,6 +2372,9 @@ export function createArtifactPane(host, deps) {
     else if (previousMode === "review" && modeState.mode !== "review") releaseWidth();
     renderModeBar();
     renderContent();
+    // The fact survives the switch (D7); only whether it is SHOWN depends on the mode just
+    // entered, so this has to re-run on every transition, not only when a new fact is recorded.
+    renderDiskChange();
     void renderHistory();
     onStateChange();
     if (modeState.mode === "edit" && previousMode !== "edit") {
@@ -2466,11 +2488,6 @@ export function createArtifactPane(host, deps) {
    * The only place a save writes to disk and settles the pane afterward — a retry from the
    * stale-save dialog (Keep mine) goes through here too, so none of these transitions can be
    * skipped by a path that isn't the ordinary Save button.
-   *
-   * NOTE (T4 Task 4, deviation from the plan): the plan's Step 1 also calls `clearDiskChange()`
-   * here. That function doesn't exist yet — it and the `diskChange` state it clears are added in
-   * Phase 3 Task 6 (the disk-change banner), which hasn't landed. Omitted for now; Task 6 adds the
-   * call when it introduces the function, per the maintainer's instruction.
    */
   async function writeAndSettle(artifact, content, ifMatch) {
     saveButton.disabled = true;
@@ -2482,6 +2499,7 @@ export function createArtifactPane(host, deps) {
       modeState = modeReducer(modeState, { type: "saved" });
       clearParkedSource(); // the parked copy is now behind the file it was parked against
       pendingReport = null;
+      clearDiskChange(); // the write that just landed is exactly what the banner was warning about
       // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
       const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
       currentArtifact = fresh;
@@ -2729,6 +2747,42 @@ export function createArtifactPane(host, deps) {
     return true;
   }
 
+  // ---------- disk-change banner (REQ-2) ----------
+
+  /** A disk change that differs from `baselineSha` — the file this pane opened has moved under
+   * the draft. Recorded immediately with `seenAt`; a save is not blocked on anything here. */
+  function noteDiskChange() {
+    diskChange = { seenAt: new Date(), at: null, attribution: null, acknowledged: false };
+    renderDiskChange();
+  }
+
+  function clearDiskChange() {
+    diskChange = null;
+    renderDiskChange();
+  }
+
+  function formatClockTime(date) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  /** Honest by construction: a writer is named only once a path-matched checkpoint hunk proves it
+   * (`resolveDiskAttribution`, later in this epic). Until then — and whenever it can't — this is
+   * the only sentence the banner is allowed to show. */
+  function diskChangeCopy(change) {
+    return `Changed on disk, seen at ${formatClockTime(change.seenAt)} — no checkpoint records who changed it.`;
+  }
+
+  /** Scoped to Edit (D7): outside Edit, `.glosa-pane-main` is itself the scroller, and inserting a
+   * flex sibling above `contentEl` would move the manuscript under an unchanged `scrollTop`. The
+   * fact survives a mode switch even though the banner does not render outside Edit — hence this
+   * runs from every mode transition, not only from a fresh disk change. */
+  function renderDiskChange() {
+    const visible = Boolean(diskChange) && !diskChange.acknowledged && modeState.mode === "edit";
+    diskChangeEl.hidden = !visible;
+    if (!visible) return;
+    diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
+  }
+
   async function refreshArtifact() {
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
@@ -2738,6 +2792,14 @@ export function createArtifactPane(host, deps) {
       // iframe and mints a brand new capability rather than trying to reuse the expiring one.
       mountClassFArtifact(true);
       return;
+    }
+    if (
+      fresh.class === "R" &&
+      baselineSha &&
+      fresh.source_sha256 !== baselineSha &&
+      (modeState.mode === "edit" || isDirty())
+    ) {
+      noteDiskChange();
     }
     if (modeState.mode !== "edit") {
       morphArtifactContent(contentEl, fresh.rendered_html ?? "");

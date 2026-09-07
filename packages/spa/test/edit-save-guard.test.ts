@@ -485,6 +485,22 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(stub.calls.mountedWith.at(-1)).toBe(SOURCE);
   });
 
+  test("AC-5: the disk-change banner appears in Edit and takes no focus", async () => {
+    const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+    const activeBefore = dom.document.activeElement;
+
+    da.disk.source_sha256 = "sha-2"; // another writer's frame arrives while the editor is open
+    await pane.refreshArtifact();
+
+    const banner = host.querySelector(".glosa-disk-change") as any;
+    expect(banner?.hidden).toBe(false);
+    expect(dom.document.activeElement).toBe(activeBefore);
+    // A guard against an explicit scrollTop write on the banner path, not proof of layout
+    // stability — happy-dom performs no layout, so this passes under a correct AND a broken
+    // implementation alike. The real property is the CSS argument in app.css (D7/§2).
+    expect((host.querySelector(".glosa-pane-main") as any)?.scrollTop ?? 0).toBe(0);
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
