@@ -912,6 +912,174 @@ describe("Edit mode — a save never invents an edit", () => {
     }
   });
 
+  test("AC-11: after Keep mine the pane settles — a further save carries the post-Keep-mine sha and opens no second dialog", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(edited));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+    da.disk.source_sha256 = "sha-fresh";
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+
+    modalButton("Keep mine").click();
+    await paint();
+    expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-fresh" }]);
+
+    // A further save, nothing more queued to reject — DSR-2's regression test: if writeAndSettle's
+    // five transitions were skipped by the Keep-mine retry, baselineSha would still be the
+    // PRE-conflict sha here and this save would 409 into a second dialog instead of just writing.
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(da.put).toHaveLength(2);
+    expect(da.put[1]?.ifMatch).toBe("sha-fresh");
+  });
+
+  test("AC-20: a save that succeeds through the stale dialog can still be approved, with the post-Keep-mine revision id", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const request = {
+      id: "inb-1",
+      created_at: "2026-09-05T10:00:00Z",
+      status: "open",
+      action: "review",
+      target_path: "notes.md",
+      message: "Ready to sign off?",
+      agent_label: "api-refactor",
+      passage: null,
+      answer_options: null,
+      approval_mode: true,
+    };
+    const answered: unknown[] = [];
+    const { host, da } = await mountEditPane({
+      ...stubRichEditor(edited),
+      getAttentionEntries: () => [request],
+      respondToAttention: undefined,
+    });
+    (da as any).respondToAttention = async (_slug: string, id: string, body: Record<string, unknown>) => {
+      answered.push({ id, ...body });
+      return { id, ...body };
+    };
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+    da.disk.source_sha256 = "sha-fresh";
+
+    const strip = host.querySelector(".glosa-approval-strip") as any;
+    expect(strip).toBeTruthy();
+    (strip.querySelector(".glosa-approval-button") as any).click();
+    await paint();
+    // First modal: "Approve this revision?" — the reader says yes.
+    modalButton("Approve revision").click();
+    await paint();
+    // Second modal: the underlying save 409s — the stale-save dialog, not the collateral gate.
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    // approveCurrentArtifact:968 reads currentArtifact?.source_sha256 AFTER the save — this is the
+    // branch the existing declined-save test (above) cannot reach, because its guard is
+    // SAVE_DECLINED-only and this save succeeds.
+    expect(answered).toHaveLength(1);
+    expect(answered[0]).toMatchObject({ id: "inb-1", outcome: "approved", revisionId: "sha-fresh" });
+    expect(host.querySelector(".glosa-approval-status")?.textContent ?? "").not.toContain("Nothing was approved");
+  });
+
+  test("AC-32: the sealed scenario, end to end — dirty, disk changes, banner, save, dialog, each verb", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+
+    // Cancel: declines, nothing written, editor still dirty.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(edited));
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      expect((host.querySelector(".glosa-disk-change") as any)?.hidden).toBe(false);
+
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+      saveButton(host).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+      modalButton("Cancel").click();
+      await paint();
+      expect(da.put).toEqual([]);
+      expect(pane.isDirty()).toBe(true);
+    }
+
+    // Take disk: declines nothing to write, discards, remounts over disk.
+    {
+      const changed = "Someone else's change.\n";
+      const stub = stubRichEditor(edited);
+      const { host, pane, da } = await mountEditPane(stub);
+      da.disk.content = changed;
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      expect((host.querySelector(".glosa-disk-change") as any)?.hidden).toBe(false);
+
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+      saveButton(host).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+      stub.calls.mountedWith.length = 0;
+      modalButton("Take disk").click();
+      await paint();
+      modalButton("Discard edits").click();
+      await paint();
+
+      expect(da.put).toEqual([]);
+      expect(pane.artifact?.source_sha256).toBe("sha-2");
+      expect(stub.calls.mountedWith.at(-1)).toBe(changed);
+    }
+
+    // Compare: opens a diff tab, writes nothing, stays dirty.
+    {
+      const opened: unknown[] = [];
+      const stub = stubRichEditor(edited);
+      const { host, pane, da } = await mountEditPane(
+        { ...stub, openDiffTab: (range: unknown) => opened.push(range) },
+        { checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }] },
+      );
+      await paint(); // let the pin land
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      expect((host.querySelector(".glosa-disk-change") as any)?.hidden).toBe(false);
+
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+      saveButton(host).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+      modalButton("Compare").click();
+      await paint();
+
+      expect(opened).toEqual([{ path: "notes.md", from: "cp-abc1234", to: "working" }]);
+      expect(da.put).toEqual([]);
+      expect(pane.isDirty()).toBe(true);
+    }
+
+    // Keep mine: writes once, carrying the fresh sha and the rebased bytes.
+    {
+      const stub = stubRichEditor(edited);
+      const { host, pane, da } = await mountEditPane(stub);
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      expect((host.querySelector(".glosa-disk-change") as any)?.hidden).toBe(false);
+
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+      saveButton(host).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+      modalButton("Keep mine").click();
+      await paint();
+
+      expect(modal()).toBeNull();
+      expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-2" }]);
+      expect(pane.artifact?.source_sha256).toBe("sha-2");
+    }
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
