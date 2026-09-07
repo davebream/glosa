@@ -300,8 +300,10 @@ describe("the annotation surface", () => {
     expect(q(host, ".glosa-margin-subhead")).not.toBeNull();
 
     // Terminal: nothing left to revise, and "Remove" would be a lie — the entry cannot be withdrawn.
+    // Nor is it "Dismiss" — that word now names the real `dismissed` wire terminal, not this
+    // local, view-only clear.
     expect(card.querySelector(".glosa-annotation-edit")).toBeNull();
-    expect(card.querySelector(".glosa-annotation-remove").textContent).toBe("Dismiss");
+    expect(card.querySelector(".glosa-annotation-remove").textContent).toBe("Clear");
 
     const undo = q(card, ".glosa-annotation-undo");
     expect(undo).not.toBeNull();

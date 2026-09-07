@@ -3343,7 +3343,8 @@ input,
 }
 
 .glosa-annotation[data-state="rejected"],
-.glosa-annotation[data-state="stale"] {
+.glosa-annotation[data-state="stale"],
+.glosa-annotation[data-state="dismissed"] {
   opacity: 0.75;
 }
 
@@ -3790,7 +3791,8 @@ input,
 }
 
 :root[data-theme="dark"] .glosa-annotation[data-state="rejected"],
-:root[data-theme="dark"] .glosa-annotation[data-state="stale"] {
+:root[data-theme="dark"] .glosa-annotation[data-state="stale"],
+:root[data-theme="dark"] .glosa-annotation[data-state="dismissed"] {
   /* Whole-card opacity compounds contrast loss for 12–13px metadata on dark surfaces. */
   opacity: 1;
 }
