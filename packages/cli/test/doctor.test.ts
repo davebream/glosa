@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 16 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 17 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -191,7 +191,7 @@ describe("glosa doctor", () => {
     expect(workspaceCheck?.detail).toContain("1 tracked artifact");
   });
 
-  test("workspace reports journal bytes and physical line count without adding a seventeenth check", async () => {
+  test("workspace reports journal bytes and physical line count without adding an extra check", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
     writeFileSync(join(dir, "notes.md"), "# hello\n");
@@ -204,7 +204,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(16);
+    expect(result.data.checks).toHaveLength(17);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -250,7 +250,7 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(16);
+    expect(unreadable.data.checks).toHaveLength(17);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
@@ -348,7 +348,7 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(16);
+    expect(parsed.data.checks).toHaveLength(17);
   });
 
   test("pending-delivery: queued entries without wiring -> WARN; with wiring -> pass; daemon down -> SKIP", async () => {
@@ -401,6 +401,40 @@ describe("glosa doctor", () => {
     });
     const down = await runDoctor(dir, downDeps);
     expect(findCheck(down.data.checks, "orphaned-state")?.status).toBe("skip");
+  });
+
+  test("orphaned-entries: entries with no payload -> WARN naming the count and dismiss hint; none -> pass; daemon down -> SKIP", async () => {
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+
+    const clean = await runDoctor(dir, deps);
+    expect(findCheck(clean.data.checks, "orphaned-entries")?.status).toBe("pass");
+
+    // The fixture must prove the check reads `orphaned_entry_count` off the production workspace
+    // row, not merely that a warn CAN happen — a fixture that can't flip this is testing itself.
+    client.statusResult.workspaces = [
+      {
+        slug: "ws",
+        path: dir,
+        last_seen: "2026-07-26T00:00:00Z",
+        pending_count: 0,
+        has_attention: false,
+        orphaned_entry_count: 2,
+      },
+    ];
+    const orphaned = await runDoctor(dir, deps);
+    const orphanCheck = findCheck(orphaned.data.checks, "orphaned-entries");
+    expect(orphanCheck?.status).toBe("warn");
+    expect(orphanCheck?.detail).toContain("2 journal entries have no inbox payload");
+    expect(orphanCheck?.detail).toContain("glosa inbox dismiss");
+
+    const { deps: downDeps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    });
+    const down = await runDoctor(dir, downDeps);
+    expect(findCheck(down.data.checks, "orphaned-entries")?.status).toBe("skip");
   });
 
   test("mcp-enabled: no settings layers -> pass; enabled+defined -> pass; enabled-but-undefined -> WARN", async () => {
