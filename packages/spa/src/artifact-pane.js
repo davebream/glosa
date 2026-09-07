@@ -2621,6 +2621,36 @@ export function createArtifactPane(host, deps) {
   }
 
   /**
+   * What a stale save would overwrite — from the checkpoint pinned at Edit entry to the working
+   * file. REQ-3 asks for "the diff between the disk version and the version you opened"; this is
+   * a named approximation of that (D10), not a silent one: it additionally includes anything
+   * already uncommitted when the writer arrived, because glosa has no client-side differ and the
+   * daemon only computes checkpoint-to-checkpoint (or checkpoint-to-working) ranges. The header
+   * states the range it actually covers rather than implying the one REQ-3 names.
+   *
+   * Degrades rather than blocks: no pin, or a failed call, means no `detail` — the dialog still
+   * opens either way (Step 5).
+   */
+  async function overwritePreview(artifact) {
+    const openedCheckpointId = editSession?.openedCheckpointId;
+    if (!openedCheckpointId) return undefined;
+    try {
+      const { hunks } = await dataAccess.getDiff(slug, { from: openedCheckpointId, to: "working" });
+      // Same rule diff-pane.js uses: a hunk with no path attribution is kept rather than hidden.
+      const unified = (hunks ?? [])
+        .filter((hunk) => !hunk.path || hunk.path === artifact.source_path)
+        .map((hunk) => hunk.diff)
+        .join("\n");
+      const lines = unified.split("\n");
+      const body =
+        lines.length > 200 ? `${lines.slice(0, 200).join("\n")}\n\n…and ${lines.length - 200} more lines.` : unified;
+      return `Changes to this file since the last saved version (${openedCheckpointId.slice(0, 7)}).\n\n${body}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Opens when a save's `If-Match` is refused because the file moved under the draft (D5, D9).
    * Every non-write outcome returns `SAVE_DECLINED` (C3.2) — Cancel, Esc and the backdrop all
    * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
@@ -2631,6 +2661,7 @@ export function createArtifactPane(host, deps) {
     const choice = await choiceDialog({
       title: "This file changed while you were editing",
       body: `${artifact.source_path} was written after you started. Saving now replaces that version with yours.`,
+      detail: await overwritePreview(artifact),
       choices: [
         { id: "take-disk", label: "Take disk", danger: true },
         { id: "compare", label: "Compare" },

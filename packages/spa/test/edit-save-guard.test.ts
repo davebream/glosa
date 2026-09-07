@@ -660,6 +660,51 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put).toEqual([]);
   });
 
+  test("AC-16: the dialog shows what would be overwritten, and still opens when the diff call fails", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+
+    // The preview is shown: the range header, and the path-filtered hunk text.
+    {
+      const { host, da } = await mountEditPane(stubRichEditor(edited), {
+        checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }],
+      });
+      await paint(); // let the pin land, giving overwritePreview a checkpoint to diff from
+      da.diff = { hunks: [{ path: "notes.md", diff: "@@ -1 +1 @@\n-old\n+new", attribution: "session:x" }] };
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+
+      const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
+      expect(detail).toContain("Changes to this file since the last saved version (cp-abc1)");
+      expect(detail).toContain("@@ -1 +1 @@");
+
+      // Close this scenario's dialog before the next one opens its own — modal() queries the
+      // whole document, and a dialog left open would still be found by the next scenario's check.
+      modalButton("Cancel").click();
+      await paint();
+    }
+
+    // A failing getDiff still opens the dialog — a daemon hiccup must not block the writer from
+    // answering at all.
+    {
+      const { host, da } = await mountEditPane(stubRichEditor(edited), {
+        checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }],
+      });
+      await paint();
+      da.getDiff = async () => {
+        throw new Error("boom");
+      };
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+
+      expect(modal()).toBeTruthy();
+      expect(modal()?.querySelector(".glosa-dialog-detail")).toBeFalsy();
+    }
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
