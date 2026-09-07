@@ -6,7 +6,9 @@
 // (pre-registering a workspace, minting real checkpoints with known attributions) that a subprocess
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { timedHooks } from "../../../test/phase-timing.ts";
+const { beforeEach, afterEach } = timedHooks("packages/daemon/test/http-routes.test.ts");
 import {
   existsSync,
   mkdirSync,

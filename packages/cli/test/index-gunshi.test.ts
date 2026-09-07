@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { BUILD_ID } from "../../daemon/src/lifecycle/build-id.ts";
 import { randomPort } from "../../daemon/test/helpers.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
-import { run } from "../src/index.ts";
+import { run, type CliRunDependencies } from "../src/index.ts";
 import { CLI_VERSION } from "../src/version.ts";
 import { useTempHome } from "./home.ts";
 
@@ -69,7 +69,10 @@ function runCli(
   };
 }
 
-async function captureRun(args: readonly string[]): Promise<{
+async function captureRun(
+  args: readonly string[],
+  deps: CliRunDependencies = {},
+): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -89,7 +92,7 @@ async function captureRun(args: readonly string[]): Promise<{
     return true;
   };
   try {
-    return { exitCode: await run(args), stdout, stderr };
+    return { exitCode: await run(args, deps), stdout, stderr };
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;
@@ -227,28 +230,23 @@ describe("Gunshi command surface", () => {
     expect(trueSurplus.stderr).not.toContain("ArgsValidationError");
   });
 
-  // A single stray token after `list` fills the (declared, now-optional) `id` slot structurally —
-  // that's not "surplus" by `assertNoSurplusPositionals`'s own declared-count definition (it counts
-  // declared positionals, not what the runtime action happens to use), so `list` proceeds to reach
-  // the daemon rather than usage-erroring on it. A squatter on GLOSA_PORT forces a fast,
-  // deterministic DAEMON_UNREACHABLE instead of a real spawn; exit 3 (not a usage 2) is the
-  // observable proof that parsing let the stray token through. Its own timeout, like the discovery
-  // tests above, because a squatted-port handshake failure isn't instant.
-  test("inbox: a single stray positional after `list` is NOT rejected as surplus — it reaches the daemon", () => {
-    const port = randomPort();
-    const squatter = Bun.serve({
-      hostname: "127.0.0.1",
-      port,
-      fetch: () => Response.json({ not: "a glosa handshake" }),
+  // The real parser must dispatch to the client factory, not reject the optional id as surplus.
+  test("inbox: a single stray positional after `list` is NOT rejected as surplus — it reaches the daemon", async () => {
+    let calls = 0;
+    const result = await captureRun(["inbox", "list", "extra-arg"], {
+      inbox: {
+        createClient: async () => {
+          calls++;
+          throw new Error("command dispatch sentinel");
+        },
+      },
     });
-    try {
-      const oneStray = runCli(["inbox", "list", "extra-arg"], { env: { GLOSA_PORT: String(port) } });
-      expect(oneStray.exitCode).toBe(3);
-      expect(oneStray.stderr).not.toContain("Unexpected positional argument");
-    } finally {
-      squatter.stop();
-    }
-  }, 7000);
+    expect(calls).toBe(1);
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("command dispatch sentinel");
+    expect(result.stderr).not.toContain("Unexpected positional argument");
+    expect(result.stdout).toBe("");
+  });
 
   test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
     const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
