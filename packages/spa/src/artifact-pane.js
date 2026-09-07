@@ -45,6 +45,12 @@ import { createElement as el } from "./viewer-shell.js";
  */
 export const SAVE_DECLINED = Symbol("glosa.save-declined");
 
+// The one 409 that means "the file moved under this draft" — routes/artifact.ts's `mapError`
+// names it separately from the daemon's generic `conflict` slug precisely so a caller never has
+// to guess from a bare status code (D5). A `workspace-adopting` 409 reaches the same route and
+// must NOT open this dialog.
+const SOURCE_CHANGED = "https://glosa.local/errors/source-changed";
+
 export const MODES = ["read", "review", "edit"];
 
 // Writer-register labels for R3's annotation `intent` enum (2026-07-21 brief §7.5): the wire
@@ -2606,7 +2612,35 @@ export function createArtifactPane(host, deps) {
       return SAVE_DECLINED;
     }
 
-    return await writeAndSettle(artifact, content, baselineSha ?? artifact.source_sha256);
+    try {
+      return await writeAndSettle(artifact, content, baselineSha ?? artifact.source_sha256);
+    } catch (error) {
+      if (error?.status === 409 && error.problem?.type === SOURCE_CHANGED) return staleSave(artifact);
+      throw error;
+    }
+  }
+
+  /**
+   * Opens when a save's `If-Match` is refused because the file moved under the draft (D5, D9).
+   * Every non-write outcome returns `SAVE_DECLINED` (C3.2) — Cancel, Esc and the backdrop all
+   * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
+   */
+  async function staleSave(artifact) {
+    editStatus.textContent = "Checking what changed…";
+    const fresh = await dataAccess.getArtifact(slug, artifact.source_path, { render: "html" });
+    const choice = await choiceDialog({
+      title: "This file changed while you were editing",
+      body: `${artifact.source_path} was written after you started. Saving now replaces that version with yours.`,
+      choices: [
+        { id: "take-disk", label: "Take disk", danger: true },
+        { id: "compare", label: "Compare" },
+        { id: "keep-mine", label: "Keep mine" },
+      ],
+    });
+    if (choice === "take-disk") return await takeDisk(fresh);
+    if (choice === "compare") return SAVE_DECLINED; // Task 12
+    if (choice === "keep-mine") return SAVE_DECLINED; // Task 11
+    return SAVE_DECLINED; // Cancel / Esc / backdrop
   }
 
   saveButton.addEventListener("click", async () => {

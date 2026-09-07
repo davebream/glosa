@@ -612,6 +612,54 @@ describe("Edit mode — a save never invents an edit", () => {
     }
   });
 
+  test("AC-8: a source-changed 409 opens a dialog offering Take disk, Compare and Keep mine beside Cancel", async () => {
+    const clean = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(clean));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeTruthy();
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+    expect(modalButton("Take disk")).toBeTruthy();
+    expect(modalButton("Compare")).toBeTruthy();
+    expect(modalButton("Keep mine")).toBeTruthy();
+    expect(modalButton("Cancel")).toBeTruthy();
+  });
+
+  test("AC-9: a workspace-adopting 409 opens no dialog and renders the ordinary save error", async () => {
+    // D5's regression test — the discriminator is problem.type, not a bare 409 status. Two
+    // distinct 409s reach this route, and matching on status alone would open the stale-save
+    // dialog during an ordinary workspace adoption.
+    const clean = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(clean));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/workspace-adopting" } });
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain("Couldn't save this artifact");
+    expect(da.put).toEqual([]);
+  });
+
+  test("AC-14: Cancel leaves the editor untouched and the file unwritten, and the save declines", async () => {
+    const clean = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(clean));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+
+    modalButton("Cancel").click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(da.put).toEqual([]);
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
