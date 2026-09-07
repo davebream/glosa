@@ -260,6 +260,63 @@ Two consequences worth stating plainly:
   rather than trusting that every markdown construct was enumerated correctly. Enumeration is how
   this class of bug happens in the first place.
 
+## A closed-unread entry gets its own terminal, `dismissed`, instead of reusing `rejected`
+
+Issue #142 gave inbox entries a second human-reachable close path alongside `resolve`: a person can
+now find an entry whose immutable payload has gone missing — moved or deleted by hand — and close it
+without a session. That path needed a terminal to land on.
+
+The obvious reuse was `resolve <id> rejected --session ...`'s existing terminal, since both a
+declined annotation and a closed-unread one end up "not going anywhere." We rejected that. A session
+declining a note is a verdict on its content; a person closing an entry they never read is not a
+verdict at all, and collapsing the two loses that distinction the moment the note is skimmed later —
+was this rejected, or just cleared? `rejected` already carries exactly this ambiguity once: the SPA's
+own withdraw path reuses `rejected` for a human taking a note back, and can only tell that apart from
+a session's decline by a `detail.withdrawn` flag riding along in the transition detail — a flag that
+has to be checked by every later reader, and that pre-flag journals from an earlier alpha don't even
+carry, so `isWithdrawn` also falls back to matching the withdraw path's literal note text. Reusing
+`rejected` a second time for dismiss would have meant smuggling in a second disambiguating flag on
+top of the first, with the same forever-check-the-detail cost and the same backward-compatibility
+seam for journals written before it existed.
+
+A distinct `dismissed` terminal costs one more value in `COMMON_TERMINALS` and one more state the SPA
+must render, but it means the fold alone says what happened — no flag to check, no note text to
+pattern-match, nothing for an older reader to get subtly wrong on a pre-existing journal. `resolve`
+and `dismiss` both still boil down to one journal append (R3, A4 §F04); they only disagree about
+which value that append writes, and about whether a session is required to write it.
+## A stale save is refused, and the writer chooses what happens next
+
+Maintainer decision, 2026-09-06 (Decision 1, part B). Two writers on one file is glosa's normal
+case — the human in Edit mode, an agent applying an annotation — and until now nothing told the
+writer their file had moved while they were typing, or stopped a save from silently overwriting an
+agent's change. The daemon already carried the mechanism (`If-Match: <source_sha256>`, refused with
+a `409`); what was missing was the SPA doing anything with it.
+
+The fix has two parts. While editing, a per-pane banner previews the same condition a save would
+hit, before the writer invests keystrokes in what they are about to lose — naming who changed the
+file only when a checkpoint proves it, and saying so honestly otherwise. On an actual stale save, a
+three-verb dialog — Keep mine, Take disk, Compare — replaces the silent overwrite.
+
+Three decisions carry the mechanism:
+
+- **The save baseline is not the display.** The pane keeps tracking the file for display as it
+  always has; a separate baseline records the version the editor was actually filled from, and
+  that baseline moves only where a face is filled — never on an ordinary refresh. A baseline that
+  advanced on every refresh would let a *clean* editor's next save overwrite an agent's change with
+  no refusal and no warning, because the display would have quietly raced ahead of what the writer
+  is looking at.
+- **The banner names a writer only when a path-matched diff hunk proves it.** A workspace
+  checkpoint proves nothing about which file it touched; the per-path attribution the daemon
+  already computes is what makes a name honest. Everything else — no checkpoint yet, an unmatched
+  path, an unreadable trailer — reads as unattributed rather than guessing, and an edit made in
+  glosa's own editor is the only thing ever named as a human edit.
+- **The stale-save `409` gets its own problem slug, `source-changed`, instead of sharing the
+  daemon's generic `conflict`.** Two distinct `409`s can reach the artifact-save route — a stale
+  `If-Match`, and a workspace mid-adoption — and `conflict` already means a dozen other things
+  across the daemon. Matching on a bare `409` status would open "this file changed while you were
+  editing" during an ordinary workspace adoption; the dedicated slug is what lets the SPA tell the
+  two apart.
+
 ## An edited block is written back in its own spelling, not the serializer's
 
 Re-serializing an edited block wrote the serializer's spelling of everything in it, so changing one

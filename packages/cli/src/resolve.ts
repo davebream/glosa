@@ -49,8 +49,10 @@ export interface ResolveData {
 /** Maps an entry-related daemon failure (unknown entry, no matching apply-begin lease, wrong
  * session) to exit 8 `entry_error` — anything that ISN'T an API-level (4xx/5xx-with-body) failure
  * is treated as daemon-unreachable instead, since it means the request never got a real answer at
- * all (network refused, `ensureDaemon` failed, ...). */
-function mapEntryFailure(command: string, err: unknown): CommandEnvelope<Record<string, never>> {
+ * all (network refused, `ensureDaemon` failed, ...). Exported so `inbox.ts`'s `runInboxDismiss`
+ * and `runInboxGet` share this exact mapping (issue #142) rather than each growing its own copy —
+ * one error contract for every entry-id command, not three drifting ones. */
+export function mapEntryFailure(command: string, err: unknown): CommandEnvelope<Record<string, never>> {
   if (isApiError(err)) {
     return {
       ok: false,

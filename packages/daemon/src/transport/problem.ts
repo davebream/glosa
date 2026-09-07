@@ -21,9 +21,11 @@ export type ProblemSlug =
   // whose real bodies land in P3.2/P4.1/P4.2/F12) so the auth/contract/confinement pipeline can be
   // exercised end-to-end against those routes today without pretending a real backend exists.
   | "not-implemented"
-  // P3.3 addition — `PUT /w/:slug/artifacts/:path`'s optional `If-Match` optimistic-concurrency
-  // check (not in A1 §5, this route isn't either). 409 when the caller's `If-Match` source_sha256
-  // no longer matches what's on disk.
+  // The daemon's generic 409: any conflict that doesn't get its own dedicated slug. Used across
+  // several unrelated routes (composite acknowledgement outcome, delivery reservation, session
+  // binding, conversation targeting, apply-begin lease, annotation withdrawal on a closed entry,
+  // `glosa init` conflicts) — a caller must not match on this slug alone to identify any one of
+  // them; each route's own condition is what's actually being asserted.
   | "conflict"
   | "approval-conflict"
   // R9 addition, sibling of `approval-conflict` and deliberately NOT the same answer. Uniqueness
@@ -57,7 +59,12 @@ export type ProblemSlug =
   | "adoption-blocked"
   | "adoption-conflict"
   | "workspace-adopting"
-  | "workspace-adopted";
+  | "workspace-adopted"
+  // T4 addition — `PUT /w/:slug/artifacts/:path`'s `If-Match` check (services/artifact.ts
+  // `prepareArtifactSave`) used to share `conflict` with routes that have nothing to do with it.
+  // Named separately so the SPA can open the stale-save dialog on exactly this condition, never on
+  // the unrelated `workspace-adopting` 409 that can also reach this route.
+  | "source-changed";
 
 export function problem(
   status: number,

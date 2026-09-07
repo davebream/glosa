@@ -7,7 +7,17 @@
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
@@ -16,7 +26,7 @@ import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
 import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
 import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
-import { inboxEntryPath, journalPath } from "../src/bus/paths.ts";
+import { inboxDir, inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
@@ -159,6 +169,104 @@ describe("A1 §5 route catalog", () => {
     );
     expect(sessionRegistry.get("cwd-only-live")?.workspace_binding).toBeUndefined();
     expect(sessionRegistry.get("explicit-stale")?.workspace_binding).toBe(root);
+  });
+
+  // --- GET /api/status: orphaned_entry_count (issue #142) ---
+  //
+  // An orphan is an entry that is (1) durably in `entryOrder` — a real `entry_created`/
+  // `entry_adopted` on record, (2) non-terminal, and (3) has no readable inbox payload. All three
+  // are load-bearing on their own, so each gets its own test rather than one combined scenario.
+  describe("GET /api/status — orphaned_entry_count", () => {
+    async function statusRow(): Promise<{ orphaned_entry_count: number }> {
+      const body = await (await fetchFn(req("/api/status"))).json();
+      return body.workspaces.find((w: { slug: string }) => w.slug === slug);
+    }
+
+    test("a clean workspace reports 0", async () => {
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("a non-terminal entry with no payload counts as one orphan", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-status-1", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-status-1"));
+
+      expect((await statusRow()).orphaned_entry_count).toBe(1);
+    });
+
+    test("condition (a): an entry vivified by a lease-only transition (no entry_created) never counts", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      // No prior createEntry — this transition_committed has nothing to guard against, so
+      // lifecycle.ts's fallback vivifies a non-terminal "delivered" entry that was never in
+      // entryOrder and never had an inbox file. It must not be mistaken for an orphan.
+      await bus.commitTransition("ghost-status-1", "delivered", { by: "human" });
+      expect(bus.state.entries["ghost-status-1"]?.status).toBe("delivered");
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("condition (b): a terminal entry with no payload does not count — and the count falls to zero after dismiss", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-status-2", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-status-2"));
+
+      expect((await statusRow()).orphaned_entry_count).toBe(1);
+
+      // dismiss is exactly `commitTransition(id, "dismissed", { by: "human" })` — see
+      // handleWorkspaceInboxDismiss. Going terminal is what must clear the count; a count that
+      // stays above zero here would make `dismiss` look ineffective.
+      await bus.commitTransition("orphan-status-2", "dismissed", { by: "human" });
+      expect(bus.state.entries["orphan-status-2"]?.status).toBe("dismissed");
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("condition (c): an adopted entry does not count while its payload exists", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.adoptEntry(
+        "adopted-status-1",
+        { kind: "annotation", artifact_path: "notes.md", body: "adopted" },
+        { kind: "annotation", status: "pending", source_registration_id: "reg-x", source_entry_id: "src-1" },
+        "adopt-idem-status-1",
+      );
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+  });
+
+  // --- GET /w/:slug/inbox/:entry/presentation — orphan fail-soft (issue #142, D9) ---
+  //
+  // The orphan signature is exact: `bus.readEntry` returns a non-null object whose `payload` is
+  // `null`. The second test is the control — a payload that EXISTS but that `actionablePresentation`
+  // declines must still 422 through the unchanged `mapError` arm; if both returned 200 the fix
+  // would have widened past the orphan signature and hidden a real defect behind a recovery hint.
+  describe("GET /w/:slug/inbox/:entry/presentation — orphan fail-soft", () => {
+    test("orphaned entry presents with a hint instead of 422 (journal state, no payload)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-pres-1", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-pres-1"));
+
+      const res = await fetchFn(req(`/w/${slug}/inbox/orphan-pres-1/presentation`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.presentation).toMatchObject({ id: "orphan-pres-1", kind: "annotation", status: "pending" });
+      expect(body.presentation.text).toContain("glosa inbox dismiss orphan-pres-1");
+      expect(body.presentation.detail).toMatchObject({ orphaned: true });
+    });
+
+    test("a payload that exists but that actionablePresentation declines still returns 422 (the control)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      // Missing `intent`/`target` — annotationPresentation (delivery/presentation.ts) returns
+      // null for this shape, which is what makes this genuinely non-actionable rather than orphaned.
+      await bus.createEntry("non-actionable-pres-1", {
+        kind: "annotation",
+        artifact_path: "notes.md",
+        body: "incomplete",
+      });
+
+      const res = await fetchFn(req(`/w/${slug}/inbox/non-actionable-pres-1/presentation`));
+      expect(res.status).toBe(422);
+    });
   });
 
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
@@ -604,7 +712,7 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(200);
   });
 
-  test("PUT artifact with a stale If-Match source_sha256 → 409 conflict, file left unchanged", async () => {
+  test("PUT artifact with a stale If-Match source_sha256 → 409 source-changed, file left unchanged", async () => {
     writeFileSync(join(root, "notes.md"), "original\n");
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
@@ -617,7 +725,7 @@ describe("A1 §5 route catalog", () => {
       }),
     );
     expect(res.status).toBe(409);
-    expect((await res.json()).type).toContain("conflict");
+    expect((await res.json()).type).toContain("source-changed");
     expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("original\n");
   });
 
@@ -2333,6 +2441,217 @@ describe("A1 §5 route catalog", () => {
       );
       expect(res.status).toBe(200);
       expect((await res.json()).status).toBe("applied");
+    });
+  });
+
+  // --- GET /api/workspaces/inbox — journal-derived listing (issue #142) ---
+  //
+  // The reproduction this closes: hand-moving an inbox `.json` file out of `.glosa/inbox/` left
+  // the entry permanently unlistable and unresolvable. Every field below must come off the
+  // journal fold, never off the payload, so the listing survives exactly that.
+
+  describe("GET /api/workspaces/inbox", () => {
+    test("lists a created entry, marks a removed payload as `payload_present: false`, and never drops the row", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("kept", { kind: "annotation", artifact_path: "notes.md", body: "keep me" });
+      const orphaned = "orphaned-1";
+      await bus.createEntry(orphaned, { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, orphaned));
+
+      const res = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.entries.map((e: { id: string }) => e.id)).toEqual(["kept", orphaned]);
+      const [keptRow, orphanedRow] = body.entries;
+      expect(keptRow).toMatchObject({ kind: "common", status: "pending", target_path: null, payload_present: true });
+      expect(orphanedRow).toMatchObject({
+        kind: "common",
+        status: "pending",
+        target_path: null,
+        payload_present: false,
+      });
+      // Raw ISO, not a formatted age — formatting is the CLI's job, not the wire shape's.
+      expect(typeof orphanedRow.created_at).toBe("string");
+      expect(new Date(orphanedRow.created_at).toISOString()).toBe(orphanedRow.created_at);
+    });
+
+    test("a terminal entry is omitted by default and included under all=1", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("open-1", { kind: "annotation", artifact_path: "notes.md", body: "still open" });
+      await bus.createEntry("closed-1", { kind: "annotation", artifact_path: "notes.md", body: "done" });
+      await bus.commitTransition("closed-1", "applied", { by: "human" });
+
+      const defaultList = await (
+        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))
+      ).json();
+      expect(defaultList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1"]);
+
+      const allList = await (
+        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}&all=1`))
+      ).json();
+      expect(allList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1", "closed-1"]);
+      expect(allList.entries[1]).toMatchObject({ status: "applied" });
+    });
+
+    test("an adopted entry lists with target_path: null — an entry_adopted event never carries one", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.adoptEntry(
+        "adopted-1",
+        { kind: "annotation", artifact_path: "notes.md", body: "adopted from elsewhere" },
+        { kind: "annotation", status: "pending", source_registration_id: "reg-x", source_entry_id: "src-1" },
+        "adopt-idem-1",
+      );
+
+      const body = await (await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))).json();
+      expect(body.entries).toEqual([
+        expect.objectContaining({
+          id: "adopted-1",
+          kind: "common",
+          status: "pending",
+          target_path: null,
+          payload_present: true,
+        }),
+      ]);
+    });
+
+    test("path query param is required", async () => {
+      const res = await fetchFn(req("/api/workspaces/inbox"));
+      expect(res.status).toBe(400);
+    });
+
+    test("an unregistered path still lists — the route is path-addressed, like resolve and apply-begin", async () => {
+      const unregistered = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-unreg-")));
+      const res = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(unregistered)}`));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ entries: [] });
+      rmSync(unregistered, { recursive: true, force: true });
+    });
+  });
+
+  // --- POST /api/workspaces/inbox/dismiss — human terminal transition, no session (issue #142) ---
+  //
+  // The reproduction this closes: hand-moving an inbox `.json` file out of `.glosa/inbox/` left an
+  // entry permanently un-actionable, with no supported way to close it and no record that it was
+  // dropped rather than resolved. `dismiss` is that supported close — a human verb, attributed
+  // `by: "human"`, no lease opened or closed, no session claimed.
+
+  describe("POST /api/workspaces/inbox/dismiss", () => {
+    function countJournalLines(): number {
+      return readFileSync(journalPath(root), "utf8")
+        .split("\n")
+        .filter((line) => line.trim().length > 0).length;
+    }
+    function countInboxFiles(): number {
+      return readdirSync(inboxDir(root)).length;
+    }
+
+    test("dismisses a pending entry: exactly one journal line appended, no inbox file touched", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-1", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+
+      const linesBefore = countJournalLines();
+      const filesBefore = countInboxFiles();
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-1", note: "closing unread" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ entry: "entry-1", status: "dismissed", to: "dismissed" });
+
+      expect(countJournalLines() - linesBefore).toBe(1);
+      expect(countInboxFiles() - filesBefore).toBe(0);
+
+      const journal = readFileSync(journalPath(root), "utf8");
+      expect(journal).toContain(`"event":"transition_committed"`);
+      expect(journal).toContain(`"by":"human"`);
+      expect(journal).toContain(`"to":"dismissed"`);
+      expect(bus.state.entries["entry-1"]?.status).toBe("dismissed");
+    });
+
+    test("dismisses an entry whose inbox payload is already gone (the hand-move reproduction)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-1", { kind: "annotation", artifact_path: "notes.md", body: "orphaned" });
+      unlinkSync(inboxEntryPath(root, "orphan-1"));
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "orphan-1" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ entry: "orphan-1", status: "dismissed", to: "dismissed" });
+      expect(bus.state.entries["orphan-1"]?.status).toBe("dismissed");
+    });
+
+    test("unknown entry → 404", async () => {
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "does-not-exist" }),
+        }),
+      );
+      expect(res.status).toBe(404);
+    });
+
+    test("a second dismiss of the same entry → 409, and adds no journal line (the terminal guard is connected, not accidental idempotence)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-2", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+
+      const first = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-2" }),
+        }),
+      );
+      expect(first.status).toBe(200);
+
+      const linesBeforeSecond = countJournalLines();
+      const second = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-2" }),
+        }),
+      );
+      expect(second.status).toBe(409);
+      expect(second.headers.get("Content-Type")).toBe("application/problem+json");
+      expect(countJournalLines()).toBe(linesBeforeSecond);
+      expect(bus.state.entries["entry-2"]?.status).toBe("dismissed");
+    });
+
+    test("an entry already terminal via a different outcome (applied) → 409, not silently re-terminalized as dismissed", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("entry-3", { kind: "annotation", artifact_path: "notes.md", body: "unread" });
+      await bus.commitTransition("entry-3", "applied", { by: "human" });
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "entry-3" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect(bus.state.entries["entry-3"]?.status).toBe("applied");
+    });
+
+    test("path and entry are required", async () => {
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/inbox/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root }),
+        }),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

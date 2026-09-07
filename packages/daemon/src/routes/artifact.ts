@@ -84,7 +84,13 @@ function mapError(error: unknown, pathname: string, context: ErrorContext = {}):
         pathname,
       );
     case "source-changed":
-      return problem(409, "conflict", "source_sha256 has changed since If-Match was captured", undefined, pathname);
+      return problem(
+        409,
+        "source-changed",
+        "source_sha256 has changed since If-Match was captured",
+        undefined,
+        pathname,
+      );
     case "unknown-checkpoint": {
       const title =
         context.unknownCheckpoint === "checkpoints"

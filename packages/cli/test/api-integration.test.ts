@@ -9,10 +9,10 @@
 // (separate workspace dirs keep the scenarios independent).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureToken, lockPath, readLock } from "@glosa/daemon";
+import { ensureToken, inboxEntryPath, lockPath, readLock } from "@glosa/daemon";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
 import { randomPort, stopDetachedDaemon, superviseDaemonHome, trackDetachedDaemon } from "../../daemon/test/helpers.ts";
@@ -297,5 +297,86 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     });
     const detail = result.data.detail;
     expect(detail && "completed_at" in detail ? Date.parse(detail.completed_at) : Number.NaN).not.toBeNaN();
+  }, 20000);
+
+  // AC-1. Its own scenario and its own workspace dir, following this file's convention, so the
+  // listing claim is gated independently of the dismiss claim below: `list` has to work on a queue
+  // nobody can clear yet, which is the state the reporter was actually stuck in.
+  test("inbox list shows entries left by a hand-move", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    writeFileSync(join(workspaceDir, "seed.md"), "seed\n");
+    const opened = await client.openWorkspace(workspaceDir);
+
+    const entry1 = await createEntry(opened.slug, "seed.md", "first unread note");
+    const entry2 = await createEntry(opened.slug, "seed.md", "second unread note");
+
+    // Hand-move both payloads out of `.glosa/inbox/`. Nothing in glosa does this; it is the
+    // unsupported workaround the issue reports as the only thing that ever cleared a stuck queue.
+    unlinkSync(inboxEntryPath(opened.path, entry1));
+    unlinkSync(inboxEntryPath(opened.path, entry2));
+
+    const listed = await client.listInboxEntries(workspaceDir);
+    const ids = listed.entries.map((e) => e.id);
+    expect(ids).toContain(entry1);
+    expect(ids).toContain(entry2);
+
+    // Every column is journal-derived. An implementation that read payloads to build the row would
+    // return an empty list here, which is precisely the failure this test exists to prevent.
+    for (const id of [entry1, entry2]) {
+      const row = listed.entries.find((e) => e.id === id);
+      expect(row?.payload_present).toBe(false);
+      expect(row?.status).toBe("pending");
+      expect(row?.kind).toBe("common");
+      expect(row?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }
+  }, 20000);
+
+  test("dismiss terminalizes an entry with no session — the stuck-queue reproduction end to end (issue #142)", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    writeFileSync(join(workspaceDir, "seed.md"), "seed\n");
+    const opened = await client.openWorkspace(workspaceDir);
+
+    const entry1 = await createEntry(opened.slug, "seed.md", "first unread note");
+    const entry2 = await createEntry(opened.slug, "seed.md", "second unread note");
+
+    // The reproduction itself: hand-move each entry's inbox payload out of `.glosa/inbox/` —
+    // never a supported operation, and (before this fix) the only thing that ever cleared a
+    // stuck queue, with no record left that the entries were dropped rather than delivered.
+    unlinkSync(inboxEntryPath(opened.path, entry1));
+    unlinkSync(inboxEntryPath(opened.path, entry2));
+
+    // pending_count BEFORE the dismiss — measured now, not just after, so an implementation that
+    // never counted these entries in the first place cannot pass.
+    const before = await client.getStatus();
+    const pendingBefore = before.workspaces.find((w) => w.slug === opened.slug)?.pending_count;
+    expect(pendingBefore).toBe(2);
+
+    // `inbox list` shows both orphaned entries even though their payloads are gone — the journal
+    // fold, never the filesystem, is what `list` reads.
+    const listed = await client.listInboxEntries(workspaceDir);
+    const listedIds = listed.entries.map((e) => e.id);
+    expect(listedIds).toContain(entry1);
+    expect(listedIds).toContain(entry2);
+    expect(listed.entries.find((e) => e.id === entry1)?.payload_present).toBe(false);
+    expect(listed.entries.find((e) => e.id === entry2)?.payload_present).toBe(false);
+
+    // `dismiss` terminalizes ONE of them with no --session anywhere in the call — `dismissEntry`
+    // opens no lease and claims no session.
+    const dismissed = await client.dismissEntry(workspaceDir, entry1, "closing unread");
+    expect(dismissed).toEqual({ entry: entry1, status: "dismissed", to: "dismissed" });
+
+    // pending_count AFTER — drops by exactly one, proving dismiss (not merely list) is the cure
+    // REQ-6 asks for.
+    const after = await client.getStatus();
+    const pendingAfter = after.workspaces.find((w) => w.slug === opened.slug)?.pending_count;
+    expect(pendingAfter).toBe(1);
+
+    // entry1 now reads `dismissed` under `--all`; entry2 is untouched and still `pending`.
+    const afterList = await client.listInboxEntries(workspaceDir, { all: true });
+    expect(afterList.entries.find((e) => e.id === entry1)?.status).toBe("dismissed");
+    expect(afterList.entries.find((e) => e.id === entry2)?.status).toBe("pending");
+
+    // A second dismiss of the same entry is a 409, never a silent no-op success.
+    await expect(client.dismissEntry(workspaceDir, entry1)).rejects.toMatchObject({ status: 409 });
   }, 20000);
 });

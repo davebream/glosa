@@ -79,11 +79,16 @@ export function truncateTornTail(deps: ReconcileDeps): TailTruncateResult {
 }
 
 /** Step 3. An inbox file on disk with no `entry_created` in the journal means the daemon crashed
- * after the write-once rename but before the paired journal append (A4 §F04's ordering makes the
- * reverse gap — event without file — impossible, so this is the only direction to heal).
- * Synthesizes and appends the missing `entry_created`, folding it into `state` immediately so the
- * caller doesn't have to re-replay. Also sweeps orphaned inbox `*.tmp` files (crash-before-rename
- * — already inert, this just tidies up). */
+ * after the write-once rename but before the paired journal append. Synthesizes and appends the
+ * missing `entry_created`, folding it into `state` immediately so the caller doesn't have to
+ * re-replay. Also sweeps orphaned inbox `*.tmp` files (crash-before-rename — already inert, this
+ * just tidies up).
+ *
+ * The reverse gap — an `entry_created` with no inbox payload, reachable by hand-removing the file
+ * after it was written (issue #142) — is NOT healed here: there is no payload to synthesize, and
+ * A4 §F04 forbids rewriting the journal to invent one. It surfaces instead as `orphaned_entry_count`
+ * in `GET /api/status` and `glosa doctor`'s orphaned-entries check; `glosa inbox dismiss` is the
+ * supported way to close it. */
 export function selfHealInbox(deps: {
   workspaceRoot: WorkspaceTarget;
   state: DerivedState;

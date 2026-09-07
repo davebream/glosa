@@ -45,6 +45,12 @@ import { createElement as el } from "./viewer-shell.js";
  */
 export const SAVE_DECLINED = Symbol("glosa.save-declined");
 
+// The one 409 that means "the file moved under this draft" — routes/artifact.ts's `mapError`
+// names it separately from the daemon's generic `conflict` slug precisely so a caller never has
+// to guess from a bare status code (D5). A `workspace-adopting` 409 reaches the same route and
+// must NOT open this dialog.
+const SOURCE_CHANGED = "https://glosa.local/errors/source-changed";
+
 export const MODES = ["read", "review", "edit"];
 
 // Writer-register labels for R3's annotation `intent` enum (2026-07-21 brief §7.5): the wire
@@ -63,6 +69,7 @@ const STATE_LABELS = {
   applied: "Done",
   rejected: "Closed",
   stale: "Out of date",
+  dismissed: "Dismissed",
 };
 
 // ---------- the document-global highlight registry ----------
@@ -271,6 +278,16 @@ export function createArtifactPane(host, deps) {
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?}
+  // The sha of the bytes the editor face was FILLED FROM — separate from currentArtifact, which
+  // keeps tracking the file for display. A refresh never moves this, so a save can stay honest
+  // about what it would overwrite even while the pane's display races ahead of it.
+  let baselineSha = null;
+  // Pinned when an edit session begins: {openedCheckpointId, attributionCursor}. Compare's `from`
+  // and the disk-change attribution walk's origin (later tasks in this epic).
+  let editSession = null;
+  // An observed disk state that differs from `baselineSha`: {seenAt, at, attribution, acknowledged}.
+  // Recorded in `refreshArtifact`, cleared on a completed save, a discard, or a fresh `loadArtifact`.
+  let diskChange = null;
   let loading = true;
   let modeState = initialModeState(readLock ? "read" : initialMode);
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
@@ -453,6 +470,36 @@ export function createArtifactPane(host, deps) {
     hidden: true,
     "aria-label": "Final approval",
   });
+  // Previews what a stale save would refuse — never steals focus (`role="status"`, the pattern
+  // `emptyEl` already uses) and renders only in Edit (D7: outside Edit, `.glosa-pane-main` is
+  // itself the scroller, and a flex sibling above `contentEl` would move the manuscript under an
+  // unchanged scrollTop).
+  const diskChangeCopyEl = el("p", { className: "glosa-disk-change-copy" });
+  const diskChangeKeepBtn = el("button", {
+    // `.glosa-btn` is the shared reusable button base (§9); the second class is a JS/test hook
+    // only, with no CSS rule of its own — reusing the base avoids a parallel button styling.
+    className: "glosa-btn glosa-disk-change-keep",
+    type: "button",
+    textContent: "Keep editing",
+    onClick: () => acknowledgeDiskChange(),
+  });
+  const diskChangeReloadBtn = el("button", {
+    // Quieter than `.glosa-btn` (`glosa-btn-ghost`, the same class Cancel wears in confirmDialog):
+    // Reload is the less common, not-yet-fully-implemented action — see `takeDisk`'s STUB note.
+    className: "glosa-btn glosa-btn-ghost glosa-disk-change-reload",
+    type: "button",
+    textContent: "Reload",
+    onClick: () => void takeDisk(currentArtifact),
+  });
+  const diskChangeActionsEl = el("div", { className: "glosa-disk-change-actions" }, [
+    diskChangeKeepBtn,
+    diskChangeReloadBtn,
+  ]);
+  const diskChangeEl = el(
+    "section",
+    { className: "glosa-disk-change", hidden: true, role: "status", "aria-live": "polite" },
+    [diskChangeCopyEl, diskChangeActionsEl],
+  );
   const annotateInstructions = el("p", {
     className: "glosa-visually-hidden",
     textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
@@ -515,6 +562,7 @@ export function createArtifactPane(host, deps) {
 
   const paneMain = el("main", { className: "glosa-pane-main" }, [
     approvalStrip,
+    diskChangeEl,
     annotateInstructions,
     emptyEl,
     skeletonEl,
@@ -1135,6 +1183,54 @@ export function createArtifactPane(host, deps) {
     parkedSource = null;
   }
 
+  /**
+   * Pins `baselineSha` to the bytes a face is about to be filled from. Called from `setMode`'s
+   * Edit-entry transition and from `loadArtifact`'s tail when the pane opens directly in Edit.
+   *
+   * Gated on a parked draft for THIS path, not on `isDirty()`: `isDirty()` folds in
+   * `richEditor?.isDirty()`, so it would depend on whether the async `mountRichFace` had landed
+   * yet, and `modeState.dirty` survives opening a DIFFERENT artifact in this pane — neither is the
+   * question "is there already a live draft for the file about to fill this face".
+   */
+  function beginEditSession() {
+    if (currentArtifact?.class !== "R" || parkedSourceFor(currentArtifact) !== null) return;
+    baselineSha = currentArtifact.source_sha256;
+    // The baseline just caught up to this sha, so any earlier "changed on disk" fact — recorded
+    // against the OLD baseline — no longer describes what a save would refuse. Without this, a
+    // clean pane that leaves Edit and returns would keep showing a banner the file has already
+    // caught up to.
+    clearDiskChange();
+    void pinEditSession();
+  }
+
+  /**
+   * D4: `editSession` is pinned once per draft, not once per mode switch. `openedCheckpointId` is
+   * Compare's `from` (§3.7, later in this epic); `attributionCursor` starts there and is what
+   * `resolveDiskAttribution` advances. Fired as `void` from `beginEditSession` — a slow or failed
+   * lookup must never hold up the face it was called from.
+   *
+   * The pin need not be a checkpoint OF this artifact: shadow-git checkpoints are whole-worktree
+   * commits, so any one is a valid tree to diff a single file against.
+   */
+  async function pinEditSession() {
+    const pinnedBaseline = baselineSha;
+    let rows;
+    try {
+      rows = await dataAccess.getCheckpoints(slug, { limit: 1 });
+    } catch {
+      return; // failure leaves the pin null; Compare degrades to compareWithLastSaved's behaviour
+    }
+    // The draft this was pinning for already ended (a save, a discard, or a fresh load) before the
+    // lookup came back — landing it now would resurrect a session nothing is tracking anymore.
+    if (baselineSha !== pinnedBaseline) return;
+    const checkpointId = rows[0]?.checkpoint_id ?? null;
+    editSession = { openedCheckpointId: checkpointId, attributionCursor: checkpointId };
+  }
+
+  function endEditSession() {
+    editSession = null;
+  }
+
   /** Puts a parked margin note back when Review is re-entered on the artifact it was written
    * against. A note parked against a different file stays parked rather than reopening somewhere
    * it does not belong. */
@@ -1565,9 +1661,10 @@ export function createArtifactPane(host, deps) {
     return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
 
-  /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`), so
-   * there is nothing left to withdraw and nothing to revise. */
-  const isTerminalState = (state) => state === "applied" || state === "rejected" || state === "stale";
+  /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`/
+   * `dismissed`), so there is nothing left to withdraw and nothing to revise. */
+  const isTerminalState = (state) =>
+    state === "applied" || state === "rejected" || state === "stale" || state === "dismissed";
 
   /** Restores the artifact to the state it was in before an agent applied this annotation. Same
    * machinery, guard and force-confirmation as the history pane's restore — an undo is a restore
@@ -2198,14 +2295,17 @@ export function createArtifactPane(host, deps) {
       // On a live entry this really withdraws it (terminal `rejected`, delivery stops). On a
       // settled one there is nothing left to withdraw — the journal is append-only and the entry
       // has already left the state machine — so the verb says what it actually does: it clears the
-      // card from this view and the record stays in the journal. Same action, honest label.
+      // card from this view and the record stays in the journal. Same action, honest label. It used
+      // to say "Dismiss" here, but `dismissed` is now a real wire terminal a human reaches through
+      // `glosa inbox dismiss` — reusing the word for a button that writes nothing would put the one
+      // honest state-machine transition and this local, view-only clear behind the same label.
       const settled = isTerminalState(state);
       actionGroup.append(
         el("button", {
           className: "glosa-annotation-remove",
           type: "button",
-          textContent: settled ? "Dismiss" : "Remove",
-          "aria-label": settled ? "Dismiss this annotation from the list" : "Remove this annotation",
+          textContent: settled ? "Clear" : "Remove",
+          "aria-label": settled ? "Clear this annotation from the list" : "Remove this annotation",
           onClick: () => void removeAnnotation(item),
         }),
       );
@@ -2328,9 +2428,15 @@ export function createArtifactPane(host, deps) {
     else if (previousMode === "review" && modeState.mode !== "review") releaseWidth();
     renderModeBar();
     renderContent();
+    // The fact survives the switch (D7); only whether it is SHOWN depends on the mode just
+    // entered, so this has to re-run on every transition, not only when a new fact is recorded.
+    renderDiskChange();
     void renderHistory();
     onStateChange();
-    if (modeState.mode === "edit" && previousMode !== "edit") paneMain.scrollTop = 0;
+    if (modeState.mode === "edit" && previousMode !== "edit") {
+      paneMain.scrollTop = 0;
+      beginEditSession();
+    }
   }
 
   editArea.addEventListener("input", () => {
@@ -2435,51 +2541,26 @@ export function createArtifactPane(host, deps) {
   }
 
   /**
-   * Writes the artifact. Returns the saved artifact, or `SAVE_DECLINED` when the writer was asked
-   * about collateral and said no — callers that act on a save (the approval flow) must check,
-   * because "nothing was written" is not the same as "nothing needed writing".
+   * The only place a save writes to disk and settles the pane afterward — a retry from the
+   * stale-save dialog (Keep mine) goes through here too, so none of these transitions can be
+   * skipped by a path that isn't the ordinary Save button.
    */
-  async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
-    if (!slug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
-    const dirty = modeState.dirty || Boolean(richEditor?.isDirty());
-    if (onlyIfDirty && !dirty) return currentArtifact;
-
-    // Everything the write needs, captured before any await: asking about collateral suspends
-    // this function, and an agent-driven reveal can swap the pane's artifact while a modal is up.
-    const artifact = currentArtifact;
-    const { content, report } = pendingSave();
-    const consent = await consentToCollateral(report);
-    if (artifact !== currentArtifact) return SAVE_DECLINED;
-    if (consent !== "save") {
-      // "Edit as source" keeps the edit and hands it to the byte-exact face, where the writer can
-      // fix the collateral by hand; nothing reaches disk either way.
-      if (consent === "source" && !sourceFace) {
-        teardownRichFace();
-        sourceFace = true;
-        renderContent();
-        editArea.value = content;
-        pendingReport = null; // they were shown the cost and chose to own these bytes
-        modeState = modeReducer(modeState, { type: "edited" });
-        editArea.focus();
-        onStateChange();
-      }
-      return SAVE_DECLINED;
-    }
-
+  async function writeAndSettle(artifact, content, ifMatch) {
     saveButton.disabled = true;
     editStatus.removeAttribute("data-error");
     editStatus.textContent = "Saving…";
     try {
-      const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, {
-        ifMatch: artifact.source_sha256,
-      });
+      const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
       currentArtifact = { ...artifact, content, ...saved };
       modeState = modeReducer(modeState, { type: "saved" });
       clearParkedSource(); // the parked copy is now behind the file it was parked against
       pendingReport = null;
+      clearDiskChange(); // the write that just landed is exactly what the banner was warning about
       // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
       const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
       currentArtifact = fresh;
+      baselineSha = fresh.source_sha256; // the post-save re-read fills the face anew
+      endEditSession();
       contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
       teardownRichFace(); // remount the rich face from the freshly saved content
       editStatus.textContent = "Saved.";
@@ -2498,6 +2579,133 @@ export function createArtifactPane(host, deps) {
     } finally {
       saveButton.disabled = false;
     }
+  }
+
+  /**
+   * Writes the artifact. Returns the saved artifact, or `SAVE_DECLINED` when the writer was asked
+   * about collateral and said no — callers that act on a save (the approval flow) must check,
+   * because "nothing was written" is not the same as "nothing needed writing".
+   */
+  async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
+    if (!slug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
+    const dirty = modeState.dirty || Boolean(richEditor?.isDirty());
+    if (onlyIfDirty && !dirty) return currentArtifact;
+
+    // Everything the write needs, captured before any await: asking about collateral suspends
+    // this function, and an agent-driven reveal can swap the pane's artifact while a modal is up.
+    const artifact = currentArtifact;
+    const { content, report } = pendingSave();
+    const consent = await consentToCollateral(report);
+    // Path, not identity: refreshArtifact assigns a NEW object for the SAME path on every frame,
+    // so identity would decline a save whenever the file merely refreshed under an open modal —
+    // exactly the moment the write is optimistic against `baselineSha` and can safely proceed into
+    // the 409 check instead. The optional chain keeps a markMissing-nulled currentArtifact declining.
+    if (artifact.source_path !== currentArtifact?.source_path) return SAVE_DECLINED;
+    if (consent !== "save") {
+      // "Edit as source" keeps the edit and hands it to the byte-exact face, where the writer can
+      // fix the collateral by hand; nothing reaches disk either way.
+      if (consent === "source" && !sourceFace) {
+        teardownRichFace();
+        sourceFace = true;
+        renderContent();
+        editArea.value = content;
+        pendingReport = null; // they were shown the cost and chose to own these bytes
+        modeState = modeReducer(modeState, { type: "edited" });
+        editArea.focus();
+        onStateChange();
+      }
+      return SAVE_DECLINED;
+    }
+
+    try {
+      return await writeAndSettle(artifact, content, baselineSha ?? artifact.source_sha256);
+    } catch (error) {
+      if (error?.status === 409 && error.problem?.type === SOURCE_CHANGED) return staleSave(artifact);
+      throw error;
+    }
+  }
+
+  /**
+   * What a stale save would overwrite — from the checkpoint pinned at Edit entry to the working
+   * file. REQ-3 asks for "the diff between the disk version and the version you opened"; this is
+   * a named approximation of that (D10), not a silent one: it additionally includes anything
+   * already uncommitted when the writer arrived, because glosa has no client-side differ and the
+   * daemon only computes checkpoint-to-checkpoint (or checkpoint-to-working) ranges. The header
+   * states the range it actually covers rather than implying the one REQ-3 names.
+   *
+   * Degrades rather than blocks: no pin, or a failed call, means no `detail` — the dialog still
+   * opens either way (Step 5).
+   */
+  async function overwritePreview(artifact) {
+    const openedCheckpointId = editSession?.openedCheckpointId;
+    if (!openedCheckpointId) return undefined;
+    try {
+      const { hunks } = await dataAccess.getDiff(slug, { from: openedCheckpointId, to: "working" });
+      // Same rule diff-pane.js uses: a hunk with no path attribution is kept rather than hidden.
+      const unified = (hunks ?? [])
+        .filter((hunk) => !hunk.path || hunk.path === artifact.source_path)
+        .map((hunk) => hunk.diff)
+        .join("\n");
+      const lines = unified.split("\n");
+      const body =
+        lines.length > 200 ? `${lines.slice(0, 200).join("\n")}\n\n…and ${lines.length - 200} more lines.` : unified;
+      return `Changes to this file since the last saved version (${openedCheckpointId.slice(0, 7)}).\n\n${body}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * *Keep mine* — re-splices the writer's document onto the fresh disk bytes and writes once
+   * through `writeAndSettle` (D6: no block-level three-way merge; a degrading rebase falls through
+   * the existing collateral gate, which asks whenever the splice can't vouch for itself).
+   *
+   * The retry is guarded (D9/AC-19): a second 409 here means the file changed AGAIN while the
+   * writer was deciding — reopening the dialog would ask the same question about a version that
+   * has already moved on, so this reports and declines instead.
+   */
+  async function keepMine(artifact, fresh) {
+    const rebased = sourceFace
+      ? { markdown: editArea.value, collateral: [], degraded: false }
+      : richEditor.rebaseOnto(fresh.content ?? "");
+    if ((await consentToCollateral(rebased)) !== "save") return SAVE_DECLINED;
+    try {
+      return await writeAndSettle(artifact, rebased.markdown, fresh.source_sha256);
+    } catch (error) {
+      if (error?.status === 409) {
+        editStatus.setAttribute("data-error", "true");
+        editStatus.textContent = "Not saved — this file changed again while you were deciding.";
+        return SAVE_DECLINED;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Opens when a save's `If-Match` is refused because the file moved under the draft (D5, D9).
+   * Every non-write outcome returns `SAVE_DECLINED` (C3.2) — Cancel, Esc and the backdrop all
+   * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
+   */
+  async function staleSave(artifact) {
+    editStatus.textContent = "Checking what changed…";
+    const fresh = await dataAccess.getArtifact(slug, artifact.source_path, { render: "html" });
+    const choice = await choiceDialog({
+      title: "This file changed while you were editing",
+      body: `${artifact.source_path} was written after you started. Saving now replaces that version with yours.`,
+      detail: await overwritePreview(artifact),
+      choices: [
+        { id: "take-disk", label: "Take disk", danger: true },
+        { id: "compare", label: "Compare" },
+        { id: "keep-mine", label: "Keep mine" },
+      ],
+    });
+    if (choice === "take-disk") return await takeDisk(fresh);
+    if (choice === "compare") {
+      await compareStaleSave(artifact);
+      return SAVE_DECLINED;
+    }
+    if (choice === "keep-mine") return await keepMine(artifact, fresh);
+    return SAVE_DECLINED; // Cancel / Esc / backdrop
   }
 
   saveButton.addEventListener("click", async () => {
@@ -2655,6 +2863,7 @@ export function createArtifactPane(host, deps) {
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
+      baselineSha = currentArtifact.source_sha256; // a newly loaded artifact fills the face
     } catch (err) {
       loading = false;
       currentArtifact = null;
@@ -2675,9 +2884,175 @@ export function createArtifactPane(host, deps) {
     contentEl.removeAttribute("data-path");
     renderModeBar();
     renderContent();
+    // A pane opened directly in Edit fills its face here rather than through setMode's transition.
+    if (modeState.mode === "edit") beginEditSession();
     void renderHistory();
     onStateChange();
     return true;
+  }
+
+  // ---------- disk-change banner (REQ-2) ----------
+
+  /** A disk change that differs from `baselineSha` — the file this pane opened has moved under
+   * the draft. Recorded immediately with `seenAt`; a save is not blocked on anything here. `sha`
+   * is what the caller compares against to decide whether a later frame is the same fact repeated
+   * (no-op) or a genuinely new one (rebuilds this, resetting `acknowledged`). */
+  function noteDiskChange(sha) {
+    diskChange = { sha, seenAt: new Date(), at: null, attribution: null, acknowledged: false };
+    renderDiskChange();
+    void resolveDiskAttribution();
+  }
+
+  function clearDiskChange() {
+    diskChange = null;
+    renderDiskChange();
+  }
+
+  /** *Keep editing* — dismisses the banner without discarding anything. A later disk change
+   * builds a fresh `diskChange` object (`noteDiskChange`), so `acknowledged` resets by
+   * construction rather than needing to be cleared anywhere else. */
+  function acknowledgeDiskChange() {
+    if (diskChange) diskChange.acknowledged = true;
+    renderDiskChange();
+  }
+
+  function formatClockTime(date) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  /**
+   * D2: a writer is named ONLY when a path-matched diff hunk proves it — never from the mere fact
+   * that something was checkpointed. `attribution` is a git commit trailer and can only ever be
+   * `"human"`, `"session:<id>"` or `"unknown"` (AGENTS.md invariant 3 / A4 §F05); this stores
+   * whatever the daemon returns for a MATCHED path verbatim and never substitutes a guess.
+   *
+   * Never blocks anything already on screen — the banner already reads `seenAt` before this is
+   * called. A rejected call, an empty cursor, or an unmatched path all leave it that way.
+   */
+  async function resolveDiskAttribution() {
+    const cursor = editSession?.attributionCursor;
+    if (!cursor) return; // no pin to walk forward from — stays unattributed
+    const changeAtCall = diskChange;
+    let rows;
+    try {
+      rows = await dataAccess.getCheckpoints(slug, { since: cursor, limit: 1 });
+    } catch {
+      return;
+    }
+    if (!rows?.length) return; // nothing checkpointed since the cursor
+    const newCursor = rows[0].checkpoint_id;
+    let hunks;
+    try {
+      hunks = (await dataAccess.getDiff(slug, { from: cursor, to: newCursor })).hunks;
+    } catch {
+      return;
+    }
+    // Advances regardless of whether this range happened to touch the artifact's own path — the
+    // range up to `newCursor` has been considered either way, and re-walking it on the next call
+    // would only repeat this same answer.
+    if (editSession) editSession.attributionCursor = newCursor;
+    const hunk = hunks?.find((candidate) => candidate.path === currentArtifact?.source_path);
+    if (!hunk) return; // checkpoints landed; none of them touched THIS file — still unattributed
+    // The banner this was resolving for may have already been superseded by a newer disk change
+    // (or cleared) while the lookup was in flight — landing a stale answer on the current one
+    // would attribute the wrong fact.
+    if (diskChange !== changeAtCall) return;
+    diskChange.attribution = hunk.attribution;
+    diskChange.at = rows[0].at;
+    renderDiskChange();
+  }
+
+  /** Honest by construction: a writer is named only when `resolveDiskAttribution` found a
+   * path-matched hunk. Everything else — no hunk, an unmatched path, an "unknown" trailer, a
+   * rejected lookup — reads the same honest default rather than inventing a name for any of them. */
+  function diskChangeCopy(change) {
+    if (change.attribution === "human") {
+      return `Changed on disk — last recorded change was an edit in glosa at ${formatClockTime(new Date(change.at))}.`;
+    }
+    if (typeof change.attribution === "string" && change.attribution.startsWith("session:")) {
+      const shortId = change.attribution.slice("session:".length).slice(0, 12);
+      return `Changed on disk — last recorded change by session ${shortId} at ${formatClockTime(new Date(change.at))}.`;
+    }
+    return `Changed on disk, seen at ${formatClockTime(change.seenAt)} — no checkpoint records who changed it.`;
+  }
+
+  /** Scoped to Edit (D7): outside Edit, `.glosa-pane-main` is itself the scroller, and inserting a
+   * flex sibling above `contentEl` would move the manuscript under an unchanged `scrollTop`. The
+   * fact survives a mode switch even though the banner does not render outside Edit — hence this
+   * runs from every mode transition, not only from a fresh disk change. */
+  function renderDiskChange() {
+    const visible = Boolean(diskChange) && !diskChange.acknowledged && modeState.mode === "edit";
+    diskChangeEl.hidden = !visible;
+    if (!visible) return;
+    diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
+  }
+
+  /** The one prompt for discarding unsaved work, shared by the pane's own close guard and
+   * *Reload* — never a second, differently-worded prompt for the same act. Self-skips when clean,
+   * so Reload on a clean stale editor is a single click. */
+  async function confirmDiscard() {
+    if (!isDirty()) return true;
+    const discard = await confirmDialog({
+      title: "Discard unsaved edits?",
+      // Says "this tab" rather than "leaving Edit": mode switches park drafts now, so closing
+      // is the only remaining way to actually lose one, and the prompt should not imply
+      // otherwise.
+      body: "This artifact has changes that haven't been saved. Closing this tab throws them away.",
+      confirmLabel: "Discard edits",
+      danger: true,
+    });
+    return discard;
+  }
+
+  /**
+   * *Reload* (REQ-4) — takes the file from disk instead of saving over it: discards the draft
+   * and remounts the editor over the fresh disk bytes, writing nothing (no write, no checkpoint).
+   * Reuses `confirmDiscard()` verbatim (C5) — never a second discard prompt. Declining changes
+   * nothing; `confirmDiscard` itself self-skips when the pane is clean, which is what makes Reload
+   * on a clean stale editor a single click. The banner's Reload button delegates here too.
+   */
+  async function takeDisk(fresh) {
+    if (!(await confirmDiscard())) return SAVE_DECLINED;
+    modeState = modeReducer(modeState, { type: "discard" });
+    clearParkedSource();
+    pendingReport = null;
+    clearDiskChange();
+    endEditSession();
+    baselineSha = fresh.source_sha256;
+    // `fresh` may be a re-read staleSave fetched separately from currentArtifact (the stale-save
+    // dialog's path) — without this, the reload sequence below would remount over the STALE
+    // content that just failed to save, defeating the whole point of "take disk".
+    currentArtifact = fresh;
+    contentEl.removeAttribute("data-path");
+    teardownRichFace();
+    renderModeBar();
+    renderContent();
+    onStateChange();
+    return SAVE_DECLINED;
+  }
+
+  /**
+   * *Compare* (REQ-5) — opens a diff tab from the checkpoint pinned at Edit entry to the working
+   * file; writes nothing, and the editor stays exactly as dirty as it was. When the pin is null,
+   * falls back to the newest checkpoint (`compareWithLastSaved`'s own behaviour) and reuses its
+   * message when there isn't one.
+   */
+  async function compareStaleSave(artifact) {
+    if (!openDiffTab) return;
+    let from = editSession?.openedCheckpointId;
+    if (!from) {
+      try {
+        const rows = await dataAccess.getCheckpoints(slug, { limit: 1 });
+        from = rows?.[0]?.checkpoint_id;
+      } catch {
+        from = undefined;
+      }
+      if (!from) {
+        editStatus.textContent = "This artifact has no saved versions to compare with yet.";
+        return;
+      }
+    }
+    openDiffTab({ path: artifact.source_path, from, to: "working" });
   }
 
   async function refreshArtifact() {
@@ -2689,6 +3064,19 @@ export function createArtifactPane(host, deps) {
       // iframe and mints a brand new capability rather than trying to reuse the expiring one.
       mountClassFArtifact(true);
       return;
+    }
+    if (fresh.class === "R" && baselineSha) {
+      if (fresh.source_sha256 === baselineSha) {
+        // The other writer's change is gone — undone, or this pane's own baseline caught up to
+        // it — so the fact this banner was warning about no longer holds.
+        if (diskChange) clearDiskChange();
+      } else if (modeState.mode === "edit" || isDirty()) {
+        // Comparing against the sha the CURRENT diskChange already represents, not just against
+        // baseline: baseline never moves on a refresh, so a bare `!== baselineSha` check would
+        // rebuild `diskChange` — and reset `acknowledged` — on every repeated frame carrying the
+        // same disk state, undoing "Keep editing" the moment the next identical frame arrived.
+        if (!diskChange || diskChange.sha !== fresh.source_sha256) noteDiskChange(fresh.source_sha256);
+      }
     }
     if (modeState.mode !== "edit") {
       morphArtifactContent(contentEl, fresh.rendered_html ?? "");
@@ -2794,19 +3182,7 @@ export function createArtifactPane(host, deps) {
       refreshOutline();
       layoutOutline();
     },
-    async confirmClose() {
-      if (!isDirty()) return true;
-      const discard = await confirmDialog({
-        title: "Discard unsaved edits?",
-        // Says "this tab" rather than "leaving Edit": mode switches park drafts now, so closing
-        // is the only remaining way to actually lose one, and the prompt should not imply
-        // otherwise.
-        body: "This artifact has changes that haven't been saved. Closing this tab throws them away.",
-        confirmLabel: "Discard edits",
-        danger: true,
-      });
-      return discard;
-    },
+    confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
       if (modeState.mode === "review") releaseWidth();
