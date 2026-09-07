@@ -54,36 +54,69 @@ describe("Edit mode — a save never invents an edit", () => {
    * opened over, so an editor re-mounted over ALREADY-spliced text is clean and has nothing to
    * report. A stub that reported collateral no matter what it was mounted over would make the
    * park-and-return test pass without testing anything.
+   *
+   * `dirty` defaults to `true` so the 9 pre-existing cases — none of which set it — are
+   * unaffected. AC-2 (a clean pane still tracking the file) is the reason this needs to be
+   * settable at all: `renderContent` always mounts the rich face in Edit, so without a way to
+   * force `isDirty()` false the pane cannot obtain a clean pane to assert against.
+   *
+   * `rebase.report` is a separate, independently settable box for `rebaseOnto`'s return value
+   * (AC-17 needs `degraded: "block-mismatch"` back from a call the splice itself never produces),
+   * so a test sets it after constructing the stub and before mounting.
    */
-  function stubRichEditor(save: { markdown: string; collateral?: unknown[]; degraded?: string | false }) {
-    const dirty = { collateral: [] as unknown[], degraded: false as string | false, ...save };
+  function stubRichEditor(
+    save: { markdown: string; collateral?: unknown[]; degraded?: string | false },
+    { dirty = true }: { dirty?: boolean } = {},
+  ) {
+    const target = { collateral: [] as unknown[], degraded: false as string | false, ...save };
     const calls = { destroyed: 0 };
+    const rebase: { report: { markdown: string; collateral: unknown[]; degraded: string | false } | null } = {
+      report: null,
+    };
     const mount = (_container: unknown, { markdown }: { markdown: string }) => {
       const report =
-        markdown === dirty.markdown ? { markdown, collateral: [], degraded: false as string | false } : dirty;
+        markdown === target.markdown ? { markdown, collateral: [], degraded: false as string | false } : target;
       return {
         getSave: () => report,
         getMarkdown: () => report.markdown,
-        isDirty: () => true,
+        isDirty: () => dirty,
+        rebaseOnto: (_newSource: string) => rebase.report ?? report,
         focus: () => {},
         destroy: () => {
           calls.destroyed += 1;
         },
       };
     };
-    return { loadRichEditor: async () => mount, calls };
+    return { loadRichEditor: async () => mount, calls, rebase };
   }
 
   function fakeDataAccess(overrides: Record<string, unknown> = {}) {
     return {
+      // Mutable so a test can move the file "on disk" between calls — `getArtifact` and
+      // `refreshArtifact` both read through this record rather than a fixed literal.
+      disk: {
+        content: SOURCE,
+        rendered_html: "<p>After.</p>",
+        source_sha256: "sha-1",
+      },
+      // Settable per test; default `{hunks: []}` so no existing case sees a hunk it didn't ask for.
+      diff: { hunks: [] as unknown[] },
+      // Settable per test; default `[]` matches today's unconditional empty return.
+      checkpoints: [] as unknown[],
+      // A per-call rejection queue: shift one off to make the next `putArtifact` reject instead of
+      // resolving, carrying the `{status, problem}` shape `DataAccessError` throws for real.
+      putRejections: [] as Array<{
+        status: number;
+        problem?: { type?: string; title?: string; [key: string]: unknown };
+      }>,
       put: [] as { path: string; content: string; ifMatch?: string }[],
       subscribe: () => () => {},
       async getArtifact() {
         return {
           source_path: "notes.md",
-          content: SOURCE,
-          rendered_html: "<p>After.</p>",
-          source_sha256: "sha-1",
+          content: this.disk.content,
+          rendered_html: this.disk.rendered_html,
+          source_sha256: this.disk.source_sha256,
           class: "R",
         };
       },
@@ -91,9 +124,20 @@ describe("Edit mode — a save never invents an edit", () => {
         return { annotations: [] };
       },
       async getCheckpoints() {
-        return [];
+        return this.checkpoints;
+      },
+      async getDiff() {
+        return this.diff;
       },
       async putArtifact(_slug: string, path: string, content: string, opts: { ifMatch?: string } = {}) {
+        const rejection = this.putRejections.shift();
+        if (rejection) {
+          const error = Object.assign(
+            new Error(rejection.problem?.title ?? `request failed with status ${rejection.status}`),
+            { status: rejection.status, problem: rejection.problem ?? null },
+          );
+          throw error;
+        }
         this.put.push({ path, content, ifMatch: opts.ifMatch });
         return { source_sha256: "sha-2" };
       },
@@ -104,8 +148,8 @@ describe("Edit mode — a save never invents an edit", () => {
     };
   }
 
-  async function mountEditPane(extra: Record<string, unknown> = {}) {
-    const da = fakeDataAccess();
+  async function mountEditPane(extra: Record<string, unknown> = {}, daOverrides: Record<string, unknown> = {}) {
+    const da = fakeDataAccess(daOverrides);
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
     const pane = createArtifactPane(host, {
@@ -295,5 +339,13 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(modal()).toBeNull();
     expect(da.put).toHaveLength(1);
     expect(da.put[0]?.content).toContain("fixed by hand");
+  });
+
+  test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
+    const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
+    expect(clean.pane.isDirty()).toBe(false);
+
+    const dirty = await mountEditPane(stubRichEditor(LOSSY, { dirty: true }));
+    expect(dirty.pane.isDirty()).toBe(true);
   });
 });
