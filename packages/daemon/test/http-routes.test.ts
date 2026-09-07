@@ -2481,14 +2481,10 @@ describe("A1 §5 route catalog", () => {
       await bus.createEntry("closed-1", { kind: "annotation", artifact_path: "notes.md", body: "done" });
       await bus.commitTransition("closed-1", "applied", { by: "human" });
 
-      const defaultList = await (
-        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))
-      ).json();
+      const defaultList = await (await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))).json();
       expect(defaultList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1"]);
 
-      const allList = await (
-        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}&all=1`))
-      ).json();
+      const allList = await (await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}&all=1`))).json();
       expect(allList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1", "closed-1"]);
       expect(allList.entries[1]).toMatchObject({ status: "applied" });
     });
