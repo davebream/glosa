@@ -57,6 +57,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   for an unresponsive daemon names SIGKILL, because a wedged daemon cannot run its own SIGTERM
   handler. `glosa doctor` names the state too, distinguishing a wedged daemon from a stale lock,
   an occupied port, and no daemon at all.
+- Saving in Edit mode could silently overwrite a change that landed on disk while you were still
+  editing — an agent applying an annotation, or a save from elsewhere — with no refusal and no
+  warning. A save now always writes against the version you actually opened rather than whatever
+  the pane's live preview last showed, so a stale save is refused instead of silently winning.
+- The pane now tells you when the open file changed on disk while you were editing it — naming who
+  changed it when a checkpoint proves it, and admitting plainly when none does — instead of leaving
+  you to find out the hard way. A save that arrives to find the file already changed opens a choice
+  instead of failing or overwriting silently: keep your edit and re-apply it onto the new file, take
+  the file as it is on disk, or compare the two first.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 
