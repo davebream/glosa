@@ -12,7 +12,7 @@
 // a real browser, and the save wiring around it in review-surface.test.ts.
 import { describe, expect, test } from "bun:test";
 import { EditorState } from "../src/vendor/prosemirror.js";
-import { parseMarkdown, serializeMarkdown, spliceMarkdown } from "../src/rich-editor.js";
+import { blockLayout, parseMarkdown, serializeMarkdown, spliceMarkdown } from "../src/rich-editor.js";
 
 const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 
@@ -340,5 +340,40 @@ describe("the serializer stops escaping what the file left bare (REQ-1, #174)", 
     const result = save(source, source.replace("live", "LIVE"));
     expect(result.markdown).toBe("Paths like ~/.claude LIVE here, and x*y too.\n");
     expect(result.degraded).toBe(false);
+  });
+});
+
+describe("the block layout carries the document's reference context", () => {
+  // A reference link whose definition is out of scope parses to plain text, so a candidate
+  // spelling for one edited block cannot be verified on its own — `## [Unreleased]` means
+  // something different alone than it means in the file. The definitions come off the tokenizer
+  // pass `blockLayout` already makes, so nothing new parses the source a second time.
+  const source = "See [r].\n\n[r]: https://example.com\n\nAfter.\n";
+
+  test("the block spans are what they have always been", () => {
+    // The regression guard for the span half. The definition produces neither a token nor a node,
+    // so it falls in the gap between the two paragraphs and each still bounds its own bytes.
+    const { blocks } = blockLayout(source);
+    expect(blocks.map(({ start, end }) => source.slice(start, end))).toEqual(["See [r].", "After."]);
+  });
+
+  test("the reference definitions come back as text a candidate can be parsed with", () => {
+    const { references } = blockLayout(source);
+    // Appendable with nothing added at the call site, and a blank line ahead of the definitions so
+    // they cannot be absorbed into whatever the candidate ends with.
+    expect(references.startsWith("\n\n")).toBe(true);
+
+    const alone = parseMarkdown("See [r].");
+    const inContext = parseMarkdown(`See [r].${references}`);
+    // Alone the brackets are literal text; with the definitions in scope they are a link to the
+    // target the source defined. This difference is the whole reason the context has to travel.
+    expect(alone.firstChild?.child(0).marks).toEqual([]);
+    expect(inContext.firstChild?.child(1).marks[0]?.attrs.href).toBe("https://example.com");
+    // And appending them adds no node of its own, which is what makes it safe to append at all.
+    expect(inContext.childCount).toBe(alone.childCount);
+  });
+
+  test("a document that defines no references reports none", () => {
+    expect(blockLayout("# T\n\nBody.\n").references).toBe("");
   });
 });

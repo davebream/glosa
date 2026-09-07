@@ -145,9 +145,54 @@ function isBlankDoc(doc) {
   return doc.childCount === 0 || (doc.childCount === 1 && doc.firstChild.content.size === 0);
 }
 
+/** What a re-rendered link destination or title has to escape to survive being parsed again.
+ * markdown-it stores both DECODED — `parseLinkDestination` and `parseLinkTitle` run them through
+ * `unescapeAll()`, which resolves backslash escapes and character entities — so writing one back
+ * raw would let a `&amp;` or a `\"` the writer's file spelled out mean something new. The LABEL is
+ * not decoded (markdown-it keys `env.references` on the raw slice, and a link resolves its own
+ * label the same raw way), so a label is written back verbatim and needs no escaping at all. */
+const ESCAPED_IN_DESTINATION = /[\\<>&]/g;
+const ESCAPED_IN_TITLE = /[\\"&]/g;
+const escapeReferencePart = (char) => (char === "&" ? "&amp;" : `\\${char}`);
+
 /**
- * Where each top-level block of `source` came from, in document order: `{start, end}` character
- * offsets bounding the block's own bytes, its trailing line ending excluded.
+ * The document's link reference definitions as text that can be appended to any candidate spelling
+ * before parsing it — `""` when the document defines none.
+ *
+ * A reference link whose definition is out of scope parses to plain text, so `## [Unreleased]`
+ * means something different on its own than it means in the file it came from. Carrying the
+ * definitions beside the block spans is what lets a verification parse ask its question in the
+ * context the bytes will actually live in.
+ *
+ * Every line is checked before it is kept, against the two things the caller relies on: it must
+ * tokenize to NOTHING — a definition produces no token and therefore no node, which is exactly why
+ * appending it cannot disturb a candidate's tree — and it must define the same href and title
+ * markdown-it recorded. A definition that fails either (an exotic label, a title spanning a blank
+ * line) is dropped rather than guessed at, which costs its own links their reference form and can
+ * never add a node to a candidate.
+ */
+function referenceDefinitions(references) {
+  const lines = [];
+  for (const [label, { href, title }] of Object.entries(references ?? {})) {
+    const destination = href.replace(ESCAPED_IN_DESTINATION, escapeReferencePart);
+    const quoted = title ? ` "${title.replace(ESCAPED_IN_TITLE, escapeReferencePart)}"` : "";
+    const line = `[${label}]: <${destination}>${quoted}`;
+    const env = {};
+    if (defaultMarkdownParser.tokenizer.parse(line, env).length !== 0) continue;
+    const defined = env.references ?? {};
+    if (Object.keys(defined).length !== 1) continue;
+    if (defined[label]?.href !== href || defined[label]?.title !== title) continue;
+    lines.push(line);
+  }
+  // A leading blank line, so the definitions cannot be absorbed into whatever the candidate ends
+  // with, and nothing else: `candidate + references` is the whole of the call site.
+  return lines.length === 0 ? "" : `\n\n${lines.join("\n")}\n`;
+}
+
+/**
+ * Where `source`'s top-level blocks came from, and the reference context they came from it in:
+ * `{blocks, references}`. `blocks` holds one `{start, end}` pair per block, in document order —
+ * character offsets bounding the block's own bytes, its trailing line ending excluded.
  *
  * markdown-it's block tokens carry a source line `map` — the same map the daemon's `data-line`
  * stamping anchors on — and `defaultMarkdownParser.tokenizer` IS that markdown-it instance, so the
@@ -157,14 +202,22 @@ function isBlankDoc(doc) {
  * whether a block is copied or re-serialized.
  *
  * Everything between two blocks — blank lines, and link reference definitions, which produce
- * neither a token nor a node — falls outside every span and is therefore copied untouched.
+ * neither a token nor a node — falls outside every span and is therefore copied untouched. The
+ * definitions still have to travel, hence the second half of the record: both halves come off the
+ * one tokenizer pass this already makes, so this stays the SINGLE route to where a block's bytes
+ * came from rather than growing a parallel one beside it.
+ *
+ * Exported for tests on the same grounds as `parseMarkdown` and `serializeMarkdown` above.
  */
-function blockLayout(source) {
+export function blockLayout(source) {
   const lineStart = [0];
   for (let i = 0; i < source.length; i += 1) if (source[i] === "\n") lineStart.push(i + 1);
   const at = (line) => (line < lineStart.length ? lineStart[line] : source.length);
   const blocks = [];
-  for (const token of defaultMarkdownParser.tokenizer.parse(source, {})) {
+  // markdown-it fills `env.references` on this pass; nothing here needed an env before, which is
+  // why the argument used to be a throwaway object literal.
+  const env = {};
+  for (const token of defaultMarkdownParser.tokenizer.parse(source, env)) {
     // Top level only: an opening or self-closing token at nesting depth zero. Its closing partner
     // reports the same level, hence the `nesting` test rather than a depth counter.
     if (token.level !== 0 || token.nesting < 0 || !token.map) continue;
@@ -172,7 +225,7 @@ function blockLayout(source) {
     const body = source.slice(start, at(token.map[1])).replace(/(\r?\n)+$/, "");
     blocks.push({ start, end: start + body.length });
   }
-  return blocks;
+  return { blocks, references: referenceDefinitions(env.references) };
 }
 
 /**
@@ -221,15 +274,16 @@ function wholeDocument(editedDoc, reason) {
  * Binds a splice to one baseline — the exact string the editor was opened over, and the document
  * parsed from it. Returns `splice(editedDoc)`.
  *
- * The baseline never changes for an editor's lifetime, so its block layout is computed once here
- * rather than on every save, park, and face switch.
+ * The baseline never changes for an editor's lifetime, so its block layout — spans and reference
+ * context both — is computed once here rather than on every save, park, and face switch.
  */
 export function createSplicer(source, originalDoc) {
   // A lone `\r` is a line break to markdown-it but not to a `\n` scan, which would slide every
   // block offset out from under the token maps. Classic-Mac endings are vanishingly rare and not
   // worth splicing carefully; refuse rather than corrupt.
   const scannable = !/\r(?!\n)/.test(source);
-  const blocks = scannable ? blockLayout(source) : [];
+  const layout = scannable ? blockLayout(source) : { blocks: [], references: "" };
+  const blocks = layout.blocks;
   const original = originalDoc.content.content;
   const body = (index) => source.slice(blocks[index].start, blocks[index].end);
   /** The original bytes between block `index - 1` and block `index`: line ending plus blank lines. */
