@@ -81,6 +81,11 @@
   binding are exposed by `glosa metadata set|show|clear`, `glosa session bind`, and the equivalent MCP
   tools. The stdio shim is a client of the singleton daemon and acknowledges MCP presentation only
   after its response write.
+- `glosa inbox list [--all] [--workspace <path>]` lists an entry's id/kind/status/age/target path from
+  the same journal fold, flagging one whose immutable payload has gone missing with `[no payload]`;
+  `--all` includes terminal entries. `glosa inbox dismiss <id> [--note] [--workspace <path>]` closes
+  an entry `by:"human"` with no `--session` anywhere in its shape — the supported way to reconcile an
+  orphaned journal entry (A4 §F04, issue #142) — sharing `resolve`'s entry-error mapping.
 - Codex project integration uses owned entries in `.codex/hooks.json` for SessionStart, SessionEnd,
   UserPromptSubmit, and Stop plus an owned `[mcp_servers.glosa]` block in `.codex/config.toml`.
   Installation participates in the same backup/rollback/foreign-entry rules as Claude configuration.
@@ -248,10 +253,11 @@
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note] [--workspace <path>]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal. `--workspace` defaults to the cwd; an entry id names one workspace already, so an agent working elsewhere names it rather than being silently scoped to whatever directory it stands in | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid> [--workspace <path>]` | F05 lease: pre-checkpoint + attribution lease; prints lease token. `--workspace` as for `resolve` | 0;3;8;12;2 |
 | `request-review` | `<path> [--message] [--action] [--require-approval] [--wait <dur>]` | create attention_request; approval mode binds final approval to the saved artifact revision; --wait blocks to resolution | 0(verdict in data);7 timeout;8 approval conflict;3;4;2;70 |
+| `inbox` | `list [--all] [--workspace <path>]` \| `get <id> [--cursor <opaque>] [--workspace <path>]` \| `dismiss <id> [--note] [--workspace <path>]` | list/retrieve/close entries from the journal fold (issue #142); list flags a payload-missing row `[no payload]`; get is read-only and returns the same bounded presentation as MCP `glosa_inbox_get`; dismiss transitions `by:"human"`, no `--session`, first-terminal-wins | list 0;2;3;70 — get 0;2;3;8 — dismiss 0;2;3;8 |
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>] [--provider <id>]` | register or refresh a session and explicitly bind it to the artifact workspace; provider-owned environment discovery supplies identity, with generic MCP fallback when unavailable | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
-| `doctor` | `[dir] --json` | 15 enumerated checks | 0(warns ok);9 any FAIL;5 |
+| `doctor` | `[dir] --json` | 17 enumerated checks | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
