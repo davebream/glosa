@@ -4,9 +4,9 @@
 // (via `foldEvents`) rather than going through a WorkspaceBus — the transition table is a pure
 // function of the event sequence, so that's the sharpest way to exercise it.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import type { EventType, JournalEvent } from "../../src/bus/journal.ts";
-import { journalPath } from "../../src/bus/paths.ts";
+import { inboxDir, journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
@@ -300,6 +300,38 @@ describe("dismissed — a distinct common terminal (#142)", () => {
   test("a dismissed on an entry with no entry_created on record auto-vivifies and terminalizes", () => {
     const s = fold([transition("ghost", "dismissed")]);
     expect(s.entries.ghost?.status).toBe("dismissed");
+  });
+});
+
+describe("dismiss writes one journal line and touches no inbox file (#142)", () => {
+  // AC-5. This lives in the `fault` gate member on purpose: "the journal is the single source of
+  // truth and is never rewritten" (AGENTS.md invariant 2) is a durability claim, so it is asserted
+  // against a real WorkspaceBus and a real journal file rather than a folded event array.
+  test("dismiss appends exactly one journal line and no inbox file", async () => {
+    const root = freshWorkspace();
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
+    await bus.createEntry("e1", { kind: "pipeline_feedback", body: "seed", target_path: "doc.md" });
+
+    const linesBefore = readFileSync(journalPath(root), "utf8").split("\n").filter(Boolean).length;
+    const filesBefore = readdirSync(inboxDir(root)).filter((f) => f.endsWith(".json")).length;
+
+    await bus.commitTransition("e1", "dismissed", { by: "human" });
+
+    const linesAfter = readFileSync(journalPath(root), "utf8").split("\n").filter(Boolean).length;
+    const filesAfter = readdirSync(inboxDir(root)).filter((f) => f.endsWith(".json")).length;
+
+    expect(linesAfter - linesBefore).toBe(1);
+    expect(filesAfter).toBe(filesBefore);
+    expect(bus.state.entries.e1?.status).toBe("dismissed");
+
+    // The appended line is the dismiss itself, attributed to a person and to no session.
+    const last = JSON.parse(readFileSync(journalPath(root), "utf8").trim().split("\n").pop() as string) as JournalEvent;
+    expect(last.event).toBe("transition_committed");
+    expect(last.by).toBe("human");
+    expect((last.detail as { to?: string } | undefined)?.to).toBe("dismissed");
+
+    await bus.close();
+    cleanupWorkspace(root);
   });
 });
 

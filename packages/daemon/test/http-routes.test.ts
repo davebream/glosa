@@ -241,7 +241,7 @@ describe("A1 §5 route catalog", () => {
   // declines must still 422 through the unchanged `mapError` arm; if both returned 200 the fix
   // would have widened past the orphan signature and hidden a real defect behind a recovery hint.
   describe("GET /w/:slug/inbox/:entry/presentation — orphan fail-soft", () => {
-    test("an orphaned entry (journal state, no payload) returns 200 with a dismiss hint", async () => {
+    test("orphaned entry presents with a hint instead of 422 (journal state, no payload)", async () => {
       const bus = ctx.getWorkspaceBus(root);
       await bus.createEntry("orphan-pres-1", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
       unlinkSync(inboxEntryPath(root, "orphan-pres-1"));
