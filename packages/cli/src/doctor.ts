@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Fifteen enumerated checks — A6's own
-// command-surface table names exactly 15 (platform, bun, git, claude-code, browser, daemon+proto,
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Seventeen enumerated checks — A6's own
+// command-surface table names exactly 17 (platform, bun, git, claude-code, browser, daemon+proto,
 // token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
-// Channel status, transcript-root).
+// Channel status, transcript-root, orphaned-entries).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
