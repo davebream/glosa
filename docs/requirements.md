@@ -162,8 +162,10 @@ generic.**
 ### R3 — file bus: inbox, journal (=truth), provenance  (detail: A4 §F04/§F05, A5 §F23)
 - **The journal is the single source of truth.** Inbox entries are **immutable** (write-once, temp→
   fsync→rename); current status is derived by **replaying the journal** (idempotent fold; ULID
-  `event_id` + `idem` keys). `glosa resolve` appends **one** journal line — no cross-file atomic write
-  exists (this is the F04 fix). Startup reconciliation: torn-tail truncate → replay → inbox self-heal →
+  `event_id` + `idem` keys). `glosa resolve` and `glosa inbox dismiss` each append **one** journal
+  line — no cross-file atomic write exists (this is the F04 fix); dismiss is the human path that
+  closes an entry whose inbox payload has gone missing, without needing a session, reconciling the
+  count `doctor`/`status` name as orphaned. Startup reconciliation: torn-tail truncate → replay → inbox self-heal →
   apply-lease reconcile → offline-edit catch-up. Corrupt interior line → quarantine, never fatal.
 - Journal, inbox, quarantine, declarative metadata/config, reconciliation state, checkpoints, and
   shadow Git resolve through the registration's absolute bus path. Redirection changes storage
@@ -328,8 +330,9 @@ the entry survives.
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent,
   provider-targeted hook/MCP merge with workspace-default or explicit user scope, ownership manifest,
   backups, uninstall — prints the correct channels dev command, never `--channels`),
-  `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (15 enumerated checks incl. optional-Channel status + transcript-root confinement), `status`;
+  `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
+  `metadata set|show|clear`, `session bind`,
+  `token rotate|revoke`, `doctor` (17 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries), `status`;
   internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`), never auto-invokes init, and
   supports an init-free Preview first run — but surfaces the un-wired state honestly: a

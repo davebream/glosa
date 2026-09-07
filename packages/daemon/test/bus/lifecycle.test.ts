@@ -281,6 +281,28 @@ describe("auto-vivify (no entry_created on record) only mints legal common `to` 
   });
 });
 
+describe("dismissed — a distinct common terminal (#142)", () => {
+  test("pending -> dismissed is terminal for a common entry", () => {
+    const s = fold([created("e1"), transition("e1", "dismissed")]);
+    expect(s.entries.e1?.status).toBe("dismissed");
+  });
+
+  test("a second dismissed on an already-dismissed entry folds to a no-op", () => {
+    const s = fold([created("e1"), transition("e1", "dismissed"), transition("e1", "dismissed")]);
+    expect(s.entries.e1?.status).toBe("dismissed");
+  });
+
+  test("a later applied on a dismissed entry folds to a no-op — first-terminal-wins", () => {
+    const s = fold([created("e1"), transition("e1", "dismissed"), transition("e1", "applied")]);
+    expect(s.entries.e1?.status).toBe("dismissed");
+  });
+
+  test("a dismissed on an entry with no entry_created on record auto-vivifies and terminalizes", () => {
+    const s = fold([transition("ghost", "dismissed")]);
+    expect(s.entries.ghost?.status).toBe("dismissed");
+  });
+});
+
 describe("wrong-axis events are no-ops — the guard table is keyed on the entry's OWN kind", () => {
   test("a common entry + attention_committed{to:'done'} is a no-op ('done' isn't in the common vocabulary)", () => {
     const s = fold([created("e1"), attentionTransition("e1", "done")]);

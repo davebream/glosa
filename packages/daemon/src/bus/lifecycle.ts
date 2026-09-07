@@ -67,17 +67,18 @@ const COMMON_INITIAL_STATUS = "pending";
 const ATTENTION_INITIAL_STATUS = "open";
 const CONVERSATION_INITIAL_STATUS = "pending";
 
-const COMMON_TERMINALS: ReadonlySet<string> = new Set(["applied", "rejected", "stale"]);
+export const COMMON_TERMINALS: ReadonlySet<string> = new Set(["applied", "rejected", "stale", "dismissed"]);
 const ATTENTION_TERMINALS: ReadonlySet<string> = new Set(["done", "expired", "stale"]);
 const CONVERSATION_TERMINALS: ReadonlySet<string> = new Set(["delivered", "stale"]);
 
-// Common: pending -> delivered -> seen? -> {applied|rejected|stale}.
+// Common: pending -> delivered -> seen? -> {applied|rejected|stale|dismissed}.
 const COMMON_GUARDS: GuardTable = {
   delivered: { from: [COMMON_INITIAL_STATUS] },
   seen: { from: ["delivered"] },
   applied: { from: "non-terminal" },
   rejected: { from: "non-terminal" },
   stale: { from: "non-terminal" },
+  dismissed: { from: "non-terminal" },
 };
 
 // Attention: open -> delivered -> seen -> {done|expired|stale}.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Fifteen enumerated checks — A6's own
-// command-surface table names exactly 15 (platform, bun, git, claude-code, browser, daemon+proto,
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Seventeen enumerated checks — A6's own
+// command-surface table names exactly 17 (platform, bun, git, claude-code, browser, daemon+proto,
 // token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
-// Channel status, transcript-root).
+// Channel status, transcript-root, orphaned-entries).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
@@ -476,6 +476,35 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
         ),
   );
 
+  // 17. orphaned-entries (issue #142) — journal entries in THIS workspace's bus that are durably
+  // created and not yet terminal, but whose inbox payload has gone missing (hand-removed, or
+  // otherwise lost). Reuses check 6's status aggregate exactly as check 12 does; daemon-down ->
+  // SKIP, same reasoning as check 12 (a warn would just repeat check 6's fail). Recovery is
+  // `glosa inbox dismiss <id>` — the supported human close; nothing here rewrites the journal or
+  // synthesizes a payload (AGENTS.md invariant 2).
+  if (!status) {
+    checks.push(check("orphaned-entries", "skip", "daemon unreachable — orphaned journal entries not checked"));
+  } else {
+    let canonicalDir = dir;
+    try {
+      canonicalDir = realpathSync(dir);
+    } catch {
+      // nonexistent dir — fall back to the literal path; no workspace row will match either way
+    }
+    const ws = status.workspaces.find((w) => w.path === canonicalDir || w.path === dir);
+    const orphaned = ws?.orphaned_entry_count ?? 0;
+    checks.push(
+      orphaned === 0
+        ? check("orphaned-entries", "pass", "no journal entries with a missing inbox payload")
+        : check(
+            "orphaned-entries",
+            "warn",
+            `${orphaned} journal entr${orphaned === 1 ? "y has" : "ies have"} no inbox payload (hand-removed?) — ` +
+              `run \`glosa inbox dismiss <id>\` to close them`,
+          ),
+    );
+  }
+
   return checks;
 }
 
@@ -500,7 +529,7 @@ export function printDoctorResult(result: CommandEnvelope<DoctorData>, json: boo
     return;
   }
   // Command-level warnings (e.g. #96's "this directory isn't the repo root") sit outside the
-  // 15 enumerated checks, so they get their own line rather than a fake 16th check.
+  // 17 enumerated checks, so they get their own line rather than an 18th check.
   for (const warning of result.warnings) {
     process.stderr.write(`glosa doctor: warning: ${warning.message}\n`);
   }

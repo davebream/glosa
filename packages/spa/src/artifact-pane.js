@@ -69,6 +69,7 @@ const STATE_LABELS = {
   applied: "Done",
   rejected: "Closed",
   stale: "Out of date",
+  dismissed: "Dismissed",
 };
 
 // ---------- the document-global highlight registry ----------
@@ -1660,9 +1661,10 @@ export function createArtifactPane(host, deps) {
     return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
 
-  /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`), so
-   * there is nothing left to withdraw and nothing to revise. */
-  const isTerminalState = (state) => state === "applied" || state === "rejected" || state === "stale";
+  /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`/
+   * `dismissed`), so there is nothing left to withdraw and nothing to revise. */
+  const isTerminalState = (state) =>
+    state === "applied" || state === "rejected" || state === "stale" || state === "dismissed";
 
   /** Restores the artifact to the state it was in before an agent applied this annotation. Same
    * machinery, guard and force-confirmation as the history pane's restore — an undo is a restore
@@ -2293,14 +2295,17 @@ export function createArtifactPane(host, deps) {
       // On a live entry this really withdraws it (terminal `rejected`, delivery stops). On a
       // settled one there is nothing left to withdraw — the journal is append-only and the entry
       // has already left the state machine — so the verb says what it actually does: it clears the
-      // card from this view and the record stays in the journal. Same action, honest label.
+      // card from this view and the record stays in the journal. Same action, honest label. It used
+      // to say "Dismiss" here, but `dismissed` is now a real wire terminal a human reaches through
+      // `glosa inbox dismiss` — reusing the word for a button that writes nothing would put the one
+      // honest state-machine transition and this local, view-only clear behind the same label.
       const settled = isTerminalState(state);
       actionGroup.append(
         el("button", {
           className: "glosa-annotation-remove",
           type: "button",
-          textContent: settled ? "Dismiss" : "Remove",
-          "aria-label": settled ? "Dismiss this annotation from the list" : "Remove this annotation",
+          textContent: settled ? "Clear" : "Remove",
+          "aria-label": settled ? "Clear this annotation from the list" : "Remove this annotation",
           onClick: () => void removeAnnotation(item),
         }),
       );

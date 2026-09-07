@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkspaceTarget } from "../workspace.ts";
+import { readInboxEntry } from "./inbox.ts";
 import type { JournalEvent } from "./journal.ts";
 import { isTerminal, lifecycleReducer } from "./lifecycle.ts";
 import { journalPath } from "./paths.ts";
@@ -77,4 +78,31 @@ export function pendingCount(state: DerivedState): number {
 
 export function hasOpenAttention(state: DerivedState): boolean {
   return Object.values(state.entries).some((e) => e.kind === "attention" && !isTerminal("attention", e.status));
+}
+
+/** Journal-derived count of orphaned entries — the reverse of A4 §F04's usual gap: a durably
+ * `entry_created`/`entry_adopted` entry (`peek.entryOrder`, so a lease-only vivify with no such
+ * event, `lifecycle.ts:181-187`, never counts), still non-terminal, whose `.glosa/inbox/<id>.json`
+ * has gone missing from under it (hand-removed, or otherwise lost — `readInboxEntry` returns
+ * `null` on any read failure). Detect-and-report only, per AGENTS.md invariant 2: the journal is
+ * never rewritten and no payload is synthesized to close the gap — `glosa inbox dismiss <id>` is
+ * the supported human reconciliation.
+ *
+ * The terminal check reuses `pendingCount`'s exact kind mapping (attention vs. everything else),
+ * not a 3-way common/attention/conversation split: `handleWorkspaceInboxDismiss` (http.ts) uses
+ * that same 2-way mapping to decide whether `dismiss` still applies to an entry, and this count
+ * must agree with it — a 3-way split here could report an entry as orphaned (or clear) that
+ * `dismiss` would classify differently, breaking the "count falls to zero after dismiss"
+ * invariant this exists to serve. */
+export function orphanedEntryCount(workspace: WorkspaceTarget, peek: JournalPeek): number {
+  let count = 0;
+  for (const id of peek.entryOrder.keys()) {
+    const entry = peek.state.entries[id];
+    if (!entry) continue; // defensive — entryOrder and the fold are populated by the same events
+    const kind = entry.kind === "attention" ? "attention" : "common";
+    if (isTerminal(kind, entry.status)) continue;
+    if (readInboxEntry(workspace, id) !== null) continue;
+    count++;
+  }
+  return count;
 }
