@@ -203,6 +203,23 @@ Class F artifacts return metadata only — actual HTML is never served through t
 - **400 invalid-path** — path escapes workspace root or fails the tracked-artifact rule.
 - **404 not-found** — path within workspace but no such artifact.
 
+### 5.4a `PUT /w/:slug/artifacts/:path`
+Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspace-relative (§6
+confinement). Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted,
+and an empty body is rejected. Optional `If-Match: <source_sha256>` header requests optimistic
+concurrency: when present and it no longer matches what is on disk, the write is refused rather
+than applied — this is what the Edit-mode stale-save dialog keys on (R6).
+- **200**
+```json
+{ "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R",
+  "content": "<saved source>", "rendered_html": "<div data-line=\"1\">…</div>" }
+```
+- **400 validation-failed** — request body is empty.
+- **404 not-found** — path within workspace but no such artifact.
+- **409 source-changed** — `If-Match`'s `source_sha256` no longer matches what is on disk; nothing
+  was written. Distinct from the `workspace-adopting` `409` that can also reach this route (§9) —
+  a caller must discriminate on `type`, never on a bare `409` status.
+
 ### 5.5 `GET /w/:slug/stream`
 Bearer required. Artifact/journal SSE stream — full protocol in §7... see §8 (SSE resync).
 Query param `?since=<cursor>` is the documented fallback for `Last-Event-ID` (see §8).
@@ -622,7 +639,7 @@ data: <json>
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed) |
+| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
 | 500 | unhandled daemon error | any route |
 
