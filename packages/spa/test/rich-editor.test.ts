@@ -185,6 +185,34 @@ describe("a save the writer did not make is byte-identical", () => {
 });
 
 describe("an edited block is the only block that moves", () => {
+  /** AC-1 (#143), THE CRITERION #174 DEFERRED (AMD-6).
+   *
+   *  #174 could not assert whole-fixture byte-identity, because it needs the YAML front matter to
+   *  survive an edit and opaque blocks are this issue's half. So this is where it lands.
+   *
+   *  All four of the fixture's regions, one word changed inside each. What the front-matter region
+   *  cost before the raw node existed, measured at `4bf6db5`: `degraded: "reparse"` — the WHOLE
+   *  document re-serialized, `---` fences gone, the two YAML lines collapsed into `## title: Test`,
+   *  the trailing newline dropped, and the entire file landing on the agent's side as one
+   *  `human_edit`. The other three already passed; they stay here so the file records what #171,
+   *  #173 and #174 bought. */
+  test("AC-1 (#143): a one-word edit inside any fixture region writes exactly that edit", () => {
+    const regions: Array<[string, string, string]> = [
+      ["front matter", "status: draft", "status: review"],
+      ["the callout body", "with a second line.", "with a SECOND line."],
+      ["the prose paragraph", "deliberate", "DELIBERATE"],
+      ["the %% comment", "A comment block.", "A COMMENT block."],
+    ];
+    for (const [region, from, to] of regions) {
+      const edited = FIXTURE.replace(from, to);
+      expect(edited, `${region}: the fixture must actually contain ${from}`).not.toBe(FIXTURE);
+      const result = save(FIXTURE, edited);
+      expect(result.markdown, `${region}: the write is the writer's file, byte for byte`).toBe(edited);
+      expect(result.degraded, `${region}: no whole-document fallback`).toBe(false);
+      expect(result.collateral, `${region}: nothing the writer did not type`).toEqual([]);
+    }
+  });
+
   test("the reported fixture: one changed word leaves frontmatter, callout, and %% untouched", () => {
     const edited = FIXTURE.replace("deliberate", "DELIBERATE");
     const { markdown } = save(FIXTURE, edited);
