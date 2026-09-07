@@ -255,7 +255,9 @@ the entry survives.
   paragraph is a line break the writer typed and is kept as one, since a joined line cannot be
   split again from the file afterwards. Where re-serializing an edited block would still change
   bytes the writer did not touch, glosa shows that collateral and asks before writing, never
-  silently. Human edits in glosa → attributed `human` by construction.
+  silently. Human edits in glosa → attributed `human` by construction. A save is refused when the file moved
+  under the draft since it was opened, rather than silently overwritten, and the writer chooses: keep
+  the edit, take the disk version, or compare first.
 - **Class R viewer (markdown)**: markdown-it + `data-line` stamping; SSE-driven updates morphed via
   idiomorph (scroll/selection preserved); annotation → W3C record → POST.
 - **Class F viewer (foreign HTML)**: **source-preserving (bridge-augmented)** — served from the
@@ -395,7 +397,8 @@ the entry survives.
   sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
-  reconnect loses no events.
+  reconnect loses no events; a concurrent writer's change on disk is never silently overwritten by
+  a stale save.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
   the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
