@@ -234,25 +234,21 @@ describe("Gunshi command surface", () => {
   // deterministic DAEMON_UNREACHABLE instead of a real spawn; exit 3 (not a usage 2) is the
   // observable proof that parsing let the stray token through. Its own timeout, like the discovery
   // tests above, because a squatted-port handshake failure isn't instant.
-  test(
-    "inbox: a single stray positional after `list` is NOT rejected as surplus — it reaches the daemon",
-    () => {
-      const port = randomPort();
-      const squatter = Bun.serve({
-        hostname: "127.0.0.1",
-        port,
-        fetch: () => Response.json({ not: "a glosa handshake" }),
-      });
-      try {
-        const oneStray = runCli(["inbox", "list", "extra-arg"], { env: { GLOSA_PORT: String(port) } });
-        expect(oneStray.exitCode).toBe(3);
-        expect(oneStray.stderr).not.toContain("Unexpected positional argument");
-      } finally {
-        squatter.stop();
-      }
-    },
-    7000,
-  );
+  test("inbox: a single stray positional after `list` is NOT rejected as surplus — it reaches the daemon", () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    try {
+      const oneStray = runCli(["inbox", "list", "extra-arg"], { env: { GLOSA_PORT: String(port) } });
+      expect(oneStray.exitCode).toBe(3);
+      expect(oneStray.stderr).not.toContain("Unexpected positional argument");
+    } finally {
+      squatter.stop();
+    }
+  }, 7000);
 
   test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
     const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);

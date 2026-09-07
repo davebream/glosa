@@ -97,7 +97,13 @@ export async function runInboxGet(
   }
   try {
     const result = await client.getInboxPresentation(options.workspace, options.id, options.cursor);
-    return { ok: true, command: "inbox get", exitCode: EXIT_CODES.OK, data: { presentation: result.presentation }, warnings: [] };
+    return {
+      ok: true,
+      command: "inbox get",
+      exitCode: EXIT_CODES.OK,
+      data: { presentation: result.presentation },
+      warnings: [],
+    };
   } catch (err) {
     return { ...mapEntryFailure("inbox get", err), data: {} };
   }

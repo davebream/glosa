@@ -31,12 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the only kind of damage that could not be undone afterwards: once the joined line was on disk,
   nothing could tell where the break had been. Editing a `%% ... %%` comment or the second line of a
   callout no longer disturbs them either, since that damage was collapsed line breaks as well. On
-  this repo's own documents the dialog now comes up on about one edited block in ten, down from
-  four.
+  this repo's own documents the dialog now comes up on about one edited block in a hundred, down
+  from one in nine.
 - Where writing an edited block back would still change markup you did not touch — glosa's markdown
-  editor has no notion of a callout marker or YAML front matter yet, and it escapes square brackets
-  in ordinary prose — the save shows you those exact bytes and asks, offering to save anyway or to
-  hand your edit to the source face so you can fix it by hand. Nothing is written until you choose.
+  editor has no notion of a callout marker or YAML front matter yet — the save shows you those exact
+  bytes and asks, offering to save anyway or to hand your edit to the source face so you can fix it
+  by hand. Nothing is written until you choose.
 - A final approval that saves your pending edits first no longer records the approval when that save
   did not happen. Declining the save leaves the request open and says so.
 - Running Claude and Codex sessions recover registration on their next MCP tool call after a daemon
@@ -82,6 +82,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   you to find out the hard way. A save that arrives to find the file already changed opens a choice
   instead of failing or overwriting silently: keep your edit and re-apply it onto the new file, take
   the file as it is on disk, or compare the two first.
+
+- Editing one word in a block no longer respells the rest of it. A save used to write the editor's
+  own spelling of everything in the block it re-serialized: a bare `[` came back escaped, `&amp;`
+  came back decoded, a link written as `[Unreleased]` came back with its target inlined, and an
+  indented continuation line came back flush left. None of that was your change, and all of it
+  reached the agent as though it were. A block glosa's editor models is now written back in the
+  spelling it was read in, with only your own edit different.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 
