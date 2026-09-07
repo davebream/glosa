@@ -234,6 +234,41 @@ describe("A1 §5 route catalog", () => {
     });
   });
 
+  // --- GET /w/:slug/inbox/:entry/presentation — orphan fail-soft (issue #142, D9) ---
+  //
+  // The orphan signature is exact: `bus.readEntry` returns a non-null object whose `payload` is
+  // `null`. The second test is the control — a payload that EXISTS but that `actionablePresentation`
+  // declines must still 422 through the unchanged `mapError` arm; if both returned 200 the fix
+  // would have widened past the orphan signature and hidden a real defect behind a recovery hint.
+  describe("GET /w/:slug/inbox/:entry/presentation — orphan fail-soft", () => {
+    test("an orphaned entry (journal state, no payload) returns 200 with a dismiss hint", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-pres-1", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-pres-1"));
+
+      const res = await fetchFn(req(`/w/${slug}/inbox/orphan-pres-1/presentation`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.presentation).toMatchObject({ id: "orphan-pres-1", kind: "annotation", status: "pending" });
+      expect(body.presentation.text).toContain("glosa inbox dismiss orphan-pres-1");
+      expect(body.presentation.detail).toMatchObject({ orphaned: true });
+    });
+
+    test("a payload that exists but that actionablePresentation declines still returns 422 (the control)", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      // Missing `intent`/`target` — annotationPresentation (delivery/presentation.ts) returns
+      // null for this shape, which is what makes this genuinely non-actionable rather than orphaned.
+      await bus.createEntry("non-actionable-pres-1", {
+        kind: "annotation",
+        artifact_path: "notes.md",
+        body: "incomplete",
+      });
+
+      const res = await fetchFn(req(`/w/${slug}/inbox/non-actionable-pres-1/presentation`));
+      expect(res.status).toBe(422);
+    });
+  });
+
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
     const looseRoot = mkdtempSync(join(tmpdir(), "glosa-routes-loose-"));
     const firstPath = join(looseRoot, "first.md");

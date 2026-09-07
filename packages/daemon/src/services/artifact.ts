@@ -518,6 +518,39 @@ export async function restoreArtifact(
   };
 }
 
+/** The fail-soft placeholder for the orphan signature `inboxPresentation` branches on below
+ * (D9, C6, issue #142): journal state exists but the immutable `.glosa/inbox/<id>.json` payload
+ * is gone — hand-removed, or otherwise lost, never rewritten or synthesized back (AGENTS.md
+ * invariant 2). `kind: "annotation"` is the generic placeholder shape (only a free-form `detail`
+ * bag, unlike `conversation_message`'s extra required fields) since the real kind died with the
+ * payload and cannot be recovered. The retrieval command mirrors `retrieval()` in
+ * delivery/presentation.ts (not exported, so reconstructed here rather than widening that
+ * module's surface for one caller). */
+function orphanEntryPresentation(
+  workspace: WorkspaceEntry,
+  entryId: string,
+  status: string,
+  cursor?: string,
+): DeliverableEntry & { workspace: string } {
+  const hint = `this entry's inbox payload is missing (hand-removed?) — run \`glosa inbox dismiss ${entryId}\` to close it`;
+  const text = `glosa annotation ${entryId}\n${hint}`;
+  return {
+    id: entryId,
+    kind: "annotation",
+    status,
+    text,
+    bytes: utf8Bytes(text),
+    detail: { orphaned: true, hint },
+    truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+    retrieval: {
+      command: `glosa inbox get ${entryId}${cursor ? ` --cursor ${cursor}` : ""}`,
+      mcp_tool: "glosa_inbox_get",
+      ...(cursor ? { cursor } : {}),
+    },
+    workspace: workspace.canonical_path,
+  };
+}
+
 export async function inboxPresentation(
   deps: ArtifactAccessDependencies,
   slug: string,
@@ -528,6 +561,15 @@ export async function inboxPresentation(
   const bus = await workspaceBus(deps, workspace);
   const entry = bus.readEntry(entryId);
   if (!entry) throw new ArtifactError("not-found", { id: entryId });
+  // The exact orphan signature (D9): journal state exists (readEntry returned non-null) but the
+  // payload is null, because readInboxEntry returns null on any read failure. Scoped to EXACTLY
+  // this — a payload that exists but that actionablePresentation declines below still throws,
+  // unchanged, through the same presentation-not-actionable -> 422 arm other callers depend on
+  // (contracts.md C7.4). Widening this to every non-actionable case would hide a real defect
+  // behind a recovery hint instead of surfacing it.
+  if (entry.payload === null) {
+    return orphanEntryPresentation(workspace, entryId, entry.status, cursor);
+  }
   const state = bus.state.entries[entryId];
   const presentation = actionablePresentation(
     deps,
