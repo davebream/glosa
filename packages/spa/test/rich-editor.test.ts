@@ -694,18 +694,18 @@ describe("REQ-7: a re-serialized block always means what the writer's tree means
 describe("the restoration's size guard", () => {
   // Mirrors MAX_RESTORE_CELLS in rich-editor.js. Duplicated deliberately: a test that read the
   // constant would pass however the constant moved.
-  const budget = 6_000_000;
+  const budget = 12_000_000;
   const tokens = (text: string) => (text.match(/\w+|\s+|[^\w\s]/g) ?? []).length;
 
   test("the budget is where this file says it is, checked from both sides", () => {
     // The corpus below cannot pin the constant on its own: its two largest blocks are serializer
     // fixed points, so skipping their restoration returns the same bytes and is invisible. The
     // largest block the corpus HAS to restore is 2.5M cells, which leaves everything between 2.5M
-    // and 6M unchecked. These two paragraphs close that gap by straddling the budget — each is a
+    // and 12M unchecked. These two paragraphs close that gap by straddling the budget — each is a
     // long run of words with one `&amp;` in it, so it is not a fixed point and restoring it is
     // observable, and they differ only in length.
-    const under = `${"alpha ".repeat(1220)}&amp; end.`;
-    const over = `${"alpha ".repeat(1260)}&amp; end.`;
+    const under = `${"alpha ".repeat(1700)}&amp; end.`;
+    const over = `${"alpha ".repeat(1760)}&amp; end.`;
     const cells = (body: string) =>
       (tokens(serializeNodesFaithfully([parseMarkdown(body).child(0)], "")) + 1) * (tokens(body) + 1);
     expect(cells(under)).toBeLessThan(budget);
@@ -764,8 +764,15 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(422);
-    // Measured at this base: 3,598,609 cells, in a 5474-byte list block in docs/requirements.md.
+    ).toBe(433);
+    // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
+    // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
+    // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
+    // against a 3,598,609-cell worst block in docs/requirements.md; merging #179, #180 and #181
+    // moved the worst block to CHANGELOG.md and left no headroom, which is exactly what this
+    // assertion exists to catch. Widened to 12M rather than relaxing the 1.5x margin: over budget
+    // the restoration silently stops running for that block, and this is not a keystroke path —
+    // `getSave()` has three user-action call sites and the measured cost was 19ms at 3.6M cells.
     // Asserted with headroom rather than bare inequality, so a document growing towards the budget
     // turns this red while there is still room to widen it — before it silently turns the fix off
     // for that block.
@@ -888,7 +895,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //                                completeness claim about the guard.
   //
   // HISTORY of metric 1: 174/418 Phase 0 · 40/418 as reported post-#173 · 43/418 re-measured at
-  // `d965ffb` · 40/418 after this task's code · 40/422 after its documentation, which added four
+  // `d965ffb` · 40/418 after this task's code · 40/433 after its documentation and the merge of #179/#180/#181, which added four
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
@@ -932,7 +939,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
    *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
    *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
-  const BLOCKS = 422;
+  const BLOCKS = 433;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -970,7 +977,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 422 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 433 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1012,7 +1019,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 3 dishonest writes of 375; the guard fires on those 3 and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 3 dishonest writes of 385; the guard fires on those 3 and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
@@ -1083,7 +1090,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
         "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 3/3 shipped and 35/35 ablated whatever `edits` becomes.",
       ),
     ).toEqual({
-      edits: 375,
+      edits: 385,
       shipped: { dishonest: 3, fired: 3 },
       ablated: { dishonest: 35, fired: 35 },
     });
