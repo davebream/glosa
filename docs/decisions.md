@@ -259,3 +259,28 @@ Two consequences worth stating plainly:
   document the writer is looking at; a mismatch falls back to a whole-document write and says so,
   rather than trusting that every markdown construct was enumerated correctly. Enumeration is how
   this class of bug happens in the first place.
+
+## A closed-unread entry gets its own terminal, `dismissed`, instead of reusing `rejected`
+
+Issue #142 gave inbox entries a second human-reachable close path alongside `resolve`: a person can
+now find an entry whose immutable payload has gone missing — moved or deleted by hand — and close it
+without a session. That path needed a terminal to land on.
+
+The obvious reuse was `resolve <id> rejected --session ...`'s existing terminal, since both a
+declined annotation and a closed-unread one end up "not going anywhere." We rejected that. A session
+declining a note is a verdict on its content; a person closing an entry they never read is not a
+verdict at all, and collapsing the two loses that distinction the moment the note is skimmed later —
+was this rejected, or just cleared? `rejected` already carries exactly this ambiguity once: the SPA's
+own withdraw path reuses `rejected` for a human taking a note back, and can only tell that apart from
+a session's decline by a `detail.withdrawn` flag riding along in the transition detail — a flag that
+has to be checked by every later reader, and that pre-flag journals from an earlier alpha don't even
+carry, so `isWithdrawn` also falls back to matching the withdraw path's literal note text. Reusing
+`rejected` a second time for dismiss would have meant smuggling in a second disambiguating flag on
+top of the first, with the same forever-check-the-detail cost and the same backward-compatibility
+seam for journals written before it existed.
+
+A distinct `dismissed` terminal costs one more value in `COMMON_TERMINALS` and one more state the SPA
+must render, but it means the fold alone says what happened — no flag to check, no note text to
+pattern-match, nothing for an older reader to get subtly wrong on a pre-existing journal. `resolve`
+and `dismiss` both still boil down to one journal append (R3, A4 §F04); they only disagree about
+which value that append writes, and about whether a session is required to write it.

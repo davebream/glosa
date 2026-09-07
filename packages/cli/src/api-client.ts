@@ -57,6 +57,9 @@ export interface WorkspaceStatusSummary {
   pending_count: number;
   has_attention: boolean;
   wiring?: "live" | "wired" | "unwired";
+  /** Additive (issue #142): journal entries with no inbox payload — optional for N-1 daemon
+   * compatibility. `doctor`'s `orphaned-entries` check reads this. */
+  orphaned_entry_count?: number;
   /** Additive in contract 1.5; optional for N-1 daemon compatibility. */
   connect?: {
     providers: Array<{ provider: string; display_name: string; instruction: string }>;
@@ -125,6 +128,14 @@ export interface ResolveResult {
   post_sha?: string;
 }
 
+/** `glosa inbox dismiss <id>`'s daemon-side result (issue #142) — always `to: "dismissed"`, no
+ * lease fields, since `dismissEntry` opens and closes none. */
+export interface DismissResult {
+  entry: string;
+  status: string;
+  to: string;
+}
+
 export interface ApplyBeginResult {
   entry: string;
   lease_id: string;
@@ -139,6 +150,25 @@ export interface AttentionRequestResult {
 
 export interface InboxPresentationResult {
   presentation: DeliverableEntry;
+}
+
+export interface InboxListEntry {
+  id: string;
+  kind: string;
+  status: string;
+  /** Raw ISO from the journal fold — a formatted age is the human renderer's job, not the wire
+   * shape's (`inbox.ts`'s D6). `null` only if the daemon predates this field entirely. */
+  created_at: string | null;
+  /** `null` for every entry kind that never records one today (an `entry_adopted` entry never
+   * carries one at all) — never backfilled from the payload. */
+  target_path: string | null;
+  /** `false` marks a row whose inbox `.json` is gone (hand-removed, or otherwise lost) — the row
+   * is still listed, never dropped, which is the entire point of issue #142. */
+  payload_present: boolean;
+}
+
+export interface InboxListResult {
+  entries: InboxListEntry[];
 }
 
 export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
@@ -175,6 +205,9 @@ export interface GlosaApiClient {
     session: string,
     note?: string,
   ): Promise<ResolveResult>;
+  /** `glosa inbox dismiss <id>`'s daemon-side call (issue #142) — a human terminal transition with
+   * no session and no lease. See `resolveEntry`'s path-addressed POST shape, which this mirrors. */
+  dismissEntry(path: string, entry: string, note?: string): Promise<DismissResult>;
   applyBegin(path: string, entry: string, session: string): Promise<ApplyBeginResult>;
   createAttentionRequest(
     path: string,
@@ -191,6 +224,10 @@ export interface GlosaApiClient {
   /** `waitMs > 0` holds the request open until the entry goes terminal or the wait elapses — one
    * blocked request rather than a poll loop. Omit it for the immediate read. */
   getEntryStatus(path: string, entry: string, waitMs?: number): Promise<EntryStatus | null>;
+  /** `glosa inbox list`'s daemon-side call (issue #142) — journal-derived, so it works on an
+   * entry whose inbox payload is gone. `opts.all` includes terminal entries; the default omits
+   * them. */
+  listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
   setMetadata?(
@@ -273,6 +310,15 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
         })
       ).json();
     },
+    async dismissEntry(path, entry, note) {
+      return (
+        await call("POST", "/api/workspaces/inbox/dismiss", {
+          path,
+          entry,
+          ...(note !== undefined ? { note } : {}),
+        })
+      ).json();
+    },
     async applyBegin(path, entry, session) {
       return (await call("POST", "/api/workspaces/apply-begin", { path, entry, session })).json();
     },
@@ -300,6 +346,12 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
         if (isApiError(err) && err.status === 404) return null;
         throw err;
       }
+    },
+    async listInboxEntries(path, opts = {}) {
+      const params: Record<string, string> = { path };
+      if (opts.all) params.all = "1";
+      const qs = new URLSearchParams(params).toString();
+      return (await call("GET", `/api/workspaces/inbox?${qs}`)).json();
     },
     async getInboxPresentation(path, entry, cursor) {
       const workspace = await openWorkspace(path);
