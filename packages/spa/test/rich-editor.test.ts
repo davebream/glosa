@@ -85,12 +85,21 @@ describe("prosemirror-markdown round-trip (what the serializer alone can carry)"
   });
 
   test("the serializer alone still mangles the reported fixture — which is why saves splice", () => {
-    // Pinned deliberately: this is the defect (#143) stated as a test. The splice is what stands
-    // between this output and the file on disk, and Phase 1 (#164) is what removes it entirely.
+    // Pinned deliberately: this is the defect (#143) stated as a test, and the splice is what stands
+    // between this output and the file on disk. #174 removed ONE HALF of it — the serializer no
+    // longer invents escapes the source did not have — so the two bracket assertions below are
+    // INVERTED, never deleted: a reviewer seeing a deleted gate assertion cannot tell an intentional
+    // inversion from a suppressed failure. The other half, front matter collapsing into a setext
+    // heading, is still #143's and stays pinned here as a defect until T5 lands.
     const mangled = roundtrip(FIXTURE);
-    expect(mangled).toContain("## title: Test\nstatus: draft"); // frontmatter → a setext heading
-    expect(mangled).toContain("\\[!info\\]"); // the callout marker escaped
-    expect(mangled).toContain("*\\[bracketed emphasis\\]*"); // brackets escaped in ordinary prose
+    expect(mangled).toContain("## title: Test\nstatus: draft"); // frontmatter → a setext heading (#143's half)
+    // Inverted by #174, was `toContain("\\[!info\\]")`. It now proves the stronger thing the weaker
+    // assertion cannot: not one escape anywhere in the output, so no construct in the fixture picks
+    // up a backslash the file did not already carry.
+    expect(mangled).not.toContain("\\[");
+    // Inverted by #174, was `toContain("*\\[bracketed emphasis\\]*")`. Brackets in ordinary prose now
+    // come back spelled exactly as the file spelled them.
+    expect(mangled).toContain("*[bracketed emphasis]*");
   });
 
   test("a soft line break survives the serializer", () => {
@@ -107,7 +116,9 @@ describe("prosemirror-markdown round-trip (what the serializer alone can carry)"
 
   test("the `%%` block and the callout's second line now survive on their own", () => {
     // Both were listed in the report as structural damage; both turn out to have been nothing but
-    // collapsed soft breaks. What is left in each is the bracket escaping, which is a separate fix.
+    // collapsed soft breaks. The bracket escaping that used to remain in each was that separate fix,
+    // and #174 is it — see the inverted assertions above. What the serializer alone still costs this
+    // fixture is front matter, which is #143's.
     expect(roundtrip(FIXTURE)).toContain("%%\nA comment block.\nSecond line of the comment.\n%%");
     expect(roundtrip(FIXTURE)).toContain("A callout\n> with a second line.");
   });
@@ -154,12 +165,21 @@ describe("an edited block is the only block that moves", () => {
     expect(markdown).toContain("> [!info] A callout\n> with a second line.");
     expect(markdown.endsWith("%%\nA comment block.\nSecond line of the comment.\n%%\n")).toBe(true);
     expect(markdown).toContain("DELIBERATE");
-    // The one region that did move is the edited block, and the cost of moving it was declared
-    // rather than slipped in: its brackets are escaped and its soft break joined, both reported.
+    // The one region that did move is the edited block, and after #174 moving it costs nothing:
+    // the block goes back in the file's own spelling with only the writer's word changed, so there
+    // is nothing left to declare. All three assertions below are INVERTED, never deleted — a
+    // reviewer seeing a deleted gate assertion cannot tell an intentional inversion from a
+    // suppressed failure.
     const report = save(FIXTURE, edited);
-    expect(report.collateral).toHaveLength(1);
-    expect(report.collateral[0]?.original).toContain("*[bracketed emphasis]*");
-    expect(markdown.split("\n").filter((line: string) => line.includes("\\[")).length).toBe(1);
+    // Inverted by #174, was `toHaveLength(1)`. The edited paragraph is a fixed point now, so the
+    // writer is asked to consent to nothing.
+    expect(report.collateral).toHaveLength(0);
+    // Inverted by #174, was an assertion about `collateral[0].original`. With nothing reported, the
+    // WRITTEN bytes are what carries the claim: the bracketed span survives the edit verbatim.
+    expect(markdown).toContain("*[bracketed emphasis]*");
+    // Inverted by #174, was `.toBe(1)`. No line of the written file carries an escape the source
+    // did not have.
+    expect(markdown.split("\n").filter((line: string) => line.includes("\\[")).length).toBe(0);
   });
 
   test("editing a block the serializer can carry reproduces the source edit byte for byte", () => {
@@ -231,12 +251,22 @@ describe("blocks added, removed, and moved", () => {
 });
 
 describe("collateral is reported, never written silently", () => {
-  test("editing inside a callout reports what re-serializing that block would cost", () => {
+  test("editing inside a callout costs nothing to report — the block goes back as it was", () => {
+    // Named "… reports what re-serializing that block would cost" until #174, which made the callout
+    // marker a fixed point. The three assertions below are INVERTED, never deleted: a reviewer
+    // seeing a deleted gate assertion cannot tell an intentional inversion from a suppressed
+    // failure. This suite's positive control for the guard — the one fixture that still HAS to
+    // report — is the setext heading in "the collateral guard, re-posed".
     const source = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
     const result = save(source, source.replace("callout", "CALLOUT"));
-    expect(result.collateral).toHaveLength(1);
-    expect(result.collateral[0]?.original).toBe("> [!info] A callout\n> with a second line.");
-    expect(result.collateral[0]?.faithful).toContain("\\[!info\\]");
+    // Inverted by #174, was `toHaveLength(1)`. The callout blockquote is a fixed point now.
+    expect(result.collateral).toHaveLength(0);
+    // Inverted by #174, was an assertion about `collateral[0].original`. With nothing reported, the
+    // WRITTEN bytes carry the proof: the source's own spelling, the writer's word, and nothing else.
+    expect(result.markdown).toBe("> [!info] A CALLOUT\n> with a second line.\n\nAfter.\n");
+    // Inverted by #174, was `collateral[0].faithful` containing `\[!info\]`. That premise is gone,
+    // so this becomes the positive case: no escape reaches the file at all.
+    expect(result.markdown).not.toContain("\\[");
     expect(result.markdown.endsWith("\n\nAfter.\n")).toBe(true); // the rest still untouched
   });
 
@@ -808,33 +838,38 @@ describe("the collateral guard, re-posed (REQ-6, #174)", () => {
   });
 });
 
-describe("the guard measured over the corpus (a draft of the REQ-8 harness)", () => {
-  // METRIC 3, and the reason it is worth committing: a guard is only as good as the ablation that
-  // proves it can fire. This runs the same synthetic one-word edit over every block of the nine
-  // hand-written documents, in TWO configurations, and checks the guard's verdict against ground
-  // truth — "the save wrote more than the writer's word" — in each.
+describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine hand-written documents", () => {
+  // WHY THIS IS COMMITTED. REQ-8 asks that the serializer fixed-point rate be "recorded so the
+  // direction is checkable", and a sentence of prose in CHANGELOG.md cannot keep a direction
+  // checkable. This is the record: four numbers measured over this repository's own documents, run
+  // as a test inside the gate suite T2 already owns — not a new suite, which contracts.md C9 forbids
+  // because minting one forces an edit to docs/requirements.md, the authoritative build input.
   //
-  // The second configuration is the ratchet. With the restoration off the writes really are
-  // dishonest, 35 of them, and the guard must catch every one; a re-run of the first design of this
-  // guard, which routed `faithful` through the restoration, scores 0 fired and 35 missed here. The
-  // ablation is an OMITTED ARGUMENT — the wrapper called without source bytes is M1 only, exactly
-  // what the pure-insertion path does — never a flag, and no flag exists to set.
+  // Each metric exists to keep the one above it honest:
+  //   1. Serializer fixed points — REQ-8's literal metric. Ratchets downward.
+  //   2. Dishonest writes        — a quieter dialog is only an improvement if the WRITES got better.
+  //   3. Guard fidelity          — a guard is only a guard if it still fires. Two configurations.
+  //   4. The known blind spot    — recorded, NOT ratcheted, so metric 3's zero is never read as a
+  //                                completeness claim about the guard.
   //
-  // A NON-ZERO `missed` IS NOT A NUMBER TO RECORD. It means the guard is unsound. The likeliest
-  // cause by far is the overlap join: with `<` in place of `<=` the ablated row scores 17 fired and
-  // 18 missed, those 18 being CHANGELOG.md's reference-link headings, whose only infidelity is a
-  // pure insertion and therefore zero-width on the source side.
+  // HISTORY of metric 1: 174/418 Phase 0 · 40/418 as reported post-#173 · 43/418 re-measured at
+  // `d965ffb` · 40/418 after this task (#174).
   //
-  // ZERO MISSED IS A PROPERTY OF THIS EDIT DISTRIBUTION, NOT A COMPLETENESS PROOF. The generator is
-  // a `word` → `WORD` substitution and so can never introduce markup, which is precisely the class
-  // the guard is blind to (see `collateralFor` in rich-editor.js). Phase 7 records that class as its
-  // own metric so this zero cannot be read as covering it.
+  // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
+  // block population, so the denominator moves and every count below moves with it.
   //
-  // THE GENERATOR IS PINNED HERE AND ITS DEFINITION IS PART OF EVERY NUMBER BELOW: the first run of
-  // five or more lowercase letters in the block's own bytes, upper-cased. It is deliberately WIDE —
-  // a narrower one that skipped words adjacent to `-` or `.` never edited a single reference-link
-  // heading, the exact class where the two overlap joins disagree. This one reaches all 18,
-  // `## [Unreleased]` included (via `nreleased`), which is why the ablated row is 35 and not 34.
+  // THE GENERATOR IS PINNED HERE, AND ITS DEFINITION IS PART OF EVERY NUMBER IN METRICS 2 AND 3
+  // (metric 4 carries its own fixed fixtures, precisely because no such generator can reach that
+  // class): `EDITED_WORD` below — the first run of five or more lowercase letters in the block's own bytes,
+  // upper-cased. It is deliberately WIDE. A narrower generator that skipped any word adjacent to `-`
+  // or `.` never edited a single reference-link heading, which is the exact class where the two
+  // overlap joins disagree; that narrower one is where the design's figures of 317 edits and 34
+  // ablated firings come from. This one reaches all 18 reference-link blocks, `## [Unreleased]`
+  // included (via `nreleased`), so it makes 371 edits and its ablated row reads 35 rather than 34.
+  // The design's ratios and its residual set reproduce exactly; only the denominators differ, and
+  // they differ because this generator is strictly wider. Compare like with like before concluding a
+  // number moved. Metric 1 does not depend on the generator at all, which is why it reproduces the
+  // design's 40/418 to the block.
   const documents = [
     "README.md",
     "AGENTS.md",
@@ -847,45 +882,132 @@ describe("the guard measured over the corpus (a draft of the REQ-8 harness)", ()
     "docs/decisions.md",
   ];
   const EDITED_WORD = /[a-z]{5,}/;
+  const root = join(import.meta.dir, "../../..");
 
-  test("as shipped it fires 3 times; with the restoration disabled, 35 — neither missing one", () => {
-    const root = join(import.meta.dir, "../../..");
+  /** Asserted on its own, so a document gaining or losing a block is VISIBLE rather than silently
+   *  shifting every ratchet below it. */
+  const BLOCKS = 418;
+
+  /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
+  const corpus = () => {
+    const all = [];
+    for (const name of documents) {
+      const source = readFileSync(join(root, name), "utf8");
+      const { blocks, referenceSuffix } = blockLayout(source);
+      const doc = parseMarkdown(source);
+      expect(blocks.length).toBe(doc.childCount);
+      for (const [index, span] of blocks.entries()) {
+        const body = source.slice(span.start, span.end);
+        all.push({ name, index, source, span, doc, referenceSuffix, body, node: doc.child(index) });
+      }
+    }
+    return all;
+  };
+
+  /** Names the construct at which a re-serialization first stops matching the file. Metric 1 asserts
+   *  this breakdown rather than only a total, so a red test says WHICH construct regressed. */
+  const firstDifference = (was: string, now: string) => {
+    let i = 0;
+    while (i < was.length && i < now.length && was[i] === now[i]) i += 1;
+    const source = was.slice(i);
+    const written = now.slice(i);
+    if (was[i - 1] === "]" && written.startsWith("(")) return "link reference definition inlined";
+    if (written.startsWith("\n") && !source.startsWith("\n")) return "tight list re-emitted loose";
+    if (source.startsWith("\n") && !written.startsWith("\n")) return "soft break inside a code span collapsed";
+    if (was[i - 1] === "\n" && source.startsWith(" ") && !written.startsWith(" "))
+      return "continuation-line indent dropped";
+    if (i === 0 && source.startsWith(" ") && written.startsWith(">")) return "indented blockquote marker normalised";
+    if (source.startsWith("&")) return "HTML entity decoded";
+    if (i === 0 && written.startsWith("## ")) return "front matter → setext heading";
+    // Deliberately returned rather than thrown: an unrecognised cause IS the regression report, and
+    // it has to reach the assertion as data instead of as an exception that hides the other 39.
+    return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
+  };
+
+  test("metric 1 — 40 of 418 blocks still cost bytes re-serialized, with no restoration", () => {
+    const byCause: Record<string, number> = {};
+    let blockCount = 0;
+    for (const { body, node, referenceSuffix } of corpus()) {
+      blockCount += 1;
+      // NO SOURCE ARGUMENT, deliberately. This is REQ-8's literal metric and the only one comparable
+      // across the project's history, and computing it without the restoration is precisely what
+      // stops it being "improved" by making the restoration stronger rather than the serializer
+      // more faithful. M1 alone: the de-escape relaxation, in the document's reference context.
+      const written = serializeNodesFaithfully([node], referenceSuffix);
+      if (written === body) continue;
+      const cause = firstDifference(body, written);
+      byCause[cause] = (byCause[cause] ?? 0) + 1;
+    }
+    const misses = Object.values(byCause).reduce((total, n) => total + n, 0);
+
+    expect(blockCount).toBe(BLOCKS);
+    // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
+    // per-cause record below is too brittle and relaxing it.
+    expect(misses).toBeLessThanOrEqual(40);
+    // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
+    // the 3 bracket/backslash-escaping blocks M1 removed — which is the whole of 43 → 40. A genuine
+    // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
+    expect(byCause).toEqual({
+      "link reference definition inlined": 18,
+      "continuation-line indent dropped": 6,
+      "soft break inside a code span collapsed": 5,
+      "indented blockquote marker normalised": 5,
+      "tight list re-emitted loose": 4,
+      "HTML entity decoded": 1,
+      "front matter → setext heading": 1, // #143's, not this task's
+    });
+  });
+
+  test("metrics 2 and 3 — 3 dishonest writes of 371; the guard fires on those 3 and, ablated, on 35", () => {
+    // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
+    // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
+    // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
+    // every one. A re-run of the first design of this guard, which routed `faithful` through the
+    // restoration, scores 0 fired and 35 missed here. The ablation is an OMITTED ARGUMENT — the
+    // wrapper called without source bytes is M1 only, exactly what the pure-insertion path does —
+    // never a flag, and no flag exists to set.
+    //
+    // A NON-ZERO `missed` IS NOT A NUMBER TO RECORD. It means the guard is unsound. The likeliest
+    // cause by far is the overlap join: with `<` in place of `<=` the ablated row scores 17 fired
+    // and 18 missed, those 18 being CHANGELOG.md's reference-link headings, whose only infidelity is
+    // a pure insertion and therefore zero-width on the source side.
+    //
+    // ZERO MISSED IS A PROPERTY OF THIS EDIT DISTRIBUTION, NOT A COMPLETENESS PROOF ABOUT THE GUARD.
+    // Stated as the design states it: the guard detects serializer infidelity carried from the
+    // block's ORIGINAL bytes, and is blind — as today's guard is — to infidelity in content the
+    // writer freshly typed. `D` is built from the original nodes, so freshly typed markup is outside
+    // its reach, and a `word` → `WORD` generator can never surface that class. Metric 4 below
+    // records it as its own figure so this zero cannot be read as covering it.
     const tally = { edits: 0, shipped: { dishonest: 0, fired: 0 }, ablated: { dishonest: 0, fired: 0 } };
     const missed: string[] = [];
     const falseAlarms: string[] = [];
     const residual: string[] = [];
 
-    for (const name of documents) {
-      const source = readFileSync(join(root, name), "utf8");
-      const { blocks, referenceSuffix } = blockLayout(source);
-      const doc = parseMarkdown(source);
-      for (const [index, span] of blocks.entries()) {
-        const body = source.slice(span.start, span.end);
-        const word = EDITED_WORD.exec(body);
-        if (!word) continue;
-        const [found] = word;
-        const editedBody = body.slice(0, word.index) + found.toUpperCase() + body.slice(word.index + found.length);
-        // Reparsed as part of the whole document, so the edited node is read in the same context
-        // the save would read it in rather than in an isolation that can mean something else.
-        const editedDoc = parseMarkdown(source.slice(0, span.start) + editedBody + source.slice(span.end));
-        expect(editedDoc.childCount).toBe(doc.childCount); // the generator never restructures
-        const edited = [editedDoc.child(index)];
-        tally.edits += 1;
+    for (const { name, index, source, span, doc, referenceSuffix, body, node } of corpus()) {
+      const word = EDITED_WORD.exec(body);
+      if (!word) continue;
+      const [found] = word;
+      const editedBody = body.slice(0, word.index) + found.toUpperCase() + body.slice(word.index + found.length);
+      // Reparsed as part of the whole document, so the edited node is read in the same context the
+      // save would read it in rather than in an isolation that can mean something else.
+      const editedDoc = parseMarkdown(source.slice(0, span.start) + editedBody + source.slice(span.end));
+      expect(editedDoc.childCount).toBe(doc.childCount); // the generator never restructures
+      const edited = [editedDoc.child(index)];
+      tally.edits += 1;
 
-        for (const [configuration, written] of [
-          ["shipped", serializeNodesFaithfully(edited, referenceSuffix, body)],
-          ["ablated", serializeNodesFaithfully(edited, referenceSuffix)],
-        ] as const) {
-          // Ground truth: an honest save writes the source with exactly the writer's word changed.
-          const dishonest = written !== editedBody;
-          const fired = collateralFor([doc.child(index)], referenceSuffix, written, body).length > 0;
-          const row = tally[configuration];
-          if (dishonest) row.dishonest += 1;
-          if (fired) row.fired += 1;
-          if (dishonest && !fired) missed.push(`${configuration} ${name} block ${index}`);
-          if (!dishonest && fired) falseAlarms.push(`${configuration} ${name} block ${index}`);
-          if (dishonest && configuration === "shipped") residual.push(`${name} block ${index}`);
-        }
+      for (const [configuration, written] of [
+        ["shipped", serializeNodesFaithfully(edited, referenceSuffix, body)],
+        ["ablated", serializeNodesFaithfully(edited, referenceSuffix)],
+      ] as const) {
+        // Ground truth: an honest save writes the source with exactly the writer's word changed.
+        const dishonest = written !== editedBody;
+        const fired = collateralFor([node], referenceSuffix, written, body).length > 0;
+        const row = tally[configuration];
+        if (dishonest) row.dishonest += 1;
+        if (fired) row.fired += 1;
+        if (dishonest && !fired) missed.push(`${configuration} ${name} block ${index}`);
+        if (!dishonest && fired) falseAlarms.push(`${configuration} ${name} block ${index}`);
+        if (dishonest && configuration === "shipped") residual.push(`${name} block ${index}`);
       }
     }
 
@@ -901,6 +1023,55 @@ describe("the guard measured over the corpus (a draft of the REQ-8 harness)", ()
       shipped: { dishonest: 3, fired: 3 },
       ablated: { dishonest: 35, fired: 35 },
     });
+  });
+
+  test("metric 4 — the blind spot: 3 writes that are dishonest and silent, recorded, NOT ratcheted", () => {
+    // THIS METRIC IS A BOUNDARY, NOT A TARGET, and it is here so metric 3's `missed: 0` is never
+    // read as completeness. Every case below is markup the writer FRESHLY TYPED: `D` is built from
+    // the block's original nodes, so it is empty at that region and the guard cannot fire under any
+    // join. NONE OF THE THREE IS A REGRESSION — `D` empty is equivalent to `faithful === replaced`,
+    // so the guard this task replaced is exactly as silent on all three, and #174 makes none worse.
+    // Fixing them is not in this issue's scope, which asks about editing blocks that CONTAIN these
+    // constructs. Improving a row here is welcome and means editing this record, not relaxing it.
+    const typed = [
+      {
+        what: "a reference label the document defines",
+        source: "Alpha here.\n\n[home]: https://example.com/a/very/long/target/path\n",
+        edited: "Alpha [home] here.\n\n[home]: https://example.com/a/very/long/target/path\n",
+        // REQ-3's own defect, from the other side: the label resolves, so the serializer writes the
+        // inline form the writer did not type.
+        writes:
+          "Alpha [home](https://example.com/a/very/long/target/path) here.\n\n[home]: https://example.com/a/very/long/target/path\n",
+      },
+      {
+        what: "an entity",
+        source: "Alpha here.\n",
+        edited: "Alpha &amp; here.\n",
+        writes: "Alpha & here.\n", // REQ-2's own defect: the entity is decoded on the way out.
+      },
+      {
+        what: "a bracket beside a load-bearing escape",
+        source: "Alpha \\*lit\\* here.\n",
+        edited: "Alpha \\*lit\\* [note] here.\n",
+        // M1 is all-or-nothing over a run, so the one escape the block genuinely needs keeps them
+        // all, and the freshly typed bracket is escaped with them.
+        writes: "Alpha \\*lit\\* \\[note\\] here.\n",
+      },
+    ];
+
+    const silent: string[] = [];
+    for (const { what, source, edited, writes } of typed) {
+      const result = save(source, edited);
+      expect(result.markdown).toBe(writes); // what the file actually receives
+      expect(result.markdown).not.toBe(edited); // ...which is not what the writer typed
+      expect(result.degraded).toBe(false);
+      if (result.collateral.length === 0) silent.push(what);
+    }
+    expect(silent).toEqual([
+      "a reference label the document defines",
+      "an entity",
+      "a bracket beside a load-bearing escape",
+    ]);
   });
 });
 
