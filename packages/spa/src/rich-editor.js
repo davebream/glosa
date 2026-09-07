@@ -80,13 +80,60 @@ export function parseMarkdown(markdown) {
 }
 
 export function serializeMarkdown(doc) {
-  return mdSerializer.serialize(doc);
+  const raw = mdSerializer.serialize(doc);
+  // The predicate here is RELATIVE — "does dropping the escapes change what the serializer's own
+  // output means?" — not absolute against `doc`. A document that reaches this path is by
+  // definition not a round-trip fixed point (that is why the whole-document write was needed at
+  // all), so an absolute check would fail for reasons that have nothing to do with escaping and
+  // would refuse every relaxation on exactly the documents that need one.
+  return relaxEscapes(raw, (relaxed) => parseMarkdown(relaxed).eq(parseMarkdown(raw)));
 }
 
 /** Serializes a run of top-level nodes on their own, so a changed block can be written back
  * without dragging the rest of the document through the serializer. */
 function serializeNodes(nodes) {
   return mdSerializer.serialize(markdownSchema.node("doc", null, nodes));
+}
+
+/** The characters prosemirror-markdown's `esc()` escapes inside text, unconditionally: it does not
+ * ask whether leaving one bare would actually mean anything. Line-start escapes (`\#`, `\-`,
+ * `\>`, `\1.`) are a separate rule in the same function and are deliberately NOT in this set. */
+const ESCAPED_IN_TEXT = /\\([`*\\~[\]_])/g;
+
+/**
+ * Drops the escapes the serializer added and keeps the result only if `verify` says the tree is
+ * unchanged. The file said `[!info]`; the serializer says `\[!info\]`; both mean the same thing,
+ * so the writer's file should keep saying what it said.
+ *
+ * ALL-OR-NOTHING, DELIBERATELY — every escape goes or none does. A greedy per-escape variant was
+ * implemented and measured, and it is unsafe: given `This is \*not emphasis\* here.` it drops the
+ * FIRST backslash only, because `*not emphasis\*` has no closing delimiter and so still parses to
+ * the same text, and it writes `This is *not emphasis\* here.` — a spelling that is neither the
+ * serializer's nor the file's. Do not "improve" this into a per-escape fallback.
+ *
+ * The cost of being conservative is that a block holding one load-bearing escape keeps all of its
+ * escapes. Where the block's own source bytes exist, that spelling is recoverable from them.
+ */
+function relaxEscapes(raw, verify) {
+  const relaxed = raw.replace(ESCAPED_IN_TEXT, "$1");
+  if (relaxed === raw) return raw;
+  return verify(relaxed) ? relaxed : raw;
+}
+
+/** Whether `doc` is exactly the run of top-level `nodes`, child for child. Spelled out rather than
+ * built into a throwaway `doc` node so `serializeNodes()`'s own expression stays untouched. */
+function sameNodes(doc, nodes) {
+  if (doc.childCount !== nodes.length) return false;
+  for (let index = 0; index < nodes.length; index += 1) if (!doc.child(index).eq(nodes[index])) return false;
+  return true;
+}
+
+/** `serializeNodes()` with the escape relaxation on top, verified ABSOLUTELY: the candidate must
+ * parse back to exactly the nodes it was made from (REQ-7). Every path out of here is therefore
+ * either the serializer's own bytes or bytes proven to mean what the writer's tree means. */
+function serializeNodesRelaxed(nodes) {
+  const raw = serializeNodes(nodes);
+  return relaxEscapes(raw, (relaxed) => sameNodes(parseMarkdown(relaxed), nodes));
 }
 
 /** True for the document prosemirror-markdown produces from an empty string: the schema requires
@@ -227,7 +274,7 @@ export function createSplicer(source, originalDoc) {
       const inserted = edited.slice(e, nextE);
       if (inserted.length && o < nextO) {
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
-        const written = serializeNodes(inserted);
+        const written = serializeNodesRelaxed(inserted);
         const faithful = serializeNodes(original.slice(o, nextO));
         if (faithful !== replaced) collateral.push({ original: replaced, faithful, written });
         pieces.push({ text: written, before: o > 0 ? separator(o) : "\n\n" });
@@ -241,7 +288,7 @@ export function createSplicer(source, originalDoc) {
               moved.delete(index);
               return body(index);
             }
-            return serializeNodes([node]);
+            return serializeNodesRelaxed([node]);
           })
           .join("\n\n");
         pieces.push({ text, before: "\n\n" });

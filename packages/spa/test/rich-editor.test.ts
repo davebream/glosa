@@ -280,3 +280,45 @@ describe("a blank file", () => {
     expect(result.degraded).toBe(false);
   });
 });
+
+describe("the serializer stops escaping what the file left bare (REQ-1, #174)", () => {
+  // The two SAFETY tests come first on purpose. Without them an implementation that simply never
+  // escapes anything passes every other test in this block — a worse bug than the one being fixed,
+  // because it corrupts a document silently instead of merely respelling it.
+
+  test("SAFETY: an escaped emphasis marker the file really contains stays escaped", () => {
+    const source = "This is \\*not emphasis\\* here.\n";
+    const result = save(source, source.replace("here", "there"));
+    expect(result.markdown).toBe("This is \\*not emphasis\\* there.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("SAFETY: an escaped link the file really contains stays escaped", () => {
+    const source = "Not a \\[link\\](https://x.example) here.\n";
+    const result = save(source, source.replace("here", "there"));
+    expect(result.markdown).toBe("Not a \\[link\\](https://x.example) there.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("editing a word inside a callout writes the callout marker unescaped", () => {
+    const source = "> [!info] A callout\n> with a second line.\n";
+    const result = save(source, source.replace("callout", "CALLOUT"));
+    expect(result.markdown).toBe("> [!info] A CALLOUT\n> with a second line.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("editing a word in the fixture's bracketed-emphasis paragraph keeps the brackets bare", () => {
+    const { markdown } = save(FIXTURE, FIXTURE.replace("deliberate", "DELIBERATE"));
+    expect(markdown).toContain("and *[bracketed emphasis]* inline.");
+    expect(markdown).not.toContain("\\[");
+  });
+
+  test("a newly typed paragraph containing `[note]` is written unescaped", () => {
+    // The pure-insertion path: a block that owns no original bytes, so there is nothing to restore
+    // its spelling from. This is the case the de-escape relaxation exists for on its own.
+    const source = "Alpha.\n";
+    const result = save(source, "Alpha.\n\nSee [note] for details.\n");
+    expect(result.markdown).toBe("Alpha.\n\nSee [note] for details.\n");
+    expect(result.degraded).toBe(false);
+  });
+});
