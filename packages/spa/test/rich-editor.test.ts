@@ -358,13 +358,13 @@ describe("the block layout carries the document's reference context", () => {
   });
 
   test("the reference definitions come back as text a candidate can be parsed with", () => {
-    const { references } = blockLayout(source);
+    const { referenceSuffix } = blockLayout(source);
     // Appendable with nothing added at the call site, and a blank line ahead of the definitions so
     // they cannot be absorbed into whatever the candidate ends with.
-    expect(references.startsWith("\n\n")).toBe(true);
+    expect(referenceSuffix.startsWith("\n\n")).toBe(true);
 
     const alone = parseMarkdown("See [r].");
-    const inContext = parseMarkdown(`See [r].${references}`);
+    const inContext = parseMarkdown(`See [r].${referenceSuffix}`);
     // Alone the brackets are literal text; with the definitions in scope they are a link to the
     // target the source defined. This difference is the whole reason the context has to travel.
     expect(alone.firstChild?.child(0).marks).toEqual([]);
@@ -374,6 +374,20 @@ describe("the block layout carries the document's reference context", () => {
   });
 
   test("a document that defines no references reports none", () => {
-    expect(blockLayout("# T\n\nBody.\n").references).toBe("");
+    expect(blockLayout("# T\n\nBody.\n").referenceSuffix).toBe("");
+  });
+
+  test("every definition comes back, spelled so it defines exactly what it defined", () => {
+    // Two definitions, one carrying every escape that can reach a stored title, and a label the
+    // renderer has to normalize. The cases above exercise one definition, no title, no escapes.
+    const source =
+      "Links: [one] and [Two  Ref].\n\n" +
+      '[one]: /p?x=&amp;amp;y "He said \\"go\\" \\\\ &amp;amp;"\n' +
+      "[Two  Ref]: /second\n";
+    const candidate = "Links: [one] and [Two  Ref].";
+    const { referenceSuffix } = blockLayout(source);
+    const inContext = parseMarkdown(candidate + referenceSuffix);
+    expect(inContext.childCount).toBe(parseMarkdown(candidate).childCount);
+    expect(inContext.firstChild?.eq(parseMarkdown(source).firstChild)).toBe(true);
   });
 });

@@ -148,9 +148,19 @@ function isBlankDoc(doc) {
 /** What a re-rendered link destination or title has to escape to survive being parsed again.
  * markdown-it stores both DECODED — `parseLinkDestination` and `parseLinkTitle` run them through
  * `unescapeAll()`, which resolves backslash escapes and character entities — so writing one back
- * raw would let a `&amp;` or a `\"` the writer's file spelled out mean something new. The LABEL is
- * not decoded (markdown-it keys `env.references` on the raw slice, and a link resolves its own
- * label the same raw way), so a label is written back verbatim and needs no escaping at all. */
+ * raw would let a `&amp;` or a `\"` the writer's file spelled out mean something new. The
+ * destination is then also NORMALIZED, through `normalizeLink`, which percent-encodes `\`, `<` and
+ * `>`: of the four characters escaped there only `&` can reach a stored href at all, and the other
+ * three are defense against that changing. A title skips `normalizeLink`, so all three of its
+ * escapes are live.
+ *
+ * The LABEL needs no escaping either, but NOT because it survives verbatim — it does not.
+ * markdown-it keys `env.references` on `normalizeReference(label)`, and a link resolves its own
+ * label through the same function, so writing the key back reproduces the same binding even though
+ * the emitted spelling is the case-folded key rather than the writer's: `[0.1.0-alpha.17]` comes
+ * back out as `[0.1.0-ALPHA.17]` and still resolves, because a candidate's own label folds too.
+ * Normalizing only trims, collapses whitespace runs and case-folds, so it preserves escape
+ * structure exactly, and the label grammar admits no unescaped bracket in the first place. */
 const ESCAPED_IN_DESTINATION = /[\\<>&]/g;
 const ESCAPED_IN_TITLE = /[\\"&]/g;
 const escapeReferencePart = (char) => (char === "&" ? "&amp;" : `\\${char}`);
@@ -167,9 +177,11 @@ const escapeReferencePart = (char) => (char === "&" ? "&amp;" : `\\${char}`);
  * Every line is checked before it is kept, against the two things the caller relies on: it must
  * tokenize to NOTHING — a definition produces no token and therefore no node, which is exactly why
  * appending it cannot disturb a candidate's tree — and it must define the same href and title
- * markdown-it recorded. A definition that fails either (an exotic label, a title spanning a blank
- * line) is dropped rather than guessed at, which costs its own links their reference form and can
- * never add a node to a candidate.
+ * markdown-it recorded. A definition that fails either is dropped rather than guessed at, which
+ * costs its own links their reference form and can never add a node to a candidate. No input is
+ * known to reach that branch — it is a fail-closed guard against vendor drift, not a check that
+ * fires in practice: should a markdown-it or `normalizeLink` change stop a spelling round-tripping,
+ * this costs the reference form rather than silently emitting a binding that means something else.
  */
 function referenceDefinitions(references) {
   const lines = [];
@@ -185,13 +197,15 @@ function referenceDefinitions(references) {
     lines.push(line);
   }
   // A leading blank line, so the definitions cannot be absorbed into whatever the candidate ends
-  // with, and nothing else: `candidate + references` is the whole of the call site.
+  // with, and nothing else: `candidate + referenceSuffix` is the whole of the call site.
   return lines.length === 0 ? "" : `\n\n${lines.join("\n")}\n`;
 }
 
 /**
  * Where `source`'s top-level blocks came from, and the reference context they came from it in:
- * `{blocks, references}`. `blocks` holds one `{start, end}` pair per block, in document order —
+ * `{blocks, referenceSuffix}`. The suffix is rendered, appendable TEXT — deliberately not the
+ * `{label: {href, title}}` map markdown-it keeps under `env.references`, which would push rendering
+ * into every verification parse. `blocks` holds one `{start, end}` pair per block, in document order —
  * character offsets bounding the block's own bytes, its trailing line ending excluded.
  *
  * markdown-it's block tokens carry a source line `map` — the same map the daemon's `data-line`
@@ -203,9 +217,10 @@ function referenceDefinitions(references) {
  *
  * Everything between two blocks — blank lines, and link reference definitions, which produce
  * neither a token nor a node — falls outside every span and is therefore copied untouched. The
- * definitions still have to travel, hence the second half of the record: both halves come off the
- * one tokenizer pass this already makes, so this stays the SINGLE route to where a block's bytes
- * came from rather than growing a parallel one beside it.
+ * definitions still have to travel, hence the second half of the record. Both halves come off the
+ * one tokenizer pass this already makes — rendering them back out costs one further tokenizer call
+ * per definition, but not one of those ever sees `source` — so this stays the SINGLE route to where
+ * a block's bytes came from rather than growing a parallel one beside it.
  *
  * Exported for tests on the same grounds as `parseMarkdown` and `serializeMarkdown` above.
  */
@@ -225,7 +240,7 @@ export function blockLayout(source) {
     const body = source.slice(start, at(token.map[1])).replace(/(\r?\n)+$/, "");
     blocks.push({ start, end: start + body.length });
   }
-  return { blocks, references: referenceDefinitions(env.references) };
+  return { blocks, referenceSuffix: referenceDefinitions(env.references) };
 }
 
 /**
@@ -282,7 +297,7 @@ export function createSplicer(source, originalDoc) {
   // block offset out from under the token maps. Classic-Mac endings are vanishingly rare and not
   // worth splicing carefully; refuse rather than corrupt.
   const scannable = !/\r(?!\n)/.test(source);
-  const layout = scannable ? blockLayout(source) : { blocks: [], references: "" };
+  const layout = scannable ? blockLayout(source) : { blocks: [], referenceSuffix: "" };
   const blocks = layout.blocks;
   const original = originalDoc.content.content;
   const body = (index) => source.slice(blocks[index].start, blocks[index].end);
