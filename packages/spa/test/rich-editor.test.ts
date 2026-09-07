@@ -32,6 +32,34 @@ const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 /** What the rich face would write for `source` after the writer's edits turned it into `edited`. */
 const save = (source: string, edited: string) => spliceMarkdown(source, parseMarkdown(source), parseMarkdown(edited));
 
+/** WHY A COUNT OVER THE CORPUS CAN GO RED WITHOUT ANYTHING HAVING REGRESSED — attached as the failure
+ *  message of every such count, so the explanation arrives with the red rather than waiting in a
+ *  comment somebody has to go and find.
+ *
+ *  The nine documents are read LIVE from the working tree, not from a frozen fixture. That is
+ *  deliberate: REQ-8's direction is only checkable against the repository's real content. The price
+ *  is that the totals below are a property of the documents as they stand today, and three sibling
+ *  tasks in this same epic append to two of them. */
+const CORPUS_COUNT_NOTE = [
+  "This is a COUNT OVER THE NINE HAND-WRITTEN DOCUMENTS IN THE REPOSITORY ROOT, read live from the",
+  "working tree rather than from a fixture, so editing any of the nine moves it. CHANGELOG.md and",
+  "docs/decisions.md take appends from T1, T4 and T5 in this same epic: whichever of those merges",
+  "second sees this red through no fault of its own, and the final total depends on the merge order.",
+  "",
+  "A MOVED DENOMINATOR WITH UNCHANGED NUMERATORS IS BOOKKEEPING, NOT A REGRESSION. Re-baseline the",
+  "total, then confirm the numerators did not move with it:",
+  "  - metric 1's per-cause map still totals 40,",
+  "  - metric 2 still reports 3 dishonest writes,",
+  "  - metric 3 still reports 0 missed and 0 false alarms.",
+  "If all three hold, the corpus grew and nothing about the serializer changed. Re-baselining means",
+  "the constant AND the test names that carry the same totals.",
+  "",
+  "A MOVED NUMERATOR IS THE REAL SIGNAL: investigate it, never re-baseline it.",
+].join("\n");
+
+/** The note above, plus what this particular count is. */
+const countNote = (what: string) => `${CORPUS_COUNT_NOTE}\n\nTHIS COUNT: ${what}`;
+
 /** The reported bug's file: every construct CommonMark has no node for, in one document. */
 const FIXTURE = [
   "---",
@@ -729,7 +757,14 @@ describe("the restoration's size guard", () => {
         if (serializeNodesFaithfully([node], referenceSuffix, body) !== body) unrestored += 1;
       }
     }
-    expect(blockCount).toBe(422); // the same corpus as the harness below; see its BLOCKS note
+    // The same corpus as the harness below, counted the same way, so it moves for the same reasons
+    // and is re-baselined in the same edit; see the BLOCKS note there.
+    expect(
+      blockCount,
+      countNote(
+        "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
+      ),
+    ).toBe(422);
     // Measured at this base: 3,598,609 cells, in a 5474-byte list block in docs/requirements.md.
     // Asserted with headroom rather than bare inequality, so a document growing towards the budget
     // turns this red while there is still room to widen it — before it silently turns the fix off
@@ -889,7 +924,14 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  shifting every ratchet below it. It did exactly that here: 418 at `d965ffb`, 422 once #174's
    *  own documentation edits landed, the four being the `docs/decisions.md` entry recording this
    *  task's route selection. A DENOMINATOR MOVE IS NOT A RESULT — every numerator below is
-   *  unchanged, and that is what makes this one readable as bookkeeping rather than as drift. */
+   *  unchanged, and that is what makes this one readable as bookkeeping rather than as drift.
+   *
+   *  IT WILL MOVE AGAIN, and not because of anything the serializer did. The corpus is read live
+   *  from the working tree, and T1, T4 and T5 all append to `CHANGELOG.md` and `docs/decisions.md`
+   *  in this same epic — so this number depends on which of them has merged, and in what order.
+   *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
+   *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
+   *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
   const BLOCKS = 422;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
@@ -944,14 +986,22 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     }
     const misses = Object.values(byCause).reduce((total, n) => total + n, 0);
 
-    expect(blockCount).toBe(BLOCKS);
+    expect(
+      blockCount,
+      countNote("the corpus block total. It is the DENOMINATOR; `misses` and `byCause` are the numerators."),
+    ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
     expect(misses).toBeLessThanOrEqual(40);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed — which is the whole of 43 → 40. A genuine
     // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
-    expect(byCause).toEqual({
+    expect(
+      byCause,
+      countNote(
+        "the per-cause record, a NUMERATOR totalling 40. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+      ),
+    ).toEqual({
       "link reference definition inlined": 18,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
@@ -1021,8 +1071,18 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     // The three the restoration cannot reach: DESIGN.md's front matter is T5's (REQ-11), the
     // requirements block is the blank-line-before-a-fence case (the AMD-2b follow-up), and README's
     // is a `&nbsp;·&nbsp;` pair that restores per-character rather than per run.
-    expect(residual).toEqual(["README.md block 6", "DESIGN.md block 1", "docs/requirements.md block 30"]);
-    expect(tally).toEqual({
+    expect(
+      residual,
+      countNote(
+        "which blocks the restoration cannot reach, named by POSITION in a live document. A block inserted above one of these shifts its index without changing which block it is, so compare the file names and the causes before reading a change here as a regression.",
+      ),
+    ).toEqual(["README.md block 6", "DESIGN.md block 1", "docs/requirements.md block 30"]);
+    expect(
+      tally,
+      countNote(
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 3/3 shipped and 35/35 ablated whatever `edits` becomes.",
+      ),
+    ).toEqual({
       edits: 375,
       shipped: { dishonest: 3, fired: 3 },
       ablated: { dishonest: 35, fired: 35 },
