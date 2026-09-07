@@ -501,6 +501,66 @@ describe("Edit mode — a save never invents an edit", () => {
     expect((host.querySelector(".glosa-pane-main") as any)?.scrollTop ?? 0).toBe(0);
   });
 
+  test("AC-6: with no checkpoint since the cursor the banner names nobody and says so", async () => {
+    // The default fake never checkpoints anything, so the pin `beginEditSession` takes never gets
+    // a real cursor — this is the ordinary "nothing has been checkpointed yet" case, not an error.
+    const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+    await paint(); // let the initial pin's getCheckpoints resolve
+
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+    await paint(); // let resolveDiskAttribution's calls resolve (it bails immediately here)
+
+    const copy = (host.querySelector(".glosa-disk-change-copy") as any)?.textContent ?? "";
+    expect(copy).toContain("seen at");
+    expect(copy).not.toContain("session");
+    expect(copy).not.toContain("human");
+  });
+
+  test("AC-7: a named attribution requires a path-matched hunk", async () => {
+    async function scenario(hunkPath: string) {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY), {
+        checkpoints: [{ checkpoint_id: "cp-1", at: "2026-09-06T10:00:00Z" }],
+      });
+      await paint(); // let the initial pin land on cp-1, giving resolveDiskAttribution a cursor
+      da.diff = { hunks: [{ path: hunkPath, diff: "", attribution: "session:abc123def456xyz" }] };
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      await paint();
+      return (host.querySelector(".glosa-disk-change-copy") as any)?.textContent ?? "";
+    }
+
+    // A hunk exists in the range, but for a DIFFERENT path — a workspace checkpoint proves
+    // nothing about this one, so it must stay exactly as unattributed as no hunk at all.
+    const unmatched = await scenario("other.md");
+    expect(unmatched).toContain("seen at");
+    expect(unmatched).not.toContain("session");
+
+    // The same fixtures, path-matched this time — only now is the session named.
+    const matched = await scenario("notes.md");
+    expect(matched).toContain("session");
+    expect(matched).toContain("abc123def456");
+  });
+
+  test("a checkpointed human edit is named as one, never invented for anything else", async () => {
+    // AGENTS.md invariant 3: edits made in glosa are `human` by construction; nothing else may
+    // ever render as `human`, including the unattributed default (checked above by AC-6/AC-7).
+    const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY), {
+      checkpoints: [{ checkpoint_id: "cp-1", at: "2026-09-06T10:00:00Z" }],
+    });
+    await paint();
+    da.diff = { hunks: [{ path: "notes.md", diff: "", attribution: "human" }] };
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+    await paint();
+
+    const copy = (host.querySelector(".glosa-disk-change-copy") as any)?.textContent ?? "";
+    // The design's copy never prints the literal word "human" to the reader — it says "an edit in
+    // glosa", the honest translation of that attribution value into prose a writer would say.
+    expect(copy).toContain("an edit in glosa");
+    expect(copy).not.toContain("session");
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);

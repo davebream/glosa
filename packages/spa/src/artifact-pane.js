@@ -1173,6 +1173,31 @@ export function createArtifactPane(host, deps) {
     // clean pane that leaves Edit and returns would keep showing a banner the file has already
     // caught up to.
     clearDiskChange();
+    void pinEditSession();
+  }
+
+  /**
+   * D4: `editSession` is pinned once per draft, not once per mode switch. `openedCheckpointId` is
+   * Compare's `from` (§3.7, later in this epic); `attributionCursor` starts there and is what
+   * `resolveDiskAttribution` advances. Fired as `void` from `beginEditSession` — a slow or failed
+   * lookup must never hold up the face it was called from.
+   *
+   * The pin need not be a checkpoint OF this artifact: shadow-git checkpoints are whole-worktree
+   * commits, so any one is a valid tree to diff a single file against.
+   */
+  async function pinEditSession() {
+    const pinnedBaseline = baselineSha;
+    let rows;
+    try {
+      rows = await dataAccess.getCheckpoints(slug, { limit: 1 });
+    } catch {
+      return; // failure leaves the pin null; Compare degrades to compareWithLastSaved's behaviour
+    }
+    // The draft this was pinning for already ended (a save, a discard, or a fresh load) before the
+    // lookup came back — landing it now would resurrect a session nothing is tracking anymore.
+    if (baselineSha !== pinnedBaseline) return;
+    const checkpointId = rows[0]?.checkpoint_id ?? null;
+    editSession = { openedCheckpointId: checkpointId, attributionCursor: checkpointId };
   }
 
   function endEditSession() {
@@ -2754,6 +2779,7 @@ export function createArtifactPane(host, deps) {
   function noteDiskChange() {
     diskChange = { seenAt: new Date(), at: null, attribution: null, acknowledged: false };
     renderDiskChange();
+    void resolveDiskAttribution();
   }
 
   function clearDiskChange() {
@@ -2765,10 +2791,59 @@ export function createArtifactPane(host, deps) {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  /** Honest by construction: a writer is named only once a path-matched checkpoint hunk proves it
-   * (`resolveDiskAttribution`, later in this epic). Until then — and whenever it can't — this is
-   * the only sentence the banner is allowed to show. */
+  /**
+   * D2: a writer is named ONLY when a path-matched diff hunk proves it — never from the mere fact
+   * that something was checkpointed. `attribution` is a git commit trailer and can only ever be
+   * `"human"`, `"session:<id>"` or `"unknown"` (AGENTS.md invariant 3 / A4 §F05); this stores
+   * whatever the daemon returns for a MATCHED path verbatim and never substitutes a guess.
+   *
+   * Never blocks anything already on screen — the banner already reads `seenAt` before this is
+   * called. A rejected call, an empty cursor, or an unmatched path all leave it that way.
+   */
+  async function resolveDiskAttribution() {
+    const cursor = editSession?.attributionCursor;
+    if (!cursor) return; // no pin to walk forward from — stays unattributed
+    const changeAtCall = diskChange;
+    let rows;
+    try {
+      rows = await dataAccess.getCheckpoints(slug, { since: cursor, limit: 1 });
+    } catch {
+      return;
+    }
+    if (!rows?.length) return; // nothing checkpointed since the cursor
+    const newCursor = rows[0].checkpoint_id;
+    let hunks;
+    try {
+      hunks = (await dataAccess.getDiff(slug, { from: cursor, to: newCursor })).hunks;
+    } catch {
+      return;
+    }
+    // Advances regardless of whether this range happened to touch the artifact's own path — the
+    // range up to `newCursor` has been considered either way, and re-walking it on the next call
+    // would only repeat this same answer.
+    if (editSession) editSession.attributionCursor = newCursor;
+    const hunk = hunks?.find((candidate) => candidate.path === currentArtifact?.source_path);
+    if (!hunk) return; // checkpoints landed; none of them touched THIS file — still unattributed
+    // The banner this was resolving for may have already been superseded by a newer disk change
+    // (or cleared) while the lookup was in flight — landing a stale answer on the current one
+    // would attribute the wrong fact.
+    if (diskChange !== changeAtCall) return;
+    diskChange.attribution = hunk.attribution;
+    diskChange.at = rows[0].at;
+    renderDiskChange();
+  }
+
+  /** Honest by construction: a writer is named only when `resolveDiskAttribution` found a
+   * path-matched hunk. Everything else — no hunk, an unmatched path, an "unknown" trailer, a
+   * rejected lookup — reads the same honest default rather than inventing a name for any of them. */
   function diskChangeCopy(change) {
+    if (change.attribution === "human") {
+      return `Changed on disk — last recorded change was an edit in glosa at ${formatClockTime(new Date(change.at))}.`;
+    }
+    if (typeof change.attribution === "string" && change.attribution.startsWith("session:")) {
+      const shortId = change.attribution.slice("session:".length).slice(0, 12);
+      return `Changed on disk — last recorded change by session ${shortId} at ${formatClockTime(new Date(change.at))}.`;
+    }
     return `Changed on disk, seen at ${formatClockTime(change.seenAt)} — no checkpoint records who changed it.`;
   }
 
