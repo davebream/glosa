@@ -468,10 +468,30 @@ export function createArtifactPane(host, deps) {
   // itself the scroller, and a flex sibling above `contentEl` would move the manuscript under an
   // unchanged scrollTop).
   const diskChangeCopyEl = el("p", { className: "glosa-disk-change-copy" });
+  const diskChangeKeepBtn = el("button", {
+    // `.glosa-btn` is the shared reusable button base (§9); the second class is a JS/test hook
+    // only, with no CSS rule of its own — reusing the base avoids a parallel button styling.
+    className: "glosa-btn glosa-disk-change-keep",
+    type: "button",
+    textContent: "Keep editing",
+    onClick: () => acknowledgeDiskChange(),
+  });
+  const diskChangeReloadBtn = el("button", {
+    // Quieter than `.glosa-btn` (`glosa-btn-ghost`, the same class Cancel wears in confirmDialog):
+    // Reload is the less common, not-yet-fully-implemented action — see `takeDisk`'s STUB note.
+    className: "glosa-btn glosa-btn-ghost glosa-disk-change-reload",
+    type: "button",
+    textContent: "Reload",
+    onClick: () => void takeDisk(currentArtifact),
+  });
+  const diskChangeActionsEl = el("div", { className: "glosa-disk-change-actions" }, [
+    diskChangeKeepBtn,
+    diskChangeReloadBtn,
+  ]);
   const diskChangeEl = el(
     "section",
     { className: "glosa-disk-change", hidden: true, role: "status", "aria-live": "polite" },
-    [diskChangeCopyEl],
+    [diskChangeCopyEl, diskChangeActionsEl],
   );
   const annotateInstructions = el("p", {
     className: "glosa-visually-hidden",
@@ -2775,15 +2795,25 @@ export function createArtifactPane(host, deps) {
   // ---------- disk-change banner (REQ-2) ----------
 
   /** A disk change that differs from `baselineSha` — the file this pane opened has moved under
-   * the draft. Recorded immediately with `seenAt`; a save is not blocked on anything here. */
-  function noteDiskChange() {
-    diskChange = { seenAt: new Date(), at: null, attribution: null, acknowledged: false };
+   * the draft. Recorded immediately with `seenAt`; a save is not blocked on anything here. `sha`
+   * is what the caller compares against to decide whether a later frame is the same fact repeated
+   * (no-op) or a genuinely new one (rebuilds this, resetting `acknowledged`). */
+  function noteDiskChange(sha) {
+    diskChange = { sha, seenAt: new Date(), at: null, attribution: null, acknowledged: false };
     renderDiskChange();
     void resolveDiskAttribution();
   }
 
   function clearDiskChange() {
     diskChange = null;
+    renderDiskChange();
+  }
+
+  /** *Keep editing* — dismisses the banner without discarding anything. A later disk change
+   * builds a fresh `diskChange` object (`noteDiskChange`), so `acknowledged` resets by
+   * construction rather than needing to be cleared anywhere else. */
+  function acknowledgeDiskChange() {
+    if (diskChange) diskChange.acknowledged = true;
     renderDiskChange();
   }
 
@@ -2858,6 +2888,36 @@ export function createArtifactPane(host, deps) {
     diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
   }
 
+  /** The one prompt for discarding unsaved work, shared by the pane's own close guard and
+   * *Reload* — never a second, differently-worded prompt for the same act. Self-skips when clean,
+   * so Reload on a clean stale editor is a single click. */
+  async function confirmDiscard() {
+    if (!isDirty()) return true;
+    const discard = await confirmDialog({
+      title: "Discard unsaved edits?",
+      // Says "this tab" rather than "leaving Edit": mode switches park drafts now, so closing
+      // is the only remaining way to actually lose one, and the prompt should not imply
+      // otherwise.
+      body: "This artifact has changes that haven't been saved. Closing this tab throws them away.",
+      confirmLabel: "Discard edits",
+      danger: true,
+    });
+    return discard;
+  }
+
+  /**
+   * *Reload* — takes the file from disk instead of saving over it.
+   *
+   * STUB (T4 Task 8): raises the discard guard and returns `SAVE_DECLINED`; it does not yet
+   * write nothing-and-remount over `fresh`'s bytes — that lands in Task 12, which replaces this
+   * body. Wired here now so the banner's Reload button and Task 9's dialog (later in this epic)
+   * both have one place to delegate to instead of two independent stubs.
+   */
+  async function takeDisk(_fresh) {
+    await confirmDiscard();
+    return SAVE_DECLINED;
+  }
+
   async function refreshArtifact() {
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
@@ -2868,13 +2928,18 @@ export function createArtifactPane(host, deps) {
       mountClassFArtifact(true);
       return;
     }
-    if (
-      fresh.class === "R" &&
-      baselineSha &&
-      fresh.source_sha256 !== baselineSha &&
-      (modeState.mode === "edit" || isDirty())
-    ) {
-      noteDiskChange();
+    if (fresh.class === "R" && baselineSha) {
+      if (fresh.source_sha256 === baselineSha) {
+        // The other writer's change is gone — undone, or this pane's own baseline caught up to
+        // it — so the fact this banner was warning about no longer holds.
+        if (diskChange) clearDiskChange();
+      } else if (modeState.mode === "edit" || isDirty()) {
+        // Comparing against the sha the CURRENT diskChange already represents, not just against
+        // baseline: baseline never moves on a refresh, so a bare `!== baselineSha` check would
+        // rebuild `diskChange` — and reset `acknowledged` — on every repeated frame carrying the
+        // same disk state, undoing "Keep editing" the moment the next identical frame arrived.
+        if (!diskChange || diskChange.sha !== fresh.source_sha256) noteDiskChange(fresh.source_sha256);
+      }
     }
     if (modeState.mode !== "edit") {
       morphArtifactContent(contentEl, fresh.rendered_html ?? "");
@@ -2980,19 +3045,7 @@ export function createArtifactPane(host, deps) {
       refreshOutline();
       layoutOutline();
     },
-    async confirmClose() {
-      if (!isDirty()) return true;
-      const discard = await confirmDialog({
-        title: "Discard unsaved edits?",
-        // Says "this tab" rather than "leaving Edit": mode switches park drafts now, so closing
-        // is the only remaining way to actually lose one, and the prompt should not imply
-        // otherwise.
-        body: "This artifact has changes that haven't been saved. Closing this tab throws them away.",
-        confirmLabel: "Discard edits",
-        danger: true,
-      });
-      return discard;
-    },
+    confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
       if (modeState.mode === "review") releaseWidth();

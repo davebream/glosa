@@ -561,6 +561,57 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(copy).not.toContain("session");
   });
 
+  test("AC-15: the banner's own actions — Keep editing dismisses it, Reload raises the discard guard", async () => {
+    // Keep editing, plus the re-show positive control.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+      const banner = host.querySelector(".glosa-disk-change") as any;
+      expect(banner?.hidden).toBe(false);
+
+      (host.querySelector(".glosa-disk-change-keep") as any).click();
+      expect(banner?.hidden).toBe(true);
+
+      // A repeated frame carrying the SAME sha must stay hidden — if `acknowledged` isn't being
+      // read, this would show the banner again.
+      await pane.refreshArtifact();
+      expect(banner?.hidden).toBe(true);
+
+      // A genuinely NEW disk change re-shows it.
+      da.disk.source_sha256 = "sha-3";
+      await pane.refreshArtifact();
+      expect(banner?.hidden).toBe(false);
+    }
+
+    // Reload, clean: nothing is parked, so the guard self-skips — a single click.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+
+      (host.querySelector(".glosa-disk-change-reload") as any).click();
+      await paint();
+      expect(modal()).toBeNull();
+      expect(da.put).toEqual([]);
+    }
+
+    // Reload, dirty: the guard is asked, and declining leaves everything untouched.
+    {
+      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY));
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+
+      (host.querySelector(".glosa-disk-change-reload") as any).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("Discard unsaved edits?");
+
+      modalButton("Cancel").click();
+      await paint();
+      expect(da.put).toEqual([]);
+    }
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
