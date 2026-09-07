@@ -299,6 +299,38 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     expect(detail && "completed_at" in detail ? Date.parse(detail.completed_at) : Number.NaN).not.toBeNaN();
   }, 20000);
 
+  // AC-1. Its own scenario and its own workspace dir, following this file's convention, so the
+  // listing claim is gated independently of the dismiss claim below: `list` has to work on a queue
+  // nobody can clear yet, which is the state the reporter was actually stuck in.
+  test("inbox list shows entries left by a hand-move", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    writeFileSync(join(workspaceDir, "seed.md"), "seed\n");
+    const opened = await client.openWorkspace(workspaceDir);
+
+    const entry1 = await createEntry(opened.slug, "seed.md", "first unread note");
+    const entry2 = await createEntry(opened.slug, "seed.md", "second unread note");
+
+    // Hand-move both payloads out of `.glosa/inbox/`. Nothing in glosa does this; it is the
+    // unsupported workaround the issue reports as the only thing that ever cleared a stuck queue.
+    unlinkSync(inboxEntryPath(opened.path, entry1));
+    unlinkSync(inboxEntryPath(opened.path, entry2));
+
+    const listed = await client.listInboxEntries(workspaceDir);
+    const ids = listed.entries.map((e) => e.id);
+    expect(ids).toContain(entry1);
+    expect(ids).toContain(entry2);
+
+    // Every column is journal-derived. An implementation that read payloads to build the row would
+    // return an empty list here, which is precisely the failure this test exists to prevent.
+    for (const id of [entry1, entry2]) {
+      const row = listed.entries.find((e) => e.id === id);
+      expect(row?.payload_present).toBe(false);
+      expect(row?.status).toBe("pending");
+      expect(row?.kind).toBe("common");
+      expect(row?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }
+  }, 20000);
+
   test("dismiss terminalizes an entry with no session — the stuck-queue reproduction end to end (issue #142)", async () => {
     const workspaceDir = freshWorkspaceDir();
     writeFileSync(join(workspaceDir, "seed.md"), "seed\n");
