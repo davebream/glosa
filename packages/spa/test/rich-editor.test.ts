@@ -203,6 +203,90 @@ describe("a save the writer did not make is byte-identical", () => {
   }
 });
 
+/** A VAULT-SHAPED NOTE (AC-7).
+ *
+ *  The nine corpus documents barely exercise this task: front matter appears once and `%%` never.
+ *  They are read LIVE from the working tree because REQ-8's direction is only checkable against real
+ *  hand-written content, so a synthetic file must NOT join them — it would inflate `BLOCKS` with
+ *  content nobody wrote. This constant lives here instead, and carries the shapes the reporter's
+ *  own documents have: a quoted value, a list inside the header, a callout, a `%%` comment, a
+ *  wikilink and a tag line. */
+const VAULT_NOTE = [
+  "---",
+  'title: "Weekly note: [draft]"',
+  "tags:",
+  "  - review",
+  "  - inbox",
+  "status: draft",
+  "---",
+  "",
+  "> [!note] Carried over",
+  "> Two lines, and the second one matters.",
+  "",
+  "A paragraph with a [[wikilink]] and a deliberate single newline",
+  "in the middle of it.",
+  "",
+  "#weekly #review",
+  "",
+  "%%",
+  "A private note.",
+  "Second line of it.",
+  "%%",
+  "",
+].join("\n");
+
+describe("a vault-shaped note survives an edit in every region (AC-7)", () => {
+  test("opening and saving it touches nothing", () => {
+    expect(save(VAULT_NOTE, VAULT_NOTE).markdown).toBe(VAULT_NOTE);
+  });
+
+  const regions: Array<[string, string, string]> = [
+    ["the header's quoted value", 'title: "Weekly note: [draft]"', 'title: "Weekly note: [final]"'],
+    ["the header's list", "  - inbox", "  - outbox"],
+    ["the callout body", "the second one matters", "the second one MATTERS"],
+    ["the prose paragraph", "deliberate", "DELIBERATE"],
+    ["the tag line", "#weekly #review", "#weekly #triage"],
+    ["the %% comment", "A private note.", "A PRIVATE note."],
+  ];
+  for (const [what, from, to] of regions) {
+    test(`a one-word edit in ${what} writes exactly that edit`, () => {
+      const edited = VAULT_NOTE.replace(from, to);
+      expect(edited, `${what}: the note must contain the text being edited`).not.toBe(VAULT_NOTE);
+      const result = save(VAULT_NOTE, edited);
+      expect(result.markdown, `${what}: byte for byte`).toBe(edited);
+      expect(result.degraded, `${what}: no whole-document fallback`).toBe(false);
+    });
+  }
+});
+
+/** THE ONE KNOWN LIMIT, PINNED SO IT CANNOT GO SILENT (AC-8, design §5.4).
+ *
+ *  A CRLF file whose header is EDITED writes that header back LF-only. Cause: markdown-it normalises
+ *  line endings before a block rule sees `state.src`, so the node's text is LF-only, while
+ *  `blockLayout` deliberately resolves spans against the RAW source — which is why an UNEDITED CRLF
+ *  header is still copied byte-for-byte.
+ *
+ *  It is bounded, not corrupting: the collateral guard FIRES, so the writer sees the exact bytes and
+ *  is asked before anything is written. The assertion on `collateral.length` is the point of this
+ *  test — the day this becomes silent, it goes red. */
+describe("a CRLF metadata header (AC-8)", () => {
+  const CRLF = "---\r\ntitle: T\r\nstatus: draft\r\n---\r\n\r\nBody.\r\n";
+
+  test("unedited, it is copied byte for byte including its \\r", () => {
+    expect(save(CRLF, CRLF).markdown).toBe(CRLF);
+  });
+
+  test("edited, the header comes back LF-only — and the writer is ASKED, never told after", () => {
+    const edited = CRLF.replace("status: draft", "status: review");
+    const result = save(CRLF, edited);
+    expect(result.markdown, "the writer's edit is applied").toContain("status: review");
+    expect(result.markdown, "but the header's own line endings are LF").toContain("---\ntitle: T");
+    expect(result.markdown, "outside the header the \\r bytes survive").toContain("Body.\r\n");
+    // THE LOAD-BEARING ASSERTION. Bounded because it is reported.
+    expect(result.collateral.length, "the collateral guard fires, so this is never silent").toBe(1);
+  });
+});
+
 /** THE RULE MUST REFUSE WHAT IT MUST REFUSE (AC-4).
  *
  *  Without these, a rule that swallowed the whole document would pass every other criterion in this
@@ -948,7 +1032,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(432);
+    ).toBe(437);
     // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
     // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
     // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
@@ -1083,6 +1167,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // · 39/432 after #143 gave front matter ONE node where it previously parsed as TWO. That is the
   //   MECHANISM moving the block population, not the corpus moving: the nine documents are unchanged
   //   and the numerator fell by exactly the one front-matter miss (DESIGN.md block 1) the node removed.
+  // · 39/437 after this task's OWN documentation: the CHANGELOG bullet, the requirements clause and
+  //   the decisions entry are three of the nine, so the corpus grew by five blocks. Denominator moved,
+  //   numerator did not — which is the bookkeeping case, not the regression case.
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
@@ -1126,7 +1213,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
    *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
    *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
-  const BLOCKS = 432;
+  const BLOCKS = 437;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1164,7 +1251,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 39 of 432 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 39 of 437 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1209,7 +1296,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 2 dishonest writes of 385; the guard fires on those 2 and, ablated, on 34", () => {
+  test("metrics 2 and 3 — 2 dishonest writes of 390; the guard fires on those 2 and, ablated, on 34", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
@@ -1289,10 +1376,14 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // is no longer re-serialized and can no longer be written dishonestly. It also left the
       // residual set above, and left `byCause` in metric 1, for the same single reason.
       //
-      // `edits` is unchanged at 385 because the generator edits blocks, and the header was already
-      // one block to the generator. The corpus did not move; the MECHANISM did.
+      // `edits` then moved 385 → 390 for the OTHER reason, in the same branch: this task's own
+      // documentation lands in CHANGELOG.md, docs/requirements.md and docs/decisions.md, which are
+      // three of the nine. Five blocks added, five more synthetic edits. THE NUMERATORS DID NOT MOVE
+      // with it — 2/2 and 34/34 either side — which is what says the corpus grew rather than the
+      // serializer changing. Both causes are recorded because they are different failures wearing
+      // the same red.
     ).toEqual({
-      edits: 385,
+      edits: 390,
       shipped: { dishonest: 2, fired: 2 },
       ablated: { dishonest: 34, fired: 34 },
     });

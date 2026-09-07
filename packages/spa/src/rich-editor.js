@@ -9,7 +9,7 @@
 // edited blocks the file is byte-identical. That matters beyond tidiness: every region this
 // rewrites reaches the agent as a `human_edit`, and a save that invents edits makes the human's
 // own change impossible to pick out. Where re-serializing an EDITED block would still cost bytes
-// the writer did not touch — CommonMark has no node for frontmatter, callout markers, `%%`
+// the writer did not touch — CommonMark has no node for callout markers, `%%`
 // comments or soft line breaks — `getSave()` reports that
 // collateral instead of writing it, and artifact-pane.js asks first.
 //
