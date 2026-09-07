@@ -2,7 +2,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
-import { checkedFiles, ROOT, type Profile } from "./test-plan.ts";
+import { checkedFiles, gitEnvironment, ROOT, type Profile } from "./test-plan.ts";
 
 type Case = {
   name: string;
@@ -64,7 +64,12 @@ export async function runInvocation(options: {
   mkdirSync(options.directory, { recursive: true });
   const prefix = join(options.directory, `${options.profile}-${Date.now()}-${crypto.randomUUID()}`);
   const started = performance.now();
-  const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root, stdout: "pipe", stderr: "pipe" })
+  const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: root,
+    env: gitEnvironment(),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
     .stdout.toString()
     .trim();
   const command = options.command ?? [

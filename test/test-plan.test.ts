@@ -8,6 +8,7 @@ import {
   changedPaths,
   classifyChanges,
   discoverTests,
+  gitEnvironment,
   expectedJobs,
   validatePartitions,
   validateResults,
@@ -34,7 +35,7 @@ test("balancing is deterministic and gives unseen tests a one-second estimate", 
 test("new tests are discovered without a manifest edit; ignored scratch and generated files stay out", () => {
   const root = mkdtempSync(join(tmpdir(), "glosa-inventory-"));
   try {
-    expect(Bun.spawnSync(["git", "init", root]).exitCode).toBe(0);
+    expect(Bun.spawnSync(["git", "init", root], { env: gitEnvironment() }).exitCode).toBe(0);
     writeFileSync(join(root, ".gitignore"), "scratch/\n");
     for (const file of [
       "new.test.ts",
@@ -108,6 +109,7 @@ test("real git diffs retain renamed and deleted paths; unavailable bases fail cl
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], {
       cwd: root,
+      env: gitEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -129,6 +131,37 @@ test("real git diffs retain renamed and deleted paths; unavailable bases fail cl
     expect(classifyChanges("pull_request", changedPaths(base, root))).toBe("full");
     expect(changedPaths("0".repeat(40), root)).toBeNull();
     expect(changedPaths("--bad", root)).toBeNull();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Git hooks cannot redirect fixture operations through ambient repository selectors", () => {
+  const root = mkdtempSync(join(tmpdir(), "glosa-hook-isolation-"));
+  const victim = join(root, "victim");
+  const fixture = join(root, "fixture");
+  try {
+    expect(Bun.spawnSync(["git", "init", victim], { env: gitEnvironment() }).exitCode).toBe(0);
+    const env = gitEnvironment({
+      ...process.env,
+      GIT_DIR: join(victim, ".git"),
+      GIT_WORK_TREE: victim,
+      GIT_INDEX_FILE: join(victim, ".git/index"),
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.bare",
+      GIT_CONFIG_VALUE_0: "true",
+    });
+    expect(env.GIT_DIR).toBeUndefined();
+    expect(env.GIT_WORK_TREE).toBeUndefined();
+    expect(env.GIT_CONFIG_COUNT).toBeUndefined();
+    expect(Bun.spawnSync(["git", "init", fixture], { env }).exitCode).toBe(0);
+    writeFileSync(join(fixture, "isolated.test.ts"), "");
+    expect(discoverTests(fixture)).toEqual(["isolated.test.ts"]);
+    const state = Bun.spawnSync(["git", "-C", victim, "rev-parse", "--is-bare-repository"], {
+      env: gitEnvironment(),
+      stdout: "pipe",
+    });
+    expect(state.stdout.toString().trim()).toBe("false");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
