@@ -705,6 +705,66 @@ describe("Edit mode — a save never invents an edit", () => {
     }
   });
 
+  test("AC-10: Keep mine issues exactly one further write, carrying the re-read sha and the rebased markdown", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(edited));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+    da.disk.source_sha256 = "sha-fresh"; // what staleSave's re-read of the artifact returns
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    expect(modal()).toBeNull(); // nothing to consent to — a clean rebase writes straight through
+    expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-fresh" }]);
+  });
+
+  test("AC-17: a degrading rebase reaches the collateral consent gate before any write; declining writes nothing", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const stub = stubRichEditor(edited);
+    stub.rebase.report = { markdown: "REWRITTEN\n", collateral: [], degraded: "block-mismatch" };
+    const { host, da } = await mountEditPane(stub);
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy(); // the stale-save dialog
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    // The collateral gate — not a second write, and not the stale-save dialog reopened.
+    expect(modal()?.querySelector("p")?.textContent).toContain("rewrites the whole thing");
+    expect(da.put).toEqual([]);
+
+    modalButton("Cancel").click();
+    await paint();
+    expect(da.put).toEqual([]);
+  });
+
+  test("AC-19: a second 409 on the Keep-mine retry does not re-open the dialog", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(edited));
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } }); // the retry 409s too
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    expect(modal()).toBeNull(); // reports and declines — never re-opens
+    expect(da.put).toEqual([]);
+    expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
+      "Not saved — this file changed again",
+    );
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);

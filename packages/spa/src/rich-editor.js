@@ -430,5 +430,6 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
       view.destroy();
       container.textContent = "";
     },
+    rebaseOnto: (newSource) => spliceMarkdown(newSource, parseMarkdown(newSource), view.state.doc),
   };
 }

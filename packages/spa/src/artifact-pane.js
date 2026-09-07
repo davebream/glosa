@@ -2651,6 +2651,32 @@ export function createArtifactPane(host, deps) {
   }
 
   /**
+   * *Keep mine* — re-splices the writer's document onto the fresh disk bytes and writes once
+   * through `writeAndSettle` (D6: no block-level three-way merge; a degrading rebase falls through
+   * the existing collateral gate, which asks whenever the splice can't vouch for itself).
+   *
+   * The retry is guarded (D9/AC-19): a second 409 here means the file changed AGAIN while the
+   * writer was deciding — reopening the dialog would ask the same question about a version that
+   * has already moved on, so this reports and declines instead.
+   */
+  async function keepMine(artifact, fresh) {
+    const rebased = sourceFace
+      ? { markdown: editArea.value, collateral: [], degraded: false }
+      : richEditor.rebaseOnto(fresh.content ?? "");
+    if ((await consentToCollateral(rebased)) !== "save") return SAVE_DECLINED;
+    try {
+      return await writeAndSettle(artifact, rebased.markdown, fresh.source_sha256);
+    } catch (error) {
+      if (error?.status === 409) {
+        editStatus.setAttribute("data-error", "true");
+        editStatus.textContent = "Not saved — this file changed again while you were deciding.";
+        return SAVE_DECLINED;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Opens when a save's `If-Match` is refused because the file moved under the draft (D5, D9).
    * Every non-write outcome returns `SAVE_DECLINED` (C3.2) — Cancel, Esc and the backdrop all
    * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
@@ -2670,7 +2696,7 @@ export function createArtifactPane(host, deps) {
     });
     if (choice === "take-disk") return await takeDisk(fresh);
     if (choice === "compare") return SAVE_DECLINED; // Task 12
-    if (choice === "keep-mine") return SAVE_DECLINED; // Task 11
+    if (choice === "keep-mine") return await keepMine(artifact, fresh);
     return SAVE_DECLINED; // Cancel / Esc / backdrop
   }
 
