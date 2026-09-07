@@ -604,7 +604,7 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(200);
   });
 
-  test("PUT artifact with a stale If-Match source_sha256 → 409 conflict, file left unchanged", async () => {
+  test("PUT artifact with a stale If-Match source_sha256 → 409 source-changed, file left unchanged", async () => {
     writeFileSync(join(root, "notes.md"), "original\n");
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
@@ -617,7 +617,7 @@ describe("A1 §5 route catalog", () => {
       }),
     );
     expect(res.status).toBe(409);
-    expect((await res.json()).type).toContain("conflict");
+    expect((await res.json()).type).toContain("source-changed");
     expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("original\n");
   });
 
