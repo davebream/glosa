@@ -339,3 +339,30 @@ mark, which was the alternative. Attributes are what `Node.eq` compares, and `No
 predicate that decides which blocks a save treats as unchanged. Widening it to carry a spelling
 would change that pairing for every save in the editor, to answer a question the block's own bytes
 already answer.
+
+## A construct the schema cannot model is carried verbatim, and the rule says so rather than listing them
+
+**Decision.** The rich editor parses over a schema DERIVED from prosemirror-markdown's CommonMark
+schema, with one added node whose serialization is its own source bytes. A markdown-it block rule
+recognises a document's metadata header and emits it as that node.
+
+**Why a property rather than a list.** The entry above warns that enumerating constructs is "how this
+class of bug happens in the first place", and it forward-references this work. So the rule is stated
+as a property — a top-level construct the schema cannot model is preserved verbatim — and only one
+recogniser ships, because measurement said only one was needed. After #174 landed, `%%` comments,
+callout markers and raw HTML all round-trip byte-identical under an edit; front matter was the only
+one still failing, and the only one that took the WHOLE document down the rewrite path rather than
+merely reporting collateral. Shipping recognisers for the other three would have been enumeration
+without evidence, and would have cost the rich face: a callout's body is ordinary rich content, and
+making it opaque would take formatting away from a construct writers use constantly.
+
+**What the rule knows.** That a `---` fence before any block content, with a non-blank line under it
+and a closing fence, is a document metadata header. That is knowledge about markdown documents, not
+about Obsidian or GitHub — the same class the editor already carries about fences, setext
+underlines and list markers. It deliberately does NOT know `%%` or `[!info]`, which are vendor
+dialect and would be a core/provider boundary violation.
+
+**The cost, stated.** The escape relaxation shipped in #174 is per-document: a file holding a header
+gets no relaxation anywhere in it. That is deny-by-default working as specified rather than a
+regression, and narrowing it is forbidden — relying on a transformation happening to be a no-op over
+raw bytes is exactly the corruption the opt-out exists to prevent.

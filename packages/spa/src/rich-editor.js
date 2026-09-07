@@ -9,7 +9,7 @@
 // edited blocks the file is byte-identical. That matters beyond tidiness: every region this
 // rewrites reaches the agent as a `human_edit`, and a save that invents edits makes the human's
 // own change impossible to pick out. Where re-serializing an EDITED block would still cost bytes
-// the writer did not touch — CommonMark has no node for frontmatter, callout markers, `%%`
+// the writer did not touch — CommonMark has no node for callout markers, `%%`
 // comments or soft line breaks — `getSave()` reports that
 // collateral instead of writing it, and artifact-pane.js asks first.
 //
@@ -19,6 +19,7 @@ import {
   EditorState,
   EditorView,
   markdownSchema,
+  Schema,
   defaultMarkdownParser,
   defaultMarkdownSerializer,
   MarkdownSerializer,
@@ -47,6 +48,13 @@ const mdSerializer = new MarkdownSerializer(
     bullet_list(state, node) {
       state.renderList(node, "  ", () => "- ");
     },
+    glosa_raw(state, node) {
+      // `false` = do not escape. These bytes are the file's own; escaping them is the corruption
+      // contracts.md C1.4 exists to prevent, and it is what makes T2's reparse-based verification
+      // trivially satisfiable on a raw block rather than starting to fail on one.
+      state.text(node.textContent, false);
+      state.closeBlock(node);
+    },
   },
   defaultMarkdownSerializer.marks,
 );
@@ -72,11 +80,112 @@ const mdSerializer = new MarkdownSerializer(
  * `handlers.softbreak ||= …`, so assigning here is the supported way past the default. Same shape
  * as the daemon configuring its one renderer at module load (daemon/src/artifact-render.ts).
  */
-defaultMarkdownParser.tokenHandlers.softbreak = (state) => state.addText("\n");
+/** A document's metadata header — `---` before any block content, a non-blank line under it, closed
+ *  by a later `---` at column 0, trailing whitespace ignored on both fences — is a construct
+ *  CommonMark cannot model. It reads as a thematic break plus a setext heading, so re-serializing it
+ *  writes `## title: …`, the reparse net then refuses the result, and the WHOLE document goes down
+ *  the `degraded: "reparse"` fallback: a one-word edit to `status:` rewrites the file and lands all
+ *  of it on the agent's side as one `human_edit`. One token, one node, its own bytes.
+ *
+ *  THE NON-BLANK GUARD IS LOAD-BEARING, not tidiness: without it a document that opens with a
+ *  thematic break and contains a second one is swallowed whole into a monospaced slab. Measured both
+ *  ways. It resolves the blank-line-separated half of that ambiguity only; the other half is accepted
+ *  and pinned (design §3.2), because `---\nkey: value\n---` and `---\ntext\n---` are the same shape
+ *  and nothing short of YAML validation separates them.
+ *
+ *  THE trimEnd IS ALSO LOAD-BEARING: without it one trailing space on either fence defeats the
+ *  recogniser entirely and an edit inside the header falls back to the whole-file rewrite — the
+ *  unmodified #143 damage, in a spelling ordinary editors produce. Measured, on both fences and with
+ *  a tab.
+ *
+ *  `---` only. `+++` is an ordinary paragraph to CommonMark, so making it opaque would CHANGE
+ *  rendering rather than preserve it; `----` is a thematic break. Widening the fence is one edit to
+ *  the constant below plus one control; do it when a document needs it, not before. */
+const RAW_NODE = "glosa_raw";
+const HEADER_FENCE = "---";
+
+/** `state.tokens.length !== 0` means "before any block content" — root-only AND admitting leading
+ *  blank lines, which emit no token. Deliberately NOT `startLine !== 0`: under that, a file opening
+ *  with a stray blank line keeps taking the whole-file `reparse` path, which is the damage this rule
+ *  exists to remove. */
+function metadataHeaderRule(state, startLine, endLine, silent) {
+  if (state.tokens.length !== 0) return false;
+  if (state.sCount[startLine] - state.blkIndent !== 0) return false;
+  const line = (n) => state.src.slice(state.bMarks[n] + state.tShift[n], state.eMarks[n]);
+  if (line(startLine).trimEnd() !== HEADER_FENCE) return false;
+  // The non-blank guard. A blank line under the fence means a thematic break, not a header.
+  if (startLine + 1 >= endLine || state.isEmpty(startLine + 1)) return false;
+
+  let close = -1;
+  for (let n = startLine + 1; n < endLine; n += 1) {
+    if (state.sCount[n] - state.blkIndent !== 0) continue;
+    if (line(n).trimEnd() === HEADER_FENCE) {
+      close = n;
+      break;
+    }
+  }
+  // An unclosed `---` is a thematic break, not a header.
+  if (close === -1) return false;
+  if (silent) return true;
+
+  const token = state.push(RAW_NODE, "", 0);
+  token.block = true;
+  token.map = [startLine, close + 1];
+  // `keepLastLF: false`. THE CHOICE IS INERT AND THAT IS WORTH WRITING DOWN: both variants produce
+  // byte-identical node text over every header shape measured, but only because `noCloseToken`
+  // routes through prosemirror-markdown's `withoutTrailingNewline`, which strips exactly one `\n`.
+  // That is the vendored bundle's property, not this rule's. `false` is the variant that stays
+  // correct if the bundle ever stops stripping, because `blockLayout` already excludes a block's
+  // trailing line ending from its span and the node's text must match that span.
+  token.content = state.getLines(startLine, close + 1, 0, false);
+  token.markup = HEADER_FENCE;
+  state.line = close + 1;
+  return true;
+}
+
+// From here on `defaultMarkdownParser` is only the SOURCE of three things — the tokenizer instance,
+// the token map, and the parser class. It no longer parses anything: `parseMarkdown` resolves through
+// `editorParser` below, and a second parse path in this file would silently reopen #173.
+defaultMarkdownParser.tokenizer.block.ruler.before("hr", RAW_NODE, metadataHeaderRule, { alt: [] });
+
+/** The schema the rich face actually runs on: CommonMark plus the one node above.
+ *
+ *  `isolating: true` is not decoration — it is what stops a `Backspace` at the head of the following
+ *  paragraph lifting prose up into the YAML. `marks: ""` and `code: true` say the bytes are literal:
+ *  nothing inside a metadata header is emphasis or a link. */
+export const editorSchema = new Schema({
+  nodes: markdownSchema.spec.nodes.addToEnd(RAW_NODE, {
+    content: "text*",
+    group: "block",
+    marks: "",
+    code: true,
+    defining: true,
+    isolating: true,
+    toDOM: () => ["pre", { class: "glosa-raw" }, ["code", 0]],
+    parseDOM: [{ tag: "pre.glosa-raw", preserveWhitespace: "full" }],
+  }),
+  marks: markdownSchema.spec.marks,
+});
+
+/** `MarkdownParser` is not on the vendored export list; its constructor is. Same tokenizer instance
+ *  as before — that is what keeps `blockLayout` and `parseMarkdown` reading one token stream, so a
+ *  block rule can never exist on one without a token-map entry on the other. */
+const editorParser = new defaultMarkdownParser.constructor(editorSchema, defaultMarkdownParser.tokenizer, {
+  ...defaultMarkdownParser.tokens,
+  [RAW_NODE]: { block: RAW_NODE, noCloseToken: true },
+});
+
+/** #173's soft break, moved onto the parser `parseMarkdown` actually resolves through.
+ *
+ *  MOVED, NOT DUPLICATED. Patching `defaultMarkdownParser` here would apply to a parser nothing
+ *  calls, and soft breaks would silently collapse back into spaces — the one loss in this file that
+ *  no round trip undoes. A second softbreak handler in this file is a bug for the same reason:
+ *  `parseMarkdown` resolves through exactly one parser, and this is it. */
+editorParser.tokenHandlers.softbreak = (state) => state.addText("\n");
 
 /** DOM-free halves of the editor, exported for tests: what the rich face parses and persists. */
 export function parseMarkdown(markdown) {
-  return defaultMarkdownParser.parse(markdown ?? "");
+  return editorParser.parse(markdown ?? "");
 }
 
 export function serializeMarkdown(doc) {
@@ -105,7 +214,7 @@ export function serializeMarkdown(doc) {
 /** Serializes a run of top-level nodes on their own, so a changed block can be written back
  * without dragging the rest of the document through the serializer. */
 function serializeNodes(nodes) {
-  return mdSerializer.serialize(markdownSchema.node("doc", null, nodes));
+  return mdSerializer.serialize(editorSchema.node("doc", null, nodes));
 }
 
 /**
@@ -546,7 +655,7 @@ function referenceDefinitions(references) {
     const quoted = title ? ` "${title.replace(ESCAPED_IN_TITLE, escapeReferencePart)}"` : "";
     const line = `[${label}]: <${destination}>${quoted}`;
     const env = {};
-    if (defaultMarkdownParser.tokenizer.parse(line, env).length !== 0) continue;
+    if (editorParser.tokenizer.parse(line, env).length !== 0) continue;
     const defined = env.references ?? {};
     if (Object.keys(defined).length !== 1) continue;
     if (defined[label]?.href !== href || defined[label]?.title !== title) continue;
@@ -565,7 +674,8 @@ function referenceDefinitions(references) {
  * character offsets bounding the block's own bytes, its trailing line ending excluded.
  *
  * markdown-it's block tokens carry a source line `map` — the same map the daemon's `data-line`
- * stamping anchors on — and `defaultMarkdownParser.tokenizer` IS that markdown-it instance, so the
+ * stamping anchors on — and `editorParser.tokenizer` IS that markdown-it instance (the same object
+ * `defaultMarkdownParser` was built over; only the schema and token map differ), so the
  * rich face can learn where every block came from without a second parser or a vendored rebuild.
  * Lines resolve against the RAW source rather than markdown-it's normalized copy, and line endings
  * are left in the gaps between blocks rather than inside them, so a CRLF file keeps its `\r` bytes
@@ -588,7 +698,7 @@ export function blockLayout(source) {
   // markdown-it fills `env.references` on this pass; nothing here needed an env before, which is
   // why the argument used to be a throwaway object literal.
   const env = {};
-  for (const token of defaultMarkdownParser.tokenizer.parse(source, env)) {
+  for (const token of editorParser.tokenizer.parse(source, env)) {
     // Top level only: an opening or self-closing token at nesting depth zero. Its closing partner
     // reports the same level, hence the `nesting` test rather than a depth counter.
     if (token.level !== 0 || token.nesting < 0 || !token.map) continue;
@@ -840,7 +950,7 @@ function toolbarActions(schema) {
  * caller falls back to source mode.
  */
 export function mountRichEditor(container, { markdown, onDirty } = {}) {
-  const schema = markdownSchema;
+  const schema = editorSchema;
   const source = markdown ?? "";
   const doc = parseMarkdown(source);
   const splice = createSplicer(source, doc);

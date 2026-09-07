@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   this repo's own documents the dialog now comes up on about one edited block in a hundred, down
   from one in nine.
 - Where writing an edited block back would still change markup you did not touch — glosa's markdown
-  editor has no notion of a callout marker or YAML front matter yet — the save shows you those exact
+  editor has no notion of a callout marker yet — the save shows you those exact
   bytes and asks, offering to save anyway or to hand your edit to the source face so you can fix it
   by hand. Nothing is written until you choose.
 - A final approval that saves your pending edits first no longer records the approval when that save
@@ -89,6 +89,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   indented continuation line came back flush left. None of that was your change, and all of it
   reached the agent as though it were. A block glosa's editor models is now written back in the
   spelling it was read in, with only your own edit different.
+- Editing a value in a document's `---` header no longer rewrites the whole file. The header is
+  carried through a save exactly as you wrote it, and a one-word change to it now reaches the agent
+  as a one-line edit rather than as a rewrite of everything.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 

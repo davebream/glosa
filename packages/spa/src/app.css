@@ -2813,6 +2813,27 @@ input,
   outline: 2px solid var(--primary);
 }
 
+/* A carried construct — the file's own bytes, shown as they are. Not composed prose, and not a
+   fenced code block either: a left hairline and muted ink rather than the filled ground
+   `.glosa-content pre` gives code, because this is not something the writer is composing.
+
+   NO TEXT LABEL. Labelling it would mean naming the construct, and the rule that produces this node
+   deliberately carries no dialect knowledge — it says "a top-level construct the schema cannot
+   model", not "YAML front matter". A `::before` here would put back the enumeration the mechanism
+   exists to avoid.
+
+   `--muted` (app.css:127) and `--border` (:129) are redefined in the dark block, so no companion
+   rule is needed. `--space-3` needs none for a DIFFERENT reason: it is a spacing-scale token,
+   defined once in the base `:root` at :52 and deliberately never redefined per theme. */
+.glosa-rich-surface .glosa-raw {
+  background: none;
+  border: 0;
+  border-left: 2px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  padding: 0 0 0 var(--space-3);
+}
+
 /* ---------- 9. Buttons ---------- */
 
 .glosa-btn,

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { EditorState, Schema, markdownSchema } from "../src/vendor/prosemirror.js";
 import {
   MODELLED_MARK_TYPES,
+  editorSchema,
   MODELLED_NODE_TYPES,
   blockLayout,
   collateralFor,
@@ -113,21 +114,39 @@ describe("prosemirror-markdown round-trip (what the serializer alone can carry)"
   });
 
   test("the serializer alone still mangles the reported fixture — which is why saves splice", () => {
-    // Pinned deliberately: this is the defect (#143) stated as a test, and the splice is what stands
-    // between this output and the file on disk. #174 removed ONE HALF of it — the serializer no
-    // longer invents escapes the source did not have — so the two bracket assertions below are
-    // INVERTED, never deleted: a reviewer seeing a deleted gate assertion cannot tell an intentional
-    // inversion from a suppressed failure. The other half, front matter collapsing into a setext
-    // heading, is still #143's and stays pinned here as a defect until T5 lands.
+    // This test's title is now historical: the serializer alone no longer mangles this fixture.
+    // #174 removed one half of #143 — the invented escapes — and #143's own remainder removed the
+    // other, so BOTH pins here are INVERTED rather than deleted. A reviewer seeing a deleted gate
+    // assertion cannot tell an intentional inversion from a suppressed failure, so they stay and
+    // assert the opposite of what they used to.
     const mangled = roundtrip(FIXTURE);
-    expect(mangled).toContain("## title: Test\nstatus: draft"); // frontmatter → a setext heading (#143's half)
+    // Inverted by #143. WAS `toContain("## title: Test\nstatus: draft")`: front matter collapsed
+    // into a setext heading, which then took the whole document down the reparse fallback. The
+    // header is now one verbatim node, so it comes back exactly as the file spelled it.
+    expect(mangled).not.toContain("## title: Test");
+    expect(mangled).toContain("---\ntitle: Test\nstatus: draft\n---");
     // Inverted by #174, was `toContain("\\[!info\\]")`. It now proves the stronger thing the weaker
     // assertion cannot: not one escape anywhere in the output, so no construct in the fixture picks
     // up a backslash the file did not already carry.
-    expect(mangled).not.toContain("\\[");
-    // Inverted by #174, was `toContain("*\\[bracketed emphasis\\]*")`. Brackets in ordinary prose now
-    // come back spelled exactly as the file spelled them.
-    expect(mangled).toContain("*[bracketed emphasis]*");
+    // RE-STATED by #143, not weakened, and NOT a #174 regression.
+    //
+    // `serializeMarkdown`'s opt-out is PER DOCUMENT (contracts.md C1.2): a document holding any node
+    // outside the modelled inventory gets the serializer's own output and no relaxation ANYWHERE in
+    // it. The fixture's front matter is now such a node, so #174's relaxation no longer reaches this
+    // document — the escapes it removed before are back, by the deny-by-default rule T2 shipped on
+    // purpose. Narrowing that opt-out to recover this assertion is forbidden: C1.2 rejects relying
+    // on the transformation happening to be a no-op on raw text, BY NAME.
+    //
+    // So the assertion moves to where #174's behaviour is still observable — the same fixture with
+    // the header removed — and the raw-node document asserts the cost instead. Both halves are here
+    // because dropping either one would let a real #174 regression hide behind this comment.
+    const withoutHeader = FIXTURE.split("---\n")[2] ?? "";
+    expect(withoutHeader, "the header-stripped fixture is non-empty").not.toBe("");
+    const relaxed = roundtrip(withoutHeader);
+    expect(relaxed, "#174 still relaxes when no raw node is present").not.toContain("\\[");
+    expect(relaxed).toContain("*[bracketed emphasis]*");
+    // And the cost, stated rather than hidden: WITH the header, nothing is relaxed.
+    expect(mangled, "a document holding a raw block gets no relaxation (C1.2's cost)").toContain("\\[!info\\]");
   });
 
   test("a soft line break survives the serializer", () => {
@@ -184,7 +203,236 @@ describe("a save the writer did not make is byte-identical", () => {
   }
 });
 
+/** A VAULT-SHAPED NOTE (AC-7).
+ *
+ *  The nine corpus documents barely exercise this task: front matter appears once and `%%` never.
+ *  They are read LIVE from the working tree because REQ-8's direction is only checkable against real
+ *  hand-written content, so a synthetic file must NOT join them — it would inflate `BLOCKS` with
+ *  content nobody wrote. This constant lives here instead, and carries the shapes the reporter's
+ *  own documents have: a quoted value, a list inside the header, a callout, a `%%` comment, a
+ *  wikilink and a tag line. */
+const VAULT_NOTE = [
+  "---",
+  'title: "Weekly note: [draft]"',
+  "tags:",
+  "  - review",
+  "  - inbox",
+  "status: draft",
+  "---",
+  "",
+  "> [!note] Carried over",
+  "> Two lines, and the second one matters.",
+  "",
+  "A paragraph with a [[wikilink]] and a deliberate single newline",
+  "in the middle of it.",
+  "",
+  "#weekly #review",
+  "",
+  "%%",
+  "A private note.",
+  "Second line of it.",
+  "%%",
+  "",
+].join("\n");
+
+describe("a vault-shaped note survives an edit in every region (AC-7)", () => {
+  test("opening and saving it touches nothing", () => {
+    expect(save(VAULT_NOTE, VAULT_NOTE).markdown).toBe(VAULT_NOTE);
+  });
+
+  const regions: Array<[string, string, string]> = [
+    ["the header's quoted value", 'title: "Weekly note: [draft]"', 'title: "Weekly note: [final]"'],
+    ["the header's list", "  - inbox", "  - outbox"],
+    ["the callout body", "the second one matters", "the second one MATTERS"],
+    ["the prose paragraph", "deliberate", "DELIBERATE"],
+    ["the tag line", "#weekly #review", "#weekly #triage"],
+    ["the %% comment", "A private note.", "A PRIVATE note."],
+  ];
+  for (const [what, from, to] of regions) {
+    test(`a one-word edit in ${what} writes exactly that edit`, () => {
+      const edited = VAULT_NOTE.replace(from, to);
+      expect(edited, `${what}: the note must contain the text being edited`).not.toBe(VAULT_NOTE);
+      const result = save(VAULT_NOTE, edited);
+      expect(result.markdown, `${what}: byte for byte`).toBe(edited);
+      expect(result.degraded, `${what}: no whole-document fallback`).toBe(false);
+    });
+  }
+});
+
+/** THE ONE KNOWN LIMIT, PINNED SO IT CANNOT GO SILENT (AC-8, design §5.4).
+ *
+ *  A CRLF file whose header is EDITED writes that header back LF-only. Cause: markdown-it normalises
+ *  line endings before a block rule sees `state.src`, so the node's text is LF-only, while
+ *  `blockLayout` deliberately resolves spans against the RAW source — which is why an UNEDITED CRLF
+ *  header is still copied byte-for-byte.
+ *
+ *  It is bounded, not corrupting: the collateral guard FIRES, so the writer sees the exact bytes and
+ *  is asked before anything is written. The assertion on `collateral.length` is the point of this
+ *  test — the day this becomes silent, it goes red. */
+describe("a CRLF metadata header (AC-8)", () => {
+  const CRLF = "---\r\ntitle: T\r\nstatus: draft\r\n---\r\n\r\nBody.\r\n";
+
+  test("unedited, it is copied byte for byte including its \\r", () => {
+    expect(save(CRLF, CRLF).markdown).toBe(CRLF);
+  });
+
+  test("edited, the header comes back LF-only — and the writer is ASKED, never told after", () => {
+    const edited = CRLF.replace("status: draft", "status: review");
+    const result = save(CRLF, edited);
+    expect(result.markdown, "the writer's edit is applied").toContain("status: review");
+    expect(result.markdown, "but the header's own line endings are LF").toContain("---\ntitle: T");
+    expect(result.markdown, "outside the header the \\r bytes survive").toContain("Body.\r\n");
+    // THE LOAD-BEARING ASSERTION. Bounded because it is reported.
+    expect(result.collateral.length, "the collateral guard fires, so this is never silent").toBe(1);
+  });
+});
+
+/** THE RULE MUST REFUSE WHAT IT MUST REFUSE (AC-4).
+ *
+ *  Without these, a rule that swallowed the whole document would pass every other criterion in this
+ *  file: the splice stays byte-honest whatever the block boundaries are, so nothing else here can
+ *  tell "one node because it is a header" from "one node because the rule ate everything".
+ *
+ *  Each row names the guard it pins. Deleting a guard must produce a NAMED red, not a vague one. */
+describe("a metadata header is recognised, and only a metadata header", () => {
+  const shapeOf = (source: string) =>
+    parseMarkdown(source).content.content.map((node: { type: { name: string } }) => node.type.name);
+
+  const cases: Array<{ what: string; source: string; shape: string[]; pins: string }> = [
+    { what: "the happy path", pins: "-",
+      source: "---\ntitle: T\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    // GUARD 4, the non-blank line under the opening fence. WITHOUT IT this row is swallowed whole:
+    // two paragraphs and a thematic break become one monospaced slab. Measured both ways.
+    { what: "a thematic break at the top, blank-line separated", pins: "guard 4",
+      source: "---\n\nSome text.\n\n---\n\nMore.\n",
+      shape: ["horizontal_rule", "paragraph", "horizontal_rule", "paragraph"] },
+    { what: "an unclosed fence is a thematic break, not a header", pins: "guard 5",
+      source: "---\ntitle: T\n\nBody.\n", shape: ["horizontal_rule", "paragraph", "paragraph"] },
+    { what: "an indented fence", pins: "guard 2",
+      source: "  ---\ntitle: T\n---\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+    // NOT guard 1: verified by ablation that this row still passes with guard 1 deleted, because the
+    // rule never fires inside a blockquote's inner tokenize at all. It pins the OUTCOME, not a guard.
+    { what: "inside a blockquote", pins: "the rule never fires nested",
+      source: "> ---\n> title: T\n> ---\n\nBody.\n", shape: ["blockquote", "paragraph"] },
+    // NOT guard 1 either: ablation shows guard 4 catches this one first, because the `---` here has a
+    // BLANK line under it. The guard-1 row is the one below, which has a non-blank line under it.
+    { what: "a lone thematic break after a heading", pins: "guard 4 (reached before guard 1)",
+      source: "# T\n\n---\n\nBody.\n", shape: ["heading", "horizontal_rule", "paragraph"] },
+    // GUARD 1, THE ROW THAT ACTUALLY OBSERVES IT. Every earlier guard passes here: unindented, a
+    // non-blank line under the fence, a closing fence present. Only "before any block content"
+    // refuses it. WITHOUT guard 1 all three of these become `glosa_raw` — a mid-document `---`
+    // separator followed by a `key: value` line would be swallowed into an opaque node. Measured.
+    { what: "a header-shaped block after a paragraph", pins: "guard 1",
+      source: "Body.\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["paragraph", "horizontal_rule", "heading", "paragraph"] },
+    { what: "a header-shaped block after a heading", pins: "guard 1",
+      source: "# T\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["heading", "horizontal_rule", "heading", "paragraph"] },
+    { what: "a header-shaped block after a list", pins: "guard 1",
+      source: "- a\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["bullet_list", "horizontal_rule", "heading", "paragraph"] },
+    { what: "four dashes is not the fence", pins: "the fence is exactly three dashes",
+      source: "----\ntitle: T\n----\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+    { what: "an empty header", pins: "-", source: "---\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    { what: "a header that is the whole file", pins: "-",
+      source: "---\ntitle: T\n---\n", shape: ["glosa_raw"] },
+  ];
+
+  for (const { what, source, shape, pins } of cases) {
+    test(`${what} (pins: ${pins})`, () => {
+      expect(shapeOf(source), what).toEqual(shape);
+      expect(save(source, source).markdown, `${what}: an untouched save is byte-identical`).toBe(source);
+    });
+  }
+
+  /** GUARD 3, the trimEnd() on both fences. WITHOUT IT one trailing space defeats the recogniser and
+   *  an edit inside the header falls back to the whole-file `reparse` rewrite — the unmodified #143
+   *  damage, in a spelling ordinary editors produce. The leading-blank-lines row is guard 1 admitting
+   *  what it deliberately admits (blank lines emit no token), and is here for the same reason.
+   *
+   *  THESE ROWS ASSERT AN EDIT IS EXACT, not merely the parsed shape: their whole point is that the
+   *  header stops taking the `reparse` path, and a shape assertion alone does not say that. */
+  const editable: Array<[string, string]> = [
+    ["a trailing space on the opening fence", "--- \ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+    ["a trailing space on the closing fence", "---\ntitle: T\nstatus: draft\n--- \n\nBody.\n"],
+    ["a tab after the opening fence", "---\t\ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+    ["leading blank lines before the fence", "\n\n---\ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+  ];
+  for (const [what, source] of editable) {
+    test(`${what} still parses as a header, and an edit inside it is exact`, () => {
+      expect(shapeOf(source), what).toEqual(["glosa_raw", "paragraph"]);
+      const edited = source.replace("status: draft", "status: review");
+      expect(edited, `${what}: the source must actually contain the edited text`).not.toBe(source);
+      const result = save(source, edited);
+      expect(result.markdown, `${what}: the write is exactly the writer's edit`).toBe(edited);
+      expect(result.degraded, `${what}: no whole-document fallback`).toBe(false);
+      expect(result.collateral, `${what}: nothing the writer did not type`).toEqual([]);
+    });
+  }
+
+  /** A RECORDED RENDERING DEFECT, NOT DATA LOSS (design §3.2).
+   *
+   *  Guard 4 resolves the blank-line-separated half of the thematic-break ambiguity only. This shape
+   *  survives it and is swallowed whole. That is ACCEPTED: `---\nkey: value\n---` and
+   *  `---\ntext\n---` are the same shape, and separating them means parsing YAML.
+   *
+   *  Both halves are pinned, because the second is what makes the first acceptable. If someone later
+   *  closes this, the test tells them exactly what they changed. */
+  test("a document opening with a thematic break and containing a second one is swallowed — and stays byte-honest", () => {
+    const source = "---\nSome text.\n\nMore text.\n\n---\nEnd.\n";
+    expect(shapeOf(source)).toEqual(["glosa_raw", "paragraph"]);
+    expect(save(source, source).markdown, "untouched: byte-identical").toBe(source);
+    const edited = source.replace("End.", "Fin.");
+    const result = save(source, edited);
+    expect(result.markdown, "an edit elsewhere writes exactly the edit").toBe(edited);
+    expect(result.degraded, "no whole-document fallback").toBe(false);
+    expect(result.collateral, "nothing reported, because nothing was invented").toEqual([]);
+  });
+
+  /** contracts.md C2's block-count invariant, and the reparse net, both with a raw node present.
+   *  `blocks.length !== original.length` degrades EVERY save of EVERY file with front matter, so the
+   *  token count and the doc's child count have to move together — which they do, because the rule
+   *  emits one token where the header previously produced two. */
+  test("the block count and the document's child count still agree, and the reparse net still holds", () => {
+    for (const [what, source] of [["the fixture", FIXTURE], ["a front-matter document", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n"]] as const) {
+      expect(blockLayout(source).blocks.length, `${what}: layout blocks`).toBe(parseMarkdown(source).childCount);
+    }
+    const source = "---\ntitle: T\nstatus: draft\n---\n\nBody.\n";
+    const edited = source.replace("status: draft", "status: review");
+    const result = save(source, edited);
+    expect(parseMarkdown(result.markdown).eq(parseMarkdown(edited)), "the write reparses to the edited tree").toBe(true);
+  });
+});
+
 describe("an edited block is the only block that moves", () => {
+  /** AC-1 (#143), THE CRITERION #174 DEFERRED (AMD-6).
+   *
+   *  #174 could not assert whole-fixture byte-identity, because it needs the YAML front matter to
+   *  survive an edit and opaque blocks are this issue's half. So this is where it lands.
+   *
+   *  All four of the fixture's regions, one word changed inside each. What the front-matter region
+   *  cost before the raw node existed, measured at `4bf6db5`: `degraded: "reparse"` — the WHOLE
+   *  document re-serialized, `---` fences gone, the two YAML lines collapsed into `## title: Test`,
+   *  the trailing newline dropped, and the entire file landing on the agent's side as one
+   *  `human_edit`. The other three already passed; they stay here so the file records what #171,
+   *  #173 and #174 bought. */
+  test("AC-1 (#143): a one-word edit inside any fixture region writes exactly that edit", () => {
+    const regions: Array<[string, string, string]> = [
+      ["front matter", "status: draft", "status: review"],
+      ["the callout body", "with a second line.", "with a SECOND line."],
+      ["the prose paragraph", "deliberate", "DELIBERATE"],
+      ["the %% comment", "A comment block.", "A COMMENT block."],
+    ];
+    for (const [region, from, to] of regions) {
+      const edited = FIXTURE.replace(from, to);
+      expect(edited, `${region}: the fixture must actually contain ${from}`).not.toBe(FIXTURE);
+      const result = save(FIXTURE, edited);
+      expect(result.markdown, `${region}: the write is the writer's file, byte for byte`).toBe(edited);
+      expect(result.degraded, `${region}: no whole-document fallback`).toBe(false);
+      expect(result.collateral, `${region}: nothing the writer did not type`).toEqual([]);
+    }
+  });
+
   test("the reported fixture: one changed word leaves frontmatter, callout, and %% untouched", () => {
     const edited = FIXTURE.replace("deliberate", "DELIBERATE");
     const { markdown } = save(FIXTURE, edited);
@@ -472,11 +720,31 @@ describe("what a candidate spelling is checked against", () => {
     // break plus a setext heading, so this document never round-trips at all and an absolute check
     // would refuse every relaxation on exactly the documents that need one.
     const mangled = roundtrip(FIXTURE);
-    expect(mangled).not.toContain("\\[");
-    expect(mangled).toContain("*[bracketed emphasis]*");
+    // RE-STATED by #143, not weakened, and NOT a #174 regression.
+    //
+    // `serializeMarkdown`'s opt-out is PER DOCUMENT (contracts.md C1.2): a document holding any node
+    // outside the modelled inventory gets the serializer's own output and no relaxation ANYWHERE in
+    // it. The fixture's front matter is now such a node, so #174's relaxation no longer reaches this
+    // document — the escapes it removed before are back, by the deny-by-default rule T2 shipped on
+    // purpose. Narrowing that opt-out to recover this assertion is forbidden: C1.2 rejects relying
+    // on the transformation happening to be a no-op on raw text, BY NAME.
+    //
+    // So the assertion moves to where #174's behaviour is still observable — the same fixture with
+    // the header removed — and the raw-node document asserts the cost instead. Both halves are here
+    // because dropping either one would let a real #174 regression hide behind this comment.
+    const withoutHeader = FIXTURE.split("---\n")[2] ?? "";
+    expect(withoutHeader, "the header-stripped fixture is non-empty").not.toBe("");
+    const relaxed = roundtrip(withoutHeader);
+    expect(relaxed, "#174 still relaxes when no raw node is present").not.toContain("\\[");
+    expect(relaxed).toContain("*[bracketed emphasis]*");
+    // And the cost, stated rather than hidden: WITH the header, nothing is relaxed.
+    expect(mangled, "a document holding a raw block gets no relaxation (C1.2's cost)").toContain("\\[!info\\]");
     // Still mangled where #143's opaque blocks are, which is T5's half and is pinned above at the
     // `## title: Test` assertion. Restated here so the relaxation cannot be read as having fixed it.
-    expect(mangled).toContain("## title: Test\nstatus: draft");
+    // Inverted by #143, same reason as the pin in the round-trip describe: the header is a verbatim
+    // node now, so the serializer writes the fences back rather than a heading.
+    expect(mangled).not.toContain("## title: Test");
+    expect(mangled).toContain("---\ntitle: Test\nstatus: draft\n---");
   });
 
   test("an escaped bracket whose bare form collides with a reference definition stays escaped", () => {
@@ -764,7 +1032,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(433);
+    ).toBe(437);
     // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
     // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
     // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
@@ -896,6 +1164,12 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //
   // HISTORY of metric 1: 174/418 Phase 0 · 40/418 as reported post-#173 · 43/418 re-measured at
   // `d965ffb` · 40/418 after this task's code · 40/433 after its documentation and the merge of #179/#180/#181, which added four
+  // · 39/432 after #143 gave front matter ONE node where it previously parsed as TWO. That is the
+  //   MECHANISM moving the block population, not the corpus moving: the nine documents are unchanged
+  //   and the numerator fell by exactly the one front-matter miss (DESIGN.md block 1) the node removed.
+  // · 39/437 after this task's OWN documentation: the CHANGELOG bullet, the requirements clause and
+  //   the decisions entry are three of the nine, so the corpus grew by five blocks. Denominator moved,
+  //   numerator did not — which is the bookkeeping case, not the regression case.
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
@@ -939,7 +1213,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
    *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
    *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
-  const BLOCKS = 433;
+  const BLOCKS = 437;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -977,7 +1251,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 433 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 39 of 437 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -999,14 +1273,15 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(40);
+    expect(misses).toBeLessThanOrEqual(39);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
-    // the 3 bracket/backslash-escaping blocks M1 removed — which is the whole of 43 → 40. A genuine
+    // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
+    // #143 removed (40 → 39). A genuine
     // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
     expect(
       byCause,
       countNote(
-        "the per-cause record, a NUMERATOR totalling 40. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+        "the per-cause record, a NUMERATOR totalling 39. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
       "link reference definition inlined": 18,
@@ -1015,11 +1290,13 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       "indented blockquote marker normalised": 5,
       "tight list re-emitted loose": 4,
       "HTML entity decoded": 1,
-      "front matter → setext heading": 1, // #143's, not this task's
+      // REMOVED by #143: `"front matter → setext heading": 1` (DESIGN.md block 1). The header is one
+      // verbatim node now, so it is no longer a miss and no longer a block. This is the one entry
+      // this task was allowed to remove, and removing it is the point of the task.
     });
   });
 
-  test("metrics 2 and 3 — 3 dishonest writes of 385; the guard fires on those 3 and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 2 dishonest writes of 390; the guard fires on those 2 and, ablated, on 34", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
@@ -1083,16 +1360,32 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       countNote(
         "which blocks the restoration cannot reach, named by POSITION in a live document. A block inserted above one of these shifts its index without changing which block it is, so compare the file names and the causes before reading a change here as a regression.",
       ),
-    ).toEqual(["README.md block 6", "DESIGN.md block 1", "docs/requirements.md block 30"]);
+      // `DESIGN.md block 1` was HERE and is gone: it was the 110-line YAML header, and #143 made it a
+      // verbatim node. Its removal is this task's whole purpose, not a loosened assertion.
+    ).toEqual(["README.md block 6", "docs/requirements.md block 30"]);
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 3/3 shipped and 35/35 ablated whatever `edits` becomes.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 2/2 shipped and 34/34 ablated whatever `edits` becomes.",
       ),
+      // THE NUMERATORS MOVED, AND THAT IS THE ONE CASE WHERE IT IS NOT A REGRESSION.
+      //
+      // The note above says a moved numerator is the real signal and must be investigated, never
+      // re-baselined. It was: shipped fell 3 → 2 and ablated 35 → 34, each by exactly ONE, and the
+      // one is `DESIGN.md block 1` — the 110-line YAML header. #143 made it a verbatim node, so it
+      // is no longer re-serialized and can no longer be written dishonestly. It also left the
+      // residual set above, and left `byCause` in metric 1, for the same single reason.
+      //
+      // `edits` then moved 385 → 390 for the OTHER reason, in the same branch: this task's own
+      // documentation lands in CHANGELOG.md, docs/requirements.md and docs/decisions.md, which are
+      // three of the nine. Five blocks added, five more synthetic edits. THE NUMERATORS DID NOT MOVE
+      // with it — 2/2 and 34/34 either side — which is what says the corpus grew rather than the
+      // serializer changing. Both causes are recorded because they are different failures wearing
+      // the same red.
     ).toEqual({
-      edits: 385,
-      shipped: { dishonest: 3, fired: 3 },
-      ablated: { dishonest: 35, fired: 35 },
+      edits: 390,
+      shipped: { dishonest: 2, fired: 2 },
+      ablated: { dishonest: 34, fired: 34 },
     });
   });
 
@@ -1161,13 +1454,23 @@ describe("the per-node-type opt-out — nothing outside the modelled inventory i
   // serializer will not DISPATCH on it: `code_block`'s handler reads `node.textContent` and never
   // renders its children by type. The run therefore serializes normally while carrying a type name
   // the inventory does not have, which is the property under test.
+  // COMPOSED FROM `editorSchema`, NOT `markdownSchema`, since #143. `Schema.node()` routes through
+  // `createChecked`, whose content match compares NodeType IDENTITY — so once these nodes belong to
+  // one schema, every ENCLOSING composer holding them must belong to it too, or it throws
+  // "Invalid content for node doc". `code_block.create()` survives either way only because
+  // `NodeType.create` skips the content check, which is what lets the stand-in bury a foreign node
+  // at all. If a composition here throws, the answer is another composer that was missed — NEVER a
+  // change to what these tests assert, and never reverting `serializeNodes()` to `markdownSchema`,
+  // which would undo contracts.md C1.3. The inventory guard at the foot of this describe stays on
+  // `markdownSchema` deliberately: it holds the allow-list against the VENDORED schema, which does
+  // not move, so a derived schema cannot enrol a type behind anybody's back.
   const opaqueSchema = new Schema({
     nodes: { doc: { content: "block+" }, text: { group: "inline" }, glosa_raw: { group: "block", content: "text*" } },
     marks: { glosa_verbatim: {} },
   });
   const opaqueNode = opaqueSchema.node("glosa_raw", null, opaqueSchema.text("verbatim"));
-  const bracketed = markdownSchema.node("paragraph", null, markdownSchema.text("See [r] here."));
-  const opaqueBlock = markdownSchema.nodes.code_block.create(null, opaqueNode);
+  const bracketed = editorSchema.node("paragraph", null, editorSchema.text("See [r] here."));
+  const opaqueBlock = editorSchema.nodes.code_block.create(null, opaqueNode);
   /** What the serializer alone writes for `[bracketed, opaqueBlock]` — brackets escaped, as it
    * escapes them everywhere. Every assertion below is against these exact bytes. */
   const RAW = "See \\[r\\] here.\n\n```\nverbatim\n```";
@@ -1189,11 +1492,70 @@ describe("the per-node-type opt-out — nothing outside the modelled inventory i
     // Remove the opt-out and this document is written `See [r] here.` — the escapes dropped from a
     // run that was never vouched for. This is the assertion that fails under an unconditional
     // rewrite, and it is the reason the opt-out sits on this path as well as on the wrapper.
-    expect(serializeMarkdown(markdownSchema.node("doc", null, [bracketed, opaqueBlock]))).toBe(RAW);
+    expect(serializeMarkdown(editorSchema.node("doc", null, [bracketed, opaqueBlock]))).toBe(RAW);
     // The control that keeps the assertion above honest: the very same paragraph, in a document the
     // inventory covers, IS relaxed. So the opt-out is what stopped it, not a serializer that never
     // escaped anything in the first place.
-    expect(serializeMarkdown(markdownSchema.node("doc", null, [bracketed]))).toBe("See [r] here.");
+    expect(serializeMarkdown(editorSchema.node("doc", null, [bracketed]))).toBe("See [r] here.");
+  });
+
+  /** THE SAME GUARANTEES, EXERCISED BY THE REAL NODE (AC-5).
+   *
+   *  Everything above uses a stand-in built by burying a foreign node in a `code_block`, because
+   *  before #143 the parser could not produce an unmodelled node at all. It can now, so these run
+   *  the same claims through `parseMarkdown` — the path a writer's file actually takes.
+   *
+   *  The header carries a literal `\[`, which is exactly what T2's escape relaxation exists to drop.
+   *  Dropping it here would corrupt bytes the file owns. */
+  const RAW_HEADER = '---\npattern: "\\[a-z\\]"\nstatus: draft\n---\n';
+  const realRawNode = () => parseMarkdown(RAW_HEADER).child(0);
+
+  test("contracts.md C1.4: the real raw node serializes to exactly its source bytes", () => {
+    const node = realRawNode();
+    expect(node.type.name, "the parser produces the raw node").toBe("glosa_raw");
+    // Byte-for-byte, unescaped. This is what makes T2's reparse-based predicate TRIVIALLY satisfied
+    // on a raw block rather than starting to fail on one.
+    const source = RAW_HEADER.replace(/\n$/, "");
+    expect(serializeNodesFaithfully([node], "", source)).toBe(source);
+    expect(serializeNodesFaithfully([node], "")).toBe(source);
+  });
+
+  test("the real raw node is outside the modelled inventory, and the inventory does not name it", () => {
+    expect(runIsModelled([realRawNode()])).toBe(false);
+    // The inventory is held against the VENDORED CommonMark schema, not against whatever schema
+    // `serializeNodes()` composes from, precisely so a derived schema cannot enrol a type behind
+    // anybody's back. `glosa_raw` must never appear here.
+    expect([...MODELLED_NODE_TYPES]).not.toContain("glosa_raw");
+  });
+
+  /** THE COST OF C1.2, PINNED WHERE THE OPT-OUT ACTUALLY DOES THE WORK.
+   *
+   *  Established by ablation, not assumed. Two documents, and only the second observes the opt-out:
+   *
+   *  - A header CONTAINING an escapable character: relaxing would change the raw node's own bytes,
+   *    so the tree comparison rejects the whole relaxation by itself. The opt-out is redundant here.
+   *    `relaxEscapes` is all-or-nothing, which is what makes the backstop reach this case.
+   *  - A header containing NO escapable character: relaxing elsewhere cannot corrupt it, both trees
+   *    agree, and the relaxation IS accepted — unless the opt-out refuses it. Measured: with the
+   *    opt-out the paragraph keeps `\[r\]`; ablated, it writes `[r]`.
+   *
+   *  So on this path the opt-out is deny-by-default conservatism rather than the last line against
+   *  corruption, and the cost is that a document holding a header gets no relaxation ANYWHERE in it.
+   *  That is design §4.7 stated as an assertion. Do not "fix" it by narrowing the opt-out:
+   *  contracts.md C1.2 forbids relying on the transformation happening to be a no-op on raw text. */
+  test("a document holding a raw block gets no relaxation anywhere in it — the opt-out, ablation-checked", () => {
+    const plain = "---\ntitle: T\nstatus: draft\n---\n";
+    expect(parseMarkdown(plain).child(0).type.name, "the header is the raw node").toBe("glosa_raw");
+    // The opt-out is the ONLY thing refusing this: the header holds nothing escapable, so the tree
+    // comparison would accept the relaxation. Ablate `runIsModelled` in `serializeMarkdown` and this
+    // line writes `See [r] here.` instead.
+    expect(serializeMarkdown(parseMarkdown(`${plain}\nSee [r] here.\n`))).toContain("See \\[r\\] here.");
+    // The control: the same paragraph in a document the inventory covers IS relaxed, so the opt-out
+    // is what stopped it rather than a serializer that never escaped anything.
+    expect(serializeMarkdown(parseMarkdown("See [r] here.\n"))).toBe("See [r] here.");
+    // And the redundant-but-harmless case, recorded so the distinction is not lost: a header that
+    // DOES hold an escapable character is protected by the tree comparison too.
+    expect(serializeMarkdown(parseMarkdown(`${RAW_HEADER}\nSee [r] here.\n`))).toContain('pattern: "\\[a-z\\]"');
   });
 
   test("an unmodelled node is refused at any depth, and a modelled document is not", () => {
@@ -1201,10 +1563,10 @@ describe("the per-node-type opt-out — nothing outside the modelled inventory i
     expect(runIsModelled([opaqueBlock])).toBe(false);
     // Buried two levels down rather than at the top: the walk has to reach it, because
     // `serializeNodes()` renders the whole subtree and its bytes reach the string being rewritten.
-    const buried = markdownSchema.node(
+    const buried = editorSchema.node(
       "blockquote",
       null,
-      markdownSchema.node("bullet_list", null, markdownSchema.node("list_item", null, opaqueBlock)),
+      editorSchema.node("bullet_list", null, editorSchema.node("list_item", null, opaqueBlock)),
     );
     expect(runIsModelled([buried])).toBe(false);
     // Deny by default: nothing here recognises `glosa_raw`, and that is the whole answer. Adding a
