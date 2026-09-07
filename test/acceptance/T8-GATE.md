@@ -6,20 +6,75 @@ overall v1 readiness may remain blocked by an independent release issue.
 
 ## 1. Deterministic gate
 
-Run from the repository root:
+Run from the repository root with Bun 1.2.7 (the pinned CI runtime):
 
-```bash
+```sh
 bun run typecheck
-bun run test:acceptance
-bun test
-bun test
+bun run test:ci
+bun run test:stability
+bun run test:full
 bun run audit:licenses
 bun run package:check
 ```
 
-`bun run test:acceptance` runs the acceptance suites and nothing else. It is the acceptance bar;
-a green full `bun test` is not. Both full runs must still pass — the second catches order
-dependence and state leakage that a subset run cannot see.
+`bun run test:ci` runs the named T8 acceptance files and two disjoint partitions of all remaining
+tests. It runs those partitions sequentially locally; CI gives each its own macOS job. The union
+must equal the discovered test inventory, without duplicates. `bun run test:acceptance` still runs
+only the named gate. A docs-only result is never a T8 pass. The main/release full run uses plain
+unpartitioned `bun test` underneath its reporting wrapper; it checks cross-file interactions, not
+randomized order. The manual rehearsal remains a separate, attended requirement.
+
+| Event | Required test profiles |
+|---|---|
+| Documentation-only PR | `test:docs`: complete editor corpus, membership guard, quality gates and OSS contracts; format and package checks; security |
+| Code, configuration, mixed or unknown PR | Acceptance plus both remaining partitions; stability; lint, typecheck, format, license/package checks; security |
+| Main push or release tag | All full-validation profiles plus one unpartitioned `test:full` run |
+| Manual dispatch | Full validation; choose two or ten stability repetitions |
+
+Stability repeats the lifecycle, daemon-helper and lease-fallback files twice, in fresh processes.
+Every attempt must pass; this is not retry-to-green. To reproduce a stability problem locally:
+
+```sh
+bun run test:stability --repetitions 10
+```
+
+The required `ci` result validates actual dependent-job outcomes. Failure, cancellation, missing
+preparation output, or an unexpected skip blocks it. `security` is independent and always runs.
+Release publishing requires both validation and security. Workflow-level path skipping is forbidden.
+Documentation classification recognizes root Markdown, docs Markdown/assets, this gate document,
+LICENSE and issue templates. Other paths, including Markdown fixtures, run full validation. Both
+sides of a rename participate. A failed or unavailable diff also runs full validation.
+
+Test discovery includes tracked files and new nonignored files matching Bun's `.test`, `_test`,
+`.spec` and `_spec` JS/TS conventions. Ignored scratch, hidden directories, dependencies and generated
+build output are excluded. Adding a test automatically adds it to coverage. Add acceptance tests to
+`scripts/acceptance-suites.ts` and the table below together. An omitted, duplicate, missing or empty
+required selection fails loudly; Bun receives explicit `./` file paths, never name filters.
+
+Every runner invocation writes uniquely named JSON, JUnit, stdout and stderr evidence under
+`.context/test-results/`. JSON records include selected files, revision, runtime, elapsed time,
+exit status, test identities and slowest cases. HTTP/Git runs also record fixture phase timings.
+JUnit must prove that the selected files actually executed; skipped cases, malformed or missing
+reports fail verification. CI uploads this directory even after failure and retains it for 14 days.
+Do not put private artifacts in this directory. Interrupted runs retain available diagnostics;
+a runner forcibly killed by the OS may leave an incomplete record, which cannot prove a pass.
+
+`scripts/test-timings.json` is a reviewed seconds-per-file baseline. Refresh it from successful
+same-runtime CI JUnit suite durations, retaining the source run and commit. Compare multiple runs
+before editing it; never update it automatically in CI. The planner sorts by decreasing duration,
+breaks ties by path, and assigns each remaining test to the lighter partition. Unseen files get a
+one-second estimate. Timing estimates influence scheduling only, never membership or pass/fail.
+
+Before changing guards, ablate the protected mechanism and require a named red; then restore it
+and rerun the relevant tests. Keep real subprocess, browser CSP, journal durability, ownership and
+provenance checks. Control synthetic waiting instead of lowering production deadlines. Profile
+setup/body/cleanup before considering shared fixtures; mutable buses and Git repos remain isolated.
+
+Rollout measurement remains separate from correctness: inspect ten subsequent code-PR runs and
+three docs-only runs, comparing workflow latency, longest job, total execution and first-attempt
+failures. The targets are a code-PR median below two minutes (aim 60–90 seconds) and docs below one
+minute. Main and release timings are reported separately. If partitioning exposes isolation bugs,
+restore serial coverage while fixing them; do not skip tests or reinterpret failed attempts.
 
 ### 1.1 The named suites
 

@@ -24,12 +24,14 @@ Run the release gates before submitting a change:
 
 ```sh
 bun run typecheck
-bun test
+bun run test:ci
+bun run test:stability
+bun run test:full
 bun run audit:licenses
 bun run package:check
 ```
 
-Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `AGENTS.md` and `docs/requirements.md`.
+Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `AGENTS.md` and `docs/requirements.md`. See `test/acceptance/T8-GATE.md` for test profiles, automatic discovery, timing reports, baseline refresh and stability reproduction.
 
 ### Running glosa from your checkout
 
