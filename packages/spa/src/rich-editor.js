@@ -245,6 +245,14 @@ function diffRuns(a, b) {
   return runs;
 }
 
+/** `diffRuns` behind the budget: `null` when the matrix is too large to fill. Two callers read
+ * that `null` differently and both are right — the restoration returns the serializer's own bytes,
+ * and the collateral guard reports, because a write it cannot prove honest is one to ask about. */
+function diffRunsWithin(a, b) {
+  if ((a.length + 1) * (b.length + 1) > MAX_RESTORE_CELLS) return null;
+  return diffRuns(a, b);
+}
+
 /** `a` with the runs `restored[k]` marks taken from `b` instead. Outside the runs the two token
  * streams are identical, so which side those pieces come from cannot matter. */
 function applyRuns(a, b, runs, restored) {
@@ -279,9 +287,8 @@ function restoreSourceSpelling(output, source, verify) {
   if (source === undefined || source === output) return output;
   const a = tokenize(output);
   const b = tokenize(source);
-  if ((a.length + 1) * (b.length + 1) > MAX_RESTORE_CELLS) return output;
-  const runs = diffRuns(a, b);
-  if (runs.length === 0) return output;
+  const runs = diffRunsWithin(a, b);
+  if (runs === null || runs.length === 0) return output;
   const all = applyRuns(
     a,
     b,
@@ -328,6 +335,82 @@ export function serializeNodesFaithfully(nodes, referenceSuffix, source) {
   // both, which returns the serializer's bytes and is checked by identity rather than by a reparse.
   if (written === raw) return raw;
   return verify(written) ? written : raw;
+}
+
+/**
+ * Whether two diff runs meet on their SOURCE side. Both intervals are half-open token ranges into
+ * the same string — the block's own bytes — so a run taken from one diff and a run taken from
+ * another are directly comparable.
+ *
+ * TOUCHING COUNTS, and the strict reading is the wrong one. `<` is the natural reading of the word
+ * "overlaps", and under it two ZERO-WIDTH runs at one offset never meet — but zero-width on the
+ * source side is exactly what a pure insertion is, the serializer adding bytes the file never had.
+ * Measured over the nine documents REQ-8 is recorded on: of the 40 blocks the serializer respells,
+ * 18 have nothing but zero-width source runs — every `## [0.1.0-alpha.N]` heading in CHANGELOG.md
+ * plus `## [Unreleased]`, whose reference definitions get written out inline. A strict join is
+ * structurally blind on those, which is REQ-3's largest residual cause going unguarded.
+ *
+ * It is also the semantically right rule rather than merely the convenient one: an insertion sitting
+ * immediately beside the writer's edit is precisely the entangled case the guard exists for. And it
+ * costs nothing — the false-alarm count is zero under both joins in every measured configuration.
+ *
+ * Exported for tests, because nothing else can pin it: the setext control in the gate file fires
+ * under EITHER join, so only a direct test of this predicate tells the two apart.
+ */
+export function runsOverlap(a, b) {
+  return a.b0 <= b.b1 && b.b0 <= a.b1;
+}
+
+/**
+ * The collateral guard. The question is not "can the serializer reproduce this block?" — the
+ * restoration above answers that one with the source bytes — but: **does the write still differ
+ * from the file at a place the SERIALIZER caused, rather than a place the writer's edit caused?**
+ *
+ * Two token diffs against the same source bytes:
+ *
+ * - `D`, what the serializer respells on its own: `M1(serializeNodes(originalNodes))` against
+ *   `source`. **NO SOURCE RESTORATION IS INVOLVED**, and that is the whole anti-tautology property.
+ *   Compute this side through the restoration and `faithful !== source` becomes true by
+ *   construction — measured, 418 blocks of 418 restore and verify — so the guard cannot fire for
+ *   any input while still looking like a guard. This is also the string the report carries.
+ * - `R`, what the write still changes: `written` against `source`.
+ *
+ * Collateral iff some run of `R` meets a run of `D` on the source side. Why each case lands right:
+ *
+ * | | in `D`? | in `R`? | verdict |
+ * |---|---|---|---|
+ * | the writer's edited word, where the file already held plain text | no | yes | not collateral — those bytes are the writer's own |
+ * | a respelling the restoration put back | yes | no | not collateral — nothing was lost |
+ * | a respelling it could NOT put back, entangled with the writer's edit | yes | yes | **collateral** — this is the case that fires |
+ * | markup the writer freshly typed, respelled on the way out | no | yes | not collateral, and the write may be dishonest — see below |
+ *
+ * **THE BLIND SPOT, stated rather than overclaimed.** `D` is built from the ORIGINAL nodes, so where
+ * the writer types NEW markup `D` is empty there and this cannot fire under any join. Measured:
+ * typing `[home]` into a document that defines that label writes an inlined URL; typing `&amp;`
+ * writes `&`; typing `[note]` into a block that also holds a load-bearing `\*` writes `\[note\]`.
+ * None of the three is a regression — `D` empty is equivalent to `faithful === source`, which is
+ * precisely what the guard this replaces was silent on too — and none is fixed here. So, precisely:
+ * this detects serializer infidelity carried from the block's ORIGINAL bytes, and is blind, exactly
+ * as its predecessor is, to infidelity in content the writer freshly typed.
+ *
+ * `written` is taken as DATA rather than computed here, which is what lets a test ablate the
+ * restoration by passing a `written` the wrapper produced with its source argument omitted. There is
+ * no flag: see `serializeNodesFaithfully` above for why this write path may not have one.
+ *
+ * Exported for tests. The report entry, its three strings and the call site are unchanged; only the
+ * condition moved.
+ */
+export function collateralFor(originalNodes, referenceSuffix, written, source) {
+  const faithful = serializeNodesFaithfully(originalNodes, referenceSuffix);
+  const entry = [{ original: source, faithful, written }];
+  const sourceTokens = tokenize(source);
+  const respelt = diffRunsWithin(tokenize(faithful), sourceTokens);
+  const remaining = diffRunsWithin(tokenize(written), sourceTokens);
+  // Fail safe. A matrix too large to fill is a write this cannot prove honest, and an unproven
+  // write is one the writer is asked about — never one written silently.
+  if (respelt === null || remaining === null) return entry;
+  for (const d of respelt) for (const r of remaining) if (runsOverlap(d, r)) return entry;
+  return [];
 }
 
 /** True for the document prosemirror-markdown produces from an empty string: the schema requires
@@ -541,8 +624,7 @@ export function createSplicer(source, originalDoc) {
       if (inserted.length && o < nextO) {
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
         const written = serializeNodesFaithfully(inserted, referenceSuffix, replaced);
-        const faithful = serializeNodes(original.slice(o, nextO));
-        if (faithful !== replaced) collateral.push({ original: replaced, faithful, written });
+        collateral.push(...collateralFor(original.slice(o, nextO), referenceSuffix, written, replaced));
         pieces.push({ text: written, before: o > 0 ? separator(o) : "\n\n" });
       } else if (inserted.length) {
         // A pure insertion owns no original bytes, so it gets a blank line of its own rather than
@@ -584,12 +666,16 @@ export function createSplicer(source, originalDoc) {
  *
  * Returns `{markdown, collateral, degraded}`.
  *
- * `collateral` lists the edited blocks the serializer cannot reproduce faithfully — an escaped
- * bracket, a soft line break joined into a space. It is found by round-tripping the block's
- * ORIGINAL nodes and comparing against its original bytes, so it reports what re-serializing that
- * block costs regardless of what the writer changed inside it. `degraded` is a short reason string
- * when the whole document had to be re-serialized instead. Both are the caller's cue to ask before
- * writing; neither is ever written silently (see artifact-pane.js).
+ * `collateral` lists the edited blocks whose write STILL differs from the file at a place the
+ * serializer caused rather than the writer — a respelling the source restoration above could not
+ * put back, because the writer's own edit was entangled with it. It is no longer "what
+ * re-serializing this block would cost regardless of the edit": most of that cost is now paid back
+ * from the block's own bytes, and reporting it anyway would ask for consent to a save that costs
+ * nothing. See `collateralFor` above for how it is decided and what it does not cover.
+ *
+ * `degraded` is a short reason string when the whole document had to be re-serialized instead.
+ * Both are the caller's cue to ask before writing; neither is ever written silently (see
+ * artifact-pane.js).
  */
 export function spliceMarkdown(source, originalDoc, editedDoc) {
   return createSplicer(source, originalDoc)(editedDoc);

@@ -16,7 +16,9 @@ import { join } from "node:path";
 import { EditorState } from "../src/vendor/prosemirror.js";
 import {
   blockLayout,
+  collateralFor,
   parseMarkdown,
+  runsOverlap,
   serializeMarkdown,
   serializeNodesFaithfully,
   spliceMarkdown,
@@ -703,5 +705,198 @@ describe("the restoration's size guard", () => {
     // And the property the whole restoration rests on: handed a block's own bytes back, every block
     // in the corpus comes back as those bytes. Nothing the writer did not change can move.
     expect(unrestored).toBe(0);
+  });
+});
+
+describe("the collateral guard, re-posed (REQ-6, #174)", () => {
+  // WHY THIS BLOCK EXISTS AT ALL. The restoration above puts a lossy block's source spelling back,
+  // which means the old guard's question — "does re-serializing the ORIGINAL block reproduce its
+  // bytes?" — no longer answers the question a writer needs answered before consenting to a save.
+  // The guard now asks: does the write still differ from the file at a place the SERIALIZER caused,
+  // rather than a place the writer's edit caused?
+  //
+  // The setext fixture below is this file's POSITIVE CONTROL, and it is the only one. Every other
+  // collateral assertion here asserts an EMPTY array, so an implementation that simply deleted the
+  // guard would pass all of them. If a future improvement to the restoration search makes this
+  // fixture honest, re-point the control at a fixture that is still dishonest — never delete it.
+  const SETEXT = "Title words\n===\n";
+
+  test("the control: an edit the restoration cannot undo is reported, with what it costs", () => {
+    // The heading spans two lines in the file and one in the serializer's output, so restoring the
+    // source over the writer's own word is the one thing that cannot verify — the `\n===` and the
+    // edited word land in a single run, and a run is all-or-nothing. The bytes go out anyway; the
+    // writer is asked first. That is the whole contract.
+    const result = save(SETEXT, "Title WORDS\n===\n");
+    expect(result.markdown).toBe("# Title WORDS\n");
+    expect(result.degraded).toBe(false); // the collateral path, NOT the whole-document reparse net
+    expect(result.collateral).toHaveLength(1);
+    expect(result.collateral[0]?.original).toBe("Title words\n===");
+    expect(result.collateral[0]?.faithful).toBe("# Title words");
+    expect(result.collateral[0]?.written).toBe("# Title WORDS");
+  });
+
+  test("no false alarm: an edit the restoration DID undo reports nothing", () => {
+    // All three respell under the serializer alone and all three come back exactly, so the write
+    // differs from the file at the writer's word and nowhere else. A guard that still fired here
+    // would ask for consent to a save that costs nothing, every time, on most of a real document.
+    const callout = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
+    expect(save(callout, callout.replace("callout", "CALLOUT")).collateral).toEqual([]);
+
+    const entities = "Use &nbsp; and &amp; and &lt; here.\n";
+    expect(save(entities, entities.replace("here", "there")).collateral).toEqual([]);
+
+    const plain = "Alpha here.\n\nBeta here.\n";
+    expect(save(plain, plain.replace("Alpha", "Delta")).collateral).toEqual([]);
+  });
+
+  test("no missed loss: an unedited lossy block stays byte-identical and stays quiet", () => {
+    // The block the control fires on, saved WITHOUT an edit. It never reaches the guard — the
+    // pairing copies its bytes — and it must not be made noisy for a save that changed nothing.
+    const result = save(SETEXT, SETEXT);
+    expect(result.markdown).toBe(SETEXT);
+    expect(result.collateral).toEqual([]);
+    expect(result.degraded).toBe(false);
+  });
+
+  test("the join is TOUCHING, not strict: two zero-width runs at one offset overlap", () => {
+    // THE DISCRIMINATOR, and it has to be a direct test. The control above fires under a strict
+    // join too — its `\n===` deletion has non-zero source extent — so every other assertion in this
+    // file passes with `<` in place of `<=`. What `<` loses is the pure INSERTION: zero-width on the
+    // source side, and two zero-width runs at one offset never intersect. That is all 18 of
+    // CHANGELOG.md's reference-link headings, REQ-3's largest residual cause, silently unguarded.
+    const at = (b0: number, b1: number) => ({ a0: 0, a1: 0, b0, b1 });
+    expect(runsOverlap(at(6, 6), at(6, 6))).toBe(true); // two pure insertions at the same offset
+    expect(runsOverlap(at(3, 7), at(7, 9))).toBe(true); // a ranged run abutting the next run's start
+    expect(runsOverlap(at(3, 7), at(7, 7))).toBe(true); // an insertion abutting a ranged run's end
+    expect(runsOverlap(at(7, 7), at(3, 7))).toBe(true); // and the same pair the other way round
+    expect(runsOverlap(at(3, 7), at(5, 9))).toBe(true); // genuinely intersecting
+    expect(runsOverlap(at(0, 2), at(3, 5))).toBe(false); // separated by a token
+    expect(runsOverlap(at(4, 4), at(6, 6))).toBe(false); // two insertions at different offsets
+  });
+
+  test("the ablation: break the restoration and the guard comes back on", () => {
+    // THE ANTI-TAUTOLOGY RATCHET. The first design of this guard routed `faithful` through the
+    // restoration and left the condition alone, which makes `faithful !== source` true by
+    // construction for all 418 blocks of the corpus: it could not fire for any input. This test is
+    // what a repeat of that fails on — with the restoration off the write really is dishonest, so
+    // the guard MUST fire.
+    //
+    // "Restoration disabled" is not a mode the module can be put into. It is what the wrapper
+    // already does when called WITHOUT source bytes — M1 only, exactly the pure-insertion path — so
+    // the ablation is an omitted argument and there is deliberately no flag, toggle or option that
+    // turns the fix off in a write path whose whole purpose is not writing bytes nobody typed.
+    const source = "## [Unreleased] pending items\n\n[Unreleased]: https://example.com/compare\n";
+    const { blocks, referenceSuffix } = blockLayout(source);
+    const body = "## [Unreleased] pending items";
+    expect(blocks.map(({ start, end }) => source.slice(start, end))).toEqual([body]); // the definition is not a block
+    const original = parseMarkdown(source).child(0);
+    const edited = parseMarkdown(source.replace("pending", "PENDING")).child(0);
+
+    const ablated = serializeNodesFaithfully([edited], referenceSuffix);
+    expect(ablated).toContain("(https://example.com/compare)"); // the definition really is inlined
+    // The block's ONLY serializer infidelity is that insertion, which is zero-width on the source
+    // side. A strict join returns nothing here; this is the systemic half of the test above.
+    expect(collateralFor([original], referenceSuffix, ablated, body)).toHaveLength(1);
+
+    // And with the restoration on, the reference form comes back and there is nothing to consent to.
+    const written = serializeNodesFaithfully([edited], referenceSuffix, body);
+    expect(written).toBe(body.replace("pending", "PENDING"));
+    expect(collateralFor([original], referenceSuffix, written, body)).toEqual([]);
+  });
+});
+
+describe("the guard measured over the corpus (a draft of the REQ-8 harness)", () => {
+  // METRIC 3, and the reason it is worth committing: a guard is only as good as the ablation that
+  // proves it can fire. This runs the same synthetic one-word edit over every block of the nine
+  // hand-written documents, in TWO configurations, and checks the guard's verdict against ground
+  // truth — "the save wrote more than the writer's word" — in each.
+  //
+  // The second configuration is the ratchet. With the restoration off the writes really are
+  // dishonest, 35 of them, and the guard must catch every one; a re-run of the first design of this
+  // guard, which routed `faithful` through the restoration, scores 0 fired and 35 missed here. The
+  // ablation is an OMITTED ARGUMENT — the wrapper called without source bytes is M1 only, exactly
+  // what the pure-insertion path does — never a flag, and no flag exists to set.
+  //
+  // A NON-ZERO `missed` IS NOT A NUMBER TO RECORD. It means the guard is unsound. The likeliest
+  // cause by far is the overlap join: with `<` in place of `<=` the ablated row scores 17 fired and
+  // 18 missed, those 18 being CHANGELOG.md's reference-link headings, whose only infidelity is a
+  // pure insertion and therefore zero-width on the source side.
+  //
+  // ZERO MISSED IS A PROPERTY OF THIS EDIT DISTRIBUTION, NOT A COMPLETENESS PROOF. The generator is
+  // a `word` → `WORD` substitution and so can never introduce markup, which is precisely the class
+  // the guard is blind to (see `collateralFor` in rich-editor.js). Phase 7 records that class as its
+  // own metric so this zero cannot be read as covering it.
+  //
+  // THE GENERATOR IS PINNED HERE AND ITS DEFINITION IS PART OF EVERY NUMBER BELOW: the first run of
+  // five or more lowercase letters in the block's own bytes, upper-cased. It is deliberately WIDE —
+  // a narrower one that skipped words adjacent to `-` or `.` never edited a single reference-link
+  // heading, the exact class where the two overlap joins disagree. This one reaches all 18,
+  // `## [Unreleased]` included (via `nreleased`), which is why the ablated row is 35 and not 34.
+  const documents = [
+    "README.md",
+    "AGENTS.md",
+    "DESIGN.md",
+    "CONTRIBUTING.md",
+    "ROADMAP.md",
+    "PRODUCT.md",
+    "CHANGELOG.md",
+    "docs/requirements.md",
+    "docs/decisions.md",
+  ];
+  const EDITED_WORD = /[a-z]{5,}/;
+
+  test("as shipped it fires 3 times; with the restoration disabled, 35 — neither missing one", () => {
+    const root = join(import.meta.dir, "../../..");
+    const tally = { edits: 0, shipped: { dishonest: 0, fired: 0 }, ablated: { dishonest: 0, fired: 0 } };
+    const missed: string[] = [];
+    const falseAlarms: string[] = [];
+    const residual: string[] = [];
+
+    for (const name of documents) {
+      const source = readFileSync(join(root, name), "utf8");
+      const { blocks, referenceSuffix } = blockLayout(source);
+      const doc = parseMarkdown(source);
+      for (const [index, span] of blocks.entries()) {
+        const body = source.slice(span.start, span.end);
+        const word = EDITED_WORD.exec(body);
+        if (!word) continue;
+        const [found] = word;
+        const editedBody = body.slice(0, word.index) + found.toUpperCase() + body.slice(word.index + found.length);
+        // Reparsed as part of the whole document, so the edited node is read in the same context
+        // the save would read it in rather than in an isolation that can mean something else.
+        const editedDoc = parseMarkdown(source.slice(0, span.start) + editedBody + source.slice(span.end));
+        expect(editedDoc.childCount).toBe(doc.childCount); // the generator never restructures
+        const edited = [editedDoc.child(index)];
+        tally.edits += 1;
+
+        for (const [configuration, written] of [
+          ["shipped", serializeNodesFaithfully(edited, referenceSuffix, body)],
+          ["ablated", serializeNodesFaithfully(edited, referenceSuffix)],
+        ] as const) {
+          // Ground truth: an honest save writes the source with exactly the writer's word changed.
+          const dishonest = written !== editedBody;
+          const fired = collateralFor([doc.child(index)], referenceSuffix, written, body).length > 0;
+          const row = tally[configuration];
+          if (dishonest) row.dishonest += 1;
+          if (fired) row.fired += 1;
+          if (dishonest && !fired) missed.push(`${configuration} ${name} block ${index}`);
+          if (!dishonest && fired) falseAlarms.push(`${configuration} ${name} block ${index}`);
+          if (dishonest && configuration === "shipped") residual.push(`${name} block ${index}`);
+        }
+      }
+    }
+
+    // Printed rather than counted, because a regression here is a list of places, not a number.
+    expect(missed).toEqual([]);
+    expect(falseAlarms).toEqual([]);
+    // The three the restoration cannot reach: DESIGN.md's front matter is T5's (REQ-11), the
+    // requirements block is the blank-line-before-a-fence case (the AMD-2b follow-up), and README's
+    // is a `&nbsp;·&nbsp;` pair that restores per-character rather than per run.
+    expect(residual).toEqual(["README.md block 6", "DESIGN.md block 1", "docs/requirements.md block 30"]);
+    expect(tally).toEqual({
+      edits: 371,
+      shipped: { dishonest: 3, fired: 3 },
+      ablated: { dishonest: 35, fired: 35 },
+    });
   });
 });
