@@ -171,6 +171,69 @@ describe("A1 §5 route catalog", () => {
     expect(sessionRegistry.get("explicit-stale")?.workspace_binding).toBe(root);
   });
 
+  // --- GET /api/status: orphaned_entry_count (issue #142) ---
+  //
+  // An orphan is an entry that is (1) durably in `entryOrder` — a real `entry_created`/
+  // `entry_adopted` on record, (2) non-terminal, and (3) has no readable inbox payload. All three
+  // are load-bearing on their own, so each gets its own test rather than one combined scenario.
+  describe("GET /api/status — orphaned_entry_count", () => {
+    async function statusRow(): Promise<{ orphaned_entry_count: number }> {
+      const body = await (await fetchFn(req("/api/status"))).json();
+      return body.workspaces.find((w: { slug: string }) => w.slug === slug);
+    }
+
+    test("a clean workspace reports 0", async () => {
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("a non-terminal entry with no payload counts as one orphan", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-status-1", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-status-1"));
+
+      expect((await statusRow()).orphaned_entry_count).toBe(1);
+    });
+
+    test("condition (a): an entry vivified by a lease-only transition (no entry_created) never counts", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      // No prior createEntry — this transition_committed has nothing to guard against, so
+      // lifecycle.ts's fallback vivifies a non-terminal "delivered" entry that was never in
+      // entryOrder and never had an inbox file. It must not be mistaken for an orphan.
+      await bus.commitTransition("ghost-status-1", "delivered", { by: "human" });
+      expect(bus.state.entries["ghost-status-1"]?.status).toBe("delivered");
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("condition (b): a terminal entry with no payload does not count — and the count falls to zero after dismiss", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("orphan-status-2", { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, "orphan-status-2"));
+
+      expect((await statusRow()).orphaned_entry_count).toBe(1);
+
+      // dismiss is exactly `commitTransition(id, "dismissed", { by: "human" })` — see
+      // handleWorkspaceInboxDismiss. Going terminal is what must clear the count; a count that
+      // stays above zero here would make `dismiss` look ineffective.
+      await bus.commitTransition("orphan-status-2", "dismissed", { by: "human" });
+      expect(bus.state.entries["orphan-status-2"]?.status).toBe("dismissed");
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+
+    test("condition (c): an adopted entry does not count while its payload exists", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.adoptEntry(
+        "adopted-status-1",
+        { kind: "annotation", artifact_path: "notes.md", body: "adopted" },
+        { kind: "annotation", status: "pending", source_registration_id: "reg-x", source_entry_id: "src-1" },
+        "adopt-idem-status-1",
+      );
+
+      expect((await statusRow()).orphaned_entry_count).toBe(0);
+    });
+  });
+
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
     const looseRoot = mkdtempSync(join(tmpdir(), "glosa-routes-loose-"));
     const firstPath = join(looseRoot, "first.md");

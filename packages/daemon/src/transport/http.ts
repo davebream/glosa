@@ -18,7 +18,7 @@ import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
 import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
-import { hasOpenAttention, peekJournal, pendingCount } from "../bus/peek.ts";
+import { hasOpenAttention, orphanedEntryCount, peekJournal, pendingCount } from "../bus/peek.ts";
 import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
 import { probeInitManifest } from "../init-probe.ts";
@@ -1532,13 +1532,17 @@ async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request):
 
 function handleStatusAggregate(ctx: ApiContext): Response {
   const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
-    const { state } = peekJournal(e);
+    const peek = peekJournal(e);
     return {
       slug: e.slug,
       path: e.worktree_path,
       last_seen: e.last_seen,
-      pending_count: pendingCount(state),
-      has_attention: hasOpenAttention(state),
+      pending_count: pendingCount(peek.state),
+      has_attention: hasOpenAttention(peek.state),
+      // Additive (issue #142): journal entries whose immutable inbox payload has gone missing —
+      // see `orphanedEntryCount`'s own docstring for the exact orphan signature and why the count
+      // reuses this already-computed fold rather than folding the journal a second time.
+      orphaned_entry_count: orphanedEntryCount(e, peek),
       // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
       // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
       wiring: computeWiring(ctx, e).state,
