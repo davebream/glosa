@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `glosa inbox list [--all] [--workspace <path>]` lists inbox entries — id, kind, status, age, and
+  target path — from the same journal fold `status` already reads, flagging one whose payload has
+  gone missing with `[no payload]`.
+- `glosa inbox dismiss <id> [--note] [--workspace <path>]` closes an entry without opening a
+  session, for when there is nothing left to act on. It lands on a new terminal status,
+  `dismissed`, kept apart from a session's own `rejected`. A daemon from before this release
+  doesn't recognize `dismissed` and folds it as a no-op on replay, leaving the entry reading as
+  pending rather than failing — degrading gracefully, never corrupting the fold.
+
 ### Fixed
 
 - Saving from Edit mode no longer rewrites the whole file. A save now re-serializes only the blocks
@@ -57,6 +68,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   for an unresponsive daemon names SIGKILL, because a wedged daemon cannot run its own SIGTERM
   handler. `glosa doctor` names the state too, distinguishing a wedged daemon from a stale lock,
   an occupied port, and no daemon at all.
+- `glosa doctor` now names a journal entry whose inbox payload has gone missing — moved or deleted
+  by hand — instead of letting the pending count sit there unexplained. `glosa inbox dismiss <id>`
+  is the fix it points you at.
+- Opening one of those entries for its actionable presentation no longer returns an unhelpful 422;
+  it returns a placeholder page naming `glosa inbox dismiss <id>` as the way to close it.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 

@@ -154,7 +154,8 @@ glosa init --agent claude-code
 once when interactive; scripts and `--json` callers must resolve ambiguity explicitly. Use
 `--scope user` for a user-wide integration. Read-only `glosa open` and `glosa_present` do not
 require init or an agent session. Run `glosa doctor` to verify effective provider installations,
-or `glosa --help` to see every command.
+or `glosa --help` to see every command. If an inbox entry's payload goes missing — moved or deleted
+by hand — `glosa inbox list` names it and `glosa inbox dismiss <id>` closes it without a session.
 
 ### Updating
 
