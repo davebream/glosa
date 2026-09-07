@@ -97,6 +97,9 @@ jobs:
       - name: Typecheck
         if: env.RUN_FULL == 'true'
         run: bun run typecheck
+      - name: Formatting
+        if: env.RUN_FULL == 'true'
+        run: bun run format:check
       - name: Acceptance suites (T8 deterministic gate)
         if: env.RUN_FULL == 'true'
         run: bun run test:acceptance

@@ -71,6 +71,31 @@ fault-injection/security/concurrency suites are, because a model's self-written 
 not catch the hard invariants. When in doubt about a subsystem's contract, the appendix is authoritative;
 do not invent.
 
+## Before you trust a claim, run it
+
+Two failure modes cost more here than any bug, and both are cheap to check.
+
+**A check that cannot observe what it claims.** Every genuine defect found while shipping #142,
+#174, #154 and #143 came from asking whether a test could actually fail — not from reading it.
+All of these shipped green: a regression pin naming a test that exits before reaching the code
+it guards; a criterion verified against a stand-in, so it passed under a test name nothing ever
+wrote; `bun test <file> | grep -q <pattern>`, which greps a stream nothing is written to,
+because `bun test` reports on stderr; guard rows labelled as pinning a rule that broke nothing
+when the rule was
+deleted; and an assertion still passing after the mechanism it watched stopped reaching that
+region at all. Before relying on a test, **ablate it** — delete the mechanism and confirm you
+get a named red. If nothing goes red, the test is decoration. And never delete a gate assertion
+to get a suite green: invert it or re-state it, because a deleted assertion is indistinguishable
+from a suppressed failure.
+
+**An issue whose premise no longer holds.** Issue text ages against the tree. Of seven issues
+picked up in one batch, three described mechanisms that did not exist at HEAD (#146, #144, #140):
+a decoupling already done, so implementing it faithfully would have shipped a no-op and closed
+the issue falsely; a mislabel that was unreachable; and a "reuse the existing X" where X had
+never been built. Validate an issue's factual claims against current code before designing, and
+state the delta in the PR when they differ. `file:line` references in issues, reports and reviews
+are leads, not facts — open the file before citing one.
+
 ## Naming
 
 `glosa` — a *glosa* is a marginal commentary on an authoritative text; the product's core act. Never

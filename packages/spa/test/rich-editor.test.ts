@@ -299,43 +299,73 @@ describe("a metadata header is recognised, and only a metadata header", () => {
     parseMarkdown(source).content.content.map((node: { type: { name: string } }) => node.type.name);
 
   const cases: Array<{ what: string; source: string; shape: string[]; pins: string }> = [
-    { what: "the happy path", pins: "-",
-      source: "---\ntitle: T\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    { what: "the happy path", pins: "-", source: "---\ntitle: T\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
     // GUARD 4, the non-blank line under the opening fence. WITHOUT IT this row is swallowed whole:
     // two paragraphs and a thematic break become one monospaced slab. Measured both ways.
-    { what: "a thematic break at the top, blank-line separated", pins: "guard 4",
+    {
+      what: "a thematic break at the top, blank-line separated",
+      pins: "guard 4",
       source: "---\n\nSome text.\n\n---\n\nMore.\n",
-      shape: ["horizontal_rule", "paragraph", "horizontal_rule", "paragraph"] },
-    { what: "an unclosed fence is a thematic break, not a header", pins: "guard 5",
-      source: "---\ntitle: T\n\nBody.\n", shape: ["horizontal_rule", "paragraph", "paragraph"] },
-    { what: "an indented fence", pins: "guard 2",
-      source: "  ---\ntitle: T\n---\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+      shape: ["horizontal_rule", "paragraph", "horizontal_rule", "paragraph"],
+    },
+    {
+      what: "an unclosed fence is a thematic break, not a header",
+      pins: "guard 5",
+      source: "---\ntitle: T\n\nBody.\n",
+      shape: ["horizontal_rule", "paragraph", "paragraph"],
+    },
+    {
+      what: "an indented fence",
+      pins: "guard 2",
+      source: "  ---\ntitle: T\n---\n\nBody.\n",
+      shape: ["horizontal_rule", "heading", "paragraph"],
+    },
     // NOT guard 1: verified by ablation that this row still passes with guard 1 deleted, because the
     // rule never fires inside a blockquote's inner tokenize at all. It pins the OUTCOME, not a guard.
-    { what: "inside a blockquote", pins: "the rule never fires nested",
-      source: "> ---\n> title: T\n> ---\n\nBody.\n", shape: ["blockquote", "paragraph"] },
+    {
+      what: "inside a blockquote",
+      pins: "the rule never fires nested",
+      source: "> ---\n> title: T\n> ---\n\nBody.\n",
+      shape: ["blockquote", "paragraph"],
+    },
     // NOT guard 1 either: ablation shows guard 4 catches this one first, because the `---` here has a
     // BLANK line under it. The guard-1 row is the one below, which has a non-blank line under it.
-    { what: "a lone thematic break after a heading", pins: "guard 4 (reached before guard 1)",
-      source: "# T\n\n---\n\nBody.\n", shape: ["heading", "horizontal_rule", "paragraph"] },
+    {
+      what: "a lone thematic break after a heading",
+      pins: "guard 4 (reached before guard 1)",
+      source: "# T\n\n---\n\nBody.\n",
+      shape: ["heading", "horizontal_rule", "paragraph"],
+    },
     // GUARD 1, THE ROW THAT ACTUALLY OBSERVES IT. Every earlier guard passes here: unindented, a
     // non-blank line under the fence, a closing fence present. Only "before any block content"
     // refuses it. WITHOUT guard 1 all three of these become `glosa_raw` — a mid-document `---`
     // separator followed by a `key: value` line would be swallowed into an opaque node. Measured.
-    { what: "a header-shaped block after a paragraph", pins: "guard 1",
+    {
+      what: "a header-shaped block after a paragraph",
+      pins: "guard 1",
       source: "Body.\n\n---\ntitle: T\n---\n\nMore.\n",
-      shape: ["paragraph", "horizontal_rule", "heading", "paragraph"] },
-    { what: "a header-shaped block after a heading", pins: "guard 1",
+      shape: ["paragraph", "horizontal_rule", "heading", "paragraph"],
+    },
+    {
+      what: "a header-shaped block after a heading",
+      pins: "guard 1",
       source: "# T\n\n---\ntitle: T\n---\n\nMore.\n",
-      shape: ["heading", "horizontal_rule", "heading", "paragraph"] },
-    { what: "a header-shaped block after a list", pins: "guard 1",
+      shape: ["heading", "horizontal_rule", "heading", "paragraph"],
+    },
+    {
+      what: "a header-shaped block after a list",
+      pins: "guard 1",
       source: "- a\n\n---\ntitle: T\n---\n\nMore.\n",
-      shape: ["bullet_list", "horizontal_rule", "heading", "paragraph"] },
-    { what: "four dashes is not the fence", pins: "the fence is exactly three dashes",
-      source: "----\ntitle: T\n----\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+      shape: ["bullet_list", "horizontal_rule", "heading", "paragraph"],
+    },
+    {
+      what: "four dashes is not the fence",
+      pins: "the fence is exactly three dashes",
+      source: "----\ntitle: T\n----\n\nBody.\n",
+      shape: ["horizontal_rule", "heading", "paragraph"],
+    },
     { what: "an empty header", pins: "-", source: "---\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
-    { what: "a header that is the whole file", pins: "-",
-      source: "---\ntitle: T\n---\n", shape: ["glosa_raw"] },
+    { what: "a header that is the whole file", pins: "-", source: "---\ntitle: T\n---\n", shape: ["glosa_raw"] },
   ];
 
   for (const { what, source, shape, pins } of cases) {
@@ -394,13 +424,18 @@ describe("a metadata header is recognised, and only a metadata header", () => {
    *  token count and the doc's child count have to move together — which they do, because the rule
    *  emits one token where the header previously produced two. */
   test("the block count and the document's child count still agree, and the reparse net still holds", () => {
-    for (const [what, source] of [["the fixture", FIXTURE], ["a front-matter document", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n"]] as const) {
+    for (const [what, source] of [
+      ["the fixture", FIXTURE],
+      ["a front-matter document", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+    ] as const) {
       expect(blockLayout(source).blocks.length, `${what}: layout blocks`).toBe(parseMarkdown(source).childCount);
     }
     const source = "---\ntitle: T\nstatus: draft\n---\n\nBody.\n";
     const edited = source.replace("status: draft", "status: review");
     const result = save(source, edited);
-    expect(parseMarkdown(result.markdown).eq(parseMarkdown(edited)), "the write reparses to the edited tree").toBe(true);
+    expect(parseMarkdown(result.markdown).eq(parseMarkdown(edited)), "the write reparses to the edited tree").toBe(
+      true,
+    );
   });
 });
 
@@ -1032,7 +1067,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(437);
+    ).toBe(441);
     // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
     // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
     // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
@@ -1167,7 +1202,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // · 39/432 after #143 gave front matter ONE node where it previously parsed as TWO. That is the
   //   MECHANISM moving the block population, not the corpus moving: the nine documents are unchanged
   //   and the numerator fell by exactly the one front-matter miss (DESIGN.md block 1) the node removed.
-  // · 39/437 after this task's OWN documentation: the CHANGELOG bullet, the requirements clause and
+  // · 39/441 after this task's OWN documentation: the CHANGELOG bullet, the requirements clause and
   //   the decisions entry are three of the nine, so the corpus grew by five blocks. Denominator moved,
   //   numerator did not — which is the bookkeeping case, not the regression case.
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
@@ -1213,7 +1248,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
    *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
    *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
-  const BLOCKS = 437;
+  const BLOCKS = 441;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1251,7 +1286,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 39 of 437 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 39 of 441 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1296,7 +1331,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 2 dishonest writes of 390; the guard fires on those 2 and, ablated, on 34", () => {
+  test("metrics 2 and 3 — 2 dishonest writes of 394; the guard fires on those 2 and, ablated, on 34", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
@@ -1376,14 +1411,14 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // is no longer re-serialized and can no longer be written dishonestly. It also left the
       // residual set above, and left `byCause` in metric 1, for the same single reason.
       //
-      // `edits` then moved 385 → 390 for the OTHER reason, in the same branch: this task's own
+      // `edits` then moved 385 → 394 for the OTHER reason, in the same branch: this task's own
       // documentation lands in CHANGELOG.md, docs/requirements.md and docs/decisions.md, which are
       // three of the nine. Five blocks added, five more synthetic edits. THE NUMERATORS DID NOT MOVE
       // with it — 2/2 and 34/34 either side — which is what says the corpus grew rather than the
       // serializer changing. Both causes are recorded because they are different failures wearing
       // the same red.
     ).toEqual({
-      edits: 390,
+      edits: 394,
       shipped: { dishonest: 2, fired: 2 },
       ablated: { dishonest: 34, fired: 34 },
     });
