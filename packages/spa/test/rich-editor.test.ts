@@ -729,7 +729,7 @@ describe("the restoration's size guard", () => {
         if (serializeNodesFaithfully([node], referenceSuffix, body) !== body) unrestored += 1;
       }
     }
-    expect(blockCount).toBe(418);
+    expect(blockCount).toBe(422); // the same corpus as the harness below; see its BLOCKS note
     // Measured at this base: 3,598,609 cells, in a 5474-byte list block in docs/requirements.md.
     // Asserted with headroom rather than bare inequality, so a document growing towards the budget
     // turns this red while there is still room to widen it — before it silently turns the fix off
@@ -853,7 +853,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //                                completeness claim about the guard.
   //
   // HISTORY of metric 1: 174/418 Phase 0 · 40/418 as reported post-#173 · 43/418 re-measured at
-  // `d965ffb` · 40/418 after this task (#174).
+  // `d965ffb` · 40/418 after this task's code · 40/422 after its documentation, which added four
+  // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
   // block population, so the denominator moves and every count below moves with it.
@@ -865,11 +866,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // or `.` never edited a single reference-link heading, which is the exact class where the two
   // overlap joins disagree; that narrower one is where the design's figures of 317 edits and 34
   // ablated firings come from. This one reaches all 18 reference-link blocks, `## [Unreleased]`
-  // included (via `nreleased`), so it makes 371 edits and its ablated row reads 35 rather than 34.
+  // included (via `nreleased`), so it makes 375 edits and its ablated row reads 35 rather than 34.
   // The design's ratios and its residual set reproduce exactly; only the denominators differ, and
   // they differ because this generator is strictly wider. Compare like with like before concluding a
   // number moved. Metric 1 does not depend on the generator at all, which is why it reproduces the
-  // design's 40/418 to the block.
+  // design's numerator of 40 to the block.
   const documents = [
     "README.md",
     "AGENTS.md",
@@ -885,8 +886,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   const root = join(import.meta.dir, "../../..");
 
   /** Asserted on its own, so a document gaining or losing a block is VISIBLE rather than silently
-   *  shifting every ratchet below it. */
-  const BLOCKS = 418;
+   *  shifting every ratchet below it. It did exactly that here: 418 at `d965ffb`, 422 once #174's
+   *  own documentation edits landed, the four being the `docs/decisions.md` entry recording this
+   *  task's route selection. A DENOMINATOR MOVE IS NOT A RESULT — every numerator below is
+   *  unchanged, and that is what makes this one readable as bookkeeping rather than as drift. */
+  const BLOCKS = 422;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -924,7 +928,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 418 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 422 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -958,7 +962,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 3 dishonest writes of 371; the guard fires on those 3 and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 3 dishonest writes of 375; the guard fires on those 3 and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
@@ -1019,7 +1023,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     // is a `&nbsp;·&nbsp;` pair that restores per-character rather than per run.
     expect(residual).toEqual(["README.md block 6", "DESIGN.md block 1", "docs/requirements.md block 30"]);
     expect(tally).toEqual({
-      edits: 371,
+      edits: 375,
       shipped: { dishonest: 3, fired: 3 },
       ablated: { dishonest: 35, fired: 35 },
     });

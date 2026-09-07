@@ -259,3 +259,26 @@ Two consequences worth stating plainly:
   document the writer is looking at; a mismatch falls back to a whole-document write and says so,
   rather than trusting that every markdown construct was enumerated correctly. Enumeration is how
   this class of bug happens in the first place.
+
+## An edited block is written back in its own spelling, not the serializer's
+
+Re-serializing an edited block wrote the serializer's spelling of everything in it, so changing one
+word also escaped brackets the file had left bare, decoded `&amp;`, inlined a reference link's
+target, and dropped a continuation line's indent. Three exits were open: patch the escaping method
+on the vendored ProseMirror serializer's prototype, rebuild the vendored bundle from a modified
+prosemirror-markdown, or leave the serializer alone and correct its output before it is written.
+
+We correct the output. The pass drops an escape, or restores a run of the block's own original
+bytes, only when the candidate re-parses to the tree the writer is looking at; a proposal that
+would change what the block says is rejected rather than trusted. The other two exits both make the
+vendored bundle something glosa maintains: one reaches a minified private class through an unnamed
+prototype and breaks on any rebuild, the other keeps the real change in a patch living outside this
+repository. Neither reaches the cases that cost the most either. That the file said `&amp;`, or
+wrote a link in reference form, is not carried anywhere in the parsed tree, so no serializer can put
+it back; only the source bytes can.
+
+The reference-link form is recovered that way rather than recorded as an attribute on the `link`
+mark, which was the alternative. Attributes are what `Node.eq` compares, and `Node.eq` is the
+predicate that decides which blocks a save treats as unchanged. Widening it to carry a spelling
+would change that pairing for every save in the editor, to answer a question the block's own bytes
+already answer.

@@ -10,7 +10,7 @@
 // rewrites reaches the agent as a `human_edit`, and a save that invents edits makes the human's
 // own change impossible to pick out. Where re-serializing an EDITED block would still cost bytes
 // the writer did not touch — CommonMark has no node for frontmatter, callout markers, `%%`
-// comments or soft line breaks, and it escapes brackets conservatively — `getSave()` reports that
+// comments or soft line breaks — `getSave()` reports that
 // collateral instead of writing it, and artifact-pane.js asks first.
 //
 // Talks to the daemon through NOTHING — pure editor over a string; artifact-pane.js owns save and
