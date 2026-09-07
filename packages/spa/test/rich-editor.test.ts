@@ -184,6 +184,123 @@ describe("a save the writer did not make is byte-identical", () => {
   }
 });
 
+/** THE RULE MUST REFUSE WHAT IT MUST REFUSE (AC-4).
+ *
+ *  Without these, a rule that swallowed the whole document would pass every other criterion in this
+ *  file: the splice stays byte-honest whatever the block boundaries are, so nothing else here can
+ *  tell "one node because it is a header" from "one node because the rule ate everything".
+ *
+ *  Each row names the guard it pins. Deleting a guard must produce a NAMED red, not a vague one. */
+describe("a metadata header is recognised, and only a metadata header", () => {
+  const shapeOf = (source: string) =>
+    parseMarkdown(source).content.content.map((node) => node.type.name);
+
+  const cases: Array<{ what: string; source: string; shape: string[]; pins: string }> = [
+    { what: "the happy path", pins: "-",
+      source: "---\ntitle: T\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    // GUARD 4, the non-blank line under the opening fence. WITHOUT IT this row is swallowed whole:
+    // two paragraphs and a thematic break become one monospaced slab. Measured both ways.
+    { what: "a thematic break at the top, blank-line separated", pins: "guard 4",
+      source: "---\n\nSome text.\n\n---\n\nMore.\n",
+      shape: ["horizontal_rule", "paragraph", "horizontal_rule", "paragraph"] },
+    { what: "an unclosed fence is a thematic break, not a header", pins: "guard 5",
+      source: "---\ntitle: T\n\nBody.\n", shape: ["horizontal_rule", "paragraph", "paragraph"] },
+    { what: "an indented fence", pins: "guard 2",
+      source: "  ---\ntitle: T\n---\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+    // NOT guard 1: verified by ablation that this row still passes with guard 1 deleted, because the
+    // rule never fires inside a blockquote's inner tokenize at all. It pins the OUTCOME, not a guard.
+    { what: "inside a blockquote", pins: "the rule never fires nested",
+      source: "> ---\n> title: T\n> ---\n\nBody.\n", shape: ["blockquote", "paragraph"] },
+    // NOT guard 1 either: ablation shows guard 4 catches this one first, because the `---` here has a
+    // BLANK line under it. The guard-1 row is the one below, which has a non-blank line under it.
+    { what: "a lone thematic break after a heading", pins: "guard 4 (reached before guard 1)",
+      source: "# T\n\n---\n\nBody.\n", shape: ["heading", "horizontal_rule", "paragraph"] },
+    // GUARD 1, THE ROW THAT ACTUALLY OBSERVES IT. Every earlier guard passes here: unindented, a
+    // non-blank line under the fence, a closing fence present. Only "before any block content"
+    // refuses it. WITHOUT guard 1 all three of these become `glosa_raw` — a mid-document `---`
+    // separator followed by a `key: value` line would be swallowed into an opaque node. Measured.
+    { what: "a header-shaped block after a paragraph", pins: "guard 1",
+      source: "Body.\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["paragraph", "horizontal_rule", "heading", "paragraph"] },
+    { what: "a header-shaped block after a heading", pins: "guard 1",
+      source: "# T\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["heading", "horizontal_rule", "heading", "paragraph"] },
+    { what: "a header-shaped block after a list", pins: "guard 1",
+      source: "- a\n\n---\ntitle: T\n---\n\nMore.\n",
+      shape: ["bullet_list", "horizontal_rule", "heading", "paragraph"] },
+    { what: "four dashes is not the fence", pins: "the fence is exactly three dashes",
+      source: "----\ntitle: T\n----\n\nBody.\n", shape: ["horizontal_rule", "heading", "paragraph"] },
+    { what: "an empty header", pins: "-", source: "---\n---\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    { what: "a header that is the whole file", pins: "-",
+      source: "---\ntitle: T\n---\n", shape: ["glosa_raw"] },
+  ];
+
+  for (const { what, source, shape, pins } of cases) {
+    test(`${what} (pins: ${pins})`, () => {
+      expect(shapeOf(source), what).toEqual(shape);
+      expect(save(source, source).markdown, `${what}: an untouched save is byte-identical`).toBe(source);
+    });
+  }
+
+  /** GUARD 3, the trimEnd() on both fences. WITHOUT IT one trailing space defeats the recogniser and
+   *  an edit inside the header falls back to the whole-file `reparse` rewrite — the unmodified #143
+   *  damage, in a spelling ordinary editors produce. The leading-blank-lines row is guard 1 admitting
+   *  what it deliberately admits (blank lines emit no token), and is here for the same reason.
+   *
+   *  THESE ROWS ASSERT AN EDIT IS EXACT, not merely the parsed shape: their whole point is that the
+   *  header stops taking the `reparse` path, and a shape assertion alone does not say that. */
+  const editable: Array<[string, string]> = [
+    ["a trailing space on the opening fence", "--- \ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+    ["a trailing space on the closing fence", "---\ntitle: T\nstatus: draft\n--- \n\nBody.\n"],
+    ["a tab after the opening fence", "---\t\ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+    ["leading blank lines before the fence", "\n\n---\ntitle: T\nstatus: draft\n---\n\nBody.\n"],
+  ];
+  for (const [what, source] of editable) {
+    test(`${what} still parses as a header, and an edit inside it is exact`, () => {
+      expect(shapeOf(source), what).toEqual(["glosa_raw", "paragraph"]);
+      const edited = source.replace("status: draft", "status: review");
+      expect(edited, `${what}: the source must actually contain the edited text`).not.toBe(source);
+      const result = save(source, edited);
+      expect(result.markdown, `${what}: the write is exactly the writer's edit`).toBe(edited);
+      expect(result.degraded, `${what}: no whole-document fallback`).toBe(false);
+      expect(result.collateral, `${what}: nothing the writer did not type`).toEqual([]);
+    });
+  }
+
+  /** A RECORDED RENDERING DEFECT, NOT DATA LOSS (design §3.2).
+   *
+   *  Guard 4 resolves the blank-line-separated half of the thematic-break ambiguity only. This shape
+   *  survives it and is swallowed whole. That is ACCEPTED: `---\nkey: value\n---` and
+   *  `---\ntext\n---` are the same shape, and separating them means parsing YAML.
+   *
+   *  Both halves are pinned, because the second is what makes the first acceptable. If someone later
+   *  closes this, the test tells them exactly what they changed. */
+  test("a document opening with a thematic break and containing a second one is swallowed — and stays byte-honest", () => {
+    const source = "---\nSome text.\n\nMore text.\n\n---\nEnd.\n";
+    expect(shapeOf(source)).toEqual(["glosa_raw", "paragraph"]);
+    expect(save(source, source).markdown, "untouched: byte-identical").toBe(source);
+    const edited = source.replace("End.", "Fin.");
+    const result = save(source, edited);
+    expect(result.markdown, "an edit elsewhere writes exactly the edit").toBe(edited);
+    expect(result.degraded, "no whole-document fallback").toBe(false);
+    expect(result.collateral, "nothing reported, because nothing was invented").toEqual([]);
+  });
+
+  /** contracts.md C2's block-count invariant, and the reparse net, both with a raw node present.
+   *  `blocks.length !== original.length` degrades EVERY save of EVERY file with front matter, so the
+   *  token count and the doc's child count have to move together — which they do, because the rule
+   *  emits one token where the header previously produced two. */
+  test("the block count and the document's child count still agree, and the reparse net still holds", () => {
+    for (const [what, source] of [["the fixture", FIXTURE], ["a front-matter document", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n"]] as const) {
+      expect(blockLayout(source).blocks.length, `${what}: layout blocks`).toBe(parseMarkdown(source).childCount);
+    }
+    const source = "---\ntitle: T\nstatus: draft\n---\n\nBody.\n";
+    const edited = source.replace("status: draft", "status: review");
+    const result = save(source, edited);
+    expect(parseMarkdown(result.markdown).eq(parseMarkdown(edited)), "the write reparses to the edited tree").toBe(true);
+  });
+});
+
 describe("an edited block is the only block that moves", () => {
   /** AC-1 (#143), THE CRITERION #174 DEFERRED (AMD-6).
    *
