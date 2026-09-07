@@ -1341,6 +1341,65 @@ describe("the per-node-type opt-out — nothing outside the modelled inventory i
     expect(serializeMarkdown(markdownSchema.node("doc", null, [bracketed]))).toBe("See [r] here.");
   });
 
+  /** THE SAME GUARANTEES, EXERCISED BY THE REAL NODE (AC-5).
+   *
+   *  Everything above uses a stand-in built by burying a foreign node in a `code_block`, because
+   *  before #143 the parser could not produce an unmodelled node at all. It can now, so these run
+   *  the same claims through `parseMarkdown` — the path a writer's file actually takes.
+   *
+   *  The header carries a literal `\[`, which is exactly what T2's escape relaxation exists to drop.
+   *  Dropping it here would corrupt bytes the file owns. */
+  const RAW_HEADER = '---\npattern: "\\[a-z\\]"\nstatus: draft\n---\n';
+  const realRawNode = () => parseMarkdown(RAW_HEADER).child(0);
+
+  test("contracts.md C1.4: the real raw node serializes to exactly its source bytes", () => {
+    const node = realRawNode();
+    expect(node.type.name, "the parser produces the raw node").toBe("glosa_raw");
+    // Byte-for-byte, unescaped. This is what makes T2's reparse-based predicate TRIVIALLY satisfied
+    // on a raw block rather than starting to fail on one.
+    const source = RAW_HEADER.replace(/\n$/, "");
+    expect(serializeNodesFaithfully([node], "", source)).toBe(source);
+    expect(serializeNodesFaithfully([node], "")).toBe(source);
+  });
+
+  test("the real raw node is outside the modelled inventory, and the inventory does not name it", () => {
+    expect(runIsModelled([realRawNode()])).toBe(false);
+    // The inventory is held against the VENDORED CommonMark schema, not against whatever schema
+    // `serializeNodes()` composes from, precisely so a derived schema cannot enrol a type behind
+    // anybody's back. `glosa_raw` must never appear here.
+    expect([...MODELLED_NODE_TYPES]).not.toContain("glosa_raw");
+  });
+
+  /** THE COST OF C1.2, PINNED WHERE THE OPT-OUT ACTUALLY DOES THE WORK.
+   *
+   *  Established by ablation, not assumed. Two documents, and only the second observes the opt-out:
+   *
+   *  - A header CONTAINING an escapable character: relaxing would change the raw node's own bytes,
+   *    so the tree comparison rejects the whole relaxation by itself. The opt-out is redundant here.
+   *    `relaxEscapes` is all-or-nothing, which is what makes the backstop reach this case.
+   *  - A header containing NO escapable character: relaxing elsewhere cannot corrupt it, both trees
+   *    agree, and the relaxation IS accepted — unless the opt-out refuses it. Measured: with the
+   *    opt-out the paragraph keeps `\[r\]`; ablated, it writes `[r]`.
+   *
+   *  So on this path the opt-out is deny-by-default conservatism rather than the last line against
+   *  corruption, and the cost is that a document holding a header gets no relaxation ANYWHERE in it.
+   *  That is design §4.7 stated as an assertion. Do not "fix" it by narrowing the opt-out:
+   *  contracts.md C1.2 forbids relying on the transformation happening to be a no-op on raw text. */
+  test("a document holding a raw block gets no relaxation anywhere in it — the opt-out, ablation-checked", () => {
+    const plain = "---\ntitle: T\nstatus: draft\n---\n";
+    expect(parseMarkdown(plain).child(0).type.name, "the header is the raw node").toBe("glosa_raw");
+    // The opt-out is the ONLY thing refusing this: the header holds nothing escapable, so the tree
+    // comparison would accept the relaxation. Ablate `runIsModelled` in `serializeMarkdown` and this
+    // line writes `See [r] here.` instead.
+    expect(serializeMarkdown(parseMarkdown(`${plain}\nSee [r] here.\n`))).toContain("See \\[r\\] here.");
+    // The control: the same paragraph in a document the inventory covers IS relaxed, so the opt-out
+    // is what stopped it rather than a serializer that never escaped anything.
+    expect(serializeMarkdown(parseMarkdown("See [r] here.\n"))).toBe("See [r] here.");
+    // And the redundant-but-harmless case, recorded so the distinction is not lost: a header that
+    // DOES hold an escapable character is protected by the tree comparison too.
+    expect(serializeMarkdown(parseMarkdown(`${RAW_HEADER}\nSee [r] here.\n`))).toContain('pattern: "\\[a-z\\]"');
+  });
+
   test("an unmodelled node is refused at any depth, and a modelled document is not", () => {
     expect(runIsModelled([bracketed])).toBe(true);
     expect(runIsModelled([opaqueBlock])).toBe(false);
