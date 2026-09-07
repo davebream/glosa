@@ -11,8 +11,16 @@
 // DOM-free (parser/serializer/splice never touch a document); the EditorView half is exercised in
 // a real browser, and the save wiring around it in review-surface.test.ts.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { EditorState } from "../src/vendor/prosemirror.js";
-import { blockLayout, parseMarkdown, serializeMarkdown, spliceMarkdown } from "../src/rich-editor.js";
+import {
+  blockLayout,
+  parseMarkdown,
+  serializeMarkdown,
+  serializeNodesFaithfully,
+  spliceMarkdown,
+} from "../src/rich-editor.js";
 
 const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 
@@ -445,5 +453,255 @@ describe("what a candidate spelling is checked against", () => {
     const link = parseMarkdown(`Link [b] here.${referenceSuffix}`).firstChild?.child(1);
     expect(link?.marks[0]?.attrs.title).toBe('He said "go" \\ here');
     expect(link?.marks[0]?.attrs.href).toBe("/plain");
+  });
+});
+
+describe("an edited block is written back in the spelling the file already had (REQ-2/3/4, #174)", () => {
+  // Each case is a SAVE, not a round trip: what reaches disk is what matters, and the source bytes
+  // the restoration works from only exist on the save path. The writer's own word is the one run
+  // that cannot be put back — restoring it would change the tree, and the verification refuses.
+
+  test("REQ-2: character references survive an edit elsewhere in the block", () => {
+    // markdown-it decodes entities at parse, so the tree carries `&`, U+00A0 and `<`. Written from
+    // the tree alone the file would silently lose all three spellings.
+    const source = "Use &nbsp; and &amp; and &lt; here.\n";
+    const result = save(source, source.replace("here", "there"));
+    expect(result.markdown).toBe("Use &nbsp; and &amp; and &lt; there.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("REQ-3: a reference-form link is written back in reference form, not inlined", () => {
+    const source = [
+      "## [Unreleased] pending items",
+      "",
+      "Body paragraph.",
+      "",
+      "[Unreleased]: https://example.com/compare",
+      "",
+    ].join("\n");
+    const result = save(source, source.replace("pending", "PENDING"));
+    expect(result.markdown).toBe(source.replace("pending", "PENDING"));
+    expect(result.degraded).toBe(false);
+    // The target appears exactly once in the file — in the definition it was already in. Written
+    // from the tree alone the heading reads `## [Unreleased](https://example.com/compare) …`.
+    expect(result.markdown.split("https://example.com/compare")).toHaveLength(2);
+  });
+
+  test("REQ-4: a continuation line keeps the indent only the source has", () => {
+    // markdown-it strips leading whitespace from a paragraph's continuation lines, so the indent
+    // exists nowhere but in the file. Re-serializing the block writes the lines flush left.
+    const source = '<picture>\n  <source srcset="hero.webp">\n</picture>\nFallback text here.\n';
+    const result = save(source, source.replace("here", "there"));
+    expect(result.markdown).toBe(source.replace("here", "there"));
+    expect(result.degraded).toBe(false);
+  });
+
+  test("REQ-4: an indented blockquote marker is not normalised", () => {
+    const source = " > alpha here\n > beta line\n";
+    const result = save(source, source.replace("alpha", "ALPHA"));
+    expect(result.markdown).toBe(" > ALPHA here\n > beta line\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("AMD-2a: a line break inside an inline code span survives an edit in the same block", () => {
+    // AMD-2a, and the one class here that is UNRECOVERABLE CONTENT LOSS rather than a respelling:
+    // CommonMark turns a line ending inside a code span into a space at parse, so once the save has
+    // written `git   add` the break the writer typed is gone from the file and no round trip can
+    // put it back. Both spellings mean the same code span, so the restoration may put it back. It
+    // needs the break and the indent beside it to land in ONE run, which they do — measured, under
+    // both the whitespace-run tokenizer and a per-character one; see RESTORE_TOKEN in rich-editor.js
+    // for why the run token is kept anyway and why this case is not the reason.
+    const source = "Run `git\n  add` first and then stop.\n";
+    const result = save(source, source.replace("stop", "STOP"));
+    expect(result.markdown).toBe("Run `git\n  add` first and then STOP.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("AMD-2b: a tight list is not re-emitted loose when a sibling item is edited", () => {
+    // AMD-2b. The serializer writes a blank line between the paragraph and the fence inside the
+    // second item, which turns the list loose on reparse — a structural change to a list the writer
+    // only edited one word of.
+    const source = "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n";
+    const result = save(source, source.replace("gamma", "GAMMA"));
+    expect(result.markdown).toBe(source.replace("gamma", "GAMMA"));
+    expect(result.degraded).toBe(false);
+  });
+
+  test("REQ-3: the edited word repeated inside the destination does not drag the destination into its run", () => {
+    // The corpus's own hardest case, and the one that pins the diff's DIAGONAL TIE-BREAK. Writing
+    // the destination out inline puts a second `alpha` in the serializer's output. Several token
+    // alignments tie at the same number of matches; one of them matches the FILE's `alpha` against
+    // that copy inside the destination, which lands the writer's edited word and the inlined
+    // destination in a single run — and a run is all-or-nothing, so neither is ever put back and
+    // the save writes a 37-token URL into a heading. Measured over CHANGELOG.md's 18 reference-link
+    // headings: 13 of them restore under the diagonal tie-break and none of them without it.
+    const source = [
+      "## [0.1.0-alpha.12] - 2026-09-04",
+      "",
+      "Some body.",
+      "",
+      "[0.1.0-alpha.12]: https://example.com/compare/v0.1.0-alpha.11...v0.1.0-alpha.12",
+      "",
+    ].join("\n");
+    // The writer edits the word INSIDE the label. The definition still resolves, because a label
+    // and a definition are both looked up case-folded.
+    const result = save(source, source.replace("[0.1.0-alpha.12] -", "[0.1.0-ALPHA.12] -"));
+    expect(result.markdown).toBe(source.replace("[0.1.0-alpha.12] -", "[0.1.0-ALPHA.12] -"));
+    expect(result.degraded).toBe(false);
+    expect(result.markdown.split("https://example.com/compare")).toHaveLength(2);
+  });
+
+  test("an escape the file did not need is still the file's, so the relaxation runs BEFORE the restoration", () => {
+    // Pins the ORDER of the two mechanisms, which is otherwise invisible. `\\~` is not load-bearing
+    // — `~` alone means the same thing — so the relaxation is free to drop it, and the file spelled
+    // it anyway. Relaxation first, restoration second: the escape goes, then the source puts it
+    // back, and the file keeps what it said. The other way round the restoration puts it back and
+    // the relaxation then drops it again, verifying happily, and the save writes `~/.claude` — a
+    // spelling that is neither the serializer's nor the file's, in a block the writer only changed
+    // one word of. Measured on `\\~` and on `` \\` ``; a load-bearing `\\_` survives either order,
+    // which is why this fixture is the one that pins it.
+    const source = "Paths like \\~/.claude live here.\n";
+    const result = save(source, source.replace("live", "LIVE"));
+    expect(result.markdown).toBe("Paths like \\~/.claude LIVE here.\n");
+    expect(result.degraded).toBe(false);
+  });
+
+  test("REQ-6: a block holding a literal bracket, an entity and a reference link moves only at the edit", () => {
+    const source = "Note [see r] plus a literal [bracket] and &amp; here.\n\n[see r]: https://example.com\n";
+    const edited = source.replace("literal", "LITERAL");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    // Stated as the requirement states it: the written bytes differ from the source at the writer's
+    // word and nowhere else.
+    // Stated the way the requirement states it: the written bytes differ from the source at the
+    // writer's word and at no other offset in the file.
+    expect(result.markdown.length).toBe(source.length);
+    const differing: number[] = [];
+    for (let i = 0; i < source.length; i += 1) if (source[i] !== result.markdown[i]) differing.push(i);
+    const word = source.indexOf("literal");
+    expect(differing).toEqual([word, word + 1, word + 2, word + 3, word + 4, word + 5, word + 6]);
+  });
+});
+
+describe("REQ-7: a re-serialized block always means what the writer's tree means", () => {
+  // The absolute predicate, driven directly over every fixture this file uses. `serializeNodes` is
+  // wrapped, never edited, so this is the wrapper's whole contract: whatever it returns for a run
+  // of nodes parses — in the document's own reference context — back to exactly that run.
+  //
+  // THIS TEST PINS THE ABSOLUTE/RELATIVE SPLIT (carried obligation OB-2). Swap the per-block
+  // baseline to the relative one (`parseMarkdown(raw)`) and the tight-list-with-a-fence fixture
+  // fails: that block does not round-trip through the serializer, so a relative baseline is the
+  // LOOSE list and refuses the restoration that puts the tight one back. Absolute per block is what
+  // lets a lossy block's source be restored in full.
+  const fixtures: [string, string][] = [
+    ["the reported fixture", FIXTURE],
+    ["entities", "Use &nbsp; and &amp; and &lt; here.\n"],
+    ["a reference heading", "## [Unreleased] pending items\n\nBody.\n\n[Unreleased]: https://example.com/compare\n"],
+    ["an indented continuation line", '<picture>\n  <source srcset="hero.webp">\n</picture>\nFallback text here.\n'],
+    ["an indented blockquote marker", " > alpha here\n > beta line\n"],
+    ["a break inside a code span", "Run `git\n  add` first and then stop.\n"],
+    ["a tight list holding a fence", "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n"],
+    ["an escaped bracket colliding with a definition", "See \\[r\\] here.\n\n[r]: https://example.com\n\nAfter.\n"],
+    ["escapes that are load-bearing", "This is \\*not emphasis\\* here.\n"],
+    ["nested lists and a fence", "- a\n  - b\n\n```js\nconst x = 1;\n```\n\nAfter.\n"],
+    ["a table CommonMark does not model", "| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter.\n"],
+    ["CRLF line endings", "# A\r\n\r\nBeta.\r\n"],
+  ];
+
+  for (const [what, source] of fixtures) {
+    test(`every block of ${what} reparses to the node it was written from`, () => {
+      const { blocks, referenceSuffix } = blockLayout(source);
+      const doc = parseMarkdown(source);
+      expect(blocks.length).toBe(doc.childCount);
+      for (const [index, span] of blocks.entries()) {
+        const node = doc.child(index);
+        const written = serializeNodesFaithfully([node], referenceSuffix, source.slice(span.start, span.end));
+        const reparsed = parseMarkdown(written + referenceSuffix);
+        expect(reparsed.childCount).toBe(1);
+        expect(reparsed.firstChild?.eq(node)).toBe(true);
+        // Stronger, and the reason the write is honest at all: handed a block's own bytes back, the
+        // wrapper returns those bytes. Nothing the writer did not change can move.
+        expect(written).toBe(source.slice(span.start, span.end));
+      }
+    });
+  }
+});
+
+describe("the restoration's size guard", () => {
+  // Mirrors MAX_RESTORE_CELLS in rich-editor.js. Duplicated deliberately: a test that read the
+  // constant would pass however the constant moved.
+  const budget = 6_000_000;
+  const tokens = (text: string) => (text.match(/\w+|\s+|[^\w\s]/g) ?? []).length;
+
+  test("the budget is where this file says it is, checked from both sides", () => {
+    // The corpus below cannot pin the constant on its own: its two largest blocks are serializer
+    // fixed points, so skipping their restoration returns the same bytes and is invisible. The
+    // largest block the corpus HAS to restore is 2.5M cells, which leaves everything between 2.5M
+    // and 6M unchecked. These two paragraphs close that gap by straddling the budget — each is a
+    // long run of words with one `&amp;` in it, so it is not a fixed point and restoring it is
+    // observable, and they differ only in length.
+    const under = `${"alpha ".repeat(1220)}&amp; end.`;
+    const over = `${"alpha ".repeat(1260)}&amp; end.`;
+    const cells = (body: string) =>
+      (tokens(serializeNodesFaithfully([parseMarkdown(body).child(0)], "")) + 1) * (tokens(body) + 1);
+    expect(cells(under)).toBeLessThan(budget);
+    expect(cells(over)).toBeGreaterThan(budget);
+
+    // Under the budget the source spelling comes back...
+    expect(serializeNodesFaithfully([parseMarkdown(under).child(0)], "", under)).toBe(under);
+    // ...and over it the restoration is skipped and the serializer's own bytes are written, which is
+    // exactly what this file did before the restoration existed: the entity comes back decoded, the
+    // collateral guard still reports it, nothing is corrupted.
+    const written = serializeNodesFaithfully([parseMarkdown(over).child(0)], "", over);
+    expect(written).not.toBe(over);
+    expect(written).toBe(serializeNodesFaithfully([parseMarkdown(over).child(0)], ""));
+  });
+
+  test("no block in this repository's nine hand-written documents comes near the budget", () => {
+    // The guard degrades to the serializer's own output, which is safe but turns the fix off for
+    // that block. So the threshold has to stay checkable against real content rather than assumed:
+    // this measures the matrix the restoration would actually fill — the M1 output's tokens against
+    // the source's — for every top-level block of the corpus REQ-8 is recorded over.
+    const root = join(import.meta.dir, "../../..");
+    const documents = [
+      "README.md",
+      "AGENTS.md",
+      "DESIGN.md",
+      "CONTRIBUTING.md",
+      "ROADMAP.md",
+      "PRODUCT.md",
+      "CHANGELOG.md",
+      "docs/requirements.md",
+      "docs/decisions.md",
+    ];
+    let worst = 0;
+    let blockCount = 0;
+    let unrestored = 0;
+    for (const name of documents) {
+      const source = readFileSync(join(root, name), "utf8");
+      const { blocks, referenceSuffix } = blockLayout(source);
+      const doc = parseMarkdown(source);
+      expect(blocks.length).toBe(doc.childCount);
+      for (const [index, span] of blocks.entries()) {
+        const body = source.slice(span.start, span.end);
+        const node = doc.child(index);
+        // Called WITHOUT source bytes this is the de-escape relaxation alone — the same string the
+        // restoration diffs against the source, so this is the real matrix, not a proxy for it.
+        const relaxed = serializeNodesFaithfully([node], referenceSuffix);
+        worst = Math.max(worst, (tokens(relaxed) + 1) * (tokens(body) + 1));
+        blockCount += 1;
+        if (serializeNodesFaithfully([node], referenceSuffix, body) !== body) unrestored += 1;
+      }
+    }
+    expect(blockCount).toBe(418);
+    // Measured at this base: 3,598,609 cells, in a 5474-byte list block in docs/requirements.md.
+    // Asserted with headroom rather than bare inequality, so a document growing towards the budget
+    // turns this red while there is still room to widen it — before it silently turns the fix off
+    // for that block.
+    expect(worst * 1.5).toBeLessThan(budget);
+    // And the property the whole restoration rests on: handed a block's own bytes back, every block
+    // in the corpus comes back as those bytes. Nothing the writer did not change can move.
+    expect(unrestored).toBe(0);
   });
 });

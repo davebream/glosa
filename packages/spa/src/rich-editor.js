@@ -159,12 +159,175 @@ function verifiesAs(candidate, referenceSuffix, baseline) {
   return sameNodes(parseMarkdown(candidate + referenceSuffix), baseline);
 }
 
-/** `serializeNodes()` with the escape relaxation on top, verified ABSOLUTELY against the run it was
- * made from and in the document's own reference context (REQ-7). Every path out of here is therefore
- * either the serializer's own bytes or bytes proven to mean what the writer's tree means. */
-function serializeNodesRelaxed(nodes, referenceSuffix) {
+/** How the source restoration below reads both sides: words, WHITESPACE RUNS, and single other
+ * characters.
+ *
+ * The whitespace RUN is a run on purpose. Reading whitespace one character at a time roughly doubles
+ * the token count of ordinary prose and so quadruples the LCS matrix — this repository's largest
+ * block goes from 3.6M cells to about 14M — and it lets an alignment slide along inside a stretch of
+ * spaces, which is the opposite of what a restoration wants. Both reasons are about keeping a
+ * difference where it actually is. An ad-hoc "merge runs separated by a short common gap" rule was
+ * measured as the alternative and rejected: every threshold that fixed one case broke another, and
+ * the largest produced a half-escaped spelling the file never contained.
+ *
+ * MEASURED, so that a later reader is not told something this file cannot back up: the run token was
+ * specified to keep the serializer's `` `git   add` `` against the file's `` `git\n  add` `` in ONE
+ * run, on the reasoning that two runs only verify together and the break inside the code span would
+ * be lost for good. In this implementation that case survives per-character whitespace too, under
+ * either backtrack — the diagonal tie-break in `diffRuns` is what actually holds it — so no test
+ * here fails if this is narrowed to `\s`. Going the other way costs one block of this repository
+ * (the `&nbsp;·&nbsp;` pair before an edited word in README.md restores per-character and not per
+ * run), which is why the run stands: the matrix, and the locality. Not because that one case needs it.
+ *
+ * Every character is a word character, whitespace, or neither, so `tokenize(s).join("") === s` and
+ * the restoration only ever reassembles pieces of the two strings it was handed. */
+const RESTORE_TOKEN = /\w+|\s+|[^\w\s]/g;
+
+function tokenize(text) {
+  return text.match(RESTORE_TOKEN) ?? [];
+}
+
+/** The LCS matrix the restoration refuses to fill. Past it restoration is skipped entirely and the
+ * serializer's own output is written — exactly what this file did before the restoration existed:
+ * the collateral guard still reports, nothing is corrupted. The corpus's worst top-level block is
+ * 1896 tokens against 1896 (3.59M cells, ~14 MiB, ~19 ms), and a test asserts that no block in the
+ * nine hand-written documents comes near this, so the number stays checkable rather than assumed. */
+const MAX_RESTORE_CELLS = 6_000_000;
+
+/**
+ * Groups every place `a` and `b` disagree into runs, by token LCS: `{a0, a1, b0, b1}` half-open on
+ * each side, in order, with the tokens between two runs identical on both sides.
+ *
+ * A run is zero-width on one side when it is a pure insertion or deletion — the serializer adding
+ * bytes the file never had, or dropping bytes it did. Hand-written rather than imported, on the same
+ * grounds as `pairUnchangedBlocks` above: this module imports the vendored bundle and nothing else.
+ */
+function diffRuns(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const common = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      common[i][j] = a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+    }
+  }
+  const runs = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    const a0 = i;
+    const b0 = j;
+    while ((i < n || j < m) && !(i < n && j < m && a[i] === b[j])) {
+      if (j >= m) i += 1;
+      else if (i >= n) j += 1;
+      // PREFER THE DIAGONAL, exactly as `pairUnchangedBlocks` above does and for the same reason.
+      // Several alignments tie at the same number of matched tokens, and which one the backtrack
+      // walks decides whether a run stays where it is or drifts across the block. Measured on this
+      // repository's `## [0.1.0-alpha.12]` headings: writing the destination out inline puts a
+      // second `alpha` in the serializer's output, a drifting backtrack matches the FILE's `alpha`
+      // against that copy, and the writer's edited word ends up inside the same run as the inlined
+      // destination — one run, so it is all-or-nothing, so neither is ever put back. Stepping both
+      // sides on a tie keeps the substitution where the writer made it and leaves the destination
+      // its own run. Same token count, 13 of CHANGELOG.md's headings restored instead of none.
+      else if (common[i + 1][j + 1] === common[i][j]) {
+        i += 1;
+        j += 1;
+      } else if (common[i + 1][j] >= common[i][j + 1]) i += 1;
+      else j += 1;
+    }
+    runs.push({ a0, a1: i, b0, b1: j });
+  }
+  return runs;
+}
+
+/** `a` with the runs `restored[k]` marks taken from `b` instead. Outside the runs the two token
+ * streams are identical, so which side those pieces come from cannot matter. */
+function applyRuns(a, b, runs, restored) {
+  let text = "";
+  let cursor = 0;
+  for (const [index, run] of runs.entries()) {
+    text += a.slice(cursor, run.a0).join("");
+    text += (restored[index] ? b.slice(run.b0, run.b1) : a.slice(run.a0, run.a1)).join("");
+    cursor = run.a1;
+  }
+  return text + a.slice(cursor).join("");
+}
+
+/**
+ * M2 — source-spelling restoration. Wherever the serializer's `output` disagrees with the block's
+ * own `source` bytes, propose putting the source spelling back, and keep a proposal only if the
+ * candidate still means exactly what the writer's tree means.
+ *
+ * Why this is safe rather than merely useful:
+ *
+ * - **It cannot revert the writer's edit.** Restoring the source over the region the writer changed
+ *   would change the tree, and `verify` rejects it. Their edit is the one run that never verifies.
+ * - **It cannot corrupt.** The predicate is tree equality, so a candidate that passes says exactly
+ *   what the writer's tree says. Behind it sit the block-count invariant and the whole-document
+ *   reparse net further down this file.
+ *
+ * Every run at once first, which is one reparse in the common case and is by construction the source
+ * itself for a block whose tree did not change. If that fails, runs go in one at a time, each kept
+ * only if the candidate still verifies. On any failure the input comes back untouched.
+ */
+function restoreSourceSpelling(output, source, verify) {
+  if (source === undefined || source === output) return output;
+  const a = tokenize(output);
+  const b = tokenize(source);
+  if ((a.length + 1) * (b.length + 1) > MAX_RESTORE_CELLS) return output;
+  const runs = diffRuns(a, b);
+  if (runs.length === 0) return output;
+  const all = applyRuns(
+    a,
+    b,
+    runs,
+    runs.map(() => true),
+  );
+  if (verify(all)) return all;
+  const restored = runs.map(() => false);
+  let best = output;
+  for (let index = 0; index < runs.length; index += 1) {
+    restored[index] = true;
+    const candidate = applyRuns(a, b, runs, restored);
+    if (verify(candidate)) best = candidate;
+    else restored[index] = false;
+  }
+  return best;
+}
+
+/**
+ * `serializeNodes()` with both mechanisms on top: the escape relaxation, then — when the caller can
+ * say which bytes this run is replacing — the source-spelling restoration. Verified ABSOLUTELY
+ * against the run it was made from and in the document's own reference context (REQ-7), so every
+ * path out of here is either the serializer's own bytes or bytes proven to mean what the writer's
+ * tree means.
+ *
+ * ORDER IS LOAD-BEARING: relaxation first, restoration second, never the other way round. Measured
+ * on both safety fixtures, running the restoration first lets the relaxation then strip an escape
+ * the restoration had just correctly put back.
+ *
+ * `source` is optional and omitting it is the whole of the M1-only path — that is what the pure
+ * insertion below does, having no original bytes to restore from, and it is how a test measures this
+ * module with the restoration ablated. There is deliberately no flag, toggle or option that turns
+ * the restoration off: this is the code path that writes a writer's document, and a runtime switch
+ * for "write the bytes they did not type" is one stray assignment from being thrown in production.
+ *
+ * Exported for tests on the same grounds as `parseMarkdown` and `serializeMarkdown` above.
+ */
+export function serializeNodesFaithfully(nodes, referenceSuffix, source) {
   const raw = serializeNodes(nodes);
-  return relaxEscapes(raw, (relaxed) => verifiesAs(relaxed, referenceSuffix, nodes));
+  const verify = (candidate) => verifiesAs(candidate, referenceSuffix, nodes);
+  const written = restoreSourceSpelling(relaxEscapes(raw, verify), source, verify);
+  // The final gate. Both mechanisms already return their input on any failure, so this is belt and
+  // braces rather than the first line of defence — and it costs nothing on the path that refused
+  // both, which returns the serializer's bytes and is checked by identity rather than by a reparse.
+  if (written === raw) return raw;
+  return verify(written) ? written : raw;
 }
 
 /** True for the document prosemirror-markdown produces from an empty string: the schema requires
@@ -377,7 +540,7 @@ export function createSplicer(source, originalDoc) {
       const inserted = edited.slice(e, nextE);
       if (inserted.length && o < nextO) {
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
-        const written = serializeNodesRelaxed(inserted, referenceSuffix);
+        const written = serializeNodesFaithfully(inserted, referenceSuffix, replaced);
         const faithful = serializeNodes(original.slice(o, nextO));
         if (faithful !== replaced) collateral.push({ original: replaced, faithful, written });
         pieces.push({ text: written, before: o > 0 ? separator(o) : "\n\n" });
@@ -391,7 +554,7 @@ export function createSplicer(source, originalDoc) {
               moved.delete(index);
               return body(index);
             }
-            return serializeNodesRelaxed([node], referenceSuffix);
+            return serializeNodesFaithfully([node], referenceSuffix);
           })
           .join("\n\n");
         pieces.push({ text, before: "\n\n" });
