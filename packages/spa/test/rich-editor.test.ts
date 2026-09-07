@@ -391,3 +391,59 @@ describe("the block layout carries the document's reference context", () => {
     expect(inContext.firstChild?.eq(parseMarkdown(source).firstChild)).toBe(true);
   });
 });
+
+describe("what a candidate spelling is checked against", () => {
+  test("the fixture round trip drops the bracket escapes and still writes the front matter", () => {
+    // The relative baseline, stated as a test. `serializeMarkdown` holds no source bytes, so the
+    // only thing it can ask is whether dropping the escapes changes what its OWN output means.
+    // Judged absolutely — against the document it was handed — the answer would be no for a reason
+    // that has nothing to do with escaping: the fixture's YAML front matter parses to a thematic
+    // break plus a setext heading, so this document never round-trips at all and an absolute check
+    // would refuse every relaxation on exactly the documents that need one.
+    const mangled = roundtrip(FIXTURE);
+    expect(mangled).not.toContain("\\[");
+    expect(mangled).toContain("*[bracketed emphasis]*");
+    // Still mangled where #143's opaque blocks are, which is T5's half and is pinned above at the
+    // `## title: Test` assertion. Restated here so the relaxation cannot be read as having fixed it.
+    expect(mangled).toContain("## title: Test\nstatus: draft");
+  });
+
+  test("an escaped bracket whose bare form collides with a reference definition stays escaped", () => {
+    // The verification parse reads a candidate in the document's reference context, and this is the
+    // input that proves it must. `See [r] there.` on its own is plain text, so a check made in
+    // isolation accepts dropping the escapes the file really spelled; back in the document `[r]` is
+    // a link, the splice's reparse net rejects the save, and the whole-document fallback writes a
+    // file with no definition in it — a line the writer never touched, silently deleted.
+    //
+    // No document in this repository contains a `\[`, so the measurement harness cannot reach this
+    // class of input and only this test stands between it and a regression.
+    const source = "See \\[r\\] here.\n\n[r]: https://example.com\n\nAfter.\n";
+    const result = save(source, source.replace("here", "there"));
+    expect(result.markdown).toBe(source.replace("here", "there"));
+    expect(result.degraded).toBe(false);
+  });
+
+  test("a definition whose target contains an entity is re-emitted so it still targets that", () => {
+    // Pins ESCAPED_IN_DESTINATION on its own. markdown-it stores an href DECODED, so re-emitting it
+    // raw would let the file's `&amp;amp;` come back meaning `&`. Empty that set and this test fails
+    // while the title test below still passes: the definition no longer round-trips, the guard in
+    // `referenceDefinitions` drops it rather than emit a binding that means something else, and
+    // `[a]` stops resolving. The corpus cannot pin this — its 18 definitions carry no `&`.
+    const source = "Link [a] here.\n\n[a]: /p?x=&amp;amp;y\n";
+    const { referenceSuffix } = blockLayout(source);
+    const link = parseMarkdown(`Link [a] here.${referenceSuffix}`).firstChild?.child(1);
+    expect(link?.marks[0]?.attrs.href).toBe("/p?x=&amp;y");
+  });
+
+  test("a definition carrying a title is re-emitted so it still carries that title", () => {
+    // Pins ESCAPED_IN_TITLE on its own — the destination here holds none of the three characters
+    // the other set escapes, so emptying that one leaves this passing. A title is stored decoded
+    // too, and it is delimited by the quote it contains: written back raw, the first `"` ends it.
+    // The corpus cannot pin this either — not one of its definitions carries a title.
+    const source = 'Link [b] here.\n\n[b]: /plain "He said \\"go\\" \\\\ here"\n';
+    const { referenceSuffix } = blockLayout(source);
+    const link = parseMarkdown(`Link [b] here.${referenceSuffix}`).firstChild?.child(1);
+    expect(link?.marks[0]?.attrs.title).toBe('He said "go" \\ here');
+    expect(link?.marks[0]?.attrs.href).toBe("/plain");
+  });
+});

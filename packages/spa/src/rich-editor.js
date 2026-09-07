@@ -81,15 +81,19 @@ export function parseMarkdown(markdown) {
 
 export function serializeMarkdown(doc) {
   const raw = mdSerializer.serialize(doc);
-  // The predicate here is RELATIVE — "does dropping the escapes change what the serializer's own
-  // output means?" — not absolute against `doc`. Reaching this path does not imply the document
-  // failed to round-trip: `wholeDocument()` also arrives here for a file refused over its lone-`\r`
-  // line endings, and the blank-source branch below calls in with nothing degraded at all. The
-  // relative predicate costs nothing on those, because for a document that IS a fixed point the two
-  // coincide exactly (`parseMarkdown(raw).eq(doc)`), and it is strictly better on the ones that are
-  // not, where an absolute check would fail for reasons that have nothing to do with escaping and
-  // would refuse every relaxation on exactly the documents that need one.
-  return relaxEscapes(raw, (relaxed) => parseMarkdown(relaxed).eq(parseMarkdown(raw)));
+  // The baseline here is RELATIVE — what the serializer's OWN output parses to, so the question is
+  // "does dropping the escapes change what that output means?" — not absolute against `doc`.
+  // Reaching this path does not imply the document failed to round-trip: `wholeDocument()` also
+  // arrives here for a file refused over its lone-`\r` line endings, and the blank-source branch
+  // below calls in with nothing degraded at all. The relative baseline costs nothing on those,
+  // because for a document that IS a fixed point the two coincide exactly, and it is strictly better
+  // on the ones that are not, where an absolute check would fail for reasons that have nothing to do
+  // with escaping and would refuse every relaxation on exactly the documents that need one — the
+  // #143 fixture among them, whose front matter alone breaks the round trip.
+  //
+  // No reference context: this path holds no source bytes, so there are no definitions to read out
+  // of one. Both sides are therefore parsed the same way, which is what the comparison needs.
+  return relaxEscapes(raw, (relaxed) => verifiesAs(relaxed, "", parseMarkdown(raw).content.content));
 }
 
 /** Serializes a run of top-level nodes on their own, so a changed block can be written back
@@ -131,12 +135,36 @@ function sameNodes(doc, nodes) {
   return true;
 }
 
-/** `serializeNodes()` with the escape relaxation on top, verified ABSOLUTELY: the candidate must
- * parse back to exactly the nodes it was made from (REQ-7). Every path out of here is therefore
+/**
+ * Whether `candidate`, read in the reference context its bytes will actually live in, means exactly
+ * `baseline`. The one place that decides a candidate spelling is safe to write.
+ *
+ * THE SUFFIX IS LOAD-BEARING, not a refinement. A reference link whose definition is out of scope
+ * parses to plain text, so the same bytes say different things alone and in the file that defines
+ * the label. Verify `See [r] there.` on its own and the de-escape of a source that really spelled
+ * `\[r\]` is accepted, because in isolation the brackets are still literal; spliced back into the
+ * document they are a live link, the whole-document reparse net below rejects the save, and the
+ * fallback rewrite drops the definition — the writer loses a line they never touched. With the
+ * definitions in scope the candidate parses as a link, the baseline says text, and the relaxation
+ * is refused where it should be.
+ *
+ * `baseline` is always a run of top-level nodes, and which run it is decides the predicate's
+ * character. Per block it is the run being serialized, which makes the check ABSOLUTE (REQ-7).
+ * For the whole document it is what the serializer's own output parses to, which makes it relative.
+ * Nothing in between: a per-block hybrid falling back to the relative baseline on a block that does
+ * not round-trip was measured and costs 2 of the corpus's 418 blocks, because on a lossy block the
+ * absolute baseline is precisely what lets the source spelling be restored in full.
+ */
+function verifiesAs(candidate, referenceSuffix, baseline) {
+  return sameNodes(parseMarkdown(candidate + referenceSuffix), baseline);
+}
+
+/** `serializeNodes()` with the escape relaxation on top, verified ABSOLUTELY against the run it was
+ * made from and in the document's own reference context (REQ-7). Every path out of here is therefore
  * either the serializer's own bytes or bytes proven to mean what the writer's tree means. */
-function serializeNodesRelaxed(nodes) {
+function serializeNodesRelaxed(nodes, referenceSuffix) {
   const raw = serializeNodes(nodes);
-  return relaxEscapes(raw, (relaxed) => sameNodes(parseMarkdown(relaxed), nodes));
+  return relaxEscapes(raw, (relaxed) => verifiesAs(relaxed, referenceSuffix, nodes));
 }
 
 /** True for the document prosemirror-markdown produces from an empty string: the schema requires
@@ -299,6 +327,9 @@ export function createSplicer(source, originalDoc) {
   const scannable = !/\r(?!\n)/.test(source);
   const layout = scannable ? blockLayout(source) : { blocks: [], referenceSuffix: "" };
   const blocks = layout.blocks;
+  // Every candidate spelling this splice proposes is verified in this context, so a block's bytes
+  // are judged by what they mean in the file rather than by what they would mean on their own.
+  const referenceSuffix = layout.referenceSuffix;
   const original = originalDoc.content.content;
   const body = (index) => source.slice(blocks[index].start, blocks[index].end);
   /** The original bytes between block `index - 1` and block `index`: line ending plus blank lines. */
@@ -346,7 +377,7 @@ export function createSplicer(source, originalDoc) {
       const inserted = edited.slice(e, nextE);
       if (inserted.length && o < nextO) {
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
-        const written = serializeNodesRelaxed(inserted);
+        const written = serializeNodesRelaxed(inserted, referenceSuffix);
         const faithful = serializeNodes(original.slice(o, nextO));
         if (faithful !== replaced) collateral.push({ original: replaced, faithful, written });
         pieces.push({ text: written, before: o > 0 ? separator(o) : "\n\n" });
@@ -360,7 +391,7 @@ export function createSplicer(source, originalDoc) {
               moved.delete(index);
               return body(index);
             }
-            return serializeNodesRelaxed([node]);
+            return serializeNodesRelaxed([node], referenceSuffix);
           })
           .join("\n\n");
         pieces.push({ text, before: "\n\n" });
