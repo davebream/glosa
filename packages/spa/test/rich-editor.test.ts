@@ -30,6 +30,21 @@ import {
 
 const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 
+// ProseMirror documents and baseline layouts are immutable. Edited documents still parse afresh.
+function readCorpusDocument(name: string) {
+  const source = readFileSync(join(import.meta.dir, "../../..", name), "utf8");
+  return { source, ...blockLayout(source), doc: parseMarkdown(source) };
+}
+const corpusCache = new Map<string, ReturnType<typeof readCorpusDocument>>();
+function corpusDocument(name: string) {
+  let document = corpusCache.get(name);
+  if (!document) {
+    document = readCorpusDocument(name);
+    corpusCache.set(name, document);
+  }
+  return document;
+}
+
 /** What the rich face would write for `source` after the writer's edits turned it into `edited`. */
 const save = (source: string, edited: string) => spliceMarkdown(source, parseMarkdown(source), parseMarkdown(edited));
 
@@ -1029,7 +1044,6 @@ describe("the restoration's size guard", () => {
     // that block. So the threshold has to stay checkable against real content rather than assumed:
     // this measures the matrix the restoration would actually fill — the M1 output's tokens against
     // the source's — for every top-level block of the corpus REQ-8 is recorded over.
-    const root = join(import.meta.dir, "../../..");
     const documents = [
       "README.md",
       "AGENTS.md",
@@ -1045,9 +1059,7 @@ describe("the restoration's size guard", () => {
     let blockCount = 0;
     let unrestored = 0;
     for (const name of documents) {
-      const source = readFileSync(join(root, name), "utf8");
-      const { blocks, referenceSuffix } = blockLayout(source);
-      const doc = parseMarkdown(source);
+      const { source, blocks, referenceSuffix, doc } = corpusDocument(name);
       expect(blocks.length).toBe(doc.childCount);
       for (const [index, span] of blocks.entries()) {
         const body = source.slice(span.start, span.end);
@@ -1234,7 +1246,6 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     "docs/decisions.md",
   ];
   const EDITED_WORD = /[a-z]{5,}/;
-  const root = join(import.meta.dir, "../../..");
 
   /** Asserted on its own, so a document gaining or losing a block is VISIBLE rather than silently
    *  shifting every ratchet below it. It did exactly that here: 418 at `d965ffb`, 422 once #174's
@@ -1254,9 +1265,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   const corpus = () => {
     const all = [];
     for (const name of documents) {
-      const source = readFileSync(join(root, name), "utf8");
-      const { blocks, referenceSuffix } = blockLayout(source);
-      const doc = parseMarkdown(source);
+      const { source, blocks, referenceSuffix, doc } = corpusDocument(name);
       expect(blocks.length).toBe(doc.childCount);
       for (const [index, span] of blocks.entries()) {
         const body = source.slice(span.start, span.end);

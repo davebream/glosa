@@ -72,6 +72,8 @@ const GLOBAL_ARGS = {
 type DefaultContext = Readonly<CommandContext<GunshiParams>>;
 
 export interface CliRunDependencies {
+  /** Inbox command-boundary seam; production retains the HTTP client. */
+  inbox?: { createClient?: () => Promise<GlosaApiClient> };
   /** Init-specific host dependencies. Omit in production to use the real home and PATH. */
   init?: {
     homeDir?: string;
@@ -725,7 +727,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       if (values.action === "list") {
         const result = await inboxModule.runInboxList(
           { workspace, all: Boolean(values.all) },
-          { createClient: createHttpGlosaClient },
+          { createClient: deps.inbox?.createClient ?? createHttpGlosaClient },
         );
         inboxModule.printInboxListResult(result, Boolean(values.json));
         setExitCode(result.exitCode);
@@ -734,7 +736,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       if (values.action === "dismiss") {
         const result = await inboxModule.runInboxDismiss(
           { workspace, id: values.id as string | undefined, note: values.note as string | undefined },
-          { createClient: createHttpGlosaClient },
+          { createClient: deps.inbox?.createClient ?? createHttpGlosaClient },
         );
         inboxModule.printInboxDismissResult(result, Boolean(values.json));
         setExitCode(result.exitCode);
@@ -756,7 +758,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
           id: values.id as string,
           cursor: values.cursor as string | undefined,
         },
-        { createClient: createHttpGlosaClient },
+        { createClient: deps.inbox?.createClient ?? createHttpGlosaClient },
       );
       inboxModule.printInboxGetResult(result, Boolean(values.json));
       setExitCode(result.exitCode);

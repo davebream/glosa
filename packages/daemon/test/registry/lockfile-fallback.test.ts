@@ -220,39 +220,51 @@ describe("withFileLease — a critical section that outruns its own TTL", () => 
     const home = freshHome();
     const lockPath = join(home, ".workspaces.lock");
     const markerPath = join(home, "marker");
-    const HOLD_MS = 3_000;
 
     const holder = Bun.spawn({
-      cmd: [process.execPath, SLOW_HOLDER_PATH, lockPath, markerPath, String(HOLD_MS)],
+      cmd: [process.execPath, SLOW_HOLDER_PATH, lockPath, markerPath],
+      stdin: "pipe",
       stdout: "ignore",
       stderr: "pipe",
     });
 
-    // Bounded poll (<= 1s) for the holder to be provably INSIDE its critical section. Bounded so a
-    // holder that never gets there fails the assertion below instead of hanging the suite.
-    let held: { token: string; pid: number; hostname: string; acquiredAt: string } | undefined;
-    for (let i = 0; i < 200 && !held; i++) {
-      if (existsSync(markerPath) && readFileSync(markerPath, "utf8") === "holding" && existsSync(lockPath)) {
-        try {
-          held = JSON.parse(readFileSync(lockPath, "utf8"));
-        } catch {
-          // caught the record mid-write — poll again
+    try {
+      // Bounded poll (<= 1s) for the holder to be provably INSIDE its critical section. Bounded so a
+      // holder that never gets there fails the assertion below instead of hanging the suite.
+      let held: { token: string; pid: number; hostname: string; acquiredAt: string } | undefined;
+      for (let i = 0; i < 200 && !held; i++) {
+        if (existsSync(markerPath) && readFileSync(markerPath, "utf8") === "holding" && existsSync(lockPath)) {
+          try {
+            held = JSON.parse(readFileSync(lockPath, "utf8"));
+          } catch {
+            // caught the record mid-write — poll again
+          }
         }
+        if (!held) await Bun.sleep(5);
       }
-      if (!held) await Bun.sleep(5);
+      expect(held?.pid).toBe(holder.pid);
+
+      // Drive the clock instead of waiting out a real 30s TTL: rewind ONLY expiresAt, leaving the
+      // holder's token/pid/hostname untouched. The bytes on disk are now byte-identical to what a
+      // genuine 30s overrun would have left, while the holder is demonstrably still running.
+      writeFileSync(lockPath, JSON.stringify({ ...held, expiresAt: Date.now() - 1 }));
+      expect(readFileSync(markerPath, "utf8")).toBe("holding");
+
+      expect(() => withFileLease(lockPath, () => "stolen from a live holder")).toThrow(/held by another writer/);
+    } finally {
+      holder.stdin.write(new Uint8Array([1]));
+      holder.stdin.end();
+      const timer = setTimeout(() => holder.kill("SIGKILL"), 2000);
+      try {
+        await holder.exited;
+        expect(readFileSync(markerPath, "utf8")).toBe("done");
+        expect(existsSync(lockPath)).toBe(false);
+      } finally {
+        clearTimeout(timer);
+        cleanup(home);
+      }
     }
-    expect(held?.pid).toBe(holder.pid);
-
-    // Drive the clock instead of waiting out a real 30s TTL: rewind ONLY expiresAt, leaving the
-    // holder's token/pid/hostname untouched. The bytes on disk are now byte-identical to what a
-    // genuine 30s overrun would have left, while the holder is demonstrably still running.
-    writeFileSync(lockPath, JSON.stringify({ ...held, expiresAt: Date.now() - 1 }));
-    expect(readFileSync(markerPath, "utf8")).toBe("holding");
-
-    expect(() => withFileLease(lockPath, () => "stolen from a live holder")).toThrow(/held by another writer/);
-
-    expect(await holder.exited).toBe(0);
-    expect(readFileSync(markerPath, "utf8")).toBe("done"); // holder finished its own RMW intact
-    cleanup(home);
+    expect(holder.exitCode).toBe(0);
+    expect(existsSync(lockPath)).toBe(false);
   }, 20_000);
 });

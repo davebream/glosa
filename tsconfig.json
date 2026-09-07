@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["packages", "test"]
+  "include": ["packages", "test", "scripts"]
 }

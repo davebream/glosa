@@ -5,7 +5,9 @@
 // `unknown`, never guessed at. Also: exactly one active lease per workspace (LEASE_HELD), and
 // concurrent operations serialize through the same workspace mutex shadow-git shares with the
 // journal.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { timedHooks } from "../../../../test/phase-timing.ts";
+const { beforeEach, afterEach } = timedHooks("packages/daemon/test/git/lease.test.ts");
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBus } from "../../src/bus/bus.ts";

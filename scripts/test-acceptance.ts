@@ -40,10 +40,9 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-const child = Bun.spawnSync({
-  cmd: ["bun", "test", ...files.map((file) => `./${file}`)],
-  cwd: root,
-  stdio: ["inherit", "inherit", "inherit"],
+const { runInvocation } = await import("./test-runner.ts");
+process.exitCode = await runInvocation({
+  profile: "acceptance",
+  files,
+  directory: resolve(root, ".context/test-results"),
 });
-
-process.exit(child.exitCode ?? 1);

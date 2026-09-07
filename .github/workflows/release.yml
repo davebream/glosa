@@ -2,13 +2,208 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ['v*']
 
 permissions:
   contents: read
 
 jobs:
+  prepare:
+    runs-on: macos-14
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.plan.outputs.profile }}
+      whole: ${{ steps.plan.outputs.whole }}
+      repetitions: ${{ steps.plan.outputs.repetitions }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - id: plan
+        env:
+          TEST_FORCE_FULL: "true"
+          TEST_STABILITY_REPETITIONS: "2"
+        run: |
+          mkdir -p .context/test-results
+          bun run scripts/test-plan.ts prepare > .context/test-results/plan.json
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-plan
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  quality:
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - run: bun install --frozen-lockfile
+      - name: Lint full repository
+        if: needs.prepare.outputs.profile == 'full'
+        run: bun run lint
+      - name: Typecheck
+        if: needs.prepare.outputs.profile == 'full'
+        run: bun run typecheck
+      - name: Formatting
+        run: bun run format:check
+      - name: Audit production dependency licenses
+        if: needs.prepare.outputs.profile == 'full'
+        run: bun run audit:licenses
+      - name: Inspect and smoke-test npm tarball
+        run: bun run package:check
+
+  docs:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'docs'
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - run: bun install --frozen-lockfile
+      - run: bun run test:docs
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tests-docs
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  tests:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'full'
+    runs-on: macos-14
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [acceptance, remaining-1, remaining-2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - run: bun install --frozen-lockfile
+      - name: Execute coverage partition
+        env:
+          TEST_PARTITION: ${{ matrix.profile }}
+        run: |
+          if [ "$TEST_PARTITION" = acceptance ]; then
+            bun run test:acceptance
+          else
+            bun run scripts/test-runner.ts "$TEST_PARTITION"
+          fi
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tests-${{ matrix.profile }}
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  stability:
+    needs: prepare
+    if: needs.prepare.outputs.profile == 'full'
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - run: bun install --frozen-lockfile
+      - name: Repeat ownership and lifecycle checks
+        env:
+          TEST_REPETITIONS: ${{ needs.prepare.outputs.repetitions }}
+        run: bun run test:stability --repetitions "$TEST_REPETITIONS"
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tests-stability
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  full:
+    needs: prepare
+    if: needs.prepare.outputs.whole == 'true'
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - run: bun install --frozen-lockfile
+      - name: Verify interactions across the unpartitioned suite
+        run: bun run test:full
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tests-full
+          path: .context/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  ci:
+    name: release-ci
+    if: always()
+    needs: [prepare, quality, docs, tests, stability, full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.7
+      - name: Require every selected job to succeed
+        env:
+          TEST_PROFILE: ${{ needs.prepare.outputs.profile }}
+          TEST_WHOLE: ${{ needs.prepare.outputs.whole }}
+          TEST_RESULTS: ${{ toJSON(needs) }}
+        run: bun run scripts/test-plan.ts aggregate
+
   security:
     name: release-security
     runs-on: ubuntu-latest
@@ -31,20 +226,18 @@ jobs:
 
   release:
     name: release
-    needs: security
+    needs: [ci, security]
     runs-on: macos-14
-    timeout-minutes: 35
+    timeout-minutes: 10
     permissions:
       contents: write
       id-token: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.2.7
       - name: Set up Node.js
@@ -58,20 +251,6 @@ jobs:
         run: |
           version="$(node -p 'require("./package.json").version')"
           test "${GITHUB_REF_NAME}" = "v${version}"
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Typecheck
-        run: bun run typecheck
-      - name: Acceptance suites (T8 deterministic gate)
-        run: bun run test:acceptance
-      - name: Test (first pass)
-        run: bun test
-      - name: Test (second pass)
-        run: bun test
-      - name: Audit production dependency licenses
-        run: bun run audit:licenses
-      - name: Inspect and smoke-test npm tarball
-        run: bun run package:check
       - name: Publish package with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.17",
   "description": "Local-first writing and review workspace for people working with AI coding agents.",
   "license": "Apache-2.0",
-  "author": "Dawid Leszczyński",
+  "author": "Dawid Leszczy\u0144ski",
   "private": false,
   "type": "module",
   "bin": {
@@ -68,13 +68,18 @@
     "check": "bun run lint && bun run typecheck && bun test && bun run format:check",
     "setup:hooks": "lefthook install --reset-hooks-path",
     "audit:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow '0BSD;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;MIT;Python-2.0'",
-    "package:check": "bun run scripts/package-smoke.ts"
+    "package:check": "bun run scripts/package-smoke.ts",
+    "test:ci": "bun run scripts/test-runner.ts ci",
+    "test:docs": "bun run scripts/test-runner.ts docs",
+    "test:stability": "bun run scripts/test-runner.ts stability",
+    "test:full": "bun run scripts/test-runner.ts full"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
     "@types/bun": "^1.4.0",
     "@types/markdown-it": "^14.2.0",
     "@types/picomatch": "^4.0.3",
+    "fast-xml-parser": "5.11.1",
     "happy-dom": "^20.13.2",
     "lefthook": "^2.1.12",
     "license-checker-rseidelsohn": "5.0.1",

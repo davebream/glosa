@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
-import { confirmPortFree } from "../src/lifecycle/daemon.ts";
+import { confirmPortFree, ensureDaemonWithDependencies } from "../src/lifecycle/daemon.ts";
 import { ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
 import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
@@ -232,7 +232,16 @@ describe("bootDaemon — subprocess fault/concurrency", () => {
       // budget is now 8s inside a 20s test, deliberately leaving room for the wait to lose, say so,
       // and still let `finally` stop the daemon. Asserting the result is the other half: without it
       // a timeout arrives as `toMatchObject` against null, which names nothing.
-      expect(await waitUntil(() => lockOf(home)?.instance_id === hs.instance_id, 8000)).toBe(true);
+      // Ownership becomes visible before the following diagnostic append. Wait for both effects
+      // of the repair rather than assuming the log is synchronous with another process's lock.
+      expect(
+        await waitUntil(
+          () =>
+            lockOf(home)?.instance_id === hs.instance_id &&
+            readFileSync(logPath(home), "utf8").includes("recreated missing ownership lock"),
+          8000,
+        ),
+      ).toBe(true);
 
       expect(lockOf(home)).toMatchObject({
         instance_id: hs.instance_id,
@@ -510,6 +519,23 @@ describe("stable free-port confirmation", () => {
 // Fix: each test now owns a `const home = freshHome()` and saves/restores the env vars itself in
 // a local try/finally — no state is shared with any sibling test, so no interleaving (real or
 // scheduler-induced) can corrupt another test's view of its own home directory.
+/** Advance only the known-unresponsive first poll; subsequent daemon startup stays real. */
+function acceleratedFirstPoll() {
+  let advanced = 0;
+  return {
+    now: () => performance.now() + advanced,
+    pollHandshake: async (...args: Parameters<typeof import("../src/lifecycle/handshake.ts").pollHandshake>) => {
+      if (advanced === 0) {
+        expect(args[1]).toBe(5000);
+        advanced += args[1];
+        return null;
+      }
+      const { pollHandshake } = await import("../src/lifecycle/handshake.ts");
+      return pollHandshake(...args);
+    },
+  };
+}
+
 describe("ensureDaemon — client", () => {
   test("a legacy daemon is replaced and the successful connection reports the current build", async () => {
     const home = freshHome();
@@ -1046,7 +1072,7 @@ describe("ensureDaemon — client", () => {
     process.env.GLOSA_PORT = String(wrongSeedPort);
 
     try {
-      const result = await ensureDaemon();
+      const result = await ensureDaemonWithDependencies({}, acceleratedFirstPoll());
       try {
         expect(result.ok).toBe(true);
         if (result.ok) {
@@ -1093,7 +1119,7 @@ describe("ensureDaemon — client", () => {
       process.env.GLOSA_HOME = home;
       process.env.GLOSA_PORT = String(port);
 
-      const result = await ensureDaemon();
+      const result = await ensureDaemonWithDependencies({}, acceleratedFirstPoll());
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.reason).toContain(String(port));
@@ -1228,7 +1254,7 @@ describe("ensureDaemon — client", () => {
       process.env.GLOSA_PORT = String(port);
 
       const started = Date.now();
-      const result = await ensureDaemon({ timeoutMs: 6000 });
+      const result = await ensureDaemonWithDependencies({ timeoutMs: 6000 }, acceleratedFirstPoll());
       const elapsed = Date.now() - started;
       expect(result.ok).toBe(false);
       if (!result.ok) {

@@ -6,10 +6,21 @@ import { join } from "node:path";
 import { assertDefined, cleanupHome, lockOf, randomPort } from "./helpers.ts";
 
 const childHelperPath = join(import.meta.dir, "helpers.ts");
+// File existence is the readiness signal. Publish complete bytes before exposing that signal;
+// writeFileSync(finalPath, ...) briefly exposes an empty file to a different process.
+const publicationScript = `
+  import { writeFileSync as publishWrite, renameSync as publishRename } from "node:fs";
+  function publishOutput(path, content, beforePublish = () => {}) {
+    publishWrite(path + ".tmp", content);
+    beforePublish();
+    publishRename(path + ".tmp", path);
+  }
+`;
 const childScript = `
+  ${publicationScript}
   import { existsSync, writeFileSync } from "node:fs";
   import { randomPort } from ${JSON.stringify(childHelperPath)};
-  writeFileSync(process.env.GLOSA_TEST_PORT_OUTPUT, String(randomPort()));
+  publishOutput(process.env.GLOSA_TEST_PORT_OUTPUT, String(randomPort()));
   while (!existsSync(process.env.GLOSA_TEST_PORT_RELEASE)) await Bun.sleep(10);
 `;
 
@@ -85,6 +96,7 @@ test("distinct-TMPDIR processes can run ensureDaemon concurrently without crossi
   const startPath = join(root, "start");
   const releasePath = join(root, "release");
   const workerScript = `
+  ${publicationScript}
     import { existsSync, writeFileSync } from "node:fs";
     import { cleanupHome, freshHome, randomPort, stopDetachedDaemon } from ${JSON.stringify(childHelperPath)};
     import { ensureTestDaemon as ensureDaemon } from ${JSON.stringify(childHelperPath)};
@@ -92,10 +104,10 @@ test("distinct-TMPDIR processes can run ensureDaemon concurrently without crossi
     const port = randomPort();
     process.env.GLOSA_HOME = home;
     process.env.GLOSA_PORT = String(port);
-    writeFileSync(process.env.GLOSA_TEST_PORT_ALLOCATED, JSON.stringify({ home, port }));
+    publishOutput(process.env.GLOSA_TEST_PORT_ALLOCATED, JSON.stringify({ home, port }));
     while (!existsSync(process.env.GLOSA_TEST_PORT_START)) await Bun.sleep(10);
     const result = await ensureDaemon();
-    writeFileSync(process.env.GLOSA_TEST_PORT_RESULT, JSON.stringify(result));
+    publishOutput(process.env.GLOSA_TEST_PORT_RESULT, JSON.stringify(result));
     while (!existsSync(process.env.GLOSA_TEST_PORT_RELEASE)) await Bun.sleep(10);
     if (result.ok) {
       await stopDetachedDaemon(home, result);
@@ -170,6 +182,7 @@ test("a daemon spawned by a test helper exits when its test runner is terminated
   cleanupDirs.push(root);
   const outputPath = join(root, "daemon.json");
   const runnerScript = `
+  ${publicationScript}
     import { writeFileSync } from "node:fs";
     import { ensureTestDaemon, freshHome, randomPort } from ${JSON.stringify(childHelperPath)};
     const home = freshHome();
@@ -178,7 +191,7 @@ test("a daemon spawned by a test helper exits when its test runner is terminated
     process.env.GLOSA_PORT = String(port);
     const daemon = await ensureTestDaemon();
     if (!daemon.ok) throw new Error(daemon.reason);
-    writeFileSync(process.env.GLOSA_TEST_DAEMON_OUTPUT, JSON.stringify({
+    publishOutput(process.env.GLOSA_TEST_DAEMON_OUTPUT, JSON.stringify({
       home,
       pid: daemon.pid,
       port: daemon.port,
@@ -244,6 +257,7 @@ test("guardian ownership is durable when the runner dies immediately after spawn
   const outputPath = join(root, "daemon.json");
   const mainPath = join(import.meta.dir, "../../cli/src/main.ts");
   const runnerScript = `
+  ${publicationScript}
     import { writeFileSync } from "node:fs";
     import { freshHome, randomPort, superviseDaemonHome } from ${JSON.stringify(childHelperPath)};
     const home = freshHome();
@@ -257,7 +271,7 @@ test("guardian ownership is durable when the runner dies immediately after spawn
       stderr: "ignore",
     });
     daemon.unref();
-    writeFileSync(process.env.GLOSA_TEST_DAEMON_OUTPUT, JSON.stringify({ home, port, pid: daemon.pid }));
+    publishOutput(process.env.GLOSA_TEST_DAEMON_OUTPUT, JSON.stringify({ home, port, pid: daemon.pid }));
     process.kill(process.pid, "SIGKILL");
   `;
   const runner = Bun.spawn({
@@ -344,12 +358,13 @@ function exactBlockEnv(port: number): Record<string, string> {
 /** A child that reserves one block, survives a forced GC, reports it, and then stays alive until
  * killed. `setInterval` is what keeps the loop alive — the unref'd reservation must not do that. */
 const squatterScript = `
+  ${publicationScript}
   import { writeFileSync } from "node:fs";
   import { randomPort } from ${JSON.stringify(childHelperPath)};
   const port = randomPort();
   Bun.gc(true);
   await Bun.sleep(25);
-  writeFileSync(process.env.GLOSA_TEST_PORT_OUTPUT, String(port));
+  publishOutput(process.env.GLOSA_TEST_PORT_OUTPUT, String(port));
   setInterval(() => {}, 1000);
 `;
 
@@ -387,11 +402,12 @@ test("a live owner holds its sentinel strongly through GC", async () => {
 
   try {
     const contenderScript = `
+  ${publicationScript}
       import { writeFileSync } from "node:fs";
       import { randomPort } from ${JSON.stringify(childHelperPath)};
       let outcome = "acquired";
       try { randomPort(); } catch (error) { outcome = error.message; }
-      writeFileSync(process.env.GLOSA_TEST_PORT_OUTPUT, outcome);
+      publishOutput(process.env.GLOSA_TEST_PORT_OUTPUT, outcome);
     `;
     const contender = Bun.spawn({
       cmd: [process.execPath, "-e", contenderScript],
@@ -416,12 +432,13 @@ test("a SIGKILLed owner is reclaimed exactly, leaves no disk state, and does not
   const root = mkdtempSync(join(tmpdir(), "glosa-test-port-reclaim-"));
   cleanupDirs.push(root);
   const successorScript = `
+  ${publicationScript}
     import { writeFileSync } from "node:fs";
     import { randomPort } from ${JSON.stringify(childHelperPath)};
     let result;
     try { result = { ok: true, port: randomPort() }; }
     catch (error) { result = { ok: false, message: error.message }; }
-    writeFileSync(process.env.GLOSA_TEST_PORT_OUTPUT, JSON.stringify(result));
+    publishOutput(process.env.GLOSA_TEST_PORT_OUTPUT, JSON.stringify(result));
   `;
 
   // Ordinary lifecycle suites scan from the start of the range. Use a bounded tail window and
@@ -483,12 +500,13 @@ test("exhausting the block range fails with a message that says what to do", asy
   cleanupDirs.push(root);
   const outputPath = join(root, "message");
   const script = `
+  ${publicationScript}
     import { writeFileSync } from "node:fs";
     import { randomPort } from ${JSON.stringify(childHelperPath)};
     let message = "no error";
     let first = null;
     try { first = randomPort(); randomPort(); } catch (error) { message = error.message; }
-    writeFileSync(process.env.GLOSA_TEST_PORT_OUTPUT, JSON.stringify({ first, message }));
+    publishOutput(process.env.GLOSA_TEST_PORT_OUTPUT, JSON.stringify({ first, message }));
     if (first === null) process.exitCode = 75;
   `;
   // Start near the end of the range so ordinary suites scanning upward do not make this test
@@ -538,4 +556,43 @@ test("assertDefined throws naming what was missing when the value is null", () =
 
 test("assertDefined throws naming what was missing when the value is undefined", () => {
   expect(() => assertDefined(undefined, "ownership lock")).toThrow(/ownership lock/);
+});
+
+test("fixture readiness is invisible until complete output is atomically published", async () => {
+  const root = mkdtempSync(join(tmpdir(), "glosa-test-publication-"));
+  cleanupDirs.push(root);
+  const output = join(root, "output");
+  const staged = join(root, "staged");
+  const release = join(root, "release");
+  const child = Bun.spawn({
+    cmd: [
+      process.execPath,
+      "-e",
+      `
+      ${publicationScript}
+      import { existsSync, writeFileSync } from "node:fs";
+      publishOutput(process.argv[1], JSON.stringify({ ready: true }), () => {
+        writeFileSync(process.argv[2], "staged");
+        const word = new Int32Array(new SharedArrayBuffer(4));
+        while (!existsSync(process.argv[3])) Atomics.wait(word, 0, 0, 5);
+      });
+    `,
+      output,
+      staged,
+      release,
+    ],
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  try {
+    expect(await waitUntil(() => existsSync(staged))).toBe(true);
+    expect(existsSync(output)).toBe(false);
+    writeFileSync(release, "release");
+    await finishChildren([child]);
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toEqual({ ready: true });
+  } finally {
+    writeFileSync(release, "release");
+    await finishChildren([child]);
+  }
 });

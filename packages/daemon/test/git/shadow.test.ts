@@ -3,7 +3,9 @@
 // git layer), config isolation, checkpoint idempotency, index.lock reclaim, delete/rename
 // staging. Every test drives real system `git` against a hermetic tmp workspace — nothing here is
 // mocked.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { timedHooks } from "../../../../test/phase-timing.ts";
+const { beforeEach, afterEach } = timedHooks("packages/daemon/test/git/shadow.test.ts");
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { checkpoint, headSha, indexLockPath, initShadowRepo, reclaimIndexLock, runGit } from "../../src/git/shadow.ts";
 import { journalPath, shadowGitDir } from "../../src/bus/paths.ts";
