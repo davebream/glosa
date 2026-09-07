@@ -209,6 +209,51 @@ describe("Gunshi command surface", () => {
     });
   });
 
+  test("inbox: `list` needs no id, `get` still requires one, and a genuine surplus positional still errors (issue #142)", () => {
+    const missingId = runCli(["inbox", "get"]);
+    expect(missingId.exitCode).toBe(2);
+    expect(missingId.stderr).toContain("missing <id>");
+
+    const unsupported = runCli(["inbox", "bogus-action"]);
+    expect(unsupported.exitCode).toBe(2);
+    expect(unsupported.stderr).toContain("unsupported action");
+
+    // `assertNoSurplusPositionals` (index.ts:1060-1067) counts DECLARED positionals regardless of
+    // `required` — `action`+`id` stay 2 declared slots for `inbox` even with `id` now optional,
+    // so a THIRD positional is still rejected before any handler or daemon call runs.
+    const trueSurplus = runCli(["inbox", "list", "a", "b"]);
+    expect(trueSurplus.exitCode).toBe(2);
+    expect(trueSurplus.stderr).toContain("Unexpected positional argument: b");
+    expect(trueSurplus.stderr).not.toContain("ArgsValidationError");
+  });
+
+  // A single stray token after `list` fills the (declared, now-optional) `id` slot structurally —
+  // that's not "surplus" by `assertNoSurplusPositionals`'s own declared-count definition (it counts
+  // declared positionals, not what the runtime action happens to use), so `list` proceeds to reach
+  // the daemon rather than usage-erroring on it. A squatter on GLOSA_PORT forces a fast,
+  // deterministic DAEMON_UNREACHABLE instead of a real spawn; exit 3 (not a usage 2) is the
+  // observable proof that parsing let the stray token through. Its own timeout, like the discovery
+  // tests above, because a squatted-port handshake failure isn't instant.
+  test(
+    "inbox: a single stray positional after `list` is NOT rejected as surplus — it reaches the daemon",
+    () => {
+      const port = randomPort();
+      const squatter = Bun.serve({
+        hostname: "127.0.0.1",
+        port,
+        fetch: () => Response.json({ not: "a glosa handshake" }),
+      });
+      try {
+        const oneStray = runCli(["inbox", "list", "extra-arg"], { env: { GLOSA_PORT: String(port) } });
+        expect(oneStray.exitCode).toBe(3);
+        expect(oneStray.stderr).not.toContain("Unexpected positional argument");
+      } finally {
+        squatter.stop();
+      }
+    },
+    7000,
+  );
+
   test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
     const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
     expect(r.exitCode).toBe(2);

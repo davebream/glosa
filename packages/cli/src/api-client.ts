@@ -141,6 +141,25 @@ export interface InboxPresentationResult {
   presentation: DeliverableEntry;
 }
 
+export interface InboxListEntry {
+  id: string;
+  kind: string;
+  status: string;
+  /** Raw ISO from the journal fold — a formatted age is the human renderer's job, not the wire
+   * shape's (`inbox.ts`'s D6). `null` only if the daemon predates this field entirely. */
+  created_at: string | null;
+  /** `null` for every entry kind that never records one today (an `entry_adopted` entry never
+   * carries one at all) — never backfilled from the payload. */
+  target_path: string | null;
+  /** `false` marks a row whose inbox `.json` is gone (hand-removed, or otherwise lost) — the row
+   * is still listed, never dropped, which is the entire point of issue #142. */
+  payload_present: boolean;
+}
+
+export interface InboxListResult {
+  entries: InboxListEntry[];
+}
+
 export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
 
 /** The interface every P5.1 command depends on. `port` is exposed (rather than kept private)
@@ -191,6 +210,10 @@ export interface GlosaApiClient {
   /** `waitMs > 0` holds the request open until the entry goes terminal or the wait elapses — one
    * blocked request rather than a poll loop. Omit it for the immediate read. */
   getEntryStatus(path: string, entry: string, waitMs?: number): Promise<EntryStatus | null>;
+  /** `glosa inbox list`'s daemon-side call (issue #142) — journal-derived, so it works on an
+   * entry whose inbox payload is gone. `opts.all` includes terminal entries; the default omits
+   * them. */
+  listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
   setMetadata?(
@@ -300,6 +323,12 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
         if (isApiError(err) && err.status === 404) return null;
         throw err;
       }
+    },
+    async listInboxEntries(path, opts = {}) {
+      const params: Record<string, string> = { path };
+      if (opts.all) params.all = "1";
+      const qs = new URLSearchParams(params).toString();
+      return (await call("GET", `/api/workspaces/inbox?${qs}`)).json();
     },
     async getInboxPresentation(path, entry, cursor) {
       const workspace = await openWorkspace(path);

@@ -7,6 +7,7 @@ import type {
   AttentionRequestResult,
   EntryStatus,
   GlosaApiClient,
+  InboxListResult,
   InboxPresentationResult,
   OpenWorkspaceResult,
   OpenWorkspaceOptions,
@@ -26,6 +27,8 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   applyBeginImpl: ((path: string, entry: string, session: string) => Promise<ApplyBeginResult>) | null = null;
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
+  inboxListResult: InboxListResult = { entries: [] };
+  inboxListImpl: ((path: string, opts?: { all?: boolean }) => Promise<InboxListResult>) | null = null;
   inboxPresentationResult: InboxPresentationResult | null = null;
   bindSessionResult: { bound: true; session_id: string } | null = null;
   bindSessionError: Error | null = null;
@@ -80,6 +83,12 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   async getEntryStatus(path: string, entry: string): Promise<EntryStatus | null> {
     this.calls.push({ method: "getEntryStatus", args: [path, entry] });
     return this.entryStatusResult;
+  }
+
+  async listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult> {
+    this.calls.push({ method: "listInboxEntries", args: opts === undefined ? [path] : [path, opts] });
+    if (this.inboxListImpl) return this.inboxListImpl(path, opts);
+    return this.inboxListResult;
   }
 
   async getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult> {
