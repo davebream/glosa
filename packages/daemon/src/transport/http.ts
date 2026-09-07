@@ -48,6 +48,7 @@ import type { TokenSource } from "../security/token.ts";
 import {
   type ArtifactAccessDependencies,
   actionablePresentation as buildArtifactPresentation,
+  listInboxEntries,
 } from "../services/artifact.ts";
 import { confineTranscriptPath } from "../transcript/root.ts";
 import { createTranscriptStreamResponse } from "../transcript/stream.ts";
@@ -1287,6 +1288,24 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   }
 }
 
+/** `GET /api/workspaces/inbox?path=<ws>[&all=1]` — `glosa inbox list`'s daemon-side half (issue
+ * #142). Read-only, no lease and no mutex: `listInboxEntries` folds the journal the same way
+ * `GET /api/status`'s `pending_count` does, so this never blocks behind — and never observes a
+ * half-applied — a concurrent write. `all=1` includes terminal entries (D4); the default omits
+ * them, matching "prints the pending entries" from the issue this closes. */
+function handleWorkspaceInboxList(ctx: ApiContext, req: Request): Response {
+  const url = new URL(req.url);
+  const rawPath = url.searchParams.get("path");
+  if (!rawPath) {
+    return problem(400, "validation-failed", "path query param is required", undefined, url.pathname);
+  }
+  const root = canonicalOrNull(rawPath);
+  if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
+  const workspace = ctx.workspaceIndex.get(root) ?? root;
+  const all = url.searchParams.get("all") === "1";
+  return Response.json({ entries: listInboxEntries(workspace, { all }) });
+}
+
 /** `POST /api/workspaces/apply-begin` — `glosa apply-begin <id> --session <sid>`'s daemon-side
  * half (A4 §F05). A second apply-begin already active for this workspace surfaces as
  * `LEASE_HELD` — mapped to 409 `lease-conflict`, which the CLI maps to exit 12. */
@@ -1672,6 +1691,9 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   }
   if (method === "POST" && pathname === "/api/workspaces/resolve") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceResolve(ctx, req) };
+  }
+  if (method === "GET" && pathname === "/api/workspaces/inbox") {
+    return { routeClass: "authed-read", handle: (req) => handleWorkspaceInboxList(ctx, req) };
   }
   if (method === "POST" && pathname === "/api/workspaces/apply-begin") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceApplyBegin(ctx, req) };

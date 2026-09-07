@@ -20,7 +20,9 @@ import {
   resolve as resolveAnchor,
 } from "../anchoring.ts";
 import { classifyArtifactPath, renderMarkdown, sourceSha256, writeArtifactAtomic } from "../artifact-render.ts";
-import { isTerminal } from "../bus/lifecycle.ts";
+import { readInboxEntry } from "../bus/inbox.ts";
+import { type EntryKind, isTerminal } from "../bus/lifecycle.ts";
+import { peekJournal } from "../bus/peek.ts";
 import type { DerivedEntryState } from "../bus/replay.ts";
 import { buildDiffHunks, commitExists } from "../checkpoint-diff.ts";
 import { checkpointArtifactPath, listCheckpoints } from "../checkpoints.ts";
@@ -30,6 +32,7 @@ import { type MatchedFile, resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceEntry } from "../registry/workspace-index.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 import { findWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface ArtifactAccessDependencies extends WorkspaceAccess {
@@ -412,6 +415,50 @@ export async function listAnnotations(
     if (item) items.push(item);
   }
   return items;
+}
+
+export interface InboxListEntry {
+  id: string;
+  kind: EntryKind;
+  status: string;
+  created_at: string | null;
+  target_path: string | null;
+  payload_present: boolean;
+}
+
+/** Every entry the journal itself remembers, oldest first — `glosa inbox list`'s daemon-side
+ * half (issue #142). Deliberately built from `peekJournal()` (`bus/peek.ts`), the same read-only
+ * fold `GET /api/status`'s `pending_count` uses, and NOT from `bus.readEntry`/`listAnnotations`:
+ * the entries this exists to surface are exactly the ones whose inbox `.json` file is gone (moved
+ * out by hand, per the reproduction this closes), so id/kind/status/age/target all come from the
+ * journal fold and never from the payload. `payload_present` is the one filesystem touch, and it
+ * is a presence probe (`readInboxEntry` returning non-null), never a content read — a missing or
+ * unparseable payload degrades a row to `payload_present: false`, never drops it from the list.
+ *
+ * Non-terminal entries only by default (D4); `opts.all` includes terminal ones too, which is what
+ * makes a dismiss's effect observable end to end: dismiss, then see the same id again under
+ * `--all` as `dismissed`. */
+export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boolean } = {}): InboxListEntry[] {
+  const { state, createdAt, entryOrder } = peekJournal(workspace);
+  const rows: InboxListEntry[] = [];
+  for (const id of entryOrder.keys()) {
+    const entry = state.entries[id];
+    if (!entry) continue; // defensive — entryOrder and the fold should always agree
+    const kind: EntryKind =
+      entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
+    if (!opts.all && isTerminal(kind, entry.status)) continue;
+    rows.push({
+      id,
+      kind,
+      status: entry.status,
+      created_at: createdAt.get(id) ?? null,
+      // `entry_adopted` never carries a `target_path` (lifecycle.ts's adopted arm has no such
+      // field) — stated as `null` here rather than papered over by reading the payload.
+      target_path: typeof entry.target_path === "string" ? entry.target_path : null,
+      payload_present: readInboxEntry(workspace, id) !== null,
+    });
+  }
+  return rows;
 }
 
 export async function artifactDiff(deps: ArtifactAccessDependencies, slug: string, from: string, to: string) {

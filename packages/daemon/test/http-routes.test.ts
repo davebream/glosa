@@ -7,7 +7,16 @@
 // integration test has no way to reach. Pipeline-level / real-subprocess attack coverage
 // (Host-rebinding, real HTTP transport) stays in http.test.ts; this file is route-schema-level.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
@@ -2333,6 +2342,90 @@ describe("A1 §5 route catalog", () => {
       );
       expect(res.status).toBe(200);
       expect((await res.json()).status).toBe("applied");
+    });
+  });
+
+  // --- GET /api/workspaces/inbox — journal-derived listing (issue #142) ---
+  //
+  // The reproduction this closes: hand-moving an inbox `.json` file out of `.glosa/inbox/` left
+  // the entry permanently unlistable and unresolvable. Every field below must come off the
+  // journal fold, never off the payload, so the listing survives exactly that.
+
+  describe("GET /api/workspaces/inbox", () => {
+    test("lists a created entry, marks a removed payload as `payload_present: false`, and never drops the row", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("kept", { kind: "annotation", artifact_path: "notes.md", body: "keep me" });
+      const orphaned = "orphaned-1";
+      await bus.createEntry(orphaned, { kind: "annotation", artifact_path: "notes.md", body: "gone" });
+      unlinkSync(inboxEntryPath(root, orphaned));
+
+      const res = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.entries.map((e: { id: string }) => e.id)).toEqual(["kept", orphaned]);
+      const [keptRow, orphanedRow] = body.entries;
+      expect(keptRow).toMatchObject({ kind: "common", status: "pending", target_path: null, payload_present: true });
+      expect(orphanedRow).toMatchObject({
+        kind: "common",
+        status: "pending",
+        target_path: null,
+        payload_present: false,
+      });
+      // Raw ISO, not a formatted age — formatting is the CLI's job, not the wire shape's.
+      expect(typeof orphanedRow.created_at).toBe("string");
+      expect(new Date(orphanedRow.created_at).toISOString()).toBe(orphanedRow.created_at);
+    });
+
+    test("a terminal entry is omitted by default and included under all=1", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("open-1", { kind: "annotation", artifact_path: "notes.md", body: "still open" });
+      await bus.createEntry("closed-1", { kind: "annotation", artifact_path: "notes.md", body: "done" });
+      await bus.commitTransition("closed-1", "applied", { by: "human" });
+
+      const defaultList = await (
+        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))
+      ).json();
+      expect(defaultList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1"]);
+
+      const allList = await (
+        await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}&all=1`))
+      ).json();
+      expect(allList.entries.map((e: { id: string }) => e.id)).toEqual(["open-1", "closed-1"]);
+      expect(allList.entries[1]).toMatchObject({ status: "applied" });
+    });
+
+    test("an adopted entry lists with target_path: null — an entry_adopted event never carries one", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.adoptEntry(
+        "adopted-1",
+        { kind: "annotation", artifact_path: "notes.md", body: "adopted from elsewhere" },
+        { kind: "annotation", status: "pending", source_registration_id: "reg-x", source_entry_id: "src-1" },
+        "adopt-idem-1",
+      );
+
+      const body = await (await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))).json();
+      expect(body.entries).toEqual([
+        expect.objectContaining({
+          id: "adopted-1",
+          kind: "common",
+          status: "pending",
+          target_path: null,
+          payload_present: true,
+        }),
+      ]);
+    });
+
+    test("path query param is required", async () => {
+      const res = await fetchFn(req("/api/workspaces/inbox"));
+      expect(res.status).toBe(400);
+    });
+
+    test("an unregistered path still lists — the route is path-addressed, like resolve and apply-begin", async () => {
+      const unregistered = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-unreg-")));
+      const res = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(unregistered)}`));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ entries: [] });
+      rmSync(unregistered, { recursive: true, force: true });
     });
   });
 });
