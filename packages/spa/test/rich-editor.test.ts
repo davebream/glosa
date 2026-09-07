@@ -13,11 +13,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { EditorState } from "../src/vendor/prosemirror.js";
+import { EditorState, Schema, markdownSchema } from "../src/vendor/prosemirror.js";
 import {
+  MODELLED_MARK_TYPES,
+  MODELLED_NODE_TYPES,
   blockLayout,
   collateralFor,
   parseMarkdown,
+  runIsModelled,
   runsOverlap,
   serializeMarkdown,
   serializeNodesFaithfully,
@@ -898,5 +901,111 @@ describe("the guard measured over the corpus (a draft of the REQ-8 harness)", ()
       shipped: { dishonest: 3, fired: 3 },
       ablated: { dishonest: 35, fired: 35 },
     });
+  });
+});
+
+describe("the per-node-type opt-out — nothing outside the modelled inventory is ever rewritten", () => {
+  // contracts.md C1.2, and the one part of #174 whose failure mode lands on somebody else. T5 (#143)
+  // gives front matter an OPAQUE node whose serialization IS its literal source bytes; a de-escape
+  // or an entity re-encoding over those bytes corrupts them. Nothing in this task's own wave can
+  // produce such a node, so an implementation that whitelists nothing and rewrites the whole
+  // serialized string unconditionally passes every OTHER test in this file and is still a contract
+  // violation. That is why this cannot wait for T5: by the time a raw node exists to exercise it,
+  // the wrapper it has to survive has already shipped.
+  //
+  // T5's node genuinely cannot be built here — `serializeNodes()` composes its doc from the
+  // CommonMark schema, which refuses a foreign type outright ("Invalid content for node doc"), and
+  // the serializer has no handler for one either. So the stand-in sits where the CommonMark
+  // serializer will not DISPATCH on it: `code_block`'s handler reads `node.textContent` and never
+  // renders its children by type. The run therefore serializes normally while carrying a type name
+  // the inventory does not have, which is the property under test.
+  const opaqueSchema = new Schema({
+    nodes: { doc: { content: "block+" }, text: { group: "inline" }, glosa_raw: { group: "block", content: "text*" } },
+    marks: { glosa_verbatim: {} },
+  });
+  const opaqueNode = opaqueSchema.node("glosa_raw", null, opaqueSchema.text("verbatim"));
+  const bracketed = markdownSchema.node("paragraph", null, markdownSchema.text("See [r] here."));
+  const opaqueBlock = markdownSchema.nodes.code_block.create(null, opaqueNode);
+  /** What the serializer alone writes for `[bracketed, opaqueBlock]` — brackets escaped, as it
+   * escapes them everywhere. Every assertion below is against these exact bytes. */
+  const RAW = "See \\[r\\] here.\n\n```\nverbatim\n```";
+
+  test("a run carrying a node type the schema does not have is written raw, byte for byte", () => {
+    // The literal contract: no de-escaping, no restoration, no reparse — the serializer's own bytes.
+    // Stated as an assertion about the WRAPPER because that is the call the splice makes; note that
+    // the absolute predicate inside it refuses this run too (it compares against nodes the parser
+    // could never build), so this pins the behavior rather than isolating the opt-out. The
+    // whole-document case below is where the opt-out is the only thing holding the line.
+    expect(serializeNodesFaithfully([bracketed, opaqueBlock], "", RAW)).toBe(RAW);
+    expect(serializeNodesFaithfully([bracketed, opaqueBlock], "")).toBe(RAW);
+  });
+
+  test("a whole document containing one is written raw too — here the opt-out IS the only guard", () => {
+    // `serializeMarkdown`'s baseline is RELATIVE: what the serializer's own output parses to. That
+    // baseline is closed under the CommonMark schema whatever the document holds, so both sides of
+    // the comparison agree and the relaxation is ACCEPTED over the opaque block's verbatim bytes.
+    // Remove the opt-out and this document is written `See [r] here.` — the escapes dropped from a
+    // run that was never vouched for. This is the assertion that fails under an unconditional
+    // rewrite, and it is the reason the opt-out sits on this path as well as on the wrapper.
+    expect(serializeMarkdown(markdownSchema.node("doc", null, [bracketed, opaqueBlock]))).toBe(RAW);
+    // The control that keeps the assertion above honest: the very same paragraph, in a document the
+    // inventory covers, IS relaxed. So the opt-out is what stopped it, not a serializer that never
+    // escaped anything in the first place.
+    expect(serializeMarkdown(markdownSchema.node("doc", null, [bracketed]))).toBe("See [r] here.");
+  });
+
+  test("an unmodelled node is refused at any depth, and a modelled document is not", () => {
+    expect(runIsModelled([bracketed])).toBe(true);
+    expect(runIsModelled([opaqueBlock])).toBe(false);
+    // Buried two levels down rather than at the top: the walk has to reach it, because
+    // `serializeNodes()` renders the whole subtree and its bytes reach the string being rewritten.
+    const buried = markdownSchema.node(
+      "blockquote",
+      null,
+      markdownSchema.node("bullet_list", null, markdownSchema.node("list_item", null, opaqueBlock)),
+    );
+    expect(runIsModelled([buried])).toBe(false);
+    // Deny by default: nothing here recognises `glosa_raw`, and that is the whole answer. Adding a
+    // node type to a schema later must not opt it in behind anybody's back.
+    expect(MODELLED_NODE_TYPES).not.toContain("glosa_raw");
+  });
+
+  test("a mark type outside the inventory is refused too, at any depth", () => {
+    // `descendants` walks NODES. A walk that stops there looks correct and checks half the
+    // inventory — this is the assertion that fails if the marks are never asked about.
+    const struck = markdownSchema.text("struck", [opaqueSchema.marks.glosa_verbatim.create()]);
+    const deep = markdownSchema.node(
+      "blockquote",
+      null,
+      markdownSchema.node(
+        "bullet_list",
+        null,
+        markdownSchema.node("list_item", null, markdownSchema.node("paragraph", null, struck)),
+      ),
+    );
+    expect(runIsModelled([deep])).toBe(false);
+    // The same shape carrying a mark the inventory DOES have is fine, so it is the mark type that
+    // decided it and not the nesting.
+    const emphasised = markdownSchema.text("struck", [markdownSchema.marks.em.create()]);
+    const ordinary = markdownSchema.node(
+      "blockquote",
+      null,
+      markdownSchema.node(
+        "bullet_list",
+        null,
+        markdownSchema.node("list_item", null, markdownSchema.node("paragraph", null, emphasised)),
+      ),
+    );
+    expect(runIsModelled([ordinary])).toBe(true);
+  });
+
+  test("the inventory is the CommonMark schema's own, in both directions", () => {
+    // Held against `markdownSchema` — the VENDORED CommonMark schema, which does not move — rather
+    // than against whatever schema `serializeNodes()` builds its doc from, because T5 replaces that
+    // with a derived one. A name the schema has and the list lacks would drop ordinary documents
+    // onto the raw path silently; a name in the list the schema does not have is dead weight that
+    // would tell T5's reader the wrong thing. Neither is visible from any other test here.
+    expect([...MODELLED_NODE_TYPES].sort()).toEqual(Object.keys(markdownSchema.nodes).sort());
+    expect([...MODELLED_MARK_TYPES].sort()).toEqual(Object.keys(markdownSchema.marks).sort());
   });
 });

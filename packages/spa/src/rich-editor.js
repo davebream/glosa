@@ -81,6 +81,12 @@ export function parseMarkdown(markdown) {
 
 export function serializeMarkdown(doc) {
   const raw = mdSerializer.serialize(doc);
+  // T5's opt-out (contracts.md C1.2), and THIS is the path where it does the work rather than
+  // merely restating what the check below would have said. The baseline here is relative — what the
+  // serializer's own output parses to — and that baseline is closed under this schema whatever `doc`
+  // holds, so an opaque node changes neither side of the comparison and the relaxation is accepted
+  // over its verbatim bytes. See `MODELLED_NODE_TYPES` for why a tree comparison is not a backstop.
+  if (!runIsModelled([doc])) return raw;
   // The baseline here is RELATIVE — what the serializer's OWN output parses to, so the question is
   // "does dropping the escapes change what that output means?" — not absolute against `doc`.
   // Reaching this path does not imply the document failed to round-trip: `wholeDocument()` also
@@ -100,6 +106,75 @@ export function serializeMarkdown(doc) {
  * without dragging the rest of the document through the serializer. */
 function serializeNodes(nodes) {
   return mdSerializer.serialize(markdownSchema.node("doc", null, nodes));
+}
+
+/**
+ * The node and mark types the two byte-faithful mechanisms below are allowed to touch: exactly
+ * prosemirror-markdown's CommonMark inventory — `markdownSchema.nodes` and `markdownSchema.marks`,
+ * both spelled out in full rather than read off the schema at run time.
+ *
+ * THIS IS AN OPT-OUT FOR T5'S OPAQUE NODES (contracts.md C1.2), not a micro-optimization, and the
+ * spelling-out is the point. T5 (#143) gives front matter a node whose serialization IS its literal
+ * source bytes, over a schema DERIVED from this one — so reading the inventory off whatever schema
+ * `serializeNodes()` happens to use would enrol that node automatically and silently, which is the
+ * one thing this must not do. Dropping a backslash or re-encoding an entity inside bytes that are
+ * already verbatim corrupts them, and the tree comparison downstream is not a reliable backstop
+ * there: it only catches such a change if the opaque node's own parse is byte-exact, which is a
+ * property of T5's parser rather than of this file.
+ *
+ * So: DENY BY DEFAULT. A type nobody has vouched for here gets the serializer's own output and
+ * nothing else, and a type added to a schema later has to be added here deliberately before either
+ * mechanism will touch a run containing it.
+ *
+ * Frozen arrays rather than sets because they are exported, and because a linear scan of twelve
+ * names per node is nothing beside the reparse each mechanism is about to spend. Exported so a test
+ * can hold them against `markdownSchema`'s own inventory in BOTH directions: a name the schema has
+ * and this list lacks would drop ordinary documents onto the raw path, and a name here that the
+ * schema does not have is dead weight that would mislead whoever reads this next.
+ */
+export const MODELLED_NODE_TYPES = Object.freeze([
+  "doc",
+  "paragraph",
+  "blockquote",
+  "horizontal_rule",
+  "heading",
+  "code_block",
+  "ordered_list",
+  "bullet_list",
+  "list_item",
+  "text",
+  "image",
+  "hard_break",
+]);
+export const MODELLED_MARK_TYPES = Object.freeze(["em", "strong", "link", "code"]);
+
+/** Whether `node`'s own type, and every mark it carries, is one this file models. */
+function nodeIsModelled(node) {
+  if (!MODELLED_NODE_TYPES.includes(node.type.name)) return false;
+  return node.marks.every((mark) => MODELLED_MARK_TYPES.includes(mark.type.name));
+}
+
+/**
+ * Whether every node in `nodes` is modelled, AT EVERY DEPTH AND INCLUDING ITS MARKS.
+ *
+ * Both halves are load-bearing. `descendants` walks nodes only, so the marks have to be asked for
+ * separately at each stop — a node-only walk reads as correct while checking half the inventory,
+ * and a `link` mark on text inside a list item inside a blockquote is still a mark. And the walk
+ * has to reach every depth: `serializeNodes()` renders the whole subtree, so an opaque node buried
+ * three levels down contributes its bytes to the string the mechanisms then rewrite.
+ *
+ * Exported for tests, on the same grounds as `parseMarkdown` and `serializeMarkdown` above.
+ */
+export function runIsModelled(nodes) {
+  return nodes.every((node) => {
+    let modelled = nodeIsModelled(node);
+    node.descendants((child) => {
+      if (modelled) modelled = nodeIsModelled(child);
+      // Stop descending once something is unmodelled; the answer cannot come back.
+      return modelled;
+    });
+    return modelled;
+  });
 }
 
 /** The characters prosemirror-markdown's `esc()` escapes inside text, unconditionally: it does not
@@ -328,6 +403,13 @@ function restoreSourceSpelling(output, source, verify) {
  */
 export function serializeNodesFaithfully(nodes, referenceSuffix, source) {
   const raw = serializeNodes(nodes);
+  // T5's opt-out (contracts.md C1.2). On THIS path the absolute predicate below happens to refuse
+  // an unmodelled run too, because it compares against `nodes` and `parseMarkdown` can only ever
+  // build nodes this schema has — so today the two agree, and that is exactly why the opt-out may
+  // not be left implicit in it: T5's parser WILL produce its opaque node, at which point the
+  // predicate starts passing and this line is the only thing left standing between a raw block's
+  // bytes and a rewrite of them.
+  if (!runIsModelled(nodes)) return raw;
   const verify = (candidate) => verifiesAs(candidate, referenceSuffix, nodes);
   const written = restoreSourceSpelling(relaxEscapes(raw, verify), source, verify);
   // The final gate. Both mechanisms already return their input on any failure, so this is belt and
