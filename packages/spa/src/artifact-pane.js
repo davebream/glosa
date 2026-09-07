@@ -2695,7 +2695,10 @@ export function createArtifactPane(host, deps) {
       ],
     });
     if (choice === "take-disk") return await takeDisk(fresh);
-    if (choice === "compare") return SAVE_DECLINED; // Task 12
+    if (choice === "compare") {
+      await compareStaleSave(artifact);
+      return SAVE_DECLINED;
+    }
     if (choice === "keep-mine") return await keepMine(artifact, fresh);
     return SAVE_DECLINED; // Cancel / Esc / backdrop
   }
@@ -2997,16 +3000,54 @@ export function createArtifactPane(host, deps) {
   }
 
   /**
-   * *Reload* — takes the file from disk instead of saving over it.
-   *
-   * STUB (T4 Task 8): raises the discard guard and returns `SAVE_DECLINED`; it does not yet
-   * write nothing-and-remount over `fresh`'s bytes — that lands in Task 12, which replaces this
-   * body. Wired here now so the banner's Reload button and Task 9's dialog (later in this epic)
-   * both have one place to delegate to instead of two independent stubs.
+   * *Reload* (REQ-4) — takes the file from disk instead of saving over it: discards the draft
+   * and remounts the editor over the fresh disk bytes, writing nothing (no write, no checkpoint).
+   * Reuses `confirmDiscard()` verbatim (C5) — never a second discard prompt. Declining changes
+   * nothing; `confirmDiscard` itself self-skips when the pane is clean, which is what makes Reload
+   * on a clean stale editor a single click. The banner's Reload button delegates here too.
    */
-  async function takeDisk(_fresh) {
-    await confirmDiscard();
+  async function takeDisk(fresh) {
+    if (!(await confirmDiscard())) return SAVE_DECLINED;
+    modeState = modeReducer(modeState, { type: "discard" });
+    clearParkedSource();
+    pendingReport = null;
+    clearDiskChange();
+    endEditSession();
+    baselineSha = fresh.source_sha256;
+    // `fresh` may be a re-read staleSave fetched separately from currentArtifact (the stale-save
+    // dialog's path) — without this, the reload sequence below would remount over the STALE
+    // content that just failed to save, defeating the whole point of "take disk".
+    currentArtifact = fresh;
+    contentEl.removeAttribute("data-path");
+    teardownRichFace();
+    renderModeBar();
+    renderContent();
+    onStateChange();
     return SAVE_DECLINED;
+  }
+
+  /**
+   * *Compare* (REQ-5) — opens a diff tab from the checkpoint pinned at Edit entry to the working
+   * file; writes nothing, and the editor stays exactly as dirty as it was. When the pin is null,
+   * falls back to the newest checkpoint (`compareWithLastSaved`'s own behaviour) and reuses its
+   * message when there isn't one.
+   */
+  async function compareStaleSave(artifact) {
+    if (!openDiffTab) return;
+    let from = editSession?.openedCheckpointId;
+    if (!from) {
+      try {
+        const rows = await dataAccess.getCheckpoints(slug, { limit: 1 });
+        from = rows?.[0]?.checkpoint_id;
+      } catch {
+        from = undefined;
+      }
+      if (!from) {
+        editStatus.textContent = "This artifact has no saved versions to compare with yet.";
+        return;
+      }
+    }
+    openDiffTab({ path: artifact.source_path, from, to: "working" });
   }
 
   async function refreshArtifact() {

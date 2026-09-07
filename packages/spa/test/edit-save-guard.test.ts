@@ -584,16 +584,25 @@ describe("Edit mode — a save never invents an edit", () => {
       expect(banner?.hidden).toBe(false);
     }
 
-    // Reload, clean: nothing is parked, so the guard self-skips — a single click.
+    // Reload, clean: nothing is parked, so the guard self-skips — a single click. Re-asserted
+    // against the REAL takeDisk (Task 12 replaced Task 8's stub) — writes nothing and actually
+    // remounts the editor over the disk bytes, not just that no error occurred.
     {
-      const { host, pane, da } = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
+      const changed = "> [!info] A callout\n> with a second line.\n\nSomeone else's change.\n";
+      const stub = stubRichEditor(LOSSY, { dirty: false });
+      const { host, pane, da } = await mountEditPane(stub);
+      da.disk.content = changed;
       da.disk.source_sha256 = "sha-2";
       await pane.refreshArtifact();
 
+      stub.calls.mountedWith.length = 0; // isolate what THIS reload's remount receives
       (host.querySelector(".glosa-disk-change-reload") as any).click();
       await paint();
+
       expect(modal()).toBeNull();
       expect(da.put).toEqual([]);
+      expect(pane.artifact?.source_sha256).toBe("sha-2"); // currentArtifact now reflects disk
+      expect(stub.calls.mountedWith.at(-1)).toBe(changed); // remounted over the disk bytes
     }
 
     // Reload, dirty: the guard is asked, and declining leaves everything untouched.
@@ -609,6 +618,30 @@ describe("Edit mode — a save never invents an edit", () => {
       modalButton("Cancel").click();
       await paint();
       expect(da.put).toEqual([]);
+    }
+
+    // Reload, dirty, confirming: discards the draft, writes nothing, and remounts over disk —
+    // the clause Task 8's stub could not make true.
+    {
+      const changed = "> [!info] A callout\n> with a second line.\n\nSomeone else's change.\n";
+      const stub = stubRichEditor(LOSSY);
+      const { host, pane, da } = await mountEditPane(stub);
+      da.disk.content = changed;
+      da.disk.source_sha256 = "sha-2";
+      await pane.refreshArtifact();
+
+      stub.calls.mountedWith.length = 0;
+      (host.querySelector(".glosa-disk-change-reload") as any).click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("Discard unsaved edits?");
+
+      modalButton("Discard edits").click();
+      await paint();
+
+      expect(modal()).toBeNull();
+      expect(da.put).toEqual([]);
+      expect(pane.artifact?.source_sha256).toBe("sha-2");
+      expect(stub.calls.mountedWith.at(-1)).toBe(changed);
     }
   });
 
@@ -763,6 +796,120 @@ describe("Edit mode — a save never invents an edit", () => {
     expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
       "Not saved — this file changed again",
     );
+  });
+
+  test("AC-12: Take disk raises the dirty guard, writes nothing on confirm and reloads from disk, changes nothing on decline", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+
+    // Confirm: zero further PUTs, and the editor remounts over the disk bytes.
+    {
+      const changed = "Someone else's change.\n";
+      const stub = stubRichEditor(edited);
+      const { host, pane, da } = await mountEditPane(stub);
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+      da.disk.content = changed;
+      da.disk.source_sha256 = "sha-fresh";
+
+      saveButton(host).click();
+      await paint();
+      expect(modal()).toBeTruthy();
+
+      stub.calls.mountedWith.length = 0;
+      modalButton("Take disk").click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("Discard unsaved edits?");
+
+      modalButton("Discard edits").click();
+      await paint();
+
+      expect(modal()).toBeNull();
+      expect(da.put).toEqual([]); // the rejected first attempt never landed in da.put either
+      expect(pane.artifact?.source_sha256).toBe("sha-fresh");
+      expect(stub.calls.mountedWith.at(-1)).toBe(changed);
+    }
+
+    // Decline: nothing changes.
+    {
+      const { host, da } = await mountEditPane(stubRichEditor(edited));
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+      expect(modal()).toBeTruthy();
+
+      modalButton("Take disk").click();
+      await paint();
+      expect(modal()?.querySelector("h2")?.textContent).toBe("Discard unsaved edits?");
+
+      modalButton("Cancel").click();
+      await paint();
+
+      expect(modal()).toBeNull();
+      expect(da.put).toEqual([]);
+    }
+  });
+
+  test("AC-13: Compare opens a diff tab from the pinned checkpoint to the working file, writes nothing, and leaves the editor dirty", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const opened: unknown[] = [];
+    const stub = stubRichEditor(edited);
+    const { host, pane, da } = await mountEditPane(
+      { ...stub, openDiffTab: (range: unknown) => opened.push(range) },
+      { checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }] },
+    );
+    await paint(); // let the pin land, so editSession.openedCheckpointId is the pinned checkpoint
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()).toBeTruthy();
+
+    modalButton("Compare").click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(opened).toEqual([{ path: "notes.md", from: "cp-abc1234", to: "working" }]);
+    expect(da.put).toEqual([]);
+    expect(pane.isDirty()).toBe(true); // untouched — Compare doesn't act on the draft
+  });
+
+  test("Compare falls back to the newest checkpoint when nothing was pinned, and says so when there is none", async () => {
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+
+    // No pin (default empty checkpoints at mount), but a checkpoint exists by the time Compare is
+    // clicked — falls back to the newest one, matching compareWithLastSaved's own behaviour.
+    {
+      const opened: unknown[] = [];
+      const stub = stubRichEditor(edited);
+      const { host, da } = await mountEditPane({ ...stub, openDiffTab: (range: unknown) => opened.push(range) });
+      await paint();
+      da.checkpoints = [{ checkpoint_id: "cp-fallback9", at: "2026-09-06T10:00:00Z" }];
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+      modalButton("Compare").click();
+      await paint();
+
+      expect(opened).toEqual([{ path: "notes.md", from: "cp-fallback9", to: "working" }]);
+    }
+
+    // No pin and no checkpoint at all — the same message compareWithLastSaved uses.
+    {
+      const stub = stubRichEditor(edited);
+      const { host, da } = await mountEditPane({ ...stub, openDiffTab: () => {} });
+      await paint();
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+      modalButton("Compare").click();
+      await paint();
+
+      expect((host.querySelector(".glosa-edit-status") as any)?.textContent).toContain(
+        "This artifact has no saved versions to compare with yet.",
+      );
+    }
   });
 
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
