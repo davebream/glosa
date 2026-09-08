@@ -16,11 +16,12 @@ const CHROMIUM_CANDIDATES = [
   "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 ] as const;
 
-function installedChromium(): { executable: string; version: string } {
+async function installedChromium(): Promise<{ executable: string; version: string }> {
   for (const executable of CHROMIUM_CANDIDATES) {
     if (!existsSync(executable)) continue;
-    const probe = Bun.spawnSync({ cmd: [executable, "--version"], stdout: "pipe", stderr: "pipe" });
-    const version = probe.stdout.toString().trim();
+    const probe = Bun.spawn({ cmd: [executable, "--version"], stdout: "pipe", stderr: "ignore" });
+    const version = (await new Response(probe.stdout).text()).trim();
+    await probe.exited;
     const major = Number(version.match(/\b(\d{3})\b/)?.[1]);
     if (probe.exitCode === 0 && Number.isFinite(major) && major >= 111) return { executable, version };
   }
@@ -146,7 +147,7 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
   });
 
   test("direct navigation has opaque storage and remote fetch/WebSocket/image/form attempts violate CSP", async () => {
-    const browser = installedChromium();
+    const browser = await installedChromium();
     const policyResponse = await fetch(classFUrl);
     const policy = policyResponse.headers.get("Content-Security-Policy");
     await policyResponse.arrayBuffer();

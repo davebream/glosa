@@ -58,10 +58,16 @@ export interface DaemonHookClient {
     messageId: string,
     outcome: "transport_accepted" | "presented" | "failed",
   ): Promise<void>;
+  /**
+   * `onOpen`, when given, fires once the stream response is actually established (headers
+   * received, body readable) — before the first read, so a caller can measure genuine connected
+   * time separately from daemon-discovery latency or a request that never gets a response at all.
+   */
   openConversationPush?(
     sessionId: string,
     onEntry: (entry: DrainedEntry) => Promise<void>,
     signal: AbortSignal,
+    onOpen?: () => void,
   ): Promise<void>;
 }
 
@@ -143,7 +149,7 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         outcome,
       });
     },
-    async openConversationPush(sessionId, onEntry, signal) {
+    async openConversationPush(sessionId, onEntry, signal, onOpen) {
       const res = await fetchRequest(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {
         headers: {
           Host: `127.0.0.1:${port}`,
@@ -154,6 +160,7 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       });
       if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as ApiProblem | null);
       if (!res.body) throw new Error("push-stream response has no body");
+      onOpen?.();
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";

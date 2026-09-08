@@ -71,6 +71,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/provider-topology-real-subprocess.test.ts",
     "packages/daemon/test/sessions-routes.test.ts",
     "packages/cli/test/mcp.test.ts",
+    "packages/cli/test/daemon-client.test.ts",
     "packages/cli/test/api-integration.test.ts",
     "packages/daemon/test/bus/delivery-reservation.test.ts",
     "packages/daemon/test/delivery/presentation.test.ts",
