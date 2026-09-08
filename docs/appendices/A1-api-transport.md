@@ -22,7 +22,8 @@ those are cross-referenced, not duplicated.
   ```
   `<slug>` values used below: `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
-  `capability-expired`, `internal`.
+  `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
+  `forget-stale-preview` (contract 1.8, §5.20).
 
 ## 2. Auth
 
@@ -96,7 +97,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.7", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.8", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -119,6 +120,14 @@ issue #79) lists `~/.glosa/state/<id>` buses whose journal still derives pending
 registration is gone — stranded user work recoverable by re-opening the original path
 (deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
 route never fails over it. `wiring` (additive, issue #80) is the same 3-state value §5.18 serves.
+
+Contract 1.8 (issue #156) additively adds `lifecycle: "forgetting"` to a workspace row whose
+`glosa forget` deletion is durably committed — possibly mid-resume after a crash. Present ONLY on
+a row in that state (absent, never `null`, for every ordinary workspace); a workspace row appears
+here even once its on-disk path is gone (`present:false`) while this field is set, so an
+interrupted deletion stays discoverable regardless of worktree presence. `doctor` and `glosa
+status`'s human output both print the exact resume command, `glosa forget <slug> --yes`, for any
+row carrying this field.
 
 Contract 1.5 additively permits this workspace field (optional for N-1 clients):
 
@@ -512,6 +521,139 @@ attempt is fsynced before the response. **200** means terminal `presented`; **20
 Authenticated bridge routes `GET /api/sessions/:id/push-stream` and
 `POST /api/sessions/:id/conversation/:message_id/ack` are exact-session transport surfaces. A
 transport acknowledgement never implies presentation.
+
+### 5.20 `POST /api/workspaces/forget` (contract 1.8, issue #156)
+
+Bearer required, Origin-gated. `glosa forget <slug> [--yes] [--json]`'s daemon-side half — the one
+supported whole-bus deletion primitive (R1/R3/R8). Addressed by **slug**, not `path` like
+`resolve`/`apply-begin`: the whole point of `forget` is that it must still work once a workspace's
+on-disk path is gone, and a slug is the one identifier that survives that.
+
+```json
+{ "slug": "workspace-a1b2c3", "confirm": false }
+```
+
+`confirm` defaults to `false` — a pure preview: runs the exact same preflight a `confirm:true` call
+would and returns the exact set of paths it would remove, but never marks, seals, or deletes
+anything.
+
+- **200** (preview, `confirm:false` or omitted):
+  ```json
+  { "slug": "workspace-a1b2c3", "confirmed": false,
+    "would_remove": [{ "registration_id": "…", "slug": "workspace-a1b2c3",
+                        "canonical_path": "/Users/example/project", "kind": "directory",
+                        "bus_path": "/Users/example/project/.glosa" }],
+    "member_fingerprint": "<sha256 hex digest of would_remove>" }
+  ```
+  `member_fingerprint` (held-review addition, still additive within contract 1.8) is a deterministic
+  digest of `would_remove`'s member set. A `confirm:true` call echoes it back as
+  `member_fingerprint` in the request body to prove it is acting on EXACTLY the set the human was
+  shown — see **409 forget-stale-preview** below. Omitting it (e.g. a `--yes` commit with no
+  preceding preview) skips this check entirely; the commit proceeds exactly as it always has.
+- **200** (commit or resume, `confirm:true`):
+  ```json
+  { "slug": "workspace-a1b2c3", "confirmed": true, "removed": [ /* same member shape */ ] }
+  ```
+  `removed`/`would_remove` always name the COMPLETE provenance unit: the target plus every
+  historical sealed loose-file source adopted into it (A4's "loose-to-directory adoption") — never
+  a partial set, and never missing a member whose own registration was already removed by an
+  earlier interrupted attempt (the daemon's durable operation record survives that). A retry after
+  the deletion has fully completed still returns this same `confirmed:true` body (the idempotent
+  completion receipt), never a `404`.
+- `slug` in the response body always names the resolved TARGET. If the request named a sealed
+  adopted source instead of its target, the body additionally carries
+  `"requested_slug": "<the-source-slug-actually-named>"` — a source is never treated as an
+  independent provenance unit; the daemon resolves it to the owning target and acts on the whole
+  unit.
+- **404 not-found** — `:slug` unknown and no forget operation (active or completed) matches it.
+- **400 validation-failed** — missing/non-string `slug`, a malformed body, a `confirm` value that is
+  present but not a boolean (a string/number/null/array/object `confirm` is a validation error, never
+  silently reinterpreted as `confirm:false`), or a `member_fingerprint` value that is present but not
+  a lowercase SHA-256 hex string (held-review addition — a non-string value was previously silently
+  treated as omitted, bypassing the stale-preview check below entirely rather than being rejected).
+- **409 forget-blocked** — a live bound session, an unexpired apply lease, or an in-progress
+  adoption blocks deletion before any side effect. Body carries a structured `blockers` array
+  (`{kind:"live-session",session_id}`, `{kind:"apply-lease",lease_id,expires_at}`, or
+  `{kind:"adopting"}`) plus `slug` (the target) and, when applicable, `requested_slug` — same
+  resolution rule as the 200 body above.
+- **409 forget-stale-preview** (held-review addition) — a `confirm:true` call's `member_fingerprint`
+  no longer matches the CURRENT member set for a target whose forget has not yet begun (e.g. an
+  adoption committed a new sealed source between the preview and this call). Zero deletions occur.
+  Body carries the FRESH `would_remove`/`member_fingerprint` pair inline, so a client can re-confirm
+  in a second round trip without a separate preview call. Never reached on a resume — once the
+  durable forget operation exists the member set is fixed for its life, so there is nothing left to
+  go stale against.
+- **500 internal** — a bus path failed confinement (a corrupted or foreign-pointing index record).
+  Confinement is proven for the COMPLETE member set before a single destructive step, independently
+  of the (possibly corrupted) `worktree_path`/`bus_path` pair itself — both are re-derived from
+  `canonical_path` and the entry's `registration_id`/`kind` before either is trusted; refuses the
+  whole operation rather than risk deleting the wrong thing.
+
+Once committed, the target and every sealed source enter `lifecycle:"forgetting"` (§5.2b) —
+**every other route refuses ordinary routing to any of them** with `409 workspace-forgetting`
+until the deletion (or its resume) finishes, including `GET /api/workspaces/inbox?path=` (held-review
+addition — this path-addressed route now resolves its path to a registration and checks its, and
+its adoption owner's, lifecycle exactly like every slug-addressed route) and every route that shares
+`resolveBus` (`resolve`, `apply-begin`, `inbox/dismiss`, a bound session's own drain/delivery-ack, and
+conversation acknowledgement — held-review addition, third pass). Session registration and binding
+(§5.12, `POST /api/sessions/register`), and a session's own heartbeat/connection-refresh (held-review
+addition — extending an expired lease never revives liveness for a forgetting target), share the same
+per-target ownership lock/lifecycle check this commit holds while it re-checks liveness and writes
+its durable marker, so none of them can land mid-commit and none races the other's liveness check:
+all refuse (or, for heartbeat/refresh, silently withhold the lease extension) once a target is
+durably being forgotten. Work-tree files are never touched by any of this — only the registration and
+its bus (journal, inbox, shadow-git).
+
+This refusal survives past the moment a target's own registration is fully removed but before its
+durable operation's completion receipt lands (held-review addition) — `POST /api/sessions/register`,
+`POST /api/workspaces/open`, `GET /api/workspaces/inbox?path=`, every route sharing `resolveBus`, an
+unbound session's composite drain, and a session's own heartbeat/connection-refresh (held-review
+addition, third pass — the owning registration id and the forgetting check both now fall back to the
+active operation record when no live registration remains) all additionally check for an active
+(uncompleted) forget operation naming the exact canonical path before treating a currently-
+unregistered path as brand-new; a completed receipt never blocks a legitimate reopen. Without this,
+the gap between deregistration and completion read as "never seen this path before" and let a fresh
+registration (or a fresh loose-file/directory registration via `open`, or a revived session lease, or
+a self-healed drain registration) land on a path forget was still mid-deleting. For `open` specifically
+(held-review addition, final pass) this check runs INSIDE `WorkspaceIndex.resolveOpenTarget`'s own
+mutex critical section — the same one that performs the resolve/register mutation — rather than as a
+separate pre-check the route ran beforehand: a pre-check outside that critical section could still be
+separated from the mutation it gated by an intervening forget step landing in between the two.
+
+Every direct "get-or-register" fallback (the `index.get(path) ?? index.upsertWorkspace(path, source)`
+shape) is now routed through one shared boundary, `getOrRegisterWorkspace` (held-review addition,
+fourth pass) — an unbound session's composite-drain cwd self-heal, an EXPLICITLY bound session's own
+`POST /api/sessions/:id/drain`, and `POST /api/workspaces/attention-request`'s workspace creation all
+call it instead of `upsertWorkspace` directly. The active-operation check runs BEFORE the upsert, not
+layered on after inside `resolveBus`: a direct `upsertWorkspace` call would otherwise durably recreate
+an ACTIVE row the instant it ran, during the exact registration-less window described above, and a
+SUBSEQUENT `resolveBus`/`workspaceBus` call would then find that live, non-forgetting row and never
+even reach its own registration-less check. The explicitly-bound drain and attention-request routes
+return `409 workspace-forgetting`; the composite-drain self-heal (an aggregate route across many
+workspaces, not addressed at one) catches the refusal and simply leaves its candidate set empty.
+
+The live-session blocker (`{kind:"live-session",...}` above) also recognizes a session still
+explicitly bound to a loose-file source's OWN pre-adoption canonical path once that source has been
+sealed into a directory target (held-review addition, third pass) — adoption does not rewrite an
+already-bound session's `workspace_binding`, so the preflight liveness check resolves it through the
+same provenance-owner alias resolution session register/bind already use, rather than comparing
+raw paths.
+
+A resumed commit's deletion candidates are drawn EXCLUSIVELY from the durable operation's own
+immutable member snapshot (held-review addition, third pass) — never from a fresh scan of
+`lifecycle:"forgetting"` rows, which an inconsistent index state could otherwise use to smuggle an
+unrelated bus into the deletion. A live entry marked `"forgetting"` for this target that is not named
+by the snapshot fails the whole resume closed (**500 internal**, confinement-failed) rather than
+being silently included or silently ignored.
+
+A pending forget operation whose target registration has been fully removed (a crash between
+deregistration and the operation's completion receipt) still surfaces in `GET /api/status`
+(held-review addition) as a synthesized workspace row — same shape as every other row, `present`
+omitted — carrying `lifecycle:"forgetting"` and the target's last-known `path`, so `doctor`'s exact
+resume command (`glosa forget <slug> --yes`) remains discoverable even with no live registration
+left to anchor a path-keyed lookup on. `path` is always the target's durable WORKTREE path (held-
+review addition, final pass) — for a `loose-file` target that is the containing directory `doctor
+<dir>` is invoked against, never the raw file path, matching every other row's own `path` field.
 
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 

@@ -232,10 +232,11 @@ the entry survives.
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.7: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.8: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
-  (full history), transcript stream, inbox/attention, presentation-token mint/redeem) — schemas, status codes, 1 MiB body cap,
+  (full history), transcript stream, inbox/attention, presentation-token mint/redeem, whole-bus
+  deletion (`glosa forget`, issue #156)) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
@@ -334,7 +335,15 @@ the entry survives.
   backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (17 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries), `status`;
+  `token rotate|revoke`, `doctor` (17 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries), `status`,
+  `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
+  workspace's registration, journal, inbox, and shadow-git history — including any historical
+  loose-file source sealed into it by adoption — while never touching work-tree files; refuses
+  first on a live bound session, an unexpired apply lease, or an in-progress adoption, naming the
+  blocker (mutually exclusive with adoption in both directions), previews exact paths before an
+  interactive consent prompt, proves confinement for the whole deletion set before any durable
+  marker or destructive step, resumes cleanly if interrupted mid-deletion, and is named explicitly
+  by `doctor`/`status` while a resume is pending);
   internal `mcp`, `hook <event>`. `open`
   auto-creates the `.glosa/` scaffold (distinct from `init`), never auto-invokes init, and
   supports an init-free Preview first run — but surfaces the un-wired state honestly: a

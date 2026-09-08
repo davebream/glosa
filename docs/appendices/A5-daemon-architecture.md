@@ -47,12 +47,54 @@
 
 ## F19 — global workspace index `~/.glosa/workspaces.json`
 - **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/hooks/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.
-- Schema v3:
-  `{version:3,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?,lifecycle}},adoptions}`.
+- Schema v4:
+  `{version:4,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?,lifecycle}},adoptions,forget_operations}`.
   `tracking` is `{mode:"matcher"}` or `{mode:"bounded",paths:[<relative-path>,…]}`. Registration
-  IDs are immutable full SHA-256 hashes of registration kind + canonical identity. v1 entries
-  migrate atomically to directory registrations without changing their slug/root, using
-  `<canonical-root>/.glosa` and matcher tracking.
+  IDs are immutable full SHA-256 hashes of registration kind + canonical identity. v1/v2/v3 entries
+  migrate atomically (v1/v2 to directory registrations without changing their slug/root, using
+  `<canonical-root>/.glosa` and matcher tracking; v3 adds an empty `forget_operations` map).
+- `forget_operations` (issue #156): `{<operation_id>:{operation_id,target_registration_id,
+  target_slug,members:[{registration_id,slug,canonical_path,worktree_path,kind,bus_path,
+  prior_lifecycle}],started_at,completed_at?}}` — `glosa forget`'s durable transaction record, written by
+  `WorkspaceIndex.beginForgetOperation` in the SAME persist as the target's and every sealed
+  source's lifecycle marker flipping to `"forgetting"`, strictly BEFORE a single bus is sealed or
+  deleted. The `members` snapshot is immutable from that instant, so it survives every member's own
+  registration later being individually removed (sources-first, target-last) — a resumed or
+  retried `forget` reports this complete original set, never a partial one derived from whatever is
+  still registered. Records are never deleted once `completed_at` is stamped: a retry against
+  either the target's original slug or any original member's slug still resolves to the same
+  idempotent completion receipt after every registration is gone, until a NEW registration
+  legitimately reoccupies that slug (a live registration under the requested slug is always
+  authoritative over a historical record, completed or not — reopening a previously forgotten
+  workspace must never be silently swallowed by its own old receipt). Each member's `prior_lifecycle`
+  is its OWN `lifecycle` value at the exact instant this snapshot was taken (e.g.
+  `{state:"adopted",adoption_id,target_registration_id,sealed_at}` for a sealed source, never a
+  hardcoded `{state:"active"}`) — what a fresh commit's lost-lease-race abort restores a member to,
+  so an already-sealed source's adoption metadata is never silently stripped. Each member's
+  `worktree_path` (held-review addition, final pass) is captured alongside `canonical_path` so a
+  registration-less synthesized status row (the target's own registration fully removed, the
+  operation not yet completed) reports the SAME `path` shape as every other row — always
+  `WorkspaceEntry.worktree_path`, never the raw file path a `loose-file` target's `canonical_path`
+  would otherwise leak into `doctor`'s recovery guidance.
+- Schema-v4 load validation (held-review addition, fourth pass; extended in the final held pass)
+  rejects — and quarantines the whole file the same way genuinely invalid JSON is quarantined — a v4
+  file whose graph is internally inconsistent, not merely field-type-correct: a `workspaces` map key
+  that disagrees with its own entry's `registration_id`; any entry's `lifecycle` value present but
+  not a real union variant per state (`isWorkspaceLifecycleShape` dispatches to one validator per
+  state — an `"adopted"` value missing its own `sealed_at`, live or inside a forget member's
+  `prior_lifecycle`, is rejected distinctly from a merely-`"adopting"` one); an ACTIVE (uncompleted)
+  forget operation whose member still has a live workspace row whose OWN `lifecycle` disagrees with
+  that operation (not `"forgetting"` for EXACTLY that operation's target) OR whose `slug`/
+  `canonical_path`/`kind`/`bus_path`/`worktree_path` has drifted from what the operation's own
+  immutable snapshot captured; or a live workspace row marked `"forgetting"` with no active
+  operation's own member snapshot naming it at all ("unaccounted forgetting rows"). This closes the
+  gap at load time, before any runtime lookup or deletion — the same invariant
+  `forget-workspace.ts`'s `resolveResumeMembers` already enforces at USE time on a resume, applied
+  earlier, as fail-closed/quarantine rather than a later runtime dereference. Resuming a commit
+  resolves the target by REGISTRATION ID, never by slug (held-review addition, final pass) — a
+  target's own slug becomes free the moment its registration is removed, and an unrelated fresh
+  registration can legitimately claim that exact freed slug before the operation's completion
+  receipt lands; resolving by slug at that point could silently act on the wrong workspace.
 - Canonicalization (identity) = realpath→NFC→strip trailing slash. Slug = sanitize(basename)+`-`+sha256(canonical)[:6], collision→lengthen hex (F25). Enumerate switcher = present===true.
 - `POST /api/workspaces/open` accepts the original file or directory path and optional
   `external_state:true`; it returns the selected slug, work-tree path, and optional representative
