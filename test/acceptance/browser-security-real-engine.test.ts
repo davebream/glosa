@@ -168,6 +168,8 @@ describe("A3 §5 attacks #1/#2 — production class-F CSP honored by a real brow
         "--metrics-recording-only",
         "--no-first-run",
         "--no-default-browser-check",
+        // The throwaway profile must not wait for access to the desktop Keychain.
+        "--use-mock-keychain",
         `--user-data-dir=${browserProfile}`,
         "--virtual-time-budget=1500",
         "--dump-dom",
