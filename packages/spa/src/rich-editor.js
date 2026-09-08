@@ -450,29 +450,88 @@ function applyRuns(a, b, runs, restored) {
   return text + a.slice(cursor).join("");
 }
 
+const isWhitespaceToken = (token) => /^\s+$/.test(token);
+const isFenceToken = (token) => token === "`" || token === "~";
+
+/** Whether a run is whitespace on both sides — exact, not a heuristic, since `RESTORE_TOKEN` never
+ * puts a word character in a whitespace token. */
+function isWhitespaceOnlyRun(a, b, run) {
+  return a.slice(run.a0, run.a1).every(isWhitespaceToken) && b.slice(run.b0, run.b1).every(isWhitespaceToken);
+}
+
+/** Whether a run's OUTPUT side touches a fence delimiter — the token right before it or right
+ * after it is a backtick or tilde. `serializeNodes()` always writes a fence as a run of those
+ * characters, one token each (`RESTORE_TOKEN` has no repetition for `[^\w\s]`), so the first or
+ * last character of the delimiter is enough to detect it. */
+function isFenceAdjacentRun(a, run) {
+  return isFenceToken(a[run.a0 - 1] ?? "") || isFenceToken(a[run.a1] ?? "");
+}
+
+/**
+ * Peels a purely-whitespace leading/trailing token off a run wherever both sides agree, at that
+ * position, that the token is whitespace (not that its value matches — only its kind). `diffRuns`
+ * only merges a whitespace difference into a word difference when nothing separates them — an
+ * edited word sitting directly against an inserted blank line — so peeling there recovers the
+ * whitespace half as its own run without ever touching the word token beside it.
+ *
+ * Gated on equal token counts on both sides of the whole run: an entity decode can merge several
+ * source tokens (`&nbsp; ` is four) into one collapsed run of output whitespace, and peeling the
+ * first token of each side there would pair a whole entity against a single space and, because
+ * CommonMark collapses whitespace runs, that partial trade can verify by itself — silently
+ * stranding the rest of the entity unrestored. A run with matching token counts on both sides
+ * doesn't have that shape; a mismatched one is returned unpeeled, exactly as before this existed.
+ */
+function peelWhitespaceBoundary(a, b, run) {
+  let { a0, a1, b0, b1 } = run;
+  if (a1 - a0 !== b1 - b0) return [run];
+  const leading = [];
+  while (a0 < a1 && b0 < b1 && isWhitespaceToken(a[a0]) && isWhitespaceToken(b[b0])) {
+    leading.push({ a0, a1: a0 + 1, b0, b1: b0 + 1 });
+    a0 += 1;
+    b0 += 1;
+  }
+  const trailing = [];
+  while (a1 > a0 && b1 > b0 && isWhitespaceToken(a[a1 - 1]) && isWhitespaceToken(b[b1 - 1])) {
+    trailing.unshift({ a0: a1 - 1, a1, b0: b1 - 1, b1 });
+    a1 -= 1;
+    b1 -= 1;
+  }
+  const core = a0 < a1 || b0 < b1 ? [{ a0, a1, b0, b1 }] : [];
+  return [...leading, ...core, ...trailing];
+}
+
 /**
  * M2 — source-spelling restoration. Wherever the serializer's `output` disagrees with the block's
  * own `source` bytes, propose putting the source spelling back, and keep a proposal only if the
  * candidate still means exactly what the writer's tree means.
  *
- * Why this is safe rather than merely useful:
- *
- * - **It cannot revert the writer's edit.** Restoring the source over the region the writer changed
- *   would change the tree, and `verify` rejects it. Their edit is the one run that never verifies.
- * - **It cannot corrupt.** The predicate is tree equality, so a candidate that passes says exactly
- *   what the writer's tree says. Behind it sit the block-count invariant and the whole-document
- *   reparse net further down this file.
- *
  * Every run at once first, which is one reparse in the common case and is by construction the source
  * itself for a block whose tree did not change. If that fails, runs go in one at a time, each kept
  * only if the candidate still verifies. On any failure the input comes back untouched.
+ *
+ * ONE BOUNDED REFINEMENT SITS AFTER THAT PASS, for #184: a fenced code block's serializer output
+ * carries a blank line before and after it regardless of the source list's own tightness, and
+ * CommonMark's tight/loose is one attribute of the whole list — so restoring only one of the two
+ * invented blank lines still leaves the list reading loose, and the per-run pass, trying them one
+ * at a time, can put neither back. `peelWhitespaceBoundary` first separates such a blank line from
+ * an edited word landing right beside it, when the two were merged into one run because nothing
+ * else was between them; the retry below then restores every rejected run that is BOTH
+ * whitespace-only AND touches a fence delimiter, together, once.
+ *
+ * Restricted to fence-adjacent runs deliberately, not every rejected whitespace-only run: `verify`
+ * is tree equality, and a list's tight/loose attribute does not record WHICH blank line made it
+ * loose, so a candidate that puts the wrong one back can still verify. Scoping the retry to the
+ * pair the fence itself produces keeps an unrelated whitespace edit elsewhere in the same block —
+ * including one that is itself whitespace-only, which a writer's edit can be — out of the group
+ * entirely, rather than relying on the group's own verify to catch it after the fact.
  */
 function restoreSourceSpelling(output, source, verify) {
   if (source === undefined || source === output) return output;
   const a = tokenize(output);
   const b = tokenize(source);
-  const runs = diffRunsWithin(a, b);
-  if (runs === null || runs.length === 0) return output;
+  const coarse = diffRunsWithin(a, b);
+  if (coarse === null || coarse.length === 0) return output;
+  const runs = coarse.flatMap((run) => peelWhitespaceBoundary(a, b, run));
   const all = applyRuns(
     a,
     b,
@@ -481,12 +540,21 @@ function restoreSourceSpelling(output, source, verify) {
   );
   if (verify(all)) return all;
   const restored = runs.map(() => false);
-  let best = output;
   for (let index = 0; index < runs.length; index += 1) {
     restored[index] = true;
-    const candidate = applyRuns(a, b, runs, restored);
+    if (!verify(applyRuns(a, b, runs, restored))) restored[index] = false;
+  }
+  let best = applyRuns(a, b, runs, restored);
+  const rejectedFenceSpacing = runs
+    .map((run, index) => index)
+    .filter(
+      (index) => !restored[index] && isWhitespaceOnlyRun(a, b, runs[index]) && isFenceAdjacentRun(a, runs[index]),
+    );
+  if (rejectedFenceSpacing.length > 1) {
+    const grouped = restored.slice();
+    for (const index of rejectedFenceSpacing) grouped[index] = true;
+    const candidate = applyRuns(a, b, runs, grouped);
     if (verify(candidate)) best = candidate;
-    else restored[index] = false;
   }
   return best;
 }
