@@ -7,6 +7,7 @@ import type {
   AttentionRequestResult,
   DismissResult,
   EntryStatus,
+  ForgetWorkspaceResult,
   GlosaApiClient,
   InboxListResult,
   InboxPresentationResult,
@@ -119,6 +120,25 @@ export class FakeGlosaApiClient implements GlosaApiClient {
   async mintPresentationToken(): Promise<{ token: string; expires_in_s: number }> {
     this.calls.push({ method: "mintPresentationToken", args: [] });
     return this.mintPresentationTokenResult;
+  }
+
+  forgetWorkspaceImpl:
+    | ((slug: string, opts?: { confirm?: boolean; memberFingerprint?: string }) => Promise<ForgetWorkspaceResult>)
+    | null = null;
+  forgetWorkspaceResult: ForgetWorkspaceResult = {
+    slug: "ws-slug",
+    confirmed: false,
+    would_remove: [],
+    member_fingerprint: "fake-fingerprint",
+  };
+
+  async forgetWorkspace(
+    slug: string,
+    opts?: { confirm?: boolean; memberFingerprint?: string },
+  ): Promise<ForgetWorkspaceResult> {
+    this.calls.push({ method: "forgetWorkspace", args: opts === undefined ? [slug] : [slug, opts] });
+    if (this.forgetWorkspaceImpl) return this.forgetWorkspaceImpl(slug, opts);
+    return this.forgetWorkspaceResult;
   }
 }
 

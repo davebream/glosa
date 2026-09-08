@@ -14,7 +14,12 @@ import {
 import { join } from "node:path";
 import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
 import { resolveTrackedFiles } from "../../src/matcher.ts";
-import { WorkspaceIndex, WorkspaceOpenError, workspaceIndexPath } from "../../src/registry/workspace-index.ts";
+import {
+  AdoptionError,
+  WorkspaceIndex,
+  WorkspaceOpenError,
+  workspaceIndexPath,
+} from "../../src/registry/workspace-index.ts";
 import { cleanup, deterministicClock, freshHome, freshWorkspaceDir, manualClock } from "./helpers.ts";
 
 describe("WorkspaceIndex — atomicity + concurrency", () => {
@@ -391,6 +396,236 @@ describe("WorkspaceIndex — forget", () => {
   });
 });
 
+describe("WorkspaceIndex — forget operation record (issue #156)", () => {
+  test("beginForgetOperation is idempotent and marks every member forgetting in one durable write", async () => {
+    const home = freshHome();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const target = await index.upsertWorkspace("/ws/target", "glosa-open");
+
+    const first = await index.beginForgetOperation(target, [target]);
+    expect(index.getBySlug(target.slug)?.lifecycle?.state).toBe("forgetting");
+    expect(first.members).toEqual([
+      {
+        registration_id: target.registration_id,
+        slug: target.slug,
+        canonical_path: target.canonical_path,
+        worktree_path: target.worktree_path,
+        kind: target.kind,
+        bus_path: target.bus_path,
+        prior_lifecycle: { state: "active" },
+      },
+    ]);
+
+    // Idempotent: a second call for the same still-active target returns the SAME record rather
+    // than starting a second one.
+    const second = await index.beginForgetOperation(target, [target]);
+    expect(second.operation_id).toBe(first.operation_id);
+    expect(index.pendingForgetOperations().map((op) => op.operation_id)).toEqual([first.operation_id]);
+
+    cleanup(home);
+  });
+
+  test("abortForgetOperation reverts lifecycle and drops the record — never after completion", async () => {
+    const home = freshHome();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const target = await index.upsertWorkspace("/ws/target", "glosa-open");
+    const operation = await index.beginForgetOperation(target, [target]);
+
+    await index.abortForgetOperation(operation.operation_id);
+    expect(index.getBySlug(target.slug)?.lifecycle?.state).toBe("active");
+    expect(index.pendingForgetOperations()).toEqual([]);
+    expect(index.forgetOperationForSlug(target.slug)).toBeNull();
+
+    // A no-op against an unknown/already-gone operation id — never throws.
+    await index.abortForgetOperation(operation.operation_id);
+
+    // And once COMPLETED, abort must never revert it — completion is the point of no return.
+    // (`completeForgetOperation` now independently refuses while any snapshotted registration is
+    // still live — issue #156 target-last hardening — so the target must be deregistered first,
+    // exactly as the real `commitForgetLocked` always does before it ever completes an operation.)
+    const restarted = await index.beginForgetOperation(target, [target]);
+    expect(await index.forget(target.slug)).toBe(true);
+    await index.completeForgetOperation(restarted.operation_id);
+    await index.abortForgetOperation(restarted.operation_id);
+    expect(index.forgetOperationForSlug(target.slug)?.completed_at).toBeDefined();
+
+    cleanup(home);
+  });
+
+  test("abortForgetOperation restores an adopted source's TRUE prior lifecycle, never a bare 'active' (held-review finding)", async () => {
+    // Regression: the OLD `abortForgetOperation` unconditionally reset every member to
+    // `{state:"active"}` — correct for the target, but a lie for an already-sealed adopted source,
+    // whose real prior state carries `adoption_id`/`target_registration_id`/`sealed_at` that
+    // `sealedSourcesFor` depends on to ever find it again. Restoring a bare "active" here would
+    // silently strip that and orphan the source's bus on every SUBSEQUENT forget attempt.
+    const home = freshHome();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const target = await index.upsertWorkspace("/ws/target", "glosa-open");
+    const source = await index.upsertWorkspace("/ws/source", "glosa-open");
+
+    // Simulate a source already sealed into the target by a completed adoption — the exact shape
+    // `commitAdoption` itself writes (workspace-index.ts's own `commitAdoption`).
+    const adoptedLifecycle = {
+      state: "adopted" as const,
+      adoption_id: "test-adoption-1",
+      target_registration_id: target.registration_id,
+      sealed_at: "2020-01-01T00:00:00.000Z",
+    };
+    source.lifecycle = adoptedLifecycle;
+    expect(index.sealedSourcesFor(target.registration_id).map((e) => e.registration_id)).toEqual([
+      source.registration_id,
+    ]);
+
+    const operation = await index.beginForgetOperation(target, [target, source]);
+    expect(index.getWorkspaceByRegistration(source.registration_id)?.lifecycle?.state).toBe("forgetting");
+
+    await index.abortForgetOperation(operation.operation_id);
+
+    expect(index.getBySlug(target.slug)?.lifecycle).toEqual({ state: "active" }); // the target's own true prior state
+    const restoredSource = index.getWorkspaceByRegistration(source.registration_id)!;
+    expect(restoredSource.lifecycle).toEqual(adoptedLifecycle); // exactly "adopted" again, never "active"
+
+    // And therefore still discoverable as a sealed source — a later forget attempt must still
+    // find and delete it, not silently orphan its bus.
+    expect(index.sealedSourcesFor(target.registration_id).map((e) => e.registration_id)).toEqual([
+      source.registration_id,
+    ]);
+
+    cleanup(home);
+  });
+
+  test("forgetOperationForSlug resolves a completed operation by any original member's slug, even once every registration is gone", async () => {
+    const home = freshHome();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const target = await index.upsertWorkspace("/ws/target", "glosa-open");
+    const source = await index.upsertWorkspace("/ws/source", "glosa-open");
+
+    const operation = await index.beginForgetOperation(target, [target, source]);
+    await index.forget(source.slug);
+    await index.forget(target.slug);
+    await index.completeForgetOperation(operation.operation_id);
+
+    expect(index.getBySlug(target.slug)).toBeNull();
+    expect(index.getBySlug(source.slug)).toBeNull();
+    const bySlug = index.forgetOperationForSlug(target.slug);
+    const byMemberSlug = index.forgetOperationForSlug(source.slug);
+    expect(bySlug?.operation_id).toBe(operation.operation_id);
+    expect(byMemberSlug?.operation_id).toBe(operation.operation_id);
+    expect(bySlug?.completed_at).toBeDefined();
+    expect(bySlug?.members.map((m) => m.registration_id).sort()).toEqual(
+      [target.registration_id, source.registration_id].sort(),
+    );
+
+    cleanup(home);
+  });
+
+  test("completeForgetOperation refuses while any snapshotted registration remains", async () => {
+    // Direct completion-guard regression (issue #156, target-last hardening, fifth held-review
+    // pass): "independently harden `completeForgetOperation` so it refuses to stamp completion
+    // while any snapshotted registration remains" — schema-v4 load-time validation
+    // (`isLifecycleOperationGraphConsistent`) refuses to TRUST an on-disk graph in this shape, but
+    // this proves the SEPARATE runtime guard inside `completeForgetOperation` itself: even reached
+    // directly, with no prior deregistration at all, it must refuse rather than stamp a completion
+    // receipt that lies about the deletion being done.
+    const home = freshHome();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const target = await index.upsertWorkspace("/ws/target", "glosa-open");
+    const source = await index.upsertWorkspace("/ws/source", "glosa-open");
+    const operation = await index.beginForgetOperation(target, [target, source]);
+
+    // Neither registration has been removed yet — completion must refuse outright.
+    await expect(index.completeForgetOperation(operation.operation_id)).rejects.toThrow(/still live/);
+    expect(index.forgetOperationForSlug(target.slug)?.completed_at).toBeUndefined();
+
+    // Removing only the SOURCE (never the target) still leaves the target itself live — must still
+    // refuse, proving the guard checks every snapshotted member, not just the one being resolved.
+    expect(await index.forget(source.slug)).toBe(true);
+    await expect(index.completeForgetOperation(operation.operation_id)).rejects.toThrow(/still live/);
+    expect(index.forgetOperationForSlug(target.slug)?.completed_at).toBeUndefined();
+
+    // Once every snapshotted registration is genuinely gone, completion proceeds normally.
+    expect(await index.forget(target.slug)).toBe(true);
+    const completed = await index.completeForgetOperation(operation.operation_id);
+    expect(completed.completed_at).toBeDefined();
+
+    cleanup(home);
+  });
+});
+
+describe("WorkspaceIndex — resolveOpenTarget vs. an active forget operation (issue #156 final held-review finding)", () => {
+  // Regression: "`POST /api/workspaces/open` checks for a registration-less operation before
+  // `resolveOpenTarget`, leaving a race in which forget can deregister between the check and
+  // registration mutation." The fix moved the check INSIDE `resolveOpenTarget`/
+  // `upsertDirectoryForOpen`'s own mutex critical section — the same one that performs the
+  // resolve/register mutation — so the two can never be split by an intervening forget step again.
+  // These tests exercise `resolveOpenTarget` directly (no HTTP layer, no outer pre-check at all) to
+  // prove the guard lives where the mutation itself happens, not in a caller that could race it.
+
+  test("refuses to recreate a directory registration while its forget operation is still active, even once the target's own registration is fully gone", async () => {
+    const home = freshHome();
+    const root = realpathSync(freshWorkspaceDir()); // realpath'd: macOS's $TMPDIR is itself a symlink
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+
+    const target = await index.upsertWorkspace(root, "glosa-open");
+    await index.beginForgetOperation(target, [target]);
+    expect(await index.forget(target.slug)).toBe(true); // deregistered; operation still active
+    expect(index.get(root)).toBeNull();
+    expect(index.activeForgetOperationForCanonicalPath(root)).not.toBeNull();
+
+    // The work-tree directory itself was never touched by forget — it still exists on disk, so
+    // without the fix `resolveOpenTarget` would happily treat it as brand new.
+    await expect(index.resolveOpenTarget(root)).rejects.toMatchObject({
+      code: "workspace-forgetting",
+    });
+    await expect(index.resolveOpenTarget(root)).rejects.toBeInstanceOf(AdoptionError);
+
+    // No new registration was created by the refused attempt.
+    expect(index.get(root)).toBeNull();
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("refuses an existing directory registration whose forget is mid-flight rather than silently refreshing it", async () => {
+    const home = freshHome();
+    const root = realpathSync(freshWorkspaceDir()); // realpath'd: macOS's $TMPDIR is itself a symlink
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+
+    const target = await index.upsertWorkspace(root, "glosa-open");
+    await index.markForgetting([target.registration_id], target.registration_id);
+    const beforeLastSeen = index.getWorkspaceByRegistration(target.registration_id)!.last_seen;
+
+    await expect(index.resolveOpenTarget(root)).rejects.toMatchObject({ code: "workspace-forgetting" });
+
+    // Refused BEFORE any mutation — `last_seen` must be untouched, not silently refreshed.
+    expect(index.getWorkspaceByRegistration(target.registration_id)!.last_seen).toBe(beforeLastSeen);
+    expect(index.getWorkspaceByRegistration(target.registration_id)!.lifecycle?.state).toBe("forgetting");
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("a loose-file open refuses to recreate a registration for a canonical path an active forget operation still names", async () => {
+    const home = freshHome();
+    const dir = freshWorkspaceDir();
+    const filePath = join(dir, "note.md");
+    writeFileSync(filePath, "note\n");
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+
+    const canonicalFile = (await index.resolveOpenTarget(filePath)).entry.canonical_path;
+    const member = index.get(canonicalFile)!;
+    await index.beginForgetOperation(member, [member]);
+    expect(await index.forget(member.slug)).toBe(true);
+    expect(index.get(canonicalFile)).toBeNull();
+
+    await expect(index.resolveOpenTarget(filePath)).rejects.toMatchObject({ code: "workspace-forgetting" });
+    expect(index.get(canonicalFile)).toBeNull();
+
+    cleanup(home);
+    cleanup(dir);
+  });
+});
+
 describe("WorkspaceIndex — onHardRemove (resource-leak fix)", () => {
   test("a GC hard-remove fires onHardRemove with exactly the removed path, awaited before gc() resolves", async () => {
     const home = freshHome();
@@ -543,6 +778,501 @@ describe("WorkspaceIndex — corrupt file quarantine", () => {
     expect(siblings).toHaveLength(1);
     cleanup(home);
   });
+
+  test("a valid v4 file with a malformed forget_operations member is quarantined before any later dereference (issue #156 held-review finding)", async () => {
+    // Regression: "the v4 index validator does not validate forget-operation records and members
+    // before later dereference" — a `members` entry missing `bus_path` previously passed straight
+    // through `isWorkspaceIndexShape` untouched, so a later read (status's own member walk,
+    // `completeForgetOperation`, ...) could dereference a field that was never actually there.
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    const path = workspaceIndexPath(home);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {},
+        adoptions: {},
+        forget_operations: {
+          "op-1": {
+            operation_id: "op-1",
+            target_registration_id: "reg-1",
+            target_slug: "target",
+            // Malformed member: no `bus_path` at all.
+            members: [{ registration_id: "reg-1", slug: "target", canonical_path: "/tmp/x", kind: "directory" }],
+            started_at: "2020-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]); // fell back to a fresh empty index, not a half-trusted one
+    expect(index.pendingForgetOperations()).toEqual([]);
+
+    const siblings = readdirSync(home).filter((name) => name.startsWith("workspaces.json.corrupt."));
+    expect(siblings).toHaveLength(1);
+    cleanup(home);
+  });
+
+  test("schema-v4 forget-operation records are validated for semantic invariants beyond field types (held-review finding, second pass)", async () => {
+    // Regression: "schema-v4 validation checks only field types. It accepts semantically corrupt
+    // operations such as members: [], a target absent from members, mismatched map keys/operation
+    // IDs, duplicate members, and non-absolute member paths." Every case below is otherwise
+    // well-typed (right string/array/object shapes throughout) and must STILL quarantine.
+    const validMember = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const validOp = {
+      operation_id: "op-1",
+      target_registration_id: "reg-target",
+      target_slug: "target",
+      members: [validMember],
+      started_at: "2020-01-01T00:00:00.000Z",
+    };
+
+    const cases: Array<{ name: string; forgetOperations: Record<string, unknown> }> = [
+      { name: "empty members array", forgetOperations: { "op-1": { ...validOp, members: [] } } },
+      {
+        name: "target absent from its own member list",
+        forgetOperations: { "op-1": { ...validOp, target_registration_id: "reg-missing" } },
+      },
+      {
+        name: "duplicate member registration ids",
+        forgetOperations: { "op-1": { ...validOp, members: [validMember, validMember] } },
+      },
+      {
+        name: "a relative canonical_path",
+        forgetOperations: { "op-1": { ...validOp, members: [{ ...validMember, canonical_path: "relative/path" }] } },
+      },
+      {
+        name: "map key disagrees with the record's own operation_id",
+        forgetOperations: { "op-mismatched-key": validOp },
+      },
+      {
+        name: "the target member's slug disagrees with target_slug",
+        forgetOperations: { "op-1": { ...validOp, members: [{ ...validMember, slug: "some-other-slug" }] } },
+      },
+    ];
+
+    for (const { name, forgetOperations } of cases) {
+      const home = freshHome();
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        workspaceIndexPath(home),
+        JSON.stringify({
+          version: 4,
+          updated_at: "2020-01-01T00:00:00.000Z",
+          workspaces: {},
+          adoptions: {},
+          forget_operations: forgetOperations,
+        }),
+      );
+      const index = new WorkspaceIndex({ home, now: deterministicClock() });
+      expect(index.pendingForgetOperations(), name).toEqual([]);
+      const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+      expect(siblings, name).toHaveLength(1);
+      cleanup(home);
+    }
+  });
+
+  const validWorkspace = {
+    registration_id: "reg-target",
+    kind: "directory" as const,
+    canonical_path: "/tmp/target",
+    worktree_path: "/tmp/target",
+    bus_path: "/tmp/target/.glosa",
+    tracking: { mode: "matcher" as const },
+    slug: "target",
+    slug_len: 6,
+    source: "glosa-open" as const,
+    first_seen: "2020-01-01T00:00:00.000Z",
+    last_seen: "2020-01-01T00:00:00.000Z",
+    present: true,
+  };
+
+  test("a workspace entry with a malformed lifecycle value is quarantined (held-review finding, fourth pass)", async () => {
+    // Regression: "isWorkspaceEntryShape never calls isWorkspaceLifecycleShape" — a PRESENT
+    // `lifecycle` value previously passed straight through untyped, whatever its shape.
+    const cases: Array<{ name: string; lifecycle: unknown }> = [
+      { name: "unknown lifecycle state", lifecycle: { state: "bogus" } },
+      { name: "a bare string instead of an object", lifecycle: "forgetting" },
+      { name: "forgetting missing its required fields", lifecycle: { state: "forgetting" } },
+      { name: "adopting missing its required fields", lifecycle: { state: "adopting" } },
+    ];
+    for (const { name, lifecycle } of cases) {
+      const home = freshHome();
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        workspaceIndexPath(home),
+        JSON.stringify({
+          version: 4,
+          updated_at: "2020-01-01T00:00:00.000Z",
+          workspaces: { "reg-target": { ...validWorkspace, lifecycle } },
+          adoptions: {},
+          forget_operations: {},
+        }),
+      );
+      const index = new WorkspaceIndex({ home, now: deterministicClock() });
+      expect(index.list(), name).toEqual([]);
+      const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+      expect(siblings, name).toHaveLength(1);
+      cleanup(home);
+    }
+  });
+
+  test("a workspaces map key that disagrees with the entry's own registration_id is quarantined (held-review finding, fourth pass)", async () => {
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: { "wrong-key": validWorkspace }, // validWorkspace.registration_id === "reg-target"
+        adoptions: {},
+        forget_operations: {},
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]);
+    const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+    expect(siblings).toHaveLength(1);
+    cleanup(home);
+  });
+
+  test("an active forget operation whose target row's lifecycle disagrees is quarantined, not silently trusted (held-review finding, fourth pass)", async () => {
+    // Regression: "a v4 file containing an active forget operation whose live target row says
+    // active therefore passes loading; forgetWorkspace takes the fresh path, and
+    // beginForgetOperation returns the inconsistent pre-existing operation while deletion is
+    // driven by current lifecycle rows." The op's own member/target shapes are individually
+    // well-typed; only the CROSS-record link (operation says "forgetting", live row says
+    // "active") is broken.
+    const member = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const op = {
+      operation_id: "op-1",
+      target_registration_id: "reg-target",
+      target_slug: "target",
+      members: [member],
+      started_at: "2020-01-01T00:00:00.000Z",
+    };
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: { "reg-target": { ...validWorkspace, lifecycle: { state: "active" } } }, // disagrees
+        adoptions: {},
+        forget_operations: { "op-1": op },
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]);
+    expect(index.pendingForgetOperations()).toEqual([]);
+    const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+    expect(siblings).toHaveLength(1);
+    cleanup(home);
+  });
+
+  test("a live workspace row marked forgetting with no active operation covering it is quarantined (held-review finding, fourth pass)", async () => {
+    // Regression: "unaccounted forgetting rows" — a lifecycle marker with no operation record
+    // behind it at all must never be silently trusted either.
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {
+          "reg-target": {
+            ...validWorkspace,
+            lifecycle: {
+              state: "forgetting",
+              started_at: "2020-01-01T00:00:00.000Z",
+              target_registration_id: "reg-target",
+            },
+          },
+        },
+        adoptions: {},
+        forget_operations: {}, // no operation at all backs this marker
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]);
+    const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+    expect(siblings).toHaveLength(1);
+    cleanup(home);
+  });
+
+  test("a genuinely consistent active operation (live or registration-less) loads normally — the guard never false-positives on real forget states (held-review finding, fourth pass)", async () => {
+    const member = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const op = {
+      operation_id: "op-1",
+      target_registration_id: "reg-target",
+      target_slug: "target",
+      members: [member],
+      started_at: "2020-01-01T00:00:00.000Z",
+    };
+
+    // Case 1: the target's own live row is present and correctly agrees.
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {
+          "reg-target": {
+            ...validWorkspace,
+            lifecycle: {
+              state: "forgetting",
+              started_at: "2020-01-01T00:00:00.000Z",
+              target_registration_id: "reg-target",
+            },
+          },
+        },
+        adoptions: {},
+        forget_operations: { "op-1": op },
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toHaveLength(1);
+    expect(index.pendingForgetOperations()).toHaveLength(1);
+    cleanup(home);
+
+    // Case 2: registration-less — the member has NO live row at all (an earlier interrupted
+    // attempt already deregistered it) — this is the normal registration-less state, never
+    // quarantined.
+    const home2 = freshHome();
+    mkdirSync(home2, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home2),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {},
+        adoptions: {},
+        forget_operations: { "op-1": op },
+      }),
+    );
+    const index2 = new WorkspaceIndex({ home: home2, now: deterministicClock() });
+    expect(index2.list()).toEqual([]);
+    expect(index2.pendingForgetOperations()).toHaveLength(1);
+    cleanup(home2);
+  });
+
+  test("an active forget operation whose live member's identity field has drifted from its immutable snapshot is quarantined (held-review finding, final pass)", async () => {
+    // Regression: "schema-v4 graph validation does not compare every live member identity field
+    // with its immutable operation snapshot" — the PRIOR check compared only `lifecycle.state`/
+    // `target_registration_id`, so a live row whose `slug`/`canonical_path`/`kind`/`bus_path`/
+    // `worktree_path` disagreed with what the operation actually captured passed loading unnoticed.
+    const member = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const op = {
+      operation_id: "op-1",
+      target_registration_id: "reg-target",
+      target_slug: "target",
+      members: [member],
+      started_at: "2020-01-01T00:00:00.000Z",
+    };
+    const liveLifecycle = {
+      state: "forgetting" as const,
+      started_at: "2020-01-01T00:00:00.000Z",
+      target_registration_id: "reg-target",
+    };
+
+    const cases: Array<{ name: string; overrides: Record<string, unknown> }> = [
+      { name: "drifted slug", overrides: { slug: "some-other-slug" } },
+      { name: "drifted canonical_path", overrides: { canonical_path: "/tmp/elsewhere" } },
+      { name: "drifted kind", overrides: { kind: "loose-file" } },
+      { name: "drifted bus_path", overrides: { bus_path: "/tmp/target/.glosa-other" } },
+      { name: "drifted worktree_path", overrides: { worktree_path: "/tmp/elsewhere" } },
+    ];
+
+    for (const { name, overrides } of cases) {
+      const home = freshHome();
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        workspaceIndexPath(home),
+        JSON.stringify({
+          version: 4,
+          updated_at: "2020-01-01T00:00:00.000Z",
+          workspaces: { "reg-target": { ...validWorkspace, lifecycle: liveLifecycle, ...overrides } },
+          adoptions: {},
+          forget_operations: { "op-1": op },
+        }),
+      );
+      const index = new WorkspaceIndex({ home, now: deterministicClock() });
+      expect(index.list(), name).toEqual([]);
+      expect(index.pendingForgetOperations(), name).toEqual([]);
+      const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+      expect(siblings, name).toHaveLength(1);
+      cleanup(home);
+    }
+  });
+
+  test("a workspace/prior_lifecycle 'adopted' value missing sealed_at is quarantined (held-review finding, final pass)", async () => {
+    // Regression: "`adopted` lifecycle validation accepts a missing `sealed_at`, including inside
+    // `prior_lifecycle`." Two sites: a live entry's own `lifecycle`, and a forget member's
+    // `prior_lifecycle` snapshot — both must reject `state:"adopted"` without `sealed_at`.
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {
+          "reg-target": {
+            ...validWorkspace,
+            lifecycle: { state: "adopted", adoption_id: "a1", target_registration_id: "reg-other" }, // no sealed_at
+          },
+        },
+        adoptions: {},
+        forget_operations: {},
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]);
+    expect(readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."))).toHaveLength(1);
+    cleanup(home);
+
+    const home2 = freshHome();
+    mkdirSync(home2, { recursive: true });
+    const memberMissingSealedAt = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "adopted", adoption_id: "a1", target_registration_id: "reg-other" }, // no sealed_at
+    };
+    writeFileSync(
+      workspaceIndexPath(home2),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        workspaces: {},
+        adoptions: {},
+        forget_operations: {
+          "op-1": {
+            operation_id: "op-1",
+            target_registration_id: "reg-target",
+            target_slug: "target",
+            members: [memberMissingSealedAt],
+            started_at: "2020-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+    const index2 = new WorkspaceIndex({ home: home2, now: deterministicClock() });
+    expect(index2.pendingForgetOperations()).toEqual([]);
+    expect(readdirSync(home2).filter((n) => n.startsWith("workspaces.json.corrupt."))).toHaveLength(1);
+    cleanup(home2);
+  });
+
+  test("an active forget operation with a missing target but a still-live source is quarantined (issue #156 target-last invariant)", async () => {
+    // Regression (fifth held-review pass): "an active operation whose target row is absent but
+    // whose source row remains live passes schema-v4 validation, then the missing-target branch
+    // stamps completion without deleting that source bus." `commitForgetLocked` always removes
+    // every source registration BEFORE the target's own (sources-first, target-last) — so the
+    // target's row can only ever be legitimately absent once EVERY other snapshotted member is
+    // gone too. A live source with an absent target is therefore an impossible state under normal
+    // operation, and must never be silently trusted at load time.
+    const targetMember = {
+      registration_id: "reg-target",
+      slug: "target",
+      canonical_path: "/tmp/target",
+      worktree_path: "/tmp/target",
+      kind: "directory" as const,
+      bus_path: "/tmp/target/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const sourceMember = {
+      registration_id: "reg-source",
+      slug: "source",
+      canonical_path: "/tmp/source",
+      worktree_path: "/tmp/source",
+      kind: "directory" as const,
+      bus_path: "/tmp/source/.glosa",
+      prior_lifecycle: { state: "active" as const },
+    };
+    const op = {
+      operation_id: "op-1",
+      target_registration_id: "reg-target",
+      target_slug: "target",
+      members: [targetMember, sourceMember],
+      started_at: "2020-01-01T00:00:00.000Z",
+    };
+    const liveSource = {
+      ...validWorkspace,
+      registration_id: "reg-source",
+      slug: "source",
+      canonical_path: "/tmp/source",
+      worktree_path: "/tmp/source",
+      bus_path: "/tmp/source/.glosa",
+      lifecycle: {
+        state: "forgetting" as const,
+        started_at: "2020-01-01T00:00:00.000Z",
+        target_registration_id: "reg-target",
+      },
+    };
+
+    const home = freshHome();
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 4,
+        updated_at: "2020-01-01T00:00:00.000Z",
+        // No "reg-target" row at all — deregistered — but "reg-source" is still live.
+        workspaces: { "reg-source": liveSource },
+        adoptions: {},
+        forget_operations: { "op-1": op },
+      }),
+    );
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    expect(index.list()).toEqual([]); // quarantined -> fresh empty index, not a half-trusted one
+    expect(index.pendingForgetOperations()).toEqual([]);
+    const siblings = readdirSync(home).filter((n) => n.startsWith("workspaces.json.corrupt."));
+    expect(siblings).toHaveLength(1);
+    cleanup(home);
+  });
 });
 
 describe("WorkspaceIndex — v2 workspace contexts", () => {
@@ -579,7 +1309,54 @@ describe("WorkspaceIndex — v2 workspace contexts", () => {
     expect(entry.kind).toBe("directory");
     expect(entry.tracking).toEqual({ mode: "matcher" });
     expect(entry.registration_id).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).version).toBe(3);
+    expect(JSON.parse(readFileSync(workspaceIndexPath(home), "utf8")).version).toBe(4);
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("atomically migrates a v3 index (pre-issue-#156, no forget_operations map) preserving workspaces and adoptions", () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    mkdirSync(home, { recursive: true });
+    const registrationId = "a".repeat(64);
+    writeFileSync(
+      workspaceIndexPath(home),
+      JSON.stringify({
+        version: 3,
+        updated_at: "2024-01-01T00:00:00.000Z",
+        workspaces: {
+          [registrationId]: {
+            registration_id: registrationId,
+            kind: "directory",
+            canonical_path: root,
+            worktree_path: root,
+            bus_path: join(root, ".glosa"),
+            tracking: { mode: "matcher" },
+            slug: "v3-slug",
+            slug_len: 6,
+            source: "session",
+            first_seen: "2024-01-01T00:00:00.000Z",
+            last_seen: "2024-01-01T00:00:00.000Z",
+            present: true,
+            lifecycle: { state: "active" },
+          },
+        },
+        adoptions: {},
+      }),
+    );
+
+    const index = new WorkspaceIndex({ home });
+    const entry = index.list()[0];
+    expect(entry).toBeDefined();
+    if (!entry) throw new Error("expected migrated workspace entry");
+    expect(entry.slug).toBe("v3-slug");
+    expect(entry.registration_id).toBe(registrationId);
+    expect(index.pendingForgetOperations()).toEqual([]);
+
+    const onDisk = JSON.parse(readFileSync(workspaceIndexPath(home), "utf8"));
+    expect(onDisk.version).toBe(4);
+    expect(onDisk.forget_operations).toEqual({});
 
     cleanup(home);
     cleanup(root);

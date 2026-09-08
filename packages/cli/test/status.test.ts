@@ -65,6 +65,36 @@ describe("glosa status", () => {
     expect(result.data.sessions).toHaveLength(1);
   });
 
+  test("human output prints the exact resume command for a workspace whose forget was interrupted (issue #156 review finding 4)", async () => {
+    const client = new FakeGlosaApiClient();
+    client.statusResult = {
+      daemon: {
+        instance_id: "gl-1",
+        pid: 42,
+        started_at: "2020-01-01T00:00:00.000Z",
+        protocol_version: "1.0",
+        contract_version: "1.0",
+        build_id: "0.1.0-alpha.0-0123456789abcdef",
+      },
+      workspaces: [
+        {
+          slug: "abc",
+          path: "/repo",
+          last_seen: "2020-01-01T00:00:00.000Z",
+          pending_count: 0,
+          has_attention: false,
+          lifecycle: "forgetting",
+        },
+      ],
+      sessions: [],
+    };
+    const deps: StatusDeps = { createClient: async () => client as unknown as GlosaApiClient };
+    const result = await runStatus("/repo", deps);
+
+    const out = captureStdout(() => printStatusResult(result, false));
+    expect(out).toContain("glosa forget abc --yes");
+  });
+
   test("--json envelope has exactly the documented top-level keys", async () => {
     const deps: StatusDeps = {
       createClient: async () => {

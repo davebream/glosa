@@ -539,4 +539,31 @@ describe("composite cwd-ancestor session drain (R2/W34)", () => {
     const retry = await (await drain()).json();
     expect(retry.drained.map((item: { id: string }) => item.id)).toEqual(["first-entry", "second-entry"]);
   });
+
+  test("a registration-less forget operation refuses the composite drain's cwd self-heal instead of recreating the deleted workspace (issue #156 held-review finding)", async () => {
+    // Regression: "composite-drain self-healing can recreate deleted bus or index state after
+    // target deregistration." An UNBOUND session (cwd routing, no explicit `workspace_binding`)
+    // previously self-healed straight into `upsertWorkspace(record.cwd, ...)` whenever nothing
+    // ALREADY-registered routed to it — which used to mean only "never seen this path before," but
+    // is equally true of the registration-less window a `glosa forget` deletion passes through
+    // between removing the target's own registration and stamping its completion receipt. Reached
+    // by that exact durable state (never a mid-commit crash injection), mirroring the sibling
+    // registration-less regressions for `/api/sessions/register`, `/api/workspaces/open`, and
+    // `GET /api/workspaces/inbox` in http-routes.test.ts.
+    await registerSession(); // unbound: cwd = root, no workspace_binding — this ALSO registers root
+    const entry = workspaceIndex.get(root)!;
+    await ctx.getWorkspaceBus(entry).reconcileOnce();
+    const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+    expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+    expect(workspaceIndex.get(root)).toBeNull();
+    expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+    const res = await drain();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ delivery_id: null, drained: [], count: 0, has_more: false });
+    // No self-heal: the deleted registration stays deleted, never silently recreated by the drain.
+    expect(workspaceIndex.get(root)).toBeNull();
+
+    mkdirSync(root, { recursive: true }); // recreate for afterEach's cleanup
+  });
 });

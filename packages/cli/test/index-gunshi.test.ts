@@ -28,6 +28,7 @@ const PUBLIC_COMMANDS = [
   "session",
   "token",
   "update",
+  "forget",
 ] as const;
 
 let dirs: string[] = [];
