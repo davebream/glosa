@@ -79,6 +79,13 @@ describe("A1 §5 route catalog", () => {
       capabilityStore: new CapabilityStore(),
       metadataRegistry,
       adapterRegistry,
+      // Without this, routes that fall back to `ctx.home ?? glosaHome()` (forget's confinement
+      // check among them) resolve against the REAL ambient GLOSA_HOME instead of this test's
+      // isolated `home` — harmless for an ordinary local `.glosa` bus check (confinement's local
+      // shape doesn't depend on `home` at all) but wrong for any REDIRECTED bus (a loose-file
+      // source's `<home>/state/<id>`), where it makes a genuinely well-formed redirected path fail
+      // confinement simply because it was checked against the wrong home.
+      home,
     };
     fetchFn = createApiFetch(ctx);
   });
@@ -2650,6 +2657,740 @@ describe("A1 §5 route catalog", () => {
         }),
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /api/workspaces/forget (issue #156)", () => {
+    function forgetReq(body: unknown): Request {
+      return stateChangingReq("/api/workspaces/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    test("GET /api/status surfaces lifecycle:forgetting so doctor can name the interrupted state (issue #156)", async () => {
+      const before = await fetchFn(req("/api/status"));
+      const beforeWs = (await before.json()).workspaces.find((w: { slug: string }) => w.slug === slug);
+      expect(beforeWs.lifecycle).toBeUndefined(); // additive field, absent for an ordinary active workspace
+
+      await workspaceIndex.markForgetting(
+        [workspaceIndex.getBySlug(slug)!.registration_id],
+        workspaceIndex.getBySlug(slug)!.registration_id,
+      );
+
+      const after = await fetchFn(req("/api/status"));
+      const afterWs = (await after.json()).workspaces.find((w: { slug: string }) => w.slug === slug);
+      expect(afterWs.lifecycle).toBe("forgetting");
+    });
+
+    test("preview (confirm omitted) names the exact bus path and never mutates anything", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.reconcileOnce();
+      expect(existsSync(join(root, ".glosa"))).toBe(true);
+
+      const res = await fetchFn(forgetReq({ slug }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { confirmed: boolean; would_remove: Array<{ bus_path: string }> };
+      expect(body.confirmed).toBe(false);
+      expect(body.would_remove).toEqual([expect.objectContaining({ registration_id: expect.any(String), slug })]);
+      expect(workspaceIndex.getBySlug(slug)).not.toBeNull();
+      expect(existsSync(join(root, ".glosa"))).toBe(true); // still there — a preview is side-effect-free
+    });
+
+    test("confirm:true deletes the bus directory and the registration, over real HTTP", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.reconcileOnce();
+      expect(existsSync(join(root, ".glosa"))).toBe(true);
+
+      const res = await fetchFn(forgetReq({ slug, confirm: true }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { confirmed: boolean; removed: Array<{ bus_path: string }> };
+      expect(body.confirmed).toBe(true);
+      expect(body.removed).toEqual([expect.objectContaining({ slug })]);
+
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(existsSync(join(root, ".glosa"))).toBe(false);
+      // Never touches the work-tree itself, only its `.glosa` bus.
+      expect(existsSync(root)).toBe(true);
+    });
+
+    test("unknown slug → 404", async () => {
+      const res = await fetchFn(forgetReq({ slug: "no-such-slug" }));
+      expect(res.status).toBe(404);
+    });
+
+    test("a live bound session → 409 forget-blocked naming the session, no side effects", async () => {
+      await ctx.getWorkspaceBus(root).reconcileOnce();
+      await sessionRegistry.register({
+        session_id: "s1",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "hook",
+      });
+
+      const res = await fetchFn(forgetReq({ slug, confirm: true }));
+      expect(res.status).toBe(409);
+      expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+      const problemBody = (await res.json()) as { type: string; blockers: unknown[] };
+      expect(problemBody.type).toContain("forget-blocked");
+      expect(problemBody.blockers).toEqual([{ kind: "live-session", session_id: "s1" }]);
+
+      expect(workspaceIndex.getBySlug(slug)).not.toBeNull();
+      expect(existsSync(join(root, ".glosa"))).toBe(true);
+    });
+
+    test("missing slug → 400", async () => {
+      const res = await fetchFn(forgetReq({}));
+      expect(res.status).toBe(400);
+    });
+
+    test("a forgetting workspace refuses ordinary routing (e.g. resolve) with 409 workspace-forgetting", async () => {
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md", body: "x" });
+      const registrationId = workspaceIndex.getBySlug(slug)!.registration_id;
+      await workspaceIndex.markForgetting([registrationId], registrationId);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "e1", outcome: "applied", session: "s1" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      const problemBody = (await res.json()) as { type: string };
+      expect(problemBody.type).toContain("workspace-forgetting");
+    });
+
+    test("a SOURCE member marked forgetting refuses routing on its OWN slug too, not just the target's", async () => {
+      // Regression: `isBeingForgotten` must not be self-reference-scoped like `isAdoptingTarget`
+      // — a sealed source's bus is just as much part of an active deletion as the target's, even
+      // though its `lifecycle.target_registration_id` points at the TARGET, not at itself.
+      const sourceRoot = mkdtempSync(join(tmpdir(), "glosa-routes-forget-source-"));
+      try {
+        const source = await workspaceIndex.upsertWorkspace(sourceRoot, "glosa-open");
+        const targetRegistrationId = workspaceIndex.getBySlug(slug)!.registration_id;
+        await workspaceIndex.markForgetting([source.registration_id], targetRegistrationId);
+        expect(source.registration_id).not.toBe(targetRegistrationId); // genuinely not self-referencing
+
+        const res = await fetchFn(
+          req(`/w/${encodeURIComponent(source.slug)}/artifacts`, { headers: { Origin: `http://127.0.0.1:${PORT}` } }),
+        );
+        expect(res.status).toBe(409);
+        const problemBody = (await res.json()) as { type: string };
+        expect(problemBody.type).toContain("workspace-forgetting");
+      } finally {
+        rmSync(sourceRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("session registration racing a forget commit never leaves a session dangling on the deleted registration (issue #156 review finding 2: shared ownership coordinator)", async () => {
+      // Regression: session register/bind must share the SAME per-target ownership lock a forget
+      // commit holds while it re-checks liveness and writes its durable marker — otherwise a
+      // session can land in the narrow window between forget's lock-free preflight peek and its
+      // actual commit, producing a live session bound to a workspace that was just deleted. Fired
+      // genuinely concurrently (mirrors "POST /api/workspaces/open joins concurrent adoption"
+      // above) so the daemon's own async interleaving is what proves the exclusion, not a
+      // hand-simulated ordering.
+      //
+      // Both sides CAN legitimately "succeed": registration_id is a deterministic hash of kind +
+      // canonical path (workspace.ts), so if registration's lock-free peek runs after forget's
+      // entire commit has already finished, re-registering the same still-existing directory
+      // legitimately reconstructs an entry with the SAME id — that is ordinary reuse after a
+      // complete deletion, not the race this guards against. What must never happen is a live
+      // session ending up attached to a bus forget is mid-deleting (lifecycle still "forgetting"),
+      // or a forget silently deleting a bus a session is live-bound to without ever seeing it.
+      await ctx.getWorkspaceBus(root).reconcileOnce();
+
+      const registerReq = stateChangingReq("/api/sessions/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: "race-1", provider: "claude-code", cwd: root, source: "hook" }),
+      });
+
+      const [forgetRes, registerRes] = await Promise.all([
+        fetchFn(forgetReq({ slug, confirm: true })),
+        fetchFn(registerReq),
+      ]);
+      const forgetBody = (await forgetRes.json()) as { confirmed?: boolean; type?: string };
+      const registerBody = (await registerRes.json()) as { type?: string; session_id?: string };
+
+      if (forgetRes.status === 200) {
+        expect(forgetBody.confirmed).toBe(true);
+        if (registerRes.status === 200) {
+          expect(registerBody.session_id).toBe("race-1");
+          // Re-registered fresh, never mid-forget: the current entry (whatever its id) is
+          // ordinary "active", never the durable "forgetting" marker forget's commit would have
+          // left behind had it lost this race instead.
+          expect(workspaceIndex.get(root)?.lifecycle?.state ?? "active").toBe("active");
+          expect(sessionRegistry.get("race-1")).not.toBeNull();
+        } else {
+          expect(registerBody.type).toContain("workspace-forgetting");
+          expect(sessionRegistry.get("race-1")).toBeNull();
+        }
+      } else {
+        // forget lost the race — a live session already existed for this workspace by the time
+        // its own (re-)check ran, so it refuses rather than deleting out from under it.
+        expect(forgetBody.type).toContain("forget-blocked");
+        expect(registerRes.status).toBe(200);
+        expect(workspaceIndex.getBySlug(slug)?.lifecycle?.state ?? "active").toBe("active");
+        expect(sessionRegistry.get("race-1")).not.toBeNull();
+      }
+    });
+
+    test("a session bind refuses once the target is durably being forgotten, without ever creating a live session for it", async () => {
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await workspaceIndex.beginForgetOperation(entry, [entry]);
+
+      const bindRes = await fetchFn(
+        stateChangingReq(`/w/${slug}/session-binding`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: "bind-1", provider: "claude-code", cwd: root, source: "hook" }),
+        }),
+      );
+      expect(bindRes.status).toBe(409);
+      expect((await bindRes.json()).type).toContain("workspace-forgetting");
+      expect(sessionRegistry.get("bind-1")).toBeNull();
+
+      const registerRes = await fetchFn(
+        stateChangingReq("/api/sessions/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: "register-1", provider: "claude-code", cwd: root, source: "hook" }),
+        }),
+      );
+      expect(registerRes.status).toBe(409);
+      expect((await registerRes.json()).type).toContain("workspace-forgetting");
+      expect(sessionRegistry.get("register-1")).toBeNull();
+    });
+
+    test("GET /api/status includes a forgetting workspace even once its worktree is gone (issue #156)", async () => {
+      // A forgetting entry's `present` flag is never touched by `beginForgetOperation` itself — it
+      // only goes false the ordinary way, via GC noticing the path is gone while the entry was
+      // still "active" (GC explicitly skips any non-active lifecycle — a sealed/forgetting bus is
+      // not disposable cache). This reproduces that real sequence: the path disappears, GC softens
+      // it, and only THEN does a `glosa forget <slug>` — addressed by slug, indifferent to
+      // presence — begin. `status` must still report it so `doctor` can name the resume command.
+      rmSync(root, { recursive: true, force: true });
+      await workspaceIndex.gc({ force: true });
+      expect(workspaceIndex.getBySlug(slug)?.present).toBe(false);
+
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await workspaceIndex.beginForgetOperation(entry, [entry]);
+
+      const res = await fetchFn(req("/api/status"));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const row = body.workspaces.find((w: { slug: string }) => w.slug === slug);
+      expect(row).toBeDefined();
+      expect(row.lifecycle).toBe("forgetting");
+
+      mkdirSync(root, { recursive: true }); // recreate for afterEach's cleanup
+    });
+
+    test("session bind/register by an adopted source's own (pre-adoption) identity canonicalizes to the OWNING target, not the source's dead registration (independent review, second pass, finding 4)", async () => {
+      // Regression: forget locks and checks liveness against the TARGET's registration_id/
+      // canonical_path. Before this fix, session bind/register locked and stored whatever
+      // registration/path they were DIRECTLY given — for a sealed adopted source that is a
+      // DIFFERENT registration_id and a DIFFERENT canonical_path than the target's, so a session
+      // still addressed by the source's pre-adoption identity would neither share forget's lock
+      // nor be visible to forget's own `sessionRegistry.forWorkspace(target.canonical_path)`
+      // liveness check.
+      const adoptRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-forget-alias-")));
+      const artifact = join(adoptRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      try {
+        const looseOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+        );
+        expect(looseOpen.status).toBe(200);
+        const looseSlug = (await looseOpen.json()).slug as string;
+        const sourceRegistrationId = workspaceIndex.getBySlug(looseSlug)!.registration_id;
+
+        const dirOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: adoptRoot }) }),
+        );
+        expect(dirOpen.status).toBe(200);
+        const targetSlug = (await dirOpen.json()).slug as string;
+        const target = workspaceIndex.getBySlug(targetSlug)!;
+
+        const source = workspaceIndex.getWorkspaceByRegistration(sourceRegistrationId)!;
+        expect(source.lifecycle?.state).toBe("adopted");
+        expect(source.registration_id).not.toBe(target.registration_id);
+        expect(source.canonical_path).not.toBe(target.canonical_path);
+
+        // Bind directly by the SOURCE's own (still-resolvable, still-"adopted") slug.
+        const bindRes = await fetchFn(
+          stateChangingReq(`/w/${source.slug}/session-binding`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: "alias-bind", provider: "claude-code", cwd: adoptRoot, source: "hook" }),
+          }),
+        );
+        expect(bindRes.status).toBe(200);
+        // Canonicalized to the OWNER's canonical path, never the source's own.
+        expect(sessionRegistry.get("alias-bind")?.workspace_binding).toBe(target.canonical_path);
+
+        // Register with an explicit workspace_binding equal to the source's pre-adoption path —
+        // the same alias, reached through the other entry point.
+        const registerRes = await fetchFn(
+          stateChangingReq("/api/sessions/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: "alias-register",
+              provider: "claude-code",
+              cwd: adoptRoot,
+              workspace_binding: source.canonical_path,
+              source: "hook",
+            }),
+          }),
+        );
+        expect(registerRes.status).toBe(200);
+        expect(sessionRegistry.get("alias-register")?.workspace_binding).toBe(target.canonical_path);
+
+        // Both sessions are now visible to forget's OWN liveness check on the TARGET's canonical
+        // path — the whole point of canonicalizing through the owner.
+        expect(
+          sessionRegistry
+            .forWorkspace(target.canonical_path)
+            .map((s) => s.session_id)
+            .sort(),
+        ).toEqual(["alias-bind", "alias-register"].sort());
+
+        // And forget on the target now correctly refuses, naming these very sessions — never
+        // silently deleting beneath them because they were mis-attributed to the dead source.
+        const forgetRes = await fetchFn(
+          stateChangingReq("/api/workspaces/forget", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slug: targetSlug, confirm: true }),
+          }),
+        );
+        expect(forgetRes.status).toBe(409);
+        const forgetBody = (await forgetRes.json()) as { type: string; blockers: Array<{ session_id?: string }> };
+        expect(forgetBody.type).toContain("forget-blocked");
+        expect(forgetBody.blockers.map((b) => b.session_id).sort()).toEqual(["alias-bind", "alias-register"].sort());
+      } finally {
+        await busRegistry.closeAll();
+        rmSync(adoptRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("session register racing a forget of the target through the SOURCE's alias path is still mutually exclusive (independent review, second pass, finding 4)", async () => {
+      // Same genuine-concurrency shape as the target-path race above, but the register call is
+      // addressed through the SOURCE's pre-adoption alias — proving the shared lock/liveness fix
+      // holds under the alias, not just the direct path.
+      const adoptRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-forget-alias-race-")));
+      const artifact = join(adoptRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      try {
+        const looseOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+        );
+        const looseSlug = (await looseOpen.json()).slug as string;
+        const sourceRegistrationId = workspaceIndex.getBySlug(looseSlug)!.registration_id;
+
+        const dirOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: adoptRoot }) }),
+        );
+        const targetSlug = (await dirOpen.json()).slug as string;
+        const source = workspaceIndex.getWorkspaceByRegistration(sourceRegistrationId)!;
+
+        const registerReq = stateChangingReq("/api/sessions/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: "alias-race",
+            provider: "claude-code",
+            cwd: adoptRoot,
+            workspace_binding: source.canonical_path,
+            source: "hook",
+          }),
+        });
+        const forgetReq2 = stateChangingReq("/api/workspaces/forget", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug: targetSlug, confirm: true }),
+        });
+
+        const [forgetRes, registerRes] = await Promise.all([fetchFn(forgetReq2), fetchFn(registerReq)]);
+        const forgetBody = (await forgetRes.json()) as { confirmed?: boolean; type?: string };
+        const registerBody = (await registerRes.json()) as { type?: string; session_id?: string };
+
+        if (forgetRes.status === 200) {
+          expect(forgetBody.confirmed).toBe(true);
+          if (registerRes.status === 200) {
+            expect(registerBody.session_id).toBe("alias-race");
+            expect(workspaceIndex.get(adoptRoot)?.lifecycle?.state ?? "active").toBe("active");
+          } else {
+            expect(registerBody.type).toContain("workspace-forgetting");
+            expect(sessionRegistry.get("alias-race")).toBeNull();
+          }
+        } else {
+          expect(forgetBody.type).toContain("forget-blocked");
+          expect(registerRes.status).toBe(200);
+          expect(sessionRegistry.get("alias-race")?.workspace_binding).not.toBe(source.canonical_path); // canonicalized
+        }
+      } finally {
+        await busRegistry.closeAll();
+        rmSync(adoptRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("a non-boolean confirm value is rejected as malformed rather than silently reinterpreted as preview (issue #156 held-review finding)", async () => {
+      for (const malformed of ["true", 1, null, [], {}]) {
+        const res = await fetchFn(forgetReq({ slug, confirm: malformed }));
+        expect(res.status).toBe(400);
+        expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+        expect(workspaceIndex.getBySlug(slug)).not.toBeNull(); // never touched
+      }
+    });
+
+    test("a confirm:true call whose previewed member set has since changed is refused as stale, deleting nothing (issue #156 held-review finding)", async () => {
+      // Regression: "interactive confirmation is not bound to the previewed member set, so an
+      // adoption completing during the prompt can expand deletion beyond the paths the user saw."
+      //
+      // Ordering matters here: `resolveOpenTarget`'s file branch resolves a tracked file straight
+      // through its OWNING directory once that directory is registered (never minting an
+      // independent loose-file registration for it at all) — so the loose file must be opened
+      // BEFORE the directory is ever registered, exactly like every other adoption test in this
+      // file/`forget-workspace.test.ts`. The directory is registered directly via `upsertWorkspace`
+      // (not `/api/workspaces/open`) so it does NOT sweep up the pre-existing loose source itself —
+      // that sweep is triggered explicitly, later, by the SECOND open call below.
+      const adoptRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-forget-stale-")));
+      const artifact = join(adoptRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      try {
+        const looseOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+        );
+        expect(looseOpen.status).toBe(200);
+        const looseSlug = (await looseOpen.json()).slug as string;
+        expect(workspaceIndex.getBySlug(looseSlug)!.kind).toBe("loose-file");
+
+        const targetEntry = await workspaceIndex.upsertWorkspace(adoptRoot, "glosa-open");
+        const targetSlug = targetEntry.slug;
+        expect(workspaceIndex.sealedSourcesFor(targetEntry.registration_id)).toHaveLength(0);
+
+        // Preview BEFORE the loose file is ever adopted — the member set is the target alone.
+        const preview = await fetchFn(forgetReq({ slug: targetSlug }));
+        expect(preview.status).toBe(200);
+        const previewBody = (await preview.json()) as { would_remove: unknown[]; member_fingerprint: string };
+        expect(previewBody.would_remove).toHaveLength(1);
+        expect(typeof previewBody.member_fingerprint).toBe("string");
+
+        // NOW open the directory — this is what actually triggers `adoptLooseLineages`, sweeping
+        // the pre-existing loose file in as a NEW sealed source of the SAME target.
+        const reopenDir = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: adoptRoot }) }),
+        );
+        expect(reopenDir.status).toBe(200);
+        expect(workspaceIndex.sealedSourcesFor(workspaceIndex.getBySlug(targetSlug)!.registration_id)).toHaveLength(1);
+
+        // Confirming with the STALE (pre-adoption) fingerprint must be refused — never silently
+        // sweep the newly-adopted source into the deletion the human never previewed.
+        const staleConfirm = await fetchFn(
+          forgetReq({ slug: targetSlug, confirm: true, member_fingerprint: previewBody.member_fingerprint }),
+        );
+        expect(staleConfirm.status).toBe(409);
+        const staleBody = (await staleConfirm.json()) as { type: string; would_remove: unknown[] };
+        expect(staleBody.type).toContain("forget-stale-preview");
+        expect(staleBody.would_remove).toHaveLength(2); // the fresh set now includes the sealed source
+
+        // Zero deletions: both members survive, untouched.
+        expect(workspaceIndex.getBySlug(targetSlug)).not.toBeNull();
+        expect(existsSync(join(adoptRoot, ".glosa"))).toBe(true);
+
+        // A confirm with the FRESH fingerprint (or none at all) proceeds normally.
+        const freshConfirm = await fetchFn(forgetReq({ slug: targetSlug, confirm: true }));
+        expect(freshConfirm.status).toBe(200);
+        expect((await freshConfirm.json()).confirmed).toBe(true);
+        expect(workspaceIndex.getBySlug(targetSlug)).toBeNull();
+      } finally {
+        await busRegistry.closeAll();
+        rmSync(adoptRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("status surfaces a registration-less pending forget operation so doctor's exact resume command still finds it (issue #156 held-review finding)", async () => {
+      // Regression: "a crash after target deregistration but before operation completion leaves no
+      // workspace row for status/doctor, even though a pending operation exists." Simulated by
+      // reaching exactly that durable state directly (the target's OWN registration fully removed,
+      // the operation record still open) rather than by injecting a mid-commit crash.
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(
+        workspaceIndex.activeForgetOperationForTarget(operation.target_registration_id)?.completed_at,
+      ).toBeUndefined();
+
+      const res = await fetchFn(req("/api/status"));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const row = body.workspaces.find((w: { slug: string }) => w.slug === slug);
+      expect(row).toBeDefined();
+      expect(row.lifecycle).toBe("forgetting");
+      expect(row.path).toBe(root);
+
+      mkdirSync(root, { recursive: true }); // recreate for afterEach's cleanup
+    });
+
+    test("status reports a registration-less LOOSE-FILE forget target's durable worktree path, not its raw file path (issue #156 final held-review finding)", async () => {
+      // Regression: "registration-less loose-file status synthesizes the file path instead of the
+      // durable worktree path, so doctor misses the recovery state." For a `loose-file` member,
+      // `canonical_path` is the FILE itself — never what `doctor <dir>` (or every OTHER row's own
+      // `path` field: always `WorkspaceEntry.worktree_path`) is addressed by.
+      const looseParent = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-loose-forget-")));
+      const artifact = join(looseParent, "note.md");
+      writeFileSync(artifact, "note\n");
+      try {
+        const openRes = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+        );
+        expect(openRes.status).toBe(200);
+        const looseSlug = (await openRes.json()).slug as string;
+        const looseEntry = workspaceIndex.getBySlug(looseSlug)!;
+        expect(looseEntry.kind).toBe("loose-file");
+        expect(looseEntry.canonical_path).toBe(artifact);
+        expect(looseEntry.worktree_path).toBe(looseParent);
+
+        await ctx.getWorkspaceBus(looseEntry).reconcileOnce();
+        await workspaceIndex.beginForgetOperation(looseEntry, [looseEntry]);
+        expect(await workspaceIndex.forget(looseEntry.slug)).toBe(true);
+        expect(workspaceIndex.getBySlug(looseSlug)).toBeNull();
+
+        const res = await fetchFn(req("/api/status"));
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const row = body.workspaces.find((w: { slug: string }) => w.slug === looseSlug);
+        expect(row).toBeDefined();
+        expect(row.lifecycle).toBe("forgetting");
+        // The durable WORKTREE path (the containing directory `doctor <dir>` is invoked against),
+        // never the raw file path — matches every other row's own `path` field.
+        expect(row.path).toBe(looseParent);
+        expect(row.path).not.toBe(artifact);
+      } finally {
+        // `workspaceIndex.forget()` already evicted the loose-file bus via `onHardRemove` above.
+        rmSync(looseParent, { recursive: true, force: true });
+      }
+    });
+
+    test("GET /api/workspaces/inbox?path=... refuses for both a forgetting target and an adopted source (issue #156 held-review finding)", async () => {
+      // Regression: "path-addressed inbox listing bypasses the forgetting lifecycle gate" — every
+      // other workspace data-access path already refuses a target/source mid a durably-committed
+      // `glosa forget`; this route, addressed by raw canonical path, did not.
+      const registrationId = workspaceIndex.getBySlug(slug)!.registration_id;
+      await workspaceIndex.markForgetting([registrationId], registrationId);
+
+      const targetRes = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`));
+      expect(targetRes.status).toBe(409);
+      expect((await targetRes.json()).type).toContain("workspace-forgetting");
+
+      // An adopted source's own path must ALSO refuse once its owning target is forgetting.
+      const adoptRoot = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-inbox-forget-")));
+      const artifact = join(adoptRoot, "notes.md");
+      writeFileSync(artifact, "note\n");
+      try {
+        const looseOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+        );
+        expect(looseOpen.status).toBe(200);
+        const looseSlug = (await looseOpen.json()).slug as string;
+        const sourceRegistrationId = workspaceIndex.getBySlug(looseSlug)!.registration_id;
+
+        const dirOpen = await fetchFn(
+          stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: adoptRoot }) }),
+        );
+        expect(dirOpen.status).toBe(200);
+        const targetEntry = workspaceIndex.get(adoptRoot)!;
+        const sourceEntry = workspaceIndex.getWorkspaceByRegistration(sourceRegistrationId)!;
+        expect(sourceEntry.lifecycle?.state).toBe("adopted");
+
+        await workspaceIndex.markForgetting([targetEntry.registration_id], targetEntry.registration_id);
+
+        const sourceRes = await fetchFn(
+          req(`/api/workspaces/inbox?path=${encodeURIComponent(sourceEntry.canonical_path)}`),
+        );
+        expect(sourceRes.status).toBe(409);
+        expect((await sourceRes.json()).type).toContain("workspace-forgetting");
+      } finally {
+        await busRegistry.closeAll();
+        rmSync(adoptRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("a registration-less active operation still refuses POST /api/sessions/register at the exact same canonical path (issue #156 held-review finding)", async () => {
+      // Regression: "an active forget operation stops governing access once its target
+      // registration is removed. Session registration treats the missing entry as a new workspace
+      // and bypasses the coordinator." Reached by the exact durable state a crash between
+      // deregistration and the operation's completion leaves behind — same setup as the status
+      // regression above, but exercised against `/api/sessions/register` instead.
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/sessions/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: "registrationless-register",
+            provider: "claude-code",
+            cwd: root,
+            source: "hook",
+          }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect((await res.json()).type).toContain("workspace-forgetting");
+      expect(sessionRegistry.get("registrationless-register")).toBeNull();
+      // No NEW registration was created either — the coordinator refused before `doRegister` ran.
+      expect(workspaceIndex.get(root)).toBeNull();
+    });
+
+    test("a registration-less active operation still refuses POST /api/workspaces/open at the exact same canonical path (issue #156 held-review finding)", async () => {
+      // Regression: same finding as above, exercised against `/api/workspaces/open` — "`open` can
+      // recreate it through `resolveOpenTarget`."
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: root }) }),
+      );
+      expect(res.status).toBe(409);
+      expect((await res.json()).type).toContain("workspace-forgetting");
+      // No NEW registration was created — `resolveOpenTarget` never ran.
+      expect(workspaceIndex.get(root)).toBeNull();
+    });
+
+    test("a registration-less active operation still refuses GET /api/workspaces/inbox?path=... at the exact same canonical path (issue #156 held-review finding)", async () => {
+      // Regression: same finding as above, exercised against the path-addressed inbox listing —
+      // "path-addressed inbox listing also proceeds when `indexed` is null."
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const res = await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`));
+      expect(res.status).toBe(409);
+      expect((await res.json()).type).toContain("workspace-forgetting");
+    });
+
+    test("a registration-less active operation still refuses POST /api/workspaces/resolve instead of recreating the deleted bus (issue #156 held-review finding)", async () => {
+      // Regression: "registration-less pending operations are not enforced by the central
+      // bus/access boundary. Path-addressed resolve/apply/dismiss ... can recreate deleted bus or
+      // index state after target deregistration." Every one of those routes shares `resolveBus`
+      // (http.ts), so this exercises the shared fix once, against `resolve` as the representative.
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.getBySlug(slug)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, entry: "e1", outcome: "applied", session: "s1" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect((await res.json()).type).toContain("workspace-forgetting");
+      // No NEW registration was recreated — `resolveBus` refused before `getWorkspaceBus` ran.
+      expect(workspaceIndex.get(root)).toBeNull();
+    });
+
+    test("a present non-string member_fingerprint is rejected as malformed rather than silently treated as omitted (issue #156 held-review finding)", async () => {
+      // Regression: "a present non-string `member_fingerprint` is treated as omission and bypasses
+      // preview binding" — the same class of bug `confirm` was already fixed for: silently
+      // coercing an unexpected type to "not supplied" instead of rejecting the request outright.
+      for (const malformed of [12345, null, true, [], {}, "not-a-sha256-digest"]) {
+        const res = await fetchFn(forgetReq({ slug, confirm: true, member_fingerprint: malformed }));
+        expect(res.status).toBe(400);
+        expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+        expect(workspaceIndex.getBySlug(slug)).not.toBeNull(); // never touched
+      }
+    });
+
+    test("a registration-less active operation still refuses an explicitly bound session's POST /api/sessions/:id/drain instead of recreating the deleted registration (issue #156 held-review finding, fourth pass)", async () => {
+      // Regression: "the explicitly bound drain path upserts a missing registration before the
+      // registration-less forget check, so it can turn an active operation back into an active row
+      // and bypass resolveBus's fallback gate." Unlike the unbound composite-drain path (already
+      // covered), an explicitly bound session's drain called `upsertWorkspace` directly, which
+      // would durably RECREATE the index row an in-flight deletion is committed to removing —
+      // before `resolveBus`'s own registration-less check ever ran.
+      const registerRes = await fetchFn(
+        stateChangingReq("/api/sessions/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: "bound-drain",
+            provider: "claude-code",
+            cwd: root,
+            workspace_binding: root,
+            source: "hook",
+          }),
+        }),
+      );
+      expect(registerRes.status).toBe(200);
+      expect(sessionRegistry.get("bound-drain")?.workspace_binding).toBe(root);
+
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.get(root)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const drainRes = await fetchFn(
+        stateChangingReq("/api/sessions/bound-drain/drain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ via: "stop" }),
+        }),
+      );
+      expect(drainRes.status).toBe(409);
+      expect((await drainRes.json()).type).toContain("workspace-forgetting");
+      // No NEW registration was recreated — `getOrRegisterWorkspace` refused before the upsert ran.
+      expect(workspaceIndex.get(root)).toBeNull();
+    });
+
+    test("a registration-less active operation still refuses POST /api/workspaces/attention-request instead of recreating the deleted registration (issue #156 held-review finding, fourth pass)", async () => {
+      // Regression: same finding as above, exercised against attention-request creation — "the same
+      // ordering exists for attention creation" (services/attention.ts's `createAttention`).
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await ctx.getWorkspaceBus(entry).reconcileOnce();
+      const operation = await workspaceIndex.beginForgetOperation(entry, [entry]);
+      expect(await workspaceIndex.forget(entry.slug)).toBe(true);
+      expect(workspaceIndex.get(root)).toBeNull();
+      expect(workspaceIndex.activeForgetOperationForCanonicalPath(root)?.operation_id).toBe(operation.operation_id);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/attention-request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root, message: "please look" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect((await res.json()).type).toContain("workspace-forgetting");
+      expect(workspaceIndex.get(root)).toBeNull();
     });
   });
 });

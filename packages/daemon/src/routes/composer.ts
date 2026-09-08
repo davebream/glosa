@@ -24,8 +24,9 @@ function composerProblem(status: number, slug: string, title: string, instance: 
 
 function mapError(error: unknown, pathname: string): Response {
   if (error instanceof WorkspaceLookupError) {
-    return error.code === "not-found"
-      ? problem(404, "not-found", "unknown workspace", undefined, pathname)
+    if (error.code === "not-found") return problem(404, "not-found", "unknown workspace", undefined, pathname);
+    return error.code === "workspace-forgetting"
+      ? problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, pathname)
       : problem(409, "workspace-adopting", "workspace adoption is in progress", undefined, pathname);
   }
   if (!(error instanceof ComposerError)) throw error;

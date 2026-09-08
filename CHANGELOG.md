@@ -16,6 +16,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `dismissed`, kept apart from a session's own `rejected`. A daemon from before this release
   doesn't recognize `dismissed` and folds it as a no-op on replay, leaving the entry reading as
   pending rather than failing — degrading gracefully, never corrupting the fold.
+- `glosa forget <workspace> [--yes] [--json]` permanently deletes a workspace's registration and
+  its whole bus — journal, inbox, and shadow-git history, including any historical loose-file
+  source sealed into a directory workspace by adoption — while never touching work-tree files.
+  Naming a historical source directly resolves to the workspace it was adopted into and forgets
+  the complete unit; a source is never an independent deletion target. It refuses before any
+  deletion when the workspace has a live bound session, an unexpired apply lease, or an adoption
+  already in progress, naming what's blocking it — and neither an adoption nor a new session can
+  start on a workspace `forget` has already committed to deleting, either (they share the same
+  per-workspace lock). Interactive use previews the exact paths that would be removed and asks
+  once; if the previewed set changes before you confirm (an adoption completing while the prompt
+  is up, for example), the confirmation is refused rather than silently deleting a different set
+  than the one you saw. `--yes` skips the prompt; a non-interactive caller without `--yes` gets a
+  usage error rather than a silent guess. `glosa doctor`/`glosa status` name an interrupted
+  deletion explicitly, with the exact command to resume it, even once the workspace's own
+  directory is gone or its registration has been fully removed. An interruption partway through —
+  a crashed daemon, a killed CLI — leaves durable state a later `glosa forget` of the same
+  workspace resumes and completes, reporting the full original set of removed paths even if some
+  were already gone, rather than leaving orphaned bus files behind or a partial report. (Daemon API
+  contract 1.8: `POST /api/workspaces/forget` and the `lifecycle` status field, documented in A1.)
 
 ### Fixed
 

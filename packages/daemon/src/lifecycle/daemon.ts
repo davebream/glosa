@@ -131,7 +131,12 @@ export interface BuildBackendOptions {
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
   const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
-  const sessionRegistry = new SessionRegistry({ index: workspaceIndex });
+  // Constructed BEFORE SessionRegistry (issue #156 held-review finding) so the SAME instance —
+  // never a second one — is what both `ctx.adoptionCoordinator` (session register/bind, forget's
+  // own commit) and SessionRegistry's heartbeat/connection-refresh serialize against; two separate
+  // coordinators would leave the two call paths just as unserialized as having none at all.
+  const adoptionCoordinator = new AdoptionCoordinator();
+  const sessionRegistry = new SessionRegistry({ index: workspaceIndex, ownershipCoordinator: adoptionCoordinator });
   const busRegistry = new WorkspaceBusRegistry({ writeCheckpoint: opts.writeCheckpoint });
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
@@ -140,7 +145,6 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     warn: (message) => log(home, message),
   });
-  const adoptionCoordinator = new AdoptionCoordinator();
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
     adoptionId: string,

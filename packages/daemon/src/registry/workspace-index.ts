@@ -50,7 +50,23 @@ export type WorkspaceSource = "session" | "glosa-open" | "discovered";
 export type WorkspaceLifecycle =
   | { state: "active" }
   | { state: "adopting"; adoption_id: string; target_registration_id: string }
-  | { state: "adopted"; adoption_id: string; target_registration_id: string; sealed_at: string };
+  | { state: "adopted"; adoption_id: string; target_registration_id: string; sealed_at: string }
+  /** `glosa forget <slug>` (issue #156): the durable marker its deletion flow (see
+   * `registry/forget-workspace.ts`) writes BEFORE touching a single bus file. GC already treats
+   * any non-`active` lifecycle as "leave it alone" (this file's `gc()`), and the HTTP layer
+   * refuses new routing to a workspace in this state the same way it refuses one mid-adoption —
+   * so once this is durable, nothing can race the deletion it is about to perform. A crash after
+   * this write still resolves by slug with this exact state, which is what makes re-running
+   * `forget` a resume instead of a re-ask: the live-session/apply-lease preflight already passed
+   * once and is never re-consulted for an entry already in this state.
+   *
+   * `target_registration_id` is this entry's OWN id when the entry IS the forget target (mirrors
+   * `"adopting"`'s self-reference convention above), or the target's id when this entry is one of
+   * its sealed sources. This is what lets a resumed call reconstruct the FULL original set with
+   * `forgettingMembersFor` — a source already flipped from `"adopted"` to `"forgetting"` by the
+   * interrupted attempt no longer matches `sealedSourcesFor`'s `"adopted"` filter, so a resume
+   * that re-derived the set the same way the first call did would silently drop it. */
+  | { state: "forgetting"; started_at: string; target_registration_id: string };
 
 export type AdoptionPhase = "planned" | "sources_sealed" | "target_published" | "committed";
 
@@ -73,7 +89,12 @@ export interface AdoptionRecord {
 
 export class AdoptionError extends Error {
   constructor(
-    readonly code: "adoption-conflict" | "adoption-blocked" | "workspace-adopting",
+    // `"workspace-forgetting"` (issue #156) shares this carrier rather than getting its own error
+    // class: it is the same shape of thing — a workspace mid a durable multi-step lifecycle
+    // transaction refusing ordinary routing until that transaction finishes — and http.ts's two
+    // generic `instanceof AdoptionError` catches (the pipeline's own, and `resolveBus`'s callers')
+    // already map any code here straight through `problem(409, error.code, error.message, ...)`.
+    readonly code: "adoption-conflict" | "adoption-blocked" | "workspace-adopting" | "workspace-forgetting",
     message: string,
   ) {
     super(message);
@@ -100,7 +121,58 @@ export interface WorkspaceEntry extends WorkspaceLocation {
   absent_since?: string;
 }
 
+/** A minimal, immutable snapshot of one `glosa forget` member — captured once, at the moment the
+ * durable operation begins, so it survives that same member's OWN registration being removed
+ * partway through a crash-interrupted deletion (issue #156 review finding: a resumed deletion
+ * must report the COMPLETE original set, not just whatever is still registered). */
+export interface ForgetMember {
+  registration_id: string;
+  slug: string;
+  canonical_path: string;
+  /** Held-review finding (fourth held pass): "registration-less loose-file status synthesizes the
+   * file path instead of the durable worktree path" — for a `loose-file` member `canonical_path` is
+   * the FILE itself, never what `doctor <dir>`/every other status row's own `path` field (always
+   * `WorkspaceEntry.worktree_path`) is addressed by. Captured alongside `canonical_path` so a
+   * registration-less synthesized status row (target fully deregistered, operation not yet
+   * completed) can report the SAME `path` shape as every live row, not the member's raw file path. */
+  worktree_path: string;
+  kind: WorkspaceKind;
+  bus_path: string;
+  /** This member's OWN lifecycle at the exact moment `beginForgetOperation` captured it — for a
+   * sealed adopted source that is `{state:"adopted", adoption_id, target_registration_id,
+   * sealed_at}`, never `{state:"active"}` (held-review finding: `abortForgetOperation`
+   * unconditionally reset every member to `"active"`, which for a sealed source is a LIE — it
+   * silently destroyed the adoption metadata `sealedSourcesFor` depends on, so a fresh `forget`
+   * attempt after a lost lease race would never rediscover that source again, orphaning its bus
+   * forever). `abortForgetOperation` restores exactly this value, never a hardcoded `"active"`. */
+  prior_lifecycle: WorkspaceLifecycle;
+}
+
+/** The durable `glosa forget <slug>` transaction record (issue #156 revised approach). Written
+ * BEFORE a single bus is sealed or deleted — see `beginForgetOperation`'s own docstring — and
+ * never removed once `completed_at` is stamped, so a retried call against a slug whose ENTIRE
+ * member set has since been deregistered still resolves to an idempotent completion receipt
+ * (`forgetOperationForSlug`) instead of a false `not-found`. `target_slug` is the target's slug
+ * AT THE MOMENT the operation began — the one identifier guaranteed to keep resolving the
+ * operation by `getBySlug` until the target's own registration is the last one removed. */
+export interface ForgetOperationRecord {
+  operation_id: string;
+  target_registration_id: string;
+  target_slug: string;
+  members: ForgetMember[];
+  started_at: string;
+  completed_at?: string;
+}
+
 export interface WorkspaceIndexFile {
+  version: 4;
+  updated_at: string;
+  workspaces: Record<string, WorkspaceEntry>;
+  adoptions: Record<string, AdoptionRecord>;
+  forget_operations: Record<string, ForgetOperationRecord>;
+}
+
+interface V3WorkspaceIndexFile {
   version: 3;
   updated_at: string;
   workspaces: Record<string, WorkspaceEntry>;
@@ -189,24 +261,264 @@ function isWorkspaceEntryShape(v: unknown): v is WorkspaceEntry {
     isAbsolute(e.worktree_path) &&
     typeof e.bus_path === "string" &&
     isAbsolute(e.bus_path) &&
-    isTrackingShape(e.tracking)
+    isTrackingShape(e.tracking) &&
+    // Held-review finding (fourth pass): "isWorkspaceEntryShape never calls
+    // isWorkspaceLifecycleShape" — `lifecycle` is optional, but a PRESENT value must still be one
+    // of the real union variants; a malformed one (unknown `state`, or a "forgetting"/"adopting"/
+    // "adopted" variant missing its own required fields) previously passed straight through,
+    // untyped, into every later `entry.lifecycle?.state === "..."` read in this file and http.ts.
+    (e.lifecycle === undefined || isWorkspaceLifecycleShape(e.lifecycle))
   );
+}
+
+/** Every non-`"active"` `WorkspaceLifecycle` variant names an id/timestamp string field — this is
+ * the one shared "is it a genuinely non-empty string" check every per-state validator below reuses,
+ * so a variant can never pass on an empty-string placeholder any more than `isForgetMemberShape`'s
+ * own non-empty-string fields can. */
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
+/** `"adopting"` shape alone — shared with `"adopted"` below, which is the SAME shape plus its own
+ * additionally-required `sealed_at`. Kept as its own function (held-review finding, final pass:
+ * "split lifecycle validators by state") rather than one combined `case "adopting": case "adopted":`
+ * branch, so `"adopted"`'s extra field can never be accidentally dropped by a future edit that only
+ * looks at the shared branch. */
+function isAdoptingLifecycleShape(l: Record<string, unknown>): boolean {
+  return isNonEmptyString(l.adoption_id) && isNonEmptyString(l.target_registration_id);
+}
+
+/** Held-review finding (final pass): "`adopted` lifecycle validation accepts a missing `sealed_at`,
+ * including inside `prior_lifecycle`" — the combined `"adopting"`/`"adopted"` branch this replaces
+ * checked only the fields the two states share, so an `"adopted"` value missing its own `sealed_at`
+ * (the field that actually MAKES it sealed rather than merely in-flight) passed validation exactly
+ * like a genuine `"adopting"` value would. Reached both from `isWorkspaceEntryShape` (a live entry's
+ * own `lifecycle`) and `isForgetMemberShape` (a snapshot member's `prior_lifecycle`) — a sealed
+ * source's `prior_lifecycle` missing `sealed_at` is exactly as untrustworthy as a live entry's. */
+function isAdoptedLifecycleShape(l: Record<string, unknown>): boolean {
+  return isAdoptingLifecycleShape(l) && isNonEmptyString(l.sealed_at);
+}
+
+function isForgettingLifecycleShape(l: Record<string, unknown>): boolean {
+  return isNonEmptyString(l.started_at) && isNonEmptyString(l.target_registration_id);
+}
+
+/** Minimal structural check for the `WorkspaceLifecycle` union — used to validate both a live
+ * entry's own `lifecycle` (`isWorkspaceEntryShape`) and a forget member's `prior_lifecycle`
+ * (`isForgetMemberShape`; held-review finding, second pass: schema-v4 validation "accepts
+ * semantically corrupt operations"). Extra unrecognized fields on an otherwise-valid variant are
+ * tolerated (forward-compatible), matching every other shape check in this file. Dispatches to one
+ * validator PER state rather than a single combined check (held-review finding, final pass) — see
+ * `isAdoptedLifecycleShape`'s own docstring for the exact gap that combining `"adopting"`/`"adopted"`
+ * left open. */
+function isWorkspaceLifecycleShape(v: unknown): v is WorkspaceLifecycle {
+  if (typeof v !== "object" || v === null) return false;
+  const l = v as Record<string, unknown>;
+  switch (l.state) {
+    case "active":
+      return true;
+    case "adopting":
+      return isAdoptingLifecycleShape(l);
+    case "adopted":
+      return isAdoptedLifecycleShape(l);
+    case "forgetting":
+      return isForgettingLifecycleShape(l);
+    default:
+      return false;
+  }
+}
+
+/** Held-review finding: "the v4 index validator does not validate forget-operation records and
+ * members before later dereference" — an on-disk `forget_operations` blob with a missing/malformed
+ * member (no `bus_path`, wrong `kind`, ...) previously passed `isWorkspaceIndexShape` untouched,
+ * so a later read (`beginForgetOperation`'s snapshot merge, `completeForgetOperation`, the HTTP
+ * status route's own member walk) could dereference a field that was never actually there.
+ *
+ * Second pass (held-review, further finding): field-type checks alone still accepted a
+ * semantically corrupt record — `members: []`, a target absent from its own member list, a
+ * duplicate registration id, or a relative path. Every non-empty-string check below additionally
+ * requires a genuinely non-empty string (an empty string is not a usable id/path either), and
+ * both path fields must be absolute — exactly the invariant `WorkspaceEntry`'s own
+ * `worktree_path`/`bus_path` already hold (`isWorkspaceEntryShape`, above). */
+function isForgetMemberShape(v: unknown): v is ForgetMember {
+  if (typeof v !== "object" || v === null) return false;
+  const m = v as Record<string, unknown>;
+  return (
+    typeof m.registration_id === "string" &&
+    m.registration_id.length > 0 &&
+    typeof m.slug === "string" &&
+    m.slug.length > 0 &&
+    typeof m.canonical_path === "string" &&
+    isAbsolute(m.canonical_path) &&
+    typeof m.worktree_path === "string" &&
+    isAbsolute(m.worktree_path) &&
+    (m.kind === "directory" || m.kind === "loose-file") &&
+    typeof m.bus_path === "string" &&
+    isAbsolute(m.bus_path) &&
+    isWorkspaceLifecycleShape(m.prior_lifecycle)
+  );
+}
+
+function isForgetOperationRecordShape(v: unknown): v is ForgetOperationRecord {
+  if (typeof v !== "object" || v === null) return false;
+  const op = v as Record<string, unknown>;
+  if (
+    typeof op.operation_id !== "string" ||
+    op.operation_id.length === 0 ||
+    typeof op.target_registration_id !== "string" ||
+    op.target_registration_id.length === 0 ||
+    typeof op.target_slug !== "string" ||
+    op.target_slug.length === 0 ||
+    !Array.isArray(op.members) ||
+    op.members.length === 0 || // "members: []" — a forget operation always has at least its target
+    !op.members.every(isForgetMemberShape) ||
+    typeof op.started_at !== "string" ||
+    (op.completed_at !== undefined && typeof op.completed_at !== "string")
+  ) {
+    return false;
+  }
+  const members = op.members as ForgetMember[];
+  // Every member registration id is unique — a duplicate is unrepresentable in the real index
+  // (`Record<registration_id, WorkspaceEntry>`) and would silently double-count on any later walk.
+  if (new Set(members.map((m) => m.registration_id)).size !== members.length) return false;
+  // Exactly one member IS the target, and its own slug agrees with `target_slug` — a target
+  // "operation" with no matching member (or a stale/mismatched slug) has nothing coherent to act on.
+  const targetMembers = members.filter((m) => m.registration_id === op.target_registration_id);
+  return targetMembers.length === 1 && targetMembers[0]!.slug === op.target_slug;
+}
+
+/** Map-key/record consistency for `forget_operations` (held-review finding): the persisted map key
+ * MUST equal the record's own `operation_id` — a mismatch is unrepresentable by any code path in
+ * this file (every write keys by the id it just minted) and is evidence the whole map cannot be
+ * trusted, so it quarantines the same as a per-record shape failure. */
+function isForgetOperationsMapShape(v: unknown): v is Record<string, ForgetOperationRecord> {
+  if (typeof v !== "object" || v === null) return false;
+  return Object.entries(v as Record<string, unknown>).every(
+    ([key, value]) => isForgetOperationRecordShape(value) && (value as ForgetOperationRecord).operation_id === key,
+  );
+}
+
+/** Map-key/record consistency for `workspaces` (held-review finding, fourth pass — "map keys/
+ * registration identities"): the persisted map key MUST equal the entry's own `registration_id`,
+ * mirroring `isForgetOperationsMapShape`'s existing convention for `forget_operations`. Every write
+ * path in this file keys by the id the entry itself carries (`upsertWorkspace`, `createEntry`), so
+ * a mismatch is unrepresentable by real code and is evidence the whole map cannot be trusted. */
+function isWorkspaceMapShape(v: unknown): v is Record<string, WorkspaceEntry> {
+  if (typeof v !== "object" || v === null) return false;
+  return Object.entries(v as Record<string, unknown>).every(
+    ([key, value]) => isWorkspaceEntryShape(value) && (value as WorkspaceEntry).registration_id === key,
+  );
+}
+
+/** Held-review finding (fourth pass, extended in the final held pass): "schema-v4 loading still
+ * does not validate... operation/member/target cross-record consistency", and (final pass) "schema-
+ * v4 graph validation does not compare every live member identity field with its immutable
+ * operation snapshot" — checking `lifecycle.state`/`target_registration_id` alone let a live row
+ * whose `canonical_path`/`kind`/`bus_path`/`worktree_path`/`slug` had drifted from what the durable
+ * operation actually captured pass loading unnoticed, exactly the same drift
+ * `forget-workspace.ts`'s `resolveResumeMembers` already refuses at USE time. Two directions, both
+ * required, checked only against ACTIVE (uncompleted) operations — a completed one no longer
+ * governs any live lifecycle:
+ *   1. Every member an active operation names, IF it still has a live workspace row (a member whose
+ *      registration was already removed by an earlier interrupted attempt is a normal, expected
+ *      registration-less state — never a contradiction), must carry a `"forgetting"` lifecycle
+ *      pointing at EXACTLY that operation's own target, AND every other identity field the snapshot
+ *      captured (`slug`, `canonical_path`, `kind`, `bus_path`, `worktree_path`) must still agree
+ *      with the live row byte-for-byte — a live row that has drifted from its own immutable
+ *      snapshot is exactly as untrustworthy as one with the wrong lifecycle state.
+ *   2. Every live workspace row that IS marked `"forgetting"` must be named by SOME active
+ *      operation's own member snapshot for that exact target ("unaccounted forgetting rows") —
+ *      never a lifecycle marker with no operation record behind it at all.
+ *   3. Target-last (held-review finding, fifth pass): `forget-workspace.ts`'s `commitForgetLocked`
+ *      always removes every source registration BEFORE the target's own — the target's row is by
+ *      construction the LAST one to disappear. So an active operation whose target row is already
+ *      absent may NEVER still have a live row for any other snapshotted member; that combination
+ *      ("target row is absent but whose source row remains live passes schema-v4 validation, then
+ *      the missing-target branch stamps completion without deleting that source bus" — the exact
+ *      held-review finding) is unreachable under normal operation and untrustworthy input
+ *      otherwise. `completeForgetOperation` independently refuses the same state at USE time (see
+ *      its own docstring) — this is the LOAD-time half of that same invariant, so a resume can
+ *      never even observe it long enough to reach that runtime check.
+ * This is the SAME invariant `forget-workspace.ts`'s `resolveResumeMembers` already enforces at
+ * USE time (its own "extras" check); this closes the gap at LOAD time, before any runtime lookup
+ * or deletion ever runs — fail-closed/quarantine, never a silent accept. */
+function isLifecycleOperationGraphConsistent(
+  workspaces: Record<string, WorkspaceEntry>,
+  forgetOperations: Record<string, ForgetOperationRecord>,
+): boolean {
+  const activeOps = Object.values(forgetOperations).filter((op) => !op.completed_at);
+
+  for (const op of activeOps) {
+    const targetLive = op.target_registration_id in workspaces;
+    for (const member of op.members) {
+      const live = workspaces[member.registration_id];
+      if (!live) continue; // already deregistered by an earlier interrupted attempt — expected
+      // Target-last invariant (point 3 above): a live source row can never outlive the target's
+      // own row under an active operation — checked before the identity/lifecycle check below so
+      // this exact impossible combination is named on its own terms, not folded into a generic
+      // "lifecycle disagrees" failure.
+      if (!targetLive && member.registration_id !== op.target_registration_id) return false;
+      if (
+        live.lifecycle?.state !== "forgetting" ||
+        live.lifecycle.target_registration_id !== op.target_registration_id ||
+        live.slug !== member.slug ||
+        live.canonical_path !== member.canonical_path ||
+        live.kind !== member.kind ||
+        live.bus_path !== member.bus_path ||
+        live.worktree_path !== member.worktree_path
+      ) {
+        return false;
+      }
+    }
+  }
+
+  for (const entry of Object.values(workspaces)) {
+    if (entry.lifecycle?.state !== "forgetting") continue;
+    const targetId = entry.lifecycle.target_registration_id;
+    const covered = activeOps.some(
+      (op) =>
+        op.target_registration_id === targetId && op.members.some((m) => m.registration_id === entry.registration_id),
+    );
+    if (!covered) return false;
+  }
+
+  return true;
 }
 
 function isWorkspaceIndexShape(v: unknown): v is WorkspaceIndexFile {
   if (typeof v !== "object" || v === null) return false;
   const f = v as Record<string, unknown>;
   if (
-    f.version !== 3 ||
+    f.version !== 4 ||
     typeof f.updated_at !== "string" ||
     typeof f.workspaces !== "object" ||
     f.workspaces === null ||
     typeof f.adoptions !== "object" ||
-    f.adoptions === null
+    f.adoptions === null ||
+    typeof f.forget_operations !== "object" ||
+    f.forget_operations === null
   ) {
     return false;
   }
-  return Object.values(f.workspaces as Record<string, unknown>).every(isWorkspaceEntryShape);
+  if (!isWorkspaceMapShape(f.workspaces) || !isForgetOperationsMapShape(f.forget_operations)) return false;
+  return isLifecycleOperationGraphConsistent(
+    f.workspaces as Record<string, WorkspaceEntry>,
+    f.forget_operations as Record<string, ForgetOperationRecord>,
+  );
+}
+
+function isV3WorkspaceIndexShape(v: unknown): v is V3WorkspaceIndexFile {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as Record<string, unknown>;
+  return (
+    f.version === 3 &&
+    typeof f.updated_at === "string" &&
+    typeof f.workspaces === "object" &&
+    f.workspaces !== null &&
+    typeof f.adoptions === "object" &&
+    f.adoptions !== null &&
+    Object.values(f.workspaces as Record<string, unknown>).every(isWorkspaceEntryShape)
+  );
 }
 
 function isV2WorkspaceIndexShape(v: unknown): v is V2WorkspaceIndexFile {
@@ -411,9 +723,20 @@ export class WorkspaceIndex {
         this.cache = parsed as WorkspaceIndexFile;
         return this.cache;
       }
+      if (isV3WorkspaceIndexShape(parsed)) {
+        const migrated: WorkspaceIndexFile = {
+          version: 4,
+          updated_at: this.now().toISOString(),
+          workspaces: parsed.workspaces,
+          adoptions: parsed.adoptions,
+          forget_operations: {},
+        };
+        this.persist(migrated);
+        return migrated;
+      }
       if (isV2WorkspaceIndexShape(parsed)) {
         const migrated: WorkspaceIndexFile = {
-          version: 3,
+          version: 4,
           updated_at: this.now().toISOString(),
           workspaces: Object.fromEntries(
             Object.entries(parsed.workspaces).map(([id, entry]) => [
@@ -422,16 +745,18 @@ export class WorkspaceIndex {
             ]),
           ),
           adoptions: {},
+          forget_operations: {},
         };
         this.persist(migrated);
         return migrated;
       }
       if (isLegacyWorkspaceIndexShape(parsed)) {
         const migrated: WorkspaceIndexFile = {
-          version: 3,
+          version: 4,
           updated_at: this.now().toISOString(),
           workspaces: {},
           adoptions: {},
+          forget_operations: {},
         };
         for (const legacy of Object.values(parsed.workspaces)) {
           const id = registrationId("directory", legacy.canonical_path);
@@ -454,7 +779,13 @@ export class WorkspaceIndex {
       // (glosa-open/discovered sources, softened-but-not-yet-GC'd history, ...).
       this.quarantineCorruptFile();
     }
-    this.cache = { version: 3, updated_at: this.now().toISOString(), workspaces: {}, adoptions: {} };
+    this.cache = {
+      version: 4,
+      updated_at: this.now().toISOString(),
+      workspaces: {},
+      adoptions: {},
+      forget_operations: {},
+    };
     return this.cache;
   }
 
@@ -605,6 +936,24 @@ export class WorkspaceIndex {
    * (issue #96, when the repo's matcher tracks the file) -> a loose-file registration over its
    * containing directory. An explicitly named file that an owning directory excludes deliberately
    * skips the enclosing-repo promotion and reaches the bounded loose-file fallback. */
+  /** True if `canonicalPath` is named as a member of some not-yet-completed forget operation.
+   * Checked against the `index` object the CALLER already loaded inside its own mutex critical
+   * section — deliberately NEVER a fresh `this.load()`/`this.pendingForgetOperations()` call, which
+   * would reopen exactly the check-then-act gap this closes (held-review finding, final pass:
+   * "`POST /api/workspaces/open` checks for a registration-less operation before `resolveOpenTarget`,
+   * leaving a race in which forget can deregister between the check and registration mutation").
+   * `forget`'s own steps (`beginForgetOperation`, `forget()`, `completeForgetOperation`) are each a
+   * SEPARATE critical section on this SAME mutex, so a `resolveOpenTarget` call that reaches this
+   * check is guaranteed to observe either the state strictly before `beginForgetOperation` ran (no
+   * active operation yet — nothing to refuse) or the state at or after it (the operation is durably
+   * recorded in this exact `index` object, however far the deletion itself has progressed) — never a
+   * torn view assembled from two separate reads taken at two different points in time. */
+  private hasActiveForgetOperation(index: WorkspaceIndexFile, canonicalPath: string): boolean {
+    return Object.values(index.forget_operations).some(
+      (op) => !op.completed_at && op.members.some((m) => m.canonical_path === canonicalPath),
+    );
+  }
+
   resolveOpenTarget(
     rawPath: string,
     opts: { externalState?: boolean; focus?: string; focusFirst?: boolean; requireFocus?: boolean } = {},
@@ -658,7 +1007,13 @@ export class WorkspaceIndex {
       }
 
       const owning = Object.values(index.workspaces)
-        .filter((entry) => entry.present && entry.kind === "directory" && isInside(entry.worktree_path, canonical))
+        .filter(
+          (entry) =>
+            entry.present &&
+            entry.kind === "directory" &&
+            entry.lifecycle?.state !== "forgetting" &&
+            isInside(entry.worktree_path, canonical),
+        )
         .sort((a, b) => b.worktree_path.length - a.worktree_path.length)[0];
       if (owning) {
         const matched = resolveTrackedFiles(owning).tracked.find(
@@ -676,7 +1031,7 @@ export class WorkspaceIndex {
 
       const identity = bigintIdentity(canonical);
       for (const entry of Object.values(index.workspaces)) {
-        if (!entry.present) continue;
+        if (!entry.present || entry.lifecycle?.state === "forgetting") continue;
         // The deepest directory remains authoritative for normal workspace membership. When it
         // explicitly excludes the named file, only an existing bounded registration may claim
         // the inode; a shallower directory or unrelated matcher registration must not override
@@ -720,6 +1075,10 @@ export class WorkspaceIndex {
         }
       }
 
+      if (this.hasActiveForgetOperation(index, canonical)) {
+        throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+      }
+
       const worktree = canonicalPath(dirname(canonical));
       const focus = relativeNfc(worktree, canonical);
       const id = registrationId("loose-file", canonical);
@@ -754,12 +1113,29 @@ export class WorkspaceIndex {
       (entry) => entry.kind === "directory" && entry.canonical_path === canonical,
     );
     if (existing) {
+      // Held-review finding (final pass): the same atomic check below must also cover the
+      // REGISTERED case — an existing row already mid a durable `glosa forget` (its own lifecycle
+      // flipped to `"forgetting"` by `beginForgetOperation`, possibly before a single bus file has
+      // even been touched yet) must never be silently refreshed and handed back as if `open` were
+      // reopening an ordinary, unforgotten workspace.
+      if (existing.lifecycle?.state === "forgetting") {
+        throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+      }
       existing.last_seen = now;
       existing.present = true;
       delete existing.absent_since;
       index.updated_at = now;
       this.persist(index);
       return existing;
+    }
+
+    // No live registration for this exact canonical path — the registration-less window a `glosa
+    // forget` deletion passes through between removing this row and stamping its completion
+    // receipt. Checked here, inside the SAME mutex critical section that is about to create a
+    // fresh registration, not as a separate pre-check the caller runs beforehand and then races
+    // against (see `hasActiveForgetOperation`'s own docstring).
+    if (this.hasActiveForgetOperation(index, canonical)) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
     }
 
     const id = registrationId("directory", canonical);
@@ -862,6 +1238,12 @@ export class WorkspaceIndex {
       const index = this.loadForMutation();
       const currentTarget = index.workspaces[target.registration_id];
       if (!currentTarget) throw new AdoptionError("adoption-blocked", "target workspace registration disappeared");
+      // Symmetric with `forget-workspace.ts` refusing to forget an "adopting" target: a target
+      // already durably committed to `glosa forget`'s deletion (issue #156) must never have its
+      // marker overwritten by a NEW adoption transaction starting underneath it.
+      if (currentTarget.lifecycle?.state === "forgetting") {
+        throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+      }
 
       const existing = Object.values(index.adoptions).find(
         (record) => record.target_registration_id === target.registration_id && record.phase !== "committed",
@@ -1032,6 +1414,242 @@ export class WorkspaceIndex {
       await this.onHardRemove(match);
       return true;
     });
+  }
+
+  /** Every registration `commitAdoption` sealed INTO `targetRegistrationId` — the historical
+   * loose-file source buses `glosa forget` on a directory workspace must also remove so the
+   * inbox/journal/checkpoint history stays one provenance unit (issue #156). A sealed source's
+   * `lifecycle` never changes again after adoption commits, so this is a plain read, not a query
+   * against the (separately GC'd) `adoptions` map. */
+  sealedSourcesFor(targetRegistrationId: string): WorkspaceEntry[] {
+    return this.list().filter(
+      (entry) =>
+        entry.lifecycle?.state === "adopted" && entry.lifecycle.target_registration_id === targetRegistrationId,
+    );
+  }
+
+  /** The durable marker `glosa forget`'s deletion flow (`registry/forget-workspace.ts`) writes for
+   * the target and every sealed source BEFORE deleting a single bus file — see the `"forgetting"`
+   * variant's own docstring above for why this is what makes the flow crash-resumable, and why
+   * every id carries the SAME `targetRegistrationId` (the target's own id for the target's own
+   * entry, included in `registrationIds`). Idempotent: an id already marked, or one that no
+   * longer exists (a prior crash already finished it), is silently skipped rather than erroring,
+   * so a resumed call can pass the exact same id list every time. A no-op call (nothing left to
+   * mark) never persists — mirrors `updateAdoption`'s committed-is-a-no-op convention so a resume
+   * never writes a no-op `updated_at` bump. */
+  markForgetting(registrationIds: readonly string[], targetRegistrationId: string): Promise<void> {
+    return this.mutex.runExclusive(() => {
+      const index = this.loadForMutation();
+      const now = this.now().toISOString();
+      let changed = false;
+      for (const id of registrationIds) {
+        const entry = index.workspaces[id];
+        if (!entry || entry.lifecycle?.state === "forgetting") continue;
+        entry.lifecycle = { state: "forgetting", started_at: now, target_registration_id: targetRegistrationId };
+        changed = true;
+      }
+      if (!changed) return;
+      index.updated_at = now;
+      this.persist(index);
+    });
+  }
+
+  /** Every entry already marked `"forgetting"` for `targetRegistrationId` — the target itself
+   * (self-referencing, mirroring `"adopting"`'s convention) plus any sealed source the interrupted
+   * attempt already flipped out of `"adopted"`. A RESUMED `forgetWorkspace` call must reconstruct
+   * its full entry set from THIS, never from `sealedSourcesFor` again: a source already marked
+   * `"forgetting"` no longer satisfies `sealedSourcesFor`'s `"adopted"` filter, so re-deriving the
+   * set on resume the same way the first call did would silently orphan it. */
+  forgettingMembersFor(targetRegistrationId: string): WorkspaceEntry[] {
+    return this.list().filter(
+      (entry) =>
+        entry.lifecycle?.state === "forgetting" && entry.lifecycle.target_registration_id === targetRegistrationId,
+    );
+  }
+
+  /** Begins (or, if one is already active for this target, returns) the durable `glosa forget`
+   * operation record — issue #156's revised approach. Takes an immutable snapshot of `members`
+   * (captured from the CALLER's already-resolved, live entries) and marks every member not
+   * already `"forgetting"` in the SAME persisted write. Callers must invoke this BEFORE sealing or
+   * deleting a single bus file: because the marker and the snapshot land together, a crash any
+   * time after this call returns is both DISCOVERABLE (status/doctor sees `lifecycle:"forgetting"`
+   * immediately — never a bus silently sealed with no durable trace) and fully RESUMABLE (the
+   * snapshot survives every member's own registration later being removed, so a resumed call can
+   * still report the complete original set — see `forget-workspace.ts`'s `commitForgetLocked`). */
+  beginForgetOperation(target: WorkspaceEntry, members: readonly WorkspaceEntry[]): Promise<ForgetOperationRecord> {
+    return this.mutex.runExclusive(() => {
+      const index = this.loadForMutation();
+      const existing = Object.values(index.forget_operations).find(
+        (op) => op.target_registration_id === target.registration_id && !op.completed_at,
+      );
+      if (existing) return existing;
+
+      const now = this.now().toISOString();
+      const record: ForgetOperationRecord = {
+        operation_id: randomUUID(),
+        target_registration_id: target.registration_id,
+        target_slug: target.slug,
+        members: members.map((entry) => ({
+          registration_id: entry.registration_id,
+          slug: entry.slug,
+          canonical_path: entry.canonical_path,
+          worktree_path: entry.worktree_path,
+          kind: entry.kind,
+          bus_path: entry.bus_path,
+          // Captured from `entry` (the CALLER's still-pre-mutation view — see this function's own
+          // "members" param docstring) BEFORE the loop below ever flips it to "forgetting", so a
+          // sealed source's true `"adopted"` state (not a bare "active") survives into the record.
+          prior_lifecycle: entry.lifecycle ?? { state: "active" },
+        })),
+        started_at: now,
+      };
+      index.forget_operations[record.operation_id] = record;
+      for (const member of members) {
+        const entry = index.workspaces[member.registration_id];
+        if (entry && entry.lifecycle?.state !== "forgetting") {
+          entry.lifecycle = { state: "forgetting", started_at: now, target_registration_id: target.registration_id };
+        }
+      }
+      index.updated_at = now;
+      this.persist(index);
+      return record;
+    });
+  }
+
+  /** Reverts an operation that never got past the planned phase — a blocker (typically a
+   * `LEASE_HELD` race lost against `beginForgetOperation`'s own lock-free preflight peek)
+   * discovered before a single bus was actually sealed. Every still-registered member's lifecycle
+   * is restored to its OWN captured `prior_lifecycle` (held-review finding: a sealed adopted
+   * source's true `"adopted"` state must come back exactly as it was, never a bare `"active"` —
+   * setting it to `"active"` would silently strip the `adoption_id`/`target_registration_id` a
+   * later `sealedSourcesFor` needs to ever rediscover it, orphaning its bus permanently), and the
+   * record is dropped entirely — never call this once ANY bus has been sealed or deleted, since at
+   * that point the operation is committed to finishing, not abandoning. A no-op if the operation is
+   * unknown or already completed (defensive; the commit path never calls this after
+   * `completeForgetOperation`). */
+  abortForgetOperation(operationId: string): Promise<void> {
+    return this.mutex.runExclusive(() => {
+      const index = this.loadForMutation();
+      const record = index.forget_operations[operationId];
+      if (!record || record.completed_at) return;
+      for (const member of record.members) {
+        const entry = index.workspaces[member.registration_id];
+        if (
+          entry &&
+          entry.lifecycle?.state === "forgetting" &&
+          entry.lifecycle.target_registration_id === record.target_registration_id
+        ) {
+          entry.lifecycle = member.prior_lifecycle ?? { state: "active" };
+        }
+      }
+      delete index.forget_operations[operationId];
+      index.updated_at = this.now().toISOString();
+      this.persist(index);
+    });
+  }
+
+  /** Stamps the operation's idempotent completion receipt. Never removed afterward — this is what
+   * lets a retried `glosa forget <slug>` return the exact same full removal list even once every
+   * member's registration is gone (see `forgetOperationForSlug`). Idempotent: completing an
+   * already-completed operation is a silent no-op, never a duplicate `updated_at` bump.
+   *
+   * Held-review finding (fifth pass): schema-v4 LOAD-time validation
+   * (`isLifecycleOperationGraphConsistent`'s own target-last invariant) already refuses to trust an
+   * on-disk graph where the target row is absent while a snapshotted source row is still live, but
+   * completion must never depend on that alone — this is the independent USE-time half of the same
+   * guard. A caller reaching this method while ANY snapshotted member (target or source) still has
+   * a live registration is refused outright: stamping `completed_at` here is the one durable claim
+   * that "every member's bus and registration are gone," and it must never be made while that is
+   * observably false, whatever upstream bug or future caller got here without finishing the
+   * sources-first, target-last deletion loop first. */
+  completeForgetOperation(operationId: string): Promise<ForgetOperationRecord> {
+    return this.mutex.runExclusive(() => {
+      const index = this.loadForMutation();
+      const record = index.forget_operations[operationId];
+      if (!record)
+        throw new Error(`forget operation ${operationId} is missing — beginForgetOperation must precede completion`);
+      if (!record.completed_at) {
+        const stillLive = record.members.find((member) => index.workspaces[member.registration_id]);
+        if (stillLive) {
+          throw new Error(
+            `forget operation ${operationId} cannot complete — registration ${stillLive.registration_id} (${stillLive.slug}) is still live`,
+          );
+        }
+        record.completed_at = this.now().toISOString();
+        index.updated_at = record.completed_at;
+        this.persist(index);
+      }
+      return index.forget_operations[operationId]!;
+    });
+  }
+
+  /** The active (not yet completed) forget operation for this target, if any — the resumed
+   * commit path's first stop, so a retry reconstructs the complete original member set from the
+   * durable snapshot rather than re-deriving a partial one from whatever is still registered. */
+  activeForgetOperationForTarget(targetRegistrationId: string): ForgetOperationRecord | null {
+    return (
+      Object.values(this.load().forget_operations).find(
+        (op) => op.target_registration_id === targetRegistrationId && !op.completed_at,
+      ) ?? null
+    );
+  }
+
+  /** Every not-yet-completed forget operation — `doctor`/status recovery reads this (via the
+   * daemon boot sweep and `GET /api/status`) to surface an interrupted deletion even once the
+   * target's own registration might already be gone. */
+  pendingForgetOperations(): ForgetOperationRecord[] {
+    return Object.values(this.load().forget_operations).filter((op) => !op.completed_at);
+  }
+
+  /** The active (not yet completed) forget operation naming `canonicalPath` as ANY of its
+   * original members — target or adopted-source alias — or `null` if none does. Held-review
+   * finding: "an active forget operation stops governing access once its target registration is
+   * removed" — session registration, `glosa open`, and path-addressed inbox listing all resolve a
+   * raw path via `WorkspaceIndex.get`/`upsertWorkspace`/`resolveOpenTarget`, none of which know
+   * anything about a durable operation whose member registrations have already been removed; a
+   * `null` live-registration lookup previously read as "never seen this path before" even while an
+   * uncompleted deletion for it was still in flight. Callers MUST check this BEFORE creating or
+   * reusing a registration for a path with no current entry — a completed operation (its receipt
+   * stamped) no longer matches, so a legitimate reopen after full completion is never blocked. */
+  activeForgetOperationForCanonicalPath(canonicalPath: string): ForgetOperationRecord | null {
+    return (
+      this.pendingForgetOperations().find((op) => op.members.some((m) => m.canonical_path === canonicalPath)) ?? null
+    );
+  }
+
+  /** Resolves a forget operation by slug — matching either the ORIGINAL target slug or any
+   * ORIGINAL member's slug, so a caller naming an adopted source already deleted by a resumed
+   * attempt (or the target itself, before or after its own registration disappears) still finds
+   * the same record. Prefers an active operation; falls back to the newest completed one — the
+   * idempotent receipt a retry after full completion must still be able to read. */
+  forgetOperationForSlug(slug: string): ForgetOperationRecord | null {
+    const matches = Object.values(this.load().forget_operations).filter(
+      (op) => op.target_slug === slug || op.members.some((member) => member.slug === slug),
+    );
+    if (matches.length === 0) return null;
+    const active = matches.find((op) => !op.completed_at);
+    if (active) return active;
+    return matches.reduce((latest, op) => (op.started_at > latest.started_at ? op : latest));
+  }
+
+  /** Resolves a forget operation by TARGET REGISTRATION ID alone — never by slug. Held-review
+   * finding (final pass): "commit resolves the target by stale slug; this can falsely complete
+   * while a live registration remains" — a target's slug becomes free the instant its own
+   * registration is removed (sources-first, target-last), and an entirely UNRELATED fresh
+   * registration elsewhere can legitimately claim that exact same freed slug before this
+   * operation's completion receipt lands. A commit that re-resolved "the target" via
+   * `getBySlug(targetSlug)` at that point would silently act on the wrong workspace. Registration
+   * id is immutable for the life of an operation (it never gets reassigned to a different canonical
+   * identity), so it is the only identity `commitForgetLocked` may resolve through. Prefers an
+   * active operation; falls back to the newest completed one, mirroring `forgetOperationForSlug`. */
+  forgetOperationForTargetRegistration(targetRegistrationId: string): ForgetOperationRecord | null {
+    const matches = Object.values(this.load().forget_operations).filter(
+      (op) => op.target_registration_id === targetRegistrationId,
+    );
+    if (matches.length === 0) return null;
+    const active = matches.find((op) => !op.completed_at);
+    if (active) return active;
+    return matches.reduce((latest, op) => (op.started_at > latest.started_at ? op : latest));
   }
 
   /** GC (A5 §F19). Runs at most once per `gcThrottleMs` unless `force` (daemon boot always

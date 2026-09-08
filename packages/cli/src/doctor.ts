@@ -251,49 +251,74 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     );
   }
 
-  // 8. workspace (.glosa + baseline checkpoint + matcher non-empty tracked set)
-  const glosaDir = join(dir, ".glosa");
-  if (!existsSync(glosaDir)) {
+  // 8. workspace (.glosa + baseline checkpoint + matcher non-empty tracked set). Takes precedence
+  // over the ordinary not-yet-opened/no-baseline branches below when this exact workspace's
+  // `glosa forget` deletion (issue #156) is durably committed but interrupted — after bus removal
+  // the directory legitimately LOOKS not-yet-opened, which would otherwise misreport a mid-deletion
+  // workspace as one nobody has ever touched. `status` is `null` only when the daemon itself is
+  // unreachable (check 6 already reported that failure); this check degrades to the ordinary
+  // filesystem-only checks below rather than reporting nothing.
+  let canonicalDirForForgetting = dir;
+  try {
+    canonicalDirForForgetting = realpathSync(dir);
+  } catch {
+    // nonexistent dir — fall back to the literal path; no workspace row will match either way
+  }
+  const forgetting = status?.workspaces.find(
+    (w) => (w.path === canonicalDirForForgetting || w.path === dir) && w.lifecycle === "forgetting",
+  );
+  if (forgetting) {
     checks.push(
-      check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
+      check(
+        "workspace",
+        "fail",
+        `this workspace's deletion was interrupted mid-way (\`glosa forget\`) — run \`glosa forget ${forgetting.slug} --yes\` to resume and finish removing it`,
+      ),
     );
   } else {
-    const journal = journalMetrics(dir);
-    const shadowGitDir = join(glosaDir, "shadow.git");
-    const headOut = existsSync(shadowGitDir)
-      ? deps.runVersionProbe([
-          "git",
-          `--git-dir=${shadowGitDir}`,
-          `--work-tree=${dir}`,
-          "rev-parse",
-          "--verify",
-          "-q",
-          "HEAD",
-        ])
-      : null;
-    if (!headOut) {
+    const glosaDir = join(dir, ".glosa");
+    if (!existsSync(glosaDir)) {
       checks.push(
-        check(
-          "workspace",
-          "fail",
-          `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve); ${journal.detail}`,
-        ),
+        check("workspace", "warn", `${glosaDir} does not exist yet — workspace not yet opened; run \`glosa open\``),
       );
     } else {
-      const tracked = resolveMatchedFiles(dir).tracked;
-      checks.push(
-        tracked.length > 0
-          ? check(
-              "workspace",
-              journal.available ? "pass" : "warn",
-              `baseline checkpoint present, ${tracked.length} tracked artifact(s); ${journal.detail}`,
-            )
-          : check(
-              "workspace",
-              "warn",
-              `baseline checkpoint present, but the matcher currently tracks zero artifacts; ${journal.detail}`,
-            ),
-      );
+      const journal = journalMetrics(dir);
+      const shadowGitDir = join(glosaDir, "shadow.git");
+      const headOut = existsSync(shadowGitDir)
+        ? deps.runVersionProbe([
+            "git",
+            `--git-dir=${shadowGitDir}`,
+            `--work-tree=${dir}`,
+            "rev-parse",
+            "--verify",
+            "-q",
+            "HEAD",
+          ])
+        : null;
+      if (!headOut) {
+        checks.push(
+          check(
+            "workspace",
+            "fail",
+            `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve); ${journal.detail}`,
+          ),
+        );
+      } else {
+        const tracked = resolveMatchedFiles(dir).tracked;
+        checks.push(
+          tracked.length > 0
+            ? check(
+                "workspace",
+                journal.available ? "pass" : "warn",
+                `baseline checkpoint present, ${tracked.length} tracked artifact(s); ${journal.detail}`,
+              )
+            : check(
+                "workspace",
+                "warn",
+                `baseline checkpoint present, but the matcher currently tracks zero artifacts; ${journal.detail}`,
+              ),
+        );
+      }
     }
   }
 

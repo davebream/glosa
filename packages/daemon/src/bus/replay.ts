@@ -59,6 +59,14 @@ export interface DerivedState {
   /** Present only after a durable `adoption_sealed`; mutators must reject rather than letting a
    * stale in-memory bus append into historical lineage. */
   adoptionSeal: { adoptionId: string; targetRegistrationId: string } | null;
+  /** Present only after a durable `forget_sealed` (issue #156) — `glosa forget`'s own bus-level
+   * permanent write-lock, the same "durable event in THIS bus's journal, checked by
+   * `assertWritable()`" pattern `adoptionSeal` already uses. Sealing is atomic with the apply-lease
+   * check that precedes it (`WorkspaceBus.sealForForget`, under this bus's own mutex), which is
+   * what closes the race a caller sitting only on a read-only `peekJournal` snapshot cannot: an
+   * `apply-begin` already past HTTP routing resolution but not yet through this bus's mutex can no
+   * longer land after this seal commits. */
+  forgetSeal: boolean;
   lineages: Record<string, Record<string, unknown>>;
   appliedEventIds: Set<string>;
   appliedIdemKeys: Set<string>;
@@ -70,6 +78,7 @@ export function createEmptyState(): DerivedState {
     entries: {},
     applyLease: null,
     adoptionSeal: null,
+    forgetSeal: false,
     lineages: {},
     appliedEventIds: new Set(),
     appliedIdemKeys: new Set(),
@@ -147,6 +156,10 @@ export const defaultReducer: Reducer = (state, event) => {
     case "lineage_attached": {
       const adoptionId = event.detail?.adoption_id;
       if (typeof adoptionId === "string") state.lineages[adoptionId] = event.detail ?? {};
+      return;
+    }
+    case "forget_sealed": {
+      state.forgetSeal = true;
       return;
     }
     default:

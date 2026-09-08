@@ -60,6 +60,11 @@ export interface WorkspaceStatusSummary {
   /** Additive (issue #142): journal entries with no inbox payload — optional for N-1 daemon
    * compatibility. `doctor`'s `orphaned-entries` check reads this. */
   orphaned_entry_count?: number;
+  /** Additive (issue #156): present only for a workspace whose `glosa forget` deletion is durably
+   * committed — possibly mid-resume after a crash. `doctor`'s `workspace` check reads this so an
+   * interrupted deletion reads as "resume with `glosa forget <slug> --yes`", not as a plain
+   * not-yet-opened workspace. */
+  lifecycle?: "forgetting";
   /** Additive in contract 1.5; optional for N-1 daemon compatibility. */
   connect?: {
     providers: Array<{ provider: string; display_name: string; instruction: string }>;
@@ -173,6 +178,42 @@ export interface InboxListResult {
 
 export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
 
+/** `glosa forget <slug>`'s daemon-side blockers (issue #156) — a live bound session, an
+ * unexpired apply lease, or an in-progress adoption, named individually so the CLI can print
+ * exactly what is blocking. */
+export type ForgetBlocker =
+  | { kind: "live-session"; session_id: string }
+  | { kind: "apply-lease"; lease_id: string; expires_at: string }
+  | { kind: "adopting" };
+
+export interface ForgetBusEntry {
+  registration_id: string;
+  slug: string;
+  canonical_path: string;
+  kind: "directory" | "loose-file";
+  bus_path: string;
+}
+
+/** `confirm:false` (preview) always returns `would_remove`; `confirm:true` (execute/resume)
+ * always returns `removed` — the two members are mutually exclusive, matching the daemon's
+ * `POST /api/workspaces/forget` response shape (http.ts's `handleWorkspaceForget`). `slug` always
+ * names the resolved TARGET; `requested_slug` is present only when the caller named a sealed
+ * adopted source instead — that source is never an independent provenance unit (issue #156
+ * revised approach), so the daemon reports what it actually acted on. */
+export type ForgetWorkspaceResult =
+  | {
+      slug: string;
+      requested_slug?: string;
+      confirmed: false;
+      would_remove: ForgetBusEntry[];
+      /** Held-review addition: a deterministic digest of `would_remove`, echoed back as
+       * `memberFingerprint` on the matching `confirm:true` call so the daemon can refuse a stale
+       * confirmation (an adoption completed the member set between preview and confirm) rather
+       * than silently deleting a different set than the one previewed. */
+      member_fingerprint: string;
+    }
+  | { slug: string; requested_slug?: string; confirmed: true; removed: ForgetBusEntry[] };
+
 /** The interface every P5.1 command depends on. `port` is exposed (rather than kept private)
  * because `glosa open` needs it to build the `http://127.0.0.1:<port>/#t=<token>` pairing URL —
  * without this, `runOpen` would have to re-run `ensureDaemon()` itself just to rediscover a port
@@ -243,6 +284,22 @@ export interface GlosaApiClient {
   ): Promise<{ bound: true; session_id: string }>;
   /** Mint a short-TTL single-use presentation token for MCP/present URLs (`p=`). */
   mintPresentationToken?(): Promise<{ token: string; expires_in_s: number }>;
+  /** `glosa forget <slug>`'s daemon-side call (issue #156). Addressed by SLUG, not `path` — the
+   * whole point is that it must still work once a workspace's on-disk path is gone. `confirm`
+   * defaults to `false`: a pure preview that performs the exact same preflight but never marks,
+   * deletes, or removes anything. Throws an `ApiError` with `problem.type` ending in
+   * `forget-blocked` (409) when a live bound session or an unexpired apply lease blocks deletion —
+   * `problem.blockers` names each one. */
+  forgetWorkspace(
+    slug: string,
+    opts?: {
+      confirm?: boolean;
+      /** Echoes a prior preview's `member_fingerprint` back on the matching `confirm:true` call
+       * — see `ForgetWorkspaceResult`'s own docstring. Throws an `ApiError` with `problem.type`
+       * ending in `forget-stale-preview` (409) when the member set has changed since. */
+      memberFingerprint?: string;
+    },
+  ): Promise<ForgetWorkspaceResult>;
 }
 
 /** The real `GlosaApiClient` — `ensureDaemon()` once per construction (find-or-spawn, R1), then an
@@ -397,6 +454,15 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
     },
     async mintPresentationToken() {
       return (await call("POST", "/api/presentation-token/mint", {})).json();
+    },
+    async forgetWorkspace(slug, opts = {}) {
+      return (
+        await call("POST", "/api/workspaces/forget", {
+          slug,
+          ...(opts.confirm ? { confirm: true } : {}),
+          ...(opts.memberFingerprint !== undefined ? { member_fingerprint: opts.memberFingerprint } : {}),
+        })
+      ).json();
     },
   };
 }

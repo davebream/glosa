@@ -156,6 +156,9 @@ once when interactive; scripts and `--json` callers must resolve ambiguity expli
 require init or an agent session. Run `glosa doctor` to verify effective provider installations,
 or `glosa --help` to see every command. If an inbox entry's payload goes missing — moved or deleted
 by hand — `glosa inbox list` names it and `glosa inbox dismiss <id>` closes it without a session.
+To permanently delete a workspace's registration and bus (never its work-tree files), use
+`glosa forget <slug> [--yes]` — it refuses first if a live session or apply lease is active, and
+previews the exact paths before asking once.
 
 ### Updating
 

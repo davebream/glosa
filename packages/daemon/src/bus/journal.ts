@@ -36,7 +36,8 @@ export type EventType =
   | "git_index_lock_reclaimed"
   | "adoption_sealed"
   | "lineage_attached"
-  | "entry_adopted";
+  | "entry_adopted"
+  | "forget_sealed";
 
 export interface JournalEvent {
   v: 1;
@@ -92,6 +93,7 @@ const LIFECYCLE_CRITICAL_EVENTS: ReadonlySet<EventType> = new Set([
   "adoption_sealed",
   "lineage_attached",
   "entry_adopted",
+  "forget_sealed",
 ]);
 
 export interface EventTooLargeError extends Error {

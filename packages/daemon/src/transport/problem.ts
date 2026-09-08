@@ -60,6 +60,20 @@ export type ProblemSlug =
   | "adoption-conflict"
   | "workspace-adopting"
   | "workspace-adopted"
+  // issue #156 — `POST /api/workspaces/forget`. `workspace-forgetting` mirrors
+  // `workspace-adopting`: ordinary routing refuses a workspace whose durable deletion is already
+  // committed and possibly mid-resume. `forget-blocked` is the distinct preflight refusal (a live
+  // bound session or an unexpired apply lease) — kept separate from the generic `conflict` slug
+  // because its body carries a structured `blockers` array (see `forgetBlockedResponse` below)
+  // the CLI names each blocker from, not just a human sentence.
+  | "workspace-forgetting"
+  | "forget-blocked"
+  // issue #156 held-review addition: a `confirm:true` call echoed back a `member_fingerprint` from
+  // an earlier preview that no longer matches the CURRENT member set (an adoption committed a new
+  // sealed source in between, or any other member-set change) — refused before anything is marked
+  // or deleted, distinct from `forget-blocked` (a live session/lease/adoption) because the caller's
+  // own remedy differs: re-preview and re-confirm, not wait out someone else's lease.
+  | "forget-stale-preview"
   // T4 addition — `PUT /w/:slug/artifacts/:path`'s `If-Match` check (services/artifact.ts
   // `prepareArtifactSave`) used to share `conflict` with routes that have nothing to do with it.
   // Named separately so the SPA can open the stale-save dialog on exactly this condition, never on
@@ -103,6 +117,60 @@ export function restoreConflictResponse(instance: string, path: string, wouldBeL
     instance,
     path,
     would_be_lost_diff: wouldBeLostDiff,
+  };
+  return new Response(JSON.stringify(body), { status: 409, headers: { "Content-Type": "application/problem+json" } });
+}
+
+/** `POST /api/workspaces/forget`'s preflight refusal (issue #156): a live bound session or an
+ * unexpired apply lease blocks deletion before any side effect. Not built via `problem()` because
+ * the CLI must name each blocker individually (session id, or lease id + expiry), which
+ * `problem()`'s fixed shape has no slot for — same rationale as `restoreConflictResponse` above. */
+export function forgetBlockedResponse(
+  instance: string,
+  blockers: ReadonlyArray<
+    | { kind: "live-session"; session_id: string }
+    | { kind: "apply-lease"; lease_id: string; expires_at: string }
+    | { kind: "adopting" }
+  >,
+  /** The workspace the blockers apply to — always the resolved TARGET, never a sealed adopted
+   * source (issue #156 revised approach: a source is never an independent provenance unit). */
+  targetSlug?: string,
+  /** Present only when the caller named a sealed adopted source rather than the target directly. */
+  requestedSlug?: string,
+): Response {
+  const body: Record<string, unknown> = {
+    type: "https://glosa.local/errors/forget-blocked",
+    title: "workspace has a live bound session, an unexpired apply lease, or is mid-adoption",
+    status: 409,
+    instance,
+    blockers,
+  };
+  if (targetSlug !== undefined) body.slug = targetSlug;
+  if (requestedSlug !== undefined) body.requested_slug = requestedSlug;
+  return new Response(JSON.stringify(body), { status: 409, headers: { "Content-Type": "application/problem+json" } });
+}
+
+/** `POST /api/workspaces/forget`'s stale-preview refusal (issue #156 held-review finding):
+ * `member_fingerprint` no longer matches the CURRENT member set. Carries the FRESH `entries`/
+ * `member_fingerprint` pair so a client can re-preview inline (same round trip) rather than issuing
+ * a second `confirm:false` call — same rationale as `restoreConflictResponse`/`forgetBlockedResponse`
+ * for why this isn't built via the fixed `problem()` shape. */
+export function forgetStalePreviewResponse(
+  instance: string,
+  targetSlug: string,
+  requestedSlug: string,
+  entries: unknown[],
+  memberFingerprint: string,
+): Response {
+  const body: Record<string, unknown> = {
+    type: "https://glosa.local/errors/forget-stale-preview",
+    title: "the previewed member set has changed — re-preview before confirming",
+    status: 409,
+    instance,
+    slug: targetSlug,
+    ...(requestedSlug !== targetSlug ? { requested_slug: requestedSlug } : {}),
+    would_remove: entries,
+    member_fingerprint: memberFingerprint,
   };
   return new Response(JSON.stringify(body), { status: 409, headers: { "Content-Type": "application/problem+json" } });
 }

@@ -177,6 +177,57 @@ describe("glosa doctor", () => {
     expect(findCheck(result.data.checks, "workspace")?.status).toBe("warn");
   });
 
+  test("workspace mid-deletion (an interrupted `glosa forget`) -> FAIL naming the exact resume command (issue #156)", async () => {
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    // The bus is already gone (an interrupted forget deleted it) — without the lifecycle signal
+    // this would otherwise misreport as the generic, harmless "not yet opened" WARN.
+    client.statusResult = {
+      ...client.statusResult,
+      workspaces: [
+        {
+          slug: "stuck-ws",
+          path: dir,
+          last_seen: "2020-01-01T00:00:00.000Z",
+          pending_count: 0,
+          has_attention: false,
+          lifecycle: "forgetting",
+        },
+      ],
+    };
+    const result = await runDoctor(dir, deps);
+    const workspaceCheck = findCheck(result.data.checks, "workspace");
+    expect(workspaceCheck?.status).toBe("fail");
+    expect(workspaceCheck?.detail).toContain("glosa forget stuck-ws --yes");
+    expect(result.exitCode).toBe(9); // DEGRADED — any FAIL
+  });
+
+  test("workspace mid-deletion takes precedence even when .glosa still exists on disk (crash before file deletion)", async () => {
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    writeFileSync(join(dir, "notes.md"), "# hello\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile(); // a real baseline checkpoint exists — would otherwise report "pass"
+    await bus.close();
+    client.statusResult = {
+      ...client.statusResult,
+      workspaces: [
+        {
+          slug: "mid-forget",
+          path: dir,
+          last_seen: "2020-01-01T00:00:00.000Z",
+          pending_count: 0,
+          has_attention: false,
+          lifecycle: "forgetting",
+        },
+      ],
+    };
+    const result = await runDoctor(dir, deps);
+    const workspaceCheck = findCheck(result.data.checks, "workspace");
+    expect(workspaceCheck?.status).toBe("fail");
+    expect(workspaceCheck?.detail).toContain("glosa forget mid-forget --yes");
+  });
+
   test("workspace opened (real shadow-git baseline) with a tracked artifact -> pass", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
