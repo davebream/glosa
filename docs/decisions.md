@@ -366,3 +366,37 @@ dialect and would be a core/provider boundary violation.
 gets no relaxation anywhere in it. That is deny-by-default working as specified rather than a
 regression, and narrowing it is forbidden — relying on a transformation happening to be a no-op over
 raw bytes is exactly the corruption the opt-out exists to prevent.
+
+## A fence's two invented blank lines are restored together, never with an unrelated run
+
+**Decision.** A fenced code block inside a tight list item gets a blank line on either side from
+the serializer regardless of the source list's own tightness. CommonMark's tight/loose is one
+attribute of the whole list, so restoring only one of the two invented blank lines still leaves the
+list reading loose — the existing per-run restoration pass, trying them one at a time, could put
+neither back. `restoreSourceSpelling` now retries the two together, once, after that pass: restored
+as a pair, tight matches tight again and the candidate verifies.
+
+Editing the word directly against one of the two blank lines — nothing else separates them — merges
+the edit and the blank line into a single diff run, which the retry above can't reach as a pair.
+Peeling the whitespace token off such a run first (gated to runs of equal token length on both
+sides, so an HTML entity decode's own many-to-one token collapse is never mistaken for this shape)
+recovers the blank line as its own run before the retry.
+
+**Why restricted to the fence's own pair, not every leftover whitespace-only run.** A writer's edit
+CAN be whitespace-only — doubling a space is one — so whitespace-only is not by itself evidence that
+a run is safe to group. The retry is scoped to runs that are both whitespace-only and adjacent to a
+fence delimiter, which the fence's own two blank lines always are and an unrelated edit elsewhere in
+the block is not. It is also one extra candidate, tried once, not a search over subsets: a
+genuinely unrelated blank line — an already-loose list's own spacing, or the writer's own
+tight-to-loose edit — never qualifies, and reverting the writer's edit itself still fails `verify`
+exactly as it did before this existed.
+
+**What this does not solve.** CommonMark's tight/loose attribute does not record which blank line
+in a list item made it loose. Where a fenced code block's own two invented blanks are entangled with
+a writer's deliberate one, a candidate that keeps the tree loose by a different blank line than the
+one the writer typed can still verify; the pair-restricted retry above at least keeps this from
+crossing into an unrelated edit, and the collateral guard reports the residual mismatch it leaves
+rather than committing it silently. Outside that pairing — a fence with only one invented blank
+line, the shape the per-run pass alone already handled before this task — the same ambiguity existed
+already and is unchanged: solving it in general would mean recording blank-line provenance the
+editor's tree does not carry today, which is out of scope here.

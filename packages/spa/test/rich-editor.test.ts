@@ -64,8 +64,8 @@ const CORPUS_COUNT_NOTE = [
   "",
   "A MOVED DENOMINATOR WITH UNCHANGED NUMERATORS IS BOOKKEEPING, NOT A REGRESSION. Re-baseline the",
   "total, then confirm the numerators did not move with it:",
-  "  - metric 1's per-cause map still totals 40,",
-  "  - metric 2 still reports 3 dishonest writes,",
+  "  - metric 1's per-cause map still totals 39,",
+  "  - metric 2 still reports 1 shipped dishonest write,",
   "  - metric 3 still reports 0 missed and 0 false alarms.",
   "If all three hold, the corpus grew and nothing about the serializer changed. Re-baselining means",
   "the constant AND the test names that carry the same totals.",
@@ -901,11 +901,155 @@ describe("an edited block is written back in the spelling the file already had (
   test("AMD-2b: a tight list is not re-emitted loose when a sibling item is edited", () => {
     // AMD-2b. The serializer writes a blank line between the paragraph and the fence inside the
     // second item, which turns the list loose on reparse — a structural change to a list the writer
-    // only edited one word of.
+    // only edited one word of. ONE spurious blank line here — the fence is the item's LAST child, so
+    // there is no trailing paragraph for the serializer to separate it from — and the existing
+    // per-run restoration pass already puts that one back alone. See #184 below for the harder case.
     const source = "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n";
     const result = save(source, source.replace("gamma", "GAMMA"));
     expect(result.markdown).toBe(source.replace("gamma", "GAMMA"));
     expect(result.degraded).toBe(false);
+  });
+
+  test("#184: a fence with a paragraph on BOTH sides, in one tight list item, keeps its own spacing", () => {
+    // THE REPORTED CASE, reduced from `docs/requirements.md` block 30. A fence sandwiched between
+    // two paragraphs of the SAME list item gets a spurious blank line on both sides — the serializer
+    // separates every pair of sibling blocks the same way regardless of which side of the fence they
+    // are on — and those two blank lines are separate, non-overlapping diff runs, nowhere near the
+    // edited word. Restoring either ALONE still leaves one spurious blank line in the candidate, so
+    // the list still reads loose on reparse and neither verifies by itself; only both together read
+    // tight again. This is `restoreSourceSpelling`'s bounded refinement, not the per-run pass AMD-2b
+    // exercises above — ablating just the refinement reproduces this exact failure (see the ablation
+    // test below).
+    const source = "- alpha here\n  ```js\n  const x = 1;\n  ```\n  beta here\n";
+    const result = save(source, source.replace("alpha", "ALPHA"));
+    expect(result.markdown).toBe(source.replace("alpha", "ALPHA"));
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: the same fence sandwich, edited on the far side of the fence instead", () => {
+    // The mirror of the case above — the edit lands in the paragraph AFTER the fence rather than
+    // before it — so the entangled-with-the-edit hypothesis the design review proposed (and this
+    // implementation's investigation disproved; see rich-editor.js's `restoreSourceSpelling`
+    // comment) cannot be rescued by "the edit happens to be on the same side as one of the runs".
+    // Edits the SECOND word of the trailing paragraph rather than the first: the first word sits
+    // token-adjacent to the closing fence's spurious blank line, and firing there is the existing,
+    // separately-pinned "touching, not strict" join (REQ-6, #174) doing exactly what it is for —
+    // not a #184 concern, and not what this discriminator is measuring.
+    const source = "- alpha here\n  ```js\n  const x = 1;\n  ```\n  gamma beta here\n";
+    const result = save(source, source.replace("beta", "BETA"));
+    expect(result.markdown).toBe(source.replace("beta", "BETA"));
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: editing the fence's OWN content leaves its flanking spacing exact too", () => {
+    // The edited word is now INSIDE the fence rather than beside it, so the two spurious blank runs
+    // sit on either side of the edit rather than nowhere near it — the widest placement this
+    // refinement has to cover in one block.
+    const source = "- alpha here\n  ```js\n  const x = 1;\n  ```\n  beta here\n";
+    const result = save(source, source.replace("x = 1", "x = 2"));
+    expect(result.markdown).toBe(source.replace("x = 1", "x = 2"));
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: nested tight lists each keep their own fence spacing exact", () => {
+    // Two fence sandwiches at two different nesting depths in one block, each governed by ITS OWN
+    // list's tight/loose attribute, restored in the same pass. The inner item's fence has no
+    // trailing sibling paragraph deliberately: prosemirror-markdown's own continuation-line indent
+    // after a nested sub-list is a separate, pre-existing defect (unrelated to #184's fence
+    // spacing), and this fixture is scoped to avoid exercising it.
+    const source =
+      "- outer alpha\n  - inner alpha\n    ```js\n    const x = 1;\n    ```\n    inner beta\n" +
+      "- second outer here\n  ```js\n  const y = 2;\n  ```\n  more outer beta\n";
+    const result = save(source, source.replace("second outer", "SECOND OUTER"));
+    expect(result.markdown).toBe(source.replace("second outer", "SECOND OUTER"));
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: an already-loose list's real blank lines are left exactly as they were", () => {
+    // The list is loose ON PURPOSE — every item is separated by a real blank line the writer wrote —
+    // so the output and the source already agree on every blank line around the fence and there is
+    // nothing here for the refinement to do. Pinned so a future change cannot "fix" this by making
+    // the refinement strip blank lines it merely finds inconvenient rather than ones the serializer
+    // invented; if it did, this write would still be honest (the tree is unaffected either way) but
+    // it would no longer be byte-identical to the source, which this line demands.
+    const source = "- alpha here\n\n- beta here\n\n  ```js\n  const x = 1;\n  ```\n\n- gamma here\n";
+    const result = save(source, source.replace("gamma", "GAMMA"));
+    expect(result.markdown).toBe(source.replace("gamma", "GAMMA"));
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: deliberately loosening a tight list is the writer's edit, not collateral to undo", () => {
+    // The writer's OWN edit adds a blank line between two items — turning the list loose is the
+    // edit, not a side effect of it — so `edited`'s tree genuinely has `tight: false`. Restoring the
+    // run that carries it would revert the writer's own change, exactly like restoring over the
+    // writer's edited word; `verify` refuses it for the same reason, and the refinement's grouping
+    // cannot rescue a run whose restoration is unsound alone by grouping it with sound ones — the
+    // group only accepts when EVERY member's restoration, including this one, verifies together.
+    const source = "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n";
+    const edited = source.replace("- gamma here", "\n- gamma here");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+  });
+
+  test("#184: a whitespace-only edit in the paragraph beside the fence is not swept into the fence's own pair", () => {
+    // A writer's edit CAN be whitespace-only — doubling a space is one — so this asserts the actual
+    // safety property directly rather than the (false) claim that such an edit cannot occur: the
+    // fence-adjacency restriction on the grouped retry keeps this run out of the fence's pair, so it
+    // is judged on its own, same as any other edit.
+    const source = "- alpha here\n  ```js\n  const x = 1;\n  ```\n  beta here\n";
+    const edited = source.replace("alpha here", "alpha  here");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: a whitespace-only edit inside the fenced code is not swept into the fence's own pair either", () => {
+    const source = "- alpha here\n  ```js\n  const x = 1;\n  ```\n  beta here\n";
+    const edited = source.replace("const x = 1;", "const  x = 1;");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("#184: splitting a paragraph into two beside the fence is the writer's edit, not undone", () => {
+    // A blank line the writer types between two paragraphs is not just a tight/loose attribute —
+    // it is the boundary between two DIFFERENT paragraph nodes. Reverting it would merge them back
+    // into one, which fails tree equality on its own (a stronger difference than tight/loose alone),
+    // so this holds regardless of the fence beside it or how many fence-only runs also need restoring.
+    const source = "- alpha here\n  beta here\n  ```js\n  const x = 1;\n  ```\n  gamma here\n";
+    const edited = source.replace("alpha here\n  beta here", "alpha here\n\n  beta here").replace("gamma", "GAMMA");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+  });
+
+  test("#184: a single serializer-invented blank line outside a fence pair is a known, pre-existing limit", () => {
+    // NOT a #184 case, and not fixed by it — kept as a reproducible comparison so a later change is
+    // measured against a named baseline rather than reasoned about from memory. This is AMD-2b's own
+    // shape: the fence is the item's LAST child, so the serializer invents exactly ONE blank line,
+    // and the pre-#184 per-run pass (unchanged by this task) restores it alone. Adding a blank the
+    // WRITER typed at the fence's other neighboring boundary lands on the identical bytes a genuine
+    // serializer artifact would occupy, so nothing here — before or after #184 — can tell one from
+    // the other; `verify` is tree equality only, and CommonMark's tight/loose does not record which
+    // blank line made a list loose. The write stays honest (same parsed tree, no corruption) but not
+    // byte-identical to what the writer typed. Confirmed identical at d4476e503e22e0c1b574ab9ac4df4df2ec36d91c,
+    // this repository's pre-#184 base commit, so #184 neither causes nor repairs it.
+    const source = "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n";
+    const edited = source.replace("beta here\n  ```", "beta here\n\n  ```");
+    const result = save(source, edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+    expect(parseMarkdown(result.markdown).eq(parseMarkdown(edited))).toBe(true);
+    expect(result.markdown).not.toBe(edited);
+    expect(result.markdown).toBe("- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n\n- gamma here\n");
   });
 
   test("REQ-3: the edited word repeated inside the destination does not drag the destination into its run", () => {
@@ -983,6 +1127,10 @@ describe("REQ-7: a re-serialized block always means what the writer's tree means
     ["an indented blockquote marker", " > alpha here\n > beta line\n"],
     ["a break inside a code span", "Run `git\n  add` first and then stop.\n"],
     ["a tight list holding a fence", "- alpha here\n- beta here\n  ```js\n  const x = 1;\n  ```\n- gamma here\n"],
+    [
+      "a fence flanked by paragraphs in one tight list item (#184)",
+      "- alpha here\n  ```js\n  const x = 1;\n  ```\n  beta here\n",
+    ],
     ["an escaped bracket colliding with a definition", "See \\[r\\] here.\n\n[r]: https://example.com\n\nAfter.\n"],
     ["escapes that are load-bearing", "This is \\*not emphasis\\* here.\n"],
     ["nested lists and a fence", "- a\n  - b\n\n```js\nconst x = 1;\n```\n\nAfter.\n"],
@@ -1079,7 +1227,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(441);
+    ).toBe(446);
     // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
     // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
     // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
@@ -1218,6 +1366,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //   the decisions entry are three of the nine, so the corpus grew by five blocks. Denominator moved,
   //   numerator did not — which is the bookkeeping case, not the regression case.
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
+  // · 39/446 after #184's own documentation: the decisions entry adds five blocks (the CHANGELOG
+  //   bullet grows an existing one). Denominator moved; the per-cause map, re-measured, did not.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
   // block population, so the denominator moves and every count below moves with it.
@@ -1229,11 +1379,13 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // or `.` never edited a single reference-link heading, which is the exact class where the two
   // overlap joins disagree; that narrower one is where the design's figures of 317 edits and 34
   // ablated firings come from. This one reaches all 18 reference-link blocks, `## [Unreleased]`
-  // included (via `nreleased`), so it makes 375 edits and its ablated row reads 35 rather than 34.
+  // included (via `nreleased`). Historically it made 375 edits with 35 ablated firings; after
+  // front-matter handling and documentation changes the current population is 446 blocks / 399 edits,
+  // with 34 ablated dishonest writes and firings.
   // The design's ratios and its residual set reproduce exactly; only the denominators differ, and
   // they differ because this generator is strictly wider. Compare like with like before concluding a
-  // number moved. Metric 1 does not depend on the generator at all, which is why it reproduces the
-  // design's numerator of 40 to the block.
+  // number moved. Metric 1 does not depend on the generator: its historical numerator was 40,
+  // reduced to the current 39 when #143 preserved front matter.
   const documents = [
     "README.md",
     "AGENTS.md",
@@ -1248,18 +1400,19 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   const EDITED_WORD = /[a-z]{5,}/;
 
   /** Asserted on its own, so a document gaining or losing a block is VISIBLE rather than silently
-   *  shifting every ratchet below it. It did exactly that here: 418 at `d965ffb`, 422 once #174's
-   *  own documentation edits landed, the four being the `docs/decisions.md` entry recording this
-   *  task's route selection. A DENOMINATOR MOVE IS NOT A RESULT — every numerator below is
-   *  unchanged, and that is what makes this one readable as bookkeeping rather than as drift.
+   *  shifting every ratchet below it. A DENOMINATOR MOVE IS NOT A RESULT — every numerator below is
+   *  unchanged, and that is what makes a move here bookkeeping rather than drift: 441 → 446 for
+   *  #184's own `docs/decisions.md` entry (five new blocks; its CHANGELOG bullet grew an existing
+   *  block rather than adding one), with metric 1's per-cause map still 39 and metric 3 still
+   *  0 missed / 0 false alarms either side of the move.
    *
-   *  IT WILL MOVE AGAIN, and not because of anything the serializer did. The corpus is read live
-   *  from the working tree, and T1, T4 and T5 all append to `CHANGELOG.md` and `docs/decisions.md`
-   *  in this same epic — so this number depends on which of them has merged, and in what order.
-   *  Re-baselining it is a one-line edit; the check that makes that edit safe is that the numerators
-   *  below did not move with it (per-cause map totalling 40, 3 dishonest writes, 0 missed and 0
-   *  false alarms). `CORPUS_COUNT_NOTE` says the same thing on the failure itself. */
-  const BLOCKS = 441;
+   *  IT WILL MOVE AGAIN, and not because of anything the serializer did: the corpus is read live
+   *  from the working tree, and this epic's other tasks append to `CHANGELOG.md` and
+   *  `docs/decisions.md` too. Re-baselining it is a one-line edit; the check that makes that edit
+   *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
+   *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
+   *  failure itself. */
+  const BLOCKS = 446;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1295,7 +1448,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 39 of 441 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 39 of 446 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1340,12 +1493,12 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 2 dishonest writes of 394; the guard fires on those 2 and, ablated, on 34", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 399; the guard fires on it and, ablated, on 34", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
-    // the restoration off the writes really are dishonest, 35 of them, and the guard must catch
+    // the restoration off the writes really are dishonest, currently 34 of them, and the guard must catch
     // every one. A re-run of the first design of this guard, which routed `faithful` through the
-    // restoration, scores 0 fired and 35 missed here. The ablation is an OMITTED ARGUMENT — the
+    // restoration, historically scored 0 fired and 35 missed (before #143 removed one case). The ablation is an OMITTED ARGUMENT — the
     // wrapper called without source bytes is M1 only, exactly what the pure-insertion path does —
     // never a flag, and no flag exists to set.
     //
@@ -1396,39 +1549,34 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     // Printed rather than counted, because a regression here is a list of places, not a number.
     expect(missed).toEqual([]);
     expect(falseAlarms).toEqual([]);
-    // The three the restoration cannot reach: DESIGN.md's front matter is T5's (REQ-11), the
-    // requirements block is the blank-line-before-a-fence case (the AMD-2b follow-up), and README's
-    // is a `&nbsp;·&nbsp;` pair that restores per-character rather than per run.
+    // The one the restoration still cannot reach: README's is a `&nbsp;·&nbsp;` pair that restores
+    // per-character rather than per run. `docs/requirements.md block 30` — the blank line #184 adds
+    // and removes around a fence in a tight list item — was HERE and is gone: its serializer output
+    // disagrees with its source in three separate runs (the edited word and the fence's two blank
+    // lines), and the two blank-line runs fail `verify` alone but pass restored together, which is
+    // the bounded retry `restoreSourceSpelling` tries once after its per-run pass.
     expect(
       residual,
       countNote(
         "which blocks the restoration cannot reach, named by POSITION in a live document. A block inserted above one of these shifts its index without changing which block it is, so compare the file names and the causes before reading a change here as a regression.",
       ),
-      // `DESIGN.md block 1` was HERE and is gone: it was the 110-line YAML header, and #143 made it a
-      // verbatim node. Its removal is this task's whole purpose, not a loosened assertion.
-    ).toEqual(["README.md block 6", "docs/requirements.md block 30"]);
+      // `DESIGN.md block 1` (#143's 110-line YAML header, made a verbatim node) left the same way.
+    ).toEqual(["README.md block 6"]);
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 2/2 shipped and 34/34 ablated whatever `edits` becomes.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 34/34 ablated whatever `edits` becomes.",
       ),
-      // THE NUMERATORS MOVED, AND THAT IS THE ONE CASE WHERE IT IS NOT A REGRESSION.
-      //
-      // The note above says a moved numerator is the real signal and must be investigated, never
-      // re-baselined. It was: shipped fell 3 → 2 and ablated 35 → 34, each by exactly ONE, and the
-      // one is `DESIGN.md block 1` — the 110-line YAML header. #143 made it a verbatim node, so it
-      // is no longer re-serialized and can no longer be written dishonestly. It also left the
-      // residual set above, and left `byCause` in metric 1, for the same single reason.
-      //
-      // `edits` then moved 385 → 394 for the OTHER reason, in the same branch: this task's own
-      // documentation lands in CHANGELOG.md, docs/requirements.md and docs/decisions.md, which are
-      // three of the nine. Five blocks added, five more synthetic edits. THE NUMERATORS DID NOT MOVE
-      // with it — 2/2 and 34/34 either side — which is what says the corpus grew rather than the
-      // serializer changing. Both causes are recorded because they are different failures wearing
-      // the same red.
+      // A MOVED NUMERATOR IS THE REAL SIGNAL, and here it moved twice, both legitimately: `shipped`
+      // fell 3 → 2 when #143 made front matter a verbatim node (no longer re-serialized, so it can
+      // no longer be written dishonestly), then 2 → 1 when #184 restores `docs/requirements.md
+      // block 30`. `ablated` stayed at 34 across both: the ablation omits the source argument
+      // entirely, so neither change's restoration logic ever runs on that path. `edits` moved with
+      // BLOCKS each time documentation grew the corpus (385 → 394 → 399) — bookkeeping, not drift,
+      // since `shipped`/`ablated` held steady across those moves.
     ).toEqual({
-      edits: 394,
-      shipped: { dishonest: 2, fired: 2 },
+      edits: 399,
+      shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 34, fired: 34 },
     });
   });

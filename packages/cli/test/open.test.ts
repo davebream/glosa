@@ -73,7 +73,7 @@ describe("glosa open", () => {
     expect(deps.isRegularFile?.(link)).toBe(false);
   });
 
-  test("realOpenDeps scrubs ANTHROPIC_API_KEY from the browser launcher", () => {
+  test("realOpenDeps scrubs ANTHROPIC_API_KEY from the browser launcher", async () => {
     const dir = freshDir();
     const fakeOpen = join(dir, "open");
     const outputPath = join(dir, "child-env.txt");
@@ -84,16 +84,26 @@ describe("glosa open", () => {
     chmodSync(fakeOpen, 0o755);
 
     const modulePath = join(import.meta.dir, "../src/open.ts");
-    const child = Bun.spawnSync({
+    const child = Bun.spawn({
       cmd: [
         process.execPath,
         "-e",
-        `const { existsSync, readFileSync } = await import("node:fs");
+        `const { readFileSync } = await import("node:fs");
          const { realOpenDeps } = await import(${JSON.stringify(modulePath)});
-         realOpenDeps(async () => ({})).openBrowser("http://127.0.0.1:4646/");
-         for (let attempt = 0; attempt < 100 && !existsSync(${JSON.stringify(outputPath)}); attempt++) await Bun.sleep(10);
-         const observed = existsSync(${JSON.stringify(outputPath)}) ? readFileSync(${JSON.stringify(outputPath)}, "utf8") : null;
-         process.stdout.write(JSON.stringify({ observed }));`,
+         const spawn = Bun.spawn.bind(Bun);
+         let launcher;
+         Bun.spawn = (options) => {
+           if (launcher) throw new Error("expected exactly one browser launcher");
+           return launcher = spawn(options);
+         };
+         try { realOpenDeps(async () => ({})).openBrowser("http://127.0.0.1:4646/"); }
+         finally { Bun.spawn = spawn; }
+         if (!launcher) throw new Error("browser launcher was not started");
+         const deadline = setTimeout(() => launcher.kill("SIGKILL"), 10_000);
+         const exitCode = await launcher.exited;
+         clearTimeout(deadline);
+         const observed = readFileSync(${JSON.stringify(outputPath)}, "utf8");
+         process.stdout.write(JSON.stringify({ exitCode, observed }));`,
       ],
       env: {
         ...Bun.env,
@@ -106,9 +116,15 @@ describe("glosa open", () => {
       stderr: "pipe",
     });
 
-    expect(child.success).toBe(true);
-    expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ observed: "unset|w03-open-control-sentinel" });
-  });
+    // Observe the real process completion, not a file appearing within a scheduling guess.
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    const exitCode = await child.exited;
+    clearTimeout(deadline);
+    expect(exitCode, await stderr).toBe(0);
+    expect(JSON.parse(await stdout)).toEqual({ exitCode: 0, observed: "unset|w03-open-control-sentinel" });
+  }, 20_000);
 
   test("non-darwin platform -> exit 5, never touches the daemon", async () => {
     let daemonTouched = false;

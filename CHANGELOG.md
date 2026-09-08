@@ -111,6 +111,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Editing a value in a document's `---` header no longer rewrites the whole file. The header is
   carried through a save exactly as you wrote it, and a one-word change to it now reaches the agent
   as a one-line edit rather than as a rewrite of everything.
+- Editing a word or whitespace anywhere near a fenced code block inside a tight list item no longer
+  inserts a blank line before and after the fence, which used to turn the whole list loose on
+  reparse (or, for edits at the fence's own boundary, fall back to rewriting the whole file) for a
+  change that never touched its spacing.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 
