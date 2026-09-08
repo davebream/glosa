@@ -119,6 +119,7 @@ dropping out of it.
 | `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 | `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
 | `delivery` | `packages/cli/test/mcp.test.ts` |
+| `delivery` | `packages/cli/test/daemon-client.test.ts` |
 | `delivery` | `packages/cli/test/api-integration.test.ts` |
 | `delivery` | `packages/daemon/test/bus/delivery-reservation.test.ts` |
 | `delivery` | `packages/daemon/test/delivery/presentation.test.ts` |
