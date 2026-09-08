@@ -16,10 +16,10 @@ import { resolveTrackedFiles } from "../matcher.ts";
 import { canonicalize } from "../registry/slug.ts";
 import type { WorkspaceIndex } from "../registry/workspace-index.ts";
 import { confinePath } from "../security/confine-path.ts";
-import { findWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
+import { findWorkspace, getOrRegisterWorkspace, type WorkspaceAccess, workspaceBus } from "./workspace-access.ts";
 
 export interface AttentionDependencies extends WorkspaceAccess {
-  workspaceRegistration: Pick<WorkspaceIndex, "upsertWorkspace" | "get">;
+  workspaceRegistration: Pick<WorkspaceIndex, "upsertWorkspace" | "get" | "activeForgetOperationForCanonicalPath">;
 }
 
 /** Bounds for the session-supplied half of a request. Each is a hard cap, not a hint: the payload
@@ -281,7 +281,11 @@ export async function createAttention(deps: AttentionDependencies, input: Create
   if (input.targetPath !== undefined && !confinedTarget?.ok) throw new AttentionError("invalid-target-path");
   if (input.approvalMode && input.targetPath === undefined) throw new AttentionError("approval-target-required");
 
-  const workspace = await deps.workspaceRegistration.upsertWorkspace(root, "glosa-open");
+  // Held-review finding (fourth pass): a direct `upsertWorkspace` here recreated an ACTIVE row
+  // during the registration-less window a `glosa forget` deletion passes through, which then made
+  // the `workspaceBus` call below find a live, non-forgetting row and never even reach its own
+  // registration-less check. `getOrRegisterWorkspace` refuses BEFORE the upsert instead.
+  const workspace = await getOrRegisterWorkspace(deps.workspaceRegistration, root, "glosa-open");
   const bus = await workspaceBus(deps, workspace);
   let normalizedTargetPath = input.targetPath;
   if (input.approvalMode) {

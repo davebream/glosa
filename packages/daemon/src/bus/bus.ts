@@ -162,6 +162,15 @@ export class WorkspaceAdoptedError extends Error {
   }
 }
 
+/** Mirrors `WorkspaceAdoptedError` for the identical shape of problem: a durable, permanent
+ * bus-level write-lock (issue #156's `forget_sealed`) that every mutator must respect regardless
+ * of what an in-memory caller believed a moment earlier. */
+export class WorkspaceForgottenError extends Error {
+  constructor() {
+    super("workspace is being permanently deleted (glosa forget) and no longer accepts writes");
+  }
+}
+
 // P2.4 — LOAD-BEARING, NOT JUST FOR THE JOURNAL: nothing here stops two WorkspaceBus instances
 // (or a WorkspaceBus + a standalone `reconcileWorkspace(root, ...)` call, e.g. from a health-check
 // endpoint or a cron) from being opened/run for the same canonical root at once. Each would hold
@@ -227,6 +236,7 @@ export class WorkspaceBus {
 
   private assertWritable(): void {
     if (this.state.adoptionSeal) throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
+    if (this.state.forgetSeal) throw new WorkspaceForgottenError();
   }
 
   constructor(workspaceRoot: WorkspaceTarget, deps: WorkspaceBusDeps = {}) {
@@ -544,6 +554,36 @@ export class WorkspaceBus {
       by: "daemon",
       idem: `adoption-seal:${adoptionId}`,
       detail: { adoption_id: adoptionId, target_registration_id: targetRegistrationId },
+    };
+    appendEvent(this.writer, event);
+    applyEvent(this.state, event, this.reducer);
+    this.notify(event);
+  }
+
+  /** `glosa forget`'s own atomic commit point (issue #156): checked inside the SAME lock as
+   * `apply-begin`/every other mutator, exactly like `sealForAdoptionLocked` above, so a lease can
+   * never appear between the caller's preflight check and this bus becoming permanently
+   * read-only. Throws `LEASE_HELD` (mirroring adoption's identical refusal) when an unexpired
+   * apply-lease is active — sealing over one would silently strand its proven pre..post interval
+   * mid-flight, the exact honest-provenance violation A4 §F05 exists to prevent. Idempotent:
+   * sealing an already-forget-sealed bus is a no-op, so a resumed `glosa forget` that reaches this
+   * again (it won't — the caller skips it on resume — but a defensive caller might) never double
+   * appends. */
+  sealForForget(): Promise<void> {
+    return this.mutex.runExclusive(this.mutexKey, () => this.sealForForgetLocked());
+  }
+
+  private sealForForgetLocked(): void {
+    if (this.state.forgetSeal) return;
+    const activeLeaseId = this.activeApplyLeaseIdForAdoptionLocked();
+    if (activeLeaseId) throw leaseHeldError(activeLeaseId);
+    const event: JournalEvent = {
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      event: "forget_sealed",
+      by: "daemon",
+      idem: `forget-seal:${this.mutexKey}`,
     };
     appendEvent(this.writer, event);
     applyEvent(this.state, event, this.reducer);

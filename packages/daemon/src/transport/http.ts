@@ -27,6 +27,7 @@ import { BUILD_ID } from "../lifecycle/build-id.ts";
 import { INSTALL_ID } from "../lifecycle/install.ts";
 import { glosaHome } from "../lifecycle/home.ts";
 import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
+import { forgetWorkspace } from "../registry/forget-workspace.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
@@ -50,12 +51,13 @@ import {
   actionablePresentation as buildArtifactPresentation,
   listInboxEntries,
 } from "../services/artifact.ts";
+import { getOrRegisterWorkspace } from "../services/workspace-access.ts";
 import { confineTranscriptPath } from "../transcript/root.ts";
 import { createTranscriptStreamResponse } from "../transcript/stream.ts";
 import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
 import { serveClassFDocument } from "./classf-serve.ts";
 import { CONTRACT_VERSION, checkContractVersion, DAEMON_VERSION } from "./contract.ts";
-import { internalErrorResponse, problem } from "./problem.ts";
+import { forgetBlockedResponse, forgetStalePreviewResponse, internalErrorResponse, problem } from "./problem.ts";
 import { createJournalStreamResponse } from "./stream.ts";
 
 const BODY_CAP_BYTES = 1024 * 1024; // A1 §4
@@ -208,7 +210,14 @@ function compositeRegistry(ctx: ApiContext): CompositeDeliveryRegistry {
   return registry;
 }
 
-function adoptionCoordinator(ctx: ApiContext): AdoptionCoordinator {
+/** The daemon's ONE per-target ownership lock (`ApiContext.adoptionCoordinator`, kept its original
+ * field/type name for wire/wiring compatibility). Originally scoped to `adoptLooseLineages`'s own
+ * seal/build/publish transaction; issue #156's revised approach generalizes it to every mutation
+ * that can race a workspace's identity — loose-file adoption, `glosa forget`'s commit, and now
+ * session register/bind — so exactly one of them ever holds a given target's lock at a time, and
+ * each re-reads durable state fresh once it actually has the lock rather than trusting whatever it
+ * observed beforehand. */
+function ownershipCoordinator(ctx: ApiContext): AdoptionCoordinator {
   if (ctx.adoptionCoordinator) return ctx.adoptionCoordinator;
   let coordinator = contextAdoptionCoordinators.get(ctx);
   if (!coordinator) {
@@ -395,6 +404,35 @@ function isAdoptingTarget(entry: WorkspaceEntry | null): boolean {
   return entry?.lifecycle?.state === "adopting" && entry.lifecycle.target_registration_id === entry.registration_id;
 }
 
+/** issue #156: an entry whose `glosa forget` deletion is durably committed (possibly mid-resume
+ * after a crash) — the TARGET or any of its sealed sources, both marked `"forgetting"` the moment
+ * the transaction commits. Deliberately NOT self-reference-scoped like `isAdoptingTarget`: a
+ * source's own slug must refuse routing too, since its bus is just as much a part of the active
+ * deletion as the target's. Ordinary routes must never touch either — new activity here would
+ * race the file deletion `forget-workspace.ts` performs. */
+function isBeingForgotten(entry: WorkspaceEntry | null): boolean {
+  return entry?.lifecycle?.state === "forgetting";
+}
+
+/** Resolves any workspace entry to its PROVENANCE OWNER (issue #156 review finding 4): an adopted
+ * source (`lifecycle.state === "adopted"`) or a member mid an active/pending forget
+ * (`lifecycle.state === "forgetting"`) both carry a `target_registration_id` pointing at the entry
+ * that actually owns routing/locking/liveness for this canonical identity now — self-referencing
+ * for the owner itself. Session register/bind MUST canonicalize through this before selecting the
+ * per-target ownership lock key or storing a `workspace_binding`: locking the SOURCE's own
+ * registration_id while `glosa forget`'s commit locks the TARGET's leaves the two entirely
+ * unserialized for a session still addressed by (or bound to) a pre-adoption alias path, and a
+ * `workspace_binding` left as the source's raw path would never match `forgetBlockers`'s
+ * `sessionRegistry.forWorkspace(target.canonical_path)` liveness check either. Falls back to the
+ * entry itself if the pointer is dangling (defensive; should be unreachable). */
+function provenanceOwner(index: WorkspaceIndex, entry: WorkspaceEntry): WorkspaceEntry {
+  const lifecycle = entry.lifecycle;
+  if (lifecycle?.state === "adopted" || lifecycle?.state === "forgetting") {
+    return index.getWorkspaceByRegistration(lifecycle.target_registration_id) ?? entry;
+  }
+  return entry;
+}
+
 function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   const entry = ctx.workspaceIndex.getBySlug(slug);
   if (!entry)
@@ -403,6 +441,12 @@ function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
     return {
       ok: false as const,
       response: problem(409, "workspace-adopting", "workspace adoption is in progress", undefined, pathname),
+    };
+  }
+  if (isBeingForgotten(entry)) {
+    return {
+      ok: false as const,
+      response: problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, pathname),
     };
   }
   return { ok: true as const, entry };
@@ -434,6 +478,23 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
   const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
   if (isAdoptingTarget(indexed)) {
     throw new AdoptionError("workspace-adopting", "workspace adoption is in progress");
+  }
+  if (isBeingForgotten(indexed)) {
+    throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+  }
+  // Held-review finding (third pass): "registration-less pending operations are not enforced by
+  // the central bus/access boundary" — every path-addressed caller of this function (resolve,
+  // apply-begin, dismiss, delivery drain/ack, conversation acknowledgement) falls back to a bare
+  // canonical-path STRING once `indexed` is null, which previously read as "never seen before" even
+  // during the exact registration-less window between a forget's own deregistration step and its
+  // completion receipt — `ctx.getWorkspaceBus(root)` would then happily recreate the bus this
+  // deletion is mid-way through removing. Checked here, once, for every caller: an active operation
+  // still naming this canonical path refuses BEFORE a bus is ever constructed or reconciled.
+  if (!indexed) {
+    const canonicalPath = typeof root === "string" ? root : root.canonical_path;
+    if (ctx.workspaceIndex.activeForgetOperationForCanonicalPath(canonicalPath)) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+    }
   }
   const bus = ctx.getWorkspaceBus(root);
   await bus.reconcileOnce();
@@ -486,18 +547,39 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
   const cwd = typeof b?.cwd === "string" ? canonicalOrNull(b.cwd) : undefined;
   if (cwd === null)
     return problem(400, "invalid-path", "cwd does not resolve to a real directory", undefined, url.pathname);
+
+  // issue #156 revised approach: session binding shares the SAME per-target ownership lock a
+  // `glosa forget` commit holds while it re-checks liveness and writes its durable marker — never
+  // just the lock-free `workspaceOrNotFound` read above, which can go stale in the gap before this
+  // mutation actually lands. Re-checking fresh state under the lock closes that race in both
+  // directions: a bind that wins the lock is a live session `forget`'s own recheck will see, and a
+  // bind that loses it sees the marker and refuses instead of resurrecting a workspace mid-deletion.
+  //
+  // `:slug` can name a sealed adopted source directly (still "adopted", not yet "forgetting" —
+  // `workspaceOrNotFound` above only refuses the latter) — `provenanceOwner` canonicalizes to the
+  // OWNING target for both the lock key and the bound path, so this can never lock or bind against
+  // a different registration than the one `forget`'s own commit locks (review finding 4).
+  const owner = provenanceOwner(ctx.workspaceIndex, resolved.entry);
   try {
-    await ctx.sessionRegistry.bind(sessionId, resolved.entry.canonical_path, {
-      provider: b?.provider as string | undefined,
-      cwd,
-      source: b?.source as string | undefined,
-      transcript_path: discoverTranscript(ctx, {
-        session_id: sessionId,
-        provider: (b?.provider as string | undefined) ?? ctx.sessionRegistry.get(sessionId)?.provider ?? "mcp",
-        cwd: cwd ?? ctx.sessionRegistry.get(sessionId)?.cwd ?? resolved.entry.canonical_path,
-        source: (b?.source as string | undefined) ?? "manual",
-      }),
+    const blocked = await ownershipCoordinator(ctx).run(owner.registration_id, async () => {
+      const fresh = ctx.workspaceIndex.getWorkspaceByRegistration(owner.registration_id);
+      if (fresh?.lifecycle?.state === "forgetting") return true;
+      await ctx.sessionRegistry.bind(sessionId, owner.canonical_path, {
+        provider: b?.provider as string | undefined,
+        cwd,
+        source: b?.source as string | undefined,
+        transcript_path: discoverTranscript(ctx, {
+          session_id: sessionId,
+          provider: (b?.provider as string | undefined) ?? ctx.sessionRegistry.get(sessionId)?.provider ?? "mcp",
+          cwd: cwd ?? ctx.sessionRegistry.get(sessionId)?.cwd ?? owner.canonical_path,
+          source: (b?.source as string | undefined) ?? "manual",
+        }),
+      });
+      return false;
     });
+    if (blocked) {
+      return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+    }
   } catch (error) {
     if (error instanceof SessionProviderConflict)
       return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
@@ -652,9 +734,42 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
       ? b.transcript_path
       : discoverTranscript(ctx, { session_id: sessionId, provider, cwd: canonicalCwd, source });
 
-  let record: SessionRecord;
-  try {
-    record = await ctx.sessionRegistry.register({
+  // issue #156 revised approach: mirror `handleSessionBinding` — a session registration that would
+  // land on an EXISTING workspace shares the same per-target ownership lock a `glosa forget` commit
+  // holds, so it either lands entirely before that commit's own liveness recheck (which then sees
+  // it and refuses itself) or entirely after (and sees the durable "forgetting" marker and refuses
+  // instead). A brand-new workspace path has nothing to race — `upsertWorkspace` cannot collide
+  // with a forget of a registration that does not exist yet — so it proceeds without the lock.
+  //
+  // The resolved path can itself be a sealed adopted source's own (pre-adoption) canonical path —
+  // e.g. a still-live session whose `workspace_binding` was set before its loose file got adopted
+  // into a directory workspace. `provenanceOwner` canonicalizes to the OWNING target for the lock
+  // key; `workspaceBinding` (if this is what produced the alias) is rewritten to the owner's own
+  // canonical path so the session registry never stores the stale alias either — `forget`'s own
+  // liveness check (`sessionRegistry.forWorkspace(target.canonical_path)`) matches on the TARGET's
+  // exact path, and a session left bound to the source's path would never be seen by it (review
+  // finding 4).
+  const preAliasPath =
+    workspaceBinding ?? ctx.sessionRegistry.get(sessionId)?.workspace_binding ?? fallbackBinding ?? canonicalCwd;
+  const preAliasTarget = ctx.workspaceIndex.get(preAliasPath);
+  const owner = preAliasTarget ? provenanceOwner(ctx.workspaceIndex, preAliasTarget) : null;
+  // Only when SOME binding (explicit, prior-stored, or adapter-supplied) actually produced the
+  // alias — never inject an explicit binding where none was intended just because `canonicalCwd`
+  // itself happens to equal a source's canonical path (`cwd` describes where the process runs and
+  // must stay truthful; it is not a routing hint the way `workspace_binding` is).
+  if (owner && owner.canonical_path !== preAliasPath && preAliasPath !== canonicalCwd) {
+    workspaceBinding = owner.canonical_path;
+  }
+  // Held-review finding: "an active forget operation stops governing access once its target
+  // registration is removed... session registration treats the missing entry as a new workspace
+  // and bypasses the coordinator." `owner` above is `null` whenever NOTHING is currently registered
+  // at `preAliasPath` — which is exactly the state right after a forget's own deregistration step
+  // but BEFORE its completion receipt lands. Without this check, that gap reads as "brand-new
+  // workspace, nothing to race" and registers straight through it.
+  const pendingOp = owner ? null : ctx.workspaceIndex.activeForgetOperationForCanonicalPath(preAliasPath);
+
+  const doRegister = () =>
+    ctx.sessionRegistry.register({
       session_id: sessionId,
       provider,
       cwd: canonicalCwd,
@@ -663,6 +778,36 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
       fallback_workspace_binding: fallbackBinding,
       ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
     });
+
+  let record: SessionRecord;
+  try {
+    if (owner) {
+      const outcome = await ownershipCoordinator(ctx).run(owner.registration_id, async () => {
+        const fresh = ctx.workspaceIndex.getWorkspaceByRegistration(owner.registration_id);
+        if (fresh?.lifecycle?.state === "forgetting") return { blocked: true as const };
+        return { blocked: false as const, record: await doRegister() };
+      });
+      if (outcome.blocked) {
+        return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+      }
+      record = outcome.record;
+    } else if (pendingOp) {
+      const outcome = await ownershipCoordinator(ctx).run(pendingOp.target_registration_id, async () => {
+        // Re-checked fresh under the lock: the operation may have completed while this call
+        // waited for it, in which case a fresh registration at this same path is a legitimate
+        // reopen, not a race — never held against a receipt that already finished.
+        if (ctx.workspaceIndex.activeForgetOperationForCanonicalPath(preAliasPath)) {
+          return { blocked: true as const };
+        }
+        return { blocked: false as const, record: await doRegister() };
+      });
+      if (outcome.blocked) {
+        return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+      }
+      record = outcome.record;
+    } else {
+      record = await doRegister();
+    }
   } catch (error) {
     if (error instanceof SessionProviderConflict)
       return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
@@ -751,10 +896,29 @@ async function handleCompositeSessionDrain(
     // Registration normally created this already. Preserve the old route's self-healing behavior
     // if an in-memory session outlives an absent index entry, but do not override an explicit
     // session bound to the cwd (the routing predicate still decides eligibility).
+    //
+    // Held-review finding (third pass): "composite-drain self-healing can recreate deleted bus or
+    // index state after target deregistration" — `ctx.workspaceIndex.get(record.cwd)` returning
+    // `null` is exactly the registration-less window a `glosa forget` deletion passes through
+    // between removing this path's registration and stamping its completion receipt, not only
+    // "never registered." Unlike every other path-addressed call site in this file, this branch
+    // calls `upsertWorkspace` directly — which would durably RECREATE the index row an in-flight
+    // deletion is committed to removing. Routed through `getOrRegisterWorkspace` (held-review
+    // finding, fourth pass: the SAME shared boundary now used everywhere a raw
+    // `get(path) ?? upsertWorkspace(path, source)` fallback previously ran inline) rather than a
+    // local ad-hoc check, so a future call site copying this pattern cannot silently regress the
+    // ordering. An active operation refuses the self-heal outright — caught and swallowed here
+    // (never surfaced as a 409, unlike every other caller of this boundary): this is an aggregate
+    // route across many workspaces, not addressed at one, so the candidate set for this session
+    // simply stays empty, exactly as it would for any other workspace this session cannot
+    // currently route to.
     if (workspaces.length === 0) {
-      const cwdWorkspace =
-        ctx.workspaceIndex.get(record.cwd) ?? (await ctx.workspaceIndex.upsertWorkspace(record.cwd, "session"));
-      if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace)) workspaces = [cwdWorkspace];
+      try {
+        const cwdWorkspace = await getOrRegisterWorkspace(ctx.workspaceIndex, record.cwd, "session");
+        if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace)) workspaces = [cwdWorkspace];
+      } catch (error) {
+        if (!(error instanceof AdoptionError && error.code === "workspace-forgetting")) throw error;
+      }
     }
 
     const candidates: CompositeDrainCandidate[] = [];
@@ -905,7 +1069,13 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   }
 
   const root = record.workspace_binding;
-  const workspace = ctx.workspaceIndex.get(root) ?? (await ctx.workspaceIndex.upsertWorkspace(root, "session"));
+  // Held-review finding (fourth pass): a direct `upsertWorkspace` here recreated an ACTIVE row
+  // during the registration-less window a `glosa forget` deletion passes through — before
+  // `resolveBus` ever ran, so its own registration-less check below never even fired.
+  // `getOrRegisterWorkspace` refuses BEFORE the upsert instead; a thrown `AdoptionError` propagates
+  // to the pipeline's own catch (this route has no local try/catch), which already maps it to
+  // `409 workspace-forgetting`.
+  const workspace = await getOrRegisterWorkspace(ctx.workspaceIndex, root, "session");
   const bus = await resolveBus(ctx, workspace);
 
   const prepared = await bus.prepareDelivery(
@@ -1110,6 +1280,17 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     return problem(400, "validation-failed", "path is required", undefined, url.pathname);
   }
   const focus = typeof parsed?.focus === "string" && parsed.focus.length > 0 ? parsed.focus : undefined;
+
+  // Held-review finding (final pass): the PRIOR fix here — a pre-check against
+  // `activeForgetOperationForCanonicalPath` run before `resolveOpenTarget`, even wrapped in the
+  // per-target ownership lock — was itself a check-then-act race: `resolveOpenTarget` runs under
+  // `WorkspaceIndex`'s OWN separate mutex, so a forget commit's individual steps (each their own
+  // critical section on that same mutex) could still land in the gap between this check returning
+  // and `resolveOpenTarget` actually resolving/registering. The atomic fix moved INTO
+  // `resolveOpenTarget`/`upsertDirectoryForOpen` themselves (`hasActiveForgetOperation`,
+  // workspace-index.ts) — checked and mutated inside the exact same critical section, which is what
+  // an outer pre-check here can never be. `resolveOpenTarget` throws the same `AdoptionError`
+  // (`"workspace-forgetting"`) the catch block below already maps to `409`.
   try {
     const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, {
       externalState: parsed?.external_state === true,
@@ -1123,7 +1304,7 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
         opened.entry,
         ctx.getWorkspaceBus,
         ctx.sealAdoptionSources,
-        adoptionCoordinator(ctx),
+        ownershipCoordinator(ctx),
       );
     }
     await resolveBus(ctx, opened.entry);
@@ -1341,7 +1522,28 @@ function handleWorkspaceInboxList(ctx: ApiContext, req: Request): Response {
   }
   const root = canonicalOrNull(rawPath);
   if (!root) return problem(400, "invalid-path", "path does not resolve to a real directory", undefined, url.pathname);
-  const workspace = ctx.workspaceIndex.get(root) ?? root;
+  const indexed = ctx.workspaceIndex.get(root);
+  // Held-review finding: "path-addressed inbox listing bypasses the forgetting lifecycle gate" —
+  // every other workspace data-access path (`workspaceOrNotFound`, `resolveBus`, `findWorkspace`/
+  // `workspaceBus` in workspace-access.ts) refuses BOTH a target and an adopted source mid a
+  // durably-committed `glosa forget`; this route, addressed by raw path rather than slug, read
+  // straight through the index with no such check at all. `provenanceOwner` covers the alias case
+  // exactly like those other call sites do: a still-registered adopted-source path whose OWNING
+  // target is now forgetting must refuse too, not just a path that is itself the target.
+  if (indexed) {
+    const owner = provenanceOwner(ctx.workspaceIndex, indexed);
+    if (isBeingForgotten(indexed) || isBeingForgotten(owner)) {
+      return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+    }
+  } else if (ctx.workspaceIndex.activeForgetOperationForCanonicalPath(root)) {
+    // Held-review finding: an active forget operation must keep refusing access even once its
+    // target/source registration has been fully removed but before its completion receipt lands —
+    // `indexed` being `null` here does NOT mean "never registered", it can equally mean "mid-
+    // deletion, registration already gone." Read-only, so no coordinator lock is needed: this
+    // route never mutates and a race against completion only ever costs one over-cautious refusal.
+    return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+  }
+  const workspace = indexed ?? root;
   const all = url.searchParams.get("all") === "1";
   return Response.json({ entries: listInboxEntries(workspace, { all }) });
 }
@@ -1398,6 +1600,112 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
     }
     throw err;
   }
+}
+
+/** `POST /api/workspaces/forget` (issue #156) — `glosa forget <slug>`'s daemon-side half, the one
+ * supported whole-bus deletion primitive. Body `{slug, confirm?}`; `confirm` defaults to `false`,
+ * a pure preview (see `forget-workspace.ts`'s own docstring for why a preview call is guaranteed
+ * side-effect-free). Deliberately addressed by SLUG, not by `path` like `resolve`/`apply-begin`:
+ * the whole point of `forget` is that it must still work once a workspace's on-disk path is gone,
+ * and a slug is the one identifier that survives that. */
+async function handleWorkspaceForget(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const b = body as Record<string, unknown> | null;
+  const slug = typeof b?.slug === "string" ? b.slug : null;
+  if (!slug) return problem(400, "validation-failed", "slug is required", undefined, url.pathname);
+  // Held-review finding: a non-boolean `confirm` (string, number, null, array, object) was silently
+  // coerced to `false` by `=== true` and treated as an ordinary preview request instead of being
+  // rejected as malformed — a caller that sent e.g. `confirm: "true"` believing it opted into
+  // deletion would instead silently get a no-op preview with no error at all.
+  if (b?.confirm !== undefined && typeof b.confirm !== "boolean") {
+    return problem(400, "validation-failed", "confirm must be a boolean", undefined, url.pathname);
+  }
+  const confirm = b?.confirm === true;
+  // Held-review finding (third pass): "a present non-string `member_fingerprint` is treated as
+  // omission and bypasses preview binding" — `typeof ... === "string" ? ... : undefined` silently
+  // turned any non-string value (a number, `null`, an array, an object) into `undefined`, which
+  // `forgetWorkspace`'s own stale-preview check reads as "no fingerprint to bind against at all"
+  // and skips entirely — the exact same class of bug `confirm` itself was already fixed for above.
+  // A present value must be a genuine lowercase SHA-256 hex digest (`memberFingerprint`'s own output
+  // shape in forget-workspace.ts) or the request is rejected outright, with zero side effects —
+  // never silently reinterpreted as "no fingerprint was supplied."
+  if (b?.member_fingerprint !== undefined) {
+    if (typeof b.member_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(b.member_fingerprint)) {
+      return problem(
+        400,
+        "validation-failed",
+        "member_fingerprint must be a lowercase SHA-256 hex string",
+        undefined,
+        url.pathname,
+      );
+    }
+  }
+  const memberFingerprint = typeof b?.member_fingerprint === "string" ? b.member_fingerprint : undefined;
+
+  const outcome = await forgetWorkspace(
+    {
+      workspaceIndex: ctx.workspaceIndex,
+      sessionRegistry: ctx.sessionRegistry,
+      home: ctx.home ?? glosaHome(),
+      getWorkspaceBus: ctx.getWorkspaceBus,
+      adoptionCoordinator: ownershipCoordinator(ctx),
+    },
+    slug,
+    { confirm, memberFingerprint },
+  );
+
+  if (!outcome.ok) {
+    if (outcome.code === "not-found") {
+      return problem(404, "not-found", "unknown workspace", undefined, url.pathname);
+    }
+    if (outcome.code === "blocked") {
+      // `requested_slug` names the owning target when `slug` named a sealed adopted source — never
+      // treated as an independent provenance unit (issue #156 revised approach).
+      return forgetBlockedResponse(
+        url.pathname,
+        outcome.blockers,
+        outcome.target_slug,
+        outcome.requested_slug !== outcome.target_slug ? outcome.requested_slug : undefined,
+      );
+    }
+    if (outcome.code === "stale-preview") {
+      return forgetStalePreviewResponse(
+        url.pathname,
+        outcome.target_slug,
+        outcome.requested_slug,
+        outcome.entries,
+        outcome.member_fingerprint,
+      );
+    }
+    // "confinement-failed" — a corrupted or foreign-pointing bus_path record. Never expected in
+    // normal operation; refuses loudly rather than risk deleting the wrong thing (see
+    // `confineBusPathForDeletion`'s own docstring in forget-workspace.ts).
+    return problem(
+      500,
+      "internal",
+      "a workspace bus path failed confinement — refusing to delete anything for this workspace",
+      `registration ${outcome.registration_id}`,
+      url.pathname,
+    );
+  }
+
+  // `slug` always names the RESOLVED target (never a sealed source it was adopted into); when the
+  // caller named a source, `requested_slug` carries what they actually asked for — a stable
+  // response naming the owning target rather than silently forgetting the source alone.
+  return Response.json({
+    slug: outcome.target_slug,
+    ...(outcome.requested_slug !== outcome.target_slug ? { requested_slug: outcome.requested_slug } : {}),
+    confirmed: outcome.confirmed,
+    ...(outcome.confirmed
+      ? { removed: outcome.removed }
+      : { would_remove: outcome.entries, member_fingerprint: outcome.member_fingerprint }),
+  });
 }
 
 /** `GET /api/status` — `glosa status`'s aggregate (A6 §F26: "daemon+workspaces+sessions+pending").
@@ -1531,32 +1839,88 @@ async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request):
 }
 
 function handleStatusAggregate(ctx: ApiContext): Response {
-  const workspaces = ctx.workspaceIndex.list({ presentOnly: true }).map((e) => {
-    const peek = peekJournal(e);
-    return {
-      slug: e.slug,
-      path: e.worktree_path,
-      last_seen: e.last_seen,
-      pending_count: pendingCount(peek.state),
-      has_attention: hasOpenAttention(peek.state),
-      // Additive (issue #142): journal entries whose immutable inbox payload has gone missing —
-      // see `orphanedEntryCount`'s own docstring for the exact orphan signature and why the count
-      // reuses this already-computed fold rather than folding the journal a second time.
-      orphaned_entry_count: orphanedEntryCount(e, peek),
-      // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
-      // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
-      wiring: computeWiring(ctx, e).state,
-      // Additive (issue #95): the SPA composes the generic workspace identity + CLI fallback
-      // around provider-owned agent instructions. No provider-specific text enters the core.
-      connect: {
-        providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
-          provider: provider.id,
-          ...provider.connectPrompt({ slug: e.slug, path: e.worktree_path }),
-        })),
-        cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+  // Additive (issue #156): a workspace mid a durably-committed `glosa forget` must stay visible
+  // here even once its on-disk path has gone missing (`present:false`) — its worktree may simply
+  // no longer exist (the deletion never touches work-tree files, but nothing stops a user from
+  // removing the directory themselves mid-forget), and `doctor` cannot name the exact resume
+  // command for a workspace `status` never reports at all (review finding: "status omits
+  // present:false forgetting targets"). Every other lifecycle state stays present-only.
+  const forgettingAbsent = ctx.workspaceIndex.list().filter((e) => !e.present && e.lifecycle?.state === "forgetting");
+  const registeredRegistrationIds = new Set(
+    [...ctx.workspaceIndex.list({ presentOnly: true }), ...forgettingAbsent].map((e) => e.registration_id),
+  );
+  // Held-review finding: "a crash after target deregistration but before operation completion
+  // leaves no workspace row for status/doctor, even though a pending operation exists." Once the
+  // target's OWN registration is fully removed there is no `WorkspaceEntry` left at all — neither
+  // `forgettingAbsent` above (which only ever looks at still-registered rows) nor `doctor`'s own
+  // path-keyed lookup can find it. The durable `ForgetOperationRecord` is what survives that crash
+  // point (see `WorkspaceIndex.beginForgetOperation`'s own docstring), so a pending operation whose
+  // target registration is gone gets a synthesized row here — same shape every other row has, so
+  // `doctor`'s existing `w.lifecycle === "forgetting"` / path-matching logic needs no changes at all.
+  const registrationlessForgetOps = ctx.workspaceIndex
+    .pendingForgetOperations()
+    .filter((op) => !registeredRegistrationIds.has(op.target_registration_id));
+  const registrationlessRows = registrationlessForgetOps.flatMap((op) => {
+    const targetMember = op.members.find((m) => m.registration_id === op.target_registration_id);
+    if (!targetMember) return []; // defensive — the target is always its own member by construction
+    return [
+      {
+        slug: op.target_slug,
+        // Held-review finding (final pass): "registration-less loose-file status synthesizes the
+        // file path instead of the durable worktree path, so doctor misses the recovery state" —
+        // `canonical_path` is the FILE itself for a `loose-file` target, never what `doctor <dir>`
+        // (or every OTHER row's own `path` field, below: always `WorkspaceEntry.worktree_path`) is
+        // addressed by. `worktree_path` is captured in the immutable snapshot for exactly this.
+        path: targetMember.worktree_path,
+        last_seen: op.started_at,
+        pending_count: 0,
+        has_attention: false,
+        orphaned_entry_count: 0,
+        wiring: "unwired" as const,
+        lifecycle: "forgetting" as const,
+        connect: {
+          providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
+            provider: provider.id,
+            ...provider.connectPrompt({ slug: op.target_slug, path: targetMember.worktree_path }),
+          })),
+          cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+        },
       },
-    };
+    ];
   });
+  const workspaces = [
+    ...[...ctx.workspaceIndex.list({ presentOnly: true }), ...forgettingAbsent].map((e) => {
+      const peek = peekJournal(e);
+      return {
+        slug: e.slug,
+        path: e.worktree_path,
+        last_seen: e.last_seen,
+        pending_count: pendingCount(peek.state),
+        has_attention: hasOpenAttention(peek.state),
+        // Additive (issue #142): journal entries whose immutable inbox payload has gone missing —
+        // see `orphanedEntryCount`'s own docstring for the exact orphan signature and why the count
+        // reuses this already-computed fold rather than folding the journal a second time.
+        orphaned_entry_count: orphanedEntryCount(e, peek),
+        // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
+        // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
+        wiring: computeWiring(ctx, e).state,
+        // Additive (issue #156): a `glosa forget` whose deletion is durably committed — possibly
+        // mid-resume after a crash — so `doctor` can name the interrupted state and the exact resume
+        // command instead of misreading a mid-deletion workspace as merely "not yet opened".
+        ...(e.lifecycle?.state === "forgetting" ? { lifecycle: "forgetting" as const } : {}),
+        // Additive (issue #95): the SPA composes the generic workspace identity + CLI fallback
+        // around provider-owned agent instructions. No provider-specific text enters the core.
+        connect: {
+          providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
+            provider: provider.id,
+            ...provider.connectPrompt({ slug: e.slug, path: e.worktree_path }),
+          })),
+          cli_fallback: "glosa session bind <current-session-id> --workspace <workspace-path>",
+        },
+      };
+    }),
+    ...registrationlessRows,
+  ];
   const sessions = ctx.sessionRegistry.list().map((s) => ({
     session_id: s.session_id,
     provider: s.provider,
@@ -1744,6 +2108,9 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   }
   if (method === "POST" && pathname === "/api/workspaces/apply-begin") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceApplyBegin(ctx, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/forget") {
+    return { routeClass: "state-changing", handle: (req) => handleWorkspaceForget(ctx, req) };
   }
   const attentionRoute = attentionRoutes(
     {

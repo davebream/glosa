@@ -83,5 +83,13 @@ export function printStatusResult(result: CommandEnvelope<StatusData>, json: boo
     process.stdout.write(
       `  ${w.slug}  ${w.path}  pending=${w.pending_count}${w.has_attention ? " [attention]" : ""}\n`,
     );
+    // issue #156 review finding: human status must print the exact resume command for a workspace
+    // whose `glosa forget` deletion is durably committed but was interrupted, not just note the
+    // fact — this is what `doctor` also prints (doctor.ts's own "workspace" check).
+    if (w.lifecycle === "forgetting") {
+      process.stdout.write(
+        `    deletion interrupted (\`glosa forget\`) — run \`glosa forget ${w.slug} --yes\` to resume\n`,
+      );
+    }
   }
 }

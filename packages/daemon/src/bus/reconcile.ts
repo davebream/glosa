@@ -273,10 +273,15 @@ export async function reconcileWorkspace(
       reducer,
     });
 
-    // An adopted loose bus is historical evidence. Replay and torn-tail repair remain safe, but
-    // self-healing, lease expiry, and offline Git catch-up would append fresh events and violate
-    // the seal. The parent workspace is the only live writer from this point onward.
-    if (state.adoptionSeal) {
+    // An adopted loose bus, or a bus durably sealed for `glosa forget` (issue #156 held-review
+    // finding: "a resumed bus carrying forget_sealed can run self-heal, lease expiry, or offline
+    // Git catch-up before deletion because reconcile treated only adoptionSeal as an early
+    // terminal state"), is historical/terminal evidence. Replay and torn-tail repair remain safe
+    // (both only ever normalize bytes already on disk), but self-healing, lease expiry, and
+    // offline Git catch-up would append FRESH events past either seal — a `forgetSeal` bus is
+    // moments from deletion, and appending to it would both violate the seal's own
+    // "no writes past this point" contract and durably record events for a bus about to vanish.
+    if (state.adoptionSeal || state.forgetSeal) {
       return {
         workspaceRoot: workspaceWorktree(workspaceRoot),
         tailTruncated: tail.truncated,

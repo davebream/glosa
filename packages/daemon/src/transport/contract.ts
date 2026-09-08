@@ -13,8 +13,14 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * `wiring`/`orphaned_state` fields on `GET /api/status` — N/N-1 safe per A1 §3.
  * v1.5 (issue #95) adds provider-owned connect prompts to each `/api/status` workspace.
  * v1.6 adds workspace-labelled composite drains for unbound ancestor sessions.
- * v1.7 adds recoverable registration/binding and typed unknown-session errors. */
-export const CONTRACT_VERSION = "1.7";
+ * v1.7 adds recoverable registration/binding and typed unknown-session errors.
+ * v1.8 (issue #156) adds `POST /api/workspaces/forget`, the `lifecycle:"forgetting"` field on
+ * `GET /api/status` workspace rows, and the `workspace-forgetting`/`forget-blocked` error slugs;
+ * the held-review repair additionally adds the preview/commit `member_fingerprint` field and the
+ * `forget-stale-preview` error slug on the same route, and a registration-less `status` row for a
+ * forget operation whose target registration has already been fully removed — all additive, N/N-1
+ * safe per A1 §3. */
+export const CONTRACT_VERSION = "1.8";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

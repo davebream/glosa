@@ -41,6 +41,7 @@ const PUBLIC_COMMANDS = new Set([
   "session",
   "token",
   "update",
+  "forget",
 ]);
 
 type GlobalValues = {
@@ -863,6 +864,31 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     },
   );
 
+  const forget = lazyHandler(
+    {
+      name: "forget",
+      description: "Permanently delete a workspace's registration and bus (never work-tree files)",
+      args: {
+        ...GLOBAL_ARGS,
+        workspace: { type: "positional", required: true, description: "Workspace slug (see `glosa status --json`)" },
+        yes: { type: "boolean", description: "Skip the interactive confirmation prompt" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const [{ createHttpGlosaClient }, forgetModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./forget.ts"),
+      ]);
+      const result = await forgetModule.runForget(
+        { slug: values.workspace as string | undefined, yes: Boolean(values.yes), json: Boolean(values.json) },
+        { createClient: createHttpGlosaClient },
+      );
+      forgetModule.printForgetResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   const update = lazyHandler(
     {
       name: "update",
@@ -1036,6 +1062,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     session,
     token,
     update,
+    forget,
     hook,
     mcp,
     __daemon: daemon,
