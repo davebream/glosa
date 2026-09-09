@@ -178,10 +178,12 @@ target paths, probe, hook/MCP nodes, and activation help described here:
 
 SessionStart accepts startup, resume, clear, and compact sources. Hook input is treated as untrusted:
 unknown fields are ignored, required identifiers are validated, and failures degrade to the next
-transport without losing inbox data. Daemon discovery inside a hook has a three-second wall-clock
-budget; an unreachable daemon makes the hook exit successfully with no output so the provider's
-five-second hooks are never killed. Explicit CLI and MCP clients retain the actionable error, and
-the immutable inbox remains eligible for the next delivery rung.
+transport without losing inbox data. A non-empty payload that is not a session envelope (no
+`session_id`/`cwd`) is a silent successful no-op so a foreign host that imported the same hook command
+is not blocked; an incomplete envelope still fails as a usage error. Daemon discovery inside a hook
+has a three-second wall-clock budget; an unreachable daemon makes the hook exit successfully with no
+output so the provider's five-second hooks are never killed. Explicit CLI and MCP clients retain the
+actionable error, and the immutable inbox remains eligible for the next delivery rung.
 
 ## F16 — conversation mirror
 
