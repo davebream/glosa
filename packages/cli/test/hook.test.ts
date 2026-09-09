@@ -171,6 +171,33 @@ describe("glosa hook user-prompt-submit", () => {
     expect(client.calls.map((c) => c.method)).toEqual(["heartbeat", "drain"]);
     expect(JSON.parse(outcome.stdout).hookSpecificOutput.additionalContext).toContain("inb-2");
   });
+
+  test("a foreign host payload with no session envelope is a silent no-op, never blocks, never calls the daemon", async () => {
+    const { deps, client } = makeDeps(freshDir());
+    // Cursor Agent CLI's beforeSubmitPrompt shape (issue #194): same registered command as
+    // Claude Code's UserPromptSubmit, but no session_id/cwd. Blocking this host is the bug.
+    const outcome = await runHook(
+      "user-prompt-submit",
+      {
+        conversation_id: "conv-1",
+        generation_id: "gen-1",
+        model: "composer",
+        prompt: "hello",
+        attachments: [],
+      },
+      deps,
+    );
+    expect(outcome).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+    expect(client.calls).toHaveLength(0);
+  });
+
+  test("an incomplete Claude/Codex envelope still fails visibly and never calls the daemon", async () => {
+    const { deps, client } = makeDeps(freshDir());
+    const outcome = await runHook("user-prompt-submit", { cwd: "/repo" }, deps);
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stderr).toBe("user-prompt-submit: hook input missing session_id/cwd");
+    expect(client.calls).toHaveLength(0);
+  });
 });
 
 describe("glosa hook stop", () => {

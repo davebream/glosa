@@ -355,6 +355,33 @@ describe("internal protocol compatibility", () => {
     }
   });
 
+  test("a foreign hook host's payload is a silent success and never waits on daemon discovery", () => {
+    const port = randomPort();
+    const squatter = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: () => Response.json({ not: "a glosa handshake" }),
+    });
+    try {
+      const started = performance.now();
+      const result = runCli(["hook", "user-prompt-submit"], {
+        env: { GLOSA_PORT: String(port) },
+        stdin: JSON.stringify({
+          conversation_id: "conv-1",
+          generation_id: "gen-1",
+          model: "composer",
+          prompt: "hello",
+          attachments: [],
+        }),
+      });
+
+      expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+      expect(performance.now() - started).toBeLessThan(5000);
+    } finally {
+      squatter.stop();
+    }
+  });
+
   // Issue #139: the error a user meets must say what was FOUND, not merely that time ran out. A
   // held port with nothing answering on it is a proven diagnosis and outranks the budget that
   // expired while proving it — "discovery exceeded its budget" left a user with nothing to act on
