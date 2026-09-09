@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A save could write markup you never typed without saying so. Once a document had a `---` metadata
+  header, two paths — starting a file from empty, and *Keep mine* after the file moved underneath
+  you — wrote the serializer's bracket escaping into your prose and reported nothing, so `See [r]`
+  landed as `See \[r\]` silently. Both now show you the change and ask, the way every other save
+  that cannot be written back exactly already did. What gets written is unchanged; being told about
+  it is the fix.
 - A hand-wrapped paragraph or a callout's second line lost the break it already had the moment a
   keypress landed inside it, before any save ran — the browser's own change-reading path folded the
   newline to a space first, silently, and #174 having removed the dialog that used to catch

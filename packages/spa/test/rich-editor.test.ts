@@ -20,6 +20,7 @@ import {
   MODELLED_NODE_TYPES,
   blockLayout,
   collateralFor,
+  createSplicer,
   parseMarkdown,
   runIsModelled,
   runsOverlap,
@@ -1228,7 +1229,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(459);
+    ).toBe(464);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1355,6 +1356,85 @@ describe("the collateral guard, re-posed (REQ-6, #174)", () => {
   });
 });
 
+describe("a write with no original bytes is still judged (#186)", () => {
+  // The guard above compares what a write CHANGED against what the restoration PUT BACK, and both
+  // sides come from the block's original bytes. Two save paths write content that owns no original
+  // at all — a save over a blank source, and the pure-insertion arm of the splice that Keep mine
+  // takes when the fresh disk bytes share no block with the held document — so neither could be
+  // judged that way, and until this both reported nothing at all.
+  //
+  // What can still be said: `serializeNodesFaithfully` refuses BOTH relaxation and restoration for
+  // a run holding a node the schema cannot model, returning the serializer's raw bytes. Those bytes
+  // carry escaping the writer never typed. A run that took that refusal is a write this cannot
+  // prove honest, and #174's own rule is that an unproven write is one the writer is asked about.
+  const HEADER = "---\ntitle: T\nstatus: draft\n---\n\n";
+  const PROSE = "See [r] and *[x]* here.\n";
+
+  test("a blank-source save of an unmodelled document reports rather than writing escaping silently", () => {
+    const typed = HEADER + PROSE;
+    const splice = createSplicer("", parseMarkdown(""));
+    const report = splice(parseMarkdown(typed));
+
+    // The write itself is unchanged — this is a consent fix, not an escaping fix. #174's per-document
+    // opt-out is deliberate and narrowing it is explicitly not the answer.
+    expect(report.markdown).toContain("\\[r\\]");
+    expect(report.markdown).not.toBe(typed);
+    // What changes is that it is no longer silent.
+    expect(report.collateral).toHaveLength(1);
+    const entry = report.collateral[0];
+    if (!entry) throw new Error("expected one collateral entry");
+    expect(entry.written).toBe(report.markdown);
+    // The pair the dialog shows is the change itself: what the writer typed, and what lands.
+    expect(entry.original).toContain("See [r]");
+    expect(entry.faithful).toContain("See \\[r\\]");
+  });
+
+  test("a blank-source save the serializer can carry honestly is NOT reported", () => {
+    // The other side of the ratchet. Without the header the run is modelled, relaxation and its
+    // reparse check both run, the brackets come back bare — and nothing is asked. A guard that
+    // fired here would be a false alarm on every new file.
+    const splice = createSplicer("", parseMarkdown(""));
+    const report = splice(parseMarkdown(PROSE));
+    expect(report.markdown).toContain("[r]");
+    expect(report.markdown).not.toContain("\\[r\\]");
+    expect(report.collateral).toEqual([]);
+    expect(report.degraded).toBe(false);
+  });
+
+  test("Keep mine rebasing an unmodelled document onto unrelated bytes reports rather than writing silently", () => {
+    // The Keep-mine shape from #186's table: the held document rebased onto fresh disk bytes that
+    // pair with none of its blocks, so every held block arrives as a pure insertion.
+    const held = parseMarkdown(HEADER + PROSE);
+    const report = spliceMarkdown("# Other\n", parseMarkdown("# Other\n"), held);
+
+    expect(report.markdown).toContain("\\[r\\]");
+    expect(report.collateral.length).toBeGreaterThan(0);
+    expect(report.collateral.some((entry) => entry.written.includes("\\[r\\]"))).toBe(true);
+  });
+
+  test("Keep mine rebasing a modelled document onto unrelated bytes is NOT reported", () => {
+    // Same shape, modelled run: the insertion is judged and cleared, not waved through.
+    const held = parseMarkdown(PROSE);
+    const report = spliceMarkdown("# Other\n", parseMarkdown("# Other\n"), held);
+    expect(report.markdown).toContain("[r]");
+    expect(report.markdown).not.toContain("\\[r\\]");
+    expect(report.collateral).toEqual([]);
+  });
+
+  test("the three shapes #186 measured all report, and the one that already asked still asks", () => {
+    // #186's own table, re-run. Rows 1-3 moved from asking to silent when #143 landed; they ask
+    // again here. The lone-`\r` row asked before and after, through a different path (`line-endings`),
+    // and must not be double-reported.
+    const held = parseMarkdown(HEADER + PROSE);
+    for (const fresh of ["# Other\n", "# A\n\n# B\n", "# A\n\n# B\n\n# C\n"]) {
+      const report = spliceMarkdown(fresh, parseMarkdown(fresh), held);
+      expect(report.collateral.length, `fresh bytes ${JSON.stringify(fresh)}`).toBeGreaterThan(0);
+    }
+    const lone = spliceMarkdown("\r", parseMarkdown("\r"), held);
+    expect(lone.degraded).toBe("line-endings");
+  });
+});
+
 describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine hand-written documents", () => {
   // WHY THIS IS COMMITTED. REQ-8 asks that the serializer fixed-point rate be "recorded so the
   // direction is checkable", and a sentence of prose in CHANGELOG.md cannot keep a direction
@@ -1434,7 +1514,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
    *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
    *  failure itself. */
-  const BLOCKS = 459;
+  const BLOCKS = 464;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1470,7 +1550,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 459 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 464 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1525,7 +1605,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 1 dishonest write of 411; the guard fires on it and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 416; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 35 of them, and the guard must catch
@@ -1607,10 +1687,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves.
     ).toEqual({
-      edits: 411,
+      edits: 416,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 35, fired: 35 },
     });

@@ -739,6 +739,47 @@ export function collateralFor(originalNodes, referenceSuffix, written, source) {
   return [];
 }
 
+/**
+ * The report for a write that owns no comparable original — the pure-insertion and whole-run
+ * replacement arms of the splice, and a save over a blank source.
+ *
+ * `collateralFor` above cannot speak for these. Both sides of its comparison are built from the
+ * block's ORIGINAL nodes: `D` is what the restoration put back, `R` is what the write still changes,
+ * and where the writer's content replaces bytes that were already faithful — Keep mine rebasing a
+ * held document onto disk bytes it shares no block with — `D` is empty and no join can fire. Until
+ * #186 that meant a save writing `See \[r\]` where the writer typed `See [r]` reported nothing.
+ *
+ * The question asked here is narrower than "is this write honest", which without original bytes
+ * cannot be answered: it is whether the write carries escaping that a VERIFIED relaxation would
+ * have removed. `serializeMarkdown` and `serializeNodesFaithfully` both refuse the relaxation for a
+ * run holding a node this schema cannot model, and return the serializer's raw bytes. That refusal
+ * is #174's per-document opt-out working as specified — narrowing it is explicitly not the fix,
+ * because relying on a transformation happening to be a no-op over verbatim bytes is the corruption
+ * the opt-out exists to prevent. What it leaves behind is escaping the writer never typed, and
+ * nothing downstream was looking at it.
+ *
+ * So: relax a copy, and report only if the relaxed form still means what the run means. Three cases
+ * fall out, and the middle one is why `runIsModelled` is NOT the predicate here — a `glosa_raw`
+ * node's raw bytes ARE its source bytes, so an unmodelled run is very often written perfectly:
+ *
+ * | | relaxing changes it? | relaxed still verifies? | verdict |
+ * |---|---|---|---|
+ * | a modelled run, already relaxed on the way out | no | — | nothing to report |
+ * | an edit inside a metadata header, written verbatim | no | — | nothing to report |
+ * | prose beside that header, escaped by the refusal | yes | yes | **reported** |
+ * | escaping that is load-bearing in this context | yes | no | nothing to report — the bytes must stay |
+ *
+ * `original` is what the writer's content would have been without the refusal, and `written` what
+ * the save puts on disk, so the consent dialog reads "See [r]" becomes "See \[r\]" — the change
+ * itself, rather than the unrelated block it happens to replace.
+ */
+export function unrelaxedEscaping(nodes, referenceSuffix, written) {
+  const relaxed = written.replace(ESCAPED_IN_TEXT, "$1");
+  if (relaxed === written) return [];
+  if (!verifiesAs(relaxed, referenceSuffix, nodes)) return [];
+  return [{ original: relaxed, faithful: written, written }];
+}
+
 /** True for the document prosemirror-markdown produces from an empty string: the schema requires
  * at least one block, so "nothing" is one empty paragraph rather than no children. */
 function isBlankDoc(doc) {
@@ -913,9 +954,15 @@ export function createSplicer(source, originalDoc) {
     // A blank source has no block tokens at all, yet still parses to one empty paragraph, so the
     // counts disagree legitimately. Keep the writer's whitespace; append whatever they typed.
     if (blocks.length === 0) {
+      if (isBlankDoc(editedDoc)) return { markdown: source, collateral: [], degraded: false };
+      const typed = serializeMarkdown(editedDoc);
       return {
-        markdown: isBlankDoc(editedDoc) ? source : source + serializeMarkdown(editedDoc),
-        collateral: [],
+        markdown: source + typed,
+        // `serializeMarkdown` gates its relaxation on the whole document, so that is the run judged.
+        // The same RELATIVE baseline `serializeMarkdown` relaxes against: what its own output
+        // parses to, with no reference context because this path holds no source bytes to read
+        // definitions out of.
+        collateral: unrelaxedEscaping(parseMarkdown(typed).content.content, "", typed),
         degraded: false,
       };
     }
@@ -951,22 +998,31 @@ export function createSplicer(source, originalDoc) {
       if (inserted.length && o < nextO) {
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
         const written = serializeNodesFaithfully(inserted, referenceSuffix, replaced);
-        collateral.push(...collateralFor(original.slice(o, nextO), referenceSuffix, written, replaced));
+        // An unmodelled run never reached the relaxation or the restoration, so `collateralFor`'s
+        // diff cannot speak for it: where the bytes it replaces were themselves faithful, `D` is
+        // empty and the join is silent no matter what the write carries.
+        const judged = collateralFor(original.slice(o, nextO), referenceSuffix, written, replaced);
+        // `collateralFor` stays authoritative where it can speak. It is silent when `D` is empty —
+        // the bytes being replaced were themselves faithful — and that is the gap #186 reported.
+        collateral.push(...(judged.length ? judged : unrelaxedEscaping(inserted, referenceSuffix, written)));
         pieces.push({ text: written, before: o > 0 ? separator(o) : "\n\n" });
       } else if (inserted.length) {
         // A pure insertion owns no original bytes, so it gets a blank line of its own rather than
         // borrowing the separator that still belongs to the block it was typed in front of.
-        const text = inserted
-          .map((node) => {
-            for (const index of moved) {
-              if (!original[index].eq(node)) continue;
-              moved.delete(index);
-              return body(index);
-            }
-            return serializeNodesFaithfully([node], referenceSuffix);
-          })
-          .join("\n\n");
-        pieces.push({ text, before: "\n\n" });
+        const parts = inserted.map((node) => {
+          for (const index of moved) {
+            if (!original[index].eq(node)) continue;
+            moved.delete(index);
+            // Its own original bytes moved with it, so there is nothing here to prove.
+            return { text: body(index), verbatim: true, node };
+          }
+          return { text: serializeNodesFaithfully([node], referenceSuffix), verbatim: false, node };
+        });
+        for (const part of parts) {
+          if (part.verbatim) continue;
+          collateral.push(...unrelaxedEscaping([part.node], referenceSuffix, part.text));
+        }
+        pieces.push({ text: parts.map((part) => part.text).join("\n\n"), before: "\n\n" });
       }
       o = nextO;
       e = nextE;
