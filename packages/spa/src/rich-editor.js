@@ -443,7 +443,7 @@ function tokenize(text) {
  * the collateral guard still reports, nothing is corrupted. The corpus's worst top-level block is
  * 1896 tokens against 1896 (3.59M cells, ~14 MiB, ~19 ms), and a test asserts that no block in the
  * nine hand-written documents comes near this, so the number stays checkable rather than assumed. */
-const MAX_RESTORE_CELLS = 12_000_000;
+const MAX_RESTORE_CELLS = 24_000_000;
 
 /**
  * Groups every place `a` and `b` disagree into runs, by token LCS: `{a0, a1, b0, b1}` half-open on

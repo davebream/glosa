@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.18] - 2026-09-09
+
+The loop works again. A wedged daemon no longer takes every client down with it, a live session
+survives a daemon restart without needing one of its own, and the inbox can be read and cleared
+from the CLI without a session to hand.
+
+Edit mode stops inventing changes. A save now rewrites only the block you edited and writes it
+back in the spelling your file already had, so what reaches the agent is your edit rather than
+the serializer's opinion of it. A file that changed underneath you is refused rather than
+silently overwritten, and a workspace can be deleted outright when you want it gone.
+
 ### Added
 
 - `glosa inbox list [--all] [--workspace <path>]` lists inbox entries — id, kind, status, age, and
@@ -120,6 +131,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   inserts a blank line before and after the fence, which used to turn the whole list loose on
   reparse (or, for edits at the fence's own boundary, fall back to rewriting the whole file) for a
   change that never touched its spacing.
+- `glosa hook` no longer blocks a prompt in an agent that is not Claude Code or Codex. Some hosts,
+  such as an editor plugin or a wrapper CLI, reuse Claude Code's hook wiring but send a payload of
+  their own shape, carrying none of the fields glosa reads to tell which session a hook came from.
+  Every `glosa hook` event treated that as a usage error, which stopped the prompt. A payload
+  carrying none of those fields now exits quietly and does not go looking for the daemon. One that
+  carries some of them but not enough to identify a session, and an empty payload, are both still
+  errors — those are a malformed Claude or Codex hook rather than a different host, and staying
+  silent about them would hide a real problem.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 
@@ -589,7 +608,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.17...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.18...HEAD
+[0.1.0-alpha.18]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.17...v0.1.0-alpha.18
 [0.1.0-alpha.17]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...v0.1.0-alpha.17
 [0.1.0-alpha.15]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.14...v0.1.0-alpha.15
 [0.1.0-alpha.14]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.13...v0.1.0-alpha.14
