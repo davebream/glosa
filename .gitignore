@@ -22,6 +22,12 @@ build/
 # session handoff (pause/restore) — never commit
 .claude/session.md
 
+# Maintainer-local agent skills and sweep scratch. Personal workflows for this
+# public OSS checkout; biome.json already excludes the same paths from lint.
+.claude/
+.agents/
+.context/
+
 # local agent/tool state (serena, impeccable etc.)
 graphify-out/
 .conductor/settings.local.toml
