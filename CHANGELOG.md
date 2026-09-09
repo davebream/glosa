@@ -63,6 +63,11 @@ silently overwritten, and a workspace can be deleted outright when you want it g
   callout no longer disturbs them either, since that damage was collapsed line breaks as well. On
   this repo's own documents the dialog now comes up on about one edited block in a hundred, down
   from one in nine.
+- That fix covered the save; typing itself did not. A hand-wrapped paragraph or a callout's second
+  line still lost its break the moment a keypress landed inside it, before the save ever ran — the
+  browser's own change-reading path folded the newline to a space first, silently, and #174 having
+  removed the dialog that used to catch unrelated damage on the same saves meant nothing was left to
+  notice it. A keypress anywhere in such a block now keeps the break it already had.
 - Where writing an edited block back would still change markup you did not touch — glosa's markdown
   editor has no notion of a callout marker yet — the save shows you those exact
   bytes and asks, offering to save anyway or to hand your edit to the source face so you can fix it

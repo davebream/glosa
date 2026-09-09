@@ -156,6 +156,7 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 | `editor-roundtrip` | `packages/spa/test/rich-editor.test.ts` |
 | `editor-roundtrip` | `packages/spa/test/edit-save-guard.test.ts` |
+| `editor-roundtrip` | `test/acceptance/rich-editor-browser-roundtrip.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
 
