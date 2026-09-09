@@ -62,8 +62,38 @@ function usageError(message: string): HookOutcome {
   return { exitCode: 2, stdout: "", stderr: message };
 }
 
+/** Both v1 providers' hook envelopes identify a session by non-empty `session_id` + `cwd`
+ * (`looksLikeClaudeHookInput` / `looksLikeCodexHookInput`). An incomplete envelope still carries
+ * at least one of those fields (or the Claude/Codex `hook_event_name` / `transcript_path`
+ * siblings) as a string; a foreign host that imported the same command typically sends neither. */
+function looksLikeSessionEnvelope(input: unknown): boolean {
+  if (typeof input !== "object" || input === null) return false;
+  const v = input as Record<string, unknown>;
+  return (
+    typeof v.session_id === "string" ||
+    typeof v.cwd === "string" ||
+    typeof v.hook_event_name === "string" ||
+    typeof v.transcript_path === "string"
+  );
+}
+
+/** A non-empty object that is not a session envelope for any v1 provider. Empty `{}`, non-objects,
+ * and incomplete envelopes stay usage errors so malformed Claude/Codex input remains visible
+ * before daemon discovery; a foreign host must not be blocked (issue #194). */
+function isForeignHookInput(input: unknown): boolean {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
+  if (Object.keys(input).length === 0) return false;
+  return !looksLikeSessionEnvelope(input);
+}
+
+function missingSessionOutcome(event: string, input: unknown): HookOutcome {
+  if (isForeignHookInput(input)) return ok();
+  return usageError(`${event}: hook input missing session_id/cwd`);
+}
+
 /** Validate everything supplied by the hook host before daemon discovery. This keeps malformed
- * input visible even when discovery itself must yield quietly inside the host's timeout. */
+ * input visible even when discovery itself must yield quietly inside the host's timeout, and
+ * yields a silent success for a foreign host whose payload no provider can bind. */
 export function validateHookInvocation(event: string, input: unknown, providerId = "claude-code"): HookOutcome | null {
   const selected = providerFor(providerId);
   if (!selected) return usageError(`glosa hook: unknown provider '${providerId}'`);
@@ -77,7 +107,7 @@ export function validateHookInvocation(event: string, input: unknown, providerId
   ) {
     return usageError(`glosa hook: unknown event '${event}'`);
   }
-  if (!selected.detectSession(input)) return usageError(`${event}: hook input missing session_id/cwd`);
+  if (!selected.detectSession(input)) return missingSessionOutcome(event, input);
   return null;
 }
 
@@ -88,7 +118,7 @@ async function handleSessionStart(
   provider: AgentProvider,
 ): Promise<HookOutcome> {
   const session = provider.detectSession(input);
-  if (!session) return usageError("session-start: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("session-start", input);
 
   await deps.daemonClient.register({
     session_id: session.session_id,
@@ -118,7 +148,7 @@ async function handleSessionEnd(
   provider: AgentProvider,
 ): Promise<HookOutcome> {
   const session = provider.detectSession(input);
-  if (!session) return usageError("session-end: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("session-end", input);
   await deps.daemonClient.deregister(session.session_id);
   if (providerId === "claude-code") deps.rewake.onSessionEnd(session.session_id);
   return ok();
@@ -135,7 +165,7 @@ function additionalContext(eventName: "SessionStart" | "UserPromptSubmit", text:
 
 async function handleUserPromptSubmit(input: unknown, deps: HookDeps, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
-  if (!session) return usageError("user-prompt-submit: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("user-prompt-submit", input);
   await deps.daemonClient.heartbeat(session.session_id);
   const drained = await deps.daemonClient.drain(session.session_id, { via: "userprompt" });
   if (drained.count === 0) return ok();
@@ -153,7 +183,7 @@ async function handleStop(
   provider: AgentProvider,
 ): Promise<HookOutcome> {
   const session = provider.detectSession(input);
-  if (!session) return usageError("stop: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("stop", input);
   await deps.daemonClient.heartbeat(session.session_id);
   // Bounded drain (A6 §F26: "≤8"; the daemon route itself also caps at 8 — belt and suspenders).
   const drained = await deps.daemonClient.drain(session.session_id, { limit: 8, via: "stop" });
@@ -170,7 +200,7 @@ async function handleStop(
 
 async function handleNotification(input: unknown, deps: HookDeps, provider: AgentProvider): Promise<HookOutcome> {
   const session = provider.detectSession(input);
-  if (!session) return usageError("notification: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("notification", input);
   await deps.daemonClient.heartbeat(session.session_id);
   // R9's "hook-fed attention state" — the daemon-side attention model (open/delivered/seen/
   // done|expired|stale) is F12/P4.4 scope; this hook's OWN job ends at keeping the session's
@@ -185,7 +215,7 @@ async function handleNotification(input: unknown, deps: HookDeps, provider: Agen
  * Finds nothing after every attempt → exits 0 (F07: "normal, no new entries yet"). */
 async function handleRewakeWatch(input: unknown, deps: HookDeps, watcherPid: number): Promise<HookOutcome> {
   const session = providers["claude-code"]!.detectSession(input);
-  if (!session) return usageError("rewake-watch: hook input missing session_id/cwd");
+  if (!session) return missingSessionOutcome("rewake-watch", input);
 
   const attempts = deps.rewakePollAttempts ?? 1;
   const intervalMs = deps.rewakePollIntervalMs ?? 0;
