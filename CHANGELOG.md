@@ -126,6 +126,14 @@ silently overwritten, and a workspace can be deleted outright when you want it g
   inserts a blank line before and after the fence, which used to turn the whole list loose on
   reparse (or, for edits at the fence's own boundary, fall back to rewriting the whole file) for a
   change that never touched its spacing.
+- `glosa hook` no longer blocks a prompt in an agent that is not Claude Code or Codex. Some hosts,
+  such as an editor plugin or a wrapper CLI, reuse Claude Code's hook wiring but send a payload of
+  their own shape, carrying none of the fields glosa reads to tell which session a hook came from.
+  Every `glosa hook` event treated that as a usage error, which stopped the prompt. A payload
+  carrying none of those fields now exits quietly and does not go looking for the daemon. One that
+  carries some of them but not enough to identify a session, and an empty payload, are both still
+  errors — those are a malformed Claude or Codex hook rather than a different host, and staying
+  silent about them would hide a real problem.
 
 ## [0.1.0-alpha.17] - 2026-09-05
 
