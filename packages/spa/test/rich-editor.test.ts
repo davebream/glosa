@@ -1506,7 +1506,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   test("metrics 2 and 3 — 1 dishonest write of 402; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
-    // the restoration off the writes really are dishonest, currently 34 of them, and the guard must catch
+    // the restoration off the writes really are dishonest, currently 35 of them, and the guard must catch
     // every one. A re-run of the first design of this guard, which routed `faithful` through the
     // restoration, historically scored 0 fired and 35 missed (before #143 removed one case). The ablation is an OMITTED ARGUMENT — the
     // wrapper called without source bytes is M1 only, exactly what the pure-insertion path does —
