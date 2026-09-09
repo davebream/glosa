@@ -1227,10 +1227,11 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(446);
-    // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
-    // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
-    // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
+    ).toBe(454);
+    // Measured here: 7,160,976 cells, in the `### Fixed` list under `## [Unreleased]` in
+    // CHANGELOG.md, after #183's own bullet. That list is ONE top-level block and every changelog
+    // entry any task appends makes it bigger, so it grows monotonically and #143 will grow it
+    // again. The budget was 6M
     // against a 3,598,609-cell worst block in docs/requirements.md; merging #179, #180 and #181
     // moved the worst block to CHANGELOG.md and left no headroom, which is exactly what this
     // assertion exists to catch. Widened to 12M rather than relaxing the 1.5x margin: over budget
@@ -1368,6 +1369,14 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // blocks to `docs/decisions.md`. Compare numerators across that last step, never rates.
   // · 39/446 after #184's own documentation: the decisions entry adds five blocks (the CHANGELOG
   //   bullet grows an existing one). Denominator moved; the per-cause map, re-measured, did not.
+  // · 39/454 after #183's own documentation: a new CHANGELOG bullet and a new decisions entry (the
+  //   latter growing again after review repair, to record the paste-path whitespace boundary this
+  //   fix's own real-browser check measures and narrows), on a DOM-only fix that #183's own harness
+  //   numbers below (metrics 2-4) cannot see by construction — `parseMarkdown`/
+  //   `serializeNodesFaithfully` never mount an `EditorView`. Denominator moved twice (446 → 452 →
+  //   454); the per-cause map, re-measured after each move, is still 39, and metrics 2/3 are still
+  //   1/1 shipped and 34/34 ablated with `edits` moving from 399 to 405 to 407 alongside it —
+  //   bookkeeping both times.
   //
   // T5 (#143) MUST RE-BASELINE ALL FOUR (contracts.md C9). An opaque front-matter node changes the
   // block population, so the denominator moves and every count below moves with it.
@@ -1380,7 +1389,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // overlap joins disagree; that narrower one is where the design's figures of 317 edits and 34
   // ablated firings come from. This one reaches all 18 reference-link blocks, `## [Unreleased]`
   // included (via `nreleased`). Historically it made 375 edits with 35 ablated firings; after
-  // front-matter handling and documentation changes the current population is 446 blocks / 399 edits,
+  // front-matter handling and documentation changes the current population is 454 blocks / 407 edits,
   // with 34 ablated dishonest writes and firings.
   // The design's ratios and its residual set reproduce exactly; only the denominators differ, and
   // they differ because this generator is strictly wider. Compare like with like before concluding a
@@ -1403,8 +1412,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  shifting every ratchet below it. A DENOMINATOR MOVE IS NOT A RESULT — every numerator below is
    *  unchanged, and that is what makes a move here bookkeeping rather than drift: 441 → 446 for
    *  #184's own `docs/decisions.md` entry (five new blocks; its CHANGELOG bullet grew an existing
-   *  block rather than adding one), with metric 1's per-cause map still 39 and metric 3 still
-   *  0 missed / 0 false alarms either side of the move.
+   *  block rather than adding one), and 446 → 452 → 454 for #183's own CHANGELOG bullet and its
+   *  decisions entry (grown once at first, then again after review repair), with metric 1's
+   *  per-cause map still 39 and metric 3 still 0 missed / 0 false alarms on either side of every
+   *  move.
    *
    *  IT WILL MOVE AGAIN, and not because of anything the serializer did: the corpus is read live
    *  from the working tree, and this epic's other tasks append to `CHANGELOG.md` and
@@ -1412,7 +1423,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
    *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
    *  failure itself. */
-  const BLOCKS = 446;
+  const BLOCKS = 454;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1448,7 +1459,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 39 of 446 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 39 of 454 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1493,7 +1504,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 1 dishonest write of 399; the guard fires on it and, ablated, on 34", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 407; the guard fires on it and, ablated, on 34", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 34 of them, and the guard must catch
@@ -1575,7 +1586,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // BLOCKS each time documentation grew the corpus (385 → 394 → 399) — bookkeeping, not drift,
       // since `shipped`/`ablated` held steady across those moves.
     ).toEqual({
-      edits: 399,
+      edits: 407,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 34, fired: 34 },
     });

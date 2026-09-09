@@ -232,9 +232,13 @@ environment, so it still knows nothing about any particular agent (invariant 1).
 
 Edit's default face is a rich editor over prosemirror-markdown's CommonMark schema, with the source
 textarea one toggle away. That schema models a subset of what people write: it has no node for YAML
-front matter, a `> [!info]` callout marker, a `%% ... %%` comment, raw HTML, or a soft line break,
-and it escapes brackets conservatively on the way out. Re-serializing a whole document therefore
-returns a structurally different file, and the collapsed line breaks are not recoverable.
+front matter, a `> [!info]` callout marker, a `%% ... %%` comment, or raw HTML, and it escapes
+brackets conservatively on the way out. Re-serializing a whole document therefore returns a
+structurally different file. At the time this decision was made, a collapsed line break was the one
+loss among those no round trip could undo once written; "A soft line break is kept by widening one
+node's whitespace policy, not by giving it a node" (below) closes that path all the way from the
+markdown parse through a live keypress in the rich face, so it is no longer one of this document's
+open costs.
 
 The available exits were to retreat to source-only editing, or to make saving preserve the source.
 We took the second. The editorial experience is the product, and every other writing tool people
@@ -400,3 +404,73 @@ rather than committing it silently. Outside that pairing — a fence with only o
 line, the shape the per-run pass alone already handled before this task — the same ambiguity existed
 already and is unchanged: solving it in general would mean recording blank-line provenance the
 editor's tree does not carry today, which is out of scope here.
+
+## A soft line break is kept by widening one node's whitespace policy, not by giving it a node
+
+**Decision.** #173 keeps a soft break as a bare `\n` inside a text node, on the parser/serializer
+side, specifically so `parseMarkdown`/`serializeMarkdown` never gain a new construct. That choice
+turned out to be only half the fix: `EditorView`'s own DOM-change reading — the code path that
+turns a keypress into a transaction — collapses that same `\n` to a single space whenever it
+re-reads a changed paragraph, because the inherited `paragraph` node spec carries no whitespace
+policy at all. The loss happened between the keypress and the document `getSave()` reads, which is
+why it was invisible to every parser/serializer test #173 and #174 added: none of them mount a real
+`EditorView`. Editing any hand-wrapped paragraph, or a paragraph nested in a blockquote or list
+item — the same node type — in the rich face was silently rewriting the file underneath it.
+
+`paragraph`'s node spec now sets `whitespace: "pre"`. Traced in the vendored bundle rather than
+guessed: the DOM-change reader already asks for `preserveWhitespace: true` on every keypress
+touching a non-`"pre"` textblock (never `false`), and that value's own branch for an embedded
+newline has exactly two outcomes — split it into ProseMirror's `linebreakReplacement` node, if the
+schema declares one, or collapse it to a space, if it does not. `"pre"` selects the branch that
+keeps a run of text bytes exactly as read, which for a `\n` means neither of those — it is left
+alone, matching what the parser already builds.
+
+**Why not `NodeSpec.linebreakReplacement`** (ProseMirror's own designed-for-this mechanism, which
+resolves the same branch by splitting the read text into a dedicated leaf node instead of
+collapsing it). It was tried first. It requires that node to be legal everywhere a soft break
+already survives on the parser side, and `heading` here is `(text | image)*` — deliberately, per
+#173, because a setext heading's break has to stay inside one text run or the node fails to build
+and the whole block falls back to a whole-document rewrite (see the round-trip test pinning
+`"one\ntwo\n==="` in `rich-editor.test.ts`). Moving softbreak's own token handler to build that node
+would need heading's content expression to admit it too, reopening the parse-side redesign #173
+chose not to do.
+
+**What tracing the change-reading path alone claims, and where that claim stops.** Read off the
+vendored bundle: `readDOMChange`'s own call already asks for `preserveWhitespace: true` on an
+ordinary paragraph regardless of `"pre"`, and the branch that value selects for an embedded newline
+never touches a run of spaces or tabs — so for THAT ONE CALL SITE, `"pre"` changes nothing about
+space or tab handling, only about `\n`. That is a claim about one function, traced from source, and
+it is true.
+
+**It is not a claim about the node spec as a whole, and treating it as one was the mistake a
+real-browser paste check caught.** `NodeSpec.whitespace` is consulted by `Ai()`'s general fallback
+wherever a `<p>` tag is matched through the vendored `DOMParser`'s ORDINARY rule-matching — which
+`readDOMChange` bypasses for the paragraph's own wrapper (it hands the changed paragraph in as an
+already-resolved `topNode`), but paste does not: `EditorView` wires up its own paste handling by
+default, and a pasted `<p>` is matched against the same rule as any other. BROWSER-MEASURED, twice
+over, and both runs are retained through the real `editor-roundtrip` gate rather than measured by
+hand. The baseline: with the paragraph override removed ENTIRELY — the unmodified CommonMark
+schema — the paste check passes, because that schema collapses a pasted run exactly as the check
+expects, while both keypress checks fail. That is the comparison this paragraph rests on, and it
+is a run rather than an assertion. The isolating ablation: bypassing only the rule override below (keeping `whitespace: "pre"` in
+place, so the keypress fix stays live) turns the committed paste check red on exactly this —
+pasting a paragraph holding a multi-space run, a tab, and one holding leading indentation kept
+every extra space, the tab, and the indentation verbatim in `getSave()`'s own markdown, none of
+which the unmodified schema did (ordinary HTML-paste collapse: single spaces, tab folded to one,
+leading whitespace trimmed). That is not "the writer typed it"; it is the serializer inventing
+bytes on the other side of the same honesty problem #174 exists to prevent.
+
+**The fix is narrowed to the one call site the claim above is actually about.** `paragraph`'s
+`parseDOM` rule now carries an explicit `preserveWhitespace: false`, restoring the ordinary
+HTML-paste collapse for any caller that rule-matches a `<p>` tag. `readDOMChange` never reaches that
+rule for the paragraph's own wrapper, so the keypress fix is unaffected; restoring the override
+after the ablation above returns the same check to green. REQ-8's four metrics, unaffected by a
+DOM-only change either way, are pinned at their pre-existing counts, and the real-browser check
+pins a representative paste (a multi-space run, a tab, leading indentation, and a raw newline
+inside the pasted markup) landing on disk — read back from the file the real `PUT` route wrote, not
+only `getSave()`'s own report — unchanged from the unmodified schema's own output.
+
+**Scope.** `paragraph` only. Every case #183 reported — a root paragraph, one inside a blockquote,
+one inside a list item — is this one node type, so one change covers all three. A setext heading
+spanning source lines keeps its pre-existing behavior (a keypress inside it still costs the break);
+nothing here makes that case worse, and it is not this fix's to close.

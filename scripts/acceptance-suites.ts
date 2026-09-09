@@ -115,7 +115,11 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/sessions-routes.test.ts",
     "packages/daemon/test/provider-topology-real-subprocess.test.ts",
   ],
-  "editor-roundtrip": ["packages/spa/test/rich-editor.test.ts", "packages/spa/test/edit-save-guard.test.ts"],
+  "editor-roundtrip": [
+    "packages/spa/test/rich-editor.test.ts",
+    "packages/spa/test/edit-save-guard.test.ts",
+    "test/acceptance/rich-editor-browser-roundtrip.test.ts",
+  ],
 };
 
 /** The guard itself runs inside the gate, so a broken mapping fails the gate rather than the full suite. */

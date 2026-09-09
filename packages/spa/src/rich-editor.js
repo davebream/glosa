@@ -9,9 +9,13 @@
 // edited blocks the file is byte-identical. That matters beyond tidiness: every region this
 // rewrites reaches the agent as a `human_edit`, and a save that invents edits makes the human's
 // own change impossible to pick out. Where re-serializing an EDITED block would still cost bytes
-// the writer did not touch — CommonMark has no node for callout markers, `%%`
-// comments or soft line breaks — `getSave()` reports that
-// collateral instead of writing it, and artifact-pane.js asks first.
+// the writer did not touch — CommonMark has no node for callout markers, `%%` comments, or raw
+// HTML — `getSave()` reports that collateral instead of writing it, and artifact-pane.js asks
+// first. A single newline inside a paragraph is NOT one of those cases: CommonMark has no node
+// for it either, but this file never needed one — a bare `\n` in a text node carries it, all the
+// way from the markdown parse (#173) through a live `EditorView` keypress (#183) — so it is
+// preserved rather than reported, in a root paragraph, one inside a blockquote, or one inside a
+// list item alike.
 //
 // Talks to the daemon through NOTHING — pure editor over a string; artifact-pane.js owns save and
 // dirty wiring (see test/import-boundary.test.ts).
@@ -148,13 +152,76 @@ function metadataHeaderRule(state, startLine, endLine, silent) {
 // `editorParser` below, and a second parse path in this file would silently reopen #173.
 defaultMarkdownParser.tokenizer.block.ruler.before("hr", RAW_NODE, metadataHeaderRule, { alt: [] });
 
+/** #183's lever. `paragraph`'s inherited spec carries no whitespace policy, and the vendored
+ *  bundle's OWN change-reading path (`EditorView`'s `readDOMChange`) already asks for
+ *  `preserveWhitespace: true` — never `false` — whenever a keypress lands inside one. Traced in the
+ *  minified bundle rather than assumed: `addTextNode`'s branch for that value keeps every OTHER
+ *  whitespace byte untouched (multiple spaces, tabs, leading indentation all survive already,
+ *  "true" and "full" are identical there) and does exactly one thing differently — an embedded
+ *  newline. Without a schema-level lever it is rewritten to a single space, which is the whole of
+ *  #183: the one construct that value silently discards is the one #173 chose to carry as a bare
+ *  `\n` IN TEXT rather than as a node.
+ *
+ *  THE NODE-BASED LEVER (`NodeSpec.linebreakReplacement`, ProseMirror's own designed-for-this
+ *  mechanism) was tried first and is why this is a comment and not just a one-line diff. It
+ *  resolves the SAME branch by splitting the changed text on `\n` and inserting a dedicated leaf
+ *  node instead of collapsing to a space — but that node would have to be `paragraph`-legal
+ *  everywhere `\n` already survives on the PARSE side, and `heading` here is `(text | image)*`
+ *  (the round-trip test below spells out why: a setext heading spanning lines already depends on
+ *  its break staying inside one text run, and a node the content expression refuses does not make
+ *  the node fail quietly — it makes the whole block fail to build). Moving softbreak's OWN handler
+ *  to build that node would need heading's content expression to admit it too, which reopens
+ *  exactly the parse-side redesign #173 chose not to do, for a schema this file does not own via
+ *  the DOM half alone. Inside THIS ONE CALL, `preserveWhitespace: "full"` costs nothing measurable
+ *  BECAUSE `addTextNode` never reaches the branch that would collapse an ordinary run of spaces
+ *  either way — the only branch "full" changes there is the one already reserved for `\n` and
+ *  `\r`. That is a claim about `readDOMChange` specifically, not about the node spec as a whole —
+ *  see `PARAGRAPH_SPEC`'s own comment below for where that distinction stopped being free.
+ *
+ *  Scoped to `paragraph` alone: every hand-wrapped break this repo's own issue reports on — a root
+ *  paragraph, one inside a blockquote, one inside a list item — is this one node type, wherever it
+ *  sits. A heading spanning two source lines keeps today's pre-#183 behaviour (a keypress inside it
+ *  still costs the break); nothing here makes that case WORSE, and extending the same lever to
+ *  `heading` is a narrower follow-up, not a prerequisite. */
+const INHERITED_PARAGRAPH_SPEC = markdownSchema.spec.nodes.get("paragraph");
+const PARAGRAPH_SPEC = {
+  ...INHERITED_PARAGRAPH_SPEC,
+  whitespace: "pre",
+  // NARROWED TO THE CHANGE-READING PATH, measured rather than assumed (a real-browser paste check
+  // pinned it): `whitespace: "pre"` alone is schema-wide, not scoped to `readDOMChange`. Any
+  // OTHER caller that runs `<p>` elements through the vendored `DOMParser`'s ordinary rule-matching
+  // — paste is the reachable one, since `EditorView` wires up its own paste handling by default —
+  // reaches the exact same node-type fallback in `Ai()`/`addTextNode` this file's own top comment
+  // traces, and inherits `whitespace: "pre"` from the TYPE rather than from `readDOMChange`'s own
+  // call site. Measured with a synthetic `ClipboardEvent` against this schema before this line
+  // existed: pasting `<p>alpha  beta   gamma</p>` kept the extra spaces verbatim in `getSave()`'s
+  // own markdown, a tab survived literally, and `<p>   indented</p>` kept its leading spaces —
+  // none of which the unmodified schema did (ordinary HTML-paste collapse: single spaces, no
+  // leading whitespace). None of that is "the writer typed it": CommonMark and every other
+  // markdown surface in this repo collapse exactly those runs, and inventing them into a saved
+  // file on paste is the same class of dishonesty #174 exists to prevent, just on the other side.
+  //
+  // `readDOMChange`'s own parse call never matches this rule at all — it hands the changed
+  // paragraph in as `topNode`/`topOpen: true` and reads `h.parent.type.whitespace` directly
+  // (this file's earlier comment traces that call site), bypassing `parseDOM` rule-matching for
+  // the paragraph's own wrapper entirely. So an explicit `preserveWhitespace: false` on the RULE
+  // only reaches callers that DO rule-match a `<p>` tag — paste, and any future full-document
+  // DOM parse — while `readDOMChange`'s keypress fix, which never consults this rule, is
+  // unaffected. `rich-editor-browser-roundtrip.test.ts`'s own paste check pins all four cases
+  // (multi-space run, tab, leading indentation, and a raw `\n` inside pasted markup) as
+  // byte-identical to the unmodified schema, reading back the file the real save route wrote, not
+  // only `getSave()`'s own report — and bypassing only this line, with `whitespace: "pre"` above
+  // left in place, turns that same check red on exactly this behavior (retained ablation).
+  parseDOM: [{ ...INHERITED_PARAGRAPH_SPEC.parseDOM[0], preserveWhitespace: false }],
+};
+
 /** The schema the rich face actually runs on: CommonMark plus the one node above.
  *
  *  `isolating: true` is not decoration — it is what stops a `Backspace` at the head of the following
  *  paragraph lifting prose up into the YAML. `marks: ""` and `code: true` say the bytes are literal:
  *  nothing inside a metadata header is emphasis or a link. */
 export const editorSchema = new Schema({
-  nodes: markdownSchema.spec.nodes.addToEnd(RAW_NODE, {
+  nodes: markdownSchema.spec.nodes.update("paragraph", PARAGRAPH_SPEC).addToEnd(RAW_NODE, {
     content: "text*",
     group: "block",
     marks: "",
@@ -1011,9 +1078,13 @@ function toolbarActions(schema) {
 
 /**
  * Mounts the rich editor into `container` (a toolbar + a ProseMirror contenteditable styled by
- * app.css). Returns {getSave, getMarkdown, isDirty, focus, destroy}, where `getSave()` is the
- * splice report the caller must consult before writing and `getMarkdown()` is its text alone, for
- * callers that only need to carry the document somewhere (the source face, a parked draft).
+ * app.css). Returns {getSave, getMarkdown, getDoc, isDirty, focus, destroy}, where `getSave()` is
+ * the splice report the caller must consult before writing and `getMarkdown()` is its text alone,
+ * for callers that only need to carry the document somewhere (the source face, a parked draft).
+ * `getDoc()` is the ProseMirror document itself, straight off `view.state` with no serialization
+ * in between — the one honest way to ask "what did the keypress that just landed actually do to
+ * the model", which `getSave()`/`getMarkdown()` cannot answer on their own: both already round
+ * through `splice()`, so a loss between the DOM and the model would be invisible to either.
  * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
  * caller falls back to source mode.
  */
@@ -1083,6 +1154,7 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
   return {
     getSave: () => splice(view.state.doc),
     getMarkdown: () => splice(view.state.doc).markdown,
+    getDoc: () => view.state.doc,
     isDirty: () => dirty,
     focus: () => view.focus(),
     destroy: () => {
