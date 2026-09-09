@@ -62,7 +62,11 @@ function buildChildEnv(ambient: Record<string, string | undefined>, home: string
  *  vacuously, by contributing nothing to assert over. */
 const spawnedChildren: Array<{ label: string; env: Record<string, string> | undefined }> = [];
 
-function spawnChild<In extends Bun.SpawnOptions.Writable, Out extends Bun.SpawnOptions.Readable, Err extends Bun.SpawnOptions.Readable>(
+function spawnChild<
+  In extends Bun.SpawnOptions.Writable,
+  Out extends Bun.SpawnOptions.Readable,
+  Err extends Bun.SpawnOptions.Readable,
+>(
   label: string,
   options: Bun.SpawnOptions.OptionsObject<In, Out, Err> & { cmd: string[]; env?: Record<string, string> },
 ): Bun.Subprocess<In, Out, Err> {
@@ -104,7 +108,12 @@ async function installedChromium(
 ): Promise<string> {
   for (const executable of CHROMIUM_CANDIDATES) {
     if (!existsSync(executable)) continue;
-    const probe = spawnChild("chromium-version-probe", { cmd: [executable, "--version"], env, stdout: "pipe", stderr: "ignore" });
+    const probe = spawnChild("chromium-version-probe", {
+      cmd: [executable, "--version"],
+      env,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     onSpawn(probe);
     const version = (await readBounded(probe.stdout, probeTimeoutMs)).trim();
     // Bounded lifecycle: whether the read above completed or timed out, the probe is terminated
@@ -258,7 +267,13 @@ class CdpClient {
     const spec = KEY_SPECS[char];
     if (!spec) throw new Error(`no CDP key mapping for ${JSON.stringify(char)}`);
     const { code, windowsVirtualKeyCode: vk } = spec;
-    await this.send("Input.dispatchKeyEvent", { type: "keyDown", key: char, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: char,
+      code,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
     await this.send("Input.dispatchKeyEvent", {
       type: "char",
       key: char,
@@ -268,7 +283,13 @@ class CdpClient {
       text: char,
       unmodifiedText: char,
     });
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", key: char, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: char,
+      code,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
   }
 
   close(): void {
@@ -591,12 +612,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   test(
     "a hand-wrapped block inside a blockquote keeps its newline count after one keypress, and the save is byte-exact",
     async () => {
-      const { result, edited, diskContent } = await runScenario(
-        "blockquote.md",
-        BLOCKQUOTE_SOURCE,
-        "deliberate",
-        "X",
-      );
+      const { result, edited, diskContent } = await runScenario("blockquote.md", BLOCKQUOTE_SOURCE, "deliberate", "X");
       // Same trim as the paragraph case: the blockquote's own paragraph text excludes the file's
       // trailing newline, and the "> " prefixes are parse-time markup, not embedded breaks.
       const sourceBreaks = (BLOCKQUOTE_SOURCE.replace(/\n$/, "").match(/\n/g) ?? []).length;
@@ -739,9 +755,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       }
       const elapsedMs = Date.now() - startedAt;
 
-      expect(thrown, "a browser that never opens CDP must be reported as a failure, not silently hang").not.toBe(
-        null,
-      );
+      expect(thrown, "a browser that never opens CDP must be reported as a failure, not silently hang").not.toBe(null);
       expect(thrown?.message).toContain("did not open its CDP endpoint");
       expect(thrown?.message, "argv is retained on the diagnostic path, not only on success").toContain(
         `"${fakeChromium}"`,
@@ -876,7 +890,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         }, {});
 
       let counts = tally();
-      expect(counts["chromium-version-probe"] ?? 0, "the version probe went through spawnChild").toBeGreaterThanOrEqual(1);
+      expect(counts["chromium-version-probe"] ?? 0, "the version probe went through spawnChild").toBeGreaterThanOrEqual(
+        1,
+      );
       expect(counts["glosa-daemon"] ?? 0, "exactly one daemon, spawned through spawnChild").toBe(1);
       expect(Object.keys(counts).sort(), "no child is spawned outside spawnChild").toEqual([
         "chromium-version-probe",
