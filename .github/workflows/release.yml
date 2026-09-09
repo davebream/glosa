@@ -226,6 +226,13 @@ jobs:
 
   release:
     name: release
+    # `ci` survives a profile-skipped `docs` with `if: always()`, but a job carrying no condition
+    # of its own is gated by an implicit `success()` that walks the whole upstream closure — so
+    # this job inherited that skip and never ran, while the workflow still reported success
+    # because every job that DID run passed. v0.1.0-alpha.18 was tagged and published nothing.
+    # Stating the condition explicitly makes this job depend on its two dependencies' results and
+    # nothing else. `released` below turns a non-success here into a red run.
+    if: always() && needs.ci.result == 'success' && needs.security.result == 'success'
     needs: [ci, security]
     runs-on: macos-14
     timeout-minutes: 10
@@ -270,3 +277,24 @@ jobs:
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  released:
+    name: released
+    # The whole point of this job: a SKIPPED `release` contributes nothing to a run's conclusion,
+    # so without this the workflow is green when it publishes nothing. That is how alpha.18 was
+    # tagged, reported success, and reached neither npm nor GitHub releases.
+    if: always()
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: A tagged release must actually publish
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          if [ "${RELEASE_RESULT}" != "success" ]; then
+            echo "release job result: ${RELEASE_RESULT}" >&2
+            echo "A tag push that publishes nothing must not report success." >&2
+            exit 1
+          fi
+          echo "release job published (result: ${RELEASE_RESULT})"
