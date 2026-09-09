@@ -474,3 +474,33 @@ only `getSave()`'s own report — unchanged from the unmodified schema's own out
 one inside a list item — is this one node type, so one change covers all three. A setext heading
 spanning source lines keeps its pre-existing behavior (a keypress inside it still costs the break);
 nothing here makes that case worse, and it is not this fix's to close.
+
+## A write with no original bytes is judged by whether its escaping survives being relaxed
+
+**Decision.** Two save paths write content that owns no comparable original: a save over a blank
+source, and the arms of the splice that replace a run of blocks wholesale or insert one outright —
+the shape Keep mine takes when the fresh bytes on disk pair with none of the held document's blocks.
+The collateral guard cannot speak for these, so until #186 they reported nothing. They are now judged
+by a narrower question: does the write carry escaping that a verified relaxation would have removed?
+If relaxing changes the bytes and the relaxed form still means what the run means, the writer is
+asked, exactly as they are for collateral the guard does find.
+
+**Why not "was the run modelled".** The obvious predicate is wrong, and measurably so. A run holding
+a construct the schema cannot model takes the refusal described in the entry above and is written
+raw — but that node's raw bytes ARE its source bytes, so an edit inside a metadata header is written
+perfectly and has nothing to answer for. Keying on the refusal reports it anyway, which turns
+`AC-1` red: every edit in the #143 fixture starts asking. The refusal is where the escaping comes
+from, not evidence that any particular write carries it.
+
+**Why not narrow the opt-out instead.** The escaping is a consequence of #174's per-document
+relaxation being deny-by-default, and relaxing it further to make these writes honest would mean
+relying on a transformation happening to be a no-op over verbatim bytes — the corruption the opt-out
+exists to prevent. The write is unchanged here. What changes is that it is no longer silent:
+severity and consent are separate axes, and #143 improved the first while moving the second the
+other way on three of six measured rebase shapes.
+
+**What this does not solve.** A write can still differ from what the writer typed for reasons
+relaxation cannot see — a respelling the restoration would have put back, in content that has no
+original to restore from. The guard's own blind spot, recorded as metric 4 of the REQ-8 harness, is
+unchanged: this reaches escaping, not infidelity in freshly typed markup. Load-bearing escaping is
+deliberately not reported, because the relaxed form fails `verify` and those bytes have to stay.
