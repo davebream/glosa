@@ -1227,7 +1227,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(446);
+    ).toBe(449);
     // Measured here: 5,103,081 cells, in the 6051-byte `### Fixed` list under `## [Unreleased]` in
     // CHANGELOG.md. That list is ONE top-level block and every changelog entry any task appends
     // makes it bigger, so it grows monotonically and #143 will grow it again. The budget was 6M
@@ -1412,7 +1412,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
    *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
    *  failure itself. */
-  const BLOCKS = 446;
+  const BLOCKS = 449;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1448,7 +1448,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 39 of 446 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 449 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1470,18 +1470,28 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(39);
+    expect(misses).toBeLessThanOrEqual(40);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
-    // #143 removed (40 → 39). A genuine
+    // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
+    // (39 → 40). A genuine
     // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
+    //
+    // THE RELEASE CASE MOVES A NUMERATOR BY CONSTRUCTION, and that is worth stating plainly because
+    // it contradicts the assumption above that corpus growth only moves denominators. Cutting a
+    // release adds `## [x.y.z]` to CHANGELOG.md AND its `[x.y.z]: https://…` definition at the foot
+    // of the file. That heading is then a reference link, which is cause #1 below — so every release
+    // adds exactly one to it. The serializer did not change and nothing regressed: `shipped` stays
+    // at 1 because the restoration reaches the new block, and only the ablated path, which omits the
+    // source argument entirely, ever sees it. Establish that shape before accepting a move here; a
+    // move in any OTHER cause is not this.
     expect(
       byCause,
       countNote(
         "the per-cause record, a NUMERATOR totalling 39. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 18,
+      "link reference definition inlined": 19,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -1493,7 +1503,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 1 dishonest write of 399; the guard fires on it and, ablated, on 34", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 402; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 34 of them, and the guard must catch
@@ -1565,19 +1575,22 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 34/34 ablated whatever `edits` becomes.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 35/35 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
       ),
       // A MOVED NUMERATOR IS THE REAL SIGNAL, and here it moved twice, both legitimately: `shipped`
       // fell 3 → 2 when #143 made front matter a verbatim node (no longer re-serialized, so it can
       // no longer be written dishonestly), then 2 → 1 when #184 restores `docs/requirements.md
-      // block 30`. `ablated` stayed at 34 across both: the ablation omits the source argument
-      // entirely, so neither change's restoration logic ever runs on that path. `edits` moved with
-      // BLOCKS each time documentation grew the corpus (385 → 394 → 399) — bookkeeping, not drift,
-      // since `shipped`/`ablated` held steady across those moves.
+      // block 30`. `ablated` stayed at 34 across BOTH OF THOSE: the ablation omits the source
+      // argument entirely, so neither change's restoration logic ever runs on that path. It then
+      // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
+      // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
+      // restores. `edits` moved with BLOCKS each time documentation grew the corpus
+      // (385 → 394 → 399 → 402) — bookkeeping, not drift, since `shipped` held steady across every
+      // one of those moves.
     ).toEqual({
-      edits: 399,
+      edits: 402,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 34, fired: 34 },
+      ablated: { dishonest: 35, fired: 35 },
     });
   });
 
