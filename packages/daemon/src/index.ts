@@ -78,8 +78,7 @@ export type { ClassifyInitTargetDeps, InitTargetRisk, InitTargetVerdict } from "
 // here (cli -> daemon is the only allowed dependency direction) rather than in two copies.
 export {
   classifyInitTarget,
-  enclosingGitRoot,
-  isGitRepoRoot,
+  enclosingGitRootWithin,
   workspaceRootFor,
 } from "./registry/workspace-root.ts";
 export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./security/auth.ts";

@@ -2,6 +2,7 @@
 // @glosa/cli - typed Gunshi command boundary. Domain runners retain the A6 output contract.
 
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -75,7 +76,10 @@ type DefaultContext = Readonly<CommandContext<GunshiParams>>;
 export interface CliRunDependencies {
   /** Inbox command-boundary seam; production retains the HTTP client. */
   inbox?: { createClient?: () => Promise<GlosaApiClient> };
-  /** Init-specific host dependencies. Omit in production to use the real home and PATH. */
+  /** Init-specific host dependencies. Omit in production to use the real home and PATH.
+   * `homeDir` also seeds the workspace-root home boundary (issue #146) for every
+   * `resolveCommandDir` call site — `init` and `doctor` both resolve the same user home, so this
+   * is not duplicated as a second seam. */
   init?: {
     homeDir?: string;
     glosaHomeDir?: string;
@@ -111,18 +115,26 @@ function lazyHandler<A extends Args>(
  * An EXPLICIT `dir` is always honoured literally — silently retargeting an argument the user
  * typed would be worse than the bug — but a non-root directory inside a repo gets a warning
  * naming the root, so the two commands can still be reconciled by hand.
+ *
+ * `home` is the injectable user-home seam for the boundary in `enclosingGitRootWithin` (issue
+ * #146): on a machine whose home is itself a git checkout, the enclosing-repository walk used to
+ * reach `$HOME` with nothing to stop it. Callers pass the real `os.homedir()` (or a test's
+ * `--init`-scoped override) explicitly rather than letting this function call it internally,
+ * because `os.homedir()` does not follow a mutated `process.env.HOME` under the pinned Bun — a
+ * boundary with no such seam could never be handed a fake home by a test.
  */
 async function resolveCommandDir(
   explicitDir: string | undefined,
   cwd: string,
+  home: string,
 ): Promise<{ dir: string; warnings: { code: string; message: string }[] }> {
-  const { enclosingGitRoot } = await import("../../daemon/src/index.ts");
+  const { enclosingGitRootWithin } = await import("../../daemon/src/index.ts");
   if (explicitDir === undefined) {
-    const root = enclosingGitRoot(cwd);
+    const root = enclosingGitRootWithin(cwd, home);
     return { dir: root ?? cwd, warnings: [] };
   }
-  const root = enclosingGitRoot(explicitDir);
-  // `enclosingGitRoot` returns a realpath'd absolute path, so `.`, `./sub`, and a symlinked
+  const root = enclosingGitRootWithin(explicitDir, home);
+  // `enclosingGitRootWithin` returns a realpath'd absolute path, so `.`, `./sub`, and a symlinked
   // checkout must be canonicalized the same way before the "is this already the root?" compare —
   // otherwise `glosa init .` at a repo root would warn about itself.
   const canonicalDir = (() => {
@@ -319,6 +331,11 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     homeDir: deps.init?.homeDir,
     glosaHomeDir: deps.init?.glosaHomeDir,
   };
+  // The user-home seam for the #146 workspace-root boundary, shared by every `resolveCommandDir`
+  // call site (`init`, `doctor`) and `classifyInitTarget` below — `deps.init.homeDir` is already
+  // the real, separately-named user home (distinct from `glosaHomeDir`), so this reuses it rather
+  // than introducing a second "what is home" seam at the CLI layer.
+  const userHome = deps.init?.homeDir ?? homedir();
   const open = lazyHandler(
     {
       name: "open",
@@ -437,7 +454,11 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     async (context) => {
       const values = withGlobals(context);
       const initModule = await import("./scoped-init.ts");
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(
+        values.dir as string | undefined,
+        process.cwd(),
+        userHome,
+      );
       const scope = (values.scope as string | undefined) ?? "workspace";
       if (scope !== "workspace" && scope !== "user") {
         const message = "--scope must be workspace or user";
@@ -472,7 +493,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       // itself is the write target.
       if (scope === "workspace" && !values.force) {
         const { classifyInitTarget } = await import("../../daemon/src/index.ts");
-        const verdict = classifyInitTarget(dir);
+        const verdict = classifyInitTarget(dir, { home: userHome });
         if (verdict.risk !== "none") {
           let proceed = false;
           if (!values.json && process.stdin.isTTY) {
@@ -666,7 +687,11 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         import("../../daemon/src/index.ts"),
         import("./doctor.ts"),
       ]);
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(values.dir as string | undefined, process.cwd());
+      const { dir, warnings: dirWarnings } = await resolveCommandDir(
+        values.dir as string | undefined,
+        process.cwd(),
+        userHome,
+      );
       const result = await doctorModule.runDoctor(
         dir,
         doctorModule.realDoctorDeps(

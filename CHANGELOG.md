@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- On a machine whose home directory is itself a git checkout (a dotfiles repo), glosa could adopt
+  the entire home directory as a workspace — bus at `~/.glosa`, shadow store at
+  `~/.glosa/shadow.git`, and the matcher pointed at every `.md`, `.html` and `.txt` under home —
+  because the walk that picks a workspace root had no boundary and simply climbed to the first
+  enclosing repository, wherever that was. Workspace resolution now refuses to land on the user's
+  home directory or any ancestor of it: `glosa init`/`glosa doctor` fall back to the working
+  directory instead, `glosa open` tracks just the one file rather than promoting to a directory
+  workspace, an explicit `--dir` naming home is refused the same way a temp directory is (clearable
+  with `--force`), and a `directory` workspace already registered at home from before this fix is
+  never silently reused — it is surfaced by slug with remediation instead. A repository that is
+  merely a subdirectory of home is unaffected. `glosa doctor` now also names the resolved workspace
+  root directly, so this is visible rather than inferred from an unusual shadow-store path (#146).
 - A save could write markup you never typed without saying so. Once a document had a `---` metadata
   header, two paths — starting a file from empty, and *Keep mine* after the file moved underneath
   you — wrote the serializer's bracket escaping into your prose and reported nothing, so `See [r]`

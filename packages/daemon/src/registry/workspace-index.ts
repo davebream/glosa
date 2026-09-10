@@ -23,6 +23,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
@@ -40,7 +41,7 @@ import {
   type WorkspaceTracking,
 } from "../workspace.ts";
 import { assignSlug, type SlugDeps } from "./slug.ts";
-import { enclosingGitRoot } from "./workspace-root.ts";
+import { enclosingGitRootWithin, isHomeOrAncestor } from "./workspace-root.ts";
 
 export type WorkspaceSource = "session" | "glosa-open" | "discovered";
 
@@ -209,7 +210,12 @@ export interface WorkspaceOpenResult {
 
 export class WorkspaceOpenError extends Error {
   constructor(
-    readonly code: "invalid-path" | "artifact-not-tracked" | "no-tracked-artifact" | "unsupported-file",
+    readonly code:
+      | "invalid-path"
+      | "artifact-not-tracked"
+      | "no-tracked-artifact"
+      | "unsupported-file"
+      | "home-workspace-registered",
     message: string,
   ) {
     super(message);
@@ -583,6 +589,13 @@ const DEFAULT_GC_THROTTLE_MS = 60_000; // 60s
 
 export interface WorkspaceIndexDeps {
   home?: string;
+  /** The OS user's home directory (issue #146) — separately named and canonicalized from `home`
+   * above, which is the GLOSA STATE directory (`~/.glosa` by default) that feeds
+   * `redirectedBusPath`. Conflating the two would tie an OS concept to a product one. Defaults to
+   * `os.homedir()`; every acceptance case for the #146 boundary drives one temp directory through
+   * this seam instead — `os.homedir()` does not follow a mutated `process.env.HOME` under the
+   * pinned Bun, so a boundary with no such seam could never be handed a fake home by a test. */
+  userHomeDir?: string;
   now?: () => Date;
   mutex?: AsyncMutex;
   gcGraceMs?: number;
@@ -633,6 +646,7 @@ export interface GcResult {
 export class WorkspaceIndex {
   private readonly path: string;
   private readonly home: string;
+  private readonly userHomeDir: string;
   private readonly mutex: AsyncMutex;
   private readonly now: () => Date;
   private readonly gcGraceMs: number;
@@ -655,6 +669,7 @@ export class WorkspaceIndex {
 
   constructor(deps: WorkspaceIndexDeps = {}) {
     this.home = deps.home ?? glosaHome();
+    this.userHomeDir = deps.userHomeDir ?? homedir();
     this.path = workspaceIndexPath(this.home);
     this.mutex = deps.mutex ?? new AsyncMutex();
     this.now = deps.now ?? (() => new Date());
@@ -1016,6 +1031,20 @@ export class WorkspaceIndex {
         )
         .sort((a, b) => b.worktree_path.length - a.worktree_path.length)[0];
       if (owning) {
+        // The boundary applies to REUSE of an existing registration too (issue #146), not only to
+        // creating a new one below — a `directory` registration already naming `$HOME` (or an
+        // ancestor of it), created before this boundary existed, would otherwise keep matching
+        // every file underneath it forever. Durable state is never silently deleted or migrated
+        // here: the registration is surfaced by slug with remediation, and continuing to use it
+        // requires the same explicit intent as creating one — opening `owning.worktree_path`
+        // itself (the directory-target branch above, untouched by this check) rather than an
+        // automatic promotion reached through an unrelated nested file.
+        if (isHomeOrAncestor(owning.worktree_path, this.userHomeDir)) {
+          throw new WorkspaceOpenError(
+            "home-workspace-registered",
+            `${owning.worktree_path} is registered as workspace "${owning.slug}", but it is your home directory (or an ancestor of it) — refusing to automatically reuse it for ${canonical}. Run \`glosa forget ${owning.slug}\` to remove the registration, or \`glosa open ${owning.worktree_path}\` directly if you really mean to keep using it as a workspace.`,
+          );
+        }
         const matched = resolveTrackedFiles(owning).tracked.find(
           (file) => file.path === relativeNfc(owning.worktree_path, canonical),
         );
@@ -1064,8 +1093,15 @@ export class WorkspaceIndex {
       // excludes (dot-dir, `node_modules`, > 2 MiB) would otherwise stop working entirely —
       // directory focus rejects an untracked file with `artifact-not-tracked`, while a direct
       // file target deliberately reaches the bounded loose-file path below.
+      //
+      // `enclosingGitRootWithin` (issue #146) refuses to answer with the user's home directory or
+      // an ancestor of it — the walk itself has no such boundary, and this is the entry point that
+      // WRITES a registration rather than just resolving one, so an unbounded answer here is what
+      // pointed the matcher at someone's entire home directory in the first place. `null` (no
+      // enclosing repo, or the enclosing repo is home-or-above) falls through to the bounded
+      // loose-file path below exactly as "no enclosing repo" already did.
       if (!owning) {
-        const repoRoot = enclosingGitRoot(dirname(canonical));
+        const repoRoot = enclosingGitRootWithin(dirname(canonical), this.userHomeDir);
         if (repoRoot !== null) {
           const repoFocus = relativeNfc(repoRoot, canonical);
           if (resolveMatchedFiles(repoRoot).tracked.some((file) => file.path === repoFocus)) {

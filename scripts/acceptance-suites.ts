@@ -59,6 +59,8 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/bus/real-daemon-fault.test.ts",
     "packages/daemon/test/wedged-daemon.test.ts",
     "packages/daemon/test/forget-workspace.test.ts",
+    "test/acceptance/home-workspace-boundary.test.ts",
+    "packages/daemon/test/registry/import-guard.test.ts",
   ],
   concurrency: [
     "packages/daemon/test/registry/session-registry.test.ts",

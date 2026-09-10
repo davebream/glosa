@@ -111,6 +111,8 @@ dropping out of it.
 | `fault` | `packages/daemon/test/bus/real-daemon-fault.test.ts` |
 | `fault` | `packages/daemon/test/wedged-daemon.test.ts` |
 | `fault` | `packages/daemon/test/forget-workspace.test.ts` |
+| `fault` | `test/acceptance/home-workspace-boundary.test.ts` |
+| `fault` | `packages/daemon/test/registry/import-guard.test.ts` |
 | `concurrency` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/concurrency.test.ts` |
 | `concurrency` | `packages/daemon/test/bus/mutex.test.ts` |

@@ -43,6 +43,11 @@ const PORT = 4646; // arbitrary — never actually bound, only compared against 
 
 describe("A1 §5 route catalog", () => {
   let home: string;
+  /** The OS user home this suite pretends to run under — deliberately NOT `home`, which is the
+   * glosa STATE directory. Conflating the two would tie an OS concept to a product one, which is
+   * the mistake #146's design review called out. Fresh per test, and an ancestor of nothing else
+   * here, so every existing case resolves exactly as it did before. */
+  let userHome: string;
   let root: string;
   let workspaceIndex: WorkspaceIndex;
   let sessionRegistry: SessionRegistry;
@@ -53,9 +58,10 @@ describe("A1 §5 route catalog", () => {
 
   beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), "glosa-routes-home-"));
+    userHome = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-userhome-")));
     root = canonicalize(mkdtempSync(join(tmpdir(), "glosa-routes-ws-")));
 
-    workspaceIndex = new WorkspaceIndex({ home });
+    workspaceIndex = new WorkspaceIndex({ home, userHomeDir: userHome });
     sessionRegistry = new SessionRegistry({ index: workspaceIndex });
     busRegistry = new WorkspaceBusRegistry();
     workspaceIndex.setLiveSessionPredicate((p) => sessionRegistry.forWorkspace(p).length > 0);
@@ -94,6 +100,7 @@ describe("A1 §5 route catalog", () => {
     for (const r of [root]) await busRegistry.close(r);
     rmSync(home, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
+    rmSync(userHome, { recursive: true, force: true });
   });
 
   function req(path: string, init: RequestInit = {}): Request {
@@ -276,6 +283,34 @@ describe("A1 §5 route catalog", () => {
       const res = await fetchFn(req(`/w/${slug}/inbox/non-actionable-pres-1/presentation`));
       expect(res.status).toBe(422);
     });
+  });
+
+  test("POST /api/workspaces/open answers a pre-boundary home registration with 400, not 500 (issue #146)", async () => {
+    // The refusal itself is covered against `WorkspaceIndex` in the acceptance suite. What was
+    // reachable but unpinned is its HTTP shape: `http.ts` maps `WorkspaceOpenError` to 422 for two
+    // named codes and 400 for anything else, so a new code inherits 400 silently and nothing said
+    // so. If it ever fell through to 500 the SPA could not tell it from a daemon fault.
+    mkdirSync(join(userHome, ".git"));
+    mkdirSync(join(userHome, "Documents"), { recursive: true });
+    const artifact = join(userHome, "Documents", "chapter.md");
+    writeFileSync(artifact, "# chapter\n");
+
+    // The registration the boundary did not exist to prevent: an explicit directory open of the
+    // home directory itself, which stays the deliberate opt-in.
+    const seeded = await workspaceIndex.resolveOpenTarget(userHome);
+
+    const response = await fetchFn(
+      stateChangingReq("/api/workspaces/open", { method: "POST", body: JSON.stringify({ path: artifact }) }),
+    );
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.type).toContain("home-workspace-registered");
+    // Status and type alone left the normative body unpinned: A1 states where the remediation goes
+    // and which registration it names, and a route that dropped either would still have passed.
+    // `WorkspaceOpenError` puts its message in `title` and sends no `detail`, so that is what A1
+    // says and what this asserts.
+    expect(body.title).toContain(seeded.entry.slug);
+    expect(body.detail).toBeUndefined();
   });
 
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
