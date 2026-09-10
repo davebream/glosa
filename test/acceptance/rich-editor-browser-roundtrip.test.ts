@@ -863,20 +863,121 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     TEST_TIMEOUT_MS,
   );
 
+  test(
+    "failure path: a bounded read gives up on a child that answers after its deadline",
+    async () => {
+      // A real child that starts, then writes its stdout LATE — after `readBounded`'s own deadline
+      // and well before this test's own timeout. A child that never writes at all would leave the
+      // read parked inside `new Response(stream).text()` with nothing for the assertion below to
+      // reach if the timeout were removed (the same defect that produced this issue — see test 6's
+      // own comment, and `L-issue-140-3`); answering late is what makes the ablation land on the
+      // assertion instead of hanging the suite.
+      const fakeChild = join(workspaceRoot, "fake-slow-reader.sh");
+      writeFileSync(fakeChild, "#!/bin/sh\nsleep 3\necho late-output\n", { mode: 0o755 });
+      const proc = spawnChild("slow-reader-canary", {
+        cmd: [fakeChild],
+        env: childEnv,
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+
+      const startedAt = Date.now();
+      const text = await readBounded(proc.stdout, 500);
+      const elapsedMs = Date.now() - startedAt;
+      await killAndAwait(proc);
+
+      expect(text, "a read that times out returns empty, not the child's late output").toBe("");
+      // The 3s write is well inside this test's own 30s timeout, so a removed deadline would not
+      // hang the suite — it would resolve with "late-output\n" instead, failing the line above, and
+      // land here at ~3000ms, failing this bound too. Either failure is a named red, not a hang.
+      expect(elapsedMs, "bounded by readBounded's own deadline, not by the child's late write").toBeLessThan(2_000);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "failure path: a CDP call that answers after its deadline is reported, not awaited forever",
+    async () => {
+      // An in-process fake CDP peer: a WebSocket server that accepts the connection immediately (so
+      // `CdpClient.connect` resolves) but answers the one call it receives LATE — after that call's
+      // own deadline and well before this test's own timeout. A peer that never answers at all would
+      // leave the call's promise with nothing to race if the timer were removed; answering late is
+      // what makes the ablation land on the assertion below rather than hanging the suite.
+      let sawCall: (id: number) => void;
+      const called = new Promise<number>((resolve) => {
+        sawCall = resolve;
+      });
+      const fakePeer = Bun.serve({
+        hostname: "127.0.0.1",
+        port: randomPort(),
+        fetch(req, srv) {
+          if (srv.upgrade(req)) return undefined;
+          return new Response("upgrade required", { status: 400 });
+        },
+        websocket: {
+          message(ws, message) {
+            const msg = JSON.parse(message as string);
+            sawCall(msg.id);
+            setTimeout(() => ws.send(JSON.stringify({ id: msg.id, result: {} })), 3_000);
+          },
+        },
+      });
+
+      try {
+        const client = await CdpClient.connect(`ws://127.0.0.1:${fakePeer.port}/`);
+        try {
+          const startedAt = Date.now();
+          let thrown: Error | null = null;
+          try {
+            await client.send("Fake.method", {}, 500);
+          } catch (error) {
+            thrown = error as Error;
+          }
+          const elapsedMs = Date.now() - startedAt;
+          // Proves the fake actually received the call (not a red caused by a dead socket, which
+          // would be a false positive for the deadline under test).
+          await called;
+
+          expect(thrown, "a CDP call that answers after its deadline must be reported, not hang").not.toBe(null);
+          expect(thrown?.message).toContain("Fake.method did not answer within 500ms");
+          expect(elapsedMs, "bounded by the call's own deadline, not by the peer's late answer").toBeLessThan(2_000);
+        } finally {
+          client.close();
+        }
+      } finally {
+        fakePeer.stop(true);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   /** The credential boundary asserted at the SPAWN, not at the pure function that builds the env.
    *
    *  A test of `buildChildEnv` alone stays green if any call site stops using its result, which is
-   *  the whole failure this guard exists to catch. Two assertions do that together, and neither
-   *  works alone: every recorded child's env must be clean, AND the recorded count must match the
-   *  children this scenario actually starts. Drop the count and a spawn that bypassed `spawnChild`
-   *  contributes no record, so "every record is clean" stays trivially true while a real child
-   *  inherits the ambient environment.
+   *  the whole failure this guard exists to catch. Two assertions do that together: every recorded
+   *  child's env must be clean, AND the recorded label set must be exactly this scenario's EXPECTED
+   *  recorded labels — `chromium-version-probe` and `glosa-daemon` before the browser launches, plus
+   *  `chromium` after, with the daemon additionally carrying `GLOSA_HOME`. Expected RECORDED, not
+   *  every child started: a child that bypasses `spawnChild` is started and never recorded, so it
+   *  cannot appear in or perturb this set. That gap is the source guard's, not this test's, and the
+   *  paragraph below says so. Other tests in this file spawn their own labelled children;
+   *  `spawnedChildren` is reset per test, so they are not in this set, and no count here is stated
+   *  as a file-wide total — that is the kind of number that rots the moment a call site is added.
    *
-   *  ABLATION: change any one of the three `spawnChild(...)` call sites back to a bare
-   *  `Bun.spawn(...)` and this goes red — on the count for that child, and on `HOME` too if the
-   *  bare call also drops `env`. */
+   *  WHAT THIS CATCHES, EXACTLY. Converting one of this scenario's labelled `spawnChild(...)` call
+   *  sites back to a bare `Bun.spawn(...)` removes its entry from `spawnedChildren` entirely, so
+   *  the count/label-set assertions below go red on exactly that label — and on `HOME` too, if the
+   *  bare call also drops `env`. That is a real, ablatable guard, exercised below.
+   *
+   *  WHAT THIS CANNOT CATCH — narrowed here rather than left to overclaim (`L-pipeline-graph-gate-1`).
+   *  A spawn added somewhere in this file that never went through `spawnChild` at all — not
+   *  replacing one of this scenario's call sites, just a new one — pushes no entry onto
+   *  `spawnedChildren`, so it changes neither the recorded label set nor any count: a recorder
+   *  cannot enumerate the calls that bypass it. The assertions below are worded to say only what
+   *  they can prove; the source-level guard in the fixture-free describe below (`the only Bun.spawn
+   *  call in this file's source is inside the spawn wrapper`) is what covers that case instead. */
   test(
-    "every child is spawned through the scrubbed environment, and none bypasses it",
+    "every recorded child of this scenario carries the scrubbed environment, and no unexpected label appears",
     async () => {
       // An inventory, not a literal list. `installedChromium` loops over every candidate until one
       // qualifies, so a machine whose FIRST installed browser is too old records two probes and
@@ -894,10 +995,10 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         1,
       );
       expect(counts["glosa-daemon"] ?? 0, "exactly one daemon, spawned through spawnChild").toBe(1);
-      expect(Object.keys(counts).sort(), "no child is spawned outside spawnChild").toEqual([
-        "chromium-version-probe",
-        "glosa-daemon",
-      ]);
+      expect(
+        Object.keys(counts).sort(),
+        "the recorded spawnChild label set is exactly these two — no known label missing, no unexpected label added",
+      ).toEqual(["chromium-version-probe", "glosa-daemon"]);
 
       const { client } = await launchBrowser();
       cdp = client;
@@ -929,6 +1030,80 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 });
 
 describe("#183 — child-environment isolation (fast, no browser)", () => {
+  /** The half of #201's claim the recorder above cannot carry: catching a bypass WITHOUT running
+   *  anything, so it fails on a bare spawn even in a scenario the recorder-based test above never
+   *  exercises.
+   *
+   *  THE REAL GUARANTEE IS THE COMPILER'S, NOT THIS SCAN'S. `spawnChild` (declared near the top of
+   *  this file) is not exported — this is a test file, not a package entry point, so nothing
+   *  outside it can import, wrap, or reach around it. That already rules out a bypass from any
+   *  OTHER module in the repository; a bare `Bun.spawn` in some unrelated file (there are many —
+   *  the daemon, the CLI, other acceptance tests) has nothing to do with THIS wrapper, and scanning
+   *  the whole tree for the literal text "Bun.spawn(" would flag all of them and prove nothing
+   *  about this file's own boundary.
+   *
+   *  WHAT MODULE PRIVACY DOES NOT COVER: a future edit to THIS file calling `Bun.spawn` directly
+   *  instead of `spawnChild`, which is exactly the bypass #201 and the guard above are about. That
+   *  is the one thing this scan checks — a literal `Bun.spawn(` in this file's own source, outside
+   *  `spawnChild`'s own body, with block comments stripped first so the ABLATION notes elsewhere in
+   *  this file (which quote that exact text) are not counted as a real call.
+   *
+   *  THE CLAIM IS NO LARGER THAN THE CHECK (`L-issue-146-3`): this recognises one spelling of a
+   *  spawn — the literal token sequence `Bun.spawn(` — not the construct. `Bun["spawn"](...)`, a
+   *  rebound `const spawn = Bun.spawn`, or a subprocess started through something other than
+   *  `Bun.spawn` entirely (`Bun.spawnSync`, a dynamically imported module) would not be caught
+   *  here. Stated as the narrower thing it is, per the same review history that produced
+   *  `packages/daemon/test/registry/import-guard.test.ts`.
+   *
+   *  ONE TRAP FOR WHOEVER EDITS THIS NEXT. The scan reads this file's own source with only BLOCK
+   *  comments stripped, so a string literal — an assertion message, say — that spells the matched
+   *  token verbatim counts as a call and reds this test. That is not hypothetical: rewording the
+   *  message below to quote the token did exactly that. Say "direct spawn call" in prose instead.
+   *  Line comments are safe only because none of them happen to quote it. */
+  test("the only Bun.spawn call in this file's source is inside the spawn wrapper", () => {
+    const selfPath = new URL(import.meta.url).pathname;
+    const source = readFileSync(selfPath, "utf8");
+    // Block comments only: this file's line (`//`) comments never quote the exact call-site text
+    // this scan looks for, so stripping them is unneeded and would risk mistaking a "://" inside a
+    // string (this file has several, e.g. an http URL) for the start of a line comment.
+    const withoutBlockComments = source.replace(/\/\*[\s\S]*?\*\//g, (block) =>
+      "\n".repeat((block.match(/\n/g) ?? []).length),
+    );
+
+    const declStart = withoutBlockComments.indexOf("function spawnChild");
+    expect(declStart, "spawnChild's own declaration must still be findable to bound this scan").toBeGreaterThan(-1);
+    // The `{` right after the parameter list's own closing `)` is the function body's opening
+    // brace — NOT the first `{` after the declaration, which lands inside the `options` parameter's
+    // own inline object type (`{ cmd: string[]; env?: ... }`) and would bound the wrong span.
+    const paramsClose = withoutBlockComments.indexOf(")", declStart);
+    expect(paramsClose, "spawnChild's own parameter list must still be findable to bound this scan").toBeGreaterThan(
+      declStart,
+    );
+    const bodyOpen = withoutBlockComments.indexOf("{", paramsClose);
+    let depth = 0;
+    let bodyEnd = -1;
+    for (let i = bodyOpen; i < withoutBlockComments.length; i += 1) {
+      if (withoutBlockComments[i] === "{") depth += 1;
+      else if (withoutBlockComments[i] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          bodyEnd = i;
+          break;
+        }
+      }
+    }
+    expect(bodyEnd, "spawnChild's closing brace must be findable to bound this scan").toBeGreaterThan(bodyOpen);
+
+    const matches = [...withoutBlockComments.matchAll(/\bBun\.spawn\s*\(/g)];
+    expect(matches.length, "exactly one direct spawn call in this file: the one inside spawnChild itself").toBe(1);
+    const onlyMatch = matches[0];
+    expect(onlyMatch, "the single matched occurrence must be locatable").toBeDefined();
+    expect(
+      (onlyMatch?.index ?? -1) > bodyOpen && (onlyMatch?.index ?? -1) < bodyEnd,
+      "the one Bun.spawn call in this file must be inside spawnChild's own body, not a new call site outside it",
+    ).toBe(true);
+  });
+
   /** The credential boundary observed from INSIDE a real child, which is the only place it is
    *  actually true or false.
    *
