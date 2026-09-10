@@ -78,6 +78,13 @@ export interface DaemonUnreachableError extends Error {
 export interface HttpDaemonClientOptions {
   ensureTimeoutMs?: number;
   fetch?: typeof fetch;
+  /**
+   * Bound into every POST this client instance makes (register/heartbeat/deregister/drain/
+   * acknowledge*), issue #140's shutdown owner. Normal callers omit it: ordinary request
+   * semantics are unbounded and unchanged, since the signal never fires until its owner aborts
+   * it. `openConversationPush` is unaffected — it already takes its own dedicated signal.
+   */
+  signal?: AbortSignal;
 }
 
 function unreachableError(reason: string): DaemonUnreachableError {
@@ -98,9 +105,9 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
     );
   }
   const port = conn.port; // captured outside the closure below — narrowing doesn't cross into it
-  const token = loadToken(glosaHome());
   const base = `http://127.0.0.1:${port}`;
   const fetchRequest = options.fetch ?? fetch;
+  const shutdownSignal = options.signal;
 
   async function call(path: string, body?: unknown): Promise<Response> {
     let res: Response;
@@ -110,10 +117,16 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         headers: {
           Host: `127.0.0.1:${port}`,
           Origin: base,
-          Authorization: `Bearer ${token}`,
+          // Resolved per request, not captured when the client was built. A client can outlive a
+          // `glosa token rotate` — the shim's push-stream client is held for the whole session, and
+          // a pending delivery acknowledgement uses the client that was current when its delivery
+          // arrived — and the daemon accepts only the current credential, with no grace period.
+          // Pinning it here turned the next call on any such client into a silent 401.
+          Authorization: `Bearer ${loadToken(glosaHome())}`,
           "Content-Type": "application/json",
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        ...(shutdownSignal ? { signal: shutdownSignal } : {}),
       });
     } catch (error) {
       throw unreachableError((error as Error).message);
@@ -154,7 +167,9 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         headers: {
           Host: `127.0.0.1:${port}`,
           Origin: base,
-          Authorization: `Bearer ${token}`,
+          // Resolved when the stream is opened, for the same reason as `call` above. A push
+          // stream is long-lived, but its credential is only checked at open.
+          Authorization: `Bearer ${loadToken(glosaHome())}`,
         },
         signal,
       });

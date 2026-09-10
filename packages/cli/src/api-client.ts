@@ -307,7 +307,17 @@ export interface GlosaApiClient {
  * additions). Every call sets `Origin` to the daemon's own self-origin, same as
  * `daemon-client.ts`'s `createHttpDaemonClient` — these are trusted local-process calls, not
  * browser requests, but the state-changing route class still requires it (A3 §4). */
-export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
+export interface HttpGlosaClientOptions {
+  /**
+   * Bound into every request this client instance makes, issue #140's shutdown owner —
+   * including `getEntryStatus`'s long poll (`glosa_ask`, up to 600s). Normal callers omit it:
+   * ordinary request semantics are unbounded and unchanged, since the signal never fires until
+   * its owner aborts it.
+   */
+  signal?: AbortSignal;
+}
+
+export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}): Promise<GlosaApiClient> {
   const conn = await ensureDaemon();
   if (!conn.ok) {
     throw unreachableError(
@@ -315,8 +325,8 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
     );
   }
   const port = conn.port;
-  const token = loadToken(glosaHome());
   const base = `http://127.0.0.1:${port}`;
+  const shutdownSignal = options.signal;
 
   async function call(method: string, path: string, body?: unknown): Promise<Response> {
     const res = await fetch(`${base}${path}`, {
@@ -324,10 +334,17 @@ export async function createHttpGlosaClient(): Promise<GlosaApiClient> {
       headers: {
         Host: `127.0.0.1:${port}`,
         Origin: base,
-        Authorization: `Bearer ${token}`,
+        // Resolved per request, not captured when the client was built — the same reason as
+        // `daemon-client.ts`. This client is reused across a whole tool call: `glosa_ask` holds it
+        // through the attention request and every held-status poll, which can span minutes. A
+        // rotation in that window turned the next poll into a 401 that `glosa_ask` treats as
+        // transient and retries until it reports `unanswered`, with a healthy daemon and a real
+        // human answer waiting on the other side.
+        Authorization: `Bearer ${loadToken(glosaHome())}`,
         "Content-Type": "application/json",
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(shutdownSignal ? { signal: shutdownSignal } : {}),
     });
     if (!res.ok) {
       let problem: ApiProblem | null = null;

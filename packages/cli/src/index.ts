@@ -1016,8 +1016,8 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { discoverCodexMcpSession } = await import("../../providers/codex/src/provider.ts");
     const { discoverMcpIdentity } = await import("./session.ts");
     await runMcpServer({
-      createHookClient: createHttpDaemonClient,
-      createApiClient: createHttpGlosaClient,
+      createHookClient: (signal) => createHttpDaemonClient({ signal }),
+      createApiClient: (signal) => createHttpGlosaClient({ signal }),
       session: (provider) =>
         discoverMcpIdentity(
           [discoverClaudeMcpSession(process.env, process.cwd()), discoverCodexMcpSession(process.env, process.cwd())],

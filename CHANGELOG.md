@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   newline to a space first, silently, and #174 having removed the dialog that used to catch
   unrelated damage on the same saves meant nothing was left to notice it. A keypress anywhere in
   such a block now keeps its break.
+- `glosa mcp` shims outlived the agent sessions that spawned them: a host that exited without
+  closing the shim's stdin left it running indefinitely. The shim now also exits on SIGHUP and when
+  its real parent process is gone, and every shutdown path — stdin EOF, SIGHUP, or an orphaned
+  parent — closes its transports and cancels in-flight daemon and API calls under one total
+  deadline, so no path can outlive it. Shutdown deliberately sends nothing to the daemon: the
+  session is cleaned up by its lease expiring, because a request at that point would carry the
+  current credential to an endpoint resolved when the session first registered (#140).
 
 ## [0.1.0-alpha.18] - 2026-09-09
 
