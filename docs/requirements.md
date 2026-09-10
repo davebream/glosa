@@ -117,6 +117,19 @@ generic.**
   The same bounded fallback applies when an explicitly named file is excluded by an already-
   registered owning directory; opening that directory still omits the file, and an explicit
   directory focus remains constrained to the directory's tracked list.
+  **This enclosing-repository resolution never adopts the user's home directory, or any ancestor
+  of it, as the resolved root** (issue #146): a dotfiles checkout at `$HOME` is a git repository
+  like any other to the raw walk, so without this boundary it is adopted the same way, pointing a
+  workspace — and its matcher — at the user's entire home directory. `glosa open`'s file-owning
+  reuse is bounded the same way: a `directory` registration already naming `$HOME` or an ancestor
+  of it (created before this boundary existed) is never silently reused for a new file lookup —
+  the registration is surfaced by slug with remediation, and continuing to use it requires the
+  same explicit intent as creating one, namely opening that directory itself rather than an
+  unrelated nested file. `glosa init`/`glosa doctor`'s cwd default falls back to the literal cwd
+  instead of promoting to home, and an explicit `--dir` naming `$HOME` itself is refused the same
+  way a temp-root or multi-repo target is (`home-dir` risk, clearable with `--force` or a TTY
+  confirmation). A repository that is merely a subdirectory of home is unaffected and keeps
+  resolving normally.
 - **Tracked-artifact rule** produces one normalized file LIST feeding watcher + sidebar + git
   pathspec identically. Directory registrations use the recursive picomatch policy: include
   `**/*.md,**/*.html,**/*.txt`; exclude dot-dirs, `node_modules`, files > 2 MiB; symlinks never
@@ -335,7 +348,7 @@ the entry survives.
   backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (17 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries), `status`,
+  `token rotate|revoke`, `doctor` (18 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses

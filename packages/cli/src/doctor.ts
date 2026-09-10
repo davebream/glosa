@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Seventeen enumerated checks — A6's own
-// command-surface table names exactly 17 (platform, bun, git, claude-code, browser, daemon+proto,
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Eighteen enumerated checks — A6's own
+// command-surface table names exactly 18 (platform, bun, git, claude-code, browser, daemon+proto,
 // token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
-// Channel status, transcript-root, orphaned-entries).
+// Channel status, transcript-root, orphaned-entries, workspace-root).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
@@ -530,6 +530,13 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
     );
   }
 
+  // 18. workspace-root (issue #146) — the directory this invocation actually resolved as its
+  // workspace, so a boundary decision is visible here rather than only inferable from an unusual
+  // shadow-store path (`~/.glosa/shadow.git` on a dotfiles-home machine was the original symptom).
+  // `dir` already passed through the caller's bounded `resolveCommandDir`/`enclosingGitRootWithin`
+  // — this check reports the outcome, it does not re-derive it.
+  checks.push(check("workspace-root", "pass", `resolved workspace root: ${dir}`));
+
   return checks;
 }
 
@@ -554,7 +561,7 @@ export function printDoctorResult(result: CommandEnvelope<DoctorData>, json: boo
     return;
   }
   // Command-level warnings (e.g. #96's "this directory isn't the repo root") sit outside the
-  // 17 enumerated checks, so they get their own line rather than an 18th check.
+  // 18 enumerated checks, so they get their own line rather than a 19th check.
   for (const warning of result.warnings) {
     process.stderr.write(`glosa doctor: warning: ${warning.message}\n`);
   }

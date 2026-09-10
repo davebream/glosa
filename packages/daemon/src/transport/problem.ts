@@ -12,6 +12,12 @@ export type ProblemSlug =
   | "artifact-not-tracked"
   | "no-tracked-artifact"
   | "unsupported-file"
+  // issue #146 — `POST /api/workspaces/open`'s nested-file resolution refuses to silently reuse
+  // an existing `directory` registration that names the user's home directory (or an ancestor of
+  // it): that registration predates the workspace-root boundary and would otherwise keep matching
+  // every file underneath it. Surfaced with the registration's slug and remediation rather than
+  // migrated or deleted.
+  | "home-workspace-registered"
   | "not-found"
   | "payload-too-large"
   | "validation-failed"

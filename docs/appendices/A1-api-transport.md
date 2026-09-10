@@ -23,7 +23,13 @@ those are cross-referenced, not duplicated.
   `<slug>` values used below: `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
   `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
-  `forget-stale-preview` (contract 1.8, §5.20).
+  `forget-stale-preview` (contract 1.8, §5.20), `home-workspace-registered`
+  (400 — the workspace that owns this path is the user's home directory or an ancestor of it, from
+  a registration of that directory — made before the boundary existed, or made deliberately since,
+  because an explicit directory target remains the supported opt-in. The registration is retained;
+  the remediation
+  text, including that registration's slug, arrives in `title`, which is where every
+  `WorkspaceOpenError` puts it, and no `detail` is sent, issue #146).
 
 ## 2. Auth
 
@@ -180,7 +186,8 @@ the CLI as a child (`glosa init <dir> --json`, env scrubbed of `ANTHROPIC_API_KE
   slug. **409 conflict** — child exit 6 (foreign-config conflict; detail carries the child's
   `error.code` + hint so the client may re-confirm with `force:true`) or exit 2
   (`durable-install-required`, or A6 §F26's `unsafe-init-target` — a directory workspace that is
-  itself under a temp root or a bare multi-repo parent; same re-confirm-with-`force:true` path).
+  itself under a temp root, a bare multi-repo parent, or the user's home directory / an ancestor of
+  it (issue #146); same re-confirm-with-`force:true` path).
   **500 internal** — other
   child failures, timeout, spawn failure, unparseable child output; the raw child stdout is never
   echoed beyond the parsed envelope fields. **503** — runner not wired (narrow test contexts).
