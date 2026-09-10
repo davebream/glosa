@@ -6,7 +6,7 @@
 // Route families own URL/body validation and exact problem mapping. The top-level pipeline keeps
 // host checks, route precedence, authorization, contract-version enforcement, and body limits.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterRegistry, AdapterSessionHint } from "../adapters/interface.ts";
@@ -658,6 +658,16 @@ async function handleClearMetadata(ctx: ApiContext, slug: string, pathname: stri
  * slash, same convention as every other workspace-identity call site) — a hook's `cwd` is NOT
  * pre-canonicalized the way `/w/:slug/...` routes' `entry.canonical_path` already is. `null` on
  * anything that doesn't resolve (nonexistent directory, symlink loop, etc.). */
+/** A canonical path that exists AND is a directory. `canonicalOrNull` alone is realpath-only, so a
+ * regular file passes it; a workspace scope naming a file is not a workspace. */
+function isExistingDirectory(canonicalPath: string): boolean {
+  try {
+    return statSync(canonicalPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function canonicalOrNull(path: string): string | null {
   try {
     return canonicalize(path);
@@ -871,9 +881,28 @@ function compareCompositeCandidates(a: CompositeDrainCandidate, b: CompositeDrai
   return compareUtf8Text(a.id, b.id);
 }
 
-function sessionRoutesToWorkspace(ctx: ApiContext, sessionId: string, workspace: WorkspaceEntry): boolean {
+/**
+ * `scope`, when given, is issue #205's immutable drain scope: the requesting generic pull's own
+ * workspace argument, captured once at route entry (`handleSessionDrain`) rather than re-read from
+ * the session's live registry row. Every OTHER session's routing still reads the live registry —
+ * only THIS session's own `cwd`/`workspace_binding` is replaced for the purpose of the predicate,
+ * via `SessionRegistry.forWorkspace`'s `scopeOverride`. Absent `scope`, behaviour is byte-for-byte
+ * what it was before this fix: the row's current `cwd` decides routing, as the four hook transports
+ * still expect.
+ *
+ * `capturedRecord` (A10) is the SAME `record` `handleSessionDrain` fetched before admitting this
+ * request — passed through so the override can complete an admitted drain even if the live row is
+ * gone (deregistered or lease-expired) by the time this actually runs. Unused when `scope` is
+ * absent. */
+function sessionRoutesToWorkspace(
+  ctx: ApiContext,
+  sessionId: string,
+  workspace: WorkspaceEntry,
+  scope: string | undefined,
+  capturedRecord: SessionRecord,
+): boolean {
   return ctx.sessionRegistry
-    .forWorkspace(workspace.canonical_path)
+    .forWorkspace(workspace.canonical_path, scope !== undefined ? { sessionId, cwd: scope, capturedRecord } : undefined)
     .some((candidate) => candidate.session_id === sessionId);
 }
 
@@ -885,12 +914,13 @@ async function handleCompositeSessionDrain(
   via: DeliveryVia,
   entryId?: string,
   cursor?: string,
+  scope?: string,
 ): Promise<Response> {
   return compositeRegistry(ctx).prepare(async () => {
     let workspaces = ctx.workspaceIndex
       .list({ presentOnly: true })
       .filter((workspace) => (workspace.lifecycle?.state ?? "active") === "active")
-      .filter((workspace) => sessionRoutesToWorkspace(ctx, sessionId, workspace))
+      .filter((workspace) => sessionRoutesToWorkspace(ctx, sessionId, workspace, scope, record))
       .sort((a, b) => compareUtf8Text(a.registration_id, b.registration_id));
 
     // Registration normally created this already. Preserve the old route's self-healing behavior
@@ -914,8 +944,8 @@ async function handleCompositeSessionDrain(
     // currently route to.
     if (workspaces.length === 0) {
       try {
-        const cwdWorkspace = await getOrRegisterWorkspace(ctx.workspaceIndex, record.cwd, "session");
-        if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace)) workspaces = [cwdWorkspace];
+        const cwdWorkspace = await getOrRegisterWorkspace(ctx.workspaceIndex, scope ?? record.cwd, "session");
+        if (sessionRoutesToWorkspace(ctx, sessionId, cwdWorkspace, scope, record)) workspaces = [cwdWorkspace];
       } catch (error) {
         if (!(error instanceof AdoptionError && error.code === "workspace-forgetting")) throw error;
       }
@@ -1041,6 +1071,26 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   let via: DeliveryVia = "userprompt";
   let entryId: string | undefined;
   let cursor: string | undefined;
+  // Issue #205: the immutable scope a generic MCP pull sends for itself, additive and optional (A1
+  // §5.15). Captured once, here, before anything async runs — never re-derived from the session's
+  // live registry row, which a concurrent re-registration can legitimately move out from under this
+  // exact request. Every other caller (gate/stop/userprompt/asyncRewake) omits it, and behaviour for
+  // them is unchanged: routing still resolves from the row.
+  //
+  // Canonicalised below with the SAME rule `handleSessionRegister` applies to `cwd`, and for the
+  // same reason: a client-supplied path is not pre-canonicalised, every routing comparison
+  // (`isCwdAncestorOf`, `workspace_binding === canonical_path`) is a literal string match against a
+  // canonical path, and on macOS the natural spelling of a temp or home path (`/tmp`, `/var`) is a
+  // symlink. An un-canonicalised scope therefore matches NO registered workspace, falls into
+  // `handleCompositeSessionDrain`'s self-heal branch, and makes `getOrRegisterWorkspace` durably
+  // register a SECOND index row for a directory that already has one — observed, not theorised.
+  // PRESENCE and VALUE are tracked separately, deliberately. Folding a type test into the capture
+  // (`typeof body.scope === "string" && length > 0`) makes `""`, `null` and a non-string
+  // indistinguishable from an omitted field, so a caller that asked for an explicit scope and
+  // spelled it wrong silently gets the row-derived routing it asked NOT to have — the defect this
+  // field exists to remove, arriving through the validator's front door.
+  let scopePresent = false;
+  let rawScope: unknown;
   try {
     const raw = await req.text();
     if (raw.length > 0) {
@@ -1048,6 +1098,10 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
       if (typeof body.limit === "number" && body.limit > 0) limit = Math.min(body.limit, DRAIN_MAX);
       if (typeof body.entryId === "string" && body.entryId.length > 0) entryId = body.entryId;
       if (typeof body.cursor === "string" && body.cursor.length > 0) cursor = body.cursor;
+      if (Object.hasOwn(body, "scope")) {
+        scopePresent = true;
+        rawScope = body.scope;
+      }
       // The four "this route surfaced it" transports — never channel/mcp_pull, which have their
       // own separate delivery paths that don't go through this drain-and-mark route at all.
       if (
@@ -1064,8 +1118,25 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
     return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
   }
 
+  // Validated inside the branch that actually reads it. An explicitly bound session's drain never
+  // consults `scope` (A1 §5.15), so validating ahead of this branch would 400 a bound drain over a
+  // field it is documented to ignore — the code and the contract have to agree on which it is.
   if (!record.workspace_binding) {
-    return handleCompositeSessionDrain(ctx, sessionId, record, limit, via, entryId, cursor);
+    // Refused rather than ignored: silently dropping an unusable scope would hand this request the
+    // row-derived behaviour it explicitly asked NOT to have, which is the defect, not a fallback.
+    // Same status and shape as `handleSessionRegister`'s own `cwd` refusal. The directory check is
+    // not redundant with canonicalisation: `canonicalOrNull` is realpath-only, so an existing
+    // regular file canonicalises happily and would reach `getOrRegisterWorkspace` as a workspace.
+    let scope: string | undefined;
+    if (scopePresent) {
+      if (typeof rawScope !== "string" || rawScope.length === 0)
+        return problem(400, "invalid-path", "scope must be a non-empty path string", undefined, url.pathname);
+      const canonicalScope = canonicalOrNull(rawScope);
+      if (!canonicalScope || !isExistingDirectory(canonicalScope))
+        return problem(400, "invalid-path", "scope does not resolve to a real directory", undefined, url.pathname);
+      scope = canonicalScope;
+    }
+    return handleCompositeSessionDrain(ctx, sessionId, record, limit, via, entryId, cursor, scope);
   }
 
   const root = record.workspace_binding;
@@ -1095,7 +1166,20 @@ async function handleSessionDeliveryAck(
 ): Promise<Response> {
   const url = new URL(req.url);
   const record = ctx.sessionRegistry.get(sessionId);
-  if (!record)
+  const isComposite = CompositeDeliveryRegistry.isCompositeToken(deliveryId);
+  // Issue #205 A10: a composite reservation already authenticates its OWN session match —
+  // `CompositeDeliveryRegistry.acknowledge` compares the token's stored `reservation.session` to
+  // `sessionId` and answers `"missing"` on a mismatch — so this route's row lookup is not what
+  // makes a composite acknowledgement safe, only what makes a NON-composite one able to resolve
+  // which bus to acknowledge against. An admitted scoped drain can legitimately complete after its
+  // requester deregisters (mechanism 1, `SessionRegistry.forWorkspace`'s captured-snapshot
+  // fallback), and requiring the row to still exist here would turn that completed drain into a
+  // permanently 404ing acknowledgement — its reservation would sit unconsumed until the composite
+  // registry's own 30s TTL/lazy pruning released it, not a redirect but a silent drop. Only the
+  // composite-token branch below moves ahead of the row requirement, and only that far: a
+  // non-composite acknowledgement still 404s in exactly the same place, relative to body parsing,
+  // as before this fix — `record` is re-checked immediately before that branch runs.
+  if (!record && !isComposite) {
     return problem(
       404,
       "session-not-registered",
@@ -1103,6 +1187,7 @@ async function handleSessionDeliveryAck(
       undefined,
       url.pathname,
     );
+  }
   let body: unknown;
   try {
     body = await req.json();
@@ -1114,7 +1199,7 @@ async function handleSessionDeliveryAck(
   if (outcome !== "presented" && outcome !== "failed") {
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, url.pathname);
   }
-  if (CompositeDeliveryRegistry.isCompositeToken(deliveryId)) {
+  if (isComposite) {
     const acknowledged = await compositeRegistry(ctx).acknowledge(
       deliveryId,
       sessionId,
@@ -1129,6 +1214,14 @@ async function handleSessionDeliveryAck(
     }
     return Response.json({ acknowledged: true });
   }
+  if (!record)
+    return problem(
+      404,
+      "session-not-registered",
+      "session not registered — re-register by calling any glosa tool",
+      undefined,
+      url.pathname,
+    );
   const root = record.workspace_binding ?? record.cwd;
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   const acknowledged = await bus.acknowledgeDelivery(

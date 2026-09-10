@@ -47,11 +47,27 @@ export interface DrainOptions {
   cursor?: string;
 }
 
+/** Issue #205: the generic `glosa_inbox_pull` path's own operation. `workspace` is the scope the
+ * pull was asked for — the daemon captures it once and uses it for the whole drain, immune to a
+ * concurrent re-registration moving the session's row afterward (contract "shape B"). Deliberately
+ * NOT a field on `DrainOptions`: the four hook transports (`gate`/`stop`/`userprompt`/`asyncRewake`)
+ * must keep resolving scope from the row, and giving them no way to even spell a scope is what makes
+ * that structural rather than a convention every caller has to remember. */
+export interface ScopedPullDrainOptions {
+  workspace: string;
+  limit?: number;
+}
+
 export interface DaemonHookClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
   heartbeat(sessionId: string): Promise<void>;
   deregister(sessionId: string): Promise<void>;
   drain(sessionId: string, opts?: DrainOptions): Promise<DrainResult>;
+  /** The scoped counterpart `glosa_inbox_pull`'s generic path calls instead of `drain` above — see
+   * `ScopedPullDrainOptions`. Raw construction of the `/api/sessions/:id/drain` route stays private
+   * to this module either way; this is a second typed door onto the same route, not an escape from
+   * the client abstraction (A7). */
+  drainScoped(sessionId: string, opts: ScopedPullDrainOptions): Promise<DrainResult>;
   acknowledge?(sessionId: string, deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<void>;
   acknowledgeConversation?(
     sessionId: string,
@@ -150,6 +166,15 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
     },
     async drain(sessionId, opts) {
       return (await call(`/api/sessions/${encodeURIComponent(sessionId)}/drain`, opts ?? {})).json();
+    },
+    async drainScoped(sessionId, opts) {
+      return (
+        await call(`/api/sessions/${encodeURIComponent(sessionId)}/drain`, {
+          via: "mcp_pull",
+          limit: opts.limit,
+          scope: opts.workspace,
+        })
+      ).json();
     },
     async acknowledge(sessionId, deliveryId, outcome, error) {
       await call(`/api/sessions/${encodeURIComponent(sessionId)}/deliveries/${encodeURIComponent(deliveryId)}/ack`, {

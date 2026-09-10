@@ -11,7 +11,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { EntryStatus, GlosaApiClient } from "../src/api-client.ts";
-import type { DaemonHookClient, DrainResult, RegisterSessionInput } from "../src/daemon-client.ts";
+import type {
+  DaemonHookClient,
+  DrainResult,
+  RegisterSessionInput,
+  ScopedPullDrainOptions,
+} from "../src/daemon-client.ts";
 import {
   abortableDelay,
   createMcpServer,
@@ -128,6 +133,7 @@ class HookClient implements DaemonHookClient {
     drained: [presentation("inb-1", "annotation", "glosa annotation inb-1\ncomment:\nAct on this.")],
   };
   drainOptions: unknown;
+  scopedDrainOptions: unknown;
   heartbeats: string[] = [];
   deregistered: string[] = [];
   deliveryAcks: Array<[string, string, "presented" | "failed", string?]> = [];
@@ -149,6 +155,11 @@ class HookClient implements DaemonHookClient {
 
   async drain(_sessionId: string, options?: unknown) {
     this.drainOptions = options;
+    return this.drained;
+  }
+
+  async drainScoped(_sessionId: string, options: ScopedPullDrainOptions) {
+    this.scopedDrainOptions = options;
     return this.drained;
   }
 

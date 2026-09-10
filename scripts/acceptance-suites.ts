@@ -69,6 +69,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/bus/approval-uniqueness.test.ts",
     "packages/daemon/test/concurrency-real-subprocess.test.ts",
     "packages/daemon/test/git/lease.test.ts",
+    "test/acceptance/generic-pull-scope.test.ts",
   ],
   delivery: [
     "packages/daemon/test/provider-topology-real-subprocess.test.ts",

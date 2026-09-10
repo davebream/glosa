@@ -119,6 +119,7 @@ dropping out of it.
 | `concurrency` | `packages/daemon/test/bus/approval-uniqueness.test.ts` |
 | `concurrency` | `packages/daemon/test/concurrency-real-subprocess.test.ts` |
 | `concurrency` | `packages/daemon/test/git/lease.test.ts` |
+| `concurrency` | `test/acceptance/generic-pull-scope.test.ts` |
 | `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 | `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
 | `delivery` | `packages/cli/test/mcp.test.ts` |

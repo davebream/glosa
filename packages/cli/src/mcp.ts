@@ -464,14 +464,26 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       outputSchema: inboxPullOutputSchema,
       annotations: { ...readOnlyClosedWorld, title: "Pull glosa inbox" },
     },
-    async ({ limit = 8, session_id: requestedSession }, extra) => {
+    async ({ limit = 8, session_id: requestedSession, workspace }, extra) => {
       const hostSession = host()?.session_id;
       if (hostSession && requestedSession && requestedSession !== hostSession) {
         throw new Error("session_id does not match the MCP host session");
       }
-      const sessionId = identity(requestedSession).session_id;
+      // The generic path only: no host session bound AND no explicit session_id requested — the
+      // one identity() rung where `workspace` decides `cwd` at all (issue #205). Every other pull
+      // keeps calling `drain` exactly as before; only this rung's scope is even reachable to send.
+      const generic = !hostSession && !requestedSession;
+      const session = identity(requestedSession, undefined, generic ? workspace : undefined);
+      const sessionId = session.session_id;
       const client = await deps.createHookClient(shutdownAbort.signal);
-      const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
+      // Sends the SAME cwd this call's own `ensureSession` registered (or re-registered) —
+      // captured here rather than re-read from the registry row, which a concurrent generic pull
+      // sharing this shim's one synthetic session id can legitimately move before this drain
+      // reaches the daemon (contract "shape B"). No lock: the design stage rejected shim-local
+      // serialization as insufficient, since the session id is not process-exclusive on the wire.
+      const drained: DrainResult = generic
+        ? await client.drainScoped(sessionId, { workspace: session.cwd, limit })
+        : await client.drain(sessionId, { via: "mcp_pull", limit });
       const text =
         drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
       const structuredContent = {
