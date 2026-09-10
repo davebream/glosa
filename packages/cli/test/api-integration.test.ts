@@ -16,6 +16,7 @@ import { ensureToken, inboxEntryPath, lockPath, readLock } from "@glosa/daemon";
 // Share the daemon-test port allocator so this long-lived ensureDaemon child cannot collide with
 // hermetic `spawnDaemon` suites that also pick from [20000, 40000) during the same `bun test` run.
 import { randomPort, stopDetachedDaemon, superviseDaemonHome, trackDetachedDaemon } from "../../daemon/test/helpers.ts";
+import { rotateToken, tokenPath } from "../../daemon/src/security/token.ts";
 import { createHttpGlosaClient, type GlosaApiClient } from "../src/api-client.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
 
@@ -302,6 +303,77 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
   // AC-1. Its own scenario and its own workspace dir, following this file's convention, so the
   // listing claim is gated independently of the dismiss claim below: `list` has to work on a queue
   // nobody can clear yet, which is the state the reporter was actually stuck in.
+  /** The daemon re-reads its own credential after a rotation; wait for that rather than assume
+   * the write took effect the instant it landed on disk. */
+  async function waitForToken(candidate: string): Promise<boolean> {
+    for (let i = 0; i < 100; i += 1) {
+      const res = await fetch(`http://127.0.0.1:${Bun.env.GLOSA_PORT}/api/status`, {
+        headers: { Authorization: `Bearer ${candidate}` },
+      });
+      if (res.status === 200) return true;
+      await Bun.sleep(100);
+    }
+    return false;
+  }
+
+  // F-7 (#140). One API client is reused for a whole tool call — `glosa_ask` holds it through the
+  // attention request and every held-status poll, which can span minutes. A `glosa token rotate`
+  // in that window used to leave the client sending the previous bearer, because it captured the
+  // credential when it was built. `glosa_ask` reads the resulting 401 as transient and retries
+  // until it reports `unanswered`, so a healthy daemon and a real human answer look like silence.
+  test("#140 an API client reused across a token rotation keeps working on the current credential", async () => {
+    // Prove the client works before rotating, so a failure after can only be the rotation.
+    expect(await client.getStatus()).toBeDefined();
+
+    let rotated: string | undefined;
+    try {
+      rotated = rotateToken(home);
+      expect(rotated).not.toBe(token);
+      // The daemon re-reads its own credential; wait for that rather than assume the write took.
+      expect(await waitForToken(rotated)).toBe(true);
+
+      // The SAME client instance, after the rotation. Pinning the bearer at construction makes
+      // this a 401.
+      expect(await client.getStatus()).toBeDefined();
+    } finally {
+      // Leave the shared daemon exactly as this test found it, on every failing path — including
+      // one that fails between minting the new credential and asserting on it. Later tests in this
+      // file share `client` and `token`; without this, one failure here reappears as unrelated
+      // failures further down and the real cause is three tests up the log.
+      if (rotated !== undefined) {
+        writeFileSync(tokenPath(home), token, { mode: 0o600 });
+        await waitForToken(token);
+      }
+    }
+  });
+
+  // F-17 (#140). The API-client guard above builds its client in `beforeAll`, but the hook client
+  // needs its own: the shim's push-stream client is held for a whole session and a pending delivery
+  // acknowledgement uses the client its delivery arrived on, so both can outlive a rotation. A test
+  // that lets the client be constructed AFTER the rotation proves nothing — construction-time
+  // capture would pass it too, which is exactly how the first version of this guard was vacuous.
+  //
+  // 404 versus 401 is what makes it precise: a stale bearer is rejected before the session is ever
+  // looked up, so reaching "session not registered" is itself proof the credential was accepted.
+  test("#140 a daemon client built before a rotation still authenticates after it", async () => {
+    const longHeld = await createHttpDaemonClient(); // built with the CURRENT token, before rotating
+    let rotated: string | undefined;
+    try {
+      rotated = rotateToken(home);
+      expect(await waitForToken(rotated)).toBe(true);
+
+      await expect(longHeld.heartbeat("unknown-longheld-fixture")).rejects.toMatchObject({
+        code: "API_ERROR",
+        status: 404, // 401 here would mean the client was still sending the pre-rotation bearer
+      });
+    } finally {
+      if (rotated !== undefined) {
+        writeFileSync(tokenPath(home), token, { mode: 0o600 });
+        await waitForToken(token);
+      }
+    }
+  });
+
   test("inbox list shows entries left by a hand-move", async () => {
     const workspaceDir = freshWorkspaceDir();
     writeFileSync(join(workspaceDir, "seed.md"), "seed\n");

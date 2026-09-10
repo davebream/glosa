@@ -42,14 +42,26 @@ export interface RequestReviewDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   pollIntervalMs: number;
+  /**
+   * Issue #140's shutdown owner. An aborted `getEntryStatus` call is caught below as an ordinary
+   * transient failure (by design — a network blip must not end the wait early), so without this
+   * the poll loop cannot tell "cancelled" apart from "retry" and would keep polling for the rest
+   * of `waitMs` regardless of how long ago shutdown started. Checked only at the give-up point, so
+   * normal (non-shutdown) callers that never supply it are completely unaffected.
+   */
+  signal?: AbortSignal;
 }
 
-export function realRequestReviewDeps(createClient: () => Promise<GlosaApiClient>): RequestReviewDeps {
+export function realRequestReviewDeps(
+  createClient: () => Promise<GlosaApiClient>,
+  signal?: AbortSignal,
+): RequestReviewDeps {
   return {
     createClient,
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     pollIntervalMs: 1000,
+    signal,
   };
 }
 
@@ -131,7 +143,7 @@ export async function runRequestReview(
         warnings: [],
       };
     }
-    if (deps.now() >= deadline) {
+    if (deps.now() >= deadline || deps.signal?.aborted) {
       return {
         ok: false,
         command: "request-review",

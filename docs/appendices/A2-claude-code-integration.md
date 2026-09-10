@@ -101,6 +101,12 @@ connection handle is also the contract for future monitor (#151) and Codex subsc
 transports; those transports are not introduced here. Registration sources include `mcp`, `monitor`,
 and `codex-app-server`; existing hook sources remain accepted.
 
+The MCP shim additionally polls its own OS-level parent pid and exits when it changes (issue #140),
+alongside stdin EOF and SIGHUP. That poll decides only the shim's own lifetime — a process ending
+itself — and tells the daemon nothing beyond what the connection drop it triggers already does. It
+is not a second liveness authority: the daemon still infers liveness from the lease alone, never by
+inspecting or polling any process itself.
+
 The MCP shim discovers provider identity through provider-owned environment readers, registers on
 first tool use, and heartbeats thereafter. Only Claude Code supplies one: a shim started by Claude
 Code — from a project `.mcp.json` or a plugin's own `.mcp.json` — reads `CLAUDE_CODE_SESSION_ID`.

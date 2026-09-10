@@ -399,6 +399,34 @@ export function lockOf(home: string) {
   return readLock(lockPath(home));
 }
 
+/**
+ * Runs `fn`, then always runs `cleanup` — but if both throw, `fn`'s error (the actual test
+ * assertion) wins. A bare `try { ... } finally { await stopDaemon(...) }` does not have this
+ * property: `stopDaemon`'s own throw (a real, load-bearing check — the daemon must actually
+ * release its lock) is a `finally`-block throw, which JS lets silently replace whatever the `try`
+ * block was already failing on, reporting only the cleanup failure and hiding the real one
+ * (`L-issue-140-review-2`). `stopDaemon` itself is unchanged and still throws exactly as before
+ * when nothing preceded it.
+ */
+export async function withCleanup<T>(fn: () => Promise<T>, cleanup: () => Promise<void>): Promise<T> {
+  let result: T;
+  try {
+    result = await fn();
+  } catch (primaryError) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      console.error(
+        "cleanup failed after a primary test failure (suppressed, primary reported instead):",
+        cleanupError,
+      );
+    }
+    throw primaryError;
+  }
+  await cleanup();
+  return result;
+}
+
 /** SIGTERM, then bounded SIGKILL fallback, proving the owned child actually exited before its
  * temporary home can be removed. */
 export async function stopDaemon(home: string, proc: Bun.Subprocess): Promise<void> {

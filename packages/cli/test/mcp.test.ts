@@ -26,6 +26,8 @@ import {
   type McpDeps,
   nextPushAttempt,
   pushReconnectDelayMs,
+  closeWithinBudget,
+  MCP_SHUTDOWN_BUDGET_MS,
   runMcpServer,
 } from "../src/mcp.ts";
 import {
@@ -66,7 +68,12 @@ test("generic pull preserves requested workspace scope while reusing its stable 
   } finally {
     await connected.close();
   }
-  expect(hook.deregistered).toEqual([hook.registered!.session_id]);
+  // Was `toEqual([hook.registered!.session_id])`. Re-stated, not dropped: shutdown no longer
+  // deregisters at all (#140) — a `deregister` would put the current bearer on the wire to an
+  // endpoint resolved at first registration, and a port held that long is not an identity. The
+  // session is cleaned up by its lease expiring instead (A2 §F08). The assertion still pins the
+  // shutdown behaviour of a generic pull's session; what it pins is now the opposite value.
+  expect(hook.deregistered).toEqual([]);
 });
 
 test("MCP heartbeats all tool activity, recovers only missing registration, and preserves auth errors", async () => {
@@ -908,7 +915,265 @@ describe("official TypeScript MCP SDK contract", () => {
     await running;
     expect(hook.deliveryAcks[0]?.slice(1)).toEqual(["delivery-1", "failed", "broken stdout"]);
     if (!hook.registered) throw new Error("expected stable MCP registration");
-    expect(hook.deregistered).toEqual([hook.registered.session_id]);
+    // Was `toEqual([hook.registered.session_id])`. Re-stated, not dropped: a temporary session is
+    // no longer deregistered on the way out (#140). Sending one would mean putting the current
+    // bearer on the wire to an endpoint resolved at first registration, which a different-uid
+    // process can take over once the daemon exits. Cleanup is the lease expiring (A2 §F08). The
+    // registration itself is still asserted above, so this test still proves the session existed;
+    // what changed is what happens to it at shutdown.
+    expect(hook.deregistered).toEqual([]);
+  });
+
+  // #140. The real-process gate cannot prove this branch: when the budget wins there, the shim
+  // exits anyway as its loop drains, so removing the branch changes nothing it can see. Injecting
+  // the boundaries is what makes a deleted deadline a named red.
+  test("#140 the shutdown budget ends the process when close() never settles", async () => {
+    const exits: number[] = [];
+    const outcome = await closeWithinBudget(
+      () => new Promise<void>(() => {}),
+      40,
+      (code) => {
+        exits.push(code);
+      },
+    );
+    expect(outcome).toBe("expired");
+    expect(exits).toEqual([0]);
+  });
+
+  test("#140 a close() that finishes inside the budget leaves the process alone", async () => {
+    const exits: number[] = [];
+    const outcome = await closeWithinBudget(
+      async () => {},
+      30_000,
+      (code) => {
+        exits.push(code);
+      },
+    );
+    expect(outcome).toBe("closed");
+    expect(exits).toEqual([]);
+  });
+
+  // A request that starts concurrently with `close()` must never do registration/heartbeat work.
+  // `close()` sets its intake gate as its own synchronous first statement, so calling `close()`
+  // without awaiting it already flips the gate before this test's next line runs — no timing or
+  // fake delay is needed to land inside the shutdown window deterministically.
+  test("#140 a request that starts after close() begins is rejected before any registration or heartbeat", async () => {
+    const hook = new HookClient();
+    const connected = await connect(deps(hook, { getMetadata: async () => null }));
+    try {
+      expect((await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} })).isError).not.toBe(true);
+      if (!hook.registered) throw new Error("expected the first call to register normally");
+      const heartbeatsBefore = hook.heartbeats.length;
+
+      const closing = connected.runtime.close();
+      // The transport itself is also torn down by `close()`, concurrently, so the SDK may reject
+      // the call outright rather than deliver a structured error result — either way is "rejected".
+      const rejected = await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} }).catch(
+        () => ({ isError: true }) as CallToolResult,
+      );
+      await closing;
+
+      expect(rejected.isError).toBe(true);
+      expect(hook.heartbeats.length).toBe(heartbeatsBefore);
+    } finally {
+      await connected.client.close();
+    }
+  });
+
+  // Distinct from the gate above: this proves `close()` tracks a request's WHOLE lifecycle, not
+  // just its handler. A request stuck inside `ensureSession` (registering) never reaches its
+  // handler at all, so a tracker that only adds a call once the handler starts would never see it
+  // — `close()` would then resolve without ever having waited on it. `register()` here never
+  // settles on purpose: `close()` must still be blocked on it well after a moment that would be
+  // more than enough time to finish if it were not being waited on at all.
+  // F-5. `close()` must CANCEL a stalled registration, not merely outlive it. Before the fix,
+  // `ensureSession` built its client with `registrationAbort`, which does not fire when shutdown
+  // starts, so a wedged register held graceful close open until the outer process-exit fallback —
+  // the backstop doing the work the second shutdown step is supposed to do.
+  // #140. Shutdown deliberately sends NOTHING to the daemon. The session is cleaned up by its
+  // lease expiring, which A2 §F08 already defines as what happens when a transport goes away.
+  // A `deregister` here would put the current bearer on the wire to an endpoint resolved at first
+  // registration, and a port held that long is not an identity: after the daemon exits any local
+  // process can take it, and the world-readable lock hands a different-uid process the instance id
+  // to echo. The absence of this traffic IS the guarantee, so it is asserted rather than assumed.
+  // #140. The last place a credential could leave at shutdown. `failAll` acknowledges every
+  // still-pending delivery through the client that delivery arrived on — a previously-resolved
+  // endpoint — and the only thing making that safe is that `close()` aborts `shutdownAbort` BEFORE
+  // calling it, so the call fails locally instead of reaching the wire. Nothing pinned that
+  // ordering, which meant reversing two lines in `close()` would have leaked silently.
+  //
+  // The response send is delayed so the acknowledgement genuinely lands DURING shutdown; without
+  // that the reservation is consumed beforehand and this proves nothing.
+  test("#140 an acknowledgement issued during shutdown finds its client already cancelled", async () => {
+    const abortedWhenAcknowledged: boolean[] = [];
+    const acks: string[] = [];
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const stalled = new Proxy(serverTransport, {
+      get(target, prop, receiver) {
+        // Delayed, not infinite: an infinite stall hangs `close()` before it ever reaches the
+        // acknowledgement, so nothing would be recorded and the assertions below would be vacuous.
+        // 200ms puts the acknowledgement squarely inside shutdown, which is the point.
+        if (prop === "send")
+          return (...args: unknown[]) =>
+            Bun.sleep(200).then(() => (target.send as (...a: unknown[]) => Promise<void>)(...args));
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+      set(target, prop, value) {
+        Reflect.set(target, prop, value);
+        return true;
+      },
+    }) as typeof serverTransport;
+
+    const runtime = createMcpServer({
+      createHookClient: async (signal?: AbortSignal) => {
+        // Default fixture: its `drained` already carries a top-level `delivery_id`, which is what
+        // reserves the acknowledgement this test needs to still be in flight at shutdown.
+        const client = new HookClient();
+        client.acknowledge = async (_session, deliveryId) => {
+          abortedWhenAcknowledged.push(signal?.aborted === true);
+          acks.push(deliveryId);
+        };
+        return client;
+      },
+      createApiClient: async () => ({}) as GlosaApiClient,
+      cwd: () => "/workspace",
+    });
+    await runtime.connect(stalled);
+    const client = new Client({ name: "glosa-test", version: "1" }, { capabilities: {} });
+    await client.connect(clientTransport);
+
+    // Not awaited: its response is still in flight when shutdown starts, which is the case that
+    // matters — an acknowledgement issued while the shim is closing.
+    void client.callTool({ name: "glosa_inbox_pull", arguments: {} }).catch(() => {});
+    await Bun.sleep(50);
+
+    await runtime.close();
+    await Bun.sleep(50); // let any acknowledgement racing the close actually land
+
+    // It really did happen — otherwise this assertion would pass vacuously on an empty list.
+    expect(acks).toEqual(["delivery-1"]);
+    expect(abortedWhenAcknowledged.length).toBeGreaterThan(0);
+    // And every such call found its client already cancelled, so none of them reached the wire.
+    expect(abortedWhenAcknowledged.every(Boolean)).toBe(true);
+  });
+
+  test("#140 shutdown sends no deregistration — the session is left to its lease", async () => {
+    const hook = new HookClient();
+    const connected = await connect(deps(hook, { getMetadata: async () => null }));
+    await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
+    expect(hook.registered).not.toBeNull();
+
+    await connected.runtime.close();
+    expect(hook.deregistered).toEqual([]);
+  });
+
+  test("#140 shutdown cancels a stalled registration rather than waiting out the outer deadline", async () => {
+    const registerSignals: Array<AbortSignal | undefined> = [];
+    const clientFor = (signal?: AbortSignal): HookClient => {
+      const hook = new HookClient();
+      hook.register = () => {
+        registerSignals.push(signal);
+        // Settles only when the signal it was handed aborts. Given no signal, or one that never
+        // fires, it hangs — which is precisely the ablated behaviour.
+        return new Promise<{ workspace: string }>((_resolve, reject) => {
+          if (!signal) return;
+          if (signal.aborted) return reject(new Error("registration aborted"));
+          signal.addEventListener("abort", () => reject(new Error("registration aborted")), { once: true });
+        });
+      };
+      return hook;
+    };
+    const connected = await connect({
+      createHookClient: async (signal?: AbortSignal) => clientFor(signal),
+      createApiClient: async () => ({ getMetadata: async () => null }) as unknown as GlosaApiClient,
+      cwd: () => "/workspace",
+    });
+    const stuck = callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
+    stuck.catch(() => {});
+    await Bun.sleep(20);
+    expect(registerSignals.length).toBeGreaterThan(0);
+
+    // The wait is bounded HERE rather than left to the runner's own timeout: a test that dies on
+    // its timeout reports "timed out", which names nothing and would be indistinguishable from an
+    // unrelated hang. Racing it means the ablated build fails on the assertion below instead.
+    const closing = connected.runtime.close();
+    closing.catch(() => {});
+    const started = Date.now();
+    const closedInTime = await Promise.race([closing.then(() => true), Bun.sleep(1_000).then(() => false)]);
+    const elapsedMs = Date.now() - started;
+    // Comfortably under the outer budget: passing by reaching MCP_SHUTDOWN_BUDGET_MS would mean
+    // the fallback rescued it, which is the defect rather than the fix.
+    expect(closedInTime).toBe(true);
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(MCP_SHUTDOWN_BUDGET_MS).toBeGreaterThan(1_000);
+  });
+
+  test("#140 close() waits for a request's whole lifecycle, registration included, not just its handler", async () => {
+    const hook = new HookClient();
+    hook.register = () => new Promise<{ workspace: string }>(() => {});
+    const connected = await connect(deps(hook, { getMetadata: async () => null }));
+    const stuck = callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
+    stuck.catch(() => {});
+    // Give the SDK's own dispatch a moment to actually invoke the wrapped handler.
+    await Bun.sleep(20);
+
+    const closing = connected.runtime.close();
+    closing.catch(() => {});
+    const closedQuickly = await Promise.race([closing.then(() => true), Bun.sleep(200).then(() => false)]);
+    expect(closedQuickly).toBe(false);
+  });
+
+  // A real-process race between a terminal signal and `runMcpServer`'s first `await` (`connect()`)
+  // is unfalsifiable at any safe test timing: `connect()` itself does no real I/O and returns in
+  // well under a millisecond (verified empirically while building this test), so no delay chosen
+  // to reliably clear Bun's own ~150-200ms module-loading startup — which no code-level fix here
+  // can shorten — can also land inside that sub-millisecond window. The ordering is instead
+  // verified directly: `runMcpServer`'s synchronous prefix (installing the SIGHUP listener, and
+  // everything before it) runs to completion before the function's first `await` ever yields
+  // control back here, so checking it immediately after calling `runMcpServer` — without awaiting
+  // — observes exactly what has run before `connect()` could possibly have started.
+  test("#140 the SIGHUP listener is installed before runMcpServer's first await", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const before = process.listenerCount("SIGHUP");
+    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    expect(process.listenerCount("SIGHUP")).toBe(before + 1);
+    // Invoke only the listener this call just registered — never `process.emit`, which fires
+    // every OTHER SIGHUP listener already registered on this shared process too, including (in a
+    // full run alongside the real-subprocess suite) `daemon/test/helpers.ts`'s own crash-cleanup
+    // handler, which calls `process.exit()` and would take the whole test run down with it.
+    const ourHandler = process.listeners("SIGHUP").at(-1) as () => void;
+    ourHandler();
+    await running;
+    expect(process.listenerCount("SIGHUP")).toBe(before);
+  });
+
+  // Same reasoning as the SIGHUP listener check above, for the parent-poll's own setup: its
+  // `setInterval` call is part of the same synchronous prefix, so it has already run by the time
+  // this line executes without having awaited `runMcpServer` yet. Also checks the matching
+  // cleanup: neither the listener nor the interval may be a reason the process stays alive, so
+  // both must be torn down again once shutdown completes — an uncleared SIGHUP listener would
+  // accumulate across every one of this file's other `runMcpServer` calls.
+  test("#140 the parent-poll interval is created before runMcpServer's first await, and both it and the SIGHUP listener are torn down on exit", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const intervalSpy = spyOn(globalThis, "setInterval");
+    const clearSpy = spyOn(globalThis, "clearInterval");
+    const listenersBefore = process.listenerCount("SIGHUP");
+    try {
+      const callsBefore = intervalSpy.mock.calls.length;
+      const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+      expect(intervalSpy.mock.calls.length).toBe(callsBefore + 1);
+      input.end();
+      await running;
+      expect(clearSpy).toHaveBeenCalled();
+      expect(process.listenerCount("SIGHUP")).toBe(listenersBefore);
+    } finally {
+      intervalSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
   });
 
   test("stdio server exits cleanly when its input reaches EOF", async () => {

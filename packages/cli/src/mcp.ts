@@ -4,6 +4,7 @@
 import { existsSync, lstatSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
+import { dlopen, FFIType } from "bun:ffi";
 import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
@@ -50,12 +51,17 @@ interface PendingAck {
   client: DaemonHookClient;
   sessionId: string;
   deliveryId: string;
-  deregister: boolean;
 }
 
 export interface McpDeps {
-  createHookClient: () => Promise<DaemonHookClient>;
-  createApiClient: () => Promise<GlosaApiClient>;
+  /**
+   * `signal`, when given, is the shutdown owner's abort signal — bind it into the created
+   * client so in-flight and future calls on that client reject when shutdown starts. Ordinary
+   * (non-shutdown) calls are unaffected: the signal never fires until shutdown begins.
+   */
+  createHookClient: (signal?: AbortSignal) => Promise<DaemonHookClient>;
+
+  createApiClient: (signal?: AbortSignal) => Promise<GlosaApiClient>;
   cwd?: () => string;
   sessionId?: () => string | undefined;
   session?: (provider?: string) => { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null;
@@ -131,22 +137,14 @@ class DeliveryAcknowledgements {
     const ack = this.pending.get(requestId);
     if (!ack) return;
     this.pending.delete(requestId);
-    try {
-      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "presented");
-    } finally {
-      if (ack.deregister) await ack.client.deregister(ack.sessionId);
-    }
+    await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "presented");
   }
 
   async failed(requestId: RequestId, reason: string): Promise<void> {
     const ack = this.pending.get(requestId);
     if (!ack) return;
     this.pending.delete(requestId);
-    try {
-      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "failed", reason);
-    } finally {
-      if (ack.deregister) await ack.client.deregister(ack.sessionId);
-    }
+    await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "failed", reason);
   }
 
   async failAll(reason: string): Promise<void> {
@@ -283,6 +281,34 @@ export const MCP_PUSH_RECOVERY_MS = 20_000;
 export const MCP_PUSH_UNBOUND_RETRY_MS = 300_000;
 
 /**
+ * The shim's one total shutdown deadline (issue #140), entered by stdin EOF, SIGHUP, or the
+ * parent poll noticing reparenting. Bounds intake stop and both clients' in-flight and pending
+ * calls; when it expires the process ends anyway so no path can outlive it. Sized like `MCP_PUSH_MIN_DELAY_MS`: generous for an aborted fetch to unwind locally, far
+ * short of anything a caller would perceive as a hang.
+ */
+export const MCP_SHUTDOWN_BUDGET_MS = 5_000;
+
+/**
+ * How often `runMcpServer` checks whether its real parent has changed. The poll cannot use
+ * `process.ppid`: Bun resolves it once, on its first read, and returns that same value forever
+ * after — so it can report the parent this process started with, but never that it changed.
+ * Orphan detection therefore reads the live value from the OS via `getppid(2)`; see
+ * `liveParentPid`.
+ */
+export const MCP_PARENT_POLL_MS = 1_000;
+
+/** The pid every orphaned process is reparented to on macOS: launchd. */
+export const REAPER_PID = 1;
+
+const libSystem = dlopen("libSystem.B.dylib", { getppid: { args: [], returns: FFIType.i32 } });
+
+/** The OS's current parent pid, read fresh every call — unlike `process.ppid` (see
+ * `MCP_PARENT_POLL_MS`), this observes reparenting to launchd once the real host process exits. */
+function liveParentPid(): number {
+  return libSystem.symbols.getppid();
+}
+
+/**
  * The issue's expected behavior is explicit: a shim that cannot bind "backs off to a long
  * interval and says why". stdout is the JSON-RPC channel a broken write here would corrupt, so
  * this goes to stderr via `console.error` — the same channel/mechanism the daemon already uses
@@ -325,7 +351,18 @@ export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export function createMcpServer(deps: McpDeps): GlosaMcpServer {
-  let syntheticClient: DaemonHookClient | undefined;
+  // Bound into every client an active tool handler creates. It fires immediately when shutdown
+  // starts, so ordinary calls are unaffected until then; once it fires, in-flight and future calls
+  // on those clients reject instead of hanging — this is what cancels a mid-flight `glosa_ask`
+  // long poll or a stuck hook call.
+  const shutdownAbort = new AbortController();
+  // Every currently-running tool call's whole lifecycle — registration/heartbeat included, not
+  // just the handler — keyed by its own promise. `close()` waits for this set to drain (after
+  // gating intake and aborting `shutdownAbort`) instead of abandoning in-flight work mid-request.
+  const activeCalls = new Set<Promise<unknown>>();
+  // Gated atomically, as `close()`'s own first statement — see `wrapped` below for why that
+  // ordering is what makes the gate and the `activeCalls` snapshot agree with each other.
+  let intakeClosed = false;
   const syntheticId = `mcp-${process.pid}-${randomUUID()}`;
   const host = (provider?: string) =>
     deps.session?.(provider) ??
@@ -352,8 +389,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     const activity = prior
       .catch(() => {})
       .then(async () => {
-        const client = await deps.createHookClient();
-        if (session.session_id === syntheticId) syntheticClient = client;
+        const client = await deps.createHookClient(shutdownAbort.signal);
         if (registered.get(session.session_id) === registrationKey) {
           try {
             await client.heartbeat(session.session_id);
@@ -395,10 +431,25 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
     ) => Promise<CallToolResult>,
   ) {
-    const wrapped = async (args: z.output<I>, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
+    const wrapped = (args: z.output<I>, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
+      // Checked and added to `activeCalls` synchronously, with no `await` in between — `close()`
+      // sets `intakeClosed` as its own first, synchronous statement, so there is no interleaving
+      // in which a request reads `intakeClosed === false` here but still lands outside the
+      // snapshot `close()` later drains. A request either sees the gate and is rejected before it
+      // does anything (no registration, no heartbeat), or is tracked for its whole lifetime.
+      if (intakeClosed) return Promise.reject(new Error("glosa mcp is shutting down"));
       const hints = args as { session_id?: string; provider?: string; workspace?: string };
-      await ensureSession(hints.session_id, hints.provider, name === "glosa_inbox_pull" ? hints.workspace : undefined);
-      return handler(args, extra);
+      const call = (async () => {
+        await ensureSession(
+          hints.session_id,
+          hints.provider,
+          name === "glosa_inbox_pull" ? hints.workspace : undefined,
+        );
+        return handler(args, extra);
+      })();
+      activeCalls.add(call);
+      call.finally(() => activeCalls.delete(call)).catch(() => {});
+      return call;
     };
     return server.registerTool(name, config, wrapped as ToolCallback<I>);
   }
@@ -419,7 +470,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         throw new Error("session_id does not match the MCP host session");
       }
       const sessionId = identity(requestedSession).session_id;
-      const client = await deps.createHookClient();
+      const client = await deps.createHookClient(shutdownAbort.signal);
       const drained: DrainResult = await client.drain(sessionId, { via: "mcp_pull", limit });
       const text =
         drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
@@ -435,7 +486,6 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
             client,
             sessionId,
             deliveryId: drained.delivery_id,
-            deregister: false,
           },
           extra.signal,
         );
@@ -456,7 +506,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ id, cursor, workspace }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const retrieved = await (await deps.createApiClient()).getInboxPresentation(root, id, cursor);
+      const retrieved = await (await deps.createApiClient(shutdownAbort.signal)).getInboxPresentation(root, id, cursor);
       const structuredContent = { presentation: retrieved.presentation };
       return toolResult(structuredContent, retrieved.presentation.text);
     },
@@ -477,7 +527,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ metadata, workspace }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const structuredContent = await (await deps.createApiClient()).setMetadata!(
+      const structuredContent = await (await deps.createApiClient(shutdownAbort.signal)).setMetadata!(
         root,
         metadata as WorkspaceMetadataDescriptor,
       );
@@ -497,7 +547,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ workspace }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const metadata = await (await deps.createApiClient()).getMetadata!(root);
+      const metadata = await (await deps.createApiClient(shutdownAbort.signal)).getMetadata!(root);
       return toolResult({ metadata });
     },
   );
@@ -516,7 +566,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
     async ({ workspace }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const structuredContent = await (await deps.createApiClient()).clearMetadata!(root);
+      const structuredContent = await (await deps.createApiClient(shutdownAbort.signal)).clearMetadata!(root);
       return toolResult(structuredContent);
     },
   );
@@ -537,7 +587,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     async ({ session_id: sessionId, workspace, provider }) => {
       const root = workspace ?? (deps.cwd ?? process.cwd)();
       const session = identity(sessionId, provider);
-      const structuredContent = await (await deps.createApiClient()).bindSession!(root, sessionId, {
+      const structuredContent = await (await deps.createApiClient(shutdownAbort.signal)).bindSession!(root, sessionId, {
         provider: session.provider,
         cwd: session.cwd,
         source: "mcp",
@@ -570,7 +620,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           "glosa_conversation_ack requires an explicit session_id when the MCP host does not provide one",
         );
       }
-      const client = await deps.createHookClient();
+      const client = await deps.createHookClient(shutdownAbort.signal);
       if (!client.acknowledgeConversation) throw new Error("conversation acknowledgement is unavailable");
       await client.acknowledgeConversation(sessionId, messageId, "presented");
       return toolResult({ message_id: messageId, delivered: true });
@@ -602,7 +652,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         undefined,
         "document",
         {
-          createClient: deps.createApiClient,
+          createClient: () => deps.createApiClient(shutdownAbort.signal),
           ensureToken,
           glosaHome,
           openBrowser: () => {
@@ -707,7 +757,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           // No question, no wait: pointing is a side effect, not a request for something back.
           ...(question === undefined ? {} : { waitMs: (waitSeconds ?? 600) * 1000 }),
         },
-        realRequestReviewDeps(deps.createApiClient),
+        realRequestReviewDeps(() => deps.createApiClient(shutdownAbort.signal), shutdownAbort.signal),
       );
 
       if (!result.ok && result.error?.kind !== "review_timeout") {
@@ -758,7 +808,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         // threshold just because a lot of wall-clock time passed.
         let connectedAt: number | null = null;
         try {
-          const client = await deps.createHookClient();
+          const client = await deps.createHookClient(shutdownAbort.signal);
           if (!client.openConversationPush || !client.acknowledgeConversation) return;
           await client.openConversationPush(
             sessionId,
@@ -803,17 +853,46 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     server,
     connect: (transport) => server.connect(new DeliveryAwareTransport(transport, acknowledgements)),
     close: async () => {
+      // Intake is gated first and atomically — a synchronous statement, before anything else,
+      // including the abort below. A request that starts concurrently with shutdown either sees
+      // this and is rejected before touching registration/heartbeat, or was already running and
+      // is in `activeCalls` by the time the snapshot below is taken; no third, ungated state
+      // exists in between (see `wrapped`, above, for the matching synchronous check-and-track).
+      intakeClosed = true;
+      shutdownAbort.abort();
       pushAbort.abort();
+      // Every admitted request still running — its registration and heartbeat included, not only
+      // its handler — is bound to `shutdownAbort` through the client `ensureSession` created for
+      // it, so aborting first means this settles quickly rather than abandoning it mid-flight.
+      await Promise.allSettled([...activeCalls]);
       await server.close();
       if (pushTask) await pushTask.catch(() => {});
+      // Safe to run after the abort above, and only because of it: every pending acknowledgement
+      // holds the client its delivery arrived on, which is bound to `shutdownAbort`. The call
+      // therefore fails locally instead of putting the current bearer on the wire to an endpoint
+      // resolved earlier in the session — the same hazard the removed deregistration had.
       await acknowledgements.failAll("MCP server closed before its response was written");
-      if (registered.has(syntheticId)) {
-        try {
-          await syntheticClient?.deregister(syntheticId);
-        } catch {
-          /* lease expires if daemon is unavailable */
-        }
-      }
+      // No deregistration is attempted, deliberately (issue #140).
+      //
+      // The session this shim registered is cleaned up by its LEASE EXPIRING, which A2 §F08 already
+      // defines as what happens when a session's transport goes away. Sending a `deregister` here
+      // would be faster, but it means putting the current bearer token on the wire to an endpoint
+      // resolved long ago — at first registration, possibly hours earlier — and a port is not an
+      // identity. After the daemon exits, any local process can take that port; the lock it left
+      // behind is world-readable (0644 to the token's 0600), so a DIFFERENT-uid process can read
+      // the instance id it published, echo it back through a handshake, and be handed a credential
+      // it could never have read from disk.
+      //
+      // Verifying harder was tried and is not worth its weight: a port comparison is satisfied by
+      // exactly that stale lock, and a tokenless handshake proving a replayable public id is too.
+      // Proving ownership properly means a fresh lock read plus a live-PID check plus full
+      // handshake agreement, inside a shutdown budget, in the one code path that must never hang —
+      // machinery guarding a convenience whose absence costs one lease interval.
+      //
+      // `ensureDaemon` is not the precedent it looks like: it resolves the port it is about to use,
+      // right then, and requires a currently live lock PID agreeing across instance, protocol,
+      // build and install. Shutdown has none of that freshness, which is what makes the same
+      // metadata safe there and unsafe here.
     },
   };
 }
@@ -831,6 +910,39 @@ function waitForInputEnd(input: Readable): Promise<void> {
   });
 }
 
+/**
+ * Run `close` under a total deadline and end the process when it does not finish (issue #140).
+ *
+ * Its boundaries are injected rather than reached for, so the fallback is provable without
+ * constructing a real hang: hand it a `close` that never settles and `exit` must be called. That
+ * matters because the fallback is unfalsifiable through the real-process gate — when the budget
+ * wins there, the shim happens to exit anyway as its event loop drains, so deleting this branch
+ * changes nothing observable from outside. A defensive backstop nothing can observe is
+ * indistinguishable from one that was never wired up, which is the whole failure this repository
+ * treats as a review blocker.
+ */
+export async function closeWithinBudget(
+  close: () => Promise<void>,
+  budgetMs: number,
+  exit: (code: number) => void,
+): Promise<"closed" | "expired"> {
+  let expired: ReturnType<typeof setTimeout> | undefined;
+  const budgetExpired = new Promise<"expired">((resolve) => {
+    expired = setTimeout(() => resolve("expired"), budgetMs);
+    expired.unref?.();
+  });
+  const outcome = await Promise.race([close().then(() => "closed" as const), budgetExpired]);
+  clearTimeout(expired);
+  if (outcome === "expired") exit(0);
+  return outcome;
+}
+
+/** Resolves once `signal` aborts — immediately if it already has. */
+function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+}
+
 export async function runMcpServer(
   deps: McpDeps,
   streams: { stdin?: Readable; stdout?: Writable } = {},
@@ -838,10 +950,69 @@ export async function runMcpServer(
   const input = streams.stdin ?? process.stdin;
   const output = streams.stdout ?? process.stdout;
   const runtime = createMcpServer(deps);
-  await runtime.connect(new WriteConfirmedStdioServerTransport(input, output));
+
+  // The shutdown owner. Three terminal signals — stdin EOF, SIGHUP, and a parent that has gone —
+  // all enter the exact same bounded path below; none of them decides how shutdown happens, only
+  // that it should start. Both the SIGHUP handler and the parent-poll baseline are installed
+  // BEFORE the first await (`connect()`, below): either terminal signal can arrive during that
+  // window, and installing a handler only after it would miss it — a SIGHUP would fall through to
+  // the default disposition, bypassing the bounded shutdown entirely — no transport close, no
+  // cancellation of in-flight work — and a parent that exits during connect() would already show
+  // as this process's own parent (launchd) by the time a baseline read AFTER connect() ran, so the
+  // poll below would never see it change.
+  const trigger = new AbortController();
+  const requestShutdown = () => trigger.abort();
+
+  const onSighup = () => requestShutdown();
+  process.on("SIGHUP", onSighup);
+
+  // The baseline is captured HERE, before the first `await`, and that ordering is the whole fix:
+  // taken any later, a parent that exits during startup would already have been replaced by the
+  // reaper, the baseline would be the reaper, and the poll below could never see it change again.
+  //
+  // `process.ppid` and `liveParentPid()` return the same thing at this line, so the choice between
+  // them is not what makes this correct — measured, `process.ppid` is resolved lazily on its first
+  // read rather than captured at fork: a process that never touches it until after its parent has
+  // gone reads 1, not the original pid. It is used here only because the poll below cannot use it
+  // (it caches after that first read, so it can never report a change), which is also why
+  // `liveParentPid()` exists at all.
+  //
+  // If the host double-forks — spawning `glosa mcp` through an intermediary that exits immediately
+  // — the parent is already the reaper by the time this line runs and there is nothing left to
+  // compare against. `glosa mcp` assumes it is spawned as a DIRECT child of its host (A2 §F08,
+  // A5 §F13); a double-forking host is not covered by this mechanism and would need its own
+  // lifetime channel rather than a getppid() poll.
+  const startingParent = process.ppid;
+  // The host is ALREADY gone (issue #140, F-4). Because `process.ppid` resolves on first read
+  // rather than at fork, a direct parent that exits during Bun's module-loading window — before
+  // the line above runs — leaves this reading the reaper. `startingParent` would then be the
+  // reaper, `liveParentPid()` would agree with it forever, and the poll below could never fire:
+  // an orphan holding someone else's stdin open, which is this issue's whole subject. There is
+  // nothing to wait for, so shut down now rather than poll for a change that cannot come.
+  // A double-forking host is indistinguishable here and is likewise not served by this process,
+  // which is consistent with that topology being unsupported (see the comment above).
+  if (startingParent === REAPER_PID) requestShutdown();
+  const parentPoll = setInterval(() => {
+    if (liveParentPid() !== startingParent) requestShutdown();
+  }, MCP_PARENT_POLL_MS);
+  parentPoll.unref?.();
+
   try {
-    await waitForInputEnd(input);
+    await runtime.connect(new WriteConfirmedStdioServerTransport(input, output));
+    await Promise.race([waitForInputEnd(input), waitForAbort(trigger.signal)]);
   } finally {
-    await runtime.close();
+    // Neither the signal listener nor the poll interval may itself be a reason the process
+    // doesn't exit: remove/clear both before the bounded close, whichever trigger fired.
+    process.off("SIGHUP", onSighup);
+    clearInterval(parentPoll);
+
+    // The one total deadline. `runtime.close()` aborts both clients and bounds the pending
+    // acknowledgements; this is the fallback for anything that does not honour that — including
+    // the SDK's own close — so no path can outlive the shim.
+    await closeWithinBudget(
+      () => runtime.close(),
+      MCP_SHUTDOWN_BUDGET_MS,
+      (code) => process.exit(code),
+    );
   }
 }
