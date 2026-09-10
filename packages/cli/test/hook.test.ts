@@ -17,6 +17,7 @@ import type {
   DrainResult,
   RegisterSessionInput,
   RegisterSessionResult,
+  ScopedPullDrainOptions,
 } from "../src/daemon-client.ts";
 import { type HookDeps, runHook } from "../src/hook.ts";
 
@@ -55,6 +56,15 @@ class FakeDaemonClient implements DaemonHookClient {
     this.calls.push({ method: "drain", args: [sessionId, opts] });
     const result = this.pendingDrain;
     this.pendingDrain = { drained: [], count: 0 }; // one-shot per call, like the real route
+    return result;
+  }
+  // No `glosa hook <event>` handler is the MCP generic-pull path (issue #205's `drainScoped` is
+  // reached only from `mcp.ts`), so this fake never exercises it — present only to satisfy the
+  // interface.
+  async drainScoped(sessionId: string, opts: ScopedPullDrainOptions): Promise<DrainResult> {
+    this.calls.push({ method: "drainScoped", args: [sessionId, opts] });
+    const result = this.pendingDrain;
+    this.pendingDrain = { drained: [], count: 0 };
     return result;
   }
 }

@@ -117,8 +117,12 @@ from its own shell environment (`connectPrompt`). Measurements in
 `docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`.
 An unknown-session heartbeat is a typed 404 and triggers re-registration. No host identity means one
 stable generic `mcp` identity per shim. A generic inbox pull retains its explicit `workspace`
-routing scope; identified host sessions always retain their actual process cwd. Explicit requested
-identities must match a known host.
+routing scope even under two overlapping pulls on that one shared identity: the pull sends the
+workspace it was asked for on the drain request itself, and the daemon uses that request-carried
+scope for the whole drain rather than the registry row's `cwd`, which a concurrent pull's own
+registration is otherwise free to move in between (issue #205). Identified host sessions always
+retain their actual process cwd and never send a scope at all. Explicit requested identities must
+match a known host.
 Registration merges preserve omitted bindings/transcripts, enrich generic provider identity, and
 reject conflicting concrete providers. Explicit bind registers an unknown ID or refreshes an expired
 lease; optional provider/cwd metadata comes from the caller, with generic `mcp` and target workspace

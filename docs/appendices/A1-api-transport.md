@@ -469,10 +469,34 @@ All routes require Bearer authentication; POST routes are Origin-gated.
   CLI retrieval. It is read-only and does not append a delivery attempt.
 - `POST /api/sessions/:id/drain` prepares up to eight oldest-first actionable entries and returns
   `{delivery_id, drained, count, has_more}`. Prepared entries are reserved for 30 seconds; no
-  `presented` event exists yet.
+  `presented` event exists yet. An unbound session's request body may additionally carry an optional
+  `scope` (a workspace path): when present, it — not the session's current registry `cwd` — decides
+  which workspaces this one drain can reach, captured once at the request and used for the whole
+  drain regardless of a registration landing on the same session id afterward. Additive and optional
+  (issue #205); an explicitly bound session's drain never reads it, and a request with no `scope`
+  behaves exactly as before, resolving from the row. The MCP `glosa_inbox_pull` generic path (no
+  bound host session, no explicit `session_id`) is the only caller that sends it. On the unbound
+  path — the only path that reads it — `scope` is canonicalised by the same rule
+  `POST /api/sessions/register` applies to `cwd` (realpath → NFC → strip trailing slash) and must
+  name an existing **directory**; anything else is refused with **400 invalid-path**, never
+  silently downgraded to row-derived scope, since a caller that asked for an explicit scope must not
+  be handed the behaviour it asked to avoid. Canonicalisation alone is realpath-only, so the
+  directory check is a separate requirement and not a restatement of it. A bound session's drain
+  neither reads nor validates `scope`, so a malformed one is ignored there rather than refused. A
+  scoped drain, once admitted (the route has captured the session record and validated `scope`),
+  completes on that captured scope even if the requesting session then deregisters or its lease
+  expires before selection actually runs (issue #205 A10) — loss of the row afterward is not a
+  second admission check, only its later redirection is prevented and its outright disappearance is
+  survived the same way.
 - `POST /api/sessions/:id/deliveries/:deliveryId/ack` with
   `{outcome:"presented"|"failed", error?:string}` consumes the reservation and appends the attempt.
-  Missing/expired tokens return **409 conflict** and the entries remain eligible.
+  Missing/expired tokens return **409 conflict** and the entries remain eligible. A **composite**
+  (`cmp_…`) token's acknowledgement does not require the session's registry row to exist (issue #205
+  A10): the composite reservation already stores and checks its own session id, so a requester that
+  deregistered or lease-expired after an admitted scoped drain completed can still acknowledge the
+  transaction that drain produced. This is the composite branch only — an ordinary, non-composite
+  delivery id still returns **404 session-not-registered** when the row is gone, since resolving
+  which single workspace's bus to acknowledge against still needs it.
 
 Each `drained[]` item is the R3 discriminated presentation object and is capped at 16 KiB UTF-8;
 the serialized batch is capped at 32 KiB including separators. Continuations use the same opaque

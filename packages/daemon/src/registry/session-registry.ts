@@ -320,12 +320,46 @@ export class SessionRegistry {
     return this.forWorkspace(targetCanonicalPath);
   }
 
-  forWorkspace(canonicalWorkspace: string): SessionRecord[] {
+  /**
+   * `scopeOverride`, when given, substitutes an immutable `cwd` for `sessionId` throughout this
+   * computation — every OTHER session's row is still read live. This is issue #205's fix: a
+   * generic MCP pull captures the workspace it was asked for once, at request entry, and a
+   * concurrent re-registration that moves the row afterward cannot redirect a selection already in
+   * flight. The override also clears that one session's `workspace_binding` for the purpose of this
+   * call, since only the unbound (generic) path ever supplies a scope — see `http.ts`'s
+   * `handleSessionDrain`, which branches to the explicit-binding route before scope is ever read.
+   *
+   * `scopeOverride.capturedRecord` (A10) is the SAME snapshot `handleSessionDrain` already captured
+   * before admitting the request — before this call, before the composite mutex, before selection.
+   * `alive` is filtered on CURRENT liveness first, so a session that deregisters or whose lease
+   * expires after admission has no row left in `alive` for the `.map` above to override; that
+   * silently drops it from selection, which is a second, later-discovered form of the same defect
+   * (the row can no longer REDIRECT an admitted drain, but could still SUPPRESS it). When no live
+   * row for `sessionId` remains, the captured snapshot is injected as an extra candidate instead of
+   * being mapped over one — an admitted drain completes on what it captured, not on whether the
+   * requester is still there to prove it. A live row under the same id, however stale-seeming to a
+   * caller, always wins over the captured snapshot: this exists to survive the row's LOSS, not to
+   * shadow a row a fresh registration legitimately replaced it with (A3 stays exactly as it was). */
+  forWorkspace(
+    canonicalWorkspace: string,
+    scopeOverride?: { sessionId: string; cwd: string; capturedRecord: SessionRecord },
+  ): SessionRecord[] {
     const alive = [...this.sessions.values()].filter((r) => this.liveness(r.session_id) === "alive");
-    const explicit = alive.filter((r) => r.workspace_binding === canonicalWorkspace);
+    let effective = alive;
+    if (scopeOverride) {
+      const overridden: SessionRecord = {
+        ...scopeOverride.capturedRecord,
+        cwd: scopeOverride.cwd,
+        workspace_binding: undefined,
+      };
+      effective = alive.some((r) => r.session_id === scopeOverride.sessionId)
+        ? alive.map((r) => (r.session_id === scopeOverride.sessionId ? overridden : r))
+        : [...alive, overridden];
+    }
+    const explicit = effective.filter((r) => r.workspace_binding === canonicalWorkspace);
     if (explicit.length > 0) return explicit;
 
-    const ancestorMatches = alive.filter((r) => !r.workspace_binding && isCwdAncestorOf(r.cwd, canonicalWorkspace));
+    const ancestorMatches = effective.filter((r) => !r.workspace_binding && isCwdAncestorOf(r.cwd, canonicalWorkspace));
     if (ancestorMatches.length === 0) return [];
 
     // Two different ancestor paths of the SAME workspace can never share a length — equal-length

@@ -38,6 +38,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   deadline, so no path can outlive it. Shutdown deliberately sends nothing to the daemon: the
   session is cleaned up by its lease expiring, because a request at that point would carry the
   current credential to an endpoint resolved when the session first registered (#140).
+- A generic `glosa_inbox_pull` (no bound host session, no explicit `session_id`) could drain under
+  a *different* concurrent pull's workspace. Every generic pull on one shim process shares a single
+  synthetic session id, and nothing stopped a second pull's registration from overwriting the first
+  pull's `cwd` on that one registry row before the first pull's own drain resolved which workspaces
+  it could reach — the daemon re-read that row live, inside the drain, not once at the route's
+  entry. A pull's drain request now carries the workspace it was asked for (canonicalised the same
+  way registration already is, and refused with 400 rather than silently falling back to row-derived
+  scope if it names no real directory), and the daemon captures that scope once, at admission, for
+  the whole drain: a registration or bind that moves the row afterward cannot redirect an admitted
+  drain to a different workspace, and — found by a second, independent review after the first fix
+  shipped — the requesting session deregistering or its lease expiring after admission cannot
+  *suppress* one either; the drain completes on its captured scope regardless, and its acknowledgement
+  succeeds even though the row is gone. The four hook transports (`gate`/`stop`/`userprompt`/
+  `asyncRewake`) are unaffected and keep resolving scope from the row exactly as before. This grants
+  no new capability — the same bearer could already register with any `cwd` and then drain (#205).
 
 ## [0.1.0-alpha.18] - 2026-09-09
 
