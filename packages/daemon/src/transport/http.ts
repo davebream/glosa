@@ -18,7 +18,7 @@ import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
 import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
-import { hasOpenAttention, orphanedEntryCount, peekJournal, pendingCount } from "../bus/peek.ts";
+import { badgePendingCount, hasOpenAttention, orphanedEntryCount, peekJournal } from "../bus/peek.ts";
 import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
 import { probeInitManifest } from "../init-probe.ts";
@@ -1828,7 +1828,10 @@ function computeWiring(ctx: ApiContext, entry: WorkspaceEntry): WiringBody {
   const routableLive = ctx.sessionRegistry.forWorkspace(entry.canonical_path).length;
   let pending = 0;
   try {
-    pending = pendingCount(peekJournal(entry).state);
+    // BADGE-facing (`GET /w/:slug/wiring`). Its own call, not a value borrowed from the status
+    // row below: this is the fold the badge reads when no status aggregate is in hand, so it
+    // carries its own exclusion and its own assertion.
+    pending = badgePendingCount(peekJournal(entry).state);
   } catch {
     // a torn/unreadable journal must not break a status read; 0 is the honest floor here
   }
@@ -1988,7 +1991,12 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         slug: e.slug,
         path: e.worktree_path,
         last_seen: e.last_seen,
-        pending_count: pendingCount(peek.state),
+        // BADGE-facing, and the one the SPA actually renders: `agent-feedback.js` reads
+        // `connection.workspace.pending_count ?? wiring.pending_count`, i.e. THIS row first and
+        // `computeWiring`'s only as a fallback. `glosa doctor`'s pending-delivery check reads it
+        // too, and says "queued ... will sit until delivery is wired" — a promise an
+        // `external_edit` can never keep, since it is excluded from delivery eligibility.
+        pending_count: badgePendingCount(peek.state),
         has_attention: hasOpenAttention(peek.state),
         // Additive (issue #142): journal entries whose immutable inbox payload has gone missing —
         // see `orphanedEntryCount`'s own docstring for the exact orphan signature and why the count

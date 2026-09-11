@@ -144,6 +144,16 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const pushRegistry = new SessionPushRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     warn: (message) => log(home, message),
+    // The watcher→bus edge (#153), assembled HERE rather than imported inside the watcher: that
+    // module stays a chokidar fan-out that knows nothing about journals or shadow git, and the one
+    // place the two layers meet is this composition root. `captureExternalEdit` takes the
+    // workspace mutex and refuses a sealed/forgotten bus itself (`assertWritable`), so the timer
+    // firing during a `glosa forget` is refused at the same gate every other writer meets.
+    captureExternalEdit: async (workspace) => {
+      const bus = busRegistry.get(workspace);
+      await bus.reconcileOnce();
+      return bus.captureExternalEdit();
+    },
   });
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
@@ -168,6 +178,16 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   workspaceIndex.setOnHardRemove((entry) =>
     Promise.all([busRegistry.evict(entry), artifactWatcherRegistry.evict(entry)]).then(() => {}),
   );
+  // Daemon-lifetime artifact watching (#153). Two halves, and both are needed: workspaces already
+  // in the index when this process starts, and workspaces registered while it runs. Without the
+  // first, watching would only ever begin after something touched a workspace over HTTP; without
+  // the second, a `glosa open` during the daemon's life would produce no watcher until the next
+  // restart. Neither half involves a browser — that is the amendment's whole point.
+  workspaceIndex.setOnRegister((entry) => artifactWatcherRegistry.ensureWatched(entry));
+  for (const entry of workspaceIndex.list({ presentOnly: true })) {
+    if ((entry.lifecycle?.state ?? "active") !== "active") continue;
+    artifactWatcherRegistry.ensureWatched(entry);
+  }
 
   return {
     workspaceIndex,

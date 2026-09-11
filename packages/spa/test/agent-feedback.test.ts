@@ -88,6 +88,24 @@ describe("mountAgentFeedback", () => {
     return { host, overlays, mounted };
   }
 
+  test("the queued badge reads the status workspace row first, which is the surface external_edit is excluded from", async () => {
+    // Pins WHICH daemon field the badge renders (#153, contract A3). The daemon excludes
+    // `external_edit` from the badge-facing count at two call sites — `GET /api/status`'s
+    // workspace row and `GET /w/:slug/wiring` — and this is the half that says the row is the one
+    // that reaches the user: given both, the row wins, so an exclusion applied only to `wiring`
+    // would still leave the badge announcing work no agent will ever be offered.
+    const { host, mounted } = mount({});
+    mounted.setState({
+      slug: "alpha",
+      wiring: { state: "wired", pending_count: 7 },
+      status: statusFor([], { pending_count: 0 }),
+    });
+
+    const trigger = host.querySelector(".glosa-agent-feedback-trigger") as HappyButton;
+    expect(trigger.textContent).not.toContain("7 queued");
+    expect(trigger.textContent).not.toContain("queued");
+  });
+
   test("combines unbound, feedback-off, and queued state; multi-provider unbound requires a choice", async () => {
     const writes: string[] = [];
     const { host, overlays, mounted } = mount({

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBus, WorkspaceAdoptedError } from "./bus/bus.ts";
 import { fsyncContainingDir } from "./bus/io.ts";
-import { readInboxEntry } from "./bus/inbox.ts";
+import { payloadKindOf, readInboxEntry } from "./bus/inbox.ts";
 import { isTerminal, type EntryKind } from "./bus/lifecycle.ts";
 import { KeyedMutex } from "./bus/mutex.ts";
 import { importLineage } from "./git/shadow.ts";
@@ -171,6 +171,19 @@ async function adoptLooseLineagesExclusive(
           payload,
           {
             kind,
+            // Carried separately from `kind` above, which on this path is the LIFECYCLE kind
+            // (`common`/`attention`), not the payload's. Without it an adopted `external_edit`
+            // would arrive at the target indistinguishable from an annotation and would be counted
+            // by the badge and offered for delivery — the exclusions read `payload_kind`, so the
+            // adoption path has to carry it forward like every other producer. Taken from the
+            // source's own derived fact first, falling back to the byte-for-byte payload being
+            // copied here for a source journal written before that fact existed.
+            ...(typeof state.payload_kind === "string"
+              ? { payload_kind: state.payload_kind }
+              : payloadKindOf(payload) !== null
+                ? { payload_kind: payloadKindOf(payload) }
+                : {}),
+            ...(typeof state.until_checkpoint === "string" ? { until_checkpoint: state.until_checkpoint } : {}),
             status: state.status,
             delivery_attempts: state.deliveryAttempts ?? [],
             source_registration_id: source.registration_id,

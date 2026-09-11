@@ -34,6 +34,17 @@ export interface DerivedEntryState {
    * the immutable inbox payload. Absent on legacy events, which callers must handle explicitly. */
   approval_mode?: boolean;
   target_path?: string;
+  /** The IMMUTABLE PAYLOAD's own `kind` (`human_edit`/`annotation`/`attention_request`/
+   * `conversation_message`/`external_edit`), distinct from `kind` below, which is the lifecycle
+   * EntryKind (`common`/`attention`/`conversation`) selecting a transition table. Recorded so a
+   * read-only fold can tell an `external_edit` apart without reopening the inbox file — `peek.ts`
+   * runs against a bare bus directory and has no payload to read. Absent on journals written
+   * before this field existed, which is correct: `external_edit` did not exist then either. */
+  payload_kind?: string;
+  /** An `external_edit`'s reported checkpoint. The crash-gap recovery
+   * (`external-edit.ts#unreportedDriftCommits`) reads it to know which drift commits already have
+   * an entry naming them. */
+  until_checkpoint?: string;
   /** The shadow-git commit the artifact read at when a session took the apply-lease that closed
    * on this entry (`apply_end.detail.pre_sha`, A4 §F05) — i.e. what "undo this" restores to.
    * Absent until a lease has actually closed, and on entries applied before `apply_end` recorded

@@ -10,11 +10,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkspaceTarget } from "../workspace.ts";
+import { isExternalEditEntry } from "./external-edit.ts";
 import { readInboxEntry } from "./inbox.ts";
 import type { JournalEvent } from "./journal.ts";
 import { isTerminal, lifecycleReducer } from "./lifecycle.ts";
 import { journalPath } from "./paths.ts";
-import { createEmptyState, type DerivedState, foldEvents } from "./replay.ts";
+import { createEmptyState, type DerivedEntryState, type DerivedState, foldEvents } from "./replay.ts";
 
 export interface JournalPeek {
   state: DerivedState;
@@ -66,14 +67,44 @@ function peekJournalFile(path: string): JournalPeek {
   return { state: foldEvents(events, lifecycleReducer), createdAt, entryOrder };
 }
 
-/** Journal-derived count of non-terminal (pending) entries — the "user work still parked here"
- * signal. The journal is the single source of truth (A4); inbox `status` fields are frozen at
- * write time and never consulted. */
-export function pendingCount(state: DerivedState): number {
+/** Every non-terminal entry, no exclusions — the shared base both counts below fold. The journal
+ * is the single source of truth (A4); inbox `status` fields are frozen at write time and never
+ * consulted. */
+function nonTerminalEntries(state: DerivedState): DerivedEntryState[] {
   return Object.values(state.entries).filter((entry) => {
     const kind = entry.kind === "attention" ? "attention" : "common";
     return !isTerminal(kind, entry.status);
-  }).length;
+  });
+}
+
+/** RETENTION-FACING: "is any user work still parked in this workspace?" — the question deletion
+ * safety asks. Consumers: `registry/workspace-index.ts`'s `hasPendingWork` (GC's hard-remove
+ * guard) and `registry/orphan-scan.ts` (the stranded-home-state scanner behind `GET /api/status`).
+ *
+ * Counts an undismissed `external_edit`, deliberately. #153's decision that an `external_edit`
+ * "nudges nobody" is about the BADGE; the same decision also promises such an entry stays pending
+ * forever. Excluding it here would tell GC "nothing parked here" and tell orphan-scan "nothing to
+ * report" for a workspace whose only outstanding item is exactly that — silently hiding the
+ * stranding orphan-scan exists to catch, and making the persistence promise decorative. Two
+ * questions, two counts; this one answers retention. */
+export function retentionPendingCount(state: DerivedState): number {
+  return nonTerminalEntries(state).length;
+}
+
+/** BADGE-FACING: "how many items are queued for someone to act on?" — the question the SPA's
+ * agent-feedback badge and `glosa doctor`'s pending-delivery check ask. Consumers:
+ * `transport/http.ts`'s `computeWiring` (`GET /w/:slug/wiring`) and its `GET /api/status`
+ * per-workspace row.
+ *
+ * Excludes `external_edit`: it is not actionable (nothing to apply — the file already changed),
+ * it is excluded from delivery eligibility, and counting it as "N queued" would promise a
+ * delivery that by construction never comes.
+ *
+ * Attention entries need no exclusion anywhere and get none: every attention fold filters
+ * `entry.kind === "attention"`, and an `external_edit`'s lifecycle kind is `common`, never that
+ * string — it is structurally excluded, with no code to write and nothing to ablate. */
+export function badgePendingCount(state: DerivedState): number {
+  return nonTerminalEntries(state).filter((entry) => !isExternalEditEntry(entry)).length;
 }
 
 export function hasOpenAttention(state: DerivedState): boolean {
@@ -88,7 +119,7 @@ export function hasOpenAttention(state: DerivedState): boolean {
  * never rewritten and no payload is synthesized to close the gap — `glosa inbox dismiss <id>` is
  * the supported human reconciliation.
  *
- * The terminal check reuses `pendingCount`'s exact kind mapping (attention vs. everything else),
+ * The terminal check reuses `nonTerminalEntries`' exact kind mapping (attention vs. everything else),
  * not a 3-way common/attention/conversation split: `handleWorkspaceInboxDismiss` (http.ts) uses
  * that same 2-way mapping to decide whether `dismiss` still applies to an entry, and this count
  * must agree with it — a 3-way split here could report an entry as orphaned (or clear) that
