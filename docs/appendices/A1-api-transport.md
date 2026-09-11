@@ -127,6 +127,12 @@ registration is gone — stranded user work recoverable by re-opening the origin
 (deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
 route never fails over it. `wiring` (additive, issue #80) is the same 3-state value §5.18 serves.
 
+The two `pending_count` fields in this response are DIFFERENT signals and disagree on purpose
+(issue #153, A5 §F23). A workspace row's is BADGE-facing and excludes `external_edit`; the SPA's
+agent-feedback badge prefers this field over §5.18's, so it is the one a reader sees. Each
+`orphaned_state` entry's is RETENTION-facing and still counts an undismissed `external_edit` — that
+is stranded user work, which is exactly what the scanner reports.
+
 Contract 1.8 (issue #156) additively adds `lifecycle: "forgetting"` to a workspace row whose
 `glosa forget` deletion is durably committed — possibly mid-resume after a crash. Present ONLY on
 a row in that state (absent, never `null`, for every ordinary workspace); a workspace row appears
@@ -165,7 +171,9 @@ Bearer required (authed read; issue #80). The SPA's per-workspace integration-wi
 ```
 `live` = init manifest present AND ≥1 session the delivery router (`forWorkspace`, R2 precedence)
 would actually reach; `wired` = manifest present, no routable session (restart/resume needed);
-`unwired` = init never ran. **The response never includes a filesystem path** (§5.14's rule).
+`unwired` = init never ran. `pending_count` is the BADGE-facing count and excludes `external_edit`
+(issue #153, A5 §F23), matching §5.2b's workspace row; it is not the retention-facing count GC and
+the orphaned-state scanner use. **The response never includes a filesystem path** (§5.14's rule).
 Poll-oriented: freshness comes from client polling + refetch after `POST /w/:slug/init` (which
 returns a fresh wiring object). **404 not-found** — unknown `:slug`.
 

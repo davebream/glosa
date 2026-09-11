@@ -362,6 +362,10 @@ describe("WorkspaceBus.createEntry propagates payload.kind into entry_created.de
       {
         detail: {
           kind: "human_edit",
+          // `payload_kind` is a reserved identity key too (#153): it is what every `external_edit`
+          // exclusion reads, so a caller able to set it could make an entry claim — or disclaim —
+          // a kind its immutable payload does not have.
+          payload_kind: "external_edit",
           approval_mode: false,
           target_path: "spoofed.md",
           caller_note: "preserved",
@@ -372,6 +376,7 @@ describe("WorkspaceBus.createEntry propagates payload.kind into entry_created.de
     expect(bus.state.entries.approval).toMatchObject({
       status: "open",
       kind: "attention",
+      payload_kind: "attention_request",
       approval_mode: true,
       target_path: "actual.md",
     });
@@ -379,6 +384,7 @@ describe("WorkspaceBus.createEntry propagates payload.kind into entry_created.de
     expect(created.detail).toEqual({
       caller_note: "preserved",
       kind: "attention_request",
+      payload_kind: "attention_request",
       approval_mode: true,
       target_path: "actual.md",
     });

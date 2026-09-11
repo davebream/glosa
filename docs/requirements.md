@@ -183,8 +183,11 @@ generic.**
 - Journal, inbox, quarantine, declarative metadata/config, reconciliation state, checkpoints, and
   shadow Git resolve through the registration's absolute bus path. Redirection changes storage
   location only; journal replay and apply-lease evidence retain unchanged authority.
-- Entry kinds: `human_edit`, `annotation`, `attention_request`, `conversation_message`. Envelope + payloads exactly per A4/A5
-  (`human_edit` = inline hunk diffs referenced by shadow-git sha, never full bodies; `annotation` =
+- Entry kinds: `human_edit`, `annotation`, `attention_request`, `conversation_message`, `external_edit`. Envelope + payloads exactly per A4/A5
+  (`human_edit` = inline hunk diffs referenced by shadow-git sha, never full bodies; `external_edit`
+  = a tracked artifact that changed on disk with nothing to attribute it to, one entry per artifact
+  — `{path, diff, since_checkpoint, until_checkpoint, observed_at, source: live|offline_catchup}`,
+  singular `path` and never a file list; `annotation` =
   W3C quote+prefix/suffix+position + `intent` + `target.chunk_id?`). Annotation `intent` enum =
   `content` (change the words → source edit) | `classification` (wrong type/split/label → pipeline
   feedback) | `style` (rendering/notation → renderer/CSS). The resolver (R6) uses `intent` only to
@@ -193,6 +196,13 @@ generic.**
   includes its workspace-relative artifact path, comment body, intent, durable quote/position context,
   and the current F10/F11 anchoring resolution. Human-edit presentation includes before/after
   shadow-git checkpoints and bounded unified hunks; it never includes a full artifact body.
+- **`external_edit` is a record, not a request.** It reports that a file changed outside glosa; there
+  is nothing to apply, because the change is already in the artifact. It is therefore excluded from
+  delivery eligibility and from the badge-facing pending count, and no agent is ever nudged with one.
+  It remains retrievable (`glosa inbox get`, MCP) and is still counted by the retention-facing
+  signals — GC's hard-remove guard and the stranded-home-state scanner — so an undismissed one is
+  parked work that blocks deletion rather than work that vanishes. `glosa inbox dismiss` closes it;
+  nothing else does, and there is no TTL.
 - **Lifecycle** is a state machine with delivery kept as a *separate axis* (A5 §F23): `delivery_attempt`
   events never change status; re-nudging a `delivered` entry emits attempts, not transitions. Full
   transition table + single writer per event in A5.
@@ -200,7 +210,12 @@ generic.**
   (`glosa apply-begin` → pre-checkpoint; `glosa resolve` → post-checkpoint; the proven `pre..post` diff
   → `session:<id>`). Edits made in glosa's own editor → `human` by construction. **Every other
   watcher-observed write → `unknown`, never falsely `human`.** Attribution rides in git commit trailers
-  (A4 §F05/§F21).
+  (A4 §F05/§F21). That last case is what `external_edit` names in the inbox, so the honest `unknown`
+  in storage is the same answer the reader and the agent are given — the two used to disagree, with
+  drift hunks reaching delivery labelled `human_edit`. A drift-capturing checkpoint is never taken
+  while an apply-lease is held: because checkpointing is idempotent, one taken mid-lease would become
+  the lease's own `post_sha` and make the journal credit a session for a commit trailered `unknown`.
+  The lease's `pre..post` pair brackets that interval instead.
 
 ### R4 — delivery: provider-based, cmux-free  (detail: A2 §F06/§F07/§F16)
 Delivery is per-agent-provider, selecting the best injection point that provider offers. Durable inbox

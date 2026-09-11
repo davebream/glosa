@@ -27,7 +27,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
-import { peekJournalAt, pendingCount } from "../bus/peek.ts";
+import { peekJournalAt, retentionPendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../lifecycle/home.ts";
 import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
 // Aliased so every call site below reads unchanged: this file is the reference caller of the
@@ -664,6 +664,7 @@ export class WorkspaceIndex {
   // apart from "nobody wired anything yet."
   private liveSessionPredicateWired: boolean;
   private onHardRemove: (entry: WorkspaceEntry) => void | Promise<void>;
+  private onRegister: (entry: WorkspaceEntry) => void = () => {};
   private cache: WorkspaceIndexFile | null = null;
   private lastGcAt = -Infinity;
 
@@ -693,7 +694,10 @@ export class WorkspaceIndex {
       deps.hasPendingWork ??
       ((entry) => {
         try {
-          return pendingCount(peekJournalAt(entry.bus_path).state) > 0;
+          // RETENTION-facing, never the badge count: hard-removing a registration whose only
+          // outstanding item is an undismissed `external_edit` would delete work the product
+          // promises stays pending until a person dismisses it.
+          return retentionPendingCount(peekJournalAt(entry.bus_path).state) > 0;
         } catch {
           return true; // fail-safe: an unreadable journal is treated as "work still parked here"
         }
@@ -721,6 +725,25 @@ export class WorkspaceIndex {
    * path would return that stale instance instead of a fresh one. */
   setOnHardRemove(fn: (entry: WorkspaceEntry) => void | Promise<void>): void {
     this.onHardRemove = fn;
+  }
+
+  /** Wires in the callback fired for every registration this index creates or refreshes as
+   * present-and-active — the symmetric counterpart to `setOnHardRemove`, and what makes artifact
+   * watching daemon-lifetime rather than scoped to an open browser tab (#153):
+   *   index.setOnRegister((entry) => artifactWatcherRegistry.ensureWatched(entry));
+   * Fired INSIDE the index mutex, so it must be cheap and must not write to the index. The
+   * watcher's `ensureWatched` is idempotent and does its one matcher walk only on first sight,
+   * which matters because a session heartbeat re-upserts its workspace continually. */
+  setOnRegister(fn: (entry: WorkspaceEntry) => void): void {
+    this.onRegister = fn;
+  }
+
+  /** Announces a registration that is present and active right now. Never fired for a `forgetting`
+   * or sealed-`adopted` entry: a workspace being deleted or frozen as historical evidence must not
+   * acquire a fresh watcher on its way out. */
+  private announceRegistered(entry: WorkspaceEntry): WorkspaceEntry {
+    if (entry.present && (entry.lifecycle?.state ?? "active") === "active") this.onRegister(entry);
+    return entry;
   }
 
   private load(): WorkspaceIndexFile {
@@ -900,7 +923,7 @@ export class WorkspaceIndex {
         delete existing.absent_since;
         index.updated_at = now;
         this.persist(index);
-        return existing;
+        return this.announceRegistered(existing);
       }
 
       const id = registrationId("directory", canonicalPath);
@@ -934,7 +957,7 @@ export class WorkspaceIndex {
       index.workspaces[id] = entry;
       index.updated_at = now;
       this.persist(index);
-      return entry;
+      return this.announceRegistered(entry);
     });
   }
 
@@ -1162,7 +1185,7 @@ export class WorkspaceIndex {
       delete existing.absent_since;
       index.updated_at = now;
       this.persist(index);
-      return existing;
+      return this.announceRegistered(existing);
     }
 
     // No live registration for this exact canonical path — the registration-less window a `glosa
@@ -1262,7 +1285,7 @@ export class WorkspaceIndex {
     index.workspaces[entry.registration_id] = entry;
     index.updated_at = now;
     this.persist(index);
-    return entry;
+    return this.announceRegistered(entry);
   }
 
   /** Claims every durable loose-file bus that becomes owned by `target`. This is deliberately

@@ -13,6 +13,8 @@ import type { DeliverableEntry } from "../agent-provider/interface.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
 import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, runGit, safePathspec } from "../git/shadow.ts";
 import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
+import { EXTERNAL_EDIT_CHECKPOINT_KIND, externalEditDetail, isExternalEditEntry } from "./external-edit.ts";
+import { externalEditPayloads } from "./external-edit-capture.ts";
 import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
 import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./journal.ts";
 import {
@@ -48,6 +50,15 @@ interface DeliveryReservation {
   via: DeliveryVia;
   session: string;
   expiresAt: number;
+}
+
+/** What one quiet-window capture did. `suppressed` names WHY no entry was created despite a
+ * commit landing, so a caller (and a test) can tell "glosa's own write, correctly silent" apart
+ * from "nothing happened". */
+export interface ExternalEditCapture {
+  committed: boolean;
+  suppressed: "apply_lease" | null;
+  entries: string[];
 }
 
 export interface PreparedDelivery {
@@ -460,7 +471,13 @@ export class WorkspaceBus {
     const payloadKind = typeof payloadRecord?.kind === "string" ? payloadRecord.kind : undefined;
     const detail: Record<string, unknown> | undefined =
       payloadKind !== undefined || fields.detail !== undefined ? { ...(fields.detail ?? {}) } : undefined;
+    // `kind` selects the fold's transition table; `payload_kind` is the immutable payload's own
+    // kind, recorded under one key by all three producers of an entry (here, `adoptEntry`, and
+    // reconcile's `selfHealInbox`) so a read-only fold can tell an `external_edit` from an
+    // `annotation` without reopening the inbox file. They happen to be equal on this path and are
+    // NOT the same fact — on the adoption path `kind` is the lifecycle kind.
     if (detail && payloadKind !== undefined) detail.kind = payloadKind;
+    if (detail && payloadKind !== undefined) detail.payload_kind = payloadKind;
     if (detail && payloadKind === "attention_request") {
       const approvalMode = payloadRecord?.approval_mode === true;
       detail.approval_mode = approvalMode;
@@ -767,6 +784,14 @@ export class WorkspaceBus {
       if (reserved.has(id)) continue;
       const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
       if (isTerminal(kind, entry.status)) continue;
+      // NOT DELIVERABLE (#153): an `external_edit` reports that a file changed on disk with
+      // nothing to attribute it to. There is no action for a session to take on it — it cannot be
+      // "applied", and the change is already in the artifact — so it is excluded here rather than
+      // left to fail presentation, which would journal a `delivery_attempt{outcome:"failed"}` on
+      // every drain for an entry that was never meant to be offered. This is the single gate
+      // feeding BOTH `previewDelivery` and `prepareDelivery` (A5 §F23), so one exclusion covers
+      // both; a fold added later is outside this method's reach.
+      if (isExternalEditEntry(entry)) continue;
       const payload = readInboxEntry(this.workspace, id);
       if (payload && typeof payload === "object") {
         const target = (payload as Record<string, unknown>).target_session_id;
@@ -1198,6 +1223,70 @@ export class WorkspaceBus {
         files: [{ path, diff, diff_bytes: Buffer.byteLength(diff, "utf8") }],
       });
       return { checkpoint_before: before, checkpoint_after: after };
+    });
+  }
+
+  /** The daemon-lifetime artifact watcher's quiet-window capture (#153): a tracked artifact
+   * changed on disk and nothing glosa did accounts for it, so commit the drift and say so.
+   *
+   * GOES THROUGH THE SAME WRITE PRIMITIVE AS EVERY OTHER WRITER, deliberately: this workspace's
+   * mutex (so the checkpoint can never race a concurrent journal append or another checkpoint on
+   * the same shadow repo) plus `assertWritable`'s `adoptionSeal`/`forgetSeal` refusal — a
+   * workspace sealed for adoption or moments from `glosa forget` deletion must not gain a fresh
+   * entry because a file changed underneath it. `captureHumanEdit` is the reference caller for
+   * this exact shape.
+   *
+   * ORDERING, AND WHY IT IS THIS WAY ROUND. The entry has to name the commit it reports, so the
+   * commit is first and a crash in that window loses the entry — permanently, because
+   * `checkpoint()` is idempotent (A4 §F21) and no later checkpoint ever sees that diff again. The
+   * repair is named and lives in reconcile: `unreportedDriftCommits` compares the last emitted
+   * `until_checkpoint` against the current shadow HEAD, and shadow history retains the commit
+   * either way. Nothing here is a read path — this MUTATES shadow git and the journal, and is only
+   * ever called from the watcher's timer, never from a GET.
+   *
+   * TWO SUPPRESSIONS, both of them A4 §F05's rule rather than an invention here:
+   *   - AN ACTIVE APPLY LEASE. The interval belongs to that lease's own `resolveEntry`, and this
+   *     defers COMPLETELY — no checkpoint, no entry, no git spawned — which is the same decision
+   *     `offlineCatchUp` (reconcile.ts step 5a) already makes, for the same reason it states
+   *     there: `checkpoint()` is idempotent, so committing the in-flight edit here as
+   *     `Glosa-Attribution: unknown` would leave `resolveEntry`'s own later checkpoint with
+   *     nothing new to stage, returning THAT SAME sha as `post_sha` — and the journal would then
+   *     record `session:<id>` for a commit whose trailer says `unknown`. Measured, not theorized:
+   *     an earlier revision of this method did commit under a lease (A4 §F05's "save-burst
+   *     checkpoints during a lease still commit (full history)"), and the lease-attribution test
+   *     in `test/bus/external-edit.test.ts` failed with exactly that `unknown`. The appendix's
+   *     "full history" wording cannot be honoured by a producer that shares the same idempotent
+   *     checkpoint as the lease without breaking R3's governing attribution guarantee, so the
+   *     guarantee wins and A4 §F05's watcher bullet is corrected to match offline catch-up.
+   *   - A GLOSA EDITOR-API SAVE. `captureHumanEdit` holds this same mutex across mutate ->
+   *     checkpoint, so by the time this runs there is nothing left to stage, `checkpoint()`
+   *     returns the same sha, and the "no drift" branch below exits. Editor writes are `human` by
+   *     construction and are not double-reported. That suppression is structural, not a check. */
+  captureExternalEdit(): Promise<ExternalEditCapture> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      // Before any git is spawned, and before the index lock is touched: a lease-held workspace is
+      // not this producer's business at all.
+      if (this.state.applyLease) return { committed: false, suppressed: "apply_lease" as const, entries: [] };
+
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+
+      const since = await headSha(this.workspace);
+      const until = await checkpoint(this.workspace, {
+        attribution: "unknown", // A4 §F05: everything the daemon cannot prove, never falsely `human`
+        kind: EXTERNAL_EDIT_CHECKPOINT_KIND,
+      });
+      if (until === since) return { committed: false, suppressed: null, entries: [] };
+
+      const payloads = await externalEditPayloads(this.workspace, since, until, "live", this.nowFn().toISOString());
+      const entries: string[] = [];
+      for (const payload of payloads) {
+        const id = this.ulidFn();
+        this.createEntryLocked(id, payload, { by: "watcher", detail: externalEditDetail(payload) });
+        entries.push(id);
+      }
+      return { committed: true, suppressed: null, entries };
     });
   }
 

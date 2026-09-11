@@ -208,6 +208,81 @@ function humanEditPresentation(
   };
 }
 
+/** An artifact changed on disk and nothing glosa did accounts for it (#144, #153 Part 1).
+ *
+ * The opening line is the whole point of this branch existing. These hunks used to arrive through
+ * `humanEditPresentation` — offline catch-up produced diffs with no kind of their own, and the
+ * `human_edit` branch stamps `kind:"human_edit"` on whatever it is handed — so an agent was told a
+ * person made an edit that glosa could not attribute to anyone. A4 §F05 is explicit that anything
+ * outside a lease or the editor API is `unknown`, "never falsely human". So this states what is
+ * known (a file changed, between these two checkpoints, observed this way) and refuses the part
+ * that was invented (who did it).
+ *
+ * Hunks are bounded and cursored exactly like a human edit's — same budget, same continuation
+ * cursor — because the truncation contract in A5 §F23 is about size, not about kind. */
+function externalEditPresentation(
+  id: string,
+  payload: Record<string, unknown>,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
+  const path = stringOf(payload.path);
+  const since = stringOf(payload.since_checkpoint);
+  const until = stringOf(payload.until_checkpoint);
+  const diff = stringOf(payload.diff);
+  if (!path || !since || !until || diff === null) return null;
+  const source = payload.source === "live" ? "observed live" : "found by offline catch-up";
+  const observedAt = stringOf(payload.observed_at);
+
+  const fixed = [
+    `glosa external_edit ${id}`,
+    `artifact: ${path}`,
+    `checkpoints: ${since}..${until}`,
+    `observed: ${source}${observedAt ? ` at ${observedAt}` : ""}`,
+    `${path} changed on disk outside glosa. attribution is "unknown": no apply-lease and no glosa`,
+    "editor save covered this change, so glosa records WHAT changed and does not guess WHO changed",
+    "it. there is nothing to apply — the change is already in the file. this is a record, not a",
+    `request; \`glosa inbox dismiss ${id}\` closes it.`,
+  ].join("\n");
+
+  const parsed = splitDiffHunks(diff);
+  const chunks =
+    parsed.hunks.length === 0 ? [parsed.header] : parsed.hunks.map((h, i) => `${i === 0 ? parsed.header : ""}${h}`);
+  const maxBytes = opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES;
+  const offset = Math.min(decodePresentationCursor(opts.cursor, id), chunks.length);
+  let text = fixed;
+  let includedCount = 0;
+  for (const chunk of chunks.slice(offset)) {
+    const addition = `\n\n${chunk.trimEnd()}`;
+    if (utf8Bytes(text + addition) > maxBytes - 512) break;
+    text += addition;
+    includedCount += 1;
+  }
+  const omitted = chunks.slice(offset + includedCount);
+  const omittedHunks = omitted.length;
+  const omittedBytes = omitted.reduce((sum, chunk) => sum + utf8Bytes(chunk), 0);
+  const cursor = omittedHunks > 0 ? encodeCursor(id, offset + includedCount) : undefined;
+  const retrieve = retrieval(id, cursor);
+  if (omittedHunks > 0) {
+    text += `\n[truncated: ${omittedHunks} hunks / ${omittedBytes} UTF-8 bytes omitted; retrieve with ${retrieve.command} or MCP ${retrieve.mcp_tool}]`;
+  }
+  return {
+    id,
+    kind: "external_edit",
+    status: opts.status,
+    text,
+    bytes: utf8Bytes(text),
+    detail: {
+      path,
+      since_checkpoint: since,
+      until_checkpoint: until,
+      source: payload.source,
+      ...(observedAt ? { observed_at: observedAt } : {}),
+    },
+    truncation: { truncated: omittedHunks > 0, omitted_bytes: omittedBytes, omitted_hunks: omittedHunks },
+    retrieval: retrieve,
+  };
+}
+
 function attentionPresentation(
   id: string,
   payload: Record<string, unknown>,
@@ -291,6 +366,7 @@ export function buildDeliveryPresentation(
   if (!payload) return null;
   if (payload.kind === "annotation") return annotationPresentation(id, payload, opts);
   if (payload.kind === "human_edit") return humanEditPresentation(id, payload, opts);
+  if (payload.kind === "external_edit") return externalEditPresentation(id, payload, opts);
   if (payload.kind === "attention_request") return attentionPresentation(id, payload, opts);
   if (payload.kind === "conversation_message") return conversationPresentation(id, payload, opts);
   return null;

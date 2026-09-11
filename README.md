@@ -88,7 +88,10 @@ until a matching agent session picks them up, so nothing is lost when no session
 History lives in a workspace-local shadow repository, so restoring an earlier version never touches
 your project's Git history. Attribution is deliberately conservative: edits made in glosa's own
 editor are yours by construction, and a change glosa did not witness through an apply lease stays
-`Unknown change` rather than being credited to anyone.
+`Unknown change` rather than being credited to anyone. Edit a tracked file in your own editor and
+glosa records it as exactly that — a file that changed outside glosa, since a named checkpoint,
+attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, no agent is
+nudged with it, and it waits there until you dismiss it.
 
 ### An agent can stop and wait for your verdict
 
@@ -214,7 +217,7 @@ workspace remain local, durable, and honestly attributable across many artifacts
 - glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)).
 - glosa has no telemetry, cloud sync, or external runtime calls. Your agent may still send content to its own provider under that tool's terms.
 - Versions live in a workspace-local shadow repository. glosa never assumes or modifies your real Git repository.
-- Provenance is conservative: edits are attributed to a session only when an apply lease proves it; everything else is `human` or `unknown`, never guessed.
+- Provenance is conservative: edits are attributed to a session only when an apply lease proves it; everything else is `human` or `unknown`, never guessed. A change glosa merely finds on disk is reported as an external edit, never as one you made.
 
 If a local bearer token may have leaked, run `glosa token revoke`, then `glosa open <directory>` to
 create and pair a replacement. Use `glosa token rotate` for immediate replacement. Token commands

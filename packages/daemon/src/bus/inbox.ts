@@ -93,6 +93,18 @@ export function readInboxEntry(workspaceRoot: WorkspaceTarget, id: string): unkn
   }
 }
 
+/** An inbox payload's own `kind` (R3: `human_edit`|`annotation`|`attention_request`|
+ * `conversation_message`|`external_edit`), or `null` when the value is not a payload object or
+ * carries no string kind. The one place that reading is spelled, so the producers that mirror the
+ * kind into `entry_created.detail.payload_kind` — adoption and reconcile's inbox self-heal — read
+ * it the same way. Reading a kind off an immutable payload already on disk is not synthesizing
+ * one: A4 §F04 forbids inventing a payload, not consulting the one that exists. */
+export function payloadKindOf(payload: unknown): string | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const kind = (payload as Record<string, unknown>).kind;
+  return typeof kind === "string" ? kind : null;
+}
+
 /** Final (`*.json`) entry ids only. A `*.tmp` file from a crash between write and rename is
  * never listed here — it's inert by construction, not a phantom entry. */
 export function listInboxEntryIds(workspaceRoot: WorkspaceTarget): string[] {

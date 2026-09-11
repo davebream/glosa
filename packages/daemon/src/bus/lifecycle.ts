@@ -147,6 +147,19 @@ function entryKindFromDetail(detail: Record<string, unknown> | undefined): Entry
   return "common";
 }
 
+/** The immutable payload's own `kind`, carried onto derived state so a read-only fold never has
+ * to reopen the inbox file to answer "what kind of entry is this" (see
+ * `DerivedEntryState.payload_kind`). Written by all three producers of an entry —
+ * `createEntryLocked`, `adoptEntry`, and reconcile's `selfHealInbox` — under this one key, so a
+ * consumer reads one field with one meaning rather than guessing which producer wrote the event.
+ * Deliberately separate from `detail.kind`, which the adoption path uses for the LIFECYCLE kind. */
+function payloadFactsFromDetail(detail: Record<string, unknown> | undefined): Partial<DerivedEntryState> {
+  return {
+    ...(typeof detail?.payload_kind === "string" ? { payload_kind: detail.payload_kind } : {}),
+    ...(typeof detail?.until_checkpoint === "string" ? { until_checkpoint: detail.until_checkpoint } : {}),
+  };
+}
+
 function entryKindOf(entryState: DerivedEntryState): EntryKind {
   if (entryState.kind === "attention") return "attention";
   if (entryState.kind === "conversation") return "conversation";
@@ -216,6 +229,7 @@ export const lifecycleReducer: Reducer = (state, event) => {
         deliveryAttempts: [] as DeliveryAttemptRecord[],
         ...(typeof event.detail?.approval_mode === "boolean" ? { approval_mode: event.detail.approval_mode } : {}),
         ...(typeof event.detail?.target_path === "string" ? { target_path: event.detail.target_path } : {}),
+        ...payloadFactsFromDetail(event.detail),
       };
       return;
     }
@@ -231,6 +245,7 @@ export const lifecycleReducer: Reducer = (state, event) => {
         // The source journal remains the audit trail; carrying the current delivery axis keeps a
         // retry after adoption from pretending an already-delivered item was never attempted.
         deliveryAttempts: attempts,
+        ...payloadFactsFromDetail(d),
         origin: {
           source_registration_id: d.source_registration_id,
           source_entry_id: d.source_entry_id,

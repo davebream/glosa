@@ -9,7 +9,7 @@
 // registration points back at the surviving state dir.
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { peekJournalAt, pendingCount } from "../bus/peek.ts";
+import { peekJournalAt, retentionPendingCount } from "../bus/peek.ts";
 import type { WorkspaceIndex } from "./workspace-index.ts";
 
 export interface OrphanedState {
@@ -39,7 +39,9 @@ export function scanOrphanedHomeState(home: string, index: WorkspaceIndex): Orph
     const busDir = join(stateRoot, name);
     try {
       if (!statSync(busDir).isDirectory()) continue;
-      const pending = pendingCount(peekJournalAt(busDir).state);
+      // RETENTION-facing, never the badge count: an undismissed `external_edit` is real user work
+      // parked in a bus nothing points at, and it is exactly what this scanner exists to name.
+      const pending = retentionPendingCount(peekJournalAt(busDir).state);
       if (pending > 0) orphans.push({ registration_id: name, pending_count: pending });
     } catch {
       // unreadable state dir — nothing actionable to report, never throw from a status path

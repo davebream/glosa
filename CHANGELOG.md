@@ -6,8 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Edit a tracked file in your own editor — Typora, vim, anything — and glosa now records what
+  changed, as an **external edit**: the artifact, the diff, the checkpoint it changed since, and
+  that nobody is credited for it. It is a note, not a task. No agent is nudged with one, it never
+  counts toward the "N queued" badge, and there is nothing to apply because the change is already
+  in your file. It simply sits in your inbox until `glosa inbox dismiss` closes it — and until you
+  do, glosa treats the workspace as still holding your work and will not garbage-collect it.
+  Watching is no longer tied to having a glosa tab open: the daemon watches every registered
+  workspace, so the external-editor-plus-agent workflow works with no browser involved. Saves are
+  coalesced over a two-second quiet window, so one editing burst produces one entry rather than one
+  per keystroke-triggered autosave (#153).
+
 ### Fixed
 
+- A file you changed outside glosa was reported to your agent as a **human edit you made in
+  glosa's editor**. The storage side was always honest — such a change is committed to the shadow
+  history attributed to nobody — but the inbox entry built from it had no kind of its own, so it
+  reached the agent wearing the one kind that means "a person typed this here". It now arrives as
+  an external edit, saying only what glosa can actually show: which file changed, between which two
+  checkpoints, and that the author is unknown (#144).
+- Relatedly, a drift checkpoint taken while an agent held an apply lease could silently steal that
+  lease's attribution: because checkpointing is idempotent, the lease's own closing checkpoint found
+  nothing left to record and reused the earlier commit, so the journal credited the session for a
+  commit marked "unknown". No checkpoint is taken inside a lease window now; the lease's own before
+  and after pair brackets it, as offline catch-up already did.
 - On a machine whose home directory is itself a git checkout (a dotfiles repo), glosa could adopt
   the entire home directory as a workspace — bus at `~/.glosa`, shadow store at
   `~/.glosa/shadow.git`, and the matcher pointed at every `.md`, `.html` and `.txt` under home —

@@ -1,13 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/daemon — startup reconciliation, the ordered sequence from A4 §F04:
 //   1. torn-tail truncate   2. replay -> derived state   3. inbox<->journal self-heal
-//   4. apply-lease reconcile (P2.3 stub)   5. offline catch-up (P2.3 stub)
-// Steps 4-5 depend on shadow-git (F21, not built yet) — they're typed no-ops here, wired into
-// the driver so P2.3 only has to fill in the two function bodies.
+//   4. apply-lease reconcile   5a. offline catch-up   5b. report drift as `external_edit`
+// Step 5b is the newest (#144, #153 Part 1): 5a commits offline drift honestly but said nothing
+// about it in the inbox, which is how drift hunks reached delivery wearing `human_edit`. It also
+// carries the crash-gap recovery for the live watcher path (contract A7) — same evidence, same
+// scan. See `reportExternalEdits` below.
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, truncateSync } from "node:fs";
 import { appendEvent, JournalWriter, type JournalEvent } from "./journal.ts";
-import { cleanupOrphanInboxTempFiles, listInboxEntryIds } from "./inbox.ts";
+import { externalEditDetail } from "./external-edit.ts";
+import { externalEditPayloads, unreportedDriftCommits } from "./external-edit-capture.ts";
+import {
+  cleanupOrphanInboxTempFiles,
+  listInboxEntryIds,
+  payloadKindOf,
+  readInboxEntry,
+  writeInboxEntryOnce,
+} from "./inbox.ts";
 import { journalPath, quarantinePath, shadowGitDir, workspaceBusDir } from "./paths.ts";
 import { quarantineRawBytes } from "./quarantine.ts";
 import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./replay.ts";
@@ -103,6 +113,15 @@ export function selfHealInbox(deps: {
   for (const id of listInboxEntryIds(deps.workspaceRoot)) {
     if (deps.state.entries[id]) continue; // already has an entry_created on record
 
+    // The payload is already durably on disk and immutable — reading its own `kind` off it is not
+    // synthesizing anything, and it is what keeps a self-healed `external_edit` recognizable to
+    // the folds that must exclude it (and to the crash-gap recovery, which must not re-report a
+    // commit this entry already names). Deliberately mirrored into `payload_kind` ONLY, never into
+    // `detail.kind`: that key selects the fold's transition table, and this repair has always
+    // defaulted a healed entry to the more restrictive `common` table.
+    const payload = readInboxEntry(deps.workspaceRoot, id);
+    const payloadKind = payloadKindOf(payload);
+    const until = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
     const event: JournalEvent = {
       v: 1,
       event_id: deps.ulid(),
@@ -110,7 +129,12 @@ export function selfHealInbox(deps: {
       entry: id,
       event: "entry_created",
       by: "daemon",
-      detail: { synthesized: true, reason: "inbox_self_heal" },
+      detail: {
+        synthesized: true,
+        reason: "inbox_self_heal",
+        ...(payloadKind !== null ? { payload_kind: payloadKind } : {}),
+        ...(typeof until.until_checkpoint === "string" ? { until_checkpoint: until.until_checkpoint } : {}),
+      },
     };
     appendEvent(deps.writer, event);
     applyEvent(deps.state, event, deps.reducer);
@@ -222,6 +246,82 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
   return { occurred: true, preSha, postSha };
 }
 
+// Step 5b: report the drift step 5a captured (#144, #153 Part 1). Step 5 has always committed
+// offline drift honestly — `auto_checkpoint` with `Glosa-Attribution: unknown` — and then said
+// nothing about it in the inbox, which is how those hunks ended up reaching delivery and being
+// stamped `human_edit`: `presentation.ts` branches on the payload kind, and drift had no kind of
+// its own. This turns each such commit into one `external_edit` entry per changed artifact.
+//
+// ONE MECHANISM, TWO JOBS, and that is the point:
+//   - #144's acceptance: the commit step 5a just made is, by definition, a drift commit nothing
+//     names yet, so it is reported here. Step 5a itself is unchanged.
+//   - The crash gap (contract A7): a daemon that died between the watcher's live checkpoint and
+//     its entry left exactly the same shape of evidence — a drift commit no entry names — and
+//     `checkpoint()`'s idempotency (A4 §F21) means nothing else will ever see that diff again.
+//     Recovering it is the same scan, and running it on every reconcile is what makes the gap
+//     survivable rather than permanent.
+// Both land with `source:"offline_catchup"`: at restart the daemon cannot prove which of the two
+// it is looking at, so it uses the label that claims less.
+export interface ReportExternalEditsDeps {
+  workspaceRoot: WorkspaceTarget;
+  state: DerivedState;
+  writer: JournalWriter;
+  ulid: () => string;
+  now?: () => Date;
+  reducer?: Reducer;
+}
+
+export async function reportExternalEdits(deps: ReportExternalEditsDeps): Promise<string[]> {
+  // A live lease owns its own interval (A4 §F05) — step 5a already declined to checkpoint under
+  // one, and reporting under one would race the same attribution edge from the other side.
+  if (deps.state.applyLease) return [];
+  if (!existsSync(shadowGitDir(deps.workspaceRoot))) return []; // nothing ever checkpointed here
+
+  // Every commit an `external_edit` entry already names, and the most recent of them as the
+  // frontier to walk forward from. Insertion order of the fold's `entries` follows journal order,
+  // so the last one is the latest reported checkpoint — the signal the contract names.
+  const reported = new Set<string>();
+  let frontier: string | null = null;
+  for (const entry of Object.values(deps.state.entries)) {
+    if (typeof entry.until_checkpoint !== "string") continue;
+    reported.add(entry.until_checkpoint);
+    frontier = entry.until_checkpoint;
+  }
+
+  const commits = await unreportedDriftCommits(deps.workspaceRoot, frontier, reported);
+  const created: string[] = [];
+  const observedAt = (deps.now?.() ?? new Date()).toISOString();
+  for (const commit of commits) {
+    const payloads = await externalEditPayloads(
+      deps.workspaceRoot,
+      commit.parent,
+      commit.sha,
+      "offline_catchup",
+      observedAt,
+    );
+    for (const payload of payloads) {
+      const id = deps.ulid();
+      // A4 §F04's load-bearing order, the same one `WorkspaceBus.createEntryLocked` uses: the
+      // immutable inbox file atomically FIRST, then `entry_created`. A crash between them leaves
+      // the gap step 3 above repairs.
+      writeInboxEntryOnce(deps.workspaceRoot, id, payload);
+      const event: JournalEvent = {
+        v: 1,
+        event_id: deps.ulid(),
+        at: observedAt,
+        entry: id,
+        event: "entry_created",
+        by: "watcher",
+        detail: { kind: payload.kind, payload_kind: payload.kind, ...externalEditDetail(payload) },
+      };
+      appendEvent(deps.writer, event);
+      applyEvent(deps.state, event, deps.reducer);
+      created.push(id);
+    }
+  }
+  return created;
+}
+
 export interface ReconcileOptions {
   ulid?: () => string;
   now?: () => Date;
@@ -237,6 +337,9 @@ export interface ReconcileResult {
   quarantineCount: number;
   expiredLeaseIds: string[];
   offlineCatchup: OfflineCatchUpResult;
+  /** Entry ids created by step 5b for drift no `external_edit` named yet — offline drift step 5a
+   * just captured, plus any commit a crash orphaned between checkpoint and entry. */
+  externalEditIds: string[];
 }
 
 /** Runs the full ordered sequence (1 -> 2 -> 3 -> 4 -> 5) for one workspace. Opens its own
@@ -291,6 +394,7 @@ export async function reconcileWorkspace(
         quarantineCount,
         expiredLeaseIds: [],
         offlineCatchup: { occurred: false },
+        externalEditIds: [],
       };
     }
 
@@ -333,6 +437,27 @@ export async function reconcileWorkspace(
       offlineCatchup = { occurred: false, error: message };
     }
 
+    // Step 5b, guarded exactly like 5a and for the same reason (glosa/#38): this spawns git, so a
+    // broken toolchain, permission problem, or corrupted shadow repo must degrade to "no entries
+    // reported this pass" — never take down every request against the workspace, including plain
+    // message delivery that touches no git at all. The drift stays committed and unnamed, and the
+    // next reconcile's scan finds it again: the repair is idempotent, so a failed pass costs a
+    // delay, not an entry.
+    let externalEditIds: string[] = [];
+    try {
+      externalEditIds = await reportExternalEdits({
+        workspaceRoot,
+        state,
+        writer,
+        ulid: ulidFn,
+        now: opts.now,
+        reducer,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[glosa] external-edit reporting failed for ${workspaceRoot}: ${message}`);
+    }
+
     return {
       workspaceRoot: workspaceWorktree(workspaceRoot),
       tailTruncated: tail.truncated,
@@ -342,6 +467,7 @@ export async function reconcileWorkspace(
       quarantineCount,
       expiredLeaseIds,
       offlineCatchup,
+      externalEditIds,
     };
   } finally {
     writer.close();
