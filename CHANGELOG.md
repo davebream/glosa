@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.19] — 2026-09-11
+
 ### Added
 
 - Edit a tracked file in your own editor — Typora, vim, anything — and glosa now records what
