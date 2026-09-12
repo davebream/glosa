@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.20] — 2026-09-12
+
 ### Fixed
 
 - alpha.19 could exhaust a machine's memory and take it down. Watching every registered workspace
