@@ -24,7 +24,7 @@ import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
 import { createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
-import type { WorkspaceTarget } from "../workspace.ts";
+import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import {
@@ -105,6 +105,9 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   pushRegistry: SessionPushRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
+  /** Starts daemon-lifetime watching for workspaces already in the index. Call AFTER serving:
+   * it is warm-up, not readiness, and it yields between workspaces. */
+  warmArtifactWatchers(): Promise<void>;
   adoptionCoordinator: AdoptionCoordinator;
   sealAdoptionSources(
     sources: readonly WorkspaceTarget[],
@@ -184,12 +187,29 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // the second, a `glosa open` during the daemon's life would produce no watcher until the next
   // restart. Neither half involves a browser — that is the amendment's whole point.
   workspaceIndex.setOnRegister((entry) => artifactWatcherRegistry.ensureWatched(entry));
-  for (const entry of workspaceIndex.list({ presentOnly: true })) {
-    if ((entry.lifecycle?.state ?? "active") !== "active") continue;
-    artifactWatcherRegistry.ensureWatched(entry);
-  }
+
+  /** The second half: workspaces already in the index when this process started.
+   *
+   * NOT run here. `ensureWatched` does one matcher walk per workspace on first sight, and this
+   * builder runs before `Bun.serve`, so doing it inline made daemon readiness wait on every
+   * registered workspace in turn — a machine with an accumulated index never answered the
+   * handshake at all. Warm-up is not readiness, so the caller starts serving first and calls this
+   * afterwards.
+   *
+   * Yields between workspaces so a long warm-up cannot hold the event loop, and skips roots that
+   * are no longer on disk: an index entry whose directory was deleted is not worth a tree walk,
+   * and `present` does not currently catch that on its own. */
+  const warmArtifactWatchers = async (): Promise<void> => {
+    for (const entry of workspaceIndex.list({ presentOnly: true })) {
+      if ((entry.lifecycle?.state ?? "active") !== "active") continue;
+      if (!existsSync(workspaceWorktree(entry))) continue;
+      artifactWatcherRegistry.ensureWatched(entry);
+      await new Promise<void>((resume) => setImmediate(resume));
+    }
+  };
 
   return {
+    warmArtifactWatchers,
     workspaceIndex,
     sessionRegistry,
     busRegistry,
@@ -432,6 +452,14 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   } else {
     markStartupReady();
     log(home, `${instanceId} serving 127.0.0.1:${port} (class-F 127.0.0.1:${classFPort})`);
+    // Warm the artifact watchers only now — after both binds, the lock, and the handshake gate.
+    // Deliberately not awaited: warm-up is not readiness, and on a machine with a large index it
+    // takes far longer than a client is willing to wait for `glosa open`. Failures are logged and
+    // dropped rather than thrown, because a workspace that cannot be watched still has its changes
+    // captured by offline catch-up on the next reconcile.
+    void backend
+      .warmArtifactWatchers()
+      .catch((error: unknown) => log(home, `${instanceId} artifact watcher warm-up failed: ${String(error)}`));
   }
   return new Promise<never>(() => {
     // bootDaemon never resolves on the happy path; the process lives until a signal handler
