@@ -115,3 +115,43 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     }
   });
 });
+
+describe("buildBackend does not watch the index it finds — warm-up is not readiness", () => {
+  // The regression this pins. alpha.19 walked every registered workspace inside buildBackend,
+  // which runs BEFORE Bun.serve, so a machine with an accumulated index never answered the
+  // handshake: `glosa open` timed out at 5s while the daemon burned CPU for minutes. The watching
+  // itself was right; doing it on the readiness path was not.
+  let home: string;
+  const roots: string[] = [];
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "glosa-warm-home-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+  });
+
+  test("constructing the backend starts no watchers; calling the warm-up starts them", async () => {
+    const first = buildBackend(home);
+    for (let i = 0; i < 3; i++) {
+      const root = canonicalize(mkdtempSync(join(tmpdir(), "glosa-warm-ws-")));
+      roots.push(root);
+      writeFileSync(join(root, "notes.md"), `note ${i}\n`);
+      await first.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    }
+    await first.closeWorkspaceResources();
+
+    // A second backend over the SAME home now finds three workspaces already in the index — the
+    // shape that used to make construction do the walking.
+    const backend = buildBackend(home);
+    expect(backend.workspaceIndex.list({ presentOnly: true }).length).toBe(3);
+    // The assertion: construction watched nothing, however many workspaces it found.
+    expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+
+    // And the warm-up is what does it, when the caller chooses — after serving.
+    await backend.warmArtifactWatchers();
+    expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBeGreaterThan(0);
+    await backend.closeWorkspaceResources();
+  });
+});

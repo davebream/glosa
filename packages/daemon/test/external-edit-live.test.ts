@@ -281,3 +281,58 @@ function openBusFor(target: WorkspaceTarget, bus: WorkspaceBus): WorkspaceBus {
   if (canonical !== bus.workspace) throw new Error(`watcher passed an unexpected workspace: ${canonical}`);
   return bus;
 }
+
+describe("the bound that protects the machine is watch ENTRIES summed across workspaces, not workspaces", () => {
+  // Why this exists. The A6 test above pins the workspace COUNT, and passed throughout — while
+  // alpha.19 exhausted memory on a real machine and took it down three times. Its two ceilings
+  // (4096 entries per workspace, 64 workspaces) were each enforced and never multiplied: their
+  // product is 262,144 filesystem watches. The A6 fixture set the two budgets "far apart on
+  // purpose" and gave every workspace one file, which is exactly the shape in which the product
+  // cannot be observed. So this measures the axis that actually ran out.
+  test("many workspaces, each individually well under the per-workspace cap, cannot exceed the total", () => {
+    const warnings: string[] = [];
+    const registry = track(
+      new ArtifactWatcherRegistry({
+        // Deliberately NOT limiting: a failure below cannot be either of these two doing the work.
+        maxWatchEntries: 4_096,
+        maxWatchedWorkspaces: 64,
+        maxTotalWatchEntries: 12,
+        warn: (message) => warnings.push(message),
+      }),
+    );
+
+    // Eight workspaces of five directories each: 40 entries wanted, every workspace a rounding
+    // error against its own 4096 cap, and 64 workspaces is never reached. Only the total binds.
+    const opened: { root: string; mode: string | null }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const root = workspace();
+      for (let d = 0; d < 5; d++) writeFile(root, join(`dir-${d}`, "notes.md"), `note ${i}/${d}\n`);
+      registry.ensureWatched(root);
+      opened.push({ root, mode: registry.modeFor(root) });
+    }
+
+    // Evaluated in full before anything is asserted: an expect() inside the loop stops at the
+    // first mismatch, and then every later workspace is asserted by reading the source instead of
+    // by observation. That defect shipped in this repository's own pipeline once already.
+    expect(registry.watchedEntryTotal()).toBeLessThanOrEqual(12);
+    expect(registry.watchedWorkspaceCount()).toBeLessThanOrEqual(64);
+    // The point of the whole test: workspaces were admitted, and the total still held.
+    expect(opened.some((entry) => entry.mode !== null && entry.mode !== "disabled")).toBe(true);
+    // And the old pair of ceilings alone would have permitted every one of the 40.
+    expect(40).toBeGreaterThan(12);
+  });
+
+  test("a single workspace under the total is still watched in full — the bound refuses sums, not workspaces", () => {
+    const registry = track(
+      new ArtifactWatcherRegistry({ maxWatchEntries: 4_096, maxWatchedWorkspaces: 64, maxTotalWatchEntries: 12 }),
+    );
+    const root = workspace();
+    for (let d = 0; d < 4; d++) writeFile(root, join(`dir-${d}`, "notes.md"), `note ${d}\n`);
+    registry.ensureWatched(root);
+
+    expect(registry.modeFor(root)).not.toBeNull();
+    expect(registry.modeFor(root)).not.toBe("disabled");
+    expect(registry.watchedEntryTotal()).toBeLessThanOrEqual(12);
+    expect(registry.watchedEntryTotal()).toBeGreaterThan(0);
+  });
+});

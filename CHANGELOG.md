@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- alpha.19 could exhaust a machine's memory and take it down. Watching every registered workspace
+  for the daemon's lifetime — new in alpha.19 — was capped two ways that never multiplied: 4,096
+  watch entries per workspace and 64 watched workspaces, so a machine with an accumulated workspace
+  list could open a quarter of a million filesystem watches. There is now a single ceiling on watch
+  entries summed across every workspace, which is the thing that actually runs out; a workspace that
+  does not fit under it stops receiving live updates, exactly as one over the per-workspace cap
+  already did, and its changes are still captured by offline catch-up on the next reconcile.
+- On a machine with many registered workspaces, alpha.19's daemon never finished starting: it walked
+  every workspace's file tree before it began accepting connections, so `glosa open` timed out while
+  the daemon was still working. Watching now begins after the daemon is serving rather than before,
+  yields between workspaces so a long warm-up cannot stall it, and skips registered workspaces whose
+  directory no longer exists.
+
 ## [0.1.0-alpha.19] — 2026-09-11
 
 ### Added

@@ -40,6 +40,18 @@ import {
 /** Per-workspace path budget: how many entries ONE `WatchState` may hand chokidar. Says nothing
  * about how many workspaces are watched — see `DEFAULT_MAX_WATCHED_WORKSPACES`. */
 export const DEFAULT_MAX_ARTIFACT_WATCH_ENTRIES = 4_096;
+/** The bound that actually protects the machine: watch entries summed across EVERY workspace.
+ *
+ * The per-workspace cap above and the workspace-count cap below are each real, and between them
+ * they bounded nothing: 64 workspaces x 4096 entries is 262,144 filesystem watches, which is what
+ * alpha.19 could open on a machine with an accumulated registry. It exhausted memory. Two ceilings
+ * that never multiply are one ceiling missing, and the axis that runs out is entries, not
+ * workspaces — a thousand tiny workspaces are cheap and two huge ones are not.
+ *
+ * Deliberately larger than one workspace's cap so a single big workspace still watches fully, and
+ * far below the old product. A workspace that does not fit degrades exactly as one over the
+ * per-workspace cap already does: no live updates, changes still captured by offline catch-up. */
+export const DEFAULT_MAX_TOTAL_WATCH_ENTRIES = 8_192;
 
 /** Cross-workspace budget: how many live watchers may exist at once, across every workspace.
  *
@@ -89,6 +101,7 @@ export type ArtifactWatcherEvent =
 export interface ArtifactWatcherRegistryOptions {
   maxWatchEntries?: number;
   maxWatchedWorkspaces?: number;
+  maxTotalWatchEntries?: number;
   warn?: (message: string) => void;
   watchFactory?: (paths: string[], options: ChokidarOptions) => FSWatcher;
   /** The quiet-window capture (#153). Injected rather than imported so this module keeps knowing
@@ -138,6 +151,7 @@ export class ArtifactWatcherRegistry {
   private readonly states = new Map<string, WatchState>();
   private readonly maxWatchEntries: number;
   private readonly maxWatchedWorkspaces: number;
+  private readonly maxTotalWatchEntries: number;
   private readonly warn: (message: string) => void;
   private readonly watchFactory: (paths: string[], options: ChokidarOptions) => FSWatcher;
   private readonly captureExternalEdit?: (workspace: WorkspaceTarget) => Promise<unknown>;
@@ -147,6 +161,7 @@ export class ArtifactWatcherRegistry {
   constructor(options: ArtifactWatcherRegistryOptions = {}) {
     this.maxWatchEntries = options.maxWatchEntries ?? DEFAULT_MAX_ARTIFACT_WATCH_ENTRIES;
     this.maxWatchedWorkspaces = options.maxWatchedWorkspaces ?? DEFAULT_MAX_WATCHED_WORKSPACES;
+    this.maxTotalWatchEntries = options.maxTotalWatchEntries ?? DEFAULT_MAX_TOTAL_WATCH_ENTRIES;
     this.warn = options.warn ?? (() => {});
     this.watchFactory = options.watchFactory ?? ((paths, watchOptions) => watch(paths, watchOptions));
     this.captureExternalEdit = options.captureExternalEdit;
@@ -240,6 +255,13 @@ export class ArtifactWatcherRegistry {
     return this.states.size;
   }
 
+  /** Watch entries live across EVERY workspace — the axis that exhausts a machine, and the one
+   * `DEFAULT_MAX_TOTAL_WATCH_ENTRIES` bounds. `watchedWorkspaceCount` counts workspaces, which is
+   * a different number and was the one alpha.19 measured while memory ran out. */
+  watchedEntryTotal(): number {
+    return this.entriesElsewhere(undefined);
+  }
+
   async evict(workspace: WorkspaceTarget): Promise<void> {
     const state = this.findState(workspace);
     if (state) await this.closeState(state);
@@ -259,20 +281,39 @@ export class ArtifactWatcherRegistry {
     this.warn(`artifact watcher ${state.id}: ${message}`);
   }
 
+  /** Entries currently registered across every OTHER workspace. `exclude` is the state being
+   * (re)started, whose own targets are about to be replaced and must not count against itself. */
+  private entriesElsewhere(exclude?: WatchState): number {
+    let total = 0;
+    for (const state of this.states.values()) {
+      if (state === exclude) continue;
+      total += state.watchedTargets.size;
+    }
+    return total;
+  }
+
   private chooseMode(state: WatchState, forceFiles: boolean): { mode: WatchMode; targets: string[] } {
     const tracking = workspaceTracking(state.workspace);
+    // Whichever ceiling is lower decides. The per-workspace cap keeps one workspace from being
+    // pathological on its own; this one keeps the SUM from being pathological no matter how the
+    // workspaces are shaped. Only the second can be exhausted by workspaces that are each fine.
+    const budget = Math.min(
+      this.maxWatchEntries,
+      Math.max(0, this.maxTotalWatchEntries - this.entriesElsewhere(state)),
+    );
+
     if (tracking.mode === "bounded") {
       const targets = boundedTargets(state.workspace);
-      if (targets.length > this.maxWatchEntries) return { mode: "disabled", targets: [] };
+      if (targets.length > budget) return { mode: "disabled", targets: [] };
       return { mode: "files", targets };
     }
 
     const fileTargets = state.snapshot.tracked.map((file) => file.rawPath);
     const estimatedEntries = state.snapshot.directories.length + fileTargets.length;
-    if (!forceFiles && estimatedEntries <= this.maxWatchEntries) {
+    if (!forceFiles && estimatedEntries <= budget) {
       return { mode: "directories", targets: state.snapshot.directories.map((directory) => directory.rawPath) };
     }
-    if (fileTargets.length <= this.maxWatchEntries) return { mode: "files", targets: fileTargets };
+    if (fileTargets.length <= budget) return { mode: "files", targets: fileTargets };
     return { mode: "disabled", targets: [] };
   }
 
@@ -388,7 +429,14 @@ export class ArtifactWatcherRegistry {
 
     if (state.mode === "directories") {
       const estimatedEntries = next.directories.length + next.tracked.length;
-      if (estimatedEntries > this.maxWatchEntries) {
+      // Growth is bounded by the same pair of ceilings a fresh start is. Without the second term a
+      // watcher that started inside the global budget could grow past it one reconcile at a time,
+      // which is the same unbounded total arriving slowly instead of all at once.
+      const growthBudget = Math.min(
+        this.maxWatchEntries,
+        Math.max(0, this.maxTotalWatchEntries - this.entriesElsewhere(state)),
+      );
+      if (estimatedEntries > growthBudget) {
         await this.replaceWatcher(state, true);
       } else {
         const nextTargets = new Set(next.directories.map((directory) => directory.rawPath));
