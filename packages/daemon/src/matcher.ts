@@ -95,6 +95,12 @@ export interface ResolveMatchedFilesResult {
   /** Diagnostic only — POSIX/NFC path of every symlink encountered (file or dir), root-relative.
    * Never matched, never descended into. */
   skippedSymlinks: string[];
+  /** True when a caller-supplied `limit` stopped the walk early, so `tracked`/`directories` are a
+   * PREFIX of the tree rather than all of it. Only a caller that asked for a limit can see this
+   * set, and such a result must never be used where completeness matters — git staging, the
+   * sidebar, anchoring. It exists for the one question that a prefix can answer honestly: "is this
+   * workspace bigger than a budget I am about to refuse it for?" */
+  truncated: boolean;
 }
 
 export interface MatchedDirectory {
@@ -124,6 +130,7 @@ function toNfcPosixPath(segments: string[]): string {
 export function resolveMatchedFiles(
   root: string,
   config: MatcherConfig = loadMatcherConfig(root),
+  options: { limit?: number } = {},
 ): ResolveMatchedFilesResult {
   // nocase: false is picomatch's default already — passed explicitly because A4 §F20 calls out
   // case-sensitivity as a deliberate choice, not an accident of the default: macOS's default FS
@@ -149,7 +156,21 @@ export function resolveMatchedFiles(
   const directories: MatchedDirectory[] = [];
   const skippedSymlinks: string[] = [];
 
+  // A caller that only needs to know whether the tree exceeds a budget does not need the whole
+  // tree. Walking 100k files to conclude "more than 4096" costs tens of seconds on the main
+  // thread, and the answer was already decided at 4097. `limit` stops the walk there; `truncated`
+  // tells the caller what it is holding. Absent a limit this is the complete walk it always was.
+  const limit = options.limit;
+  let truncated = false;
+  const overLimit = (): boolean => {
+    if (limit === undefined) return false;
+    if (candidates.length + directories.length <= limit) return false;
+    truncated = true;
+    return true;
+  };
+
   const walk = (absDir: string, relSegments: string[]): void => {
+    if (truncated) return;
     let names: string[];
     try {
       names = readdirSync(absDir);
@@ -158,6 +179,7 @@ export function resolveMatchedFiles(
     }
     directories.push({ path: toNfcPosixPath(relSegments), rawPath: absDir });
     for (const name of names) {
+      if (overLimit()) return;
       const absPath = join(absDir, name);
       const nextSegments = [...relSegments, name];
       let st: Stats;
@@ -199,7 +221,7 @@ export function resolveMatchedFiles(
   directories.sort((a, b) => byteCompare(a.path, b.path));
   skippedSymlinks.sort(byteCompare);
 
-  return { tracked, oversize, directories, skippedSymlinks };
+  return { tracked, oversize, directories, skippedSymlinks, truncated };
 }
 
 /** Builds the chokidar `ignored` predicate for the shared artifact watcher FROM the same
@@ -251,11 +273,14 @@ export function buildWatchIgnored(
  * recursive matcher form for lower-level callers and tests; registered workspaces additionally
  * carry their daemon-selected state directory and may replace the recursive walk with a bounded
  * explicit list. */
-export function resolveTrackedFiles(workspace: WorkspaceTarget): ResolveMatchedFilesResult {
+export function resolveTrackedFiles(
+  workspace: WorkspaceTarget,
+  options: { limit?: number } = {},
+): ResolveMatchedFilesResult {
   const root = workspaceWorktree(workspace);
   const tracking = workspaceTracking(workspace);
   if (tracking.mode === "matcher") {
-    return resolveMatchedFiles(root, loadMatcherConfig(root, workspaceBusPath(workspace)));
+    return resolveMatchedFiles(root, loadMatcherConfig(root, workspaceBusPath(workspace)), options);
   }
 
   const tracked: MatchedFile[] = [];
@@ -270,7 +295,7 @@ export function resolveTrackedFiles(workspace: WorkspaceTarget): ResolveMatchedF
     }
   }
   tracked.sort((a, b) => byteCompare(a.path, b.path));
-  return { tracked, oversize: [], directories: [], skippedSymlinks: [] };
+  return { tracked, oversize: [], directories: [], skippedSymlinks: [], truncated: false };
 }
 
 export type CrossingEvent =

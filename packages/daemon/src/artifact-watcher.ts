@@ -228,7 +228,7 @@ export class ArtifactWatcherRegistry {
       id,
       listeners: new Set(),
       daemonLifetime,
-      snapshot: resolveTrackedFiles(workspace),
+      snapshot: resolveTrackedFiles(workspace, { limit: this.maxWatchEntries }),
       watcher: null,
       watchedTargets: new Set(),
       mode: "disabled",
@@ -307,6 +307,11 @@ export class ArtifactWatcherRegistry {
       if (targets.length > budget) return { mode: "disabled", targets: [] };
       return { mode: "files", targets };
     }
+
+    // A truncated snapshot is a prefix, not a tree: the walk stopped because the workspace is
+    // already past the per-workspace ceiling. That is exactly the answer `disabled` encodes, and
+    // deciding it here is what keeps the walk from having to finish to find out.
+    if (state.snapshot.truncated) return { mode: "disabled", targets: [] };
 
     const fileTargets = state.snapshot.tracked.map((file) => file.rawPath);
     const estimatedEntries = state.snapshot.directories.length + fileTargets.length;
@@ -423,7 +428,7 @@ export class ArtifactWatcherRegistry {
     state.pendingPaths.clear();
 
     const previous = state.snapshot;
-    const next = resolveTrackedFiles(state.workspace);
+    const next = resolveTrackedFiles(state.workspace, { limit: this.maxWatchEntries });
     const crossings = diffSnapshots(previous, next);
     state.snapshot = next;
 

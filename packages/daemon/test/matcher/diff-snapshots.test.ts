@@ -12,6 +12,7 @@ function snapshot(tracked: string[], oversize: string[]): ResolveMatchedFilesRes
     oversize: oversize.map((path) => ({ path, rawPath: `/ws/${path}`, sizeBytes: 999_999_999 })),
     directories: [],
     skippedSymlinks: [],
+    truncated: false,
   };
 }
 

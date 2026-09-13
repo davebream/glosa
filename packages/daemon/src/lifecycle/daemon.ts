@@ -6,6 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { AdapterRegistry } from "../adapters/interface.ts";
 import { WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
@@ -24,6 +25,7 @@ import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
 import { createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
+import { isHomeOrAncestor } from "../registry/workspace-root.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
@@ -130,10 +132,21 @@ export interface BuildBackendOptions {
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
   /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
   writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
+  /** Test-only override for what counts as the user's home directory. Production reads the real
+   * one. Threaded to WorkspaceIndex as well, so the refusal the index applies and the refusal
+   * watcher warm-up applies are answering from the same value rather than two calls to
+   * `homedir()` that could diverge under test. */
+  userHomeDir?: string;
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
-  const workspaceIndex = new WorkspaceIndex({ home, gcGraceMs: opts.gcGraceMs, gcThrottleMs: opts.gcThrottleMs });
+  const userHomeDir = opts.userHomeDir ?? homedir();
+  const workspaceIndex = new WorkspaceIndex({
+    home,
+    gcGraceMs: opts.gcGraceMs,
+    gcThrottleMs: opts.gcThrottleMs,
+    userHomeDir,
+  });
   // Constructed BEFORE SessionRegistry (issue #156 held-review finding) so the SAME instance —
   // never a second one — is what both `ctx.adoptionCoordinator` (session register/bind, forget's
   // own commit) and SessionRegistry's heartbeat/connection-refresh serialize against; two separate
@@ -202,7 +215,16 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const warmArtifactWatchers = async (): Promise<void> => {
     for (const entry of workspaceIndex.list({ presentOnly: true })) {
       if ((entry.lifecycle?.state ?? "active") !== "active") continue;
-      if (!existsSync(workspaceWorktree(entry))) continue;
+      const root = workspaceWorktree(entry);
+      if (!existsSync(root)) continue;
+      // The same refusal workspace RESOLUTION applies (#146/#209). That guard runs when a
+      // workspace is resolved, so it stops new home-directory registrations and refuses to reuse
+      // an existing one — but the index still CONTAINS entries written before it existed, and
+      // this loop watches what the index holds. Without this check the daemon starts a matcher
+      // walk over the whole home directory for a registration `glosa open` would refuse today.
+      // Observed: a registration whose bus path was `~/.glosa` itself, reporting 34,823 tracked
+      // artifacts, on a daemon that then wedged.
+      if (isHomeOrAncestor(root, userHomeDir)) continue;
       artifactWatcherRegistry.ensureWatched(entry);
       await new Promise<void>((resume) => setImmediate(resume));
     }
