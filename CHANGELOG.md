@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.21] — 2026-09-14
+
 ### Fixed
 
 - The daemon could stop answering shortly after starting, on a machine with large registered
