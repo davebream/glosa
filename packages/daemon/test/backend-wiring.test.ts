@@ -155,3 +155,48 @@ describe("buildBackend does not watch the index it finds — warm-up is not read
     await backend.closeWorkspaceResources();
   });
 });
+
+describe("warm-up applies the same refusals workspace resolution does", () => {
+  // #146/#209 made a workspace never the home directory or an ancestor of it. That guard runs when
+  // a workspace is RESOLVED, so it stops new registrations and refuses to reuse an existing one —
+  // but the index still holds entries written before it existed, and watcher warm-up watches what
+  // the index holds. Without this the daemon starts a matcher walk over the whole home directory
+  // for a registration `glosa open` would refuse today, and wedges.
+  let home: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "glosa-refuse-home-"));
+    fakeHome = canonicalize(mkdtempSync(join(tmpdir(), "glosa-fake-user-home-")));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  test("a registration at the home directory is left unwatched; an ordinary one beside it is watched", async () => {
+    const ordinary = canonicalize(mkdtempSync(join(tmpdir(), "glosa-ordinary-ws-")));
+    try {
+      writeFileSync(join(fakeHome, "notes.md"), "in home\n");
+      writeFileSync(join(ordinary, "notes.md"), "beside it\n");
+
+      const seeding = buildBackend(home, { userHomeDir: fakeHome });
+      await seeding.workspaceIndex.upsertWorkspace(fakeHome, "glosa-open");
+      await seeding.workspaceIndex.upsertWorkspace(ordinary, "glosa-open");
+      await seeding.closeWorkspaceResources();
+
+      const backend = buildBackend(home, { userHomeDir: fakeHome });
+      expect(backend.workspaceIndex.list({ presentOnly: true }).length).toBe(2);
+      await backend.warmArtifactWatchers();
+
+      // Both halves asserted together: the refusal is real AND it is not refusing everything.
+      expect({
+        home: backend.artifactWatcherRegistry.modeFor(fakeHome),
+        ordinary: backend.artifactWatcherRegistry.modeFor(ordinary) !== null,
+      }).toEqual({ home: null, ordinary: true });
+      await backend.closeWorkspaceResources();
+    } finally {
+      rmSync(ordinary, { recursive: true, force: true });
+    }
+  });
+});
