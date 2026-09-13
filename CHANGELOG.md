@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- The daemon could stop answering shortly after starting, on a machine with large registered
+  workspaces. Deciding whether a workspace fits the live-update budget meant walking its whole file
+  tree first, on the daemon's only thread — and a workspace of a hundred thousand files takes tens
+  of seconds to walk to reach a conclusion that was settled a few thousand files in. The walk now
+  stops once the answer is decided. Everything that needs the complete list of a workspace's files —
+  the sidebar, `glosa doctor`, reconciliation — still gets it.
+- A workspace registered at your home directory, or above it, is no longer watched. glosa stopped
+  *creating* such registrations a few releases ago, but one recorded before that was still in the
+  index, and the daemon would begin walking your entire home directory on startup because of it.
+
 ## [0.1.0-alpha.20] — 2026-09-12
 
 ### Fixed
