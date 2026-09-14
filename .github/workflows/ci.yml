@@ -49,7 +49,7 @@ jobs:
           bun run scripts/test-plan.ts prepare > .context/test-results/plan.json
       - name: Preserve test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: test-plan
           path: .context/test-results/
@@ -101,7 +101,7 @@ jobs:
       - run: bun run test:docs
       - name: Preserve test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tests-docs
           path: .context/test-results/
@@ -138,7 +138,7 @@ jobs:
           fi
       - name: Preserve test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tests-${{ matrix.profile }}
           path: .context/test-results/
@@ -166,7 +166,7 @@ jobs:
         run: bun run test:stability --repetitions "$TEST_REPETITIONS"
       - name: Preserve test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tests-stability
           path: .context/test-results/
@@ -192,7 +192,7 @@ jobs:
         run: bun run test:full
       - name: Preserve test evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tests-full
           path: .context/test-results/
