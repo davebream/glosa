@@ -12,11 +12,6 @@ the exit criteria that close it.
 
 ## Now
 
-- **Phase 1: make the loop honest.** A change made in another editor is reported as an external
-  edit, never as an edit you made in glosa; a workspace is never your home directory; `glosa mcp`
-  processes exit when their host closes, hangs up, or goes away; a workspace can be forgotten. This
-  shipped across alpha.18 and alpha.19, and the phase closes when its exit criteria are verified.
-  Track: [#164](https://github.com/davebream/glosa/issues/164).
 - **Phase 2: onboarding without ceremony.** Install into Claude Code with a plugin and into Codex
   with `codex mcp add`, let both push feedback to an idle session, and retire `glosa init` with the
   hooks it installs and the older ways of waking a session (the rewake hook and Claude Code
@@ -24,6 +19,11 @@ the exit criteria that close it.
 
 ## Recently completed
 
+- **Phase 1: the loop is honest.** A change made in another editor is reported as an external edit,
+  never as an edit you made in glosa; a workspace is never your home directory; `glosa mcp`
+  processes exit when their host closes, hangs up, or goes away; a workspace can be forgotten.
+  Shipped in alpha.18 through alpha.21. Track:
+  [#164](https://github.com/davebream/glosa/issues/164).
 - **Phase 0: the loop works again.** A daemon that stops responding recovers, sessions re-register
   on their next MCP tool call after a daemon restart, an Edit-mode save rewrites only the blocks you
   changed, and the inbox can be listed and cleared from the CLI. Shipped in alpha.18. Track:
