@@ -11,7 +11,12 @@ import { ArtifactWatcherRegistry, type ArtifactWatcherEvent } from "../src/artif
 import type { WorkspaceLocation } from "../src/workspace.ts";
 import { cleanupWorkspace, freshWorkspace, makeDir, makeSymlink, writeFile } from "./matcher/helpers.ts";
 
-async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+// 15 s, not Bun's 5 s default: these waits sit on real chokidar events, which FSEvents delivers with
+// seconds of latency on a loaded macos-14 runner. The "custom matcher config" test below timed out
+// at exactly 5 s on three consecutive CI attempts of a stylesheet-only PR while passing locally
+// every time, and external-edit-live.test.ts already documents the same class. The budget is the
+// wait, not the work.
+async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) await Bun.sleep(20);
   if (!predicate()) throw new Error("timed out waiting for artifact watcher state");
@@ -100,7 +105,7 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
 
     stop();
     cleanupWorkspace(outside);
-  });
+  }, 20_000);
 
   test("tracked changes, atomic replacement, new nested artifacts, deletion, and oversize crossings reconcile", async () => {
     const note = writeFile(root, "docs/note.md", "one");
@@ -186,7 +191,7 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
 
     writeFileSync(custom, "two");
     await waitUntil(() => events.some((event) => event.type === "artifact" && event.data.path === "docs/note.custom"));
-  });
+  }, 20_000);
 
   test("a temporarily absent bounded loose file is watched by exact path and reappears live", async () => {
     const path = writeFile(root, "loose.md", "one");
@@ -221,7 +226,7 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
           event.data.changes.some((change) => change.type === "file_tracked" && change.path === "loose.md"),
       ),
     );
-  });
+  }, 20_000);
 
   test("two subscribers share one watcher and the final unsubscribe closes it", async () => {
     writeFile(root, "note.md", "one");
@@ -313,5 +318,5 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     expect(watchers[1]!.closeCalls).toBe(1);
     expect(calls).toHaveLength(2);
     expect(warnings).toHaveLength(1);
-  });
+  }, 20_000);
 });
