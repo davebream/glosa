@@ -445,12 +445,16 @@ export function createArtifactPane(host, deps) {
     moveGroup.hidden = moveItems.length > 0 && available === 0;
   }
 
+  // The writer's face for this artifact lives here, among the artifact's other settings, not in
+  // the bar: a reading preference is chosen once and then left alone (face.js fills the group).
+  const faceGroup = el("div", { className: "glosa-face-group" });
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
     outlineMenuItem,
     copySourceButton,
     printArtifactButton,
     compareButton,
+    faceGroup,
     moveGroup,
     toolsStatus,
   ]);
@@ -461,13 +465,10 @@ export function createArtifactPane(host, deps) {
   // but a pane in Preview and a pane in Annotate with nothing annotated yet look identical, so
   // the state still has to be legible. A quiet label states it without offering it.
   const modeLabel = el("span", { className: "glosa-pane-mode-label" });
-  // The face control follows the mode control: both are about how THIS artifact is read.
-  const faceHost = el("div", { className: "glosa-face-host" });
   const artifactBar = el("div", { className: "glosa-artifact-bar" }, [
     artifactIdEl,
     modeLabel,
     modeBar,
-    faceHost,
     historyToggle,
     tools,
   ]);
@@ -596,7 +597,7 @@ export function createArtifactPane(host, deps) {
   // The writer's face for this artifact, stamped on the pane so every manuscript surface in it —
   // rendered, rich editor, the quotes that echo it — reads one variable (app.css §1).
   const faceControl = faceStore
-    ? mountFaceControl(faceHost, faceStore, {
+    ? mountFaceControl(faceGroup, faceStore, {
         getKey: () => {
           const facePath = currentArtifact?.source_path ?? path;
           return facePath ? faceKey(slug, facePath) : null;
@@ -605,8 +606,10 @@ export function createArtifactPane(host, deps) {
           if (face === "default") paneEl.removeAttribute("data-face");
           else paneEl.setAttribute("data-face", face);
         },
+        onPick: () => setToolsOpen(false, { restoreFocus: true }),
       })
     : null;
+  if (!faceStore) faceGroup.hidden = true;
 
   // ---------- the fore-edge index ----------
   //

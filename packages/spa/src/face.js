@@ -76,60 +76,75 @@ export function createFaceStore({ storage } = {}) {
 }
 
 /**
- * Mounts the face control: a native select, because a reading preference wants the platform's own
- * affordance rather than an invented one. `getKey` answers which artifact the control is for right
- * now; the control re-reads it whenever the pane tells it the artifact changed.
+ * Mounts the face chooser as a group of menu rows, the same home the workspace menu gives
+ * Appearance: a reading preference is a setting, not primary chrome. `getKey` answers which
+ * artifact the rows are for right now; the pane calls `refresh` whenever that changes, and
+ * `onPick` after a row is chosen so the menu can close.
  * @param {any} container
  * @param {ReturnType<typeof createFaceStore>} store
- * @param {{ getKey: () => string | null, onChange?: (face: string) => void }} options
+ * @param {{ getKey: () => string | null, onChange?: (face: string) => void, onPick?: () => void }} options
  */
-export function mountFaceControl(container, store, { getKey, onChange } = {}) {
-  const label = document.createElement("label");
-  label.className = "glosa-face";
-  const glyph = document.createElement("span");
-  glyph.className = "glosa-face-glyph";
-  glyph.setAttribute("aria-hidden", "true");
-  glyph.textContent = "Aa";
-  const select = document.createElement("select");
-  select.className = "glosa-face-select";
-  select.setAttribute("aria-label", "Manuscript face");
+export function mountFaceControl(container, store, { getKey, onChange, onPick } = {}) {
+  const heading = document.createElement("p");
+  heading.className = "glosa-pane-menu-heading";
+  heading.textContent = "Manuscript face";
+  container.setAttribute("role", "group");
+  container.setAttribute("aria-label", "Manuscript face");
+  container.append(heading);
+  /** @type {Map<string, HTMLButtonElement>} */
+  const rows = new Map();
   for (const face of FACES) {
-    const option = document.createElement("option");
-    option.value = face;
-    option.textContent = FACE_LABELS[face];
-    select.append(option);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "glosa-pane-menu-item glosa-face-option";
+    row.setAttribute("role", "menuitemradio");
+    row.setAttribute("aria-checked", "false");
+    row.dataset.face = face;
+    const sample = document.createElement("span");
+    sample.className = "glosa-face-sample";
+    sample.setAttribute("aria-hidden", "true");
+    sample.textContent = "Aa";
+    const label = document.createElement("span");
+    label.textContent = FACE_LABELS[face];
+    row.append(sample, label);
+    row.addEventListener("click", () => {
+      const key = getKey?.();
+      if (!key) return;
+      store.set(key, face);
+      onPick?.();
+    });
+    rows.set(face, row);
+    container.append(row);
   }
-  label.append(glyph, select);
-  container.append(label);
+
+  function paint(face) {
+    for (const [value, row] of rows) row.setAttribute("aria-checked", String(value === face));
+  }
 
   let unsubscribe = null;
   function bind() {
     unsubscribe?.();
     unsubscribe = null;
     const key = getKey?.();
-    select.disabled = !key;
+    for (const row of rows.values()) row.disabled = !key;
     if (!key) {
-      select.value = "default";
+      paint("default");
       onChange?.("default");
       return;
     }
     unsubscribe = store.subscribe(key, (face) => {
-      select.value = face;
+      paint(face);
       onChange?.(face);
     });
   }
-  select.addEventListener("change", () => {
-    const key = getKey?.();
-    if (key) store.set(key, select.value);
-  });
   bind();
 
   return {
-    /** Call when the pane's artifact changed so the control follows it. */
+    /** Call when the pane's artifact changed so the rows follow it. */
     refresh: bind,
     destroy() {
       unsubscribe?.();
-      label.remove();
+      container.replaceChildren();
     },
   };
 }

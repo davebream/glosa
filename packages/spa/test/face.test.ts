@@ -78,33 +78,50 @@ describe("mountFaceControl", () => {
   });
   afterEach(() => dom.teardown());
 
-  test("offers exactly the three faces, follows the pane's artifact, and reports changes", () => {
+  test("offers exactly the three faces as menu radio rows, follows the pane's artifact, and reports picks", () => {
     const store = createFaceStore({ storage: fakeStorage({ [faceKey("ws", "b.md")]: "mono" }) });
     let key: string | null = faceKey("ws", "a.md");
     const applied: string[] = [];
+    let picks = 0;
     const host = dom.document.createElement("div") as unknown as HTMLElement;
-    const control = mountFaceControl(host, store, { getKey: () => key, onChange: (face) => applied.push(face) });
-    const select = host.querySelector("select") as unknown as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual([...FACES]);
-    expect(select.getAttribute("aria-label")).toBe("Manuscript face");
-    expect(select.value).toBe("default");
+    const control = mountFaceControl(host, store, {
+      getKey: () => key,
+      onChange: (face) => applied.push(face),
+      onPick: () => {
+        picks += 1;
+      },
+    });
+    const rows = () => Array.from(host.querySelectorAll('[role="menuitemradio"]')) as unknown as HTMLButtonElement[];
+    expect(host.getAttribute("aria-label")).toBe("Manuscript face");
+    expect(rows().map((r) => r.dataset.face)).toEqual([...FACES]);
+    expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
 
-    select.value = "serif";
-    select.dispatchEvent(new dom.window.Event("change") as unknown as Event);
+    rows()[1]!.click();
     expect(store.get(key)).toBe("serif");
     expect(applied.at(-1)).toBe("serif");
+    expect(picks).toBe(1);
+    expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
 
     key = faceKey("ws", "b.md");
     control.refresh();
-    expect(select.value).toBe("mono");
+    expect(rows()[2]!.getAttribute("aria-checked")).toBe("true");
     expect(applied.at(-1)).toBe("mono");
 
     key = null;
     control.refresh();
-    expect(select.disabled).toBe(true);
+    expect(rows().every((r) => r.disabled)).toBe(true);
     expect(applied.at(-1)).toBe("default");
     control.destroy();
-    expect(host.querySelector("select")).toBeNull();
+    expect(host.querySelector('[role="menuitemradio"]')).toBeNull();
+  });
+
+  test("the face chooser is a pane-menu group, not a control in the artifact bar", () => {
+    const pane = readFileSync(new URL("../src/artifact-pane.js", import.meta.url), "utf8");
+    const bar =
+      pane.match(/const artifactBar = el\("div", \{ className: "glosa-artifact-bar" \}, \[([\s\S]*?)\]\);/)?.[1] ?? "";
+    expect(bar).not.toContain("face");
+    const menu = pane.match(/const toolsMenu = el\([\s\S]*?\[([\s\S]*?)\]\);/)?.[1] ?? "";
+    expect(menu).toContain("faceGroup");
   });
 });
 
