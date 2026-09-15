@@ -421,7 +421,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
    * override points for the failure-path checks below, which need to fail fast rather than wait
    * out the real defaults. */
   async function launchBrowser(
-    opts: { deadlineMs?: number; targetFetchTimeoutMs?: number; executablePath?: string } = {},
+    opts: { deadlineMs?: number; targetFetchTimeoutMs?: number; executablePath?: string; initialUrl?: string } = {},
   ): Promise<{ client: CdpClient; argv: string[] }> {
     const { deadlineMs = 10_000, targetFetchTimeoutMs = 5_000, executablePath = chromiumPath } = opts;
     const cdpPort = randomPort();
@@ -476,10 +476,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       client = await CdpClient.connect(target.webSocketDebuggerUrl);
       await client.send("Page.enable");
       await client.send("Runtime.enable");
-      // No pairing fragment: this test never drives the app shell's own routing, only the daemon's
-      // static `/app/` module route, so a bare same-origin navigation is enough to get the right
-      // origin for the dynamic imports and `fetch()` calls the in-page script makes.
-      await client.navigate(`http://127.0.0.1:${port}/`);
+      // Module tests need only the origin. Route tests supply a complete deep link so the real
+      // shell, bootstrap and viewer are composed instead of mounted independently in the test.
+      await client.navigate(opts.initialUrl ?? `http://127.0.0.1:${port}/`);
     } catch (error) {
       client?.close();
       const { out, err } = await terminateAndDrainChrome();
@@ -489,6 +488,153 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     }
     return { client, argv };
   }
+
+  function documentUrl(surface: string, artifact = "paragraph.md", mode = "read") {
+    return `http://127.0.0.1:${port}/#${new URLSearchParams({
+      t: TOKEN,
+      w: slug,
+      a: artifact,
+      surface,
+      mode,
+    })}`;
+  }
+
+  async function waitForRoute(client: CdpClient, surface: string, text: string) {
+    let state: any;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try {
+        state = await client.evaluate(`(() => {
+          const root = document.querySelector('.glosa-app');
+          const active = root?.querySelector('.glosa-pane[data-active="true"]');
+          return { surface: root?.getAttribute('data-surface'),
+            text: active?.querySelector('.glosa-content')?.textContent ?? '',
+            panes: root?.querySelectorAll('.glosa-pane').length,
+            navigatorHidden: root?.querySelector('.glosa-nav-toggle')?.hidden,
+            sidebarHidden: root?.querySelector('.glosa-sidebar')?.hidden,
+            mode: active?.getAttribute('data-mode'),
+            readLocked: root?.getAttribute('data-preview-lock') === 'true',
+            hash: location.hash, paired: sessionStorage.getItem('glosa_token') !== null };
+        })()`);
+        if (state.surface === surface && state.text.includes(text)) return state;
+      } catch {
+        // The previous execution context disappears during the guarded route reload.
+      }
+      await Bun.sleep(50);
+    }
+    throw new Error(`route did not render ${surface}: ${JSON.stringify(state)}`);
+  }
+
+  test(
+    "#145: a document fragment reaches one rendered pane without navigator",
+    async () => {
+      const { client } = await launchBrowser({ initialUrl: documentUrl("document") });
+      cdp = client;
+      const state = await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
+      expect(state.panes).toBe(1);
+      expect(state.navigatorHidden).toBe(true);
+      expect(state.sidebarHidden).toBe(true);
+      expect(state.paired).toBe(true);
+      expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "#145: a reused workspace tab follows a document fragment",
+    async () => {
+      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
+      cdp = client;
+      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+      const layoutBefore = await client.evaluate<string>("JSON.stringify(localStorage)");
+      const next = new URL(documentUrl("document", "blockquote.md")).hash;
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      const state = await waitForRoute(client, "document", "A callout");
+      expect(state.panes).toBe(1);
+      expect(state.navigatorHidden).toBe(true);
+      expect(state.sidebarHidden).toBe(true);
+      expect(state.paired).toBe(true);
+      expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
+      expect(await client.evaluate<string>("JSON.stringify(localStorage)")).toBe(layoutBefore);
+      const workspace = new URL(documentUrl("workspace")).hash;
+      await client.evaluate(`location.hash = ${JSON.stringify(workspace)}`);
+      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+      await client.evaluate("history.back()");
+      await waitForRoute(client, "document", "A callout");
+      await client.evaluate("history.forward()");
+      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      await waitForRoute(client, "document", "A callout");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "#145: changing a route preserves read-lock semantics",
+    async () => {
+      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
+      cdp = client;
+      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+      const next = `${new URL(documentUrl("document", "blockquote.md", "edit")).hash}&lock=read`;
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      const state = await waitForRoute(client, "document", "A callout");
+      expect(state.readLocked).toBe(true);
+      expect(state.mode).toBe("read");
+      expect(state.navigatorHidden).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "#145: cancelling a document link preserves the edited source and its current URL",
+    async () => {
+      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace", "paragraph.md", "edit") });
+      cdp = client;
+      // Read-mode content is hidden in Edit; wait for the actual editable source face instead.
+      await client.evaluate(`(async () => {
+      for (let i = 0; i < 120 && !document.querySelector('.glosa-face-source'); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      document.querySelector('.glosa-face-source').click();
+      for (let i = 0; i < 120 && (document.querySelector('.glosa-edit-area').hidden || document.querySelector('.glosa-edit-area').value !== ${JSON.stringify(PARAGRAPH_SOURCE)}); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      const source = document.querySelector('.glosa-edit-area');
+      if (source.value !== ${JSON.stringify(PARAGRAPH_SOURCE)}) throw new Error('source did not finish loading');
+      source.focus(); source.setSelectionRange(source.value.length, source.value.length);
+    })()`);
+      await client.send("Input.insertText", { text: "UNSAVED ROUTE DRAFT" });
+      const before: any = await client.evaluate(
+        `({ hash: location.hash, text: document.querySelector('.glosa-edit-area').value })`,
+      );
+      expect(before.text).toContain("UNSAVED ROUTE DRAFT");
+      const next = new URL(documentUrl("document", "blockquote.md")).hash;
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      const prompt: any = await client.evaluate(`(async () => {
+      for (let i = 0; i < 120 && !document.querySelector('dialog[open]'); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      const dialog = document.querySelector('dialog[open]');
+      if (!dialog) throw new Error('navigation did not ask before discarding the editor');
+      const title = dialog.querySelector('h2').textContent;
+      if (new URLSearchParams(location.hash.slice(1)).has('t')) throw new Error('pairing token visible during consent');
+      [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      return { title, hash: location.hash, text: document.querySelector('.glosa-edit-area').value,
+        surface: document.querySelector('.glosa-app').getAttribute('data-surface') };
+    })()`);
+      expect(prompt.title).toBe("Discard unsaved edits?");
+      expect(prompt.hash).toBe(before.hash);
+      expect(prompt.text).toBe(before.text);
+      expect(prompt.surface).toBe("workspace");
+      expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      await client.evaluate(`(async () => {
+      for (let i = 0; i < 120 && !document.querySelector('dialog[open]'); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      document.querySelector('dialog[open] .glosa-btn-danger').click();
+    })()`);
+      await waitForRoute(client, "document", "A callout");
+      expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   /** Mounts the REAL `mountRichEditor` (imported from the daemon's own `/app/` route) over markdown
    * fetched through the REAL `/w/:slug/artifacts/:path` route, and places the caret right after
