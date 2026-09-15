@@ -60,6 +60,24 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<
   if (!predicate()) throw new Error("timed out waiting for the artifact watcher");
 }
 
+/** Save, then keep re-saving identical bytes every 250 ms until `observed()` is true. A single
+ * write issued right after chokidar's `ready` can be lost on macOS: the FSEvents stream behind a
+ * directory watch comes up asynchronously after `ready` and does not replay earlier events. The
+ * "warns once and keeps watching" test below saw exactly that in CI, waiting the full 15 s for a
+ * first save that had already happened. A real editor saves many times, so the product sees the
+ * next one; this loop gives a single-save test the same property. See the twin helper in
+ * artifact-watcher.test.ts. */
+async function saveUntil(path: string, content: string, observed: () => boolean, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    writeFileSync(path, content);
+    const next = Math.min(Date.now() + 250, deadline);
+    while (!observed() && Date.now() < next) await Bun.sleep(20);
+    if (observed()) return;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for the watcher to see ${path}`);
+  }
+}
+
 /** A real chokidar factory plus a promise that settles once the watch is ARMED. A write made before
  * then can land while no watch exists yet and produce no event at all — under load that window is
  * wide enough to lose a test's first save, and a write that early is reconcile's offline catch-up's
@@ -422,10 +440,12 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
     registry.ensureWatched(root);
     await armed();
 
-    writeFileSync(join(root, "notes.md"), "one\ntwo\n");
-    await waitUntil(() => calls > 0, 5_000);
-    writeFileSync(join(root, "notes.md"), "one\ntwo\nthree\n");
-    await waitUntil(() => calls > 1, 5_000);
+    // The capture throws on every call, so the retrying save cannot create entries; the warning
+    // below is deduplicated by the watcher, so however many captures the saves provoke, "once" is
+    // still the claim under test.
+    await saveUntil(join(root, "notes.md"), "one\ntwo\n", () => calls > 0);
+    const seen = calls;
+    await saveUntil(join(root, "notes.md"), "one\ntwo\nthree\n", () => calls > seen);
 
     expect(registry.watchedWorkspaceCount()).toBe(1);
     expect(warnings.filter((message) => message.includes("external-edit capture failed"))).toHaveLength(1);
