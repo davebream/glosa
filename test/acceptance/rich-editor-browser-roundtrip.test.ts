@@ -614,8 +614,17 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       if (!dialog) throw new Error('navigation did not ask before discarding the editor');
       const title = dialog.querySelector('h2').textContent;
       if (new URLSearchParams(location.hash.slice(1)).has('t')) throw new Error('pairing token visible during consent');
+      const editor = document.querySelector('.glosa-edit-area');
       [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
-      await new Promise(resolve => setTimeout(resolve, 30));
+      // While consent is pending the address bar holds the requested link; the accepted URL is
+      // restored only once the refusal settles. Wait for that outcome, not for a fixed delay.
+      const settled = () => !document.querySelector('dialog[open]') && location.hash === ${JSON.stringify(before.hash)};
+      for (let i = 0; i < 120 && !settled(); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      if (!settled())
+        throw new Error('cancel did not settle: dialog open=' + Boolean(document.querySelector('dialog[open]')) + ', hash=' + location.hash);
+      if (document.querySelector('.glosa-edit-area') !== editor || !editor.isConnected)
+        throw new Error('cancel replaced the dirty editor instead of keeping it mounted');
       return { title, hash: location.hash, text: document.querySelector('.glosa-edit-area').value,
         surface: document.querySelector('.glosa-app').getAttribute('data-surface') };
     })()`);
