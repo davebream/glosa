@@ -98,6 +98,16 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(sessionRegistry.get("bad")).toBeNull();
   });
 
+  test("an explicit bind records the caller's source, and `manual` when it supplies none (A2 §F08, R2)", async () => {
+    const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+    const bind = (body: unknown) =>
+      fetchFn(req(`/w/${workspace.slug}/session-binding`, { method: "POST", body: JSON.stringify(body) }));
+    expect((await bind({ session_id: "bare" })).status).toBe(200);
+    expect(sessionRegistry.get("bare")?.source).toBe("manual");
+    expect((await bind({ session_id: "from-cli", source: "cli" })).status).toBe(200);
+    expect(sessionRegistry.get("from-cli")?.source).toBe("cli");
+  });
+
   for (const end of ["cancel", "shutdown", "revoke", "replace"] as const) {
     test(`open stream alone keeps session alive; ${end} cleans up its lease handle`, async () => {
       let ms = 0;

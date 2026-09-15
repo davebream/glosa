@@ -158,7 +158,8 @@ generic.**
   transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls or an open
   session transport connection every 20 seconds (never `kill(pid,0)`). Closing a connection stops
   refreshes; it does not end the lease immediately. `source` is `monitor`, `codex-app-server`,
-  `mcp`, or `cli` (explicit bind); there are no hook sources (#152).
+  `mcp`, or `cli` (explicit bind), or `manual` for an explicit bind that sends none; there are no
+  hook sources (#152).
   MCP registers on first tool use and re-registers after an unknown-session heartbeat. Explicit bind
   also registers unknown identities and refreshes stale ones; missing provider identity uses generic
   `mcp`, which a subsequent concrete provider may enrich. Omitted registration fields preserve

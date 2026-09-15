@@ -103,8 +103,10 @@ Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registr
 tool call, and an open session transport refresh it. Connection-held refreshes run
 every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then
 expires normally. Old timers cannot refresh a deregistered or replacement session. The generic
-connection handle is used by the monitor and Codex subscription transports. Registration sources
-are `monitor`, `codex-app-server`, `mcp`, and `cli` (explicit bind); there are no hook sources.
+connection handle is used by the monitor and Codex subscription transports. The registration
+sources glosa's own callers send are `monitor`, `codex-app-server`, `mcp`, and `cli` (explicit bind);
+an explicit bind that sends no `source`, such as `glosa open --bind`, is recorded as `manual`. There
+are no hook sources.
 
 The MCP shim additionally polls its own OS-level parent pid and exits when it changes (issue #140),
 alongside stdin EOF and SIGHUP. That poll decides only the shim's own lifetime — a process ending

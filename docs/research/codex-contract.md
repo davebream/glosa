@@ -57,9 +57,11 @@ UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt
 `*CommandInput` struct in `codex-rs/hooks/src/schema.rs`. Only these fields are on every one:
 `session_id`, `transcript_path`, `cwd`, `hook_event_name`. Beyond that it fragments:
 - `turn_id` is on every event except `SessionStart` and `SessionEnd` (`schema.rs:499-523`).
-- `model`/`permission_mode` are on every event except `SessionEnd`, which has neither
-  (`SessionEndCommandInput`, `schema.rs:515-523`: just `session_id`/`transcript_path`/`cwd`/
-  `hook_event_name`/`reason`).
+- `model` is on every event except `SessionEnd` (`SessionEndCommandInput`, `schema.rs:515-523`: just
+  `session_id`/`transcript_path`/`cwd`/`hook_event_name`/`reason`).
+- `permission_mode` is on every event except `SessionEnd`, `PreCompact` and `PostCompact`. The two
+  compact events carry `trigger` instead (`PreCompactCommandInput`/`PostCompactCommandInput`,
+  `schema.rs:347-382`).
 - `source` (`"startup"|"resume"|"clear"|"compact"`) is **`SessionStart`-only**
   (`schema.rs:499-510`). `SubagentStart` has no `source` field despite otherwise looking like a
   turn-scoped event (`SubagentStartCommandInput`, `schema.rs:549-562`).
@@ -74,12 +76,16 @@ UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt
 `Interrupt` (`codex-rs/hooks/src/events/interrupt.rs`; input `InterruptCommandInput`,
 `schema.rs:626-636`) fires when a running turn is interrupted; its stdin is
 `session_id`/`turn_id`/`transcript_path`/`cwd`/`hook_event_name`/`model`/`permission_mode` — the
-same shape as `Stop` minus the stop-specific fields, not a distinct envelope of its own. Discovery
-order (highest to lowest precedence, later merges rather than replaces) is unchanged from the
-prior pass: `~/.codex/hooks.json` → `~/.codex/config.toml [hooks]` → `<repo>/.codex/hooks.json`
-(requires the project be trusted) → `<repo>/.codex/config.toml [hooks]` → plugin-bundled
-`hooks/hooks.json` → org-enforced `requirements.toml` managed hooks
-(`codex-rs/hooks/src/engine/discovery.rs`).
+same shape as `Stop` minus the stop-specific fields, not a distinct envelope of its own.
+
+Hook discovery (`codex-rs/hooks/src/engine/discovery.rs:118-198`) appends handlers from every source
+rather than letting one replace another, in this load order: managed requirement handlers first
+(`append_managed_requirement_handlers`); then each configuration layer from lowest to highest
+(`layers_low_to_high`), taking that layer's `hooks.json` folder and its `config.toml [hooks]` table
+(with a warning when a layer uses both); then plugin-bundled hook sources
+(`append_plugin_hook_sources`). An `allow_managed_hooks_only` requirement limits discovery to
+managed sources. This is load and display order. The snapshot's discovery code does not by itself
+establish which handler wins when several apply to one event, so this note makes no precedence claim.
 
 **Hook output fields.** Most hooks' stdout JSON shares a universal envelope
 (`codex-rs/hooks/src/engine/output_parser.rs`'s `UniversalOutput`, sourced from
