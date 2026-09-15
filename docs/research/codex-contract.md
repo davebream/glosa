@@ -212,11 +212,8 @@ subcommand tree (`AppServerDaemonSubcommand`, `codex-rs/cli/src/main.rs:786-816`
 user-managed app-server process — `version` ("print local CLI and running app-server versions as
 JSON", `main.rs:815-816`) was missing from the 2026-07-21/09-06 framing and is included here. This
 is an explicit opt-in a user runs, not a default — it doesn't change glosa's own rule that `push`
-is a live-connection fact per session, never inferred from installation (R4) — but it does mean the
-"separately run `codex app-server --listen ...`" phrasing in A2 §F07 now has a documented
-first-class CLI form (`codex app-server daemon bootstrap` / `start`) alongside the raw flag
-invocation; worth an A2 wording pass the next time that appendix is touched, out of scope for this
-docs pass.
+is a live-connection fact per session, never inferred from installation (R4). A2 §F07 names
+`codex app-server daemon bootstrap`/`start` alongside the raw `--listen` invocation for this reason.
 
 ## 5. Transcript / rollout file (Codex-source claim, then glosa's actual code path) **CONFIRMED (source)**
 
@@ -323,10 +320,6 @@ field), else falls back to `hook_event_name`, matching
 - **Rollout JSONL event schema** (§5) — path and naming confirmed; line-level event shape is not;
   compressed (`.jsonl.zst`) cold rollouts are a new wrinkle for that future mapper, not for the
   current `AgentProvider`.
-- **`codex app-server daemon` subcommand tree** (§4) — new in this snapshot; doesn't change glosa's
-  push-is-a-live-fact rule, but A2 §F07's install-surface wording could eventually cite the CLI
-  subcommand instead of (or alongside) the raw `--listen` invocation. Not acted on here — A2 is a
-  normative appendix and this note doesn't edit it.
 - **Which Codex tool reads `CODEX_THREAD_ID`** (§6) — the environment-injection mechanism is
   confirmed present in this snapshot; the specific "the shell tool sees it" attribution still rests
   on the 2026-09-06 spike's live run, not on a source path this sparse checkout includes. Re-verify
