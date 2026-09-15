@@ -24,7 +24,6 @@ import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import {
   collectRenderedHeadings,
-  collectSourceHeadings,
   createOutlineController,
   currentHeadingIndex,
   measureTextareaOffsets,
@@ -343,6 +342,10 @@ export function createArtifactPane(host, deps) {
   let approvalResult = null;
   let toolsStatusArtifactPath = null;
   let destroyed = false;
+  /** @type {typeof import("./markdown-parser.js").collectSourceHeadings | null} */
+  let sourceHeadingCollector = null;
+  /** @type {Promise<void> | null} */
+  let sourceHeadingLoad = null;
   // Pane inline size, kept by the ResizeObserver below. `layoutMargin` and the composer's
   // scroll-into-view both need it, and a pane's width is not the window's.
   let paneWidth = 0;
@@ -659,11 +662,25 @@ export function createArtifactPane(host, deps) {
     }
 
     if (surface.kind === "source") {
+      if (!sourceHeadingCollector) {
+        outlineTops = [];
+        outline.setEntries([]);
+        sourceHeadingLoad ??= import("./markdown-parser.js")
+          .then((module) => {
+            sourceHeadingCollector = module.collectSourceHeadings;
+            // Read the current face and text after loading: the user may have switched meanwhile.
+            if (!destroyed) refreshOutline();
+          })
+          .catch(() => {
+            sourceHeadingLoad = null;
+          });
+        return;
+      }
       const text = editArea.value ?? "";
       const key = `${currentArtifact.source_path}:${editArea.clientWidth}:${text.length}:${text}`;
       if (key === outlineSourceKey) return;
       outlineSourceKey = key;
-      const headings = collectSourceHeadings(text);
+      const headings = sourceHeadingCollector(text);
       const depths = outlineDepths(headings);
       const tops = measureTextareaOffsets(
         editArea,
@@ -2462,6 +2479,7 @@ export function createArtifactPane(host, deps) {
     sourceFace = true;
     renderContent();
     editArea.value = carried; // after renderContent, so the artifact snapshot doesn't clobber it
+    refreshOutline(); // programmatic text assignment emits no input event
     // The report rides along: this text is still the rich face's splice until the writer edits it.
     pendingReport = reportToCarry(save, carried);
   });

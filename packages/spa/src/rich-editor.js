@@ -9,7 +9,7 @@
 // edited blocks the file is byte-identical. That matters beyond tidiness: every region this
 // rewrites reaches the agent as a `human_edit`, and a save that invents edits makes the human's
 // own change impossible to pick out. Where re-serializing an EDITED block would still cost bytes
-// the writer did not touch — CommonMark has no node for callout markers, `%%` comments, or raw
+// the writer did not touch — CommonMark has no node for callout markers or raw
 // HTML — `getSave()` reports that collateral instead of writing it, and artifact-pane.js asks
 // first. A single newline inside a paragraph is NOT one of those cases: CommonMark has no node
 // for it either, but this file never needed one — a bare `\n` in a text node carries it, all the
@@ -43,6 +43,13 @@ import {
   liftListItem,
   sinkListItem,
 } from "./vendor/prosemirror.js";
+import {
+  NON_MANUSCRIPT_BLOCK_TOKEN,
+  NON_MANUSCRIPT_INLINE_TOKEN,
+  RAW_KIND,
+  tokenLayout,
+} from "./markdown-non-manuscript.js";
+import { commonMarkTokenizer } from "./markdown-parser.js";
 
 /** The default serializer bullets with `*`; nearly every hand-authored file here uses `-`.
  * Overriding just bullet_list keeps saved diffs from churning list markers document-wide. */
@@ -60,7 +67,11 @@ const mdSerializer = new MarkdownSerializer(
       state.closeBlock(node);
     },
   },
-  defaultMarkdownSerializer.marks,
+  {
+    ...defaultMarkdownSerializer.marks,
+    // The mark carries its complete source spelling, including empty-note delimiters.
+    glosa_comment: { open: "", close: "", escape: false },
+  },
 );
 
 /**
@@ -106,51 +117,23 @@ const mdSerializer = new MarkdownSerializer(
  *  rendering rather than preserve it; `----` is a thematic break. Widening the fence is one edit to
  *  the constant below plus one control; do it when a document needs it, not before. */
 const RAW_NODE = "glosa_raw";
-const HEADER_FENCE = "---";
-
-/** `state.tokens.length !== 0` means "before any block content" — root-only AND admitting leading
- *  blank lines, which emit no token. Deliberately NOT `startLine !== 0`: under that, a file opening
- *  with a stray blank line keeps taking the whole-file `reparse` path, which is the damage this rule
- *  exists to remove. */
-function metadataHeaderRule(state, startLine, endLine, silent) {
-  if (state.tokens.length !== 0) return false;
-  if (state.sCount[startLine] - state.blkIndent !== 0) return false;
-  const line = (n) => state.src.slice(state.bMarks[n] + state.tShift[n], state.eMarks[n]);
-  if (line(startLine).trimEnd() !== HEADER_FENCE) return false;
-  // The non-blank guard. A blank line under the fence means a thematic break, not a header.
-  if (startLine + 1 >= endLine || state.isEmpty(startLine + 1)) return false;
-
-  let close = -1;
-  for (let n = startLine + 1; n < endLine; n += 1) {
-    if (state.sCount[n] - state.blkIndent !== 0) continue;
-    if (line(n).trimEnd() === HEADER_FENCE) {
-      close = n;
-      break;
-    }
-  }
-  // An unclosed `---` is a thematic break, not a header.
-  if (close === -1) return false;
-  if (silent) return true;
-
-  const token = state.push(RAW_NODE, "", 0);
-  token.block = true;
-  token.map = [startLine, close + 1];
-  // `keepLastLF: false`. THE CHOICE IS INERT AND THAT IS WORTH WRITING DOWN: both variants produce
-  // byte-identical node text over every header shape measured, but only because `noCloseToken`
-  // routes through prosemirror-markdown's `withoutTrailingNewline`, which strips exactly one `\n`.
-  // That is the vendored bundle's property, not this rule's. `false` is the variant that stays
-  // correct if the bundle ever stops stripping, because `blockLayout` already excludes a block's
-  // trailing line ending from its span and the node's text must match that span.
-  token.content = state.getLines(startLine, close + 1, 0, false);
-  token.markup = HEADER_FENCE;
-  state.line = close + 1;
-  return true;
-}
+/** The inline mark for an unescaped `%% ... %%` pair sharing a line with visible prose (repair
+ *  of the first draft's unauthorized inline exclusion — see markdown-non-manuscript.js's own
+ *  header comment for the full property). A MARK, not a second opaque node: the surrounding prose
+ *  must stay ordinary, editable rich content, and only the enclosed span is set apart. */
+const COMMENT_MARK = "glosa_comment";
 
 // From here on `defaultMarkdownParser` is only the SOURCE of three things — the tokenizer instance,
 // the token map, and the parser class. It no longer parses anything: `parseMarkdown` resolves through
 // `editorParser` below, and a second parse path in this file would silently reopen #173.
-defaultMarkdownParser.tokenizer.block.ruler.before("hr", RAW_NODE, metadataHeaderRule, { alt: [] });
+//
+// THE ONE DECLARATIVE RECOGNISER, SHARED: `installNonManuscriptRules` (markdown-non-manuscript.js)
+// registers the SAME block/inline rules onto this vendored tokenizer that artifact-render.ts
+// registers onto the daemon's own `markdown-it` instance — one module, two `MarkdownIt`-shaped
+// targets, not two independent reimplementations that can drift (see that module's header comment
+// for why "separate runtimes" was never actually a barrier to sharing plain JS). `hideInRenderer:
+// false` because this tokenizer is never asked to `.render()` — `parseMarkdown` below turns its
+// tokens into nodes/marks directly, so there is no HTML renderer step to hide anything from.
 
 /** #183's lever. `paragraph`'s inherited spec carries no whitespace policy, and the vendored
  *  bundle's OWN change-reading path (`EditorView`'s `readDOMChange`) already asks for
@@ -219,7 +202,13 @@ const PARAGRAPH_SPEC = {
  *
  *  `isolating: true` is not decoration — it is what stops a `Backspace` at the head of the following
  *  paragraph lifting prose up into the YAML. `marks: ""` and `code: true` say the bytes are literal:
- *  nothing inside a metadata header is emphasis or a link. */
+ *  nothing inside a metadata header or a `%%` comment is emphasis or a link.
+ *
+ *  `attrs.kind` is #175's addition, defaulted to `RAW_KIND.METADATA` so every EXISTING caller that
+ *  builds a bare `glosa_raw` node (the opaque-node fixtures in rich-editor.test.ts predate #175)
+ *  keeps building the same node it always did. It carries no dialect knowledge either — the two
+ *  values name what the rich face is telling the writer ("this is the document's own metadata" /
+ *  "this is a note you left yourself"), not a syntax family. */
 export const editorSchema = new Schema({
   nodes: markdownSchema.spec.nodes.update("paragraph", PARAGRAPH_SPEC).addToEnd(RAW_NODE, {
     content: "text*",
@@ -228,18 +217,54 @@ export const editorSchema = new Schema({
     code: true,
     defining: true,
     isolating: true,
-    toDOM: () => ["pre", { class: "glosa-raw" }, ["code", 0]],
-    parseDOM: [{ tag: "pre.glosa-raw", preserveWhitespace: "full" }],
+    attrs: { kind: { default: RAW_KIND.METADATA } },
+    // A LABEL, WHERE THERE WAS DELIBERATELY NONE BEFORE (app.css's own comment on `.glosa-raw`
+    // explains why: naming a syntax family — "YAML front matter" — would put back the enumeration
+    // the rule exists to avoid). Two flavors now share this node, and only #175 changes what Read/
+    // Review does with them (hides both) — so the rich face, which already showed the metadata
+    // header verbatim, has to tell the writer WHICH non-manuscript region they are looking at
+    // before they can trust that Read/Review will not show it. `data-glosa-kind` names the
+    // FUNCTION ("metadata" / "comment"), never a dialect; app.css reads it for the `::before` text.
+    toDOM: (node) => ["pre", { class: "glosa-raw", "data-glosa-kind": node.attrs.kind }, ["code", 0]],
+    parseDOM: [
+      {
+        tag: "pre.glosa-raw",
+        preserveWhitespace: "full",
+        getAttrs: (dom) => ({ kind: dom.getAttribute("data-glosa-kind") || RAW_KIND.METADATA }),
+      },
+    ],
   }),
-  marks: markdownSchema.spec.marks,
+  // Notes remain editable inline text, with literal source spelling and a visible label.
+  marks: markdownSchema.spec.marks.addToEnd(COMMENT_MARK, {
+    inclusive: false,
+    toDOM: () => [
+      "span",
+      {
+        class: "glosa-comment-inline",
+        "data-glosa-kind": RAW_KIND.COMMENT,
+        title: "Private note — hidden from Read/Review",
+      },
+      0,
+    ],
+    parseDOM: [{ tag: "span.glosa-comment-inline" }],
+  }),
 });
 
 /** `MarkdownParser` is not on the vendored export list; its constructor is. Same tokenizer instance
  *  as before — that is what keeps `blockLayout` and `parseMarkdown` reading one token stream, so a
  *  block rule can never exist on one without a token-map entry on the other. */
-const editorParser = new defaultMarkdownParser.constructor(editorSchema, defaultMarkdownParser.tokenizer, {
+const editorParser = new defaultMarkdownParser.constructor(editorSchema, commonMarkTokenizer, {
   ...defaultMarkdownParser.tokens,
-  [RAW_NODE]: { block: RAW_NODE, noCloseToken: true },
+  // `getAttrs` reads the ONE thing the shared module's two BLOCK rules disagree about
+  // (`token.meta.kind`) so both land on the node's `attrs.kind` — falling back to `METADATA` for
+  // parity with the schema's own default, though every token either rule pushes sets `meta` itself.
+  [NON_MANUSCRIPT_BLOCK_TOKEN]: {
+    block: RAW_NODE,
+    noCloseToken: true,
+    getAttrs: (tok) => ({ kind: tok.meta?.kind ?? RAW_KIND.METADATA }),
+  },
+  // Including delimiters leaves an empty note representable as marked text.
+  [NON_MANUSCRIPT_INLINE_TOKEN]: { mark: COMMENT_MARK, noCloseToken: true },
 });
 
 /** #173's soft break, moved onto the parser `parseMarkdown` actually resolves through.
@@ -251,6 +276,10 @@ const editorParser = new defaultMarkdownParser.constructor(editorSchema, default
 editorParser.tokenHandlers.softbreak = (state) => state.addText("\n");
 
 /** DOM-free halves of the editor, exported for tests: what the rich face parses and persists. */
+export function editorMarkdownLayout(source) {
+  return tokenLayout(editorParser.tokenizer.parse(source, {}));
+}
+
 export function parseMarkdown(markdown) {
   return editorParser.parse(markdown ?? "");
 }
@@ -453,7 +482,26 @@ const MAX_RESTORE_CELLS = 24_000_000;
  * bytes the file never had, or dropping bytes it did. Hand-written rather than imported, on the same
  * grounds as `pairUnchangedBlocks` above: this module imports the vendored bundle and nothing else.
  */
-function diffRuns(a, b) {
+/** The two extreme optimal alignments; matched index pairs distinguish source identity from
+ * harmless differences in the order of unmatched edit operations. */
+function matchingPairs(common, equal, preferA) {
+  const pairs = [];
+  let i = 0;
+  let j = 0;
+  while (common[i][j] > 0) {
+    if (preferA && common[i + 1][j] === common[i][j]) i++;
+    else if (!preferA && common[i][j + 1] === common[i][j]) j++;
+    else if (equal(i, j)) {
+      pairs.push(i, j);
+      i++;
+      j++;
+    } else if (preferA) j++;
+    else i++;
+  }
+  return pairs;
+}
+
+function diffRuns(a, b, requireUnique = false) {
   const n = a.length;
   const m = b.length;
   const common = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
@@ -461,6 +509,13 @@ function diffRuns(a, b) {
     for (let j = m - 1; j >= 0; j -= 1) {
       common[i][j] = a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
     }
+  }
+  if (requireUnique) {
+    // Compare the two extreme optimal match alignments. Skipping unmatched tokens in a different
+    // order is harmless; matching a retained token to a different source position is ambiguous.
+    const left = matchingPairs(common, (i, j) => a[i] === b[j], true);
+    const right = matchingPairs(common, (i, j) => a[i] === b[j], false);
+    if (left.some((position, index) => position !== right[index])) return null;
   }
   const runs = [];
   let i = 0;
@@ -499,9 +554,9 @@ function diffRuns(a, b) {
 /** `diffRuns` behind the budget: `null` when the matrix is too large to fill. Two callers read
  * that `null` differently and both are right — the restoration returns the serializer's own bytes,
  * and the collateral guard reports, because a write it cannot prove honest is one to ask about. */
-function diffRunsWithin(a, b) {
+function diffRunsWithin(a, b, requireUnique = false) {
   if ((a.length + 1) * (b.length + 1) > MAX_RESTORE_CELLS) return null;
-  return diffRuns(a, b);
+  return diffRuns(a, b, requireUnique);
 }
 
 /** `a` with the runs `restored[k]` marks taken from `b` instead. Outside the runs the two token
@@ -626,6 +681,74 @@ function restoreSourceSpelling(output, source, verify) {
   return best;
 }
 
+/** Copy an edit onto the original bytes instead of rebuilding a non-manuscript run.
+ * The two serialized trees identify the edit; their old spelling is aligned with the source.
+ * Only edits disjoint from serializer/source differences can be projected. Unknown node/mark
+ * types, ambiguous overlaps, oversized alignments and failed reparses retain the guarded fallback.
+ * Neither escape relaxation nor source-spelling restoration runs over an opaque region here.
+ */
+function projectNonManuscriptEdits(original, edited, source, referenceSuffix) {
+  let hasRegion = false;
+  const known = (nodes) =>
+    nodes.every((node) => {
+      const accepts = (child) => {
+        const raw = child.type === editorSchema.nodes[RAW_NODE] && Object.values(RAW_KIND).includes(child.attrs.kind);
+        if (raw) hasRegion = true;
+        if (!raw && !MODELLED_NODE_TYPES.includes(child.type.name)) return false;
+        return child.marks.every((mark) => {
+          if (mark.type === editorSchema.marks[COMMENT_MARK]) {
+            hasRegion = true;
+            return true;
+          }
+          return MODELLED_MARK_TYPES.includes(mark.type.name);
+        });
+      };
+      let accepted = accepts(node);
+      node.descendants((child) => {
+        if (accepted) accepted = accepts(child);
+        return accepted;
+      });
+      return accepted;
+    });
+  if (!known(original) || !known(edited) || !hasRegion) return null;
+  const before = tokenize(serializeNodes(original));
+  const after = tokenize(serializeNodes(edited));
+  const bytes = tokenize(source);
+  const edits = diffRunsWithin(before, after, true);
+  const spelling = diffRunsWithin(before, bytes, true);
+  if (!edits || !spelling) return null;
+  const boundary = (position, right) => {
+    let shift = 0;
+    for (const run of spelling) {
+      if (position < run.a0) break;
+      if (position === run.a0) return run.a0 === run.a1 && right ? run.b1 : run.b0;
+      if (position < run.a1) return null;
+      if (position === run.a1) return run.b1;
+      shift = run.b1 - run.a1;
+    }
+    return position + shift;
+  };
+  const patches = [];
+  for (const edit of edits) {
+    if (
+      spelling.some(
+        (run) =>
+          (edit.a0 < run.a1 && run.a0 < edit.a1) ||
+          (run.a0 === run.a1 && edit.a0 < run.a0 && run.a0 < edit.a1) ||
+          (edit.a0 === edit.a1 && run.a0 < edit.a0 && edit.a0 < run.a1),
+      )
+    )
+      return null;
+    const start = boundary(edit.a0, true);
+    const end = edit.a0 === edit.a1 ? start : boundary(edit.a1, false);
+    if (start === null || end === null || start > end) return null;
+    patches.push({ start, end, text: after.slice(edit.b0, edit.b1) });
+  }
+  for (const patch of patches.reverse()) bytes.splice(patch.start, patch.end - patch.start, ...patch.text);
+  const candidate = bytes.join("");
+  return verifiesAs(candidate, referenceSuffix, edited) ? candidate : null;
+}
+
 /**
  * `serializeNodes()` with both mechanisms on top: the escape relaxation, then — when the caller can
  * say which bytes this run is replacing — the source-spelling restoration. Verified ABSOLUTELY
@@ -653,7 +776,11 @@ export function serializeNodesFaithfully(nodes, referenceSuffix, source) {
   // not be left implicit in it: T5's parser WILL produce its opaque node, at which point the
   // predicate starts passing and this line is the only thing left standing between a raw block's
   // bytes and a rewrite of them.
-  if (!runIsModelled(nodes)) return raw;
+  if (!runIsModelled(nodes)) {
+    // Opaque regions bypass spelling/escape normalization. Restore a uniform source CRLF style
+    // that markdown-it normalized while parsing; this changes no content or delimiter spelling.
+    return source?.includes("\r\n") && !/(?:^|[^\r])\n/.test(source) ? raw.replace(/\n/g, "\r\n") : raw;
+  }
   const verify = (candidate) => verifiesAs(candidate, referenceSuffix, nodes);
   const written = restoreSourceSpelling(relaxEscapes(raw, verify), source, verify);
   // The final gate. Both mechanisms already return their input on any failure, so this is belt and
@@ -727,7 +854,11 @@ export function runsOverlap(a, b) {
  * condition moved.
  */
 export function collateralFor(originalNodes, referenceSuffix, written, source) {
-  const faithful = serializeNodesFaithfully(originalNodes, referenceSuffix);
+  const faithful = serializeNodesFaithfully(
+    originalNodes,
+    referenceSuffix,
+    runIsModelled(originalNodes) ? undefined : source,
+  );
   const entry = [{ original: source, faithful, written }];
   const sourceTokens = tokenize(source);
   const respelt = diffRunsWithin(tokenize(faithful), sourceTokens);
@@ -885,40 +1016,126 @@ export function blockLayout(source) {
   return { blocks, referenceSuffix: referenceDefinitions(env.references) };
 }
 
-/**
- * Pairs the blocks the writer did not touch, by tree equality.
- *
- * `Node.eq` compares trees, not spelling, so `*em*` and `_em_` are one node to this. The backtrack
- * therefore prefers matches on the diagonal: in the ordinary case — one edited block, the rest in
- * place — that keeps every kept block paired with the block it actually came from, instead of
- * pairing two look-alike blocks crosswise and swapping their source spellings.
- */
+const MAX_IDENTITY_WORK = 1_000_000;
+
+/** Prove one edited-index → original-index assignment across every optimal retained alignment
+ * and maximum one-to-one moved completion. Distinct-node moves have one global assignment even
+ * when several LCS paths describe them. Duplicate classes need exhaustive proof, within a fixed
+ * state/signature work budget; an unfinished proof is never permission to copy source bytes. */
 function pairUnchangedBlocks(original, edited) {
   const n = original.length;
   const m = edited.length;
+  if ((n + 1) * (m + 1) > MAX_RESTORE_CELLS) return null;
   const common = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      common[i][j] = original[i].eq(edited[j])
-        ? common[i + 1][j + 1] + 1
-        : Math.max(common[i + 1][j], common[i][j + 1]);
+  const matches = Array.from({ length: n }, () => new Uint8Array(m));
+  const rowCounts = new Int32Array(n);
+  const columnCounts = new Int32Array(m);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      const equal = original[i].eq(edited[j]);
+      if (equal) {
+        matches[i][j] = 1;
+        rowCounts[i]++;
+        columnCounts[j]++;
+      }
+      common[i][j] = equal ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
     }
   }
+  const retained = matchingPairs(common, (i, j) => matches[i][j] === 1, true);
   const pairs = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (original[i].eq(edited[j])) {
-      pairs.push([i, j]);
-      i += 1;
-      j += 1;
-    } else if (common[i + 1][j] > common[i][j + 1]) i += 1;
-    else if (common[i + 1][j] < common[i][j + 1]) j += 1;
-    else if (i > j)
-      j += 1; // a tie: step whichever side is behind, to stay on the diagonal
-    else i += 1;
+  for (let k = 0; k < retained.length; k += 2) pairs.push([retained[k], retained[k + 1]]);
+  const forced = Array(m).fill(-1);
+  let duplicates = false;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < m; j++) {
+      if (!matches[i][j]) continue;
+      if (rowCounts[i] === 1 && columnCounts[j] === 1) forced[j] = i;
+      else duplicates = true;
+    }
   }
-  return pairs;
+  if (!duplicates) return { pairs, sources: forced };
+
+  const unknown = Symbol("source-identity");
+  let work = 0;
+  const spend = (amount = 1) => {
+    work += amount;
+    if (work > MAX_IDENTITY_WORK) throw unknown;
+  };
+  let unique = null;
+  const completed = new Set();
+  const complete = (bindings) => {
+    if (completed.has(bindings)) return;
+    completed.add(bindings);
+    spend(n + m + bindings.length);
+    const sources = forced.slice();
+    for (const pair of bindings.split(";")) {
+      if (!pair) continue;
+      const [i, j] = pair.split(":").map(Number);
+      sources[j] = i;
+    }
+    const available = new Set(original.map((_, i) => i));
+    for (const i of sources)
+      if (i !== -1) {
+        if (!available.delete(i)) throw unknown;
+      }
+    const pending = edited.map((_, j) => j).filter((j) => sources[j] === -1 && columnCounts[j] > 0);
+    const visit = (position) => {
+      spend(m + 1);
+      let candidates = [];
+      // New nodes with no remaining equal original have no source identity to choose.
+      while (position < pending.length) {
+        spend(available.size + 1);
+        candidates = [...available].filter((i) => matches[i][pending[position]]);
+        if (candidates.length) break;
+        position++;
+      }
+      if (position === pending.length) {
+        if (unique === null) unique = sources.slice();
+        else if (unique.some((source, j) => source !== sources[j])) throw unknown;
+        return;
+      }
+      const j = pending[position];
+      spend(pending.length - position);
+      const destinations = pending.slice(position).filter((k) => matches[candidates[0]][k]).length;
+      for (const i of candidates) {
+        available.delete(i);
+        sources[j] = i;
+        visit(position + 1);
+        sources[j] = -1;
+        available.add(i);
+      }
+      // A surplus destination can be the newly inserted copy. Enumerate that choice too,
+      // while still requiring maximum moved cardinality within this semantic class.
+      if (destinations > candidates.length) visit(position + 1);
+    };
+    visit(0);
+  };
+  try {
+    const seen = new Set();
+    const stack = [{ i: 0, j: 0, bindings: "" }];
+    while (stack.length) {
+      const { i, j, bindings } = stack.pop();
+      const key = `${i},${j}|${bindings}`;
+      spend(key.length + 1);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (common[i][j] === 0) {
+        complete(bindings);
+        continue;
+      }
+      if (common[i + 1][j] === common[i][j]) stack.push({ i: i + 1, j, bindings });
+      if (common[i][j + 1] === common[i][j]) stack.push({ i, j: j + 1, bindings });
+      if (matches[i][j] && common[i + 1][j + 1] + 1 === common[i][j]) {
+        const next = rowCounts[i] === 1 && columnCounts[j] === 1 ? bindings : `${bindings}${i}:${j};`;
+        stack.push({ i: i + 1, j: j + 1, bindings: next });
+      }
+    }
+  } catch (error) {
+    if (error !== unknown) throw error;
+    return null;
+  }
+  if (unique === null || pairs.some(([i, j]) => unique[j] !== i)) return null;
+  return { pairs, sources: unique };
 }
 
 /** A save that rewrote the whole file: what the rich face did before block splicing existed. The
@@ -950,6 +1167,10 @@ export function createSplicer(source, originalDoc) {
   const separator = (index) => source.slice(blocks[index - 1].end, blocks[index].start);
 
   return function splice(editedDoc) {
+    // No edit needs no source offsets, but the supplied baseline must still describe these bytes.
+    if (originalDoc.eq(editedDoc) && originalDoc.eq(parseMarkdown(source))) {
+      return { markdown: source, collateral: [], degraded: false };
+    }
     if (!scannable) return wholeDocument(editedDoc, "line-endings");
     // A blank source has no block tokens at all, yet still parses to one empty paragraph, so the
     // counts disagree legitimately. Keep the writer's whitespace; append whatever they typed.
@@ -971,12 +1192,11 @@ export function createSplicer(source, originalDoc) {
     if (blocks.length !== original.length) return wholeDocument(editedDoc, "block-mismatch");
 
     const edited = editedDoc.content.content;
-    const pairs = pairUnchangedBlocks(original, edited);
-    // Originals nothing matched. A block that was moved rather than rewritten reappears in the
-    // edited document as an insertion; finding it here lets its ORIGINAL bytes move with it,
-    // instead of a re-serialization that would quietly restyle a block nobody edited.
-    const moved = new Set(original.map((_, index) => index));
-    for (const [index] of pairs) moved.delete(index);
+    const plan = pairUnchangedBlocks(original, edited);
+    if (plan === null) return wholeDocument(editedDoc, "source-identity");
+    const { pairs, sources } = plan;
+    const assigned = new Set(sources.filter((index) => index !== -1));
+    const consumed = new Set();
 
     const collateral = [];
     const pieces = [];
@@ -986,6 +1206,8 @@ export function createSplicer(source, originalDoc) {
     while (o < original.length || e < edited.length) {
       const pair = pairs[p];
       if (pair && pair[0] === o && pair[1] === e) {
+        if (sources[e] !== o || consumed.has(o)) return wholeDocument(editedDoc, "source-identity");
+        consumed.add(o);
         pieces.push({ text: body(o), before: o > 0 ? separator(o) : "\n\n" });
         o += 1;
         e += 1;
@@ -996,12 +1218,25 @@ export function createSplicer(source, originalDoc) {
       const nextE = pair ? pair[1] : edited.length;
       const inserted = edited.slice(e, nextE);
       if (inserted.length && o < nextO) {
+        // A moved source must not also feed a replacement's spelling restoration, nor may a
+        // proven moved destination be serialized as newly written text inside a mixed run.
+        if (sources.slice(e, nextE).some((index) => index !== -1)) return wholeDocument(editedDoc, "source-identity");
+        for (let index = o; index < nextO; index++) {
+          if (assigned.has(index) || consumed.has(index)) return wholeDocument(editedDoc, "source-identity");
+          consumed.add(index);
+        }
         const replaced = source.slice(blocks[o].start, blocks[nextO - 1].end);
-        const written = serializeNodesFaithfully(inserted, referenceSuffix, replaced);
+        const projected = projectNonManuscriptEdits(original.slice(o, nextO), inserted, replaced, referenceSuffix);
+        const written = projected ?? serializeNodesFaithfully(inserted, referenceSuffix, replaced);
         // An unmodelled run never reached the relaxation or the restoration, so `collateralFor`'s
         // diff cannot speak for it: where the bytes it replaces were themselves faithful, `D` is
         // empty and the join is silent no matter what the write carries.
-        const judged = collateralFor(original.slice(o, nextO), referenceSuffix, written, replaced);
+        // Projection copies all bytes outside its verified edit spans; comparing that result with
+        // a normalized serializer baseline would falsely blame an edit beside an original entity.
+        // Re-serialized fallbacks still need the existing collateral comparison. Both paths keep
+        // the independent escaping check below, including escapes introduced by newly typed text.
+        const judged =
+          projected === null ? collateralFor(original.slice(o, nextO), referenceSuffix, written, replaced) : [];
         // `collateralFor` stays authoritative where it can speak. It is silent when `D` is empty —
         // the bytes being replaced were themselves faithful — and that is the gap #186 reported.
         collateral.push(...(judged.length ? judged : unrelaxedEscaping(inserted, referenceSuffix, written)));
@@ -1009,15 +1244,18 @@ export function createSplicer(source, originalDoc) {
       } else if (inserted.length) {
         // A pure insertion owns no original bytes, so it gets a blank line of its own rather than
         // borrowing the separator that still belongs to the block it was typed in front of.
-        const parts = inserted.map((node) => {
-          for (const index of moved) {
-            if (!original[index].eq(node)) continue;
-            moved.delete(index);
-            // Its own original bytes moved with it, so there is nothing here to prove.
-            return { text: body(index), verbatim: true, node };
+        const parts = [];
+        for (let k = 0; k < inserted.length; k++) {
+          const node = inserted[k];
+          const index = sources[e + k];
+          if (index !== -1) {
+            if (consumed.has(index)) return wholeDocument(editedDoc, "source-identity");
+            consumed.add(index);
+            parts.push({ text: body(index), verbatim: true, node });
+          } else {
+            parts.push({ text: serializeNodesFaithfully([node], referenceSuffix), verbatim: false, node });
           }
-          return { text: serializeNodesFaithfully([node], referenceSuffix), verbatim: false, node };
-        });
+        }
         for (const part of parts) {
           if (part.verbatim) continue;
           collateral.push(...unrelaxedEscaping([part.node], referenceSuffix, part.text));
@@ -1032,10 +1270,9 @@ export function createSplicer(source, originalDoc) {
     for (const [index, piece] of pieces.entries()) markdown += (index === 0 ? "" : piece.before) + piece.text;
     markdown += source.slice(blocks[blocks.length - 1].end);
 
-    // The safety net that makes this scheme sound rather than merely well-tested: if the spliced
-    // bytes do not parse back to the document the writer is looking at, the splice is wrong about
-    // some construct, and no amount of enumerating markdown corner cases would have told us. Fall
-    // back to the honest-but-blunt whole-document write, flagged so the caller has to ask.
+    // Source identity was proven above; this final check catches structural or semantic loss.
+    // A semantic reparse alone cannot prove which original spelling a duplicate came from.
+    // Any failed reparse falls back to a whole-document write that requires consent.
     if (!parseMarkdown(markdown).eq(editedDoc)) return wholeDocument(editedDoc, "reparse");
     return { markdown, collateral, degraded: false };
   };

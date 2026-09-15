@@ -2817,11 +2817,6 @@ input,
    fenced code block either: a left hairline and muted ink rather than the filled ground
    `.glosa-content pre` gives code, because this is not something the writer is composing.
 
-   NO TEXT LABEL. Labelling it would mean naming the construct, and the rule that produces this node
-   deliberately carries no dialect knowledge — it says "a top-level construct the schema cannot
-   model", not "YAML front matter". A `::before` here would put back the enumeration the mechanism
-   exists to avoid.
-
    `--muted` (app.css:127) and `--border` (:129) are redefined in the dark block, so no companion
    rule is needed. `--space-3` needs none for a DIFFERENT reason: it is a spacing-scale token,
    defined once in the base `:root` at :52 and deliberately never redefined per theme. */
@@ -2831,7 +2826,34 @@ input,
   border-left: 2px solid var(--border);
   border-radius: 0;
   color: var(--muted);
-  padding: 0 0 0 var(--space-3);
+  padding: var(--space-2) 0 0 var(--space-3);
+}
+
+/* Labels distinguish source-only regions from the manuscript shown in Read/Review. */
+.glosa-rich-surface .glosa-raw::before {
+  display: block;
+  font-size: 0.75em;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.glosa-rich-surface .glosa-raw[data-glosa-kind="metadata"]::before {
+  content: "Document metadata — hidden from Read/Review";
+}
+
+.glosa-rich-surface .glosa-raw[data-glosa-kind="comment"]::before {
+  content: "Private note — hidden from Read/Review";
+}
+
+.glosa-rich-surface .glosa-comment-inline {
+  color: var(--muted);
+  border-bottom: 1px dotted var(--border);
+}
+.glosa-rich-surface .glosa-comment-inline::before {
+  content: "Private note: ";
+  font-size: 0.75em;
+  user-select: none;
 }
 
 /* ---------- 9. Buttons ---------- */
