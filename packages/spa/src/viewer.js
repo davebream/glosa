@@ -678,7 +678,7 @@ export function mountApp(
     dock = createDock(dockHost, {
       slug: currentSlug,
       appearance,
-      storage: layoutStorage,
+      storage: singlePane ? null : layoutStorage,
       createPane,
       destroyPane,
       getTabState: tabStateFor,
@@ -794,7 +794,7 @@ export function mountApp(
 
   void refreshWorkspaces().catch(showWorkspaceError);
 
-  return () => {
+  const unmount = () => {
     unmounted = true;
     if (revealTimer !== null) clearTimeout(revealTimer);
     document.removeEventListener("keydown", onShortcut);
@@ -809,4 +809,13 @@ export function mountApp(
     contextSurfaces.destroy();
     shell.destroy();
   };
+  // Keep the callable cleanup contract for existing hosts. URL navigation closes the whole
+  // view, so every pane must consent before bootstrap reloads it with another surface/layout.
+  unmount.confirmClose = async () => {
+    for (const pane of panes.values()) {
+      if (!(await (pane.confirmClose?.() ?? true))) return false;
+    }
+    return true;
+  };
+  return unmount;
 }
