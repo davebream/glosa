@@ -823,6 +823,7 @@ export class WorkspaceBus {
   private eligibleDeliveryEntriesLocked(opts: {
     session: string;
     entryId?: string;
+    excludeEntryIds?: ReadonlySet<string>;
   }): Array<[string, DerivedState["entries"][string], unknown]> {
     const reserved = new Set(
       Array.from(this.deliveryReservations.values()).flatMap((reservation) => reservation.entries),
@@ -830,6 +831,7 @@ export class WorkspaceBus {
     const eligible: Array<[string, DerivedState["entries"][string], unknown]> = [];
     for (const [id, entry] of Object.entries(this.state.entries)) {
       if (opts.entryId && id !== opts.entryId) continue;
+      if (opts.excludeEntryIds?.has(id)) continue;
       if (reserved.has(id)) continue;
       const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
       if (isTerminal(kind, entry.status)) continue;
@@ -863,7 +865,7 @@ export class WorkspaceBus {
    * roll back every reservation they already acquired rather than substitute another entry. */
   previewDelivery(
     limit: number,
-    opts: { session: string; entryId?: string },
+    opts: { session: string; entryId?: string; excludeEntryIds?: ReadonlySet<string> },
     build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
   ): Promise<PlannedDelivery> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
@@ -1354,6 +1356,65 @@ export class WorkspaceBus {
   close(): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.writer.close();
+    });
+  }
+
+  /** Records that a provider-neutral session stream entry reached agent context. Unlike a drain
+   * acknowledgement this path has no reservation token: the in-band entry id printed by the
+   * monitor is the durable identity the agent returns through MCP. */
+  acknowledgePushedEntry(
+    entryId: string,
+    opts: { session: string; via: "monitor"; outcome: "presented" | "failed"; error?: string },
+  ): Promise<boolean> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      const payload = readInboxEntry(this.workspace, entryId);
+      if (!payload || typeof payload !== "object") return false;
+      const record = payload as Record<string, unknown>;
+      if (record.kind === "external_edit") return false;
+      if (record.kind === "conversation_message" && record.target_session_id !== opts.session) return false;
+      const entry = this.state.entries[entryId];
+      if (!entry) return false;
+      const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+      const latest = attempts.at(-1);
+      if (latest?.via === opts.via && latest?.session === opts.session && latest?.outcome === opts.outcome) return true;
+      if (
+        !attempts.some(
+          (attempt) =>
+            attempt.via === opts.via && attempt.session === opts.session && attempt.outcome === "transport_accepted",
+        )
+      ) {
+        return false;
+      }
+      this.recordDeliveryAttemptLocked(entryId, {
+        fsync: true,
+        idem: `monitor:${opts.session}:${entryId}:${opts.outcome}`,
+        via: opts.via,
+        session: opts.session,
+        outcome: opts.outcome,
+        reason: attempts.length > 0 ? "re_nudge" : "initial",
+        ...(opts.error ? { error: opts.error } : {}),
+      });
+      if (
+        record.kind === "conversation_message" &&
+        opts.outcome === "presented" &&
+        this.state.entries[entryId]?.status !== "delivered"
+      ) {
+        const event: JournalEvent = {
+          v: 1,
+          event_id: this.ulidFn(),
+          at: this.nowFn().toISOString(),
+          entry: entryId,
+          event: "transition_committed",
+          by: "daemon",
+          idem: `conversation:${entryId}:delivered`,
+          detail: { to: "delivered" },
+        };
+        appendEvent(this.writer, event);
+        applyEvent(this.state, event, this.reducer);
+        this.notify(event);
+      }
+      return true;
     });
   }
 }

@@ -1057,6 +1057,42 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     });
   });
 
+  const monitor = lazyHandler(
+    {
+      name: "monitor",
+      description: "Claude Code plugin session monitor",
+      internal: true,
+      args: {
+        "plugin-root": { type: "string", description: "Absolute Claude plugin root" },
+        "project-dir": { type: "string", description: "Absolute Claude project directory" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+      const pluginRoot = values["plugin-root"] as string | undefined;
+      const projectDir = values["project-dir"] as string | undefined;
+      if (!sessionId || !pluginRoot || !projectDir) {
+        process.stderr.write("glosa monitor: CLAUDE_CODE_SESSION_ID, --plugin-root, and --project-dir are required\n");
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const { runClaudeMonitor } = await import("../../providers/claude-code/src/monitor.ts");
+      const shutdown = new AbortController();
+      const stop = () => shutdown.abort();
+      process.once("SIGTERM", stop);
+      process.once("SIGINT", stop);
+      process.once("SIGHUP", stop);
+      try {
+        await runClaudeMonitor({ sessionId, pluginRoot, projectDir }, undefined, shutdown.signal);
+      } finally {
+        process.off("SIGTERM", stop);
+        process.off("SIGINT", stop);
+        process.off("SIGHUP", stop);
+      }
+    },
+  );
+
   const daemon = lazyHandler({ name: "__daemon", description: "Detached daemon process", internal: true }, async () => {
     const { bootDaemon } = await import("../../daemon/src/index.ts");
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
@@ -1068,6 +1104,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
             liveness: sessionRegistry,
             channelsEnabled: (session) => pushRegistry.has(session.session_id),
             sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
+            pushVia: (session) => pushRegistry.transport(session.session_id),
           }),
         ({ sessionRegistry }) => new CodexProvider({ liveness: sessionRegistry }),
       ],
@@ -1096,6 +1133,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     forget,
     hook,
     mcp,
+    monitor,
     __daemon: daemon,
     checkpoints: placeholder("checkpoints"),
     diff: placeholder("diff"),
@@ -1175,7 +1213,7 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
 
 /** Commands whose stderr is consumed by a machine, not read by a person: the detached daemon logs
  * it, the agent hooks and the MCP server hand it to their host. None of them should carry advice. */
-const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "complete"]);
+const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "monitor", "complete"]);
 
 let devNoticeShown = false;
 

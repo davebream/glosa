@@ -193,6 +193,20 @@ export const conversationAckOutputSchema = z
   })
   .strict();
 
+export const deliveryAckInputSchema = z
+  .object({
+    entry_id: inboxId,
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const deliveryAckOutputSchema = z
+  .object({
+    entry_id: inboxId,
+    presented: z.literal(true).describe("Always true on success."),
+  })
+  .strict();
+
 const absoluteFilePath = z
   .string()
   .min(1)

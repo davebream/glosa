@@ -49,6 +49,7 @@ export interface DoctorDeps {
    * failure. "Unreachable" covers four unrelated situations and only one of them asks the user to
    * kill something, so doctor names which one it is (issue #139). Never spawns or signals. */
   diagnoseDaemon: (home: string) => Promise<DaemonDiagnosis>;
+  env?: Record<string, string | undefined>;
 }
 
 function realRunVersionProbe(cmd: string[]): string | null {
@@ -74,6 +75,7 @@ export function realDoctorDeps(createClient: () => Promise<GlosaApiClient>, glos
     claudeConfigDir,
     claudeConfigRoots,
     diagnoseDaemon: (home) => diagnoseDaemon(home),
+    env: Bun.env,
   };
 }
 
@@ -517,15 +519,22 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 14. Channels are an optional Claude capability. The registry does not expose a durable
-  // registration handshake, so doctor reports the capability as unverified without degrading the
-  // hook/MCP compatibility result.
+  // 14. A monitor is per interactive Claude session, not a durable installation property.
+  const monitorDisabledBy = ["DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"].filter(
+    (name) => deps.env?.[name] === "1",
+  );
   checks.push(
-    check(
-      "channel",
-      "skip",
-      "optional Claude Channel not verified; hook and MCP fallback remain the compatibility path",
-    ),
+    monitorDisabledBy.length > 0
+      ? check(
+          "claude-monitor",
+          "warn",
+          `Claude Code suppresses plugin monitors while ${monitorDisabledBy.join(" and ")} is set; glosa entries remain queued for MCP pull`,
+        )
+      : check(
+          "claude-monitor",
+          "skip",
+          "monitor availability is per interactive Claude session; a live stream, not plugin installation, enables push",
+        ),
   );
 
   // 15. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)

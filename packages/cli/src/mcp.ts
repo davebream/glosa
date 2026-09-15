@@ -28,6 +28,8 @@ import {
   askOutputSchema,
   conversationAckInputSchema,
   conversationAckOutputSchema,
+  deliveryAckInputSchema,
+  deliveryAckOutputSchema,
   inboxGetInputSchema,
   inboxGetOutputSchema,
   inboxPullInputSchema,
@@ -74,6 +76,7 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_metadata_show",
   "glosa_metadata_clear",
   "glosa_session_bind",
+  "glosa_delivery_ack",
   "glosa_conversation_ack",
   "glosa_present",
   "glosa_ask",
@@ -419,7 +422,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         experimental: { "claude/channel": {} },
       },
       instructions:
-        "glosa conversation messages arrive as channel events with a message_id. Immediately call glosa_conversation_ack for that message_id before acting; hook delivery remains the safety fallback.",
+        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting. Legacy channel conversation messages use glosa_conversation_ack.",
     },
   );
 
@@ -605,6 +608,35 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         source: "mcp",
       });
       return toolResult(structuredContent);
+    },
+  );
+
+  registerTool(
+    "glosa_delivery_ack",
+    {
+      title: "Acknowledge pushed glosa entry",
+      description:
+        "Acknowledge that a glosa monitor entry reached this agent context. Use the entry id from the [glosa <entry-id>] line prefix.",
+      inputSchema: deliveryAckInputSchema,
+      outputSchema: deliveryAckOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Acknowledge pushed entry",
+      },
+    },
+    async ({ entry_id: entryId, session_id: requestedSession }) => {
+      const hostSession = host()?.session_id;
+      if (hostSession && requestedSession && requestedSession !== hostSession) {
+        throw new Error("session_id does not match the MCP host session");
+      }
+      const sessionId = hostSession ?? requestedSession;
+      if (!sessionId) {
+        throw new Error("glosa_delivery_ack requires an explicit session_id when the MCP host does not provide one");
+      }
+      const client = await deps.createHookClient(shutdownAbort.signal);
+      if (!client.acknowledgePushed) throw new Error("pushed-entry acknowledgement is unavailable");
+      await client.acknowledgePushed(sessionId, entryId, "presented");
+      return toolResult({ entry_id: entryId, presented: true });
     },
   );
 

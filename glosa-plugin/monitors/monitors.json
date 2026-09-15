@@ -1,0 +1,10 @@
+{
+  "monitors": [
+    {
+      "name": "glosa-session",
+      "description": "Deliver queued glosa review entries to this Claude Code session",
+      "when": "always",
+      "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/glosa monitor --plugin-root \"${CLAUDE_PLUGIN_ROOT}\" --project-dir \"${CLAUDE_PROJECT_DIR}\""
+    }
+  ]
+}

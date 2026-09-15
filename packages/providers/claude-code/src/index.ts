@@ -6,6 +6,15 @@ export type { ChannelSender, ClaudeCodeProviderDeps, RewakeSignal, SessionLivene
 export { RewakeCoordinator, RewakeLeaseStore } from "./rewake.ts";
 export type { RearmResult, RewakeCoordinatorDeps, RewakeLeaseStoreDeps, WatcherLease } from "./rewake.ts";
 export { looksLikeClaudeHookInput } from "./hook-types.ts";
+export {
+  deriveMonitorTranscriptPath,
+  monitorRetryDelay,
+  MONITOR_MAX_DELAY_MS,
+  MONITOR_MIN_DELAY_MS,
+  registeredWorkspaceForProject,
+  runClaudeMonitor,
+} from "./monitor.ts";
+export type { MonitorDeps, MonitorOptions } from "./monitor.ts";
 export type {
   ClaudeHookInput,
   NotificationHookInput,
