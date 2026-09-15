@@ -248,7 +248,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius-focus);
 }
@@ -578,10 +578,8 @@ input,
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
   font-size: var(--text-sm);
 }
 
@@ -644,8 +642,8 @@ input,
 
 .glosa-agent-feedback-provider:focus,
 .glosa-agent-feedback-prompt:focus {
-  border-color: var(--primary);
-  outline: 3px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  border-color: var(--focus);
+  outline: 3px solid color-mix(in oklch, var(--focus) 18%, transparent);
 }
 
 .glosa-agent-feedback-actions {
@@ -1161,8 +1159,8 @@ input,
 }
 
 .glosa-attention-response:focus {
-  border-color: var(--primary);
-  outline: 3px solid color-mix(in oklch, var(--primary) 18%, transparent);
+  border-color: var(--focus);
+  outline: 3px solid color-mix(in oklch, var(--focus) 18%, transparent);
 }
 
 .glosa-attention-actions {
@@ -2573,7 +2571,7 @@ input,
 
 .glosa-foreedge-filter:focus-visible {
   outline: none;
-  border-bottom-color: var(--primary);
+  border-bottom-color: var(--focus);
 }
 
 .glosa-foreedge-list {
@@ -3296,8 +3294,8 @@ input,
 
 .glosa-agent-input:focus-visible {
   outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 16%, transparent);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--focus) 16%, transparent);
 }
 
 .glosa-agent-actions {
@@ -3326,7 +3324,7 @@ input,
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--primary);
+  background: var(--hand); /* an unsaved draft is the human's hand, parked */
 }
 
 /* Compact gutter markers: quiet dots at anchor heights along the right edge. */
@@ -3704,8 +3702,8 @@ input,
 .glosa-conv-composer-input:focus-visible,
 .glosa-edit-area:focus-visible {
   outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 14%, transparent);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--focus) 14%, transparent);
 }
 
 /* The pencil line sharpens rather than glows: writing, not a form field. */
@@ -3955,16 +3953,18 @@ input,
   white-space: nowrap;
 }
 
+/* The two hands, as chips: the human's change is filled in the hand, a session's is printed in ink
+   on paper, and an unattributed one is a dashed outline. Weight and edge carry it as well as colour. */
 .glosa-history-attribution[data-by="human"] {
-  background: var(--ink);
-  border-color: var(--ink);
+  background: var(--hand);
+  border-color: var(--hand);
   color: var(--bg);
 }
 
 .glosa-history-attribution[data-by="session"] {
-  background: color-mix(in oklch, var(--primary) 12%, var(--bg));
-  border-color: var(--primary);
-  color: var(--primary);
+  background: var(--bg);
+  border-color: var(--ink);
+  color: var(--ink);
 }
 
 .glosa-history-attribution[data-by="unknown"] {
@@ -4202,11 +4202,11 @@ input,
   align-self: flex-end;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-composer);
-  background: color-mix(in oklch, var(--primary) 10%, var(--surface));
+  background: var(--anchor-wash); /* the human's turn, in the hand's wash */
 }
 
 .glosa-conv-user::before {
-  color: var(--primary);
+  color: var(--hand);
 }
 
 .glosa-conv-assistant {
@@ -4292,8 +4292,8 @@ input,
 }
 
 .glosa-conv-composer:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 14%, transparent);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--focus) 14%, transparent);
 }
 
 .glosa-conv-composer-actions {
