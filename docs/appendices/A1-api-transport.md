@@ -833,3 +833,23 @@ data: <json>
 - Manifest→source-range resolution algorithm for class-F annotations → F11.
 - Transcript tailer's partial-line/rotation/corruption handling → F16 (the API only sees its
   opaque cursor, per §8.1).
+
+### Shadow diagnosis and explicit baseline repair (#226)
+
+`GET /w/:slug/shadow/health` is an authenticated read. It resolves the existing canonical registration
+(including redirected and loose-file buses), never constructs a writing bus, and returns `slug`,
+`registration_id`, `state`, `reason`, `head`, and `census`. States are `healthy`, `uninitialized`,
+`lost-history`, `invalid-head`, and `repair-pending`. A pending repair also includes its stable ID,
+reason, and checkpoint. Health covers the active HEAD commit, not every historical object.
+
+`census` contains `entries`, `missing_checkpoint_entries`, `unassessable_entries`, and `complete`.
+It counts each human/external-edit entry once when any required checkpoint commit is missing;
+unreachable but readable commits still count as present. Missing/malformed relevant payloads and
+unknown kinds are unassessable. Invalid journal records qualify completeness. It never repairs history.
+
+`POST /w/:slug/shadow/repair-baseline` is state-changing: Bearer, same Origin, contract gate and global
+body cap apply. Its body must be `{}` (at most 1024 bytes). It returns the same diagnosis after explicit
+repair under the ownership coordinator and shared bus mutex (A4 F21). Unknown slug is 404; malformed
+body is 400. Inactive registrations, unsafe paths, leases, unavailable singleton proof, invalid HEAD,
+and already-healthy stores are named 409 refusals. Missing history is not recovered; a new baseline
+only permits future capture. These additive routes do not change the protocol version.

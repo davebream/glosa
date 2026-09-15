@@ -544,3 +544,12 @@ relaxation cannot see — a respelling the restoration would have put back, in c
 original to restore from. The guard's own blind spot, recorded as metric 4 of the REQ-8 harness, is
 unchanged: this reaches escaping, not infidelity in freshly typed markup. Load-bearing escaping is
 deliberately not reported, because the relaxed form fails `verify` and those bytes have to stay.
+
+## Lost shadow history requires explicit baseline repair
+
+A surviving ref is not proof that its commit object exists. When that object is lost, silently
+initializing a new baseline would hide the loss. Ordinary capture therefore refuses; doctor names
+the state and provides an explicit repair command. Repair preserves surviving objects and records a
+new unknown-attributed history root, with a reason recoverable across a crash. It cannot reconstruct
+lost checkpoints or rewrite the old inbox entries that reference them. If all Git and prior checkpoint
+journal evidence is absent, previous initialization is unknowable; first-use behavior remains unchanged.

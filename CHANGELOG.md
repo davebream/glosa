@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Missing shadow checkpoint objects now cause a named refusal. Doctor diagnoses the active
+  baseline and counts affected inbox entries; explicit `doctor --workspace <slug> --repair-baseline`
+  starts new history without changing documents or removing surviving history. Later saves and
+  interrupted external-edit capture resume from that baseline. (#226)
 - Read/Review and the outline now hide document metadata and paired `%%` authoring notes,
   including inline notes in headings and prose. Rich Edit labels those regions and preserves
   their source spelling, including mixed line endings and nested list/blockquote notes. (#175)

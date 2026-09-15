@@ -261,7 +261,7 @@
 | `session` | `bind <session-id> [--workspace <path>] [--provider <id>]` | register or refresh a session and explicitly bind it to the artifact workspace; provider-owned environment discovery supplies identity, with generic MCP fallback when unavailable | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
 | `forget` | `<workspace> [--yes]` | issue #156: the one supported whole-bus deletion primitive, addressed by slug (see `status --json`), never a path — a workspace's on-disk path may already be gone. Naming a historical loose-file source sealed into a directory workspace resolves to the owning target and forgets the complete unit, never just the source. Removes the registration, journal, inbox, and shadow-git history, including any historical loose-file source sealed into it by adoption; never touches work-tree files. Refuses before any deletion when a live bound session, an unexpired apply lease, or an in-progress adoption exists, naming each blocker (adoption AND new session register/bind on the same target refuse symmetrically while a forget is committing — one shared per-workspace lock). Interactive use previews the exact paths first and asks once; `--yes` skips the prompt; a non-interactive caller (no TTY, or `--json`) without `--yes` is a usage error. Confinement is proven for every member of the deletion set before a durable marker is written or a single file is touched. `glosa doctor`/`glosa status` name an interrupted run explicitly with its exact resume command, even once the workspace's own directory is gone; re-running `forget` on the same slug (or a since-forgotten source's own slug) finishes it and still reports the complete original set of removed paths | 0;2;3;4;12;70 |
-| `doctor` | `[dir] --json` | 18 enumerated checks, incl. the resolved workspace root (issue #146) | 0(warns ok);9 any FAIL;5 |
+| `doctor` | `[dir] --json [--workspace <registered-slug>] [--repair-baseline]` | 18 enumerated checks, incl. the resolved workspace root (issue #146) | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | stdio MCP (rung-1 channel + tools) | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
@@ -328,3 +328,17 @@ glosa complete fish > ~/.config/fish/completions/glosa.fish
 # PowerShell: add the generated registration script to the current user's profile.
 glosa complete powershell >> $PROFILE
 ```
+
+### Doctor shadow-history diagnosis and repair (#226)
+
+For a registered directory (or explicit `--workspace <slug>`), the workspace check reads the daemon's
+canonical shadow-health endpoint, including redirected/loose-file state. Missing HEAD objects fail
+and print `glosa doctor --workspace <slug> --repair-baseline`. Diagnosis reports missing-checkpoint
+entry counts and whether the census is complete. Healthy current history with historical missing or
+unassessable entries warns. With no registered target available, the local read-only fallback verifies
+`HEAD^{commit}`; a raw ref is insufficient.
+
+`--repair-baseline` requires an explicit registered slug and calls the authenticated daemon route.
+No unknown registration is created and there is no offline Git repair. The command starts new history
+from current tracked files; it cannot restore lost checkpoints. Refusals fail the workspace check;
+success with remaining historical damage warns. Other doctor checks retain their existing behavior.

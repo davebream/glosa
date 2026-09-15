@@ -152,3 +152,12 @@
 
 ## Cross-cutting
 - All mutations route through the single serialized writer (daemon/journal); no cross-file atomic writes. Versioned schemas (version/manifest_version/protocol_version) for N-1 tolerance. Deferred as over-engineering for local single-user v1: idle-daemon auto-shutdown, full inline markdown source map, fuzzy re-anchoring.
+
+### Shadow repair ownership (#226)
+
+The daemon exposes read-only shadow health without constructing or reconciling a WorkspaceBus.
+Explicit baseline repair uses the existing ownership coordinator followed by the registration's
+shared bus mutex. Canonical path and lifecycle checks run again after acquiring the bus lock, since
+parent adoption can mark a loose source under a different coordinator key. The singleton lock must
+prove this process owns Git writes. Watcher, human saves, leases, repair and journal writes therefore
+share one serialization boundary. Repair never runs as a CLI-side offline Git mutation (A4 F21).
