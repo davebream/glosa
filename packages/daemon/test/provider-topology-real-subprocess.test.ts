@@ -146,7 +146,7 @@ afterAll(() => {
 });
 
 describe("T8 real daemon + production provider + divergent cwd topology", () => {
-  test("CodexProvider queues across an explicit cross-directory binding, survives SIGKILL, then Stop presents it", async () => {
+  test("CodexProvider queues across an explicit cross-directory binding, survives SIGKILL, then MCP pull presents it", async () => {
     const home = freshHome();
     const artifactWorkspace = mkdtempSync(join(tmpdir(), "glosa-provider-artifacts-"));
     const agentCwd = mkdtempSync(join(tmpdir(), "glosa-provider-agent-cwd-"));
@@ -186,13 +186,13 @@ describe("T8 real daemon + production provider + divergent cwd topology", () => 
       expect(await composed.json()).toMatchObject({
         message_id: messageId,
         state: "queued",
-        delivery: { via: "gate", outcome: "attempted" },
+        delivery: { via: "mcp_pull", outcome: "attempted" },
       });
 
       const journalPath = join(artifactWorkspace, ".glosa", "journal.ndjson");
       const beforeKill = readFileSync(journalPath, "utf8");
       expect(beforeKill).toContain(`"entry":"${messageId}"`);
-      expect(beforeKill).toContain(`"via":"gate"`);
+      expect(beforeKill).toContain(`"via":"mcp_pull"`);
       expect(beforeKill).toContain(`"outcome":"attempted"`);
 
       daemon.kill("SIGKILL");
@@ -211,7 +211,7 @@ describe("T8 real daemon + production provider + divergent cwd topology", () => 
       expect(reRegistered.status).toBe(200);
       expect((await post(port, `/w/${opened.slug}/session-binding`, { session_id: sessionId })).status).toBe(200);
 
-      const drainedResponse = await post(port, `/api/sessions/${sessionId}/drain`, { via: "stop" });
+      const drainedResponse = await post(port, `/api/sessions/${sessionId}/drain`, { via: "mcp_pull" });
       expect(drainedResponse.status).toBe(200);
       const drained = (await drainedResponse.json()) as {
         delivery_id: string;
@@ -231,7 +231,7 @@ describe("T8 real daemon + production provider + divergent cwd topology", () => 
       expect(ack.status).toBe(200);
 
       const afterRestart = readFileSync(journalPath, "utf8");
-      expect(afterRestart).toContain(`"via":"stop"`);
+      expect(afterRestart).toContain(`"via":"mcp_pull"`);
       expect(afterRestart).toContain(`"outcome":"presented"`);
       expect(afterRestart).toContain(`"to":"delivered"`);
     } finally {

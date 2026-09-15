@@ -87,7 +87,6 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/agent-provider/push-registry.test.ts",
     "packages/providers/claude-code/test/provider.test.ts",
     "packages/providers/claude-code/test/monitor.test.ts",
-    "packages/providers/claude-code/test/rewake.test.ts",
     "packages/providers/claude-code/test/delivery-journal.test.ts",
     "packages/providers/codex/test/provider.test.ts",
     "packages/providers/codex/test/app-server.test.ts",

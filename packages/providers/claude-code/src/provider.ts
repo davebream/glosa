@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-claude-code — the Claude Code AgentProvider (R7). Implements the R4 delivery
 // ladder for Claude specifically:
-//   rung 1  channel      MCP `notifications/claude/channel` — pushes into an idle session (A2 §F06)
-//   rung 2  asyncRewake  wakes an idle session via the SessionStart-launched watcher (A2 §F07)
-//   rung 3  boundary     Stop/UserPromptSubmit hook drain — delivered at the next turn boundary
-//   rung 4  mcpPull      the entry sits in the durable inbox for the `glosa mcp` pull tool
+//   rung 1  monitor   the plugin session monitor's open stream (A2 §F06/§F07) — pushes into an
+//                     idle session; available only while THIS session has a connected monitor
+//   rung 2  mcpPull   the entry sits in the durable inbox for the `glosa mcp` pull tool
 //
 // Every transport this class can reach for is INJECTED (never a bare `fetch`/`Bun.spawn` inside
 // `deliver()` itself) — that's what makes the ladder + fallback behavior unit-testable without a
-// live Claude Code session. Wiring the real channel sender / real watcher signal is the P5.4
-// rehearsal's job (see this package's test/ dir header comment); this file only has to prove the
-// LOGIC: try the best rung first, record what actually happened, fall back correctly when a rung
-// is unavailable OR fails.
+// live Claude Code session. This file only has to prove the LOGIC: try the push first, record
+// what actually happened, fall back correctly when the push is unavailable OR fails.
 import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
@@ -36,36 +33,22 @@ export interface SessionLivenessSource {
   liveness(sessionId: string): "alive" | "stale";
 }
 
-/** Rung 1 — attempts the MCP channel push. Returns `true` on an accepted notification, `false` if
- * channels are unavailable/unregistered/rejected for this session (a `false` is NOT an error —
- * R4: channels are optional, this just means "try the next rung"), and MAY throw for a genuine
- * transport failure (which `deliver()` records as `outcome: "failed"` before falling back). */
-export type ChannelSender = (session: SessionBinding, entry: DeliverableEntry) => Promise<boolean>;
-
-/** Rung 2 — signals the currently-armed asyncRewake watcher for this session (if any). `false`
- * (not armed / signal rejected) falls through to rung 3, same contract as `ChannelSender`. */
-export type RewakeSignal = (session: SessionBinding, entry: DeliverableEntry) => Promise<boolean>;
+/** Rung 1 — hands the bounded entry to this session's connected monitor stream. Returns `true` on
+ * a transport-accepted push, `false` if the stream declined or timed out (a `false` is NOT an
+ * error — it just means "fall back to MCP pull"), and MAY throw for a genuine transport failure
+ * (which `deliver()` records as `outcome: "failed"` before falling back). */
+export type MonitorSender = (session: SessionBinding, entry: DeliverableEntry) => Promise<boolean>;
 
 export interface ClaudeCodeProviderDeps {
   transcriptRoots?: () => readonly string[];
   liveness: SessionLivenessSource;
-  /** Whether channels are active for THIS session (the `--dangerously-load-development-channels
-   * server:glosa` activation, A2 §F06) — a provider-wide `sendChannel` existing doesn't imply a
-   * given session actually has channels loaded; this is what lets a "channels OFF" test disable
-   * rung 1 without removing the sender itself. Omit (or return false) to always fall back. */
-  channelsEnabled?: (session: SessionBinding) => boolean;
-  sendChannel?: ChannelSender;
-  /** The live push transport registered for this session. During the #151→#152 transition this
-   * can be either the plugin monitor or the legacy Claude Channel shim. */
-  pushVia?: (session: SessionBinding) => "monitor" | "channel" | null;
-  /** Whether an asyncRewake watcher is currently armed for this session — backed by
-   * `RewakeLeaseStore.isActive` in production. Omit to skip rung 2 entirely (e.g. a provider
-   * instance running outside the daemon that has no lease-store access). */
-  watcherArmed?: (sessionId: string) => boolean;
-  signalWatcher?: RewakeSignal;
+  /** Whether THIS session currently has a connected plugin monitor (R7: `push` is evaluated per
+   * session at registration, never from plugin installation — a monitor does not start under
+   * `DISABLE_TELEMETRY=1`, in non-interactive sessions, or on third-party model platforms).
+   * Omit (or return false) to always fall back to MCP pull. */
+  pushAvailable?: (session: SessionBinding) => boolean;
+  sendPush?: MonitorSender;
 }
-
-const CAPABILITIES: ProviderCapabilities = { push: true, gate: true, boundaryDrain: true, mcpPull: true };
 
 export class ClaudeCodeProvider implements AgentProvider {
   readonly id = "claude-code";
@@ -81,11 +64,11 @@ export class ClaudeCodeProvider implements AgentProvider {
     };
   }
 
-  /** Structural only — accepts anything carrying `session_id`/`cwd` (A2 §F08's SessionStart shape
-   * and every other Claude hook event share that much), so a hook payload with extra/newer fields
-   * this package doesn't know about still detects fine. `workspace` is `cwd` verbatim: R2's
-   * routing precedence layers an explicit adapter binding ABOVE this, so `detectSession` itself
-   * never has to guess at anything fancier than "the directory this hook fired in". */
+  /** Structural only — accepts anything carrying `session_id`/`cwd` (A2 §F08's registration shape
+   * and every Claude event payload share that much), so a payload with extra/newer fields this
+   * package doesn't know about still detects fine. `workspace` is `cwd` verbatim: R2's routing
+   * precedence layers an explicit adapter binding ABOVE this, so `detectSession` itself never has
+   * to guess at anything fancier than "the directory this session runs in". */
   detectSession(hookEvent: unknown): SessionBinding | null {
     if (!looksLikeClaudeHookInput(hookEvent)) return null;
     const raw = hookEvent as {
@@ -111,12 +94,11 @@ export class ClaudeCodeProvider implements AgentProvider {
     return binding;
   }
 
-  /** Static for this provider — every Claude Code session gets the same four capabilities (R7:
-   * "v1 ships: Claude Code provider (deep: push=channels, gate+boundary=hooks, mcpPull=tools...)").
-   * Takes `session` only to satisfy the interface; a future provider revision COULD make this
-   * session-dependent (e.g. an older CC version lacking channels) without changing the signature. */
-  capabilities(_session: SessionBinding): ProviderCapabilities {
-    return CAPABILITIES;
+  /** R7: `{ push, mcpPull }`, evaluated per session. `push` is true only while this exact session
+   * has a connected plugin monitor; `mcpPull` is always true (the durable inbox is reachable from
+   * any session with the MCP server loaded). */
+  capabilities(session: SessionBinding): ProviderCapabilities {
+    return { push: this.deps.pushAvailable?.(session) === true, mcpPull: true };
   }
 
   liveness(session: SessionBinding): Liveness {
@@ -143,70 +125,43 @@ export class ClaudeCodeProvider implements AgentProvider {
     return candidates.size === 1 ? [...candidates][0]! : null;
   }
 
-  /** The R4 ladder, in rung order — each rung's `via` and `outcome` are A5 §F23's fixed
-   * vocabulary, never a free-text gloss (a P4.3 review caught an earlier revision inventing
-   * `"delivered"`/`"boundary_drain"`/`"none"`, none of which are legal A5 §F23 values). Every
-   * rung either (a) isn't available for this session/deps configuration → skip straight to the
-   * next rung with no journal entry for it (an unavailable rung was never "attempted"), or (b) is
-   * attempted and either succeeds or throws/returns `false`. `deliver()` itself only ever returns
-   * ONE result per call — the rung it actually landed on — never one event per rung tried; a
-   * thrown error from a rung is caught and reported as THAT rung's own `outcome: "failed"` rather
-   * than propagating or silently falling through (a genuine transport error is not the same thing
-   * as "this rung declined, try the next one").
+  /** The R4 ladder, `push → mcp_pull`. Each rung's `via` and `outcome` are A5 §F23's fixed
+   * vocabulary, never a free-text gloss. The push rung either (a) isn't available for this
+   * session → skip straight to MCP pull with no journal entry for it (an unavailable rung was
+   * never "attempted"), or (b) is attempted and either succeeds, declines (`false`), or throws.
+   * `deliver()` only ever returns ONE result per call — the rung it actually landed on; a thrown
+   * error from the push is reported as THAT rung's own `outcome: "failed"` rather than propagating
+   * or silently falling through (a genuine transport error is not the same thing as "this rung
+   * declined, try the next one").
    *
    * `outcome` distinguishes what's actually KNOWN at the moment `deliver()` returns:
-   *   - `transport_accepted` — the channel/watcher ack'd the push (rungs 1–2 success). This is
-   *     NOT the same as the agent having seen it yet — just that the transport took it.
-   *   - `attempted` — queued for a FUTURE touchpoint with no confirmation at all (rungs 3–4): the
-   *     entry is durable and WILL be presented at the next Stop/UserPromptSubmit hook or MCP pull
-   *     — but that presentation is a SEPARATE event (recorded by the hook route itself, via
-   *     `outcome: "presented"`, when it actually happens) from this proactive queuing record. */
+   *   - `transport_accepted` — the monitor stream ack'd the push. NOT the same as the agent having
+   *     seen it yet — `presented` is recorded separately when the agent calls `glosa_delivery_ack`.
+   *   - `attempted` — queued for a FUTURE MCP pull with no confirmation at all: the entry is
+   *     durable and WILL be presented when the session next pulls, and that presentation is a
+   *     SEPARATE event (recorded by the pull route itself as `outcome: "presented"`). */
   async deliver(session: SessionBinding, entry: DeliverableEntry): Promise<DeliveryResult> {
     const caps = this.capabilities(session);
 
-    // Rung 1 — channel push.
-    if (caps.push && this.deps.channelsEnabled?.(session) && this.deps.sendChannel) {
+    if (caps.push && this.deps.sendPush) {
       try {
-        const accepted = await this.deps.sendChannel(session, entry);
-        if (accepted) {
-          return { via: this.deps.pushVia?.(session) ?? "channel", outcome: "transport_accepted" };
+        if (await this.deps.sendPush(session, entry)) {
+          return { via: "monitor", outcome: "transport_accepted" };
         }
       } catch (err) {
-        return { via: "channel", outcome: "failed", error: errorMessage(err) };
+        return { via: "monitor", outcome: "failed", error: errorMessage(err) };
       }
-      // Not accepted (e.g. no live channel handshake) — fall through, this was never a hard error.
+      // Not accepted (stream declined or timed out) — fall through, this was never a hard error.
     }
 
-    // Rung 2 — asyncRewake.
-    if (caps.push && this.deps.watcherArmed?.(session.session_id) && this.deps.signalWatcher) {
-      try {
-        const accepted = await this.deps.signalWatcher(session, entry);
-        if (accepted) return { via: "asyncRewake", outcome: "transport_accepted" };
-      } catch (err) {
-        return { via: "asyncRewake", outcome: "failed", error: errorMessage(err) };
-      }
-    }
-
-    // Rung 3 — turn-boundary drain (the "gate" row of R4's table — Claude's `gate` capability is
-    // always true, so this is deterministic for the real provider; the ACTUAL Stop/UserPromptSubmit
-    // hook that surfaces the entry records its own `via:"stop"|"userprompt"` + `outcome:"presented"`
-    // separately, once it really happens). Nothing to actively push here — the entry is already
-    // durable in the inbox (R4's invariant) — so this is a queuing record, not a delivery
-    // confirmation.
-    if (caps.gate || caps.boundaryDrain) {
-      return { via: "gate", outcome: "attempted" };
-    }
-
-    // Rung 4 — MCP pull. Last resort: the entry waits in the durable inbox for an explicit pull.
     if (caps.mcpPull) {
       return { via: "mcp_pull", outcome: "attempted" };
     }
 
-    // No capability at all (unreachable for the real Claude provider — every capability above is
-    // statically true; only a test double with a narrowed `capabilities()` hits this). "gate" is
-    // reused as the vocabulary has no "none" — `outcome:"failed"` + `error` is what actually
-    // distinguishes it from a real gate attempt.
-    return { via: "gate", outcome: "failed", error: "no_capability_available" };
+    // No capability at all (unreachable for the real Claude provider — `mcpPull` is statically
+    // true; only a test double with a narrowed `capabilities()` hits this). The vocabulary has no
+    // "none", so `outcome:"failed"` + `error` is what distinguishes it from a real pull attempt.
+    return { via: "mcp_pull", outcome: "failed", error: "no_capability_available" };
   }
 }
 
@@ -217,5 +172,5 @@ function errorMessage(err: unknown): string {
 /** Provider-owned identity discovery; transcript recency is never evidence of identity. */
 export function discoverClaudeMcpSession(env: Record<string, string | undefined>, cwd: string) {
   const session_id = env.CLAUDE_CODE_SESSION_ID;
-  return session_id ? { session_id, provider: "claude-code", cwd, channelPush: true } : null;
+  return session_id ? { session_id, provider: "claude-code", cwd } : null;
 }

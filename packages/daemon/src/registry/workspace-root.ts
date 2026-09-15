@@ -24,8 +24,8 @@
 // inside the global-index mutex; a subprocess there would be both slow and a new failure mode. A
 // `.git` entry (directory OR file, so linked worktrees and submodules resolve) is the same marker
 // `git rev-parse --show-toplevel` looks for.
-import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, isAbsolute, sep } from "node:path";
 
 /** Every path is compared post-`realpath` because macOS aliases `/tmp` -> `/private/tmp` and
@@ -124,107 +124,4 @@ export function workspaceRootFor(
 ): { root: string; kind: "git-repo" | "literal" } {
   const repo = enclosingGitRootWithin(startDir, home, exists);
   return repo ? { root: repo, kind: "git-repo" } : { root: realOrSelf(startDir), kind: "literal" };
-}
-
-// ---------------------------------------------------------------------------------------------
-// `glosa init` target safety (issue #96)
-// ---------------------------------------------------------------------------------------------
-
-export type InitTargetRisk = "none" | "home-dir" | "temp-dir" | "multi-repo";
-
-export interface InitTargetVerdict {
-  risk: InitTargetRisk;
-  /** Human-readable reason, empty for `none`. Rendered verbatim in the CLI error/warning. */
-  detail: string;
-}
-
-export interface ClassifyInitTargetDeps {
-  /** Temp roots to treat as unsafe. Defaults to the macOS set, each realpath'd. */
-  tempRoots?: string[];
-  exists?: (path: string) => boolean;
-  /** Immediate entries of a directory; `[]` on any read error. */
-  readDir?: (dir: string) => string[];
-  /** The user's home directory, for the `home-dir` rung (issue #146). Defaults to `os.homedir()`. */
-  home?: string;
-}
-
-function defaultTempRoots(): string[] {
-  return [...new Set([tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"].map(realOrSelf))];
-}
-
-function defaultReadDir(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Would writing agent config into `dir` be a surprising mutation?
- *
- * The ladder, in order:
- *  0. **`dir` is the user's home directory, or an ancestor of it → `home-dir`.** Placed ABOVE the
- *     repo-root rung deliberately (issue #146): a dotfiles checkout makes `$HOME` itself a git
- *     repository, so if repo-ness were checked first it would short-circuit to `none` and this rung
- *     would be unreachable for the one case it exists to catch — which is the precise bug that
- *     caused #146 in `resolveOpenTarget`'s unrelated promotion path.
- *  1. **`dir` is itself a git repository → `none`.** A repo is a project root by definition, and
- *     that is true of a scratch repo created under `$TMPDIR` just as much as one in `~/code`. This
- *     is why the check leads with repo-ness rather than with the path prefix: the thing that makes
- *     `glosa init /private/tmp` wrong is that `/private/tmp` is not a project, not that it is
- *     under `/tmp`.
- *  2. **Under a temp root → `temp-dir`.** The `glosa open /tmp/doc.md` -> `glosa init /private/tmp`
- *     accident from issue #96.
- *  3. **Two or more immediate subdirectories are git repos → `multi-repo`.** A `~/code`-style
- *     parent. Config written here silently applies to every repo beneath it.
- *
- * Advisory only — this function never touches disk beyond stat/readdir. The CLI decides what a
- * non-`none` verdict costs (A6 §F26: refuse with exit 2, overridable by `--force` or a TTY
- * confirmation) — `home-dir` uses the exact same override path as `temp-dir`/`multi-repo`, so
- * someone whose home really is the project they mean to work in still has a way through.
- */
-export function classifyInitTarget(dir: string, deps: ClassifyInitTargetDeps = {}): InitTargetVerdict {
-  const exists = deps.exists ?? existsSync;
-  const readDir = deps.readDir ?? defaultReadDir;
-  const resolved = realOrSelf(dir);
-  const home = realOrSelf(deps.home ?? homedir());
-
-  if (isHomeOrAncestor(resolved, home)) {
-    return {
-      risk: "home-dir",
-      detail: `${resolved} is your home directory (or an ancestor of it) — writing agent config here would apply it to everything underneath, not to one project`,
-    };
-  }
-
-  if (isGitRepoRoot(resolved, exists)) return { risk: "none", detail: "" };
-
-  const tempRoots = (deps.tempRoots ?? defaultTempRoots()).map(realOrSelf);
-  const containingTempRoot = tempRoots.find((root) => isInside(root, resolved));
-  if (containingTempRoot !== undefined) {
-    return {
-      risk: "temp-dir",
-      detail: `${resolved} is inside the temporary directory ${containingTempRoot} and is not a git repository`,
-    };
-  }
-
-  const repoChildren: string[] = [];
-  for (const name of readDir(resolved)) {
-    const child = join(resolved, name);
-    try {
-      if (!lstatSync(child).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (isGitRepoRoot(child, exists)) repoChildren.push(name);
-    if (repoChildren.length >= 2) break;
-  }
-  if (repoChildren.length >= 2) {
-    return {
-      risk: "multi-repo",
-      detail: `${resolved} is not a git repository but contains several (${repoChildren.sort().join(", ")}, …)`,
-    };
-  }
-
-  return { risk: "none", detail: "" };
 }

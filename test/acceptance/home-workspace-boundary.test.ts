@@ -7,7 +7,8 @@
 // entry point rather than a stand-in (contract.md's acceptance list, verbatim):
 //
 //   1. the nearest enclosing repository is home, resolved through the real no-`--dir` CLI path;
-//   2. the same through the explicit-`--dir` CLI path;
+//   2. the same through the explicit-`--dir` CLI path (`glosa init`'s home-dir refusal went with
+//      `glosa init` in #152; `doctor`'s explicit-directory advice, 2b, is what remains);
 //   3. `glosa open <file>` whose enclosing repository is home does not register `$HOME`, through
 //      the real `WorkspaceIndex.resolveOpenTarget`;
 //   4. a run seeded with an EXISTING `$HOME` directory registration does not silently reuse it,
@@ -15,7 +16,7 @@
 //
 // Plus: `doctor` names the resolved workspace root, in both the human and `--json` shapes.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../../packages/cli/src/index.ts";
@@ -80,7 +81,7 @@ describe("workspace resolution never adopts the home directory (issue #146)", ()
     try {
       result = await captureStdout(() =>
         run(["doctor", "--json"], {
-          init: { homeDir: home, glosaHomeDir },
+          home: { homeDir: home },
           doctor: { createClient: async () => client, glosaHome: () => glosaHomeDir },
         }),
       );
@@ -106,7 +107,7 @@ describe("workspace resolution never adopts the home directory (issue #146)", ()
     try {
       result = await captureStdout(() =>
         run(["doctor"], {
-          init: { homeDir: home, glosaHomeDir },
+          home: { homeDir: home },
           doctor: { createClient: async () => client, glosaHome: () => glosaHomeDir },
         }),
       );
@@ -120,47 +121,13 @@ describe("workspace resolution never adopts the home directory (issue #146)", ()
     expect(line).not.toBe(`[PASS] workspace-root: resolved workspace root: ${home}`);
   });
 
-  test("2. explicit --dir: `glosa init` on the home directory itself is refused (home-dir risk), not silently adopted", async () => {
-    const { home } = freshDotfilesHome();
-    const glosaHomeDir = freshDir("glosa-146-state-");
-
-    const refused = await captureStdout(() =>
-      run(["init", home, "--agent", "claude-code", "--json"], {
-        init: { homeDir: home, glosaHomeDir },
-      }),
-    );
-    const refusedBody = JSON.parse(refused.out);
-    expect(refusedBody.ok).toBe(false);
-    expect(refusedBody.error.code).toBe("unsafe-init-target");
-    expect(refusedBody.error.message).toContain(home);
-    expect(refusedBody.exit_code).toBe(2);
-    // Nothing durable was written — the refusal actually stopped the write, not merely warned.
-    expect(existsSync(join(home, ".claude"))).toBe(false);
-
-    // The refusal is clearable, per the design requirement: --force proceeds exactly like the
-    // existing temp-dir/multi-repo risk classes.
-    const forced = await captureStdout(() =>
-      run(["init", home, "--agent", "claude-code", "--force", "--json"], {
-        init: { homeDir: home, glosaHomeDir },
-      }),
-    );
-    const forcedBody = JSON.parse(forced.out);
-    expect(forcedBody.ok).toBe(true);
-    expect(existsSync(join(home, ".claude", "settings.json"))).toBe(true);
-  });
-
   test("2b. an explicit directory is never told its project root is $HOME", async () => {
-    // The case above observes `classifyInitTarget`, which is a different mechanism: an independent
-    // review proved it by pointing at ablation A, which removes `enclosingGitRootWithin`'s boundary
-    // and leaves that case green. Writing the obvious replacement — assert the resolved dir is not
-    // $HOME — turned out to assert nothing either: `resolveCommandDir`'s explicit-directory branch
-    // ALWAYS returns the directory the user typed, so the boundary cannot change it.
-    //
-    // What the boundary does change on this path is the advice. Unbounded, the enclosing repository
-    // of a directory under a dotfiles home is $HOME, so the command emits `not-repository-root`
-    // telling the user their real project root is their home directory and inviting them to run
-    // `glosa init` there. That is issue #96's accident pointed at home, and it is the observable
-    // this entry point actually owns.
+    // Asserting the resolved dir is not $HOME would assert nothing: `resolveCommandDir`'s
+    // explicit-directory branch ALWAYS returns the directory the user typed, so the boundary cannot
+    // change it. What the boundary does change on this path is the advice. Unbounded, the enclosing
+    // repository of a directory under a dotfiles home is $HOME, so the command emits
+    // `not-repository-root` telling the user their real project root is their home directory. That
+    // is issue #96's accident pointed at home, and it is the observable this entry point owns.
     const { home, nested } = freshDotfilesHome();
     const glosaHomeDir = freshDir("glosa-146-state-");
     const client = new FakeGlosaApiClient();
@@ -168,7 +135,7 @@ describe("workspace resolution never adopts the home directory (issue #146)", ()
     // from the cwd branch case 1 already covers. `doctor` takes its target positionally.
     const result = await captureStdout(() =>
       run(["doctor", nested, "--json"], {
-        init: { homeDir: home, glosaHomeDir },
+        home: { homeDir: home },
         doctor: { createClient: async () => client, glosaHome: () => glosaHomeDir },
       }),
     );

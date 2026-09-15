@@ -29,7 +29,7 @@ describe("SessionPushRegistry", () => {
     const entry = conversation("message-1", "session-a");
     expect(await registry.send("session-a", entry, 1)).toBe(false);
 
-    const unregister = registry.register("session-a", (value) => seen.push(value.id));
+    const unregister = registry.register("session-a", (value) => seen.push(value.id), undefined, "monitor");
     const accepted = registry.send("session-a", entry, 100);
     expect(registry.has("session-a")).toBe(true);
     expect(registry.has("session-b")).toBe(false);

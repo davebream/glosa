@@ -94,10 +94,12 @@ function shortSessionId(sessionId) {
 }
 
 /**
- * Mount the non-modal control. `setState` accepts independently fetched wiring and aggregate
- * status bodies; an absent body renders an honest unavailable state instead of retaining green.
+ * Mount the non-modal control. `setState` accepts the aggregate status body; an absent body
+ * renders an honest unavailable state instead of retaining green. Connection state (#95) is the
+ * only signal — there is no separate "wired" installation state any more (#152): a session either
+ * has a live explicit binding or the workspace's entries wait here.
  */
-export function mountAgentFeedback(host, { overlayHost = host, onWire = async () => {}, clipboard } = {}) {
+export function mountAgentFeedback(host, { overlayHost = host, clipboard } = {}) {
   const trigger = el("button", {
     className: "glosa-agent-feedback-trigger",
     type: "button",
@@ -116,7 +118,6 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
   host.append(trigger);
   overlayHost.append(popover);
 
-  let wiring = null;
   let connection = null;
   let selectedProvider = "";
   let selectedSlug = null;
@@ -134,7 +135,7 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
   }
 
   function setOpen(open) {
-    if (!open || !connection || !wiring) {
+    if (!open || !connection) {
       close({ restoreFocus: open === false });
       return;
     }
@@ -149,7 +150,7 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
   }
 
   function renderTrigger() {
-    if (!connection || !wiring) {
+    if (!connection) {
       trigger.textContent = "Agent feedback unavailable";
       trigger.setAttribute("data-state", "unknown");
       trigger.setAttribute("aria-label", "Agent feedback status unavailable");
@@ -164,15 +165,13 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
       stale: "Agent stale",
       unbound: "Connect agent",
     };
-    const feedbackOff = wiring.state === "unwired" ? " · feedback off" : "";
-    const pendingCount = connection.workspace.pending_count ?? wiring.pending_count ?? 0;
+    const pendingCount = connection.workspace.pending_count ?? 0;
     const pending = pendingCount > 0 ? ` · ${pendingCount} queued` : "";
-    const label = `● ${stateLabels[connection.state]}${feedbackOff}${pending}`;
+    const label = `● ${stateLabels[connection.state]}${pending}`;
 
     trigger.disabled = false;
     trigger.textContent = label;
     trigger.setAttribute("data-state", connection.state);
-    trigger.setAttribute("data-wiring", wiring.state);
     trigger.setAttribute("aria-label", label.replace("● ", "Agent feedback: "));
     trigger.title = label.replace("● ", "");
   }
@@ -272,7 +271,7 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
   }
 
   function renderPopover() {
-    if (!connection || !wiring) return;
+    if (!connection) return;
     popover.textContent = "";
     const closeButton = el("button", {
       className: "glosa-agent-feedback-close",
@@ -309,27 +308,15 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
         }),
       );
       if (connection.state === "stale") renderSessions(popover);
-      renderConnectControls(popover);
-    }
-
-    if (wiring.state === "unwired") {
-      popover.append(
-        el("div", { className: "glosa-agent-feedback-wiring" }, [
+      if (connection.state === "unbound") {
+        popover.append(
           el("p", {
-            textContent:
-              "Feedback integration is off. Prompts can still bind a session after the integration is installed.",
+            className: "glosa-agent-feedback-waiting",
+            textContent: "No session connected — annotations wait here.",
           }),
-          el("button", {
-            className: "glosa-secondary-button",
-            type: "button",
-            textContent: "Wire it now",
-            onClick: async () => {
-              close();
-              await onWire();
-            },
-          }),
-        ]),
-      );
+        );
+      }
+      renderConnectControls(popover);
     }
   }
 
@@ -350,7 +337,6 @@ export function mountAgentFeedback(host, { overlayHost = host, onWire = async ()
   renderTrigger();
   return {
     setState(next) {
-      wiring = next.wiring ?? null;
       connection = deriveAgentConnection(next.status, next.slug);
       const slug = connection?.workspace?.slug ?? null;
       const providers = connection?.workspace?.connect?.providers ?? [];

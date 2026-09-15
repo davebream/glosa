@@ -5,13 +5,14 @@ documents; the human reads them rendered, annotates in the margins, and edits; g
 annotations and edits back to the right agent session with honest provenance. **Companion topology**:
 the agent runs as a normal interactive session in the user's terminal; glosa is a singleton daemon
 beside it serving a browser SPA. Claude Code is the deep, required integration; the design is
-agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one provider interface).
+agent-agnostic (Codex and other push/MCP-capable CLIs supported through one provider interface).
 
 Status: **experimental public alpha.** The implementation and deterministic acceptance suites exist,
 and token rotation/revocation has shipped. The recorded
 [T8 rehearsal](docs/compatibility/2026-07-22-t8-manual-rehearsal.md) passed the generic scenarios it
 exercised, but maintainer sign-off and the expanded real-session conversation-delivery scenario
-remain pending. This is not yet approved for a live document week.
+remain pending; the rehearsal is re-sequenced behind Phases 0–2 (#19). This is not yet approved for
+a live document week.
 
 ## Read this before writing any code
 
@@ -40,8 +41,9 @@ remain pending. This is not yet approved for a live document week.
    proves it; edits made in glosa's editor are `human` by construction; everything else is `unknown`,
    never falsely `human` (A4 §F05).
 4. **No cmux.** glosa is fully decoupled from cmux — not a dependency, not a delivery mechanism, not the
-   UI host. The SPA runs in any browser over `http://127.0.0.1`. Delivery uses each agent's own
-   hooks/MCP (channels for Claude; blocking gate + turn-boundary + MCP-pull cross-agent) (R4).
+   UI host. The SPA runs in any browser over `http://127.0.0.1`. Delivery uses each agent's own push
+   transport (Claude: the plugin monitor; Codex: the app-server socket) plus MCP pull — no hooks, no
+   Channels, no `glosa init` (R4).
 5. **Local-first, zero telemetry, zero external runtime calls.** Manuscripts may hold special-category
    personal data; class-F network egress is CSP-blocked (A3). Scrub `ANTHROPIC_API_KEY` from every
    spawned child env. **The daemon and SPA runtime make no outbound network calls at all.** The single

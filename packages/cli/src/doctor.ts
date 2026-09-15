@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Eighteen enumerated checks — A6's own
-// command-surface table names exactly 18 (platform, bun, git, claude-code, browser, daemon+proto,
-// token/pairing, workspace, hooks, mcp, mcp-enabled, pending-delivery, orphaned-state, optional
-// Channel status, transcript-root, orphaned-entries, workspace-root).
+// @glosa/cli — `glosa doctor [dir] --json` (A6 §F26/§F30). Sixteen enumerated checks — A6's own
+// command-surface table names exactly 16 (platform, bun, git, claude-code, browser, daemon+proto,
+// token/pairing, workspace, pending-delivery, orphaned-state, claude-monitor, transcript-root,
+// claude-config-roots, orphaned-entries, workspace-root, legacy-config).
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
 import {
@@ -19,7 +20,6 @@ import {
 } from "../../daemon/src/index.ts";
 import type { GlosaApiClient, StatusSummary } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
-import { checkScopedManifestDrift } from "./scoped-init.ts";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
 
@@ -50,6 +50,9 @@ export interface DoctorDeps {
    * kill something, so doctor names which one it is (issue #139). Never spawns or signals. */
   diagnoseDaemon: (home: string) => Promise<DaemonDiagnosis>;
   env?: Record<string, string | undefined>;
+  /** The user's home, for the `legacy-config` scan of user-scope agent config. Defaults to
+   * `os.homedir()`; injectable so a test can point it at a temp directory. */
+  homeDir?: () => string;
 }
 
 function realRunVersionProbe(cmd: string[]): string | null {
@@ -182,7 +185,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ? check(
             "claude-code",
             "warn",
-            `${claudeVersionOut} is below the optional Channel floor 2.1.80 (hook/MCP fallback remains supported)`,
+            `${claudeVersionOut} is below the plugin floor 2.1.80 — install a newer Claude Code for the glosa plugin`,
           )
         : check("claude-code", "pass", claudeVersionOut ?? `found at ${claudePath}`),
     );
@@ -382,98 +385,10 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     }
   }
 
-  // 9. hooks (manifest hash match / drift)
-  const { manifest, manifests, drifted } = checkScopedManifestDrift(dir, { glosaHomeDir: deps.glosaHome() });
-  if (!manifest) {
-    checks.push(
-      check("hooks", "warn", "no glosa init manifest found — `glosa init` has not been run for this workspace"),
-    );
-  } else if (drifted.length > 0) {
-    checks.push(
-      check(
-        "hooks",
-        "fail",
-        `${drifted.length} node(s) drifted since \`glosa init\`: ${drifted.join(", ")} — re-run \`glosa init\``,
-      ),
-    );
-  } else {
-    const installed = manifests.flatMap((item) =>
-      Object.keys(item.providers).map((provider) => `${provider} (${item.scope})`),
-    );
-    checks.push(check("hooks", "pass", `hooks manifest matches: ${installed.join(", ")}`));
-  }
-
-  // 10. MCP follows the effective scoped/provider manifest rather than assuming workspace Claude.
-  const hasOwnedMcp = manifests.some((item) =>
-    Object.values(item.providers).some((provider) => provider?.files.mcp !== undefined),
-  );
-  const ownedMcpPaths = manifests.flatMap((item) =>
-    Object.values(item.providers)
-      .map((provider) => provider?.files.mcp?.path)
-      .filter((path): path is string => typeof path === "string"),
-  );
-  const mcpDrifted = drifted.some((detail) => ownedMcpPaths.some((path) => detail.startsWith(path)));
-  const mcpPath = join(dir, ".mcp.json");
-  const scopedClaudeMcp = manifests.flatMap((item) => {
-    const ownedMcp = item.providers["claude-code"]?.files.mcp;
-    return ownedMcp === undefined ? [] : [ownedMcp.path];
-  });
-  let mcpDefined =
-    scopedClaudeMcp.length > 0 && !drifted.some((detail) => scopedClaudeMcp.some((path) => detail.startsWith(path)));
-  if (hasOwnedMcp && manifest) {
-    checks.push(
-      check("mcp", mcpDrifted ? "fail" : "pass", `configured through ${manifests.length} scoped manifest(s)`),
-    );
-  } else if (!existsSync(mcpPath)) {
-    checks.push(check("mcp", "warn", "no provider MCP integration is installed — run `glosa init`"));
-  } else {
-    try {
-      const parsed = JSON.parse(readFileSync(mcpPath, "utf8"));
-      mcpDefined = Boolean(parsed?.mcpServers?.glosa);
-      checks.push(
-        mcpDefined
-          ? check("mcp", "pass", `${mcpPath} has a "glosa" MCP server entry`)
-          : check("mcp", "warn", `${mcpPath} has no "glosa" MCP server entry — run \`glosa init\``),
-      );
-    } catch {
-      checks.push(check("mcp", "fail", `${mcpPath} is not valid JSON`));
-    }
-  }
-
-  // 11. mcp-enabled — the enabled-but-undefined trap (issue #78): a settings layer force-enables
-  // an MCP server named "glosa" via enabledMcpjsonServers while .mcp.json defines no such server.
-  // The workspace LOOKS half-configured (Claude Code shows the enablement) but the server can
-  // never load. Invalid/absent settings layers are tolerated — this check only ever reads.
-  const enablingLayers: string[] = [];
-  for (const settingsFile of [join(dir, ".claude", "settings.json"), join(dir, ".claude", "settings.local.json")]) {
-    if (!existsSync(settingsFile)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(settingsFile, "utf8"));
-      const enabled = parsed?.enabledMcpjsonServers;
-      if (Array.isArray(enabled) && enabled.includes("glosa")) enablingLayers.push(settingsFile);
-    } catch {
-      // invalid JSON in a settings layer is the hooks/mcp checks' concern, not this one's
-    }
-  }
-  if (enablingLayers.length > 0 && !mcpDefined) {
-    checks.push(
-      check(
-        "mcp-enabled",
-        "warn",
-        `${enablingLayers.join(", ")} enables an MCP server named "glosa" via enabledMcpjsonServers, but .mcp.json does not define it — run \`glosa init\` to reinstall the entry, or remove "glosa" from enabledMcpjsonServers`,
-      ),
-    );
-  } else if (enablingLayers.length > 0) {
-    checks.push(check("mcp-enabled", "pass", `enabledMcpjsonServers references "glosa" and .mcp.json defines it`));
-  } else {
-    checks.push(check("mcp-enabled", "pass", `no settings layer force-enables an undefined glosa MCP server`));
-  }
-
-  // 12. pending-delivery (issue #79) — entries queued in THIS workspace's bus while delivery
-  // wiring is absent. Reuses check 6's status aggregate; daemon-down -> SKIP (a warn would just
-  // repeat check 6's fail). The hooks verdict above is the wiring signal: annotations queue
-  // regardless of init, but only init-installed hooks ever drain them.
-  const hooksCheck = checks.find((c) => c.name === "hooks");
+  // 9. pending-delivery (issue #79) — entries queued in THIS workspace's bus with no live session
+  // to carry them. Reuses check 6's status aggregate; daemon-down -> SKIP (a warn would just
+  // repeat check 6's fail). Connection state (#95) is the only wiring signal: a session that
+  // registers (monitor, app-server, or MCP first tool call) drains the queue.
   if (!status) {
     checks.push(check("pending-delivery", "skip", "daemon unreachable — pending-annotation count not checked"));
   } else {
@@ -485,22 +400,31 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     }
     const ws = status.workspaces.find((w) => w.path === canonicalDir || w.path === dir);
     const pending = ws?.pending_count ?? 0;
-    if (pending > 0 && hooksCheck?.status !== "pass") {
+    const liveSession = status.sessions.some(
+      (session) => session.liveness === "alive" && (session.workspace_binding === ws?.path || session.cwd === ws?.path),
+    );
+    if (pending > 0 && !liveSession) {
       checks.push(
         check(
           "pending-delivery",
           "warn",
-          `${pending} annotation(s) are queued for this workspace but delivery is not wired — they will sit until \`glosa init\` runs and a Claude Code session restarts`,
+          `${pending} entr${pending === 1 ? "y" : "ies"} queued, no live session — they wait until a session connects (plugin monitor, Codex app-server, or any glosa MCP tool call)`,
         ),
       );
     } else if (pending > 0) {
-      checks.push(check("pending-delivery", "pass", `${pending} pending annotation(s); delivery wiring present`));
+      checks.push(
+        check(
+          "pending-delivery",
+          "pass",
+          `${pending} pending entr${pending === 1 ? "y" : "ies"}; a live session is connected`,
+        ),
+      );
     } else {
       checks.push(check("pending-delivery", "pass", "no annotations queued for this workspace"));
     }
   }
 
-  // 13. orphaned-state (issue #79) — home-state buses (`~/.glosa/state/<id>`) holding pending
+  // 10. orphaned-state (issue #79) — home-state buses (`~/.glosa/state/<id>`) holding pending
   // entries with no live registration: user work stranded by a removed registration. Recovery is
   // re-opening the original path (deterministic registration ids reclaim the surviving bus).
   if (!status) {
@@ -519,7 +443,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 14. A monitor is per interactive Claude session, not a durable installation property.
+  // 11. A monitor is per interactive Claude session, not a durable installation property.
   const monitorDisabledBy = ["DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"].filter(
     (name) => deps.env?.[name] === "1",
   );
@@ -537,7 +461,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
-  // 15. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
+  // 12. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();
   checks.push(
     existsSync(configDir)
@@ -549,10 +473,10 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
-  // 16. claude-config-roots — every directory a Claude session on this machine might root its
+  // 13. claude-config-roots — every directory a Claude session on this machine might root its
   // transcripts in. An account switcher runs Claude with its own CLAUDE_CONFIG_DIR, so sessions
-  // exist that this active root knows nothing about. Reporting them makes an unwired switcher
-  // instance visible instead of silently unsupported.
+  // exist that this active root knows nothing about. Reporting them makes a switcher instance
+  // without the plugin visible instead of silently unsupported.
   const roots = deps.claudeConfigRoots().filter((root) => existsSync(root));
   const otherRoots = roots.filter((root) => root !== configDir);
   checks.push(
@@ -562,13 +486,12 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
           "claude-config-roots",
           "warn",
           `${roots.length} Claude config roots found (${otherRoots.join(", ")} besides ${configDir}). ` +
-            "Transcripts from all of them are readable; agent wiring installed at user scope reaches " +
-            "only the active root — run `glosa init --scope user` with CLAUDE_CONFIG_DIR set to each " +
-            "of the others to wire them too",
+            "Transcripts from all of them are readable; a plugin is installed per config root — run " +
+            "`/plugin install glosa` in a session started under each of the others too",
         ),
   );
 
-  // 17. orphaned-entries (issue #142) — journal entries in THIS workspace's bus that are durably
+  // 14. orphaned-entries (issue #142) — journal entries in THIS workspace's bus that are durably
   // created and not yet terminal, but whose inbox payload has gone missing (hand-removed, or
   // otherwise lost). Reuses check 6's status aggregate exactly as check 12 does; daemon-down ->
   // SKIP, same reasoning as check 12 (a warn would just repeat check 6's fail). Recovery is
@@ -597,14 +520,81 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 18. workspace-root (issue #146) — the directory this invocation actually resolved as its
+  // 15. workspace-root (issue #146) — the directory this invocation actually resolved as its
   // workspace, so a boundary decision is visible here rather than only inferable from an unusual
   // shadow-store path (`~/.glosa/shadow.git` on a dotfiles-home machine was the original symptom).
   // `dir` already passed through the caller's bounded `resolveCommandDir`/`enclosingGitRootWithin`
   // — this check reports the outcome, it does not re-derive it.
   checks.push(check("workspace-root", "pass", `resolved workspace root: ${dir}`));
 
+  // 16. legacy-config (#152) — glosa entries `glosa init` used to write into agent config. They
+  // are inert now (`glosa hook` is a silent stub for one release, and no MCP entry outside the
+  // plugin is needed), but they are the user's files, so doctor names them and never edits them.
+  const leftovers = scanLegacyConfig(dir, deps);
+  checks.push(
+    leftovers.length === 0
+      ? check("legacy-config", "pass", "no leftover glosa hook/MCP entries from `glosa init`")
+      : check(
+          "legacy-config",
+          "warn",
+          `leftover glosa entries from the removed \`glosa init\` can be deleted: ${leftovers.join(", ")}`,
+        ),
+  );
+
   return checks;
+}
+
+/** Read-only scan of the files `glosa init` used to own, in both scopes. A file is listed once
+ * when it still carries a `glosa hook` command, a `glosa` MCP server, or a glosa ownership
+ * manifest. Unreadable or invalid files are skipped — this is a hint, not a diagnosis. */
+function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
+  const home = deps.homeDir?.() ?? homedir();
+  const codexHome = deps.env?.CODEX_HOME ?? join(home, ".codex");
+  const found: string[] = [];
+  const jsonMentionsGlosa = (path: string): boolean => {
+    if (!existsSync(path)) return false;
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> | null;
+      if (!parsed || typeof parsed !== "object") return false;
+      const hooks = JSON.stringify(parsed.hooks ?? null);
+      if (/glosa[^"]*\bhook\b/.test(hooks)) return true;
+      const servers = parsed.mcpServers as Record<string, unknown> | undefined;
+      if (servers && typeof servers === "object" && "glosa" in servers) return true;
+      const enabled = parsed.enabledMcpjsonServers;
+      return Array.isArray(enabled) && enabled.includes("glosa");
+    } catch {
+      return false;
+    }
+  };
+  const tomlMentionsGlosa = (path: string): boolean => {
+    if (!existsSync(path)) return false;
+    try {
+      return /^\s*\[mcp_servers\.glosa\]/m.test(readFileSync(path, "utf8"));
+    } catch {
+      return false;
+    }
+  };
+  for (const path of [
+    join(dir, ".claude", "settings.json"),
+    join(dir, ".claude", "settings.local.json"),
+    join(deps.claudeConfigDir(), "settings.json"),
+    join(dir, ".mcp.json"),
+    join(dir, ".codex", "hooks.json"),
+    join(codexHome, "hooks.json"),
+  ]) {
+    if (jsonMentionsGlosa(path)) found.push(path);
+  }
+  for (const path of [join(dir, ".codex", "config.toml"), join(codexHome, "config.toml")]) {
+    if (tomlMentionsGlosa(path)) found.push(path);
+  }
+  for (const path of [
+    join(dir, ".glosa", "init-manifest.json"),
+    join(dir, ".claude", ".glosa-init.json"),
+    join(deps.glosaHome(), "init-manifest.json"),
+  ]) {
+    if (existsSync(path)) found.push(path);
+  }
+  return found;
 }
 
 export async function runDoctor(
@@ -632,7 +622,7 @@ export function printDoctorResult(result: CommandEnvelope<DoctorData>, json: boo
     return;
   }
   // Command-level warnings (e.g. #96's "this directory isn't the repo root") sit outside the
-  // 18 enumerated checks, so they get their own line rather than a 19th check.
+  // 16 enumerated checks, so they get their own line rather than a 17th check.
   for (const warning of result.warnings) {
     process.stderr.write(`glosa doctor: warning: ${warning.message}\n`);
   }

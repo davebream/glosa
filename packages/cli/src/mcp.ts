@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Product-scoped MCP stdio server: durable inbox pull/get, metadata, session bind,
-// conversation acknowledgement, and the optional Claude Channel notification rung.
+// delivery acknowledgement, and the Codex app-server attachment.
 import { existsSync, lstatSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
@@ -26,8 +26,6 @@ import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
 import {
   askInputSchema,
   askOutputSchema,
-  conversationAckInputSchema,
-  conversationAckOutputSchema,
   deliveryAckInputSchema,
   deliveryAckOutputSchema,
   inboxGetInputSchema,
@@ -66,7 +64,7 @@ export interface McpDeps {
   createApiClient: (signal?: AbortSignal) => Promise<GlosaApiClient>;
   cwd?: () => string;
   sessionId?: () => string | undefined;
-  session?: (provider?: string) => { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null;
+  session?: (provider?: string) => { session_id: string; provider: string; cwd: string } | null;
   startCodexAttachment?: (
     options: { sessionId: string; workspace: string; cwd: string },
     signal: AbortSignal,
@@ -81,7 +79,6 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_metadata_clear",
   "glosa_session_bind",
   "glosa_delivery_ack",
-  "glosa_conversation_ack",
   "glosa_present",
   "glosa_ask",
 ] as const;
@@ -255,39 +252,6 @@ export interface GlosaMcpServer {
 }
 
 /**
- * MCP conversation-push reconnect policy (issue 178). The SPA's SSE reconnect (A1 §8.3, 250ms
- * base / 5s cap) is a *different* stream serving a browser tab a human is watching; this stream
- * feeds an agent turn, so a tight floor would spin the daemon and the agent's own token budget
- * for no observable benefit. Every retry path below — clean EOF, a broken stream, and
- * createHookClient/daemon-discovery failure — shares one bounded exponential/jittered wait:
- * floor 5,000ms (the issue's explicit minimum), doubling per consecutive short-lived attempt,
- * capped at MCP_PUSH_MAX_DELAY_MS. Jitter is added on top of the target delay only (never
- * subtracted), so the floor and cap can never be violated by randomness.
- */
-export const MCP_PUSH_MIN_DELAY_MS = 5_000;
-export const MCP_PUSH_MAX_DELAY_MS = 60_000;
-export const MCP_PUSH_BACKOFF_FACTOR = 2;
-export const MCP_PUSH_JITTER_RATIO = 0.2;
-/**
- * A push-stream connection refreshes its session lease every 20s while open (A1 §5.12).
- * Staying connected for at least one refresh cycle is treated as genuine recovery and resets
- * backoff to the floor; anything shorter (including a clean EOF that closes immediately) is
- * treated as a failed attempt so a daemon that keeps accepting-then-dropping the connection
- * cannot reset backoff into a reconnect storm.
- */
-export const MCP_PUSH_RECOVERY_MS = 20_000;
-/**
- * Registered/alive/unbound (409 `conflict`) means the daemon knows this session but no workspace
- * is explicitly bound to it yet — only a human/agent action (`glosa_session_bind`, `glosa_present`
- * with an unlocked mode) resolves that, never the passage of time. Retrying on the normal capped
- * backoff would still poll pointlessly every minute forever, so this state instead uses one long,
- * fixed, bounded interval — a deliberately different, truthful reason from "the last attempt
- * failed" — and never escalates further. Recovery is preserved: once a bind lands, the very next
- * attempt on this interval succeeds normally.
- */
-export const MCP_PUSH_UNBOUND_RETRY_MS = 300_000;
-
-/**
  * The shim's one total shutdown deadline (issue #140), entered by stdin EOF, SIGHUP, or the
  * parent poll noticing reparenting. Bounds intake stop and both clients' in-flight and pending
  * calls; when it expires the process ends anyway so no path can outlive it. Sized like `MCP_PUSH_MIN_DELAY_MS`: generous for an aborted fetch to unwind locally, far
@@ -315,48 +279,6 @@ function liveParentPid(): number {
   return libSystem.symbols.getppid();
 }
 
-/**
- * The issue's expected behavior is explicit: a shim that cannot bind "backs off to a long
- * interval and says why". stdout is the JSON-RPC channel a broken write here would corrupt, so
- * this goes to stderr via `console.error` — the same channel/mechanism the daemon already uses
- * for its own operator-facing diagnostics — never stdout, and never on every ordinary retry.
- */
-function logUnboundPushRetry(sessionId: string): void {
-  console.error(
-    `glosa mcp: session ${sessionId} is registered but not bound to a workspace; push retries move to a fixed ` +
-      `${MCP_PUSH_UNBOUND_RETRY_MS}ms interval until a bind resolves it (glosa_session_bind or glosa_present)`,
-  );
-}
-
-/** Bounded exponential backoff, jitter added on top of the target only — floor/cap are exact. */
-export function pushReconnectDelayMs(attempt: number): number {
-  const target = Math.min(MCP_PUSH_MIN_DELAY_MS * MCP_PUSH_BACKOFF_FACTOR ** attempt, MCP_PUSH_MAX_DELAY_MS);
-  const jitter = Math.random() * target * MCP_PUSH_JITTER_RATIO;
-  return Math.min(MCP_PUSH_MAX_DELAY_MS, target + jitter);
-}
-
-/** The reset condition: a connection held for one lease-refresh cycle counts as recovered. */
-export function nextPushAttempt(previousAttempt: number, connectedMs: number): number {
-  return connectedMs >= MCP_PUSH_RECOVERY_MS ? 0 : previousAttempt + 1;
-}
-
-/** Resolves after `ms` or immediately on abort; always releases its timer and listener. */
-export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    timer.unref?.();
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   // Bound into every client an active tool handler creates. It fires immediately when shutdown
   // starts, so ordinary calls are unaffected until then; once it fires, in-flight and future calls
@@ -371,7 +293,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   // ordering is what makes the gate and the `activeCalls` snapshot agree with each other.
   let intakeClosed = false;
   const syntheticId = `mcp-${process.pid}-${randomUUID()}`;
-  let explicitlyBound: { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null = null;
+  let explicitlyBound: { session_id: string; provider: string; cwd: string } | null = null;
   const host = (provider?: string) =>
     deps.session?.(provider) ??
     (explicitlyBound && (!provider || explicitlyBound.provider === provider) ? explicitlyBound : null) ??
@@ -418,19 +340,14 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     }
   };
   const acknowledgements = new DeliveryAcknowledgements();
-  const pushAbort = new AbortController();
-  let pushTask: Promise<void> | null = null;
   let codexAttachAbort: AbortController | null = null;
   const codexAttachTasks = new Set<Promise<void>>();
 
   const server = new McpServer(
     { name: "glosa", version: CLI_VERSION },
     {
-      capabilities: {
-        experimental: { "claude/channel": {} },
-      },
       instructions:
-        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting. Legacy channel conversation messages use glosa_conversation_ack.",
+        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting.",
     },
   );
 
@@ -664,37 +581,6 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   );
 
   registerTool(
-    "glosa_conversation_ack",
-    {
-      title: "Acknowledge conversation message",
-      description:
-        "Acknowledge that a targeted glosa conversation message reached this agent context (presented). Required after channel delivery; hook delivery remains the safety fallback.",
-      inputSchema: conversationAckInputSchema,
-      outputSchema: conversationAckOutputSchema,
-      annotations: {
-        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
-        title: "Acknowledge conversation message",
-      },
-    },
-    async ({ message_id: messageId, session_id: requestedSession }) => {
-      const hostSession = host()?.session_id;
-      if (hostSession && requestedSession && requestedSession !== hostSession) {
-        throw new Error("session_id does not match the MCP host session");
-      }
-      const sessionId = hostSession ?? requestedSession;
-      if (!sessionId) {
-        throw new Error(
-          "glosa_conversation_ack requires an explicit session_id when the MCP host does not provide one",
-        );
-      }
-      const client = await deps.createHookClient(shutdownAbort.signal);
-      if (!client.acknowledgeConversation) throw new Error("conversation acknowledgement is unavailable");
-      await client.acknowledgeConversation(sessionId, messageId, "presented");
-      return toolResult({ message_id: messageId, delivered: true });
-    },
-  );
-
-  registerTool(
     "glosa_present",
     {
       title: "Present an artifact",
@@ -853,69 +739,6 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     },
   );
 
-  const startPush = () => {
-    let session: ReturnType<typeof host>;
-    try {
-      session = host();
-    } catch {
-      return;
-    } // conflicting identity is reported by the next tool call
-    const sessionId = session?.session_id;
-    if (!sessionId || pushTask || !(session?.channelPush || deps.sessionId)) return;
-    pushTask = (async () => {
-      // -1 means "no failed attempt recorded yet" — nextPushAttempt(-1, …) yields 0, i.e. the
-      // very first retry after a failure uses the floor delay, not an already-doubled one.
-      let attempt = -1;
-      while (!pushAbort.signal.aborted) {
-        let unbound = false;
-        // Set only once the stream response is actually established (see daemon-client.ts's
-        // `onOpen`) — never at loop-top. A slow `createHookClient`/daemon-discovery, or a request
-        // that stalls and fails without ever getting a response, must escalate backoff like any
-        // other failed attempt, not be mistaken for a held-open connection nearing the recovery
-        // threshold just because a lot of wall-clock time passed.
-        let connectedAt: number | null = null;
-        try {
-          const client = await deps.createHookClient(shutdownAbort.signal);
-          if (!client.openConversationPush || !client.acknowledgeConversation) return;
-          await client.openConversationPush(
-            sessionId,
-            async (entry) => {
-              if (entry.kind !== "conversation_message") return;
-              await server.server.notification({
-                method: "notifications/claude/channel",
-                params: { content: entry.message, meta: { message_id: entry.id } },
-              } as never);
-              await client.acknowledgeConversation?.(sessionId, entry.id, "transport_accepted");
-            },
-            pushAbort.signal,
-            () => {
-              connectedAt = Date.now();
-            },
-          );
-          // Clean EOF (daemon restart, deliberate close): falls through to the same
-          // recovery/backoff accounting as a thrown stream failure below.
-        } catch (error) {
-          if (pushAbort.signal.aborted) return;
-          // 409 conflict ("session is not explicitly bound") is a distinct, non-transient state
-          // from 404 ("unknown live session") — never let one masquerade as the other.
-          unbound = isApiError(error) && error.status === 409;
-        }
-        if (pushAbort.signal.aborted) return;
-        if (unbound) {
-          attempt = -1;
-          logUnboundPushRetry(sessionId);
-          await abortableDelay(MCP_PUSH_UNBOUND_RETRY_MS, pushAbort.signal);
-          continue;
-        }
-        const connectedMs = connectedAt === null ? 0 : Date.now() - connectedAt;
-        attempt = nextPushAttempt(attempt, connectedMs);
-        await abortableDelay(pushReconnectDelayMs(attempt), pushAbort.signal);
-      }
-    })();
-  };
-
-  server.server.oninitialized = startPush;
-
   return {
     server,
     connect: (transport) => server.connect(new DeliveryAwareTransport(transport, acknowledgements)),
@@ -927,14 +750,12 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       // exists in between (see `wrapped`, above, for the matching synchronous check-and-track).
       intakeClosed = true;
       shutdownAbort.abort();
-      pushAbort.abort();
       codexAttachAbort?.abort();
       // Every admitted request still running — its registration and heartbeat included, not only
       // its handler — is bound to `shutdownAbort` through the client `ensureSession` created for
       // it, so aborting first means this settles quickly rather than abandoning it mid-flight.
       await Promise.allSettled([...activeCalls]);
       await server.close();
-      if (pushTask) await pushTask.catch(() => {});
       await Promise.allSettled([...codexAttachTasks]);
       // Safe to run after the abort above, and only because of it: every pending acknowledgement
       // holds the client its delivery arrived on, which is bound to `shutdownAbort`. The call

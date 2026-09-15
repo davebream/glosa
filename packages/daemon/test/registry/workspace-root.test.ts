@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // issue #96 — the single workspace-root rule shared by `glosa open`'s enclosing-repo resolution
-// and `glosa init`/`glosa doctor`'s cwd default + risky-target guard.
+// and `glosa doctor`'s cwd default.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  classifyInitTarget,
   enclosingGitRootWithin,
   isGitRepoRoot,
   isHomeOrAncestor,
@@ -22,7 +21,7 @@ function real(path: string): string {
 }
 
 /** A `home` argument the fixtures below are never near, so `enclosingGitRootWithin`/
- * `workspaceRootFor`/`classifyInitTarget` behave exactly like their pre-#146 unbounded selves in
+ * `workspaceRootFor` behaves exactly like its pre-#146 unbounded self in
  * every test that isn't specifically about the home boundary. */
 function unrelatedHome(): string {
   return freshWorkspaceDir();
@@ -172,98 +171,5 @@ describe("workspaceRootFor", () => {
     const result = workspaceRootFor(nested, homeLike);
     expect(result).toEqual({ root: real(nested), kind: "literal" });
     cleanup(homeLike);
-  });
-});
-
-describe("classifyInitTarget", () => {
-  test("a directory that is itself a git repo is always risk:none, even under a temp root", () => {
-    const repo = mkdtempSync(join(tmpdir(), "glosa-root-test-"));
-    mkdirSync(join(repo, ".git"));
-    expect(classifyInitTarget(repo, { home: unrelatedHome() }).risk).toBe("none");
-    cleanup(repo);
-  });
-
-  test("a bare directory under $TMPDIR is risk:temp-dir", () => {
-    const dir = mkdtempSync(join(tmpdir(), "glosa-root-test-"));
-    const verdict = classifyInitTarget(dir, { home: unrelatedHome() });
-    expect(verdict.risk).toBe("temp-dir");
-    expect(verdict.detail).toContain("temporary directory");
-    cleanup(dir);
-  });
-
-  test("a bare directory under an injected custom temp root is risk:temp-dir", () => {
-    const scratchRoot = freshWorkspaceDir();
-    const dir = join(scratchRoot, "child");
-    mkdirSync(dir);
-    const verdict = classifyInitTarget(dir, { tempRoots: [scratchRoot], home: unrelatedHome() });
-    expect(verdict.risk).toBe("temp-dir");
-    cleanup(scratchRoot);
-  });
-
-  test("a directory that is not a repo but contains 2+ immediate git-repo subdirectories is risk:multi-repo", () => {
-    // tempRoots: [] isolates this from the temp-dir branch so the multi-repo branch is exercised
-    // in isolation — every real fixture in this suite otherwise lives under the system tmp root,
-    // which would win the ladder first (see workspace-root.ts's ordering).
-    const parent = freshWorkspaceDir();
-    mkdirSync(join(parent, "repo-a", ".git"), { recursive: true });
-    mkdirSync(join(parent, "repo-b", ".git"), { recursive: true });
-    const verdict = classifyInitTarget(parent, { tempRoots: [], home: unrelatedHome() });
-    expect(verdict.risk).toBe("multi-repo");
-    expect(verdict.detail).toContain("repo-a");
-    expect(verdict.detail).toContain("repo-b");
-    cleanup(parent);
-  });
-
-  test("a directory with only ONE git-repo subdirectory is risk:none — the ladder needs 2+", () => {
-    const parent = freshWorkspaceDir();
-    mkdirSync(join(parent, "repo-a", ".git"), { recursive: true });
-    mkdirSync(join(parent, "not-a-repo"));
-    const verdict = classifyInitTarget(parent, { tempRoots: [], home: unrelatedHome() });
-    expect(verdict.risk).toBe("none");
-    cleanup(parent);
-  });
-
-  test("an ordinary project directory (not temp, not a multi-repo parent) is risk:none", () => {
-    const dir = freshWorkspaceDir();
-    const verdict = classifyInitTarget(dir, { tempRoots: [], home: unrelatedHome() });
-    expect(verdict.risk).toBe("none");
-    cleanup(dir);
-  });
-
-  test("temp-dir takes precedence over multi-repo when a target is both", () => {
-    const tempParent = mkdtempSync(join(tmpdir(), "glosa-root-test-"));
-    mkdirSync(join(tempParent, "repo-a", ".git"), { recursive: true });
-    mkdirSync(join(tempParent, "repo-b", ".git"), { recursive: true });
-    const verdict = classifyInitTarget(tempParent, { home: unrelatedHome() });
-    expect(verdict.risk).toBe("temp-dir");
-    cleanup(tempParent);
-  });
-
-  // issue #146 — the `home-dir` rung, placed ABOVE the repo-root rung.
-  test("a dotfiles-style repo AT the home directory is risk:home-dir, not risk:none", () => {
-    const homeLike = freshWorkspaceDir();
-    mkdirSync(join(homeLike, ".git"));
-    const verdict = classifyInitTarget(homeLike, { home: homeLike });
-    expect(verdict.risk).toBe("home-dir");
-    expect(verdict.detail).toContain(homeLike);
-    cleanup(homeLike);
-  });
-
-  test("an ANCESTOR of home is risk:home-dir even when it is not itself a repo", () => {
-    const outer = freshWorkspaceDir();
-    const home = join(outer, "home");
-    mkdirSync(home);
-    const verdict = classifyInitTarget(outer, { home, tempRoots: [] });
-    expect(verdict.risk).toBe("home-dir");
-    cleanup(outer);
-  });
-
-  test("a directory that is merely a SUBdirectory of home is unaffected", () => {
-    const home = freshWorkspaceDir();
-    const project = join(home, "projects", "book");
-    mkdirSync(join(project, ".git"), { recursive: true });
-    const verdict = classifyInitTarget(project, { home });
-    expect(verdict.risk).toBe("none");
-    cleanup(home);
   });
 });

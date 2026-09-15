@@ -57,13 +57,12 @@ for (const { name, make } of providers) {
       expect(typeof detected?.source).toBe("string");
     });
 
-    test("capabilities() returns all four R7 fields as booleans", () => {
+    test("capabilities() returns exactly the two R7 fields, both booleans", () => {
       const provider = make();
       const caps = provider.capabilities(SESSION);
       expect(typeof caps.push).toBe("boolean");
-      expect(typeof caps.gate).toBe("boolean");
-      expect(typeof caps.boundaryDrain).toBe("boolean");
       expect(typeof caps.mcpPull).toBe("boolean");
+      expect(Object.keys(caps).sort()).toEqual(["mcpPull", "push"]);
     });
 
     test("liveness() returns 'alive' or 'stale', never throws for an unknown session", () => {
@@ -81,44 +80,39 @@ for (const { name, make } of providers) {
     test("deliver() resolves to a DeliveryResult with a legal A5 §F23 `via`/`outcome`, never rejects", async () => {
       const provider = make();
       const result = await provider.deliver(SESSION, ENTRY);
-      expect([
-        "monitor",
-        "codex_app_server",
-        "channel",
-        "asyncRewake",
-        "gate",
-        "stop",
-        "userprompt",
-        "mcp_pull",
-      ]).toContain(result.via);
+      expect(["monitor", "codex_app_server", "mcp_pull"]).toContain(result.via);
       expect(["attempted", "transport_accepted", "presented", "failed"]).toContain(result.outcome);
     });
   });
 }
 
-// R7: Claude's plugin capability is provider-wide while Codex push exists only for the exact thread
-// with a live app-server attachment. This checks that split against both real providers.
+// R7: `push` is session-local for BOTH providers — Claude only while that session has a connected
+// plugin monitor, Codex only while that thread has a live app-server attachment. Neither is a
+// provider-wide constant, and neither is inferred from installation. This checks the split against
+// both real providers.
 describe("Claude Code vs Codex — the R7 capability split is session-local", () => {
-  test("Claude Code advertises plugin push; Codex requires its attached session", () => {
+  test("push is false with no transport and true only for the attached session", () => {
     const claude = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
     const codex = new CodexProvider({ liveness: { liveness: () => "alive" } });
+    const monitoredClaude = new ClaudeCodeProvider({
+      liveness: { liveness: () => "alive" },
+      pushAvailable: (session) => session.session_id === SESSION.session_id,
+    });
     const attachedCodex = new CodexProvider({
       liveness: { liveness: () => "alive" },
       pushAvailable: (session) => session.session_id === SESSION.session_id,
     });
-    expect(claude.capabilities(SESSION).push).toBe(true);
+    expect(claude.capabilities(SESSION).push).toBe(false);
     expect(codex.capabilities(SESSION).push).toBe(false);
+    expect(monitoredClaude.capabilities(SESSION).push).toBe(true);
+    expect(monitoredClaude.capabilities({ ...SESSION, session_id: "other" }).push).toBe(false);
     expect(attachedCodex.capabilities(SESSION).push).toBe(true);
+    expect(attachedCodex.capabilities({ ...SESSION, session_id: "other" }).push).toBe(false);
   });
 
-  test("both agree on gate + boundaryDrain + mcpPull all true", () => {
+  test("both agree mcpPull is always true", () => {
     const claude = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
     const codex = new CodexProvider({ liveness: { liveness: () => "alive" } });
-    for (const provider of [claude, codex]) {
-      const caps = provider.capabilities(SESSION);
-      expect(caps.gate).toBe(true);
-      expect(caps.boundaryDrain).toBe(true);
-      expect(caps.mcpPull).toBe(true);
-    }
+    for (const provider of [claude, codex]) expect(provider.capabilities(SESSION).mcpPull).toBe(true);
   });
 });

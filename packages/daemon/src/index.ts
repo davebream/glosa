@@ -10,16 +10,6 @@ export {
   WorkspaceMetadataRegistry,
   workspaceMetadataPath,
 } from "./adapters/workspace-metadata.ts";
-export type {
-  DesiredInstallHook,
-  InitScope,
-  InstallBin,
-  InstallRoots,
-  ProviderDetectionDeps,
-  ProviderId,
-  ProviderInstallDescriptor,
-  ProviderInstallTarget,
-} from "./agent-provider/install.ts";
 // NOTE: `DeliveryOutcome`/`DeliveryVia`/`DeliveryReason` are NOT re-listed here even though
 // `agent-provider/interface.ts` also re-exports them — they already flow through from
 // `bus/index.ts`'s star-export above (the canonical definition lives in `bus/lifecycle.ts`);
@@ -72,12 +62,10 @@ export {
   isCwdAncestorOf,
   SessionRegistry,
 } from "./registry/session-registry.ts";
-export type { ClassifyInitTargetDeps, InitTargetRisk, InitTargetVerdict } from "./registry/workspace-root.ts";
-// issue #96 — the single workspace-root rule. The CLI's `init`/`doctor` cwd defaults and the
-// daemon's own open resolution must agree on what a path's workspace root is, so the rule lives
-// here (cli -> daemon is the only allowed dependency direction) rather than in two copies.
+// issue #96 — the single workspace-root rule. The CLI's `doctor` cwd default and the daemon's own
+// open resolution must agree on what a path's workspace root is, so the rule lives here
+// (cli -> daemon is the only allowed dependency direction) rather than in two copies.
 export {
-  classifyInitTarget,
   enclosingGitRootWithin,
   workspaceRootFor,
 } from "./registry/workspace-root.ts";

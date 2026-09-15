@@ -135,7 +135,6 @@ dropping out of it.
 | `delivery` | `packages/daemon/test/agent-provider/push-registry.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/provider.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/monitor.test.ts` |
-| `delivery` | `packages/providers/claude-code/test/rewake.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/delivery-journal.test.ts` |
 | `delivery` | `packages/providers/codex/test/provider.test.ts` |
 | `delivery` | `packages/providers/codex/test/app-server.test.ts` |
@@ -183,7 +182,7 @@ handoff, route listeners or discard guard must produce a named browser failure.
 
 **Session recovery (#141).** The delivery suite keeps one production MCP stdio process alive while
 its isolated daemon is killed/restarted, for both Claude and Codex environment identities. The next
-tool re-registers without a SessionStart hook; explicit binding restores the target. CLI recovery,
+tool re-registers without any hook; explicit binding restores the target. CLI recovery,
 HTTP error classification, concurrent registration/binding, and transcript confinement are covered.
 An injected clock advances past several lease TTLs with only a push stream open, then verifies
 expiry after cancellation, replacement, credential revocation, and shutdown. These fixtures do not
@@ -201,7 +200,7 @@ section states both layers so neither is mistaken for the other.
 |---|---|---|
 | `fault` | daemon killed at each write step, one legal recovered state | exhaustive byte-offset journal truncation plus a real production daemon process, using an injected composition seam, SIGKILLed/restarted at five boundaries from inbox temp fsync through `entry_created` journal fsync |
 | `security` | the A3 §5 browser attacks | attacks #1/#2 run in installed Chromium against production class-F serving and prove opaque storage, `connect-src`/`img-src` violations, plus zero loopback fetch/WebSocket/image/form requests; the remaining attacks retain their function/socket tests |
-| `explicit-binding-topology` | agent cwd differs from the artifact workspace and routing still succeeds | a real daemon with the production Codex provider queues from a different cwd, is SIGKILLed/restarted, re-registers/binds, then Stop drains and acknowledges the durable message |
+| `explicit-binding-topology` | agent cwd differs from the artifact workspace and routing still succeeds | a real daemon with the production Codex provider queues from a different cwd, is SIGKILLed/restarted, re-registers/binds, then an MCP pull drains and acknowledges the durable message |
 
 **`fault`.** The byte sweep remains exhaustive within its torn-journal model. The real-process layer
 uses an explicit injected composition dependency available only to its test daemon entrypoint; the
@@ -230,11 +229,11 @@ the SPA's tab-storage behavior.
 **`explicit-binding-topology`.** The lower-level in-process adapter test remains because it isolates
 the routing decision. The real-process layer composes the actual `CodexProvider` in the normal daemon,
 crosses localhost HTTP, binds an agent cwd unrelated to the artifact workspace, persists the
-provider's `gate/attempted` result, kills the daemon before presentation, and proves Stop presents
-the exact message after restart. It is a controlled provider integration test, not a live Codex
-session. Real Claude/Codex hook hosts, models, Channels negotiation, credentials, and conversation
-UI remain explicit attended rehearsal work; the deterministic test never invokes a vendor CLI or
-network and never installs hooks/MCP.
+provider's `mcp_pull/attempted` result, kills the daemon before presentation, and proves an MCP
+pull presents the exact message after restart. It is a controlled provider integration test, not a
+live Codex session. Real Claude/Codex hosts, models, credentials, and conversation UI remain
+explicit attended rehearsal work; the deterministic test never invokes a vendor CLI or network and
+never installs the plugin or an MCP entry.
 
 Beyond the named suites, these coverage groups must hold across the full run:
 
@@ -246,7 +245,7 @@ Beyond the named suites, these coverage groups must hold across the full run:
 | Metadata | schema/limits/conflicts, adapter hydration, API/CLI/MCP parity, SPA invalidation |
 | Anchoring | neutral class-R/F fixtures, verbatim range, transformed feedback, stale/ambiguous cases |
 | Attention | delivered→seen→done, action outcomes, `--wait`, badge/tray keyboard and failure recovery |
-| Providers | Channels on/off, acknowledgement split, hook/MCP fallback, async rearm, explicit cross-directory binding |
+| Providers | monitor / app-server push on and off, acknowledgement split, MCP pull fallback, refused legacy `via` values, explicit cross-directory binding |
 | Transcript | partial/corrupt/unknown events, resume/clear/compact, capped tool results, fail-soft UI |
 | Composer | exact-session isolation, idempotent retry/restart, picker, draft recovery, presented-only clearing |
 
@@ -280,9 +279,8 @@ Record without secrets:
 - browser name/version;
 - API contract and metadata descriptor versions.
 
-Attempt optional Channels using the documented activation when available. If activation is unavailable
-or rejected, record that result and require a successful Stop/UserPromptSubmit or MCP fallback with
-journaled delivery attempts.
+Record whether the plugin monitor connected for the session (or why Claude suppressed it). If it
+did not, require a successful MCP pull fallback with journaled delivery attempts.
 
 ## 4. Scenarios
 
@@ -294,7 +292,7 @@ journaled delivery attempts.
 | Parked delivery | entry parks without a live binding and drains after registration/bind |
 | Attention | badge/tray, seen, action-aware response, structured `request-review --wait` completion |
 | Conversation | live mirror; Claude and Codex boundary delivery from different cwd values; restart between queue and presentation; browser clears only after `presented` |
-| Delivery | Channel succeeds when available, otherwise audited hook/MCP fallback succeeds |
+| Delivery | push (monitor / app-server) succeeds when connected, otherwise audited MCP pull succeeds |
 | Browser security | real browser renders locally; class-F sandbox/CSP blocks only a local inert probe attempt |
 
 The SPA must not auto-switch workspaces or steal focus. The tray must support keyboard open/action,
@@ -308,7 +306,7 @@ Write `docs/compatibility/YYYY-MM-DD-t8-manual-rehearsal.md` with:
 - environment/version table;
 - expected versus actual result for every scenario;
 - sanitized evidence references and delivery attempts;
-- failures, mitigations, and Channel/fallback status;
+- failures, mitigations, and push/fallback status;
 - separate **T8 result** and **overall v1 readiness** decisions;
 - **maintainer sign-off: pending** until the human reviews the rendered report.
 

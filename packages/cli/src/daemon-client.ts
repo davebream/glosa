@@ -33,12 +33,12 @@ export interface DrainResult {
   has_more?: boolean;
 }
 
-/** A5 §F23's turn-boundary/watcher `via` values — exactly the ones `POST /api/sessions/:id/drain`
- * accepts (never `channel`/`mcp_pull`, which have their own separate delivery paths). The caller
- * MUST say which hook is actually surfacing this drain right now — `deliver()`'s own proactive
- * `"gate"`/`"attempted"` queuing record (agent-provider/interface.ts) is a SEPARATE, earlier event from
- * this route's `"presented"` confirmation once the drain genuinely happens. */
-export type DrainVia = "gate" | "stop" | "userprompt" | "asyncRewake" | "mcp_pull";
+/** The one `via` `POST /api/sessions/:id/drain` accepts (A5 §F23): the route only ever surfaces an
+ * MCP pull. The push transports (monitor, Codex app-server) have their own stream/ack routes.
+ * `deliver()`'s own proactive `"mcp_pull"`/`"attempted"` queuing record
+ * (agent-provider/interface.ts) is a SEPARATE, earlier event from this route's `"presented"`
+ * confirmation once the pull genuinely happens. */
+export type DrainVia = "mcp_pull";
 
 export interface DrainOptions {
   limit?: number;
@@ -69,27 +69,11 @@ export interface DaemonHookClient {
    * the client abstraction (A7). */
   drainScoped(sessionId: string, opts: ScopedPullDrainOptions): Promise<DrainResult>;
   acknowledge?(sessionId: string, deliveryId: string, outcome: "presented" | "failed", error?: string): Promise<void>;
-  acknowledgeConversation?(
-    sessionId: string,
-    messageId: string,
-    outcome: "transport_accepted" | "presented" | "failed",
-  ): Promise<void>;
   acknowledgePushed?(sessionId: string, entryId: string, outcome: "presented" | "failed"): Promise<void>;
   acknowledgeStreamTransport?(sessionId: string, entryId: string): Promise<void>;
   openSessionStream?(
     sessionId: string,
     transport: "monitor" | "codex_app_server",
-    onEntry: (entry: DrainedEntry) => Promise<void>,
-    signal: AbortSignal,
-    onOpen?: () => void,
-  ): Promise<void>;
-  /**
-   * `onOpen`, when given, fires once the stream response is actually established (headers
-   * received, body readable) — before the first read, so a caller can measure genuine connected
-   * time separately from daemon-discovery latency or a request that never gets a response at all.
-   */
-  openConversationPush?(
-    sessionId: string,
     onEntry: (entry: DrainedEntry) => Promise<void>,
     signal: AbortSignal,
     onOpen?: () => void,
@@ -107,7 +91,7 @@ export interface HttpDaemonClientOptions {
    * Bound into every POST this client instance makes (register/heartbeat/deregister/drain/
    * acknowledge*), issue #140's shutdown owner. Normal callers omit it: ordinary request
    * semantics are unbounded and unchanged, since the signal never fires until its owner aborts
-   * it. `openConversationPush` is unaffected — it already takes its own dedicated signal.
+   * it. `openSessionStream` is unaffected — it already takes its own dedicated signal.
    */
   signal?: AbortSignal;
 }
@@ -191,11 +175,6 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         ...(error ? { error } : {}),
       });
     },
-    async acknowledgeConversation(sessionId, messageId, outcome) {
-      await call(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/${encodeURIComponent(messageId)}/ack`, {
-        outcome,
-      });
-    },
     async acknowledgePushed(sessionId, entryId, outcome) {
       await call(`/api/sessions/${encodeURIComponent(sessionId)}/stream/${encodeURIComponent(entryId)}/ack`, {
         outcome,
@@ -237,39 +216,6 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           const event = frame.match(/^event:\s*(.+)$/m)?.[1];
           const data = frame.match(/^data:\s*(.+)$/m)?.[1];
           if (event !== "delivery" || !data) continue;
-          await onEntry(JSON.parse(data) as DrainedEntry);
-        }
-      }
-    },
-    async openConversationPush(sessionId, onEntry, signal, onOpen) {
-      const res = await fetchRequest(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {
-        headers: {
-          Host: `127.0.0.1:${port}`,
-          Origin: base,
-          // Resolved when the stream is opened, for the same reason as `call` above. A push
-          // stream is long-lived, but its credential is only checked at open.
-          Authorization: `Bearer ${loadToken(glosaHome())}`,
-        },
-        signal,
-      });
-      if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as ApiProblem | null);
-      if (!res.body) throw new Error("push-stream response has no body");
-      onOpen?.();
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffered = "";
-      while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffered += decoder.decode(value, { stream: true });
-        let boundary = buffered.indexOf("\n\n");
-        while (boundary >= 0) {
-          const frame = buffered.slice(0, boundary);
-          buffered = buffered.slice(boundary + 2);
-          boundary = buffered.indexOf("\n\n");
-          const event = frame.match(/^event:\s*(.+)$/m)?.[1];
-          const data = frame.match(/^data:\s*(.+)$/m)?.[1];
-          if (event !== "conversation_message" || !data) continue;
           await onEntry(JSON.parse(data) as DrainedEntry);
         }
       }

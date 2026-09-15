@@ -630,25 +630,11 @@ input,
   color: var(--danger);
 }
 
-.glosa-agent-feedback-wiring {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--border);
-}
-
-.glosa-agent-feedback-wiring p {
-  margin: 0;
+.glosa-agent-feedback-waiting {
+  margin: 0 0 var(--space-3);
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.45;
-}
-
-.glosa-agent-feedback-wiring button {
-  flex: 0 0 auto;
 }
 
 @media (max-width: 639px) {
@@ -659,11 +645,6 @@ input,
   .glosa-agent-feedback-popover {
     right: var(--space-2);
     width: calc(100vw - var(--space-4));
-  }
-
-  .glosa-agent-feedback-wiring {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 

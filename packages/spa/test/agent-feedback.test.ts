@@ -88,48 +88,43 @@ describe("mountAgentFeedback", () => {
     return { host, overlays, mounted };
   }
 
-  test("the queued badge reads the status workspace row first, which is the surface external_edit is excluded from", async () => {
-    // Pins WHICH daemon field the badge renders (#153, contract A3). The daemon excludes
-    // `external_edit` from the badge-facing count at two call sites — `GET /api/status`'s
-    // workspace row and `GET /w/:slug/wiring` — and this is the half that says the row is the one
-    // that reaches the user: given both, the row wins, so an exclusion applied only to `wiring`
-    // would still leave the badge announcing work no agent will ever be offered.
+  test("the queued badge reads the status workspace row, which is the surface external_edit is excluded from", async () => {
+    // Pins WHICH daemon field the badge renders (#153, contract A3): `GET /api/status`'s
+    // workspace row `pending_count`, from which the daemon excludes `external_edit`. There is no
+    // second wiring source any more (#152), so this row is the only one that reaches the user.
     const { host, mounted } = mount({});
-    mounted.setState({
-      slug: "alpha",
-      wiring: { state: "wired", pending_count: 7 },
-      status: statusFor([], { pending_count: 0 }),
-    });
+    mounted.setState({ slug: "alpha", status: statusFor([], { pending_count: 0 }) });
 
     const trigger = host.querySelector(".glosa-agent-feedback-trigger") as HappyButton;
-    expect(trigger.textContent).not.toContain("7 queued");
     expect(trigger.textContent).not.toContain("queued");
   });
 
-  test("combines unbound, feedback-off, and queued state; multi-provider unbound requires a choice", async () => {
+  test("combines unbound and queued state, says entries wait here; multi-provider unbound requires a choice", async () => {
     const writes: string[] = [];
     const { host, overlays, mounted } = mount({
       clipboard: { writeText: async (text: string) => void writes.push(text) },
     });
-    mounted.setState({
-      slug: "alpha",
-      wiring: { state: "unwired", pending_count: 2 },
-      status: statusFor([], { pending_count: 2 }),
-    });
+    mounted.setState({ slug: "alpha", status: statusFor([], { pending_count: 2 }) });
 
     const trigger = host.querySelector(".glosa-agent-feedback-trigger") as HappyButton;
-    expect(trigger.textContent).toBe("● Connect agent · feedback off · 2 queued");
+    expect(trigger.textContent).toBe("● Connect agent · 2 queued");
+    expect(trigger.hasAttribute("data-wiring")).toBe(false);
     trigger.click();
 
+    // #152: connection state is the only signal. Unbound says where the entries are, and never
+    // offers an installation step — there is no wiring to run.
+    expect(overlays.querySelector(".glosa-agent-feedback-waiting")?.textContent).toBe(
+      "No session connected — annotations wait here.",
+    );
+    expect(Array.from(overlays.querySelectorAll("button")).some((button) => button.textContent === "Wire it now")).toBe(
+      false,
+    );
     const select = overlays.querySelector("select") as HappySelect;
     const textarea = overlays.querySelector("textarea") as HappyTextarea;
     const copy = overlays.querySelector(".glosa-agent-feedback-copy") as HappyButton;
     expect(select.value).toBe("");
     expect(textarea.value).toBe("");
     expect(copy.disabled).toBe(true);
-    expect(Array.from(overlays.querySelectorAll("button")).some((button) => button.textContent === "Wire it now")).toBe(
-      true,
-    );
 
     select.value = "codex";
     select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -146,7 +141,6 @@ describe("mountAgentFeedback", () => {
     const { host, overlays, mounted } = mount();
     mounted.setState({
       slug: "alpha",
-      wiring: { state: "wired", pending_count: 0 },
       status: statusFor([
         session({ session_id: "claude-old", provider: "claude-code", liveness: "stale" }),
         session({
@@ -173,7 +167,6 @@ describe("mountAgentFeedback", () => {
     });
     mounted.setState({
       slug: "alpha",
-      wiring: { state: "wired", pending_count: 0 },
       status: statusFor([], { connect: { providers: [providers[0]], cli_fallback: "fallback" } }),
     });
 
@@ -195,12 +188,10 @@ describe("mountAgentFeedback", () => {
     expect(dom.document.activeElement).toBe(trigger);
   });
 
-  test("connected details include multiple live sessions and unwired keeps the consented action", async () => {
-    let wireCalls = 0;
-    const { host, overlays, mounted } = mount({ onWire: async () => void (wireCalls += 1) });
+  test("connected details include multiple live sessions and no waiting line", async () => {
+    const { host, overlays, mounted } = mount();
     mounted.setState({
       slug: "alpha",
-      wiring: { state: "unwired", pending_count: 0 },
       status: statusFor([
         session({ session_id: "claude-live" }),
         session({ session_id: "codex-live", provider: "codex" }),
@@ -212,19 +203,13 @@ describe("mountAgentFeedback", () => {
       "2 agent sessions are connected.",
     );
     expect(overlays.querySelectorAll(".glosa-agent-feedback-sessions li")).toHaveLength(2);
-    const wire = Array.from(overlays.querySelectorAll("button")).find(
-      (button) => button.textContent === "Wire it now",
-    )!;
-    wire.click();
-    await Promise.resolve();
-    expect(wireCalls).toBe(1);
+    expect(overlays.querySelector(".glosa-agent-feedback-waiting")).toBeNull();
   });
 
   test("workspace switching resets provider choice instead of carrying it across workspaces", () => {
     const { host, overlays, mounted } = mount();
     mounted.setState({
       slug: "alpha",
-      wiring: { state: "wired", pending_count: 0 },
       status: statusFor([], { connect: { providers: [providers[0]], cli_fallback: "fallback" } }),
     });
     (host.querySelector("button") as HappyButton).click();
@@ -232,7 +217,6 @@ describe("mountAgentFeedback", () => {
 
     mounted.setState({
       slug: "beta",
-      wiring: { state: "wired", pending_count: 0 },
       status: {
         workspaces: [
           {

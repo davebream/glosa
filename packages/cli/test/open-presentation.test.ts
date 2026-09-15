@@ -10,11 +10,7 @@ import {
   type OpenPresentationDeps,
   runOpenPresentation,
 } from "../src/open-presentation.ts";
-import type { ScopedOwnershipManifest } from "../src/scoped-init.ts";
 import { FakeGlosaApiClient } from "./fake-api-client.ts";
-
-const WIRED_MANIFEST = {} as ScopedOwnershipManifest;
-const WIRED = { manifest: WIRED_MANIFEST, manifests: [WIRED_MANIFEST], drifted: [] as string[] };
 
 describe("open-presentation shared contract", () => {
   test("relative targets resolve against the client cwd, including a relative focus", () => {
@@ -83,7 +79,6 @@ describe("open-presentation shared contract", () => {
       dirExists: (path) => path === "/work/review",
       fileExists: (path) => path === "/work/review/draft.md",
       isRegularFile: (path) => path === "/work/review/draft.md",
-      checkManifestDrift: () => WIRED,
     };
 
     const result = await runOpenPresentation("/work/review/draft.md", undefined, "document", deps, {

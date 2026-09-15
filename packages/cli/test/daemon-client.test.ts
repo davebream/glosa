@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Issue 178: the MCP reconnect loop in mcp.ts depends on this file's `openConversationPush` for
-// every one of its retry signals — a clean EOF that falls through without throwing, a thrown
-// stream failure, and (crucially) telling a registered/alive/unbound session (409) apart from an
-// unknown/dead one (404) so the loop never confuses the two. mcp.test.ts's `HookClient` fakes
-// `openConversationPush` outright, so none of that ever runs through the real HTTP surface this
-// file implements. These tests exercise the real thing against a real daemon subprocess (this
-// suite's supplied process-test helper, never a live GLOSA_HOME) so the 409/404/clean-EOF/abort
-// claims are about the actual production code path, not a stand-in for it.
+// Issue 178 / #151 / #152: the plugin monitor's reconnect loop depends on this file's
+// `openSessionStream` for every one of its retry signals — a clean EOF that falls through without
+// throwing, a thrown stream failure, and (crucially) telling a registered/alive/unbound session
+// (409) apart from an unknown/dead one (404) so the loop never confuses the two. The monitor suite
+// fakes the client, so none of that ever runs through the real HTTP surface this file implements.
+// These tests exercise the real thing against a real daemon subprocess (this suite's supplied
+// process-test helper, never a live GLOSA_HOME) so the 409/404/clean-EOF/abort claims are about the
+// actual production code path, not a stand-in for it.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,7 +23,7 @@ import {
   waitForHandshake,
 } from "../../daemon/test/helpers.ts";
 
-const TOKEN = "daemon-client-push-stream-real-token-0123456789";
+const TOKEN = "daemon-client-session-stream-real-token-0123456789";
 
 interface RealDaemon {
   port: number;
@@ -72,10 +72,19 @@ async function withRealDaemon(fn: (daemon: RealDaemon) => Promise<void>): Promis
 }
 
 function realDir(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), "glosa-push-stream-")));
+  return realpathSync(mkdtempSync(join(tmpdir(), "glosa-session-stream-")));
 }
 
-describe("createHttpDaemonClient().openConversationPush against a real daemon (issue 178)", () => {
+describe("createHttpDaemonClient() carries no Channel-era surface (#152)", () => {
+  test("neither openConversationPush nor acknowledgeConversation exists on the client", async () => {
+    await withRealDaemon(async ({ client }) => {
+      expect("openConversationPush" in client).toBe(false);
+      expect("acknowledgeConversation" in client).toBe(false);
+    });
+  }, 30_000);
+});
+
+describe("createHttpDaemonClient().openSessionStream against a real daemon (issue 178, #151)", () => {
   test("unknown/dead session is 404, registered/alive/unbound is 409 — never confused", async () => {
     await withRealDaemon(async ({ client, register }) => {
       const agentCwd = realDir();
@@ -86,35 +95,47 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
 
       let deadError: unknown;
       try {
-        await client.openConversationPush!("never-registered", async () => {}, new AbortController().signal, onOpen);
+        await client.openSessionStream!(
+          "never-registered",
+          "monitor",
+          async () => {},
+          new AbortController().signal,
+          onOpen,
+        );
       } catch (error) {
         deadError = error;
       }
       expect(isApiError(deadError)).toBe(true);
       expect((deadError as { status: number }).status).toBe(404);
 
-      await register({ session_id: "unbound-session", provider: "mcp", cwd: agentCwd, source: "mcp" });
+      await register({ session_id: "unbound-session", provider: "claude-code", cwd: agentCwd, source: "mcp" });
       let unboundError: unknown;
       try {
-        await client.openConversationPush!("unbound-session", async () => {}, new AbortController().signal, onOpen);
+        await client.openSessionStream!(
+          "unbound-session",
+          "monitor",
+          async () => {},
+          new AbortController().signal,
+          onOpen,
+        );
       } catch (error) {
         unboundError = error;
       }
       expect(isApiError(unboundError)).toBe(true);
       expect((unboundError as { status: number }).status).toBe(409);
-      // Neither rejection ever got a response worth calling "established" — mcp.ts's reconnect
-      // loop must be able to tell these apart from a connection that actually opened.
+      // Neither rejection ever got a response worth calling "established" — the monitor's
+      // reconnect loop must be able to tell these apart from a connection that actually opened.
       expect(opens).toBe(0);
     });
   }, 30_000);
 
-  test("onOpen fires once the push-stream response is actually established, before any entry arrives", async () => {
+  test("onOpen fires once the stream response is actually established, before any entry arrives", async () => {
     await withRealDaemon(async ({ client, register }) => {
       const agentCwd = realDir();
       const workspace = realDir();
       await register({
         session_id: "onopen-session",
-        provider: "mcp",
+        provider: "claude-code",
         cwd: agentCwd,
         source: "mcp",
         workspace_binding: workspace,
@@ -122,8 +143,9 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
 
       let openedAt: number | null = null;
       const abort = new AbortController();
-      const push = client.openConversationPush!(
+      const push = client.openSessionStream!(
         "onopen-session",
+        "monitor",
         async () => {},
         abort.signal,
         () => {
@@ -138,13 +160,13 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
     });
   }, 30_000);
 
-  test("a replacement connection closes the prior one cleanly — openConversationPush returns, it does not throw", async () => {
+  test("a replacement connection closes the prior one cleanly — openSessionStream returns, it does not throw", async () => {
     await withRealDaemon(async ({ client, register }) => {
       const agentCwd = realDir();
       const workspace = realDir();
       await register({
         session_id: "bound-session",
-        provider: "mcp",
+        provider: "claude-code",
         cwd: agentCwd,
         source: "mcp",
         workspace_binding: workspace,
@@ -152,7 +174,7 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
 
       let firstSettled: "resolved" | "rejected" | null = null;
       const firstAbort = new AbortController();
-      const first = client.openConversationPush!("bound-session", async () => {}, firstAbort.signal)
+      const first = client.openSessionStream!("bound-session", "monitor", async () => {}, firstAbort.signal)
         .then(() => {
           firstSettled = "resolved";
         })
@@ -165,10 +187,10 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
       await Bun.sleep(300);
       expect(firstSettled).toBeNull();
 
-      // A2/A1 §5.12: a second push-stream for the SAME session replaces the first, which the
-      // daemon's SessionPushRegistry closes cleanly (production replacement path, not a test hook).
+      // A2/A1 §5.12: a second stream for the SAME session replaces the first, which the daemon's
+      // SessionPushRegistry closes cleanly (production replacement path, not a test seam).
       const secondAbort = new AbortController();
-      const second = client.openConversationPush!("bound-session", async () => {}, secondAbort.signal);
+      const second = client.openSessionStream!("bound-session", "monitor", async () => {}, secondAbort.signal);
 
       await first;
       // TS's control-flow narrowing tracks `firstSettled`'s declaration-site literal straight
@@ -187,14 +209,14 @@ describe("createHttpDaemonClient().openConversationPush against a real daemon (i
       const workspace = realDir();
       await register({
         session_id: "abort-session",
-        provider: "mcp",
+        provider: "claude-code",
         cwd: agentCwd,
         source: "mcp",
         workspace_binding: workspace,
       });
 
       const abort = new AbortController();
-      const push = client.openConversationPush!("abort-session", async () => {}, abort.signal);
+      const push = client.openSessionStream!("abort-session", "monitor", async () => {}, abort.signal);
       await Bun.sleep(200); // let the stream actually open before cancelling it
 
       const abortedAt = Date.now();

@@ -16,7 +16,6 @@ import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
-import { createInitRunner } from "../init-runner.ts";
 import { SessionRegistry } from "../registry/session-registry.ts";
 import { WorkspaceIndex } from "../registry/workspace-index.ts";
 import { CapabilityStore } from "../security/capability.ts";
@@ -348,8 +347,6 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     shutdownSignal: shutdownController.signal,
     home,
     recordRejection: createRejectionRecorder((line) => log(home, `${instanceId} ${line}`)),
-    // issue #80: consent-gated `glosa init` shell-out behind POST /w/:slug/init.
-    runWorkspaceInit: createInitRunner({ home, port }),
   });
   // Bun.serve starts accepting as soon as it returns, but a successful handshake is the public
   // readiness proof. Hold only that route until lock ownership, both listeners, and shutdown are

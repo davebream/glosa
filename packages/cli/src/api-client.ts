@@ -57,7 +57,6 @@ export interface WorkspaceStatusSummary {
   last_seen: string;
   pending_count: number;
   has_attention: boolean;
-  wiring?: "live" | "wired" | "unwired";
   /** Additive (issue #142): journal entries with no inbox payload — optional for N-1 daemon
    * compatibility. `doctor`'s `orphaned-entries` check reads this. */
   orphaned_entry_count?: number;

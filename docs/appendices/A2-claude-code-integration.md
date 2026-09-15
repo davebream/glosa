@@ -27,7 +27,7 @@ Claude suppresses plugin monitors when `DISABLE_TELEMETRY=1` or
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and does not run them for noninteractive or unsupported
 hosted-model sessions. `push` is therefore true only while a monitor is connected. MCP tools still
 load in those modes, and doctor names the environment-variable case rather than implying delivery is
-broken. Legacy Channel support remains only until #152 removes the old integration rails.
+broken.
 
 ## F07 — monitor delivery and fallback
 
@@ -48,8 +48,11 @@ plugin monitor → MCP pull
 - The stream emits at most eight entries per selection pass, with 16 KiB per entry and the same
   32 KiB batch presentation contract used by pull.
 
-The existing Channel, `asyncRewake`, and turn-boundary hooks remain executable only during the
-#151→#152 migration window. They are no longer an installation path and are not the release design.
+There are no other rungs. Channels, the `asyncRewake` watcher, the `SessionStart`/`SessionEnd`/
+`UserPromptSubmit`/`Stop`/`Notification` hooks and `glosa init` are removed (#152). `glosa hook
+<event>` remains for one release as a silent exit-0 stub so a machine still carrying old
+`settings.json` entries never shows a failing hook; `glosa doctor`'s `legacy-config` line names the
+entries that can be deleted.
 
 ### Codex app-server transport
 
@@ -79,27 +82,6 @@ already-running turn. A successful JSON-RPC response records
 clears the active turn and provides the hook-free boundary signal while the open generic stream
 continues draining parked and new entries.
 
-Hook output shapes:
-
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "UserPromptSubmit",
-    "additionalContext": "<bounded actionable presentation>"
-  }
-}
-```
-
-```json
-{
-  "decision": "block",
-  "reason": "<bounded actionable presentation>"
-}
-```
-
-An async watcher writes the presentation to its hook stream before the process exits with the
-rewake code. The shim acknowledges `presented` only after that write succeeds.
-
 ## F08 — session registry and explicit binding
 
 Providers register through the daemon API; no hook writes registry files directly. A record contains:
@@ -117,12 +99,12 @@ Providers register through the daemon API; no hook writes registry files directl
 }
 ```
 
-Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registration, existing
-hooks, every MCP tool call, and an open session transport refresh it. Connection-held refreshes run
+Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registration, every MCP
+tool call, and an open session transport refresh it. Connection-held refreshes run
 every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then
 expires normally. Old timers cannot refresh a deregistered or replacement session. The generic
-connection handle is used by the monitor and Codex subscription transports. Registration sources include `mcp`, `monitor`,
-and `codex-app-server`; existing hook sources remain accepted.
+connection handle is used by the monitor and Codex subscription transports. Registration sources
+are `monitor`, `codex-app-server`, `mcp`, and `cli` (explicit bind); there are no hook sources.
 
 The MCP shim additionally polls its own OS-level parent pid and exits when it changes (issue #140),
 alongside stdin EOF and SIGHUP. That poll decides only the shim's own lifetime — a process ending
@@ -170,18 +152,18 @@ Routing precedence is fixed:
 2. generic cwd-ancestor matching;
 3. park the entry until a session is registered and bound.
 
-Turn-boundary/MCP drains preserve the same routing relation in the inverse direction. An explicit
+MCP drains preserve the same routing relation in the inverse direction. An explicit
 binding stays exact. An unbound session may be a valid ancestor candidate for several present, active
 workspace journals, so the daemon emits one globally capped, workspace-labelled composite batch; it
 never picks one descendant. Composite coordination and crash-prefix acknowledgement semantics are
 specified in A1 §5.15 and do not replace any workspace journal as truth.
 
 `glosa_present` with `mode:"preview"` is session-independent: it registers the artifact and returns
-a preview-locked URL but never binds a session. A durable global or non-workspace MCP entry may use
-preview-only presentation without `glosa init`. `glosa open` is equally init-free: it registers and
-opens the artifact, creates only glosa workspace state, and never installs agent configuration.
-Claude provider delivery is installed only through the plugin marketplace. No per-workspace Claude
-settings are written. `glosa doctor` reports daemon health and any observable monitor suppression.
+a preview-locked URL but never binds a session. `glosa open` registers and opens the artifact,
+creates only glosa workspace state, and never installs agent configuration — there is nothing to
+install: Claude provider delivery comes only through the plugin marketplace, Codex through
+`codex mcp add glosa -- glosa mcp`. No per-workspace Claude settings are written. `glosa doctor`
+reports daemon health, any observable monitor suppression, and leftover `glosa init` entries.
 
 Bindings are session-scoped and held only in memory. An explicit bind restores them after a daemon
 restart, including registration if needed, rather
@@ -197,28 +179,13 @@ identity and `glosa session bind <current-session-id> --workspace <workspace-pat
 The prompt asks the current agent session to bind itself; glosa never launches an agent, enumerates
 agent CLI processes, selects between candidate sessions, or persists a binding for later restoration.
 
-## F15 — legacy hook registration (removed by #152)
+## F15 — hook registration (removed, #152)
 
-`glosa init` owns only its signed entries and merges them transactionally. Provider selection and
-scope orchestration are generic CLI concerns; the Claude Code provider owns the Claude-specific
-target paths, probe, hook/MCP nodes, and activation help described here:
-
-| Claude event | glosa role |
-|---|---|
-| `SessionStart` | register/refresh session; drain parked entries; arm watcher |
-| `SessionEnd` | release the session lease |
-| `UserPromptSubmit` | refresh activity; bounded additional-context drain |
-| `Stop` | bounded drain; rearm async watcher |
-| `Notification` | update provider attention signal |
-
-SessionStart accepts startup, resume, clear, and compact sources. Hook input is treated as untrusted:
-unknown fields are ignored, required identifiers are validated, and failures degrade to the next
-transport without losing inbox data. A non-empty payload that is not a session envelope (no
-`session_id`/`cwd`) is a silent successful no-op so a foreign host that imported the same hook command
-is not blocked; an incomplete envelope still fails as a usage error. Daemon discovery inside a hook
-has a three-second wall-clock budget; an unreachable daemon makes the hook exit successfully with no
-output so the provider's five-second hooks are never killed. Explicit CLI and MCP clients retain the
-actionable error, and the immutable inbox remains eligible for the next delivery rung.
+The hook-based registration surface — `glosa init`, its ownership manifest, and the
+`SessionStart`/`SessionEnd`/`UserPromptSubmit`/`Stop`/`Notification` roles — is gone. Registration is
+the monitor's at session start (F06) or the MCP shim's on its first tool call (F08). The only
+remnant is the one-release `glosa hook <event>` stub described in F07, which reads nothing, prints
+nothing and exits 0 for every event and provider.
 
 ## F16 — conversation mirror
 

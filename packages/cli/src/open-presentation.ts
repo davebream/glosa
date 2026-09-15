@@ -6,7 +6,6 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { GlosaApiClient, OpenWorkspaceResult } from "./api-client.ts";
 import { isApiError } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope } from "./envelope.ts";
-import { type ManifestDriftResult, checkScopedManifestDrift } from "./scoped-init.ts";
 
 export type OpenSurface = "document" | "workspace";
 export type PresentationMode = "read" | "review" | "edit";
@@ -72,14 +71,6 @@ export interface OpenPresentationDeps {
   fileExists: (path: string) => boolean;
   /** True when the path exists as a regular non-symlink file. Defaults to `fileExists`. */
   isRegularFile?: (path: string) => boolean;
-  /** Read-only init-manifest probe used for the `not-initialized`/`init-drifted` warnings.
-   * Defaults to scoped-init.ts's `checkScopedManifestDrift` — the SAME function `glosa doctor`'s
-   * `hooks`/`mcp` checks call, so open's verdict can never disagree with doctor's. The removed
-   * legacy probe only looked at `.claude/.glosa-init.json`;
-   * since `runScopedInit` writes `.glosa/init-manifest.json` and DELETES the legacy file after
-   * migrating it, every correctly-wired workspace reported `not-initialized` (issue #96).
-   * Injectable for tests. */
-  checkManifestDrift?: (dir: string) => ManifestDriftResult;
 }
 
 /**
@@ -283,48 +274,6 @@ export async function runOpenPresentation(
       };
     }
     return { ...daemonUnreachableEnvelope("open", (err as Error).message), data: {} };
-  }
-
-  // Un-wired/drifted visibility (issue #78): a workspace can be opened+annotated WITHOUT init
-  // (A6 — SPA-only, no agent delivery), but that state must never be silent — annotations queue
-  // in the bus and are only delivered through init-installed hooks. Advisory only: exit stays 0,
-  // and an internal probe failure never breaks `open`.
-  try {
-    const probe = deps.checkManifestDrift ?? ((dir: string) => checkScopedManifestDrift(dir, { glosaHomeDir: home }));
-    const drift = probe(opened.path);
-    if (drift.manifest === null) {
-      // A loose-file registration's worktree is the file's CONTAINING directory, which can be
-      // `/private/tmp` or a parent holding several unrelated repos. A1 §5.19 already refuses to
-      // run init there through the daemon route ("writing `.claude/` config there would be a
-      // surprising mutation"); telling the user to run the same thing by hand contradicted that
-      // refusal (issue #96). Name the file's own status instead, and never a directory to wire.
-      warnings.push(
-        opened.kind === "loose-file"
-          ? {
-              code: "not-initialized",
-              message:
-                "this file is not inside a project glosa can wire — annotations are saved locally but will never be delivered to a session.\n" +
-                "  fix: move it into a git repository, then run `glosa open` on it again.",
-            }
-          : {
-              code: "not-initialized",
-              message:
-                "this workspace is not wired for agent feedback — annotations are saved locally but will never be delivered to a session.\n" +
-                `  fix: run \`glosa init ${opened.path}\`\n` +
-                "  then: restart or /resume your Claude Code session so it loads glosa.",
-            },
-      );
-    } else if (drift.drifted.length > 0) {
-      warnings.push({
-        code: "init-drifted",
-        message:
-          `glosa's agent integration has drifted since \`glosa init\` (${drift.drifted.length} node(s) changed) — delivery may be broken.\n` +
-          `  fix: re-run \`glosa init ${opened.path}\`\n` +
-          "  then: restart or /resume your Claude Code session.",
-      });
-    }
-  } catch {
-    // Visibility must never make `open` fragile — skip the warning on probe failure.
   }
 
   let boundSession: string | undefined;

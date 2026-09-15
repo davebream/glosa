@@ -19,10 +19,20 @@ import {
   EXIT_CODES,
   printJsonEnvelope,
 } from "./envelope.ts";
-import { isEphemeralPackageRunnerPath } from "./init-io.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const PKG = "@davebream/glosa";
+
+/** A package-runner cache (`npx`/`bunx`/`pnpm dlx`) is never upgradeable in place. */
+export function isEphemeralPackageRunnerPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  return (
+    normalized.includes("/.npm/_npx/") ||
+    normalized.includes("/_npx/") ||
+    normalized.includes("/install/cache/") ||
+    normalized.includes("/.pnpm/dlx/")
+  );
+}
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const REGISTRY_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;

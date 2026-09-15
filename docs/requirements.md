@@ -18,13 +18,13 @@ An agent drafts documents; the human reads them rendered, annotates in the margi
 routes annotations and edits back to the right agent session with honest provenance. **Companion
 topology**: the agent runs as a normal interactive session in the user's terminal; glosa is a singleton
 daemon beside it serving a browser SPA. Claude Code is the deep, required integration; the design is
-agent-agnostic (Codex and other hook/MCP-capable CLIs supported through one provider interface).
+agent-agnostic (Codex and other push/MCP-capable CLIs supported through one provider interface).
 
 **Repository**: `davebream/glosa`. GitHub issues are the executable work queue; this document is the
 normative product contract.
 
 ## 0. What changed from v1 (orientation for anyone who read v1)
-- **No cmux coupling** anywhere. SPA runs in any browser over localhost; delivery uses each agent's own hooks/MCP, not keystroke injection.
+- **No cmux coupling** anywhere. SPA runs in any browser over localhost; delivery uses each agent's own push transport plus MCP, not keystroke injection.
 - **In-app editor is IN scope** (Read / Review / Edit modes). v1's "no editing" non-goal is removed.
 - **Explicit session binding** is authoritative; terminal cwd is only a generic fallback (F01).
 - **Declarative workspace metadata** replaces embedded producer/domain adapters. An external
@@ -51,9 +51,9 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
 ## 2. Architecture (fixed)
 ```
  user's terminal: interactive `claude` (or `codex`) session(s)      browser (any: Safari-dock / tab / later Electron)
-   hooks → register/drain · receive channel push · run `glosa            glosa SPA (served by daemon over http://127.0.0.1)
-   resolve`/`apply-begin` via Bash · MCP shim (`glosa mcp`)               Read/Review/Edit · 4 viewers · workspace switcher
-                    │ hooks, MCP(stdio), CLI                                        │ fetch + streaming-SSE, Bearer (SPA origin)
+   plugin monitor / app-server attach → register + push stream ·        glosa SPA (served by daemon over http://127.0.0.1)
+   MCP shim (`glosa mcp`) pull/ack/bind · `glosa resolve`/`apply-begin`  Read/Review/Edit · 4 viewers · workspace switcher
+                    │ push stream (SSE), MCP(stdio), CLI                            │ fetch + streaming-SSE, Bearer (SPA origin)
              ┌──────▼──────────────────────────────────────────────────────────────▼──────┐
              │ glosa daemon — singleton per machine, TWO fixed ports (4646 SPA/API, 4647    │
              │ class-F content). file bus: per-workspace inbox + journal(=truth) + shadow-  │
@@ -110,7 +110,7 @@ generic.**
   `~/.glosa/state/<full-sha256-registration-id>/` while retaining their original work-tree.
   **A file with no owning registration resolves to its enclosing git repository as a `directory`
   registration, not a `loose-file`, whenever that repo's own tracked-artifact rule would track the
-  file** (issue #96) — this is the same root `glosa init`/`glosa doctor` resolve to for that file,
+  file** (issue #96) — this is the same root `glosa doctor` resolves to for that file,
   so all three commands agree on one workspace boundary and never point a wiring hint at the
   file's bare containing directory. `loose-file` remains the outcome for a file outside any git
   repository, or one the enclosing repo's own matcher excludes (dot-dir, `node_modules`, > 2 MiB).
@@ -125,7 +125,7 @@ generic.**
   of it (created before this boundary existed) is never silently reused for a new file lookup —
   the registration is surfaced by slug with remediation, and continuing to use it requires the
   same explicit intent as creating one, namely opening that directory itself rather than an
-  unrelated nested file. `glosa init`/`glosa doctor`'s cwd default falls back to the literal cwd
+  unrelated nested file. `glosa doctor`'s cwd default falls back to the literal cwd
   instead of promoting to home, and an explicit `--dir` naming `$HOME` itself is refused the same
   way a temp-root or multi-repo target is (`home-dir` risk, clearable with `--force` or a TTY
   confirmation). A repository that is merely a subdirectory of home is unaffected and keeps
@@ -151,12 +151,13 @@ generic.**
   recursively moves or deletes source state (A4/A5).
 
 ### R2 — session registry & routing  (detail: A2 §F08, A5 §F19)
-- Providers register live agent sessions through hooks, MCP activity, or explicit binding → daemon API
-  (never direct file writes; serialized by the daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
-  transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls, existing hooks, or an open
+- Providers register live agent sessions through their push transport at session start, MCP activity
+  (first tool call), or explicit binding → daemon API (never direct file writes; serialized by the
+  daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
+  transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls or an open
   session transport connection every 20 seconds (never `kill(pid,0)`). Closing a connection stops
-  refreshes; it does not end the lease immediately. Sources include `mcp`, `monitor`, and
-  `codex-app-server`, alongside existing hook sources. The latter two transports ship separately.
+  refreshes; it does not end the lease immediately. `source` is `monitor`, `codex-app-server`,
+  `mcp`, or `cli` (explicit bind); there are no hook sources (#152).
   MCP registers on first tool use and re-registers after an unknown-session heartbeat. Explicit bind
   also registers unknown identities and refreshes stale ones; missing provider identity uses generic
   `mcp`, which a subsequent concrete provider may enrich. Omitted registration fields preserve
@@ -220,32 +221,39 @@ generic.**
 ### R4 — delivery: provider-based, cmux-free  (detail: A2 §F06/§F07/§F16)
 Delivery is per-agent-provider, selecting the best injection point that provider offers. Durable inbox
 is always the truth; a transport failure only changes *which* mechanism delivers next, never whether
-the entry survives.
+the entry survives. The ladder is **`push → mcp_pull`**; there are no hook rungs (#152).
 
-| Capability | Claude Code provider | Codex / other hook-capable provider | Generic MCP host |
+| Capability | Claude Code provider | Codex provider | Generic MCP host |
 |---|---|---|---|
 | Async push into idle | **plugin monitor** over the generic session stream | **Codex app-server control socket**, when separately running | — |
-| Blocking review gate (sync) | legacy hook gate during the #151→#152 transition | **their hook gate** (Codex Stop-hook etc.) | — |
-| Turn-boundary drain (async) | legacy Stop / UserPromptSubmit hooks during the transition | their turn hooks | — |
 | Pull on demand | MCP tool | MCP tool | **MCP tool** |
-- Monitor availability is the live per-session stream connection, never plugin configuration. Claude
-  suppresses monitors when nonessential traffic/telemetry is disabled and in noninteractive or unsupported
-  hosted-model sessions; `glosa doctor` names the environment-variable case and MCP pull remains available.
-- Monitor writes prove only `transport_accepted`. A targeted conversation message becomes terminal
-  `delivered` only after the exact session acknowledges `presented`; until then it remains eligible
-  for MCP pull. Every monitor line begins `[glosa <entry-id>]`, which the acknowledgement tool returns.
-- Codex push is likewise a live per-session capability, never inferred from installation. Its MCP
-  bind owns an RFC 6455 connection over the local app-server Unix socket, resumes the exact thread,
-  and delivers bounded input with `turn/steer` when it knows the active turn id or `turn/start`
-  otherwise. Glosa never starts or repairs Codex's app-server; MCP pull remains available when the
-  socket is absent or the first-turn rollout is not ready.
-- **No cmux.** The universal cross-agent path is the structured blocking gate (Plannotator-proven on
-  Claude/Codex/Gemini/Copilot) + turn-boundary drain + MCP-pull.
+- Registration happens from the push transport at session start (the monitor, the app-server
+  attachment) or from the MCP shim on its first tool call. There is no `glosa init`, no hook
+  registration, no Channel, no rewake watcher, and no turn-boundary drain: the `SessionStart`/`Stop`/
+  `UserPromptSubmit`/`Notification` hooks and the structured blocking gate are retired, not
+  optional. `glosa hook <event>` survives for one release as a silent exit-0 stub so a machine still
+  carrying old hook entries never shows a failing hook; `glosa doctor` names the leftover entries.
+- `push` is a **per-session** capability evaluated at registration, never inferred from
+  installation. Claude: true only while that session's plugin monitor holds the stream — Claude
+  suppresses monitors when nonessential traffic/telemetry is disabled and in noninteractive or
+  unsupported hosted-model sessions; `glosa doctor` names the environment-variable case and MCP pull
+  remains available. Codex: true only while that exact thread owns a live app-server attachment.
+- Push writes prove only `transport_accepted`. A targeted conversation message becomes terminal
+  `delivered` only after the exact session acknowledges `presented` through `glosa_delivery_ack`;
+  until then it remains eligible for MCP pull. Every pushed line begins `[glosa <entry-id>]`, which
+  the acknowledgement tool returns.
+- Codex's MCP bind owns an RFC 6455 connection over the local app-server Unix socket, resumes the
+  exact thread, and delivers bounded input with `turn/steer` when it knows the active turn id or
+  `turn/start` otherwise. Glosa never starts or repairs Codex's app-server; MCP pull remains
+  available when the socket is absent or the first-turn rollout is not ready.
+- **No cmux.** The universal cross-agent path is MCP pull; push is a per-provider optimization over
+  the provider's own documented transport. (The earlier sentence naming "the structured blocking
+  gate (Plannotator-proven …)" as the universal path is retired with the hooks.)
 - Every injected presentation is UTF-8 bounded: at most 16 KiB per entry and 32 KiB per batch, with
   at most eight entries in journal creation order. Truncation happens only at field or complete-hunk
   boundaries and always carries omitted counts plus `glosa inbox get <id> --cursor <cursor>` and MCP
   `glosa_inbox_get` retrieval instructions. Preparing content reserves it briefly; only a successful
-  monitor/hook/channel/MCP write may acknowledge it as `presented`. Failed or expired reservations remain
+  monitor/app-server/MCP write may acknowledge it as `presented`. Failed or expired reservations remain
   eligible, and later attempts append `reason:re_nudge` without mutating the inbox payload.
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
@@ -323,7 +331,10 @@ the entry survives.
   quarantine, resume/clear/compact handling, tool-result caps (A2 §F16). **Fail soft**: any parse
   failure → "mirror unavailable — use the terminal", never worse; artifact/annotation workflow stays
   usable. Composer sends a NEW user message out-of-band via R4 (never writes the transcript). Attention
-  state from the provider's `Notification` hook, not a transcript stall heuristic. The composer keeps
+  state comes only from glosa's own `attention_request` entries (`glosa_ask`, `request-review`) —
+  never a transcript stall heuristic, and no longer a provider signal: the `Notification` hook that
+  carried "agent is waiting on you" went with the hooks (#152), and the #150 spike found no
+  replacement in the plugin monitor's or MCP server's environment. The composer keeps
   one tab-scoped in-flight submission, clears only after `presented`, preserves newer edits, and shows
   an inline native session picker when multiple live explicit bindings are eligible.
 - **Anchoring resolution contract** (A5 §F10/§F11): total `resolve(annotation, artifact, ctx) →
@@ -339,17 +350,17 @@ the entry survives.
   ```
   interface AgentProvider {
     id: string                                   // "claude-code" | "codex"
-    detectSession(hookEvent): SessionBinding | null   // from hook payload → {session_id, workspace, transcript_path?, source}
-    capabilities(session): { push:bool, gate:bool, boundaryDrain:bool, mcpPull:bool }
+    detectSession(payload): SessionBinding | null    // from a session payload → {session_id, workspace, transcript_path?, source}
+    capabilities(session): { push:bool, mcpPull:bool }   // evaluated per session at registration, never provider-wide
     deliver(session, entry): DeliveryResult      // uses the best available capability; result → journal delivery_attempt
     liveness(session): "alive" | "stale"         // lease/heartbeat, never kill(pid,0)
     transcriptPath(session): string | null       // explicit path or exact provider-owned discovery
     transcriptRoots?(): readonly string[]          // provider-owned confinement allowlist
   }
   ```
-  v1 ships: **Claude Code provider** (deep: push=plugin monitor, mcpPull=plugin MCP tools, transcript
-  mirror) and a **Codex provider** (app-server push when its exact-thread socket subscription is
-  connected, plus gate + boundaryDrain + mcpPull fallbacks).
+  v1 ships: **Claude Code provider** (`push` = a monitor is connected for this session; plugin MCP
+  tools; transcript mirror) and a **Codex provider** (`push` = an app-server attachment is live for
+  this exact thread). Both always have `mcpPull`; neither has `gate` or `boundaryDrain` any more (#152).
   Adding a CLI = a new provider, never a core change.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
   **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
@@ -371,12 +382,10 @@ the entry survives.
   viewer/annotation/editor behavior. Without a descriptor, HTML remains opaque Preview+Annotate.
 
 ### R8 — CLI + install  (detail: A6 full)
-- Commands (all with `--json` + stable exit codes, A6): `open [--url]`, `init` (idempotent,
-  provider-targeted hook/MCP merge with workspace-default or explicit user scope, ownership manifest,
-  backups, uninstall — prints the correct channels dev command, never `--channels`),
+- Commands (all with `--json` + stable exit codes, A6): `open [--url]`,
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (18 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146), `status`,
+  `token rotate|revoke`, `doctor` (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
@@ -385,16 +394,13 @@ the entry survives.
   interactive consent prompt, proves confinement for the whole deletion set before any durable
   marker or destructive step, resumes cleanly if interrupted mid-deletion, and is named explicitly
   by `doctor`/`status` while a resume is pending);
-  internal `mcp`, `hook <event>`. `open`
-  auto-creates the `.glosa/` scaffold (distinct from `init`), never auto-invokes init, and
-  supports an init-free Preview first run — but surfaces the un-wired state honestly: a
-  `not-initialized`/`init-drifted` warning (exit 0) plus, on a TTY without `--json`, a one-question
-  consented init offer (`--init`/`--no-init` bypass; A6). Preview-only `glosa_present` is also init-free.
-  Provider selection uses explicit repeatable `--agent` flags or provider-owned local detection;
-  ambiguity gets one TTY prompt and fails with an exact flag hint in non-interactive/JSON mode.
-  Agent-specific detection, config paths, and desired nodes remain in `packages/providers/*`; the
-  generic CLI only orchestrates the transaction. Provider delivery integration may be installed at
-  workspace or user scope, and a workspace remains usable SPA-only without either.
+  internal `mcp`, `monitor`, `codex-attach`, and — for one release — `hook <event>` as a silent
+  exit-0 stub (#152). **There is no `glosa init`.** Claude Code is wired by the plugin
+  (`/plugin marketplace add davebream/glosa`, `/plugin install glosa`); Codex by
+  `codex mcp add glosa -- glosa mcp`. `open` auto-creates the `.glosa/` scaffold and never writes
+  agent configuration; a workspace with no connected session is shown as such by the SPA badge
+  ("no session connected — annotations wait here") and by `doctor`'s `pending-delivery` line, never
+  as "not initialized". A workspace remains usable SPA-only without any agent.
 
 ### R9 — attention model  (detail: A5 §F23)
 - Agents **knock, never barge**: `attention_request` entries retain their immutable `message`, `action`,
@@ -404,7 +410,8 @@ the entry survives.
   `delivered→seen→done`; repeated mutations are idempotent. Generic actions show **Done**.
   `request-review` defaults to action `review` and shows **Approve** / **Request changes**. The terminal
   `done.detail` is `{outcome:done|approved|changes_requested,response?}` with a bounded optional response;
-  `request-review --wait` returns that structure.
+  `request-review --wait` returns that structure. The attention badge is driven only by these
+  `attention_request` entries; glosa has no provider-side "waiting on you" signal (R6, #152).
 - `request-review --require-approval` opts one existing tracked artifact into explicit final approval.
   Its immutable request payload carries normalized `target_path` plus `approval_mode:true`; at most one
   non-terminal approval request may exist for that workspace/path. The matching artifact alone shows
@@ -441,7 +448,7 @@ the entry survives.
   a concrete Codex provider contract (which hook fires the blocking gate, its stdin/stdout shape, where
   Codex writes its transcript, whether it speaks MCP). Gate: a written contract the provider is built against.
 - **T2 — providers & delivery**: agent-provider interface (R7); Claude Code plugin monitor + MCP server;
-  **Codex provider** (per T2a; app-server push + gate + boundary + MCP-pull); `resolve`/`apply-begin`/MCP tools. Gate: each
+  **Codex provider** (per T2a; app-server push + MCP pull); `resolve`/`apply-begin`/MCP tools. Gate: each
   capability delivers for each provider; monitor-unavailable MCP fallback still delivers; journal records correct
   transport `outcome`.
 - **T3 — SPA shell + class R viewer + three modes + diff/history**: handshake/pairing screens; switcher/
@@ -487,11 +494,11 @@ the entry survives.
 
 ## 7. Normative appendices (in repo as `docs/appendices/`)
 - **A1** api-transport — HTTP contract, streaming-SSE, cursors/resync, capability URLs, versioning.
-- **A2** claude-code-integration — plugin monitor, MCP fallback, registry, transcript tailer, and the temporary legacy hook migration surface.
+- **A2** claude-code-integration — plugin monitor, MCP fallback, registry, transcript tailer.
 - **A3** security — two-origin split, CSP, MessageChannel bridge, token lifecycle, confinePath, Host/Origin table, attack→test matrix.
 - **A4** filebus-concurrency — journal-as-truth durability, apply-lease attribution, shadow-git mechanics, picomatch matcher, slug.
 - **A5** daemon-architecture — daemon lifecycle, workspace index, lifecycle state-transition table, anchoring resolution contract.
-- **A6** cli-platform — command surface, exit codes, `init` merge/uninstall, platform pins, checkpoint/restore, terminology.
+- **A6** cli-platform — command surface, exit codes, install surface, platform pins, checkpoint/restore, terminology.
 
 ## 7b. Deferred / future (explicitly NOT v1 — recorded so they are not re-litigated or lost)
 - **tila as the state-relay home**: promote the proven inbox/journal/registry schemas into a tila vertical

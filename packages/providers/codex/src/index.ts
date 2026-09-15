@@ -12,7 +12,6 @@ export {
 } from "./app-server.ts";
 export type { CodexAttachDeps, CodexAttachOptions, CodexControlClient } from "./app-server.ts";
 export { UnixWebSocket } from "./unix-websocket.ts";
-export { codexInstallDescriptor } from "./install.ts";
 export type { CodexProviderDeps, SessionLivenessSource } from "./provider.ts";
 export { looksLikeCodexHookInput } from "./hook-types.ts";
 export type {

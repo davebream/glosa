@@ -52,15 +52,15 @@ function cleanupWorkspace(root: string): void {
 }
 
 describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal", () => {
-  test("rung 1 (channel) success is recorded as delivery_attempt{via:'channel', outcome:'transport_accepted', reason:'initial'} — A5 §F23's exact vocabulary, not free text", async () => {
+  test("rung 1 (monitor) success is recorded as delivery_attempt{via:'monitor', outcome:'transport_accepted', reason:'initial'} — A5 §F23's exact vocabulary, not free text", async () => {
     const root = freshWorkspace();
     const bus = new WorkspaceBus(root);
     await bus.createEntry("inb-1", { kind: "annotation" });
 
     const provider = new ClaudeCodeProvider({
       liveness: { liveness: () => "alive" },
-      channelsEnabled: () => true,
-      sendChannel: async () => true,
+      pushAvailable: () => true,
+      sendPush: async () => true,
     });
     const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
@@ -68,7 +68,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     const attempts = attemptsOf(bus, "inb-1");
     expect(attempts).toHaveLength(1);
     expect(attempts[0]).toMatchObject({
-      via: "channel",
+      via: "monitor",
       session: "sess-1",
       outcome: "transport_accepted",
       reason: "initial",
@@ -80,45 +80,44 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     cleanupWorkspace(root);
   });
 
-  test("a failed rung (channel throws) is recorded as outcome:'failed' with the error message", async () => {
+  test("a failed rung (monitor stream throws) is recorded as outcome:'failed' with the error message", async () => {
     const root = freshWorkspace();
     const bus = new WorkspaceBus(root);
     await bus.createEntry("inb-1", { kind: "annotation" });
 
     const provider = new ClaudeCodeProvider({
       liveness: { liveness: () => "alive" },
-      channelsEnabled: () => true,
-      sendChannel: async () => {
-        throw new Error("channel closed");
+      pushAvailable: () => true,
+      sendPush: async () => {
+        throw new Error("stream closed");
       },
     });
     const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     expect(attemptsOf(bus, "inb-1")[0]).toMatchObject({
-      via: "channel",
+      via: "monitor",
       outcome: "failed",
-      error: "channel closed",
+      error: "stream closed",
     });
 
     await bus.close();
     cleanupWorkspace(root);
   });
 
-  test("channels-OFF: the fallback rung's delivery_attempt still records a legal A5 §F23 outcome — the durable inbox survives regardless", async () => {
+  test("monitor-OFF: the fallback rung's delivery_attempt still records a legal A5 §F23 outcome — the durable inbox survives regardless", async () => {
     const root = freshWorkspace();
     const bus = new WorkspaceBus(root);
     await bus.createEntry("inb-1", { kind: "human_edit" });
 
-    // No channelsEnabled/sendChannel/watcherArmed deps at all — channels + asyncRewake both
-    // structurally unavailable, exactly the "channels disabled" configuration R4 requires every
-    // delivery test to also pass under.
+    // No pushAvailable/sendPush deps at all — no monitor connected, exactly the configuration a
+    // telemetry-off or non-interactive Claude session is in.
     const provider = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
     const result = await provider.deliver(SESSION, HUMAN_EDIT_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);
 
     const attempt = attemptsOf(bus, "inb-1")[0];
-    expect(attempt).toMatchObject({ via: "gate", outcome: "attempted", reason: "initial" });
+    expect(attempt).toMatchObject({ via: "mcp_pull", outcome: "attempted", reason: "initial" });
     expect(bus.state.entries["inb-1"]?.status).toBe("pending"); // still durable, untouched
 
     await bus.close();
@@ -153,23 +152,14 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     const bus = new WorkspaceBus(root);
     await bus.createEntry("inb-1", { kind: "annotation" });
 
-    const LEGAL_VIA = new Set([
-      "monitor",
-      "codex_app_server",
-      "channel",
-      "asyncRewake",
-      "gate",
-      "stop",
-      "userprompt",
-      "mcp_pull",
-    ]);
+    const LEGAL_VIA = new Set(["monitor", "codex_app_server", "mcp_pull"]);
     const LEGAL_OUTCOME = new Set(["attempted", "transport_accepted", "presented", "failed"]);
     const LEGAL_REASON = new Set(["initial", "re_nudge"]);
 
     const provider = new ClaudeCodeProvider({
       liveness: { liveness: () => "alive" },
-      channelsEnabled: () => true,
-      sendChannel: async () => true,
+      pushAvailable: () => true,
+      sendPush: async () => true,
     });
     const result = await provider.deliver(SESSION, ANNOTATION_ENTRY);
     await recordDelivery(bus, "inb-1", SESSION, result);

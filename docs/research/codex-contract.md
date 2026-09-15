@@ -180,7 +180,7 @@ Codex CLI 0.153.4). Two statements in the 2026-07-21 pass no longer hold:
 
 | R4 rung | Claude Code | Codex | Codex mechanism |
 |---|---|---|---|
-| push (async, idle) | channels | **app-server socket** | `thread/resume` + `turn/start`/`turn/steer` over `$CODEX_HOME/app-server-control/app-server-control.sock`, verified 2026-09-06 (#161). Not present on a default install — see the spike note. The 2026-07-21 "no equivalent exists" finding was true of hooks and `notify`, and wrong about the app-server. |
+| push (async, idle) | plugin monitor | **app-server socket** | `thread/resume` + `turn/start`/`turn/steer` over `$CODEX_HOME/app-server-control/app-server-control.sock`, verified 2026-09-06 (#161). Not present on a default install — see the spike note. The 2026-07-21 "no equivalent exists" finding was true of hooks and `notify`, and wrong about the app-server. |
 | gate (blocking) | Stop/UserPromptSubmit hook `decision:block` | Stop hook `decision:block` + non-empty `reason` | §2 above |
 | boundaryDrain (async) | Stop/UserPromptSubmit hook, non-blocking | Stop/UserPromptSubmit hook, non-blocking (plain stdout / `additionalContext`) | §3 above |
 | mcpPull | `glosa mcp` tool via `.mcp.json` | `glosa mcp` tool via `config.toml [mcp_servers.glosa]` | §6 above |

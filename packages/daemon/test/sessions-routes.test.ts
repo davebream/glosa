@@ -122,8 +122,14 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
         generationSignal: () => generation.signal,
         snapshot: () => ({ token: TOKEN, signal: generation.signal }),
       };
-      await sessionRegistry.bind("stream-session", root);
-      const response = await fetchFn(req("/api/sessions/stream-session/push-stream"));
+      await sessionRegistry.register({
+        session_id: "stream-session",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "monitor",
+      });
+      const response = await fetchFn(req("/api/sessions/stream-session/stream?transport=monitor"));
       expect(response.status).toBe(200);
       const reader = response.body!.getReader();
       await reader.read();
@@ -137,7 +143,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       if (end === "shutdown") shutdown.abort();
       if (end === "revoke") generation.abort();
       if (end === "replace") {
-        const next = await fetchFn(req("/api/sessions/stream-session/push-stream"));
+        const next = await fetchFn(req("/api/sessions/stream-session/stream?transport=monitor"));
         expect((await reader.read()).done).toBe(true);
         expect(callbacks.size).toBe(1);
         await reader.cancel(); // old reader cannot release the replacement
@@ -384,7 +390,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
   });
 
   describe("POST /api/sessions/:id/drain", () => {
-    test("SPA annotation producer reaches Claude/Codex hook context as actionable content", async () => {
+    test("SPA annotation producer reaches Claude/Codex MCP pull as actionable content", async () => {
       writeFileSync(join(root, "notes.md"), "Grace upon grace.\n");
       await sessionRegistry.register({
         session_id: "sess-claude",
@@ -407,7 +413,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(created.status).toBe(201);
       const prepared = await (
         await fetchFn(
-          req("/api/sessions/sess-claude/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }),
+          req("/api/sessions/sess-claude/drain", { method: "POST", body: JSON.stringify({ via: "mcp_pull" }) }),
         )
       ).json();
       expect(prepared.drained[0].text).toContain("artifact: notes.md");
@@ -415,7 +421,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(prepared.drained[0].text).toContain('"exact":"Grace upon grace."');
     });
 
-    test("SPA edit producer reaches Codex Stop/MCP paths as bounded checkpoint hunks", async () => {
+    test("SPA edit producer reaches the Codex MCP pull as bounded checkpoint hunks", async () => {
       writeFileSync(join(root, "notes.md"), "Before\n");
       await sessionRegistry.register({ session_id: "sess-codex", provider: "codex", cwd: root, source: "startup" });
       const slug = workspaceIndex.list({ presentOnly: true })[0]!.slug;
@@ -423,7 +429,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(saved.status).toBe(200);
       expect((await saved.json()).inbox_id).toBeString();
       const prepared = await (
-        await fetchFn(req("/api/sessions/sess-codex/drain", { method: "POST", body: JSON.stringify({ via: "stop" }) }))
+        await fetchFn(
+          req("/api/sessions/sess-codex/drain", { method: "POST", body: JSON.stringify({ via: "mcp_pull" }) }),
+        )
       ).json();
       expect(prepared.drained[0].kind).toBe("human_edit");
       expect(prepared.drained[0].text).toContain("checkpoints:");
@@ -452,25 +460,31 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
         const attempts = bus.state.entries[item.id]?.deliveryAttempts as
           | { via?: string; outcome?: string; reason?: string }[]
           | undefined;
-        // Default `via` (no `via` in the request body) is "userprompt" — the drain route's own
-        // default; `outcome:"presented"` because this route IS the hook response surfacing it.
-        expect(attempts?.[0]).toMatchObject({ via: "userprompt", outcome: "presented", reason: "initial" });
+        // `via` is always "mcp_pull" — the drain route only ever surfaces an MCP pull (#152);
+        // `outcome:"presented"` because the acknowledged pull response IS what surfaced it.
+        expect(attempts?.[0]).toMatchObject({ via: "mcp_pull", outcome: "presented", reason: "initial" });
         // A5 §F23 — status untouched by a delivery_attempt.
         expect(bus.state.entries[item.id]?.status).toBe("pending");
       }
     });
 
-    test("a caller-supplied via ('stop'/'gate'/'asyncRewake') is recorded verbatim", async () => {
+    test("a caller-supplied via other than mcp_pull is refused — the removed hook transports never re-enter the journal (#152)", async () => {
       await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
       const bus = busRegistry.get(root);
       await bus.createEntry("e1", actionableAnnotation());
 
+      for (const via of ["stop", "gate", "userprompt", "asyncRewake", "channel"]) {
+        const res = await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ via }) }));
+        expect(res.status).toBe(400);
+      }
+      expect(bus.state.entries.e1?.deliveryAttempts).toHaveLength(0);
+
       const prepared = await (
-        await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ via: "stop" }) }))
+        await fetchFn(req("/api/sessions/sess-1/drain", { method: "POST", body: JSON.stringify({ via: "mcp_pull" }) }))
       ).json();
       await ack("sess-1", prepared.delivery_id);
       const attempts = bus.state.entries.e1?.deliveryAttempts as { via?: string }[] | undefined;
-      expect(attempts?.[0]?.via).toBe("stop");
+      expect(attempts?.[0]?.via).toBe("mcp_pull");
     });
 
     test("a second drain call does NOT re-return already-attempted entries", async () => {
@@ -503,9 +517,9 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       const bus = busRegistry.get(root);
       await bus.createEntry("e1", actionableAnnotation());
       // Simulate a provider's own failed rung attempt (e.g. ClaudeCodeProvider.deliver()'s
-      // channel rung throwing) recorded BEFORE this entry ever reaches the drain route.
+      // monitor rung throwing) recorded BEFORE this entry ever reaches the drain route.
       await bus.recordDeliveryAttempt("e1", {
-        via: "channel",
+        via: "monitor",
         session: "sess-1",
         outcome: "failed",
         reason: "initial",
@@ -527,12 +541,12 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(attempts?.[1]).toMatchObject({ outcome: "presented", reason: "re_nudge" });
     });
 
-    test("transport_accepted remains drainable until a hook/MCP output is acknowledged presented", async () => {
+    test("transport_accepted remains drainable until an MCP pull output is acknowledged presented", async () => {
       await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
       const bus = busRegistry.get(root);
       await bus.createEntry("e1", actionableAnnotation());
       await bus.recordDeliveryAttempt("e1", {
-        via: "channel",
+        via: "monitor",
         session: "sess-1",
         outcome: "transport_accepted",
         reason: "initial",
@@ -675,7 +689,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
         source: "startup",
       });
       const res = await fetchFn(
-        req("/api/sessions/sess-shadow-broken/drain", { method: "POST", body: JSON.stringify({ via: "userprompt" }) }),
+        req("/api/sessions/sess-shadow-broken/drain", { method: "POST", body: JSON.stringify({ via: "mcp_pull" }) }),
       );
 
       expect(res.status).toBe(200);

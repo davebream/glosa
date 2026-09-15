@@ -3,13 +3,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { PassThrough, Writable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import {
-  type CallToolResult,
-  LATEST_PROTOCOL_VERSION,
-  type Request,
-  type Result,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import { type CallToolResult, LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import type { EntryStatus, GlosaApiClient } from "../src/api-client.ts";
 import type {
   DaemonHookClient,
@@ -18,25 +12,15 @@ import type {
   ScopedPullDrainOptions,
 } from "../src/daemon-client.ts";
 import {
-  abortableDelay,
   createMcpServer,
   GLOSA_MCP_TOOL_NAMES,
   type GlosaMcpServer,
-  MCP_PUSH_BACKOFF_FACTOR,
-  MCP_PUSH_JITTER_RATIO,
-  MCP_PUSH_MAX_DELAY_MS,
-  MCP_PUSH_MIN_DELAY_MS,
-  MCP_PUSH_RECOVERY_MS,
-  MCP_PUSH_UNBOUND_RETRY_MS,
   type McpDeps,
-  nextPushAttempt,
-  pushReconnectDelayMs,
   closeWithinBudget,
   MCP_SHUTDOWN_BUDGET_MS,
   runMcpServer,
 } from "../src/mcp.ts";
 import {
-  conversationAckInputSchema,
   inboxGetInputSchema,
   inboxPresentationSchema,
   inboxPullInputSchema,
@@ -137,9 +121,7 @@ class HookClient implements DaemonHookClient {
   heartbeats: string[] = [];
   deregistered: string[] = [];
   deliveryAcks: Array<[string, string, "presented" | "failed", string?]> = [];
-  conversationAcks: Array<[string, string, "transport_accepted" | "presented" | "failed"]> = [];
   pushedAcks: Array<[string, string, "presented" | "failed"]> = [];
-  push?: DaemonHookClient["openConversationPush"];
 
   async register(input: RegisterSessionInput) {
     this.registered = input;
@@ -168,25 +150,8 @@ class HookClient implements DaemonHookClient {
     this.deliveryAcks.push([sessionId, deliveryId, outcome, error]);
   }
 
-  async acknowledgeConversation(
-    sessionId: string,
-    messageId: string,
-    outcome: "transport_accepted" | "presented" | "failed",
-  ) {
-    this.conversationAcks.push([sessionId, messageId, outcome]);
-  }
-
   async acknowledgePushed(sessionId: string, entryId: string, outcome: "presented" | "failed") {
     this.pushedAcks.push([sessionId, entryId, outcome]);
-  }
-
-  async openConversationPush(
-    sessionId: string,
-    onEntry: Parameters<NonNullable<DaemonHookClient["openConversationPush"]>>[1],
-    signal: AbortSignal,
-    onOpen?: () => void,
-  ) {
-    if (this.push) return this.push(sessionId, onEntry, signal, onOpen);
   }
 }
 
@@ -258,16 +223,17 @@ const VALID_METADATA = {
 };
 
 describe("official TypeScript MCP SDK contract", () => {
-  test("SDK initialization advertises latest protocol, channel capability, instructions, and package version", async () => {
+  test("SDK initialization advertises latest protocol, no Channel capability, instructions, and package version", async () => {
     const connected = await connect(deps(new HookClient()));
     try {
       expect(LATEST_PROTOCOL_VERSION).toBe("2025-11-25");
       expect(connected.client.getServerVersion()).toEqual({ name: "glosa", version: CLI_VERSION });
-      expect(connected.client.getServerCapabilities()).toMatchObject({
-        tools: { listChanged: true },
-        experimental: { "claude/channel": {} },
-      });
+      expect(connected.client.getServerCapabilities()).toMatchObject({ tools: { listChanged: true } });
+      // #152: Channels are gone. The shim must not advertise the experimental capability, or a
+      // Claude session would negotiate a push rail nobody serves.
+      expect(connected.client.getServerCapabilities()?.experimental).toBeUndefined();
       expect(connected.client.getInstructions()).toContain("glosa_delivery_ack");
+      expect(connected.client.getInstructions()).not.toContain("glosa_conversation_ack");
     } finally {
       await connected.close();
     }
@@ -392,11 +358,6 @@ describe("official TypeScript MCP SDK contract", () => {
         valid: [{ session_id: "s1" }, { session_id: "s1", workspace: "/w" }],
         invalid: [{}, { session_id: "" }, { session_id: "s1", extra: true }],
       },
-      {
-        schema: conversationAckInputSchema,
-        valid: [{ message_id: "m-1" }, { message_id: "m-1", session_id: "s1" }],
-        invalid: [{}, { message_id: "" }, { message_id: "m-1", session_id: 1 }],
-      },
     ] as const;
 
     for (const example of cases) {
@@ -433,7 +394,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
       for (const [name, args] of [
         ["glosa_inbox_pull", { session_id: "other-session" }],
-        ["glosa_conversation_ack", { message_id: "m-1", session_id: "other-session" }],
+        ["glosa_delivery_ack", { entry_id: "e-1", session_id: "other-session" }],
       ] as const) {
         const result = await callTool(connected.client, { name, arguments: args });
         expect(result.isError).toBe(true);
@@ -459,22 +420,6 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(result.content).toEqual([
         expect.objectContaining({ type: "text", text: expect.stringContaining("Output validation error") }),
       ]);
-    } finally {
-      await connected.close();
-    }
-  });
-
-  test("conversation acknowledgement uses the exact MCP host session", async () => {
-    const hook = new HookClient();
-    const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-    try {
-      const result = await callTool(connected.client, {
-        name: "glosa_conversation_ack",
-        arguments: { message_id: "m-1" },
-      });
-      expect(result.isError).not.toBe(true);
-      expect(structured(result)).toEqual({ message_id: "m-1", delivered: true });
-      expect(hook.conversationAcks).toEqual([["claude-session-1", "m-1", "presented"]]);
     } finally {
       await connected.close();
     }
@@ -669,278 +614,16 @@ describe("official TypeScript MCP SDK contract", () => {
     }
   });
 
-  test("initialized SDK connection sends Claude channel notifications and records transport acceptance", async () => {
-    const channelNotificationSchema = z.object({
-      method: z.literal("notifications/claude/channel"),
-      params: z.object({
-        content: z.string(),
-        meta: z.object({ message_id: z.string() }),
-      }),
-    });
-    type ChannelNotification = z.infer<typeof channelNotificationSchema>;
-    const hook = new HookClient();
-    hook.push = async (_sessionId, onEntry, signal) => {
-      await onEntry({
-        id: "message-1",
-        workspace: "/workspace",
-        kind: "conversation_message",
-        status: "pending",
-        text: "bounded",
-        bytes: 7,
-        message: "Exact composer text",
-        message_bytes: 19,
-        target_session_id: "claude-session-1",
-        provider: "claude-code",
-        detail: {},
-        truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
-        retrieval: { command: "glosa inbox get message-1", mcp_tool: "glosa_inbox_get" },
-      });
-      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-    };
-
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const runtime = createMcpServer({ ...deps(hook), sessionId: () => "claude-session-1" });
-    await runtime.connect(serverTransport);
-    const client = new Client<Request, ChannelNotification, Result>(
-      { name: "channel-test", version: "1" },
-      { capabilities: {} },
-    );
-    const notifications: ChannelNotification[] = [];
-    client.setNotificationHandler(channelNotificationSchema, (notification) => {
-      notifications.push(notification);
-    });
-    await client.connect(clientTransport);
+  test("the tool inventory carries no Channel-era tool (#152)", async () => {
+    const connected = await connect(deps(new HookClient()));
     try {
-      await waitFor(
-        () => notifications.length === 1 && hook.conversationAcks.length === 1,
-        "Claude channel notification acknowledgement",
-      );
-      expect(notifications[0]).toEqual({
-        method: "notifications/claude/channel",
-        params: { content: "Exact composer text", meta: { message_id: "message-1" } },
-      });
-      expect(hook.conversationAcks).toEqual([["claude-session-1", "message-1", "transport_accepted"]]);
+      const names = (await connected.client.listTools()).tools.map((tool) => tool.name);
+      expect(names).not.toContain("glosa_conversation_ack");
+      expect(names).toContain("glosa_delivery_ack");
+      expect([...GLOSA_MCP_TOOL_NAMES]).not.toContain("glosa_conversation_ack");
     } finally {
-      await client.close();
-      await runtime.close();
-    }
-  });
-
-  describe("MCP push-stream reconnect math (issue 178) — deterministic, no waiting", () => {
-    test("pushReconnectDelayMs never violates the 5,000ms floor or the finite cap, across escalating attempts", () => {
-      for (let attempt = 0; attempt <= 10; attempt++) {
-        const expectedFloor = Math.min(
-          MCP_PUSH_MIN_DELAY_MS * MCP_PUSH_BACKOFF_FACTOR ** attempt,
-          MCP_PUSH_MAX_DELAY_MS,
-        );
-        const expectedCeiling = Math.min(MCP_PUSH_MAX_DELAY_MS, expectedFloor * (1 + MCP_PUSH_JITTER_RATIO));
-        for (let sample = 0; sample < 20; sample++) {
-          const delay = pushReconnectDelayMs(attempt);
-          expect(delay).toBeGreaterThanOrEqual(expectedFloor);
-          expect(delay).toBeLessThanOrEqual(expectedCeiling);
-        }
-      }
-      // Proves the loop above actually exercised both regimes, not just the already-capped one:
-      // by attempt 10 the raw exponential (5,000 * 2^10) is far past the cap.
-      expect(MCP_PUSH_MIN_DELAY_MS * MCP_PUSH_BACKOFF_FACTOR ** 10).toBeGreaterThan(MCP_PUSH_MAX_DELAY_MS);
-      expect(pushReconnectDelayMs(0)).toBeGreaterThanOrEqual(MCP_PUSH_MIN_DELAY_MS);
-    });
-
-    test("nextPushAttempt resets to the floor only once a connection was actually held for one lease-refresh cycle", () => {
-      expect(nextPushAttempt(0, 0)).toBe(1);
-      expect(nextPushAttempt(3, MCP_PUSH_RECOVERY_MS - 1)).toBe(4);
-      expect(nextPushAttempt(3, MCP_PUSH_RECOVERY_MS)).toBe(0);
-      expect(nextPushAttempt(7, MCP_PUSH_RECOVERY_MS * 5)).toBe(0);
-    });
-
-    test("abortableDelay resolves via its timer and releases the abort listener it registered", async () => {
-      const controller = new AbortController();
-      const addSpy = spyOn(controller.signal, "addEventListener");
-      const removeSpy = spyOn(controller.signal, "removeEventListener");
-      await abortableDelay(10, controller.signal);
-      expect(addSpy).toHaveBeenCalledTimes(1);
-      expect(removeSpy).toHaveBeenCalledTimes(1);
-    });
-
-    test("abortableDelay resolves promptly on abort instead of waiting out a long pending timer", async () => {
-      const controller = new AbortController();
-      const started = Date.now();
-      const pending = abortableDelay(10_000, controller.signal);
-      controller.abort();
-      await pending;
-      expect(Date.now() - started).toBeLessThan(200);
-    });
-
-    test("abortableDelay resolves immediately when the signal is already aborted", async () => {
-      const controller = new AbortController();
-      controller.abort();
-      const started = Date.now();
-      await abortableDelay(10_000, controller.signal);
-      expect(Date.now() - started).toBeLessThan(50);
-    });
-  });
-
-  describe("MCP push-stream reconnect loop (issue 178) — real timing through the SDK", () => {
-    test("a stream failure waits at least the 5,000ms floor before reconnecting, never the old flat 1s retry", async () => {
-      const hook = new HookClient();
-      const attemptedAt: number[] = [];
-      hook.push = async () => {
-        attemptedAt.push(Date.now());
-        throw new Error("stream failure");
-      };
-      const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-      try {
-        await waitFor(() => attemptedAt.length >= 2, "second reconnect attempt", MCP_PUSH_MIN_DELAY_MS * 1.5);
-        const gap = attemptedAt[1]! - attemptedAt[0]!;
-        expect(gap).toBeGreaterThanOrEqual(MCP_PUSH_MIN_DELAY_MS);
-        expect(gap).toBeLessThan(MCP_PUSH_MIN_DELAY_MS * 1.5);
-      } finally {
-        await connected.close();
-      }
-    }, 15_000);
-
-    test("a clean EOF (openConversationPush resolves without throwing, e.g. a daemon restart) waits at least the 5,000ms floor — never the immediate-retry burst issue 178 reported", async () => {
-      const hook = new HookClient();
-      const attemptedAt: number[] = [];
-      hook.push = async () => {
-        attemptedAt.push(Date.now());
-        // Resolves cleanly, exactly as createHttpDaemonClient's real openConversationPush does on
-        // a clean EOF (daemon-client.ts's `if (done) break;` falls out of the loop and returns) —
-        // never throws. Before issue 178, this path skipped the catch's sleep entirely.
-      };
-      const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-      try {
-        await waitFor(
-          () => attemptedAt.length >= 2,
-          "second reconnect attempt after clean EOF",
-          MCP_PUSH_MIN_DELAY_MS * 1.5,
-        );
-        const gap = attemptedAt[1]! - attemptedAt[0]!;
-        expect(gap).toBeGreaterThanOrEqual(MCP_PUSH_MIN_DELAY_MS);
-        expect(gap).toBeLessThan(MCP_PUSH_MIN_DELAY_MS * 1.5);
-      } finally {
-        await connected.close();
-      }
-    }, 15_000);
-
-    test("createHookClient/daemon-discovery failure waits at least the 5,000ms floor and escalates across repeated failures", async () => {
-      const attemptedAt: number[] = [];
-      const failingDeps: McpDeps = {
-        createHookClient: async () => {
-          attemptedAt.push(Date.now());
-          throw new Error("glosa daemon unreachable: connection refused");
-        },
-        createApiClient: async () => ({}) as GlosaApiClient,
-        cwd: () => "/workspace",
-        sessionId: () => "claude-session-1",
-      };
-      const connected = await connect(failingDeps);
-      try {
-        await waitFor(() => attemptedAt.length >= 3, "third discovery attempt", MCP_PUSH_MAX_DELAY_MS * 1.5);
-        const firstGap = attemptedAt[1]! - attemptedAt[0]!;
-        const secondGap = attemptedAt[2]! - attemptedAt[1]!;
-        expect(firstGap).toBeGreaterThanOrEqual(MCP_PUSH_MIN_DELAY_MS);
-        // Bounded escalation, never the old flat 1,000ms-forever retry issue 178 reported for a
-        // daemon that never comes back ("roughly 60 attempts a minute, forever, with no escalation").
-        expect(secondGap).toBeGreaterThan(firstGap);
-      } finally {
-        await connected.close();
-      }
-    }, 30_000);
-
-    test("a stalled connection that never establishes escalates backoff — wall-clock time alone cannot fake recovery", async () => {
-      const hook = new HookClient();
-      const startedAt: number[] = [];
-      const finishedAt: number[] = [];
-      let call = 0;
-      hook.push = async (_sessionId, _onEntry, _signal, onOpen) => {
-        call++;
-        startedAt.push(Date.now());
-        if (call === 2) {
-          // A request that stalls past one whole lease-refresh cycle (MCP_PUSH_RECOVERY_MS) and
-          // then fails WITHOUT ever calling onOpen — i.e. it never actually established a
-          // connection, unlike a genuinely held-open stream that just happens to run that long.
-          await Bun.sleep(MCP_PUSH_RECOVERY_MS + 1_000);
-        }
-        void onOpen; // deliberately never invoked — this attempt never opens
-        finishedAt.push(Date.now());
-        throw new Error("stream failure");
-      };
-      const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-      try {
-        await waitFor(() => startedAt.length >= 3, "third reconnect attempt", 90_000);
-        // The delay between the stalled attempt finishing and the next attempt starting is the
-        // real signal: reset-to-floor (the bug) yields ~MCP_PUSH_MIN_DELAY_MS; escalation (the
-        // fix) yields at least one more doubling on top of that.
-        const delayAfterStall = startedAt[2]! - finishedAt[1]!;
-        expect(delayAfterStall).toBeGreaterThanOrEqual(MCP_PUSH_MIN_DELAY_MS * MCP_PUSH_BACKOFF_FACTOR);
-      } finally {
-        await connected.close();
-      }
-    }, 120_000);
-
-    test("registered/alive/unbound (409) never spins — no retry within the ordinary backoff floor", async () => {
-      const hook = new HookClient();
-      let calls = 0;
-      hook.push = async () => {
-        calls++;
-        throw apiError(409, { title: "session is not explicitly bound" });
-      };
-      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-        try {
-          await waitFor(() => calls >= 1, "first push attempt");
-          // Long past the 5,000ms floor a generic stream failure would already have retried within —
-          // a 409 must not, because only an explicit bind resolves it, never the passage of time.
-          await Bun.sleep(MCP_PUSH_MIN_DELAY_MS + 1_500);
-          expect(calls).toBe(1);
-        } finally {
-          await connected.close();
-        }
-      } finally {
-        errorSpy.mockRestore();
-      }
-    }, 15_000);
-
-    test("registered/alive/unbound (409) says why on stderr before the long wait, not silence", async () => {
-      const hook = new HookClient();
-      hook.push = async () => {
-        throw apiError(409, { title: "session is not explicitly bound" });
-      };
-      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-        try {
-          await waitFor(() => errorSpy.mock.calls.length >= 1, "unbound diagnostic on stderr");
-          const message = String(errorSpy.mock.calls[0]?.[0]);
-          expect(message).toContain("claude-session-1");
-          expect(message.toLowerCase()).toContain("not bound");
-          expect(message).toContain(String(MCP_PUSH_UNBOUND_RETRY_MS));
-        } finally {
-          await connected.close();
-        }
-      } finally {
-        errorSpy.mockRestore();
-      }
-    }, 15_000);
-
-    test("close() cancels a pending reconnect wait promptly and the loop never reconnects again", async () => {
-      const hook = new HookClient();
-      let calls = 0;
-      hook.push = async () => {
-        calls++;
-        throw new Error("stream failure");
-      };
-      const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
-      await waitFor(() => calls >= 1, "first push attempt");
-      const closedAt = Date.now();
       await connected.close();
-      expect(Date.now() - closedAt).toBeLessThan(500);
-      // Long enough that a loop which failed to release its pending wait would have reconnected.
-      await Bun.sleep(MCP_PUSH_MIN_DELAY_MS + 1_000);
-      expect(calls).toBe(1);
-    }, 15_000);
+    }
   });
 
   test("stdio write failure records failed before the temporary session is cleaned up", async () => {

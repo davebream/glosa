@@ -260,7 +260,6 @@ export function createArtifactPane(host, deps) {
      * provider record — never guessed here, and never taken from the request payload. */
     getProviderName = () => "An agent session",
     refreshAttention = () => Promise.resolve(),
-    maybeOfferWiring = () => Promise.resolve(),
     openArtifactInThisPane = () => Promise.resolve(false),
     openDiffTab = null,
     // How a pane asks the dock for room. Entering Annotate in a pane too narrow for the rail
@@ -1456,9 +1455,6 @@ export function createArtifactPane(host, deps) {
       artifact_path: currentArtifact.source_path,
       ...(currentArtifact.rendered_sha256 ? { captured_rendered_sha256: currentArtifact.rendered_sha256 } : {}),
     };
-    // Point-of-action wiring offer (issue #81) — strictly BEFORE the POST but never a gate on
-    // it: whatever the user chooses (or if wiring itself fails), the save below proceeds.
-    await maybeOfferWiring();
     const replacing = composer.replacing;
     try {
       const result = await dataAccess.postAnnotation(slug, record);
