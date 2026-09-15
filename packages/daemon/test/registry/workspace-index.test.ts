@@ -1569,7 +1569,7 @@ describe("WorkspaceIndex — enclosing-repo resolution (issue #96)", () => {
   // the workspace root, and its wiring hint ("run `glosa init <repo>/sub`") could point at a
   // system temp dir or a directory holding several unrelated repos. A file inside a git
   // repository now resolves to a DIRECTORY registration rooted at the repo — the same root
-  // `doctor`/`init` use — as long as the repo's own matcher would track that file.
+  // `doctor` uses — as long as the repo's own matcher would track that file.
 
   test("an unowned file inside a git repo registers the repo root as a directory, not a loose file", async () => {
     const home = freshHome();

@@ -594,7 +594,7 @@ async function acquireLockOrExit(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Client role: every non-daemon entry point (CLI, MCP shim, hooks) calls this to get connection
+// Client role: every non-daemon entry point (CLI, MCP shim) calls this to get connection
 // info, spawning a detached daemon if none is live. Never binds/locks anything itself.
 // ---------------------------------------------------------------------------------------------
 export interface DaemonConnection {

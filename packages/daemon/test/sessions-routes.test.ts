@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// P4.3 — the `/api/sessions/...` surface `glosa hook <event>` calls into (A2 §F08/R2): register,
-// heartbeat, deregister, drain. Same harness style as http-routes.test.ts — a real `createApiFetch`
-// pipeline in-process against real `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry`
-// instances over real tmp workspaces.
+// P4.3 — the `/api/sessions/...` surface the monitor, the Codex attachment, and the MCP shim call
+// into (A2 §F08/R2): register, heartbeat, deregister, drain. Same harness style as
+// http-routes.test.ts — a real `createApiFetch` pipeline in-process against real
+// `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry` instances over real tmp workspaces.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,7 +85,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       session_id: "manual",
       provider: "codex",
       cwd: root,
-      source: "hook",
+      source: "mcp",
       transcript_path: "/fixture.jsonl",
       lease_expiry: new Date(0).toISOString(),
     });
@@ -96,6 +96,16 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect((await bind({ session_id: "manual", provider: "claude-code" })).status).toBe(409);
     expect((await bind({ session_id: "bad", cwd: "/nonexistent-recovery-cwd" })).status).toBe(400);
     expect(sessionRegistry.get("bad")).toBeNull();
+  });
+
+  test("an explicit bind records the caller's source, and `manual` when it supplies none (A2 §F08, R2)", async () => {
+    const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+    const bind = (body: unknown) =>
+      fetchFn(req(`/w/${workspace.slug}/session-binding`, { method: "POST", body: JSON.stringify(body) }));
+    expect((await bind({ session_id: "bare" })).status).toBe(200);
+    expect(sessionRegistry.get("bare")?.source).toBe("manual");
+    expect((await bind({ session_id: "from-cli", source: "cli" })).status).toBe(200);
+    expect(sessionRegistry.get("from-cli")?.source).toBe("cli");
   });
 
   for (const end of ["cancel", "shutdown", "revoke", "replace"] as const) {

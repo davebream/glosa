@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "glosa Codex agent provider — app-server push, hook boundary delivery, and MCP pull.",
+  "description": "glosa Codex agent provider — app-server push, MCP pull, and transcript mirror.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"

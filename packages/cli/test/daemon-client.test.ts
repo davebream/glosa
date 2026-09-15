@@ -12,7 +12,7 @@ import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isApiError } from "../src/api-client.ts";
-import { createHttpDaemonClient, type DaemonHookClient } from "../src/daemon-client.ts";
+import { createHttpDaemonClient, type DaemonClient } from "../src/daemon-client.ts";
 import { tokenPath } from "../../daemon/src/security/token.ts";
 import {
   cleanupHome,
@@ -28,7 +28,7 @@ const TOKEN = "daemon-client-session-stream-real-token-0123456789";
 interface RealDaemon {
   port: number;
   home: string;
-  client: DaemonHookClient;
+  client: DaemonClient;
   register(body: Record<string, unknown>): Promise<void>;
 }
 

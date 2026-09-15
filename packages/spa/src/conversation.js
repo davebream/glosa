@@ -153,10 +153,11 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
     textContent: "×",
     onClick: () => onClose?.(),
   });
-  // P4.3 seam: attention state (e.g. "Claude is waiting for input") comes from the provider's own
-  // Notification hook, NOT a heuristic derived from transcript activity/staleness — this element
-  // exists as the mount point a future P4.3 wiring flips, never inferred here (R6: "Attention
-  // state from the provider's Notification hook, not a transcript stall heuristic").
+  // P4.3 seam: attention state (e.g. "a session is waiting for you") comes only from glosa's own
+  // `attention_request` entries (`glosa_ask`, `request-review`) — NOT a heuristic derived from
+  // transcript activity/staleness, and no longer a provider hook signal either: the Notification
+  // hook this used to plan around went with the hooks (#152), and no replacement was found (R6).
+  // This element exists as the mount point a future wiring flips, never inferred here.
   const attentionEl = el("p", {
     className: "glosa-conv-attention",
     hidden: true,

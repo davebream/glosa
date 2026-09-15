@@ -30,7 +30,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
     expect(entry.canonical_path).toBe(root);
 
-    await backend.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: root, source: "hook" });
+    await backend.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: root, source: "mcp" });
     // The registry's own register() upserts into the SAME index instance it was constructed
     // with — so the workspace is reachable from either handle.
     expect(backend.workspaceIndex.get(root)?.slug).toBe(entry.slug);
@@ -39,7 +39,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
   test("live-session predicate is wired: GC never hard-removes a workspace with a live session", async () => {
     const backend = buildBackend(home, { gcGraceMs: 0, gcThrottleMs: 0 });
     await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
-    await backend.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: root, source: "hook" });
+    await backend.sessionRegistry.register({ session_id: "s1", provider: "claude-code", cwd: root, source: "mcp" });
     rmSync(root, { recursive: true, force: true }); // path now missing on disk
 
     await backend.workspaceIndex.gc({ force: true }); // pass 1: softens to present:false

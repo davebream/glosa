@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shared in-memory `GlosaApiClient` fake — mirrors hook.test.ts's `FakeDaemonClient` convention:
+// Shared in-memory `GlosaApiClient` fake — mirrors mcp.test.ts's `FakeDaemonClient` convention:
 // records every call so a test can assert exactly what a command asked the daemon to do, and lets
 // a test script canned responses/throws without a real daemon process anywhere in the loop.
 import type {

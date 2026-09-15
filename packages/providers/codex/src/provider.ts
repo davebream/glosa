@@ -25,7 +25,7 @@ import type {
   ProviderConnectTarget,
   SessionBinding,
 } from "../../../daemon/src/index.ts";
-import { looksLikeCodexHookInput } from "./hook-types.ts";
+import { looksLikeSessionPayload } from "./session-payload.ts";
 
 /** The subset of `SessionRegistry` `liveness()` needs — a structural interface, not an import of
  * the daemon's concrete class, same trick `ClaudeCodeProvider`'s own `SessionLivenessSource` uses
@@ -59,13 +59,13 @@ export class CodexProvider implements AgentProvider {
    * struct carries exactly those two fields under those names, codex-contract.md §7), mirroring
    * `ClaudeCodeProvider.detectSession`'s own guard exactly. `workspace` is `cwd` verbatim — same
    * reasoning as Claude's: R2's routing precedence layers an explicit adapter binding ABOVE this,
-   * so `detectSession` never has to guess at anything fancier than "the directory this hook fired
-   * in". `source` reads the payload's own `source` field when present (`SessionStart` only), else
-   * falls back to `hook_event_name` (`Stop`/`UserPromptSubmit`/`SessionEnd` carry no `source`),
-   * exactly mirroring the Claude provider's own fallback. */
-  detectSession(hookEvent: unknown): SessionBinding | null {
-    if (!looksLikeCodexHookInput(hookEvent)) return null;
-    const raw = hookEvent as {
+   * so `detectSession` never has to guess at anything fancier than "the directory this payload's
+   * session runs in". `source` reads the payload's own `source` field when present, else falls back
+   * to the payload's `hook_event_name` when it carries one, exactly mirroring the Claude provider's
+   * own fallback. */
+  detectSession(payload: unknown): SessionBinding | null {
+    if (!looksLikeSessionPayload(payload)) return null;
+    const raw = payload as {
       session_id: string;
       cwd: string;
       transcript_path?: unknown;
@@ -95,7 +95,7 @@ export class CodexProvider implements AgentProvider {
   }
 
   /** Lease/heartbeat only — same invariant as Claude's provider, doubly true for Codex: no Codex
-   * hook payload documents a PID either (codex-contract.md §4), so there's no PID-based liveness
+   * hook payload documents a PID either (the payload envelope in codex-contract.md §1), so there's no PID-based liveness
    * check to even be tempted by. */
   liveness(session: SessionBinding): Liveness {
     return this.deps.liveness.liveness(session.session_id);

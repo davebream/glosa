@@ -647,17 +647,18 @@ async function handleClearMetadata(ctx: ApiContext, slug: string, pathname: stri
 
 // -------------------------------------------------------------------------------------------
 // P4.3 additions — not in A1 §5 (same footing as P4.2's `/transcript/compose`): the internal
-// `/api/sessions/...` surface `glosa hook <event>` calls into. R2/A2 §F08 are explicit that
-// "providers register live agent sessions via hooks → daemon API (never direct file writes)" —
-// these four routes are that API. Kept under `/api/` (not `/w/:slug/...`) since a hook fires
-// before the caller necessarily knows which workspace slug it landed in; `register` is what
-// resolves that (via `SessionRegistry.register`'s own workspace upsert).
+// `/api/sessions/...` surface the monitor, the Codex attachment, and the MCP shim call into. R2/A2
+// §F08 are explicit that "providers register live agent sessions through their push transport at
+// session start, MCP activity, or explicit binding — daemon API, never direct file writes" — these
+// four routes are that API. Kept under `/api/` (not `/w/:slug/...`) since a registering caller
+// doesn't necessarily know which workspace slug it landed in yet; `register` is what resolves that
+// (via `SessionRegistry.register`'s own workspace upsert).
 // -------------------------------------------------------------------------------------------
 
-/** Resolves a hook-supplied path to its canonical identity (realpath -> NFC -> strip trailing
- * slash, same convention as every other workspace-identity call site) — a hook's `cwd` is NOT
- * pre-canonicalized the way `/w/:slug/...` routes' `entry.canonical_path` already is. `null` on
- * anything that doesn't resolve (nonexistent directory, symlink loop, etc.). */
+/** Resolves a registering caller's supplied path to its canonical identity (realpath -> NFC ->
+ * strip trailing slash, same convention as every other workspace-identity call site) — a
+ * provider's `cwd` is NOT pre-canonicalized the way `/w/:slug/...` routes' `entry.canonical_path`
+ * already is. `null` on anything that doesn't resolve (nonexistent directory, symlink loop, etc.). */
 /** A canonical path that exists AND is a directory. `canonicalOrNull` alone is realpath-only, so a
  * regular file passes it; a workspace scope naming a file is not a workspace. */
 function isExistingDirectory(canonicalPath: string): boolean {
@@ -680,9 +681,9 @@ function canonicalOrNull(path: string): string | null {
  * returns the identity the caller resolved to; it never pushes or delivers. R2's "no live session
  * -> park; next registration for that workspace drains it" is NOT settled here: a park is an entry
  * left non-terminal in the workspace journal, and the drain is the separate
- * `POST /api/sessions/:id/drain` the same hook invocation calls immediately after this one (see
- * `handleSessionDrain`, and `glosa hook session-start`). Nothing about a park lives in daemon
- * memory, so it survives a daemon restart. */
+ * `POST /api/sessions/:id/drain` the same registering caller requests immediately after this one
+ * (see `handleSessionDrain`). Nothing about a park lives in daemon memory, so it survives a daemon
+ * restart. */
 async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -838,14 +839,14 @@ async function handleSessionHeartbeat(ctx: ApiContext, sessionId: string): Promi
   return Response.json({ ok: true });
 }
 
-/** `POST /api/sessions/:id/deregister` — SessionEnd (A2 §F08: "removes the session from the
- * active registry (keeps journal audit trail)"). Also a no-op-safe 200 for an unknown id. */
+/** `POST /api/sessions/:id/deregister` — an explicit client deregistration: removes the session from
+ * the active registry and keeps the journal audit trail. Also a no-op-safe 200 for an unknown id. */
 async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Promise<Response> {
   await ctx.sessionRegistry.deregister(sessionId);
   return Response.json({ ok: true });
 }
 
-const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
+const DRAIN_MAX = 8; // Per-request cap on entries one drain returns; a caller pulls again for the rest.
 
 interface CompositeDrainCandidate {
   workspace: WorkspaceEntry;
@@ -887,8 +888,8 @@ function compareCompositeCandidates(a: CompositeDrainCandidate, b: CompositeDrai
  * the session's live registry row. Every OTHER session's routing still reads the live registry —
  * only THIS session's own `cwd`/`workspace_binding` is replaced for the purpose of the predicate,
  * via `SessionRegistry.forWorkspace`'s `scopeOverride`. Absent `scope`, behaviour is byte-for-byte
- * what it was before this fix: the row's current `cwd` decides routing, as the four hook transports
- * still expect.
+ * what it was before this fix: the row's current `cwd` decides routing, as every identified
+ * session's own drain call still expects.
  *
  * `capturedRecord` (A10) is the SAME `record` `handleSessionDrain` fetched before admitting this
  * request — passed through so the override can complete an admitted drain even if the live row is
@@ -1073,8 +1074,8 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   // Issue #205: the immutable scope a generic MCP pull sends for itself, additive and optional (A1
   // §5.15). Captured once, here, before anything async runs — never re-derived from the session's
   // live registry row, which a concurrent re-registration can legitimately move out from under this
-  // exact request. Every other caller (gate/stop/userprompt/asyncRewake) omits it, and behaviour for
-  // them is unchanged: routing still resolves from the row.
+  // exact request. An identified session's own drain call omits it, and its routing still resolves
+  // from the row unchanged.
   //
   // Canonicalised below with the SAME rule `handleSessionRegister` applies to `cwd`, and for the
   // same reason: a client-supplied path is not pre-canonicalised, every routing comparison
@@ -2129,8 +2130,8 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "GET" && pathname === "/api/workspaces") {
     return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
   }
-  // P4.3: the session-registration surface `glosa hook <event>` calls into (A2 §F08/R2) — see
-  // the handlers' own header comment above.
+  // P4.3: the session-registration surface the monitor, the Codex attachment, and the MCP shim
+  // call into (A2 §F08/R2) — see the handlers' own header comment above.
   if (method === "POST" && pathname === "/api/sessions/register") {
     return { routeClass: "state-changing", handle: (req) => handleSessionRegister(ctx, req) };
   }

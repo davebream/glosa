@@ -39,7 +39,7 @@ export function releaseDaemonIdentity(): void {
   claimed = null;
 }
 
-/** `null` in any process that has not won the daemon-lock CAS — CLI, hooks, tests, and a second
+/** `null` in any process that has not won the daemon-lock CAS — CLI, tests, and a second
  * daemon that lost the race. Callers must treat `null` as "ownership unprovable", never as
  * "ownership assumed". */
 export function currentDaemonIdentity(): DaemonIdentity | null {
