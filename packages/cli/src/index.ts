@@ -1045,10 +1045,20 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     ]);
     const { discoverClaudeMcpSession } = await import("../../providers/claude-code/src/provider.ts");
     const { discoverCodexMcpSession } = await import("../../providers/codex/src/provider.ts");
+    const { codexAttachmentRuntime, runCodexAttachment } = await import("../../providers/codex/src/app-server.ts");
     const { discoverMcpIdentity } = await import("./session.ts");
     await runMcpServer({
       createHookClient: (signal) => createHttpDaemonClient({ signal }),
       createApiClient: (signal) => createHttpGlosaClient({ signal }),
+      startCodexAttachment: (options, signal) =>
+        runCodexAttachment(
+          options,
+          {
+            ...codexAttachmentRuntime,
+            createDaemonClient: (clientSignal) => createHttpDaemonClient({ signal: clientSignal }),
+          },
+          signal,
+        ),
       session: (provider) =>
         discoverMcpIdentity(
           [discoverClaudeMcpSession(process.env, process.cwd()), discoverCodexMcpSession(process.env, process.cwd())],
@@ -1093,6 +1103,50 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     },
   );
 
+  const codexAttach = lazyHandler(
+    {
+      name: "codex-attach",
+      description: "Attach a bound Codex thread to its local app-server control socket",
+      internal: true,
+      args: {
+        ...GLOBAL_ARGS,
+        id: { type: "positional", required: true, description: "Exact Codex thread ID" },
+        workspace: { type: "string", description: "Bound glosa workspace directory" },
+        cwd: { type: "string", description: "Codex session working directory" },
+        socket: { type: "string", description: "App-server Unix socket path" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const { createHttpDaemonClient } = await import("./daemon-client.ts");
+      const { codexAttachmentRuntime, runCodexAttachment } = await import("../../providers/codex/src/app-server.ts");
+      const shutdown = new AbortController();
+      const stop = () => shutdown.abort();
+      process.once("SIGTERM", stop);
+      process.once("SIGINT", stop);
+      process.once("SIGHUP", stop);
+      try {
+        await runCodexAttachment(
+          {
+            sessionId: values.id as string,
+            workspace: (values.workspace as string | undefined) ?? process.cwd(),
+            cwd: (values.cwd as string | undefined) ?? process.cwd(),
+            socketPath: values.socket as string | undefined,
+          },
+          {
+            ...codexAttachmentRuntime,
+            createDaemonClient: (signal) => createHttpDaemonClient({ signal }),
+          },
+          shutdown.signal,
+        );
+      } finally {
+        process.off("SIGTERM", stop);
+        process.off("SIGINT", stop);
+        process.off("SIGHUP", stop);
+      }
+    },
+  );
+
   const daemon = lazyHandler({ name: "__daemon", description: "Detached daemon process", internal: true }, async () => {
     const { bootDaemon } = await import("../../daemon/src/index.ts");
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
@@ -1104,9 +1158,17 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
             liveness: sessionRegistry,
             channelsEnabled: (session) => pushRegistry.has(session.session_id),
             sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
-            pushVia: (session) => pushRegistry.transport(session.session_id),
+            pushVia: (session) => {
+              const transport = pushRegistry.transport(session.session_id);
+              return transport === "monitor" || transport === "channel" ? transport : null;
+            },
           }),
-        ({ sessionRegistry }) => new CodexProvider({ liveness: sessionRegistry }),
+        ({ sessionRegistry, pushRegistry }) =>
+          new CodexProvider({
+            liveness: sessionRegistry,
+            pushAvailable: (session) => pushRegistry.transport(session.session_id) === "codex_app_server",
+            sendPush: (session, entry) => pushRegistry.send(session.session_id, entry),
+          }),
       ],
     });
   });
@@ -1128,6 +1190,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     inbox,
     metadata,
     session,
+    "codex-attach": codexAttach,
     token,
     update,
     forget,
@@ -1213,7 +1276,7 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
 
 /** Commands whose stderr is consumed by a machine, not read by a person: the detached daemon logs
  * it, the agent hooks and the MCP server hand it to their host. None of them should carry advice. */
-const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "monitor", "complete"]);
+const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "monitor", "codex-attach", "complete"]);
 
 let devNoticeShown = false;
 

@@ -224,7 +224,7 @@ the entry survives.
 
 | Capability | Claude Code provider | Codex / other hook-capable provider | Generic MCP host |
 |---|---|---|---|
-| Async push into idle | **plugin monitor** over the generic session stream | — (honest limit: delivered at next turn/gate) | — |
+| Async push into idle | **plugin monitor** over the generic session stream | **Codex app-server control socket**, when separately running | — |
 | Blocking review gate (sync) | legacy hook gate during the #151→#152 transition | **their hook gate** (Codex Stop-hook etc.) | — |
 | Turn-boundary drain (async) | legacy Stop / UserPromptSubmit hooks during the transition | their turn hooks | — |
 | Pull on demand | MCP tool | MCP tool | **MCP tool** |
@@ -234,6 +234,11 @@ the entry survives.
 - Monitor writes prove only `transport_accepted`. A targeted conversation message becomes terminal
   `delivered` only after the exact session acknowledges `presented`; until then it remains eligible
   for MCP pull. Every monitor line begins `[glosa <entry-id>]`, which the acknowledgement tool returns.
+- Codex push is likewise a live per-session capability, never inferred from installation. Its MCP
+  bind owns an RFC 6455 connection over the local app-server Unix socket, resumes the exact thread,
+  and delivers bounded input with `turn/steer` when it knows the active turn id or `turn/start`
+  otherwise. Glosa never starts or repairs Codex's app-server; MCP pull remains available when the
+  socket is absent or the first-turn rollout is not ready.
 - **No cmux.** The universal cross-agent path is the structured blocking gate (Plannotator-proven on
   Claude/Codex/Gemini/Copilot) + turn-boundary drain + MCP-pull.
 - Every injected presentation is UTF-8 bounded: at most 16 KiB per entry and 32 KiB per batch, with
@@ -343,7 +348,8 @@ the entry survives.
   }
   ```
   v1 ships: **Claude Code provider** (deep: push=plugin monitor, mcpPull=plugin MCP tools, transcript
-  mirror) and a **Codex provider** (gate + boundaryDrain + mcpPull; push=false — no channels-equivalent).
+  mirror) and a **Codex provider** (app-server push when its exact-thread socket subscription is
+  connected, plus gate + boundaryDrain + mcpPull fallbacks).
   Adding a CLI = a new provider, never a core change.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
   **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
@@ -435,7 +441,7 @@ the entry survives.
   a concrete Codex provider contract (which hook fires the blocking gate, its stdin/stdout shape, where
   Codex writes its transcript, whether it speaks MCP). Gate: a written contract the provider is built against.
 - **T2 — providers & delivery**: agent-provider interface (R7); Claude Code plugin monitor + MCP server;
-  **Codex provider** (per T2a; gate + boundary + MCP-pull); `resolve`/`apply-begin`/MCP tools. Gate: each
+  **Codex provider** (per T2a; app-server push + gate + boundary + MCP-pull); `resolve`/`apply-begin`/MCP tools. Gate: each
   capability delivers for each provider; monitor-unavailable MCP fallback still delivers; journal records correct
   transport `outcome`.
 - **T3 — SPA shell + class R viewer + three modes + diff/history**: handshake/pairing screens; switcher/
@@ -459,7 +465,7 @@ the entry survives.
   Gate: compatibility exercised entirely through public contracts with no external code in this repo.
 - **T8 — release gate = deterministic suites + private manual rehearsal**:
   - Deterministic suites (mandatory): storage/fault (kill daemon at each write step → one legal recovered
-    state); concurrency; delivery (monitor push/reconnect, MCP pull fallback, parked/resumed); browser
+    state); concurrency; delivery (monitor/Codex push/reconnect, MCP pull fallback, parked/resumed); browser
     security (the A3 §5 attacks); anchor corpus (Polish combining chars, md markup, duplicate quotes,
     stale hashes, transformed HTML); transcript suite; **explicit-binding topology** (agent cwd differs
     from the artifact workspace and routing still succeeds); editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical).

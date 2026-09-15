@@ -185,9 +185,10 @@ Codex CLI 0.153.4). Two statements in the 2026-07-21 pass no longer hold:
 | boundaryDrain (async) | Stop/UserPromptSubmit hook, non-blocking | Stop/UserPromptSubmit hook, non-blocking (plain stdout / `additionalContext`) | §3 above |
 | mcpPull | `glosa mcp` tool via `.mcp.json` | `glosa mcp` tool via `config.toml [mcp_servers.glosa]` | §6 above |
 
-`capabilities = { push: false, gate: true, boundaryDrain: true, mcpPull: true }` — no channels-
-equivalent push, matching R7's "Codex provider (gate + boundaryDrain + mcpPull; push=false — no
-channels-equivalent)" verbatim, now backed by source rather than assumption.
+`capabilities = { push: <exact thread attachment connected>, gate: true, boundaryDrain: true,
+mcpPull: true }`. Push is evaluated per session from the live `codex_app_server` stream connection,
+never from Codex installation or socket existence. A normal Homebrew/npm install has no managed
+daemon, so the ordinary fallback remains hook boundary delivery plus MCP pull.
 
 `detectSession(hookEvent)` accepts any payload carrying `session_id` (string) + `cwd` (string) —
 structurally identical guard to Claude's `looksLikeClaudeHookInput`, since every Codex

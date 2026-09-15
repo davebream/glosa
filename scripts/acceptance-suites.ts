@@ -37,7 +37,7 @@ export type SuiteName = (typeof REQUIRED_SUITES)[number];
 export const SUITE_CLAUSES: Record<SuiteName, string> = {
   fault: "storage/fault (kill daemon at each write step → one legal recovered state)",
   concurrency: "concurrency",
-  delivery: "delivery (monitor push, reconnect, MCP pull fallback, parked/resumed)",
+  delivery: "delivery (monitor/Codex push, reconnect, MCP pull fallback, parked/resumed)",
   security: "browser security (the A3 §5 attacks)",
   anchor: "anchor corpus (Polish combining chars, md markup, duplicate quotes, stale hashes, transformed HTML)",
   transcript: "transcript suite",
@@ -90,6 +90,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/providers/claude-code/test/rewake.test.ts",
     "packages/providers/claude-code/test/delivery-journal.test.ts",
     "packages/providers/codex/test/provider.test.ts",
+    "packages/providers/codex/test/app-server.test.ts",
     "test/agent-provider-conformance.test.ts",
   ],
   security: [

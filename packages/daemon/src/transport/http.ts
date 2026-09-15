@@ -1312,12 +1312,22 @@ async function handleSessionStream(
   server: BunServer | undefined,
   authSignal?: AbortSignal,
 ): Promise<Response> {
+  const transport = new URL(req.url).searchParams.get("transport") ?? "monitor";
+  if (transport !== "monitor" && transport !== "codex_app_server") {
+    return problem(400, "validation-failed", "transport must be monitor|codex_app_server");
+  }
   const record = ctx.sessionRegistry.get(sessionId);
   if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
     return problem(404, "not-found", "unknown live session", undefined, new URL(req.url).pathname);
   }
   if (!record.workspace_binding) {
     return problem(409, "conflict", "session is not explicitly bound", undefined, new URL(req.url).pathname);
+  }
+  if (
+    (transport === "monitor" && record.provider !== "claude-code") ||
+    (transport === "codex_app_server" && record.provider !== "codex")
+  ) {
+    return problem(409, "conflict", "session provider does not match the requested stream transport");
   }
   if (!ctx.pushRegistry) {
     return problem(503, "internal", "session push is unavailable", undefined, new URL(req.url).pathname);
@@ -1369,7 +1379,7 @@ async function handleSessionStream(
           throw error;
         }
       };
-      unregister = ctx.pushRegistry?.register(sessionId, send, close, "monitor");
+      unregister = ctx.pushRegistry?.register(sessionId, send, close, transport);
       releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
 
       const pump = async () => {
@@ -1418,23 +1428,23 @@ async function handleSessionStream(
 
 async function handleSessionStreamTransportAck(ctx: ApiContext, sessionId: string, entryId: string): Promise<Response> {
   const record = ctx.sessionRegistry.get(sessionId);
-  if (!record?.workspace_binding || ctx.pushRegistry?.transport(sessionId) !== "monitor") {
-    return problem(404, "not-found", "unknown monitor session");
-  }
-  if (!ctx.pushRegistry.isAwaitingTransport(sessionId, entryId)) {
+  const transport = ctx.pushRegistry?.transport(sessionId);
+  if (!record?.workspace_binding || (transport !== "monitor" && transport !== "codex_app_server"))
+    return problem(404, "not-found", "unknown session stream");
+  if (!ctx.pushRegistry?.isAwaitingTransport(sessionId, entryId)) {
     return problem(409, "conflict", "stream delivery is not awaiting transport acknowledgement");
   }
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
   const attempts = bus.state.entries[entryId]?.deliveryAttempts;
   await bus.recordDeliveryAttempt(entryId, {
     fsync: true,
-    idem: `monitor:${sessionId}:${entryId}:transport_accepted`,
-    via: "monitor",
+    idem: `${transport}:${sessionId}:${entryId}:transport_accepted`,
+    via: transport,
     session: sessionId,
     outcome: "transport_accepted",
     reason: Array.isArray(attempts) && attempts.length > 0 ? "re_nudge" : "initial",
   });
-  if (!ctx.pushRegistry.acknowledgeTransport(sessionId, entryId)) {
+  if (!ctx.pushRegistry?.acknowledgeTransport(sessionId, entryId)) {
     return problem(409, "conflict", "stream delivery is not awaiting transport acknowledgement");
   }
   return Response.json({ acknowledged: true });
@@ -1459,11 +1469,25 @@ async function handleSessionStreamPresentedAck(
     return problem(400, "validation-failed", "outcome must be presented|failed");
   }
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const attempts = bus.state.entries[entryId]?.deliveryAttempts;
+  const accepted = Array.isArray(attempts)
+    ? [...attempts]
+        .reverse()
+        .find(
+          (attempt) =>
+            attempt.session === sessionId &&
+            attempt.outcome === "transport_accepted" &&
+            (attempt.via === "monitor" || attempt.via === "codex_app_server"),
+        )
+    : undefined;
+  if (!accepted || (accepted.via !== "monitor" && accepted.via !== "codex_app_server")) {
+    return problem(409, "conflict", "entry has no accepted session-stream delivery");
+  }
   const acknowledged = await bus.acknowledgePushedEntry(entryId, {
     session: sessionId,
-    via: "monitor",
+    via: accepted.via,
     outcome,
-    ...(outcome === "failed" ? { error: "monitor_presentation_failed" } : {}),
+    ...(outcome === "failed" ? { error: "stream_presentation_failed" } : {}),
   });
   if (!acknowledged) return problem(409, "conflict", "entry is not deliverable to this session");
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });

@@ -266,6 +266,7 @@
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | plugin stdio MCP tools and pull fallback | — |
 | `monitor` | internal | plugin session stream transport; requires `--plugin-root` and `--project-dir` | — |
+| `codex-attach` | internal | foreground Codex app-server stream transport; requires exact thread id and accepts `--workspace`, `--cwd`, and `--socket` | — |
 | `hook <event>` | internal | CC hook entry point | per hook |
 | `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
 - `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery) — but never silently: `open` emits a `not-initialized` warning (or `init-drifted` when glosa-owned config nodes changed since init) naming the fix command and the session-restart step, with exit code 0 preserved. The consented TTY init offer never fires for drift (re-init over drift can require `--force`, which `open` never runs on the user's behalf), never fires non-TTY or under `--json`, and an internal probe failure never breaks `open`.

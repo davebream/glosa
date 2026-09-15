@@ -99,9 +99,11 @@ describe("CodexProvider — AgentProvider conformance", () => {
     expect(provider.detectSession(null)).toBeNull();
   });
 
-  test("capabilities: no channels-equivalent push, gate+boundaryDrain+mcpPull all true (R7/codex-contract.md §7)", () => {
+  test("capabilities expose push only while this session has a connected app-server transport", () => {
     const provider = new CodexProvider({ liveness: liveness() });
     expect(provider.capabilities(SESSION)).toEqual({ push: false, gate: true, boundaryDrain: true, mcpPull: true });
+    const attached = new CodexProvider({ liveness: liveness(), pushAvailable: () => true });
+    expect(attached.capabilities(SESSION)).toEqual({ push: true, gate: true, boundaryDrain: true, mcpPull: true });
   });
 
   test("liveness delegates to the injected liveness source, never a PID check", () => {
@@ -123,7 +125,18 @@ describe("CodexProvider — AgentProvider conformance", () => {
   });
 });
 
-describe("CodexProvider.deliver — the R4 ladder minus channels", () => {
+describe("CodexProvider.deliver — app-server push before durable fallbacks", () => {
+  test("a connected app-server stream is the first rung", async () => {
+    const provider = new CodexProvider({
+      liveness: liveness(),
+      pushAvailable: () => true,
+      sendPush: async (_session, entry) => entry === ENTRY,
+    });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({
+      via: "codex_app_server",
+      outcome: "transport_accepted",
+    });
+  });
   test("gate/boundaryDrain available (the default) → delivers via 'gate', outcome 'attempted'", async () => {
     const provider = new CodexProvider({ liveness: liveness() });
     const result = await provider.deliver(SESSION, ENTRY);
@@ -141,7 +154,7 @@ describe("CodexProvider.deliver — the R4 ladder minus channels", () => {
     expect(result).toEqual({ via: "gate", outcome: "attempted" });
   });
 
-  test("gate AND boundaryDrain both unavailable → falls to rung 2, mcp_pull", async () => {
+  test("gate AND boundaryDrain both unavailable → falls to rung 3, mcp_pull", async () => {
     class NoHookDrainProvider extends CodexProvider {
       override capabilities() {
         return { push: false, gate: false, boundaryDrain: false, mcpPull: true };
@@ -163,7 +176,7 @@ describe("CodexProvider.deliver — the R4 ladder minus channels", () => {
     expect(result).toEqual({ via: "gate", outcome: "failed", error: "no_capability_available" });
   });
 
-  test("push is never consulted — Codex has no channels-equivalent, so a push:true override still doesn't add a rung", async () => {
+  test("a declared push with no attached sender falls through to the hook gate", async () => {
     class SpuriousPushProvider extends CodexProvider {
       override capabilities() {
         return { push: true, gate: true, boundaryDrain: true, mcpPull: true };

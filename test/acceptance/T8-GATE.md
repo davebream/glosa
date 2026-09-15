@@ -85,7 +85,7 @@ the same eight. `requirements.md` governs where any summary of it disagrees.
 |---|---|
 | `fault` | storage/fault (kill daemon at each write step → one legal recovered state) |
 | `concurrency` | concurrency |
-| `delivery` | delivery (monitor push, reconnect, MCP pull fallback, parked/resumed) |
+| `delivery` | delivery (monitor/Codex push, reconnect, MCP pull fallback, parked/resumed) |
 | `security` | browser security (the A3 §5 attacks) |
 | `anchor` | anchor corpus (Polish combining chars, md markup, duplicate quotes, stale hashes, transformed HTML) |
 | `transcript` | transcript suite |
@@ -138,6 +138,7 @@ dropping out of it.
 | `delivery` | `packages/providers/claude-code/test/rewake.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/delivery-journal.test.ts` |
 | `delivery` | `packages/providers/codex/test/provider.test.ts` |
+| `delivery` | `packages/providers/codex/test/app-server.test.ts` |
 | `delivery` | `test/agent-provider-conformance.test.ts` |
 | `security` | `test/acceptance/security-attack-matrix.test.ts` |
 | `security` | `packages/daemon/test/auth.test.ts` |

@@ -67,6 +67,10 @@ export interface McpDeps {
   cwd?: () => string;
   sessionId?: () => string | undefined;
   session?: (provider?: string) => { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null;
+  startCodexAttachment?: (
+    options: { sessionId: string; workspace: string; cwd: string },
+    signal: AbortSignal,
+  ) => Promise<void>;
 }
 
 export const GLOSA_MCP_TOOL_NAMES = [
@@ -367,8 +371,10 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   // ordering is what makes the gate and the `activeCalls` snapshot agree with each other.
   let intakeClosed = false;
   const syntheticId = `mcp-${process.pid}-${randomUUID()}`;
+  let explicitlyBound: { session_id: string; provider: string; cwd: string; channelPush?: boolean } | null = null;
   const host = (provider?: string) =>
     deps.session?.(provider) ??
+    (explicitlyBound && (!provider || explicitlyBound.provider === provider) ? explicitlyBound : null) ??
     (deps.sessionId?.() ? { session_id: deps.sessionId()!, provider: "mcp", cwd: (deps.cwd ?? process.cwd)() } : null);
   const identity = (requested?: string, provider?: string, genericWorkspace?: string) => {
     const current = host(provider);
@@ -414,6 +420,8 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   const acknowledgements = new DeliveryAcknowledgements();
   const pushAbort = new AbortController();
   let pushTask: Promise<void> | null = null;
+  let codexAttachAbort: AbortController | null = null;
+  const codexAttachTasks = new Set<Promise<void>>();
 
   const server = new McpServer(
     { name: "glosa", version: CLI_VERSION },
@@ -607,6 +615,21 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         cwd: session.cwd,
         source: "mcp",
       });
+      explicitlyBound = session;
+      if (session.provider === "codex" && deps.startCodexAttachment) {
+        codexAttachAbort?.abort();
+        const attachAbort = new AbortController();
+        codexAttachAbort = attachAbort;
+        const signal = AbortSignal.any([shutdownAbort.signal, attachAbort.signal]);
+        const task = deps.startCodexAttachment({ sessionId, workspace: root, cwd: session.cwd }, signal);
+        codexAttachTasks.add(task);
+        task
+          .finally(() => {
+            codexAttachTasks.delete(task);
+            if (codexAttachAbort === attachAbort) codexAttachAbort = null;
+          })
+          .catch(() => {});
+      }
       return toolResult(structuredContent);
     },
   );
@@ -905,12 +928,14 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       intakeClosed = true;
       shutdownAbort.abort();
       pushAbort.abort();
+      codexAttachAbort?.abort();
       // Every admitted request still running — its registration and heartbeat included, not only
       // its handler — is bound to `shutdownAbort` through the client `ensureSession` created for
       // it, so aborting first means this settles quickly rather than abandoning it mid-flight.
       await Promise.allSettled([...activeCalls]);
       await server.close();
       if (pushTask) await pushTask.catch(() => {});
+      await Promise.allSettled([...codexAttachTasks]);
       // Safe to run after the abort above, and only because of it: every pending acknowledgement
       // holds the client its delivery arrived on, which is bound to `shutdownAbort`. The call
       // therefore fails locally instead of putting the current bearer on the wire to an endpoint

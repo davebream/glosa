@@ -57,4 +57,10 @@ describe("SessionPushRegistry", () => {
     expect(await registry.send("session-a", entry, 100)).toBe(true);
     expect(seen).toEqual(["message-2"]);
   });
+
+  test("records a Codex app-server connection as its actual transport", () => {
+    const registry = new SessionPushRegistry();
+    registry.register("codex-session", () => {}, undefined, "codex_app_server");
+    expect(registry.transport("codex-session")).toBe("codex_app_server");
+  });
 });
