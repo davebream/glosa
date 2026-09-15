@@ -1,3 +1,4 @@
+import type { ShadowDiagnosis } from "../../daemon/src/git/shadow-health.ts";
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/cli — P5.1: the broader daemon-facing client the non-hook CLI surface (open/resolve/
 // apply-begin/request-review/status) calls into. Same shape convention as daemon-client.ts's
@@ -271,6 +272,8 @@ export interface GlosaApiClient {
   listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
+  getShadowHealth?(slug: string): Promise<ShadowDiagnosis>;
+  repairShadowBaseline?(slug: string): Promise<ShadowDiagnosis>;
   setMetadata?(
     path: string,
     metadata: WorkspaceMetadataDescriptor,
@@ -436,6 +439,12 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
           `/w/${encodeURIComponent(workspace.slug)}/inbox/${encodeURIComponent(entry)}/presentation${suffix}`,
         )
       ).json();
+    },
+    async getShadowHealth(slug) {
+      return (await call("GET", `/w/${encodeURIComponent(slug)}/shadow/health`)).json();
+    },
+    async repairShadowBaseline(slug) {
+      return (await call("POST", `/w/${encodeURIComponent(slug)}/shadow/repair-baseline`, {})).json();
     },
     async getStatus() {
       return (await call("GET", "/api/status")).json();

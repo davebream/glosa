@@ -6,10 +6,12 @@
 // open — and #153's headline workflow is an external editor plus an agent with NO glosa tab. Every
 // test here therefore opens no stream and registers no listener.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { unlinkSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ChokidarOptions, type FSWatcher, watch } from "chokidar";
 import { ArtifactWatcherRegistry, DEFAULT_MAX_WATCHED_WORKSPACES } from "../src/artifact-watcher.ts";
+import { headSha } from "../src/git/shadow.ts";
+import { shadowGitDir } from "../src/bus/paths.ts";
 import { WorkspaceBus } from "../src/bus/bus.ts";
 import { EXTERNAL_EDIT_KIND } from "../src/bus/external-edit.ts";
 import { readInboxEntry } from "../src/bus/inbox.ts";
@@ -91,6 +93,36 @@ afterEach(async () => {
 });
 
 describe("A4 — a live external save produces one coalesced entry, with no browser attached", () => {
+  test("a live watcher captures a racing final save after explicit lost-history repair (#226)", async () => {
+    const root = workspace();
+    claimTestDaemonIdentity(root);
+    writeFile(root, "notes.md", "Initial.\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    const head = await headSha(root);
+    unlinkSync(join(shadowGitDir(root), "objects", head.slice(0, 2), head.slice(2)));
+    const { watchFactory, armed } = armedWatchFactory();
+    const registry = track(
+      new ArtifactWatcherRegistry({
+        watchFactory,
+        quietWindowMs: 40,
+        captureExternalEdit: () => bus.captureExternalEdit(),
+      }),
+    );
+    registry.ensureWatched(root);
+    await armed();
+    await bus.repairBaseline(
+      () => {},
+      (step) => {
+        if (step === "index-staged") writeFile(root, "notes.md", "Racing final bytes.\n");
+      },
+    );
+    await waitUntil(() => externalEditEntries(bus).length > 0);
+    expect(externalEditEntries(bus)).toHaveLength(1);
+    expect(externalEditEntries(bus)[0]).toMatchObject({ kind: "external_edit", source: "live", path: "notes.md" });
+    expect(String(externalEditEntries(bus)[0]?.diff)).toContain("+Racing final bytes.");
+  });
+
   test("three saves inside one real 2-second window, no SSE listener, produce exactly one external_edit with correct hunks", async () => {
     const root = workspace();
     claimTestDaemonIdentity(root);

@@ -10,9 +10,10 @@
 // us. Attribution/kind/entry/lease ride in commit TRAILERS, never in the git author/committer
 // identity — that identity is the constant `glosa <glosa@localhost>` regardless of who's credited
 // for the content (A4 §F21: "attribution in commit TRAILERS not author").
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { appendEvent, type JournalWriter } from "../bus/journal.ts";
-import { shadowGitDir } from "../bus/paths.ts";
+import { existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { appendEvent, parseJournalEventLine, type JournalEvent, type JournalWriter } from "../bus/journal.ts";
+import { journalPath, shadowGitDir } from "../bus/paths.ts";
 import { currentDaemonIdentity, type DaemonIdentity } from "../lifecycle/daemon-identity.ts";
 import { readLock } from "../lifecycle/lock.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
@@ -309,6 +310,209 @@ export interface InitShadowRepoDeps {
   now?: () => Date;
 }
 
+export interface ShadowHealth {
+  state: "healthy" | "uninitialized" | "lost-history" | "invalid-head" | "repair-pending";
+  reason: string;
+  head: string | null;
+  repair?: { id: string; reason: "lost_history" | "initialization_unknown"; checkpoint: string };
+}
+
+/** Complete physical records only. Diagnosis never truncates, quarantines or opens a writer. */
+export function shadowJournalEvents(root: WorkspaceTarget): JournalEvent[] {
+  const path = journalPath(root);
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .slice(0, -1)
+    .flatMap((line) => {
+      const event = parseJournalEventLine(line);
+      return event ? [event] : [];
+    });
+}
+
+/** Checks the active HEAD commit, not the integrity of every historical object. */
+export async function inspectShadowRepo(root: WorkspaceTarget): Promise<ShadowHealth> {
+  const hadHistory = shadowJournalEvents(root).some((event) =>
+    ["baseline_checkpoint", "auto_checkpoint", "apply_begin", "apply_end", "offline_catchup"].includes(event.event),
+  );
+  const missing = (reason: string): ShadowHealth => ({
+    state: hadHistory ? "lost-history" : "uninitialized",
+    reason,
+    head: null,
+  });
+  const dir = shadowGitDir(root);
+  for (const [path, directory] of [
+    [dir, true],
+    [join(dir, "objects"), true],
+    [join(dir, "refs"), true],
+    [join(dir, "refs", "heads"), true],
+    [join(dir, "HEAD"), false],
+    [join(dir, "refs", "heads", GLOSA_BRANCH), false],
+    [join(dir, "packed-refs"), false],
+    [join(dir, "config"), false],
+    [join(dir, "index"), false],
+  ] as const) {
+    try {
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) {
+        return { state: "invalid-head", reason: "unsafe-shadow-path", head: null };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (!existsSync(dir)) return missing("missing-store");
+  if (!existsSync(join(dir, "HEAD"))) return missing("missing-head");
+  // Read the ref itself before asking Git about objects: Git refuses even rev-parse when
+  // the entire objects directory is gone, although the surviving ref still names lost history.
+  const symbolic = readFileSync(join(dir, "HEAD"), "utf8").trim();
+  if (symbolic !== `ref: refs/heads/${GLOSA_BRANCH}`)
+    return { state: "invalid-head", reason: "wrong-head", head: null };
+  const ref = join(dir, "refs", "heads", GLOSA_BRANCH);
+  let head = existsSync(ref) ? readFileSync(ref, "utf8").trim() : "";
+  if (!head && existsSync(join(dir, "packed-refs"))) {
+    const packed = readFileSync(join(dir, "packed-refs"), "utf8");
+    head = new RegExp(`^([a-f0-9]{40,64}) refs/heads/${GLOSA_BRANCH}$`, "m").exec(packed)?.[1] ?? "";
+  }
+  if (!head) return missing("missing-ref");
+  if (!/^[a-f0-9]{40,64}$/.test(head)) return { state: "invalid-head", reason: "wrong-head", head: null };
+  const object = await runGit(root, ["cat-file", "-t", head], { allowExitCodes: [0, 128] });
+  if (object.exitCode !== 0) return { state: "lost-history", reason: "missing-head-object", head };
+  if (object.stdout.trim() !== "commit") return { state: "invalid-head", reason: "head-not-commit", head };
+  const message = (await runGit(root, ["show", "-s", "--format=%B", head])).stdout;
+  if (/^Glosa-Kind: repair_baseline$/m.test(message)) {
+    const id = /^Glosa-Repair-Id: ([0-9A-HJKMNP-TV-Z]{26})$/m.exec(message)?.[1];
+    const reason = /^Glosa-Repair-Reason: (lost_history|initialization_unknown)$/m.exec(message)?.[1];
+    if (!id || !reason || !/^Glosa-Attribution: unknown$/m.test(message)) {
+      return { state: "invalid-head", reason: "invalid-repair-metadata", head };
+    }
+    const repair = { id, reason: reason as "lost_history" | "initialization_unknown", checkpoint: head };
+    const event = shadowJournalEvents(root).find((event) => event.event_id === id);
+    if (!event) return { state: "repair-pending", reason: "repair-reason-unrecorded", head, repair };
+    if (
+      event.event !== "baseline_checkpoint" ||
+      event.detail?.checkpoint !== head ||
+      event.detail?.reason !== reason ||
+      event.detail?.repair_id !== id ||
+      event.by !== "daemon"
+    ) {
+      return { state: "invalid-head", reason: "repair-event-conflict", head };
+    }
+  }
+  return { state: "healthy", reason: "head-commit-readable", head };
+}
+
+export class ShadowHistoryError extends Error {
+  readonly code: "SHADOW_HISTORY_LOST" | "SHADOW_INVALID_HEAD" | "SHADOW_REPAIR_PENDING";
+  constructor(readonly health: ShadowHealth) {
+    super(
+      `Shadow history is ${health.state} (${health.reason}); ${health.state === "invalid-head" ? "baseline repair is refused" : "explicit baseline repair is required"}.`,
+    );
+    this.code =
+      health.state === "lost-history"
+        ? "SHADOW_HISTORY_LOST"
+        : health.state === "repair-pending"
+          ? "SHADOW_REPAIR_PENDING"
+          : "SHADOW_INVALID_HEAD";
+  }
+}
+
+function finalizeRepairReason(root: WorkspaceTarget, health: ShadowHealth, deps: InitShadowRepoDeps): void {
+  assertShadowOwner();
+  const repair = health.repair;
+  if (!repair) throw new ShadowHistoryError(health);
+  const raw = existsSync(journalPath(root)) ? readFileSync(journalPath(root), "utf8") : "";
+  // Normal startup/repair performs the existing torn-tail recovery before finalization.
+  if (raw && !raw.endsWith("\n")) throw new ShadowHistoryError({ ...health, reason: "torn-journal" });
+  appendEvent(
+    deps.writer,
+    {
+      v: 1,
+      event_id: repair.id,
+      at: (deps.now?.() ?? new Date()).toISOString(),
+      event: "baseline_checkpoint",
+      by: "daemon",
+      detail: { reason: repair.reason, repair_id: repair.id, checkpoint: repair.checkpoint },
+    },
+    { fsync: true },
+  );
+}
+
+export interface RepairShadowDeps extends InitShadowRepoDeps {
+  /** Isolated fault/concurrency tests pause or interrupt actual durable boundaries here. */
+  afterStep?: (
+    step: "index-staged" | "tree-written" | "commit-created" | "ref-published" | "reason-recorded",
+  ) => void | Promise<void>;
+}
+
+export function assertShadowOwner(): void {
+  const identity = currentDaemonIdentity();
+  if (!identity || readLock(identity.lockFile)?.instance_id !== identity.instanceId) {
+    throw Object.assign(new Error("Baseline repair requires the owning singleton daemon."), {
+      code: "SHADOW_NOT_OWNER",
+    });
+  }
+}
+
+/** Caller holds the registration's bus mutex and has rechecked lifecycle/path ownership. */
+export async function repairShadowBaseline(root: WorkspaceTarget, deps: RepairShadowDeps): Promise<ShadowHealth> {
+  assertShadowOwner();
+  const health = await inspectShadowRepo(root);
+  if (health.state === "healthy") {
+    throw Object.assign(new Error("Shadow history is already healthy; no baseline was replaced."), {
+      code: "SHADOW_ALREADY_HEALTHY",
+    });
+  }
+  if (health.state === "invalid-head") throw new ShadowHistoryError(health);
+  if (health.state === "repair-pending") {
+    finalizeRepairReason(root, health, deps);
+    return inspectShadowRepo(root);
+  }
+  const reason = health.state === "lost-history" ? "lost_history" : "initialization_unknown";
+  const repairId = deps.ulid();
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(repairId) || shadowJournalEvents(root).some((e) => e.event_id === repairId)) {
+    throw Object.assign(new Error("Repair event identity is invalid or already used."), {
+      code: "SHADOW_REPAIR_ID_CONFLICT",
+    });
+  }
+  reclaimIndexLock(root, deps);
+  mkdirSync(shadowGitDir(root), { recursive: true });
+  await configureShadowRepo(root);
+  await runGit(root, ["read-tree", "--empty"]);
+  const paths = resolveTrackedFiles(root).tracked.map((file) => safePathspec(file.path));
+  if (paths.length) await runGit(root, ["add", "-A", "-f", "--", ...paths]);
+  await deps.afterStep?.("index-staged");
+  const tree = (await runGit(root, ["write-tree"])).stdout.trim();
+  await runGit(root, ["cat-file", "-e", `${tree}^{tree}`]);
+  await deps.afterStep?.("tree-written");
+  const message = `checkpoint\n\nGlosa-Kind: repair_baseline\nGlosa-Attribution: unknown\nGlosa-Repair-Id: ${repairId}\nGlosa-Repair-Reason: ${reason}\n`;
+  const head = (
+    await runGit(root, ["commit-tree", tree, "-m", message], {
+      env: isolatedEnv({
+        GIT_AUTHOR_NAME: GIT_IDENTITY_NAME,
+        GIT_AUTHOR_EMAIL: GIT_IDENTITY_EMAIL,
+        GIT_COMMITTER_NAME: GIT_IDENTITY_NAME,
+        GIT_COMMITTER_EMAIL: GIT_IDENTITY_EMAIL,
+      }),
+    })
+  ).stdout.trim();
+  await deps.afterStep?.("commit-created");
+  await runGit(root, ["update-ref", `refs/heads/${GLOSA_BRANCH}`, head, health.head ?? "0".repeat(head.length)]);
+  await deps.afterStep?.("ref-published");
+  finalizeRepairReason(
+    root,
+    {
+      state: "repair-pending",
+      reason: "repair-reason-unrecorded",
+      head,
+      repair: { id: repairId, reason, checkpoint: head },
+    },
+    deps,
+  );
+  await deps.afterStep?.("reason-recorded");
+  return inspectShadowRepo(root);
+}
+
 /** Deterministic init (A4 §F21): `git init`, pin `HEAD` to `refs/heads/glosa` (never whatever
  * `init.defaultBranch` would otherwise pick), the fixed repo-local config, then a baseline commit
  * capturing whatever's on disk right now — attributed `unknown` because nothing proves who put it
@@ -317,24 +521,16 @@ export interface InitShadowRepoDeps {
  * later checkpoint). Safe to call before every lease/checkpoint operation, not just once at
  * startup — the redundant `init`/`config` calls are cheap and this is never a hot loop. */
 export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepoDeps): Promise<void> {
+  const health = await inspectShadowRepo(root);
+  if (health.state === "lost-history" || health.state === "invalid-head") throw new ShadowHistoryError(health);
+  if (health.state === "repair-pending") {
+    finalizeRepairReason(root, health, deps);
+    return;
+  }
   mkdirSync(shadowGitDir(root), { recursive: true });
-  await runGit(root, ["init", "--quiet"]);
-  await runGit(root, ["symbolic-ref", "HEAD", `refs/heads/${GLOSA_BRANCH}`]);
-  await runGit(root, ["config", "core.autocrlf", "false"]);
-  await runGit(root, ["config", "core.safecrlf", "false"]);
-  await runGit(root, ["config", "commit.gpgsign", "false"]);
-  await runGit(root, ["config", "core.fileMode", "false"]);
-  // Not in F21's explicit config list, but load-bearing for `trackedUnion` below: without this,
-  // git octal-quotes any path with a non-ASCII byte in plain (non-`-z`) `ls-tree`/`ls-files`
-  // output (e.g. `"a caf\303\251 note.md"`), which would never match `resolveMatchedFiles`'s real
-  // path string — silently breaking the union for exactly the unicode filenames A3 §5 attack #5
-  // is meant to cover.
-  await runGit(root, ["config", "core.quotepath", "false"]);
+  await configureShadowRepo(root);
+  if (health.state === "healthy") return;
 
-  const head = await runGit(root, ["rev-parse", "--verify", "-q", "HEAD"], { allowExitCodes: [0, 1] });
-  if (head.exitCode === 0) return; // a baseline (or later) commit already exists
-
-  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
   // `-f` because the PROJECT's `.gitignore` has no authority over glosa's own history. The
   // pathspec is already exactly what the matcher chose, so forcing cannot widen what gets staged;
   // it only stops a rule written for the project's git from vetoing a checkpoint. Without it, one
@@ -344,6 +540,7 @@ export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepo
   // unrelated real workspaces. The shadow repo is local-only storage under `.glosa/`, deliberately
   // independent of the work-tree's own git (decisions.md: "`.gitignore` protects only git-mediated"
   // paths), so tracking what glosa matched is the consistent behaviour.
+  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
   if (tracked.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...tracked.map(safePathspec)]);
   await commit(root, {
     message: "checkpoint",
@@ -357,6 +554,21 @@ export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepo
     event: "baseline_checkpoint",
     by: "daemon",
   });
+}
+
+async function configureShadowRepo(root: WorkspaceTarget): Promise<void> {
+  await runGit(root, ["init", "--quiet"]);
+  await runGit(root, ["symbolic-ref", "HEAD", `refs/heads/${GLOSA_BRANCH}`]);
+  await runGit(root, ["config", "core.autocrlf", "false"]);
+  await runGit(root, ["config", "core.safecrlf", "false"]);
+  await runGit(root, ["config", "commit.gpgsign", "false"]);
+  await runGit(root, ["config", "core.fileMode", "false"]);
+  // Not in F21's explicit config list, but load-bearing for `trackedUnion` below: without this,
+  // git octal-quotes any path with a non-ASCII byte in plain (non-`-z`) `ls-tree`/`ls-files`
+  // output (e.g. `"a caf\303\251 note.md"`), which would never match `resolveMatchedFiles`'s real
+  // path string — silently breaking the union for exactly the unicode filenames A3 §5 attack #5
+  // is meant to cover.
+  await runGit(root, ["config", "core.quotepath", "false"]);
 }
 
 export interface CheckpointOptions {
@@ -387,6 +599,8 @@ export interface CheckpointOptions {
  * Assumes `initShadowRepo` has already run for this root (so `HEAD` resolves) — callers are
  * responsible for that ordering, same as they are for holding the mutex. */
 export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions): Promise<string> {
+  const health = await inspectShadowRepo(root);
+  if (health.state !== "healthy") throw new ShadowHistoryError(health);
   // Reset the index to HEAD BEFORE staging anything, so the staged set is always exactly what this
   // checkpoint staged. Without it the index is cumulative across calls: staging (below) and
   // committing are two separate git invocations, so any checkpoint that dies between them —

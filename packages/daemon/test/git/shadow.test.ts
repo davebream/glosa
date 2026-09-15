@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { timedHooks } from "../../../../test/phase-timing.ts";
 const { beforeEach, afterEach } = timedHooks("packages/daemon/test/git/shadow.test.ts");
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { checkpoint, headSha, indexLockPath, initShadowRepo, reclaimIndexLock, runGit } from "../../src/git/shadow.ts";
 import { journalPath, shadowGitDir } from "../../src/bus/paths.ts";
 import {
@@ -83,6 +84,25 @@ describe("initShadowRepo — deterministic init (A4 §F21)", () => {
 
     const count = await runGit(root, ["rev-list", "--count", "HEAD"]);
     expect(count.stdout.trim()).toBe("1");
+  });
+
+  test("missing commit objects behind an intact ref refuse startup without changing the journal (#226)", async () => {
+    const writer = testWriter(root);
+    try {
+      await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+      const before = readFileSync(journalPath(root));
+      const ref = await headSha(root);
+      const objects = join(shadowGitDir(root), "objects");
+      rmSync(objects, { recursive: true });
+      mkdirSync(objects);
+      expect((await runGit(root, ["rev-parse", "--verify", "-q", "HEAD"])).stdout.trim()).toBe(ref);
+      await expect(
+        initShadowRepo(root, { writer, ulid: deterministicUlid(500_000), now: deterministicClock() }),
+      ).rejects.toMatchObject({ code: "SHADOW_HISTORY_LOST" });
+      expect(readFileSync(journalPath(root))).toEqual(before);
+    } finally {
+      writer.close();
+    }
   });
 });
 

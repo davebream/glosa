@@ -678,6 +678,11 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       args: {
         ...GLOBAL_ARGS,
         dir: { type: "positional", required: false, description: "Workspace directory" },
+        workspace: { type: "string", description: "Registered workspace slug for shadow diagnosis/repair" },
+        "repair-baseline": {
+          type: "boolean",
+          description: "Explicitly start a new baseline after shadow history loss (requires --workspace)",
+        },
       },
     },
     async (context) => {
@@ -698,6 +703,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
           deps.doctor?.createClient ?? createHttpGlosaClient,
           deps.doctor?.glosaHome ?? glosaHome,
         ),
+        { workspace: values.workspace as string | undefined, repairBaseline: Boolean(values["repair-baseline"]) },
       );
       const withDirWarnings =
         dirWarnings.length === 0 ? result : { ...result, warnings: [...dirWarnings, ...result.warnings] };

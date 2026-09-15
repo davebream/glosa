@@ -93,6 +93,11 @@ own editor and glosa records it as exactly that — a file that changed outside 
 checkpoint, attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, no
 agent is nudged with it, and it waits there until you dismiss it.
 
+If checkpoint storage is damaged, `glosa doctor --workspace <slug>` reports it and counts inbox entries
+that reference missing history. `glosa doctor --workspace <slug> --repair-baseline` explicitly starts
+a new baseline from current tracked files, so future saves can be captured again. It leaves your files
+and surviving history intact; it cannot restore lost checkpoints.
+
 ### An agent can stop and wait for your verdict
 
 <picture>

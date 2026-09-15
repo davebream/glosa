@@ -102,6 +102,8 @@ dropping out of it.
 
 | Suite | File |
 |---|---|
+| `fault` | `packages/daemon/test/git/shadow-repair.test.ts` |
+| `fault` | `packages/daemon/test/shadow-health.test.ts` |
 | `fault` | `packages/daemon/test/bus/journal.test.ts` |
 | `fault` | `packages/daemon/test/bus/inbox.test.ts` |
 | `fault` | `packages/daemon/test/bus/replay.test.ts` |

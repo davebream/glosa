@@ -92,3 +92,13 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 6. Injected HTML (name/md/annotation/transcript/tool_result) → contextual escaping + script-src 'self' → test: `<script>` payloads render escaped in class R, class-F overlays, conversation mirror.
 7. Local site navigates/frames class-F/handshake → Host literal + Origin table + frame-ancestors → test: foreign origin (a) top-nav handshake non-sensitive + state routes reject, (b) no-Bearer GET → 401, (c) iframe class-F → blocked by frame-ancestors, (d) iframe SPA → blocked.
 8. Fragment token in history/localStorage → replaceState + sessionStorage + rotate/revoke → test: hash empty, no history `t=`, token in sessionStorage not localStorage, revoke → old Bearer 401.
+
+### Explicit shadow repair (#226)
+
+Shadow health uses the authenticated-read class; baseline repair uses the state-changing class with
+Bearer, mandatory same Origin, contract validation and the existing body cap. The repair body is an
+empty JSON object, bounded to 1024 bytes. The slug selects an existing canonical registration; no path
+or alternate Git directory is accepted from the request. The daemon validates registration/worktree
+anchors, bounded loose-file tracking, and local or home-state bus placement before opening a writer,
+then repeats the validation under the shared bus mutex. Symlink bus/journal/HEAD/ref paths are refused.
+Repair requires singleton ownership and respects apply leases and adoption/forget seals (A4 F21).

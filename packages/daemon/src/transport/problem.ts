@@ -3,6 +3,14 @@
 // route returns the same {type,title,status,detail?,instance?} shape with the right content
 // type, instead of each handler hand-rolling its own error body.
 export type ProblemSlug =
+  | "shadow-unsafe-path"
+  | "shadow-workspace-inactive"
+  | "shadow-history-lost"
+  | "shadow-invalid-head"
+  | "shadow-repair-pending"
+  | "shadow-not-owner"
+  | "shadow-already-healthy"
+  | "shadow-repair-id-conflict"
   | "session-provider-conflict"
   | "session-not-registered"
   | "invalid-origin"

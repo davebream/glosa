@@ -7,7 +7,7 @@
 // read-only folds are among those callers. `peek.ts` exists precisely so a plain GET (or a GC
 // pass) never gains write side effects "incl. spawning git", so it must not transitively import
 // the git layer to ask what kind an entry is. The split keeps that true by construction.
-import { runGit, safePathspec } from "../git/shadow.ts";
+import { shadowJournalEvents, runGit, safePathspec } from "../git/shadow.ts";
 import type { WorkspaceTarget } from "../workspace.ts";
 import {
   EXTERNAL_EDIT_CHECKPOINT_KIND,
@@ -85,6 +85,32 @@ export async function unreportedDriftCommits(
   frontier: string | null,
   reported: ReadonlySet<string>,
 ): Promise<DriftCommit[]> {
+  // An explicit baseline starts a new history epoch. Old immutable entries may still name
+  // missing or surviving-but-disconnected commits; neither can bound the new epoch's crash scan.
+  if (frontier) {
+    const ancestor = await runGit(workspace, ["merge-base", "--is-ancestor", frontier, "HEAD"], {
+      allowExitCodes: [0, 1, 128],
+    });
+    if (ancestor.exitCode !== 0) {
+      const repairs = shadowJournalEvents(workspace).filter(
+        (event) =>
+          event.event === "baseline_checkpoint" &&
+          event.detail?.repair_id === event.event_id &&
+          typeof event.detail?.checkpoint === "string",
+      );
+      for (const event of repairs.reverse()) {
+        const baseline = event.detail!.checkpoint as string;
+        if (!/^[a-f0-9]{40,64}$/.test(baseline)) continue;
+        const reachable = await runGit(workspace, ["merge-base", "--is-ancestor", baseline, "HEAD"], {
+          allowExitCodes: [0, 1, 128],
+        });
+        if (reachable.exitCode === 0) {
+          frontier = baseline;
+          break;
+        }
+      }
+    }
+  }
   const range = frontier ? `${frontier}..HEAD` : "HEAD";
   // ONE git invocation for the whole range, trailers included — deliberately not one `git show` per
   // commit. This runs on a startup path, and before a workspace has ever reported an external edit

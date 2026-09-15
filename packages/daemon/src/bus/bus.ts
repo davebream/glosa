@@ -11,7 +11,20 @@
 import { mkdirSync } from "node:fs";
 import type { DeliverableEntry } from "../agent-provider/interface.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
-import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, runGit, safePathspec } from "../git/shadow.ts";
+import {
+  assertShadowOwner,
+  checkpoint,
+  headSha,
+  initShadowRepo,
+  inspectShadowRepo,
+  ShadowHistoryError,
+  reclaimIndexLock,
+  repairShadowBaseline,
+  type RepairShadowDeps,
+  type ShadowHealth,
+  runGit,
+  safePathspec,
+} from "../git/shadow.ts";
 import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
 import { EXTERNAL_EDIT_CHECKPOINT_KIND, externalEditDetail, isExternalEditEntry } from "./external-edit.ts";
 import { externalEditPayloads } from "./external-edit-capture.ts";
@@ -35,9 +48,9 @@ import {
   lifecycleReducer,
 } from "./lifecycle.ts";
 import { KeyedMutex } from "./mutex.ts";
-import { journalPath, workspaceBusDir } from "./paths.ts";
+import { journalPath, quarantinePath, workspaceBusDir } from "./paths.ts";
 import { peekJournal } from "./peek.ts";
-import { type ReconcileResult, reconcileWorkspace } from "./reconcile.ts";
+import { type ReconcileResult, reconcileWorkspace, truncateTornTail } from "./reconcile.ts";
 import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
@@ -248,6 +261,42 @@ export class WorkspaceBus {
   private assertWritable(): void {
     if (this.state.adoptionSeal) throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
     if (this.state.forgetSeal) throw new WorkspaceForgottenError();
+  }
+
+  /** Explicit repair shares the journal/lease/watcher lock. Lifecycle validation must run
+   * AFTER acquiring it: parent adoption can mark this source under a different coordinator key. */
+  repairBaseline(validateLocked: () => void, afterStep?: RepairShadowDeps["afterStep"]): Promise<ShadowHealth> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      validateLocked();
+      assertShadowOwner();
+      this.state = peekJournal(this.workspace).state;
+      this.assertWritable();
+      if (this.state.applyLease && !isLeaseExpired(this.state.applyLease, this.nowFn())) {
+        throw leaseHeldError(this.state.applyLease.leaseId);
+      }
+      const health = await inspectShadowRepo(this.workspace);
+      if (health.state === "healthy")
+        throw Object.assign(new Error("Shadow history is already healthy; no baseline was replaced."), {
+          code: "SHADOW_ALREADY_HEALTHY",
+        });
+      if (health.state === "invalid-head") throw new ShadowHistoryError(health);
+      truncateTornTail({
+        journalPath: journalPath(this.workspace),
+        quarantinePath: quarantinePath(this.workspace),
+        writer: this.writer,
+        ulid: this.ulidFn,
+        now: this.nowFn,
+      });
+      const result = await repairShadowBaseline(this.workspace, {
+        writer: this.writer,
+        ulid: this.ulidFn,
+        now: this.nowFn,
+        afterStep,
+      });
+      this.state = peekJournal(this.workspace).state;
+      this.nextSequence = countJournalLines(journalPath(this.workspace));
+      return result;
+    });
   }
 
   constructor(workspaceRoot: WorkspaceTarget, deps: WorkspaceBusDeps = {}) {

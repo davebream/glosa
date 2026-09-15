@@ -511,3 +511,12 @@ the entry survives.
   **WorkspaceMetadataDescriptor** — the durable declarative metadata v1 document supplied through
   CLI/MCP. **External integration** — any process outside glosa that supplies metadata, binds sessions,
   or generates artifacts using public contracts only.
+
+### Shadow-history loss recovery (#226)
+
+Detected loss of the active shadow checkpoint refuses ordinary capture and fails the workspace doctor
+check. The maintainer-selected policy is explicit repair: `glosa doctor --workspace <registered-slug> --repair-baseline` requests a daemon-owned, unknown-attributed baseline of current tracked files.
+It preserves surviving history and immutable records, records the reason durably, and restores later
+external-edit capture. Read-only diagnosis counts entries referring to missing checkpoints and
+qualifies unassessable data. See A4 F21 for ownership, crash recovery and the limit when all evidence
+of prior initialization is absent; A1 and A6 define the API and command.

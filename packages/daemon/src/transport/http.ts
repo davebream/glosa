@@ -39,6 +39,7 @@ import {
 } from "../registry/workspace-index.ts";
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
+import { shadowRoutes } from "../routes/shadow.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
 import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
@@ -2263,6 +2264,18 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
       handle: (req) => handleConversationAck(ctx, sessionId, messageId, req),
     };
   }
+
+  const shadowRoute = shadowRoutes(
+    {
+      workspaceIndex: ctx.workspaceIndex,
+      getWorkspaceBus: ctx.getWorkspaceBus,
+      home: ctx.home ?? glosaHome(),
+      adoptionCoordinator: ownershipCoordinator(ctx),
+    },
+    method,
+    pathname,
+  );
+  if (shadowRoute) return shadowRoute;
 
   const artifactRoute = artifactRoutes(
     {

@@ -4,10 +4,12 @@
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { unlinkSync, chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { journalPath, tokenPath, WorkspaceBus } from "@glosa/daemon";
+import { headSha } from "../../daemon/src/git/shadow.ts";
+import { shadowGitDir } from "../../daemon/src/bus/paths.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
 import { runScopedInit } from "../src/scoped-init.ts";
@@ -522,5 +524,60 @@ describe("glosa doctor", () => {
     writeFileSync(join(dir, ".claude", "settings.local.json"), "{not json");
     const result = await runDoctor(dir, deps);
     expect(findCheck(result.data.checks, "mcp-enabled")?.status).toBe("pass");
+  });
+  test("doctor refuses a ref whose commit object is missing (#226)", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps();
+    writeFileSync(join(dir, "draft.md"), "Fixture.\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile();
+    const head = await headSha(dir);
+    await bus.close();
+    unlinkSync(join(shadowGitDir(dir), "objects", head.slice(0, 2), head.slice(2)));
+    const result = await runDoctor(dir, deps);
+    expect(findCheck(result.data.checks, "workspace")).toMatchObject({ status: "fail" });
+    expect(findCheck(result.data.checks, "workspace")?.detail).toContain("HEAD commit is unreadable");
+  });
+
+  test("doctor names explicit repair and never mutates during diagnosis (#226)", async () => {
+    const dir = freshDir();
+    const { deps, client } = makeDeps();
+    client.statusResult.workspaces = [
+      { slug: "selected", path: dir, last_seen: "2026-09-15", pending_count: 0, has_attention: false },
+    ];
+    const calls: string[] = [];
+    const wired = Object.assign(client, {
+      async getShadowHealth(slug: string) {
+        calls.push(`health:${slug}`);
+        return {
+          state: "lost-history" as const,
+          reason: "missing-head-object",
+          head: "a".repeat(40),
+          census: { entries: 3, missing_checkpoint_entries: 2, unassessable_entries: 1, complete: false },
+        };
+      },
+      async repairShadowBaseline(slug: string) {
+        calls.push(`repair:${slug}`);
+        return {
+          state: "healthy" as const,
+          reason: "head-commit-readable",
+          head: "b".repeat(40),
+          census: { entries: 3, missing_checkpoint_entries: 2, unassessable_entries: 1, complete: false },
+        };
+      },
+    });
+    deps.createClient = async () => wired;
+    const result = await runDoctor(dir, deps);
+    const diagnosis = findCheck(result.data.checks, "workspace");
+    expect(diagnosis?.status).toBe("fail");
+    expect(diagnosis?.detail).toContain("glosa doctor --workspace selected --repair-baseline");
+    expect(diagnosis?.detail).toContain("census incomplete");
+    expect(calls).toEqual(["health:selected"]);
+    const repaired = await runDoctor(dir, deps, { workspace: "selected", repairBaseline: true });
+    expect(findCheck(repaired.data.checks, "workspace")?.status).toBe("warn");
+    expect(calls).toEqual(["health:selected", "repair:selected"]);
+    await runDoctor(dir, deps, { repairBaseline: true });
+    await runDoctor(dir, deps, { workspace: "not-registered", repairBaseline: true });
+    expect(calls).toEqual(["health:selected", "repair:selected"]);
   });
 });

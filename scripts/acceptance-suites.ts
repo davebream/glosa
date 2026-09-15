@@ -50,6 +50,8 @@ export const SUITE_CLAUSES: Record<SuiteName, string> = {
 /** Suite → the test files that discharge it. Paths are repo-root-relative and POSIX-separated. */
 export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
   fault: [
+    "packages/daemon/test/git/shadow-repair.test.ts",
+    "packages/daemon/test/shadow-health.test.ts",
     "packages/daemon/test/bus/journal.test.ts",
     "packages/daemon/test/bus/inbox.test.ts",
     "packages/daemon/test/bus/replay.test.ts",

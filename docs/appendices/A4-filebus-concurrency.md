@@ -113,3 +113,27 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 - Primary: serialize through daemon (sole writer, temp→fsync→rename under per-file async mutex); slug assignment in same critical section. Concurrent hooks serialize behind mutex → no lost updates.
 - Fallback (hook must write before daemon up): `O_EXCL` lockfile (`~/.glosa/.workspaces.lock`, `<ws>/.glosa/.registry.lock`) with EXACT `withSessionLease` semantics (openSync wx = atomic CAS; {token,pid,hostname,expiresAt}; bounded retries then fail; TTL + kill(pid,0) stale reclaim via unlink→re-openSync(wx); re-entrant process-local token map). RMW (load→modify→temp→fsync→rename) INSIDE the lease, never bare.
 - Preconditions: local POSIX FS with atomic O_EXCL (no NFS); single host; TTL = staleness backstop.
+
+### Explicit repair after shadow history loss (#226)
+
+Ordinary initialization/capture verifies that the active HEAD names a readable commit, not merely
+that a ref contains a SHA. Missing referenced objects, or a missing store/ref with surviving
+checkpoint journal evidence, refuse with `SHADOW_HISTORY_LOST`. No automatic replacement occurs.
+If neither Git nor journal evidence survives, prior initialization cannot be distinguished from
+first use; the existing first-initialization behavior remains. This is not a full object-integrity audit.
+
+Explicit repair requires the owning singleton daemon, the registration's shared bus mutex, a fresh
+active-lifecycle/path check inside that mutex, and no active apply lease or journal seal. It stages
+only the canonical registration's tracked files and creates a parentless, unknown-attributed commit.
+It preserves surviving objects and immutable inbox/journal records; document bytes are never rewritten.
+The ref update compares the previously observed head. Commit trailers retain a stable repair ID and
+reason (`lost_history`, or `initialization_unknown` without prior evidence). An fsynced
+`baseline_checkpoint` journal event uses that ID and records `repair_id`, `reason`, and `checkpoint`.
+
+A published ref without its reason is `repair-pending`: checkpoints refuse until startup (after torn-tail
+recovery) or explicit retry appends that same reason once. A crash before ref publication leaves the
+old ref and may leave harmless unreachable objects. The repair baseline starts a new recovery epoch:
+when an old external-edit frontier is missing or disconnected, restart scans from the recorded repair
+baseline that is an ancestor of HEAD. Old entries remain unchanged. External writers do not take the
+mutex; final durable racing bytes reach either the staged baseline or later watcher/restart capture.
+Intermediate overwritten saves are subject to ordinary coalescing.
