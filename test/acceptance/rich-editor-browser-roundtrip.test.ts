@@ -792,7 +792,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       await import("/app/markdown-parser.js");
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       pane.toggleOutline();
-      const result = { mode: pane.getMode(), labels: [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.textContent) };
+      // Rendered headings carry a § address span inside the row; the title attribute is the bare
+      // heading, which is what this test compares (the source-parsed outlines above have none).
+      const result = { mode: pane.getMode(), labels: [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.title) };
       pane.destroy(); host.remove(); delete window.__outlineTest;
       return result;
     })()`);
