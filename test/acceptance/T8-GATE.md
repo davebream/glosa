@@ -163,11 +163,19 @@ dropping out of it.
 | `explicit-binding-topology` | `packages/daemon/test/registry/session-registry.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/sessions-routes.test.ts` |
 | `explicit-binding-topology` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `editor-roundtrip` | `packages/spa/test/bootstrap.test.ts` |
 | `editor-roundtrip` | `packages/spa/test/rich-editor.test.ts` |
 | `editor-roundtrip` | `packages/spa/test/edit-save-guard.test.ts` |
 | `editor-roundtrip` | `test/acceptance/rich-editor-browser-roundtrip.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
+
+Document-link coverage in `editor-roundtrip` (#145) composes the real browser shell, bootstrap and
+viewer from an initial URL and a reused tab. It checks the single-pane surface, hidden navigator,
+back/forward navigation, read lock, workspace-layout preservation, and cancellation/acceptance of
+unsaved editor discard. The bootstrap tests also pin duplicate events, pending consent, secret
+scrubbing, internal focus reflection and confirmation failure. Removing the initial surface
+handoff, route listeners or discard guard must produce a named browser failure.
 
 **Session recovery (#141).** The delivery suite keeps one production MCP stdio process alive while
 its isolated daemon is killed/restarted, for both Claude and Codex environment identities. The next

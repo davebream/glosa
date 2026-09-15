@@ -11,8 +11,163 @@ import {
   scrubSecrets,
   selectScreen,
   waitForOwnDaemon,
+  watchRouteChanges,
   writeFocus,
 } from "../src/bootstrap.js";
+
+describe("same-tab route navigation (#145)", () => {
+  function setup(confirmLeave = async () => true, hash = "#w=one&a=first.md&surface=workspace&mode=read") {
+    const location = new URL(`http://127.0.0.1:9999/${hash}`);
+    const events = new EventTarget();
+    const reloaded: string[] = [];
+    const history = {
+      replaceState(_state: unknown, _title: string, url?: string | URL | null) {
+        location.href = new URL(String(url), location).href;
+      },
+    };
+    const controller = watchRouteChanges({
+      location,
+      history,
+      events,
+      confirmLeave,
+      reload: () => {
+        reloaded.push(location.hash);
+      },
+    });
+    return {
+      location,
+      controller,
+      reloaded,
+      navigate(hash: string, type = "hashchange") {
+        location.hash = hash;
+        events.dispatchEvent(new Event(type));
+      },
+    };
+  }
+  const tick = () => Bun.sleep(0);
+
+  for (const event of ["hashchange", "popstate"]) {
+    test(`${event} reloads the requested route once`, async () => {
+      const app = setup();
+      const next = "#w=two&a=second.md&surface=document&mode=review&lock=read";
+      app.navigate(next, event);
+      await tick();
+      expect(app.reloaded).toEqual([next]);
+      app.navigate(next, event);
+      expect(app.reloaded).toHaveLength(1);
+      app.controller.stop();
+    });
+  }
+
+  test("declining navigation restores the current focus without pairing secrets", async () => {
+    const app = setup(async () => false, "#t=secret&w=one&a=first.md&surface=workspace&mode=edit");
+    app.navigate("#p=another-secret&w=two&a=second.md&surface=document");
+    await tick();
+    expect(app.reloaded).toEqual([]);
+    expect(app.location.hash).toBe("#w=one&a=first.md&surface=workspace&mode=edit");
+    app.controller.stop();
+  });
+
+  test("pairing secrets are hidden during consent and survive duplicate events for bootstrap", async () => {
+    let resolve!: (allow: boolean) => void;
+    const app = setup(
+      () =>
+        new Promise<boolean>((done) => {
+          resolve = done;
+        }),
+    );
+    const next = "#p=presentation-secret&w=two&a=second.md&surface=document";
+    app.navigate(next, "popstate");
+    expect(app.location.hash).toBe("#w=two&a=second.md&surface=document");
+    app.navigate(app.location.hash);
+    expect(app.reloaded).toEqual([]);
+    resolve(true);
+    await tick();
+    expect(app.reloaded).toEqual([next]);
+    app.controller.stop();
+  });
+
+  test("internal focus changes do not reload and become the cancellation destination", async () => {
+    const app = setup(async () => false);
+    app.controller.reflectFocus({ slug: "one", artifact: "edited.md", surface: "workspace", mode: "edit" });
+    const accepted = app.location.hash;
+    expect(app.reloaded).toEqual([]);
+    app.navigate("#w=two&surface=document");
+    await tick();
+    expect(app.location.hash).toBe(accepted);
+    app.controller.stop();
+  });
+
+  test("duplicate events share consent and the latest target wins despite late focus updates", async () => {
+    let resolve!: (allow: boolean) => void;
+    let prompts = 0;
+    const app = setup(() => {
+      prompts++;
+      return new Promise<boolean>((done) => {
+        resolve = done;
+      });
+    });
+    app.navigate("#w=two&surface=document");
+    app.navigate("#w=two&surface=document", "popstate");
+    app.navigate("#w=three&surface=document");
+    app.controller.reflectFocus({ slug: "one", artifact: "first.md", surface: "workspace" });
+    expect(prompts).toBe(1);
+    expect(app.location.hash).toBe("#w=three&surface=document");
+    resolve(true);
+    await tick();
+    expect(app.reloaded).toEqual(["#w=three&surface=document"]);
+    app.controller.stop();
+  });
+
+  test("returning to the accepted route while consent is pending cancels the navigation", async () => {
+    let resolve!: (allow: boolean) => void;
+    const app = setup(
+      () =>
+        new Promise<boolean>((done) => {
+          resolve = done;
+        }),
+    );
+    const accepted = app.location.hash;
+    app.navigate("#w=two&surface=document");
+    app.navigate(accepted, "popstate");
+    resolve(true);
+    await tick();
+    expect(app.reloaded).toEqual([]);
+    app.controller.stop();
+  });
+
+  test("disposing navigation invalidates pending consent and removes both listeners", async () => {
+    let resolve!: (allow: boolean) => void;
+    let prompts = 0;
+    const app = setup(() => {
+      prompts++;
+      return new Promise<boolean>((done) => {
+        resolve = done;
+      });
+    });
+    app.navigate("#w=two&surface=document");
+    app.controller.stop();
+    resolve(true);
+    await tick();
+    app.navigate("#w=three", "popstate");
+    app.navigate("#w=four");
+    expect(prompts).toBe(1);
+    expect(app.reloaded).toEqual([]);
+  });
+
+  test("a failed confirmation cannot discard the current view", async () => {
+    const app = setup(async () => {
+      throw new Error("dialog unavailable");
+    });
+    const accepted = app.location.hash;
+    app.navigate("#w=two&surface=document");
+    await tick();
+    expect(app.reloaded).toEqual([]);
+    expect(app.location.hash).toBe(accepted);
+    expect(app.controller.isNavigating()).toBe(false);
+    app.controller.stop();
+  });
+});
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();

@@ -273,6 +273,11 @@ the entry survives.
   (same-origin fetch today). This is a v1 build constraint, not future scope: it is what makes a future
   hosted-shell/Electron topology a config change rather than a refactor (the L0→L3 distribution ladder).
   No SPA component talks to the daemon except through that module.
+- **Document links and same-tab navigation**: a `surface=document` fragment renders one pane with
+  the navigator hidden, without restoring or overwriting the workspace's saved tab layout. External
+  fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
+  consents. Cancellation preserves the mounted editor and restores its secret-free focus URL.
+  Workspace, artifact, surface, mode and read lock follow the requested fragment.
 - **Three modes per artifact**, named for what the HUMAN is doing rather than for who the counterparty
   is: **Read** (rendered, reading-only canvas: navigation and read-only context are progressive
   disclosures; annotation, restore, and agent composition require an explicit mode transition),

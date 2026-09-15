@@ -129,6 +129,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/provider-topology-real-subprocess.test.ts",
   ],
   "editor-roundtrip": [
+    "packages/spa/test/bootstrap.test.ts",
     "packages/spa/test/rich-editor.test.ts",
     "packages/spa/test/edit-save-guard.test.ts",
     "test/acceptance/rich-editor-browser-roundtrip.test.ts",

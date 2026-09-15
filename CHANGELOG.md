@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Document links now switch an existing tab to the requested file and surface, including browser
+  back/forward navigation. Unsaved editor changes require discard confirmation; cancelling keeps
+  the draft and current URL. Document visits preserve the saved workspace tab layout. (#145)
 - CI and release tests use Bun 1.4.2 to avoid a JUnit reporter abort on passing tests.
   Older runtimes receive an explicit test-runner version error; report completeness and
   failure/skip checks remain enforced. The application runtime floor is unchanged. (#230)

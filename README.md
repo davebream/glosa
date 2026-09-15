@@ -168,6 +168,10 @@ To permanently delete a workspace's registration and bus (never its work-tree fi
 `glosa forget <slug> [--yes]` — it refuses first if a live session or apply lease is active, and
 previews the exact paths before asking once.
 
+`glosa open --document <file>` opens one document with no file navigator. Its link also works in
+an existing workspace tab: unsaved editor changes require discard confirmation before navigation.
+Cancelling keeps the draft and current view; document visits preserve your saved workspace tabs.
+
 ### Updating
 
 ```sh

@@ -182,6 +182,70 @@ export function writeFocus(loc, history, focus) {
   history.replaceState(null, "", loc.pathname + loc.search + focusHash(focus));
 }
 
+/** Follow external same-tab links through the normal bootstrap. Internal focus reflection uses
+ * replaceState and updates the accepted address without creating a navigation. While a discard
+ * dialog is open, later history/hash events replace the requested target, not the mounted view.
+ * @param {{ location: AddressLocation, history: HistoryWriter, events: EventTarget,
+ *   confirmLeave: () => Promise<boolean>, reload: () => void }} deps
+ */
+export function watchRouteChanges({ location, history, events, confirmLeave, reload }) {
+  const address = () => location.pathname + location.search + location.hash;
+  // A cancelled link must never put the original pairing secret back in the address bar.
+  let accepted = location.pathname + location.search + focusHash(readRoute(location));
+  let requested = accepted;
+  let visibleRequested = accepted;
+  let pending = false;
+  let reloading = false;
+  let stopped = false;
+
+  async function navigate() {
+    if (stopped || reloading) return;
+    const incoming = address();
+    // A second browser event may observe our scrubbed URL. Keep the captured credential until
+    // consent settles; only a genuinely different link replaces it.
+    if (!pending || incoming !== visibleRequested) {
+      requested = incoming;
+      visibleRequested = location.pathname + location.search + focusHash(readRoute(location));
+      if (requested !== visibleRequested) history.replaceState(null, "", visibleRequested);
+    }
+    if (pending || requested === accepted) return;
+    pending = true;
+    try {
+      const allowed = await confirmLeave();
+      if (stopped) return;
+      if (!allowed) {
+        history.replaceState(null, "", accepted);
+      } else if (requested !== accepted) {
+        reloading = true;
+        history.replaceState(null, "", requested);
+        reload();
+      }
+    } catch {
+      // Failure to obtain consent is a refusal, never permission to drop the current draft.
+      reloading = false;
+      if (!stopped) history.replaceState(null, "", accepted);
+    } finally {
+      pending = false;
+    }
+  }
+  const onNavigate = () => void navigate();
+  events.addEventListener("hashchange", onNavigate);
+  events.addEventListener("popstate", onNavigate);
+  return {
+    /** @param {Focus} focus */
+    reflectFocus(focus) {
+      accepted = location.pathname + location.search + focusHash(focus);
+      if (!pending && !reloading && !stopped) history.replaceState(null, "", accepted);
+    },
+    isNavigating: () => pending || reloading || stopped,
+    stop() {
+      stopped = true;
+      events.removeEventListener("hashchange", onNavigate);
+      events.removeEventListener("popstate", onNavigate);
+    },
+  };
+}
+
 /**
  * Pure: which of R5's four screens to render. `handshake` is the parsed `/api/handshake` body,
  * or null if the fetch failed/threw. `token` is whatever scrub returned.
@@ -286,6 +350,14 @@ async function enterForeignDaemon(dataAccess, paired) {
 
 async function main() {
   const route = readRoute(window.location); // before scrub — it strips secrets from the fragment
+  let confirmLeave = async () => true;
+  const navigation = watchRouteChanges({
+    location: window.location,
+    history: window.history,
+    events: window,
+    confirmLeave: () => confirmLeave(),
+    reload: () => window.location.reload(),
+  });
   let redeemed = null;
   if (route.presentationToken) {
     try {
@@ -294,6 +366,7 @@ async function main() {
       redeemed = null;
     }
   }
+  if (navigation.isNavigating()) return;
   const token = scrubSecrets(window.location, window.sessionStorage, window.history, route, redeemed);
   const pairedInstall = window.sessionStorage.getItem(INSTALL_KEY);
 
@@ -308,6 +381,7 @@ async function main() {
 
   /** @type {Handshake | null} */
   const handshake = await dataAccess.daemonIdentity(); // null → daemon unreachable → "down" screen
+  if (navigation.isNavigating()) return;
 
   const screen = selectScreen(handshake, token, pairedInstall);
   render(screen);
@@ -327,10 +401,11 @@ async function main() {
     const readLock = Boolean(route.readLock);
     // viewer.js is intentionally not yet checked; adapt its incomplete inferred parameter type
     // at this one import seam while keeping bootstrap's full call contract explicit.
-    const mountReadyApp = /** @type {(root: Element, options: BootstrapMountOptions) => unknown} */ (
-      /** @type {unknown} */ (mountApp)
-    );
-    mountReadyApp(/** @type {Element} */ (readyEl), {
+    const mountReadyApp =
+      /** @type {(root: Element, options: BootstrapMountOptions) => { confirmClose: () => Promise<boolean> }} */ (
+        /** @type {unknown} */ (mountApp)
+      );
+    const app = mountReadyApp(/** @type {Element} */ (readyEl), {
       // The SAME data-access instance the handshake came from, so the app inherits the identity
       // check rather than building a second, unconfigured client (R6: one module, one decision).
       dataAccess,
@@ -341,13 +416,14 @@ async function main() {
       readLock,
       appearance,
       onFocusChange: (next) =>
-        writeFocus(window.location, window.history, {
+        navigation.reflectFocus({
           ...next,
           surface,
           mode: next.mode ?? initialMode,
           readLock,
         }),
     });
+    confirmLeave = () => app.confirmClose();
   }
 }
 
