@@ -95,9 +95,11 @@ test("JUnit records all 10000 passing tests and retains both output streams (#23
   try {
     writeFileSync(
       join(root, "reporter-only.test.ts"),
-      `import {test,expect} from "bun:test";
+      `import {describe,test,expect} from "bun:test";
 console.log("reporter stdout sentinel"); console.error("reporter stderr sentinel");
-for(let i=0;i<10000;i++) test(\`empty test \${i}\`,()=>expect(true).toBe(true));`,
+describe("outer",()=>describe("inner",()=>{
+for(let i=0;i<10000;i++) test(\`empty test \${i}\`,()=>expect(true).toBe(true));
+}));`,
     );
     const directory = join(root, "reports");
     expect(await runInvocation({ profile: "reporter-volume", files: ["reporter-only.test.ts"], root, directory })).toBe(
@@ -205,5 +207,32 @@ test("unsupported-runtime preflight stops before creating reports or starting a 
   } finally {
     version.mockRestore();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Bun 1.4.2 emits nested suites for describe groups. Parent counts include descendants;
+// count each testcase once, while still accepting a mixture of direct and nested cases.
+test("nested JUnit suites preserve inventory and failure/skip checks (#230)", () => {
+  const nested = `<testsuites tests="3" failures="0"><testsuite name="a.test.ts" time="0.3">
+    <testcase name="direct" file="a.test.ts" time="0.1" />
+    <testsuite name="outer" tests="2" time="0.2">
+      <testcase name="grouped" classname="outer" file="a.test.ts" time="0.1" />
+      <testsuite name="inner" tests="1" time="0.1">
+        <testcase name="deep" classname="outer &gt; inner" file="a.test.ts" time="0.1" />
+      </testsuite>
+    </testsuite>
+  </testsuite></testsuites>`;
+  const parsed = inspectReport(nested, ["a.test.ts"]);
+  expect(parsed.tests).toBe(3);
+  expect(parsed.identities).toEqual(
+    ["a.test.ts\t\tdirect", "a.test.ts\touter > inner\tdeep", "a.test.ts\touter\tgrouped"].sort(),
+  );
+  expect(() => inspectReport(nested, ["a.test.ts", "missing.test.ts"])).toThrow("inventory");
+  expect(() => inspectReport(nested.replace('tests="3"', 'tests="4"'), ["a.test.ts"])).toThrow("inconsistent");
+  const deep = 'name="deep" classname="outer &gt; inner" file="a.test.ts" time="0.1" />';
+  for (const kind of ["failure", "error", "skipped"]) {
+    const bad = nested.replace(deep, deep.replace("/>", `><${kind} /></testcase>`));
+    const result = inspectReport(bad, ["a.test.ts"]);
+    expect(kind === "skipped" ? result.skipped : result.failures).toBe(1);
   }
 });
