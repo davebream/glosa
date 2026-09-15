@@ -78,4 +78,34 @@ describe("run(['doctor', ...]) — workspace-root resolution (issue #96)", () =>
     const parsed = JSON.parse(out);
     expect(parsed.warnings.map((w: { code: string }) => w.code)).not.toContain("not-repository-root");
   });
+  test("doctor --workspace --repair-baseline addresses the selected slug through the daemon (#226)", async () => {
+    const dir = freshRepo();
+    const client = new FakeGlosaApiClient();
+    client.statusResult.workspaces = [
+      { slug: "repair-target", path: dir, last_seen: "2026-09-15", pending_count: 0, has_attention: false },
+    ];
+    const calls: string[] = [];
+    const health = {
+      state: "healthy" as const,
+      reason: "head-commit-readable",
+      head: "a".repeat(40),
+      census: { entries: 0, missing_checkpoint_entries: 0, unassessable_entries: 0, complete: true },
+    };
+    const wired = Object.assign(client, {
+      async getShadowHealth() {
+        throw new Error("unexpected GET");
+      },
+      async repairShadowBaseline(slug: string) {
+        calls.push(slug);
+        return health;
+      },
+    });
+    const { out } = await captureStdout(() =>
+      run(["doctor", dir, "--workspace", "repair-target", "--repair-baseline", "--json"], {
+        doctor: { createClient: async () => wired, glosaHome: freshRepo },
+      }),
+    );
+    expect(calls).toEqual(["repair-target"]);
+    expect(JSON.parse(out).data.checks.find((c: { name: string }) => c.name === "workspace").status).toBe("pass");
+  });
 });

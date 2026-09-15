@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(482);
+    ).toBe(487);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1771,6 +1771,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //   unchanged.
   // · 40/473 after cutting alpha.21: the dated release heading, one block, as at alpha.19 and
   //   alpha.20. `edits` 421 → 422, numerators unchanged.
+  // · 40/487 after #226's shadow-repair documentation. The generator produces 435 edits;
+  //   per-cause counts, shipped 1/1, ablated 35/35, and missed/false-alarm counts stay unchanged.
   // · 40/482 after #175's metadata/comment decision and current roadmap changes. The generator
   //   produces 430 edits; per-cause counts and shipped 1/1 versus ablated 35/35 remain unchanged.
   // · 40/472 after #216's fix: a `### Fixed` section under `[Unreleased]` is two blocks, heading
@@ -1841,7 +1843,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
    *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
    *  failure itself. */
-  const BLOCKS = 482;
+  const BLOCKS = 487;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1877,7 +1879,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 482 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 487 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1932,7 +1934,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 1 dishonest write of 430; the guard fires on it and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 435; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 35 of them, and the guard must catch
@@ -2017,7 +2019,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves.
     ).toEqual({
-      edits: 430,
+      edits: 435,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 35, fired: 35 },
     });
