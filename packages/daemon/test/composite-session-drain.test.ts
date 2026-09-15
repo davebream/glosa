@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // W34 — real-route coverage for R2's inverse direction: one unbound ancestor session may be
-// routable from several registered workspace journals, so a turn-boundary drain must combine
+// routable from several registered workspace journals, so a composite MCP-pull drain must combine
 // them without guessing one workspace or inventing a durable authority outside the journals.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

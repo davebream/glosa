@@ -2,7 +2,7 @@
 // @glosa/daemon — the global workspace index (A5 §F19): `<GLOSA_HOME>/workspaces.json`. Tracks
 // every workspace glosa has ever seen (across every provider session, `glosa open`, or a
 // discovered `.glosa/` dir), keyed by canonical path. Daemon is the SOLE writer, serialized by
-// ONE in-process async mutex, atomic temp -> fsync -> rename — no consumer (CLI/hooks/MCP) ever
+// ONE in-process async mutex, atomic temp -> fsync -> rename — no consumer (CLI/MCP) ever
 // writes this file directly; they mutate through the daemon (F19). This is also the fix for the
 // F08 session-registration race: slug assignment happens under the SAME mutex critical section
 // as the upsert that records it, so two concurrent registrations for different workspaces can
@@ -224,12 +224,6 @@ export class WorkspaceOpenError extends Error {
 
 export function workspaceIndexPath(home: string): string {
   return join(home, "workspaces.json");
-}
-
-/** Path for the pre-daemon O_EXCL fallback lease (A4 "Registry-write serialization") that guards
- * this same file when a hook must write it directly because the daemon is unreachable. */
-export function fallbackWorkspacesLockPath(home: string): string {
-  return join(home, ".workspaces.lock");
 }
 
 function isLegacyWorkspaceEntryShape(v: unknown): v is LegacyWorkspaceEntry {
@@ -622,8 +616,8 @@ export interface WorkspaceIndexDeps {
   onHardRemove?: (entry: WorkspaceEntry) => void | Promise<void>;
   /** Does this registration's bus still hold journal-derived pending (non-terminal) entries?
    * Consulted only by GC's hard-remove check (issue #79): parked user work — e.g. annotations
-   * created in a workspace that was never `glosa init`'d, waiting for delivery — must never be
-   * erased just because the workspace path went missing. This matters most for home-redirected
+   * created in a workspace nothing has explicitly registered yet, waiting for delivery — must
+   * never be erased just because the workspace path went missing. This matters most for home-redirected
    * buses (`~/.glosa/state/<id>`), where removing the registration orphans the bus with the work
    * still inside. Defaults to a read-only journal fold (`bus/peek.ts`) against the entry's own
    * `bus_path`; ANY fold failure counts as "has pending" — fail-safe, never remove on
@@ -871,17 +865,6 @@ export class WorkspaceIndex {
     }
   }
 
-  // P4.3: this daemon-side writer and the pre-daemon O_EXCL fallback (lockfile-fallback.ts's
-  // `withFileLease`, guarding `fallbackWorkspacesLockPath`) do NOT currently coordinate — a hook
-  // falling back to a direct write while the daemon is unreachable takes the fallback lease, but
-  // `persist()` below never acquires it. That's fine today (zero production callers of the
-  // fallback yet), but the task that wires the hook-side fallback caller MUST make both writers
-  // share the SAME lease: either have `persist()` also wrap its temp->fsync->rename in
-  // `withFileLease(fallbackWorkspacesLockPath(home), ...)`, or otherwise prove the two paths can
-  // never run concurrently. Skipping this once the fallback has a real caller reopens exactly the
-  // torn-write risk the O_EXCL lease exists to close. See the matching note in
-  // lockfile-fallback.ts.
-
   /** Atomic temp -> fsync -> rename. Caller MUST already hold `this.mutex` — this only performs
    * the I/O, it doesn't serialize on its own (mirrors bus/inbox.ts's division of labor). */
   private persist(index: WorkspaceIndexFile): void {
@@ -1106,11 +1089,12 @@ export class WorkspaceIndex {
       }
 
       // No registration owns this file yet. Before falling back to a loose-file registration —
-      // whose worktree is the file's CONTAINING DIRECTORY, and which is therefore what produced
-      // `glosa open /tmp/doc.md` -> "run `glosa init /private/tmp`" (issue #96) — prefer the
-      // file's enclosing git repository as a normal directory workspace. That is the same root
-      // `glosa init`/`glosa doctor` resolve to, and the only root at which `.claude/settings.json`
-      // actually takes effect, so all three commands now agree on one answer.
+      // whose worktree is the file's CONTAINING DIRECTORY, and which is therefore what used to
+      // produce `glosa open /tmp/doc.md` -> "run `glosa init /private/tmp`" (issue #96, before
+      // `glosa init` was retired with the hooks, #152) — prefer the file's enclosing git repository
+      // as a normal directory workspace. That is the same root `glosa doctor` resolves to, and the
+      // only root at which `.claude/settings.json` actually takes effect, so `glosa open` and
+      // `glosa doctor` agree on one answer.
       //
       // Gated on the file being a TRACKED artifact of that repo: a file the repo's matcher
       // excludes (dot-dir, `node_modules`, > 2 MiB) would otherwise stop working entirely —

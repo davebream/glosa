@@ -73,7 +73,7 @@ export interface ContentAdapter {
    * deep scan — and side-effect-free (it may be called speculatively, more than once per request). */
   recognizes(workspaceRoot: string, workspace?: WorkspaceTarget): boolean;
   /** R2's authoritative routing input, derived from adapter-specific state (e.g. a provider's own
-   * session-history file) rather than the hook payload's raw `cwd`. `null`/`undefined` defers to
+   * session-history file) rather than the session payload's raw `cwd`. `null`/`undefined` defers to
    * the core's existing cwd-ancestor fallback (`SessionRegistry.forWorkspace`) exactly as if no adapter had
    * an opinion — the core calls this WITHOUT knowing why the adapter picked what it picked. */
   sessionBinding?(session: AdapterSessionHint): string | null;

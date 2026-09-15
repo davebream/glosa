@@ -11,11 +11,7 @@ export const DOC_FILES = [
   "test/quality-gates.test.ts",
   "test/oss-release.test.ts",
 ];
-export const STABILITY_FILES = [
-  "packages/daemon/test/lifecycle.test.ts",
-  "packages/daemon/test/helpers.test.ts",
-  "packages/daemon/test/registry/lockfile-fallback.test.ts",
-];
+export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packages/daemon/test/helpers.test.ts"];
 export type Profile = "acceptance" | "remaining-1" | "remaining-2" | "docs" | "stability" | "full";
 export type ChangeProfile = "docs" | "full";
 export type Plan = Record<Profile, string[]>;

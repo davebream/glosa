@@ -122,7 +122,7 @@ async function resolveCommandDir(
   const root = enclosingGitRootWithin(explicitDir, home);
   // `enclosingGitRootWithin` returns a realpath'd absolute path, so `.`, `./sub`, and a symlinked
   // checkout must be canonicalized the same way before the "is this already the root?" compare —
-  // otherwise `glosa init .` at a repo root would warn about itself.
+  // otherwise `glosa doctor .` at a repo root would warn about itself.
   const canonicalDir = (() => {
     try {
       return realpathSync(resolvePath(cwd, explicitDir));
@@ -682,7 +682,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { codexAttachmentRuntime, runCodexAttachment } = await import("../../providers/codex/src/app-server.ts");
     const { discoverMcpIdentity } = await import("./session.ts");
     await runMcpServer({
-      createHookClient: (signal) => createHttpDaemonClient({ signal }),
+      createDaemonClient: (signal) => createHttpDaemonClient({ signal }),
       createApiClient: (signal) => createHttpGlosaClient({ signal }),
       startCodexAttachment: (options, signal) =>
         runCodexAttachment(
@@ -904,7 +904,9 @@ function normalizeGunshiArgs(argv: readonly string[]): string[] {
 }
 
 /** Commands whose stderr is consumed by a machine, not read by a person: the detached daemon logs
- * it, the agent hooks and the MCP server hand it to their host. None of them should carry advice. */
+ * it, and the monitor, MCP server, Codex attachment, and shell completion hand theirs to their own
+ * host process. None of them should carry advice. (`hook` is listed too, though the one-release
+ * stub, #152, never writes anything.) */
 const DEV_NOTICE_SILENT_COMMANDS = new Set(["__daemon", "hook", "mcp", "monitor", "codex-attach", "complete"]);
 
 let devNoticeShown = false;

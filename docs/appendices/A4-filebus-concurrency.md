@@ -1,9 +1,15 @@
 # glosa v1 — file-bus & provenance concurrency spec (F04, F05, F21, F20, F25)
 
 **Cross-cutting invariant: the daemon is the SOLE writer** of journal, shadow git, and registries.
-CLI/hooks call the daemon HTTP API (mutation under an in-process async mutex keyed by immutable
-registration ID); if daemon unreachable they FAIL LOUDLY, never do unsynchronized writes. Reuses this
-repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-daemon lockfile fallback.
+The CLI calls the daemon HTTP API; if the daemon is unreachable it FAILS LOUDLY, never doing
+unsynchronized writes. Three distinct boundaries make that true, not one mutex shared across all
+of them: the singleton daemon O_EXCL lock (A5 §F13) gives exactly one process in the machine
+cross-process ownership of `GLOSA_HOME`; inside that one process, `WorkspaceIndex` serializes
+every write to the global `workspaces.json` through its own single shared mutex (A5 §F19); and
+each registration's own workspace bus (journal, shadow git) is serialized separately, by a
+per-registration keyed mutex, so two different workspaces' writes never wait on each other while
+two writes to the SAME workspace never interleave. There is no pre-daemon lockfile fallback
+(removed with the hooks, #152).
 
 ## F04 — journal-as-truth durability
 - Every registration carries an absolute `<bus-path>`. Files:
@@ -110,9 +116,7 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
 - Assign under global-index lock: no entry → use; same slug+same path → reuse (idempotent); same slug+different path → collision, **incumbent keeps slug, newcomer lengthens hex prefix (n+=2) until unique among different-path entries** (max full 64-hex). Deterministic + terminating. Store slug+slugLen. Moving dir → new path → new slug (intended).
 
 ## Registry-write serialization
-- Primary: serialize through daemon (sole writer, temp→fsync→rename under per-file async mutex); slug assignment in same critical section. Concurrent hooks serialize behind mutex → no lost updates.
-- Fallback (hook must write before daemon up): `O_EXCL` lockfile (`~/.glosa/.workspaces.lock`, `<ws>/.glosa/.registry.lock`) with EXACT `withSessionLease` semantics (openSync wx = atomic CAS; {token,pid,hostname,expiresAt}; bounded retries then fail; TTL + kill(pid,0) stale reclaim via unlink→re-openSync(wx); re-entrant process-local token map). RMW (load→modify→temp→fsync→rename) INSIDE the lease, never bare.
-- Preconditions: local POSIX FS with atomic O_EXCL (no NFS); single host; TTL = staleness backstop.
+- Serialize through the daemon (sole writer, temp→fsync→rename under per-file async mutex); slug assignment in the same critical section. Concurrent clients serialize behind the mutex → no lost updates. There is no pre-daemon lockfile fallback (removed with the hooks, #152): a client that cannot reach the daemon fails loudly rather than writing the registry directly.
 
 ### Explicit repair after shadow history loss (#226)
 

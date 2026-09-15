@@ -650,7 +650,7 @@ describe("MCP shim real-process lifetime (#140)", () => {
         expect((await sessions(port, ROTATED)).filter((sn) => /^mcp-\d+-/.test(sn.session_id)).length).toBe(1);
 
         // A second tool call after the rotation, end to end through a real shim. Note what this
-        // does NOT prove: `createMcpServer` builds a fresh hook client for every heartbeat and
+        // does NOT prove: `createMcpServer` builds a fresh daemon client for every heartbeat and
         // drain, so this call's client is constructed AFTER the rotation and would work even if
         // the bearer were captured at construction. The long-held-client boundary is crossed only
         // by the guard in `api-integration.test.ts`, which builds its client BEFORE rotating.

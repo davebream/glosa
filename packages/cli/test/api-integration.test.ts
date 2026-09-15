@@ -346,7 +346,7 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     }
   });
 
-  // F-17 (#140). The API-client guard above builds its client in `beforeAll`, but the hook client
+  // F-17 (#140). The API-client guard above builds its client in `beforeAll`, but the daemon client
   // needs its own: the shim's push-stream client is held for a whole session and a pending delivery
   // acknowledgement uses the client its delivery arrived on, so both can outlive a rotation. A test
   // that lets the client be constructed AFTER the rotation proves nothing — construction-time

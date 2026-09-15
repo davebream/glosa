@@ -23,7 +23,7 @@ import type {
   ProviderConnectTarget,
   SessionBinding,
 } from "../../../daemon/src/index.ts";
-import { looksLikeClaudeHookInput } from "./hook-types.ts";
+import { looksLikeSessionPayload } from "./session-payload.ts";
 
 /** The subset of `SessionRegistry` `deliver()`/`liveness()` need — a structural interface, not an
  * import of the daemon's concrete class, so this package only ever depends on `@glosa/daemon` for
@@ -69,9 +69,9 @@ export class ClaudeCodeProvider implements AgentProvider {
    * package doesn't know about still detects fine. `workspace` is `cwd` verbatim: R2's routing
    * precedence layers an explicit adapter binding ABOVE this, so `detectSession` itself never has
    * to guess at anything fancier than "the directory this session runs in". */
-  detectSession(hookEvent: unknown): SessionBinding | null {
-    if (!looksLikeClaudeHookInput(hookEvent)) return null;
-    const raw = hookEvent as {
+  detectSession(payload: unknown): SessionBinding | null {
+    if (!looksLikeSessionPayload(payload)) return null;
+    const raw = payload as {
       session_id: string;
       cwd: string;
       transcript_path?: unknown;

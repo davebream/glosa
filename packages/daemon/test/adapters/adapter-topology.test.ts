@@ -101,7 +101,7 @@ describe("adapter-topology (T8) — session cwd != adapter's real workspace root
     expect(res.status).toBe(200);
     const body = (await res.json()) as { workspace: string };
 
-    // The headline assertion: routed to the adapter's real data root, NOT the hook-reported cwd —
+    // The headline assertion: routed to the adapter's real data root, NOT the session's reported cwd —
     // and NOT the cwd-ancestor fallback either (cwdDir is not even an ancestor of realWorkspaceRoot,
     // so a buggy implementation falling through to that fallback would show up as neither value).
     expect(body.workspace).toBe(realWorkspaceRoot);

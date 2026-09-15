@@ -5,12 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type CallToolResult, LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import type { EntryStatus, GlosaApiClient } from "../src/api-client.ts";
-import type {
-  DaemonHookClient,
-  DrainResult,
-  RegisterSessionInput,
-  ScopedPullDrainOptions,
-} from "../src/daemon-client.ts";
+import type { DaemonClient, DrainResult, RegisterSessionInput, ScopedPullDrainOptions } from "../src/daemon-client.ts";
 import {
   createMcpServer,
   GLOSA_MCP_TOOL_NAMES,
@@ -44,7 +39,7 @@ test("MCP host discovery rejects ambiguous providers and permits explicit select
 });
 
 test("generic pull preserves requested workspace scope while reusing its stable identity", async () => {
-  const hook = new HookClient();
+  const hook = new FakeDaemonClient();
   hook.drained = { count: 0, drained: [] };
   const connected = await connect(deps(hook));
   try {
@@ -66,7 +61,7 @@ test("generic pull preserves requested workspace scope while reusing its stable 
 });
 
 test("MCP heartbeats all tool activity, recovers only missing registration, and preserves auth errors", async () => {
-  const hook = new HookClient();
+  const hook = new FakeDaemonClient();
   let registrations = 0;
   const register = hook.register.bind(hook);
   hook.register = async (input) => {
@@ -109,7 +104,7 @@ function presentation(id: string, kind: "annotation" | "human_edit", text: strin
   };
 }
 
-class HookClient implements DaemonHookClient {
+class FakeDaemonClient implements DaemonClient {
   registered: RegisterSessionInput | null = null;
   drained: DrainResult = {
     delivery_id: "delivery-1",
@@ -155,9 +150,9 @@ class HookClient implements DaemonHookClient {
   }
 }
 
-function deps(hook: HookClient, api?: Partial<GlosaApiClient>): McpDeps {
+function deps(hook: FakeDaemonClient, api?: Partial<GlosaApiClient>): McpDeps {
   return {
-    createHookClient: async () => hook,
+    createDaemonClient: async () => hook,
     createApiClient: async () => api as GlosaApiClient,
     cwd: () => "/workspace",
   };
@@ -224,7 +219,7 @@ const VALID_METADATA = {
 
 describe("official TypeScript MCP SDK contract", () => {
   test("SDK initialization advertises latest protocol, no Channel capability, instructions, and package version", async () => {
-    const connected = await connect(deps(new HookClient()));
+    const connected = await connect(deps(new FakeDaemonClient()));
     try {
       expect(LATEST_PROTOCOL_VERSION).toBe("2025-11-25");
       expect(connected.client.getServerVersion()).toEqual({ name: "glosa", version: CLI_VERSION });
@@ -253,7 +248,7 @@ describe("official TypeScript MCP SDK contract", () => {
       if (newline >= 0) resolveResponse(buffered.slice(0, newline));
     });
 
-    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    const running = runMcpServer(deps(new FakeDaemonClient()), { stdin: input, stdout: output });
     input.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
@@ -273,7 +268,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("tools/list is SDK-generated from the ten Zod registrations", async () => {
-    const connected = await connect(deps(new HookClient()));
+    const connected = await connect(deps(new FakeDaemonClient()));
     try {
       const tools = (await connected.client.listTools()).tools;
       expect(tools.map((tool) => tool.name)).toEqual([...GLOSA_MCP_TOOL_NAMES]);
@@ -378,7 +373,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("SDK-native tool errors reject invalid input and session identity overrides", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect({ ...deps(hook), sessionId: () => "host-session" });
     try {
       const invalid = await callTool(connected.client, { name: "glosa_inbox_get", arguments: {} });
@@ -409,7 +404,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("SDK validates structured output against the registered Zod schema", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const api: Partial<GlosaApiClient> = {
       getMetadata: async () => ({ version: 2, id: "invalid", artifacts: [] }) as never,
     };
@@ -426,7 +421,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("monitor delivery acknowledgement uses the exact MCP host session", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
     try {
       const result = await callTool(connected.client, {
@@ -461,7 +456,7 @@ describe("official TypeScript MCP SDK contract", () => {
         return { bound: true, session_id: sessionId };
       },
     };
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect(deps(hook, api));
     try {
       for (const [name, args] of [
@@ -490,7 +485,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("a Codex bind starts one exact-thread attachment and MCP close aborts it", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const attached: unknown[] = [];
     let attachAborted = false;
     const api: Partial<GlosaApiClient> = {
@@ -535,7 +530,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("pull keeps actionable text and acknowledges only after the SDK transport write", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const events: string[] = [];
     hook.acknowledge = async (sessionId, deliveryId, outcome, error) => {
       events.push(outcome);
@@ -567,7 +562,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("transport write failure records failed and retains the shim session until close", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect(deps(hook));
     const send = connected.serverTransport.send.bind(connected.serverTransport);
     connected.serverTransport.send = async (message, options) => {
@@ -588,7 +583,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("get refreshes registration and retrieves the durable entry without draining", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     hook.drained = { delivery_id: null, count: 0, drained: [] };
     const calls: unknown[] = [];
     const api: Partial<GlosaApiClient> = {
@@ -615,7 +610,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("the tool inventory carries no Channel-era tool (#152)", async () => {
-    const connected = await connect(deps(new HookClient()));
+    const connected = await connect(deps(new FakeDaemonClient()));
     try {
       const names = (await connected.client.listTools()).tools.map((tool) => tool.name);
       expect(names).not.toContain("glosa_conversation_ack");
@@ -627,7 +622,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("stdio write failure records failed before the temporary session is cleaned up", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const input = new PassThrough();
     let resolveInitializeWrite = () => {};
     const initializeWritten = new Promise<void>((resolve) => {
@@ -718,7 +713,7 @@ describe("official TypeScript MCP SDK contract", () => {
   // without awaiting it already flips the gate before this test's next line runs — no timing or
   // fake delay is needed to land inside the shutdown window deterministically.
   test("#140 a request that starts after close() begins is rejected before any registration or heartbeat", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect(deps(hook, { getMetadata: async () => null }));
     try {
       expect((await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} })).isError).not.toBe(true);
@@ -787,10 +782,10 @@ describe("official TypeScript MCP SDK contract", () => {
     }) as typeof serverTransport;
 
     const runtime = createMcpServer({
-      createHookClient: async (signal?: AbortSignal) => {
+      createDaemonClient: async (signal?: AbortSignal) => {
         // Default fixture: its `drained` already carries a top-level `delivery_id`, which is what
         // reserves the acknowledgement this test needs to still be in flight at shutdown.
-        const client = new HookClient();
+        const client = new FakeDaemonClient();
         client.acknowledge = async (_session, deliveryId) => {
           abortedWhenAcknowledged.push(signal?.aborted === true);
           acks.push(deliveryId);
@@ -820,7 +815,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("#140 shutdown sends no deregistration — the session is left to its lease", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     const connected = await connect(deps(hook, { getMetadata: async () => null }));
     await callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
     expect(hook.registered).not.toBeNull();
@@ -831,8 +826,8 @@ describe("official TypeScript MCP SDK contract", () => {
 
   test("#140 shutdown cancels a stalled registration rather than waiting out the outer deadline", async () => {
     const registerSignals: Array<AbortSignal | undefined> = [];
-    const clientFor = (signal?: AbortSignal): HookClient => {
-      const hook = new HookClient();
+    const clientFor = (signal?: AbortSignal): FakeDaemonClient => {
+      const hook = new FakeDaemonClient();
       hook.register = () => {
         registerSignals.push(signal);
         // Settles only when the signal it was handed aborts. Given no signal, or one that never
@@ -846,7 +841,7 @@ describe("official TypeScript MCP SDK contract", () => {
       return hook;
     };
     const connected = await connect({
-      createHookClient: async (signal?: AbortSignal) => clientFor(signal),
+      createDaemonClient: async (signal?: AbortSignal) => clientFor(signal),
       createApiClient: async () => ({ getMetadata: async () => null }) as unknown as GlosaApiClient,
       cwd: () => "/workspace",
     });
@@ -871,7 +866,7 @@ describe("official TypeScript MCP SDK contract", () => {
   });
 
   test("#140 close() waits for a request's whole lifecycle, registration included, not just its handler", async () => {
-    const hook = new HookClient();
+    const hook = new FakeDaemonClient();
     hook.register = () => new Promise<{ workspace: string }>(() => {});
     const connected = await connect(deps(hook, { getMetadata: async () => null }));
     const stuck = callTool(connected.client, { name: "glosa_metadata_show", arguments: {} });
@@ -898,7 +893,7 @@ describe("official TypeScript MCP SDK contract", () => {
     const input = new PassThrough();
     const output = new PassThrough();
     const before = process.listenerCount("SIGHUP");
-    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    const running = runMcpServer(deps(new FakeDaemonClient()), { stdin: input, stdout: output });
     expect(process.listenerCount("SIGHUP")).toBe(before + 1);
     // Invoke only the listener this call just registered — never `process.emit`, which fires
     // every OTHER SIGHUP listener already registered on this shared process too, including (in a
@@ -924,7 +919,7 @@ describe("official TypeScript MCP SDK contract", () => {
     const listenersBefore = process.listenerCount("SIGHUP");
     try {
       const callsBefore = intervalSpy.mock.calls.length;
-      const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+      const running = runMcpServer(deps(new FakeDaemonClient()), { stdin: input, stdout: output });
       expect(intervalSpy.mock.calls.length).toBe(callsBefore + 1);
       input.end();
       await running;
@@ -939,7 +934,7 @@ describe("official TypeScript MCP SDK contract", () => {
   test("stdio server exits cleanly when its input reaches EOF", async () => {
     const input = new PassThrough();
     const output = new PassThrough();
-    const running = runMcpServer(deps(new HookClient()), { stdin: input, stdout: output });
+    const running = runMcpServer(deps(new FakeDaemonClient()), { stdin: input, stdout: output });
     input.end();
     await expect(running).resolves.toBeUndefined();
   });
@@ -968,7 +963,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("an answered question returns the human's words and their chosen option", async () => {
       const { api, calls, created } = askApi(1, { outcome: "done", response: "Thin — say why.", chose: "thin" });
-      const connected = await connect(deps(new HookClient(), api));
+      const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         const result = await callTool(connected.client, {
           name: "glosa_ask",
@@ -1004,7 +999,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("an empty answer is 'declined', never reported as an answer the human did not give", async () => {
       const { api } = askApi(1, { outcome: "done", response: "" });
-      const connected = await connect(deps(new HookClient(), api));
+      const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         const result = await callTool(connected.client, {
           name: "glosa_ask",
@@ -1019,7 +1014,7 @@ describe("official TypeScript MCP SDK contract", () => {
     test("a wait that elapses is 'unanswered' — distinct from declined, because nobody saw it", async () => {
       // Never goes terminal, and the deadline is immediate.
       const { api } = askApi(1, null);
-      const connected = await connect(deps(new HookClient(), api));
+      const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         const result = await callTool(connected.client, {
           name: "glosa_ask",
@@ -1036,7 +1031,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("a pointer with no question returns at once and never waits", async () => {
       const { api, calls, created } = askApi(1, null);
-      const connected = await connect(deps(new HookClient(), api));
+      const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         const result = await callTool(connected.client, {
           name: "glosa_ask",
@@ -1053,7 +1048,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("a question is action 'ask', so answering it asserts no verdict nobody gave", async () => {
       const { api, created } = askApi(1, { outcome: "done", response: "Fine." });
-      const connected = await connect(deps(new HookClient(), api));
+      const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         await callTool(connected.client, {
           name: "glosa_ask",
@@ -1094,7 +1089,7 @@ describe("official TypeScript MCP SDK contract", () => {
         },
       };
       const connected = await connect({
-        ...deps(new HookClient(), api),
+        ...deps(new FakeDaemonClient(), api),
         sessionId: () => "host-session",
       });
       try {
@@ -1157,7 +1152,7 @@ describe("official TypeScript MCP SDK contract", () => {
         },
       };
       const connected = await connect({
-        ...deps(new HookClient(), api),
+        ...deps(new FakeDaemonClient(), api),
         sessionId: () => "host-session",
       });
       try {

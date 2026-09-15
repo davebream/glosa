@@ -54,7 +54,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: liveRoot,
       workspace_binding: liveRoot,
-      source: "hook",
+      source: "mcp",
     });
 
     const liveResult = await forgetWorkspace(deps, liveEntry.slug, { confirm: false });
@@ -1006,7 +1006,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: root,
       workspace_binding: root,
-      source: "hook",
+      source: "mcp",
     });
     const initialExpiry = sessionRegistry.get("s1")!.lease_expiry;
 
@@ -1039,7 +1039,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: root,
       workspace_binding: root,
-      source: "hook",
+      source: "mcp",
     });
     const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1178,7 +1178,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: root,
       workspace_binding: root,
-      source: "hook",
+      source: "mcp",
     });
     const initialExpiry = sessionRegistry.get("s1")!.lease_expiry;
 
@@ -1245,7 +1245,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: loose.entry.canonical_path,
       workspace_binding: loose.entry.canonical_path,
-      source: "hook",
+      source: "mcp",
     });
 
     writeFileSync(artifact, "second\n");
@@ -1299,7 +1299,7 @@ describe("glosa forget", () => {
       provider: "claude-code",
       cwd: root,
       workspace_binding: root,
-      source: "hook",
+      source: "mcp",
     });
     const initialExpiry = sessionRegistry.get("s1")!.lease_expiry;
 

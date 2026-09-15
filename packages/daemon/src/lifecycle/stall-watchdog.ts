@@ -19,7 +19,7 @@ const HEARTBEAT_INTERVAL_MS = 250;
 
 /** Default stall threshold. Two orders of magnitude above any synchronous work the daemon actually
  * does (a journal append + fsync is sub-millisecond) and well past every client's own patience —
- * hooks give up after 3s, CLI and MCP clients after 12s — so by the time this fires, the daemon
+ * CLI and MCP clients give up after 12s — so by the time this fires, the daemon
  * has already stopped being useful to anyone and holding the port only prevents its replacement. */
 export const DEFAULT_STALL_WATCHDOG_MS = 30_000;
 
