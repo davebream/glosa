@@ -31,6 +31,10 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   registered workspace. Its launcher resolves `$GLOSA_BIN`, glosa's recorded absolute symlink, or a
   sibling source checkout in that order; it never searches `PATH` for glosa and never downloads.
   The monitor's daemon discovery is read-only and never starts, repairs, replaces, or stops a process.
+- The Codex attachment opens only the configured local `AF_UNIX` control socket and never uses
+  `remoteControl/*`, opens a TCP listener, or starts Codex's app-server. The app-server itself may
+  maintain its own remote-control task toward `chatgpt.com`; that process and egress are Codex-owned,
+  while the Glosa daemon, SPA, and attachment make no outbound network request.
 - Fragment scrub FIRST statement on bootstrap: read `#t=` (durable) or `#p=` (presentation),
   redeem `p` once for the durable token when present, `sessionStorage.setItem('glosa_token', durable)`,
   `history.replaceState` to pathname+search plus non-secret fragment state

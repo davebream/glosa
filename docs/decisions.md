@@ -21,13 +21,15 @@ must be restored explicitly after daemon restart. MCP activity restores registra
 explicit binding also registers unknown identities and renews expired leases. Provider identity comes
 from the provider environment or an explicit selector; absent evidence uses generic MCP, never a
 transcript-recency guess. Open transport connections refresh the shared registry lease; closing one
-stops refreshes and leaves expiry to the TTL. Monitor and Codex subscription transports consume this
-contract in their own follow-up issues.
+stops refreshes and leaves expiry to the TTL. The monitor and Codex app-server subscription transports
+consume this contract. Codex's transport uses its documented local control-plane JSON-RPC API over an
+`AF_UNIX` WebSocket; it does not type into a terminal and does not depend on a terminal multiplexer.
 
 ## Runtime trust boundary
 
-glosa remains local-first and makes no telemetry or external runtime calls. Channels are an
-optional delivery optimization. Hook, turn-boundary, and MCP delivery remain supported fallbacks.
+glosa remains local-first and makes no telemetry or external runtime calls. Plugin monitor and Codex
+app-server connections are optional delivery optimizations. Hook, turn-boundary, and MCP delivery
+remain supported fallbacks.
 
 ## Token lifecycle is a local filesystem authority
 

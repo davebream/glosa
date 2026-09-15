@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Codex sessions can attach to a separately running local app-server control socket after an exact
+  MCP bind. Glosa sends bounded feedback as user input with `turn/steer` or `turn/start`, records
+  transport acceptance separately from agent acknowledgement, retries first-rollout and disconnect
+  failures, and closes the socket with the MCP process. The app-server remains user-owned and MCP
+  pull remains the fallback when it is absent. (#161)
 - Claude Code now installs through the repository's official plugin marketplace. The plugin carries
   glosa's MCP server, `glosa-connect` skill, and a per-session monitor that streams parked and live
   inbox entries without starting the daemon. The launcher uses only explicit or recorded local glosa

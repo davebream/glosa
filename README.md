@@ -198,7 +198,7 @@ runs only when you invoke it, and it sends no identifying data.
 | Agent | Integration |
 |---|---|
 | **Claude Code** | Official plugin with MCP pull and a per-session monitor over the generic push stream. |
-| **Codex** | Hooks, MCP pull, and turn-boundary delivery through the same provider contract. |
+| **Codex** | App-server push when its local control socket is running, with hooks and MCP pull as fallbacks. |
 | **Generic MCP host** | Durable feedback can be pulled through the MCP tools without teaching the core about that agent. |
 
 glosa binds feedback to an explicit live session when possible. If more than one session matches, the
@@ -207,10 +207,24 @@ browser asks instead of guessing. If none is live, the entry parks until a match
 A running session survives a glosa daemon restart: its next MCP tool call re-registers it. Restore
 an explicit workspace connection with `glosa_session_bind` or
 `glosa session bind <session-id> --workspace <path>`; binding also registers an unknown session, so
-restarting the agent is unnecessary. Claude and Codex identity comes from their session environment;
-`--provider <id>` (or MCP `provider`) supplies it explicitly when needed. Without provider evidence,
+restarting the agent is unnecessary. Claude identity comes from its session environment. Codex's MCP
+process receives no thread identity, so the agent reads `CODEX_THREAD_ID` in its shell and supplies it
+with MCP `provider:"codex"`. `--provider <id>` supplies identity explicitly to the CLI. Without provider evidence,
 binding uses a generic MCP session. A missing transcript affects only the conversation mirror.
 Open session streams keep the session lease alive; once closed, the lease expires after its remaining TTL.
+
+Codex push requires a separately running app-server control socket. Glosa never starts it. The
+standalone Codex distribution can manage that daemon; Homebrew/npm users can run it themselves before
+starting the TUI:
+
+```sh
+codex app-server --listen "unix://$CODEX_HOME/app-server-control/app-server-control.sock"
+```
+
+`glosa_session_bind` starts the attachment inside the long-lived MCP process. For troubleshooting or
+an MCP host without that lifecycle, run `glosa codex-attach <thread-id> --workspace <path>` in a
+foreground terminal and stop it with Ctrl-C. If the socket is absent, feedback remains available via
+`glosa_inbox_pull`.
 
 ## Related tools
 

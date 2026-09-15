@@ -51,6 +51,34 @@ plugin monitor → MCP pull
 The existing Channel, `asyncRewake`, and turn-boundary hooks remain executable only during the
 #151→#152 migration window. They are no longer an installation path and are not the release design.
 
+### Codex app-server transport
+
+Codex has a separate provider-owned push rail. After an explicit `glosa_session_bind` carrying
+`provider:"codex"`, the MCP shim connects to
+`$CODEX_HOME/app-server-control/app-server-control.sock`, performs an RFC 6455 WebSocket handshake
+over `AF_UNIX`, initializes the app-server protocol, and calls
+`thread/resume {threadId, excludeTurns:true}` for that exact bound thread. The MCP process owns the
+connection: stdin EOF, SIGHUP, parent loss, or replacement by a newer Codex bind closes it within the
+same bounded shutdown path as the MCP server.
+
+The attachment never enumerates threads and never starts, stops, or repairs the app-server. A missing
+socket or a pre-rollout `thread/resume` failure retries with jittered exponential backoff from five to
+sixty seconds while MCP pull remains usable. Homebrew/npm Codex installs do not provide a managed
+daemon; users either install the standalone distribution or separately run:
+
+```sh
+codex app-server --listen "unix://$CODEX_HOME/app-server-control/app-server-control.sock"
+```
+
+For each `delivery` frame, the attachment sends one text input prefixed `[glosa <entry-id>]`.
+`turn/steer` is used only after this connection observed `turn/started` for the resumed thread and can
+supply `expectedTurnId`; otherwise it uses `turn/start`, which also covers attachment during an
+already-running turn. A successful JSON-RPC response records
+`via:"codex_app_server", outcome:"transport_accepted"`. The agent then calls
+`glosa_delivery_ack`; only that exact-session acknowledgement records `presented`. `turn/completed`
+clears the active turn and provides the hook-free boundary signal while the open generic stream
+continues draining parked and new entries.
+
 Hook output shapes:
 
 ```json
@@ -93,8 +121,7 @@ Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registr
 hooks, every MCP tool call, and an open session transport refresh it. Connection-held refreshes run
 every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then
 expires normally. Old timers cannot refresh a deregistered or replacement session. The generic
-connection handle is also the contract for future monitor (#151) and Codex subscription (#161)
-transports; those transports are not introduced here. Registration sources include `mcp`, `monitor`,
+connection handle is used by the monitor and Codex subscription transports. Registration sources include `mcp`, `monitor`,
 and `codex-app-server`; existing hook sources remain accepted.
 
 The MCP shim additionally polls its own OS-level parent pid and exits when it changes (issue #140),
@@ -111,8 +138,11 @@ variables and no Codex identity under any configuration, so a Codex shim has no 
 own and takes the thread id from an explicit bind carrying `CODEX_THREAD_ID`, which the agent reads
 from its own shell environment (`connectPrompt`). Measurements in
 `docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`.
-An unknown-session heartbeat is a typed 404 and triggers re-registration. No host identity means one
-stable generic `mcp` identity per shim. A generic inbox pull retains its explicit `workspace`
+After that bind succeeds, the MCP process retains the exact provider/session/cwd identity for its
+later pull and acknowledgement calls; it never falls back to its synthetic generic id while the
+bound Codex process is alive.
+An unknown-session heartbeat is a typed 404 and triggers re-registration. Before an explicit bind,
+no host identity means one stable generic `mcp` identity per shim. A generic inbox pull retains its explicit `workspace`
 routing scope even under two overlapping pulls on that one shared identity: the pull sends the
 workspace it was asked for on the drain request itself, and the daemon uses that request-carried
 scope for the whole drain rather than the registry row's `cwd`, which a concurrent pull's own
