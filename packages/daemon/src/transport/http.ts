@@ -839,14 +839,14 @@ async function handleSessionHeartbeat(ctx: ApiContext, sessionId: string): Promi
   return Response.json({ ok: true });
 }
 
-/** `POST /api/sessions/:id/deregister` — SessionEnd (A2 §F08: "removes the session from the
- * active registry (keeps journal audit trail)"). Also a no-op-safe 200 for an unknown id. */
+/** `POST /api/sessions/:id/deregister` — an explicit client deregistration: removes the session from
+ * the active registry and keeps the journal audit trail. Also a no-op-safe 200 for an unknown id. */
 async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Promise<Response> {
   await ctx.sessionRegistry.deregister(sessionId);
   return Response.json({ ok: true });
 }
 
-const DRAIN_MAX = 8; // A2 §F07/A6 §F26: "Stop drains are bounded (≤8) and treated as drains, not loops."
+const DRAIN_MAX = 8; // Per-request cap on entries one drain returns; a caller pulls again for the rest.
 
 interface CompositeDrainCandidate {
   workspace: WorkspaceEntry;

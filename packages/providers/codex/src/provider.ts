@@ -60,9 +60,9 @@ export class CodexProvider implements AgentProvider {
    * `ClaudeCodeProvider.detectSession`'s own guard exactly. `workspace` is `cwd` verbatim — same
    * reasoning as Claude's: R2's routing precedence layers an explicit adapter binding ABOVE this,
    * so `detectSession` never has to guess at anything fancier than "the directory this payload's
-   * session runs in". `source` reads the payload's own `source` field when present (`SessionStart`
-   * only), else falls back to `hook_event_name` (`Stop`/`UserPromptSubmit`/`SessionEnd` carry no
-   * `source`), exactly mirroring the Claude provider's own fallback. */
+   * session runs in". `source` reads the payload's own `source` field when present, else falls back
+   * to the payload's `hook_event_name` when it carries one, exactly mirroring the Claude provider's
+   * own fallback. */
   detectSession(payload: unknown): SessionBinding | null {
     if (!looksLikeSessionPayload(payload)) return null;
     const raw = payload as {

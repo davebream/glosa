@@ -54,7 +54,7 @@ UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt
 ```
 
 **There is no single input envelope shared by every event** — checked field-by-field against every
-`*CommandInput` struct in `codex-rs/hooks/src/schema.rs`. Only four fields are on all twelve:
+`*CommandInput` struct in `codex-rs/hooks/src/schema.rs`. Only these fields are on every one:
 `session_id`, `transcript_path`, `cwd`, `hook_event_name`. Beyond that it fragments:
 - `turn_id` is on every event except `SessionStart` and `SessionEnd` (`schema.rs:499-523`).
 - `model`/`permission_mode` are on every event except `SessionEnd`, which has neither
@@ -95,22 +95,25 @@ optional `systemMessage` — no `continue`/`stopReason`/`suppressOutput` field e
 matching `InterruptOutcome` (`interrupt.rs`), which has no blocking or continuation semantics
 whatsoever (no `should_block`/`should_stop`, only `hook_events`).
 
-On top of the universal envelope (where it applies), each event type layers its own fields:
-`Stop`/`SubagentStop`/`PostToolUse`/`UserPromptSubmit` add `decision:"block"` + non-empty `reason`
-(`BlockDecisionWire`). `PreToolUse` has **two separate decision channels**, not one: a legacy
+On top of the universal envelope (where it applies), each event type layers its own fields. This
+paragraph covers the decision and context fields that shape a turn; `schema.rs` is the complete
+inventory. `Stop`/`SubagentStop`/`PostToolUse`/`UserPromptSubmit` add `decision:"block"` + non-empty
+`reason` (`BlockDecisionWire`). `PreToolUse` has **two separate decision channels**, not one: a legacy
 top-level `decision:"approve"|"block"` (`PreToolUseDecisionWire`, `schema.rs:267-273`, no third
-value), and a newer `hookSpecificOutput.permissionDecision:"allow"|"deny"|"ask"`
-(`PreToolUsePermissionDecisionWire`, `schema.rs:257-265` — **three** values, including `"ask"`),
-plus sibling `permissionDecisionReason` and `updatedInput`. `PermissionRequest` nests its decision
-**two levels deep**, not one: `hookSpecificOutput.decision.behavior:"allow"|"deny"`
-(`PermissionRequestHookSpecificOutputWire.decision: Option<PermissionRequestDecisionWire>`,
-`PermissionRequestDecisionWire.behavior: PermissionRequestBehaviorWire`, `schema.rs:189-226`) —
-`decision` is an object, not a bare string — with sibling `message`, `updatedInput`,
-`updatedPermissions`, and `interrupt` fields on that same `decision` object (all reserved and
-fail-closed if set, per the source's own doc comments). `SessionStart`/`SubagentStart` add
+value), and `hookSpecificOutput.permissionDecision:"allow"|"deny"|"ask"`
+(`PreToolUsePermissionDecisionWire`, `schema.rs:257-265`), with sibling `permissionDecisionReason`,
+`updatedInput` and `additionalContext` (`PreToolUseHookSpecificOutputWire`, `schema.rs:244-255`).
+`PostToolUse`'s `hookSpecificOutput` carries `additionalContext` and `updatedMCPToolOutput`
+(`PostToolUseHookSpecificOutputWire`, `schema.rs:231-239`). `PermissionRequest` nests its decision
+**two levels deep**: `hookSpecificOutput.decision.behavior:"allow"|"deny"`
+(`PermissionRequestDecisionWire`, `schema.rs:189-226`) — `decision` is an object, not a bare string.
+On that object, `message` is accepted and becomes the denial message (`events/permission_request.rs`,
+`PermissionRequestDecision::Deny { message }`); `updatedInput` and `updatedPermissions` are reserved
+and fail closed if present; `interrupt` is reserved and fails closed only when `true` (the source's
+own doc comments on each field). `SessionStart`, `SubagentStart` and `UserPromptSubmit` add
 `hookSpecificOutput.additionalContext`.
 
-Codex's own hook system has no `Notification` event in this closed 12-member set. This is
+Codex's own hook system has no `Notification` event in this closed set. This is
 Codex-source information only, offered for whoever eventually designs a Codex-specific signal;
 glosa's own attention model does not need or use it (see the intro above and §8).
 
@@ -259,17 +262,18 @@ rather than carried forward. `codex app-server` does exist (§4), but it speaks 
 `thread/turn` JSON-RPC protocol, not MCP — citing it as an "MCP-facing process" conflated two
 different protocols, so that framing is also dropped.
 
-**The environment a spawned local MCP server actually receives — corrected this pass.** The prior
-"fixed eight-variable environment" claim is superseded: `create_env_for_mcp_server`
+**The environment a spawned local MCP server actually receives.** `create_env_for_mcp_server`
 (`codex-rs/rmcp-client/src/utils.rs:16-59`), called from the local stdio launcher
-(`codex-rs/rmcp-client/src/stdio_server_launcher.rs:276`), builds the child environment from
-`DEFAULT_ENV_VARS` (unix, `utils.rs:162-175`) — **eleven** names, not eight: `HOME`, `LOGNAME`,
-`PATH`, `SHELL`, `USER`, `__CF_USER_TEXT_ENCODING`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ` — plus
-whatever the server's own `env` table declares (`local_stdio_env_var_names`, `utils.rs:90-100`),
-plus a handful of custom-CA keys. None of `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `CODEX_HOME`
-are in that fixed list or added anywhere in this function. A glosa MCP server started by Codex
-therefore still cannot identify its own thread from its spawn environment; the thread id reaches
-glosa through an explicit bind instead.
+(`codex-rs/rmcp-client/src/stdio_server_launcher.rs:276`), builds the child environment from an
+allowlist, `DEFAULT_ENV_VARS` (unix, `utils.rs:162-175`): `HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`,
+`__CF_USER_TEXT_ENCODING`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ`. Each name is copied only when it
+is set in Codex's own environment (`filter_map(|var| env::var_os(var)…)`). On top of that come the
+names the server's own `env` table declares (`local_stdio_env_var_names`, `utils.rs:90-100`), and
+the custom-CA keys when set. The 2026-09-06 spike observed eight variables. That is consistent with
+this allowlist on a host where `LC_ALL`, `TERM` and `TZ` were unset, and it is how A2 §F08 states the
+result. No `CODEX_THREAD_ID`, `CODEX_SESSION_ID` or `CODEX_HOME` is on the allowlist or added by this
+function. A glosa MCP server started by Codex therefore cannot identify its own thread from its
+spawn environment; the thread id reaches glosa through an explicit bind instead.
 
 **UNCONFIRMED (2026-09-06 spike, not re-verified) — which Codex tool actually exposes `CODEX_THREAD_ID`.**
 The constant `CODEX_THREAD_ID_ENV_VAR` and a populating step do exist in this snapshot

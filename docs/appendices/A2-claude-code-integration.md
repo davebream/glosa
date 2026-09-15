@@ -115,8 +115,9 @@ inspecting or polling any process itself.
 The MCP shim discovers provider identity through provider-owned environment readers, registers on
 first tool use, and heartbeats thereafter. Only Claude Code supplies one: a shim started by Claude
 Code — from a project `.mcp.json` or a plugin's own `.mcp.json` — reads `CLAUDE_CODE_SESSION_ID`.
-**Codex supplies nothing.** A server spawned from `[mcp_servers.*]` receives eight fixed environment
-variables and no Codex identity under any configuration, so a Codex shim has no host identity of its
+**Codex supplies nothing.** A server spawned from `[mcp_servers.*]` inherits only an allowlist of
+host variables that are set (eight were set in the measurement below), plus its own `env` table, and
+no Codex identity under any configuration, so a Codex shim has no host identity of its
 own and takes the thread id from an explicit bind carrying `CODEX_THREAD_ID`, which the agent reads
 from its own shell environment (`connectPrompt`). Measurements in
 `docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`.
