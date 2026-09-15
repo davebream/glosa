@@ -25,7 +25,10 @@ type Case = {
   error?: unknown;
   skipped?: unknown;
 };
-type Suite = { name: string; time: string; testcase?: Case[] };
+type Suite = { name: string; time: string; testcase?: Case[]; testsuite?: Suite[] };
+function suiteCases(suite: Suite): Case[] {
+  return [...(suite.testcase ?? []), ...(suite.testsuite ?? []).flatMap(suiteCases)];
+}
 export function inspectReport(xml: string, selected: string[]) {
   if (/<!DOCTYPE/i.test(xml)) throw new Error("JUnit must not declare document entities");
   if (XMLValidator.validate(xml) !== true) throw new Error("Malformed JUnit report");
@@ -37,7 +40,7 @@ export function inspectReport(xml: string, selected: string[]) {
   }).parse(xml) as { testsuites?: { tests: string; failures: string; testsuite?: Suite[] } };
   const report = document.testsuites;
   const suites = report?.testsuite ?? [];
-  const cases = suites.flatMap((suite) => suite.testcase ?? []);
+  const cases = suites.flatMap(suiteCases);
   if (!report || cases.length === 0 || Number(report.tests) !== cases.length)
     throw new Error("Missing or inconsistent JUnit test cases");
   if (!Number.isInteger(Number(report.failures)) || Number(report.failures) < 0)
