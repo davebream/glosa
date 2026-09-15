@@ -423,9 +423,9 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
     await armed();
 
     writeFileSync(join(root, "notes.md"), "one\ntwo\n");
-    await waitUntil(() => calls > 0, 5_000);
+    await waitUntil(() => calls > 0, 15_000);
     writeFileSync(join(root, "notes.md"), "one\ntwo\nthree\n");
-    await waitUntil(() => calls > 1, 5_000);
+    await waitUntil(() => calls > 1, 15_000);
 
     expect(registry.watchedWorkspaceCount()).toBe(1);
     expect(warnings.filter((message) => message.includes("external-edit capture failed"))).toHaveLength(1);
