@@ -123,7 +123,12 @@ function journalMetrics(dir: string): JournalMetrics {
   }
 }
 
-async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> {
+export interface DoctorOptions {
+  workspace?: string;
+  repairBaseline?: boolean;
+}
+
+async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions): Promise<CheckResult[]> {
   const checks: CheckResult[] = [];
 
   // 1. platform
@@ -202,8 +207,9 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   // 6. daemon+proto — `status` is hoisted for the pending-delivery/orphaned-state checks below,
   // which reuse this one aggregate call instead of re-fetching (and SKIP when it failed).
   let status: StatusSummary | null = null;
+  let client: GlosaApiClient | null = null;
   try {
-    const client = await deps.createClient();
+    client = await deps.createClient();
     status = await client.getStatus();
     const compatible = protocolCompatible(PROTOCOL_VERSION, status.daemon.protocol_version);
     checks.push(
@@ -267,7 +273,59 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   const forgetting = status?.workspaces.find(
     (w) => (w.path === canonicalDirForForgetting || w.path === dir) && w.lifecycle === "forgetting",
   );
-  if (forgetting) {
+  const selected = options.workspace
+    ? status?.workspaces.find((w) => w.slug === options.workspace)
+    : status?.workspaces.find((w) => w.path === canonicalDirForForgetting || w.path === dir);
+  if (options.repairBaseline && !options.workspace) {
+    checks.push(
+      check("workspace", "fail", "baseline repair requires --workspace <registered-slug>; no repair was attempted"),
+    );
+  } else if (options.workspace || (selected && selected.lifecycle !== "forgetting")) {
+    if (!selected || !client?.getShadowHealth) {
+      checks.push(
+        check(
+          "workspace",
+          "fail",
+          "cannot diagnose the selected registration; connect to a daemon supporting shadow health; no repair was attempted",
+        ),
+      );
+    } else {
+      try {
+        if (options.repairBaseline && !client.repairShadowBaseline)
+          throw new Error("daemon client does not support baseline repair");
+        const health = options.repairBaseline
+          ? await client.repairShadowBaseline!(selected.slug)
+          : await client.getShadowHealth(selected.slug);
+        const census = health.census;
+        const remedy = `glosa doctor --workspace ${selected.slug} --repair-baseline`;
+        checks.push(
+          check(
+            "workspace",
+            health.state !== "healthy"
+              ? "fail"
+              : !census.complete || census.missing_checkpoint_entries > 0
+                ? "warn"
+                : "pass",
+            `shadow ${health.state} (${health.reason}); ${census.missing_checkpoint_entries} entry/entries reference missing checkpoints; ` +
+              `${census.unassessable_entries} unassessable; census ${census.complete ? "complete" : "incomplete"}` +
+              (health.state === "invalid-head"
+                ? " — invalid shadow layout; baseline repair is refused"
+                : health.state !== "healthy"
+                  ? ` — explicit repair: ${remedy}. Repair starts new history; it cannot restore lost checkpoints.`
+                  : ""),
+          ),
+        );
+      } catch (error) {
+        checks.push(
+          check(
+            "workspace",
+            "fail",
+            `shadow ${options.repairBaseline ? "repair" : "diagnosis"} refused: ${(error as Error).message}`,
+          ),
+        );
+      }
+    }
+  } else if (forgetting) {
     checks.push(
       check(
         "workspace",
@@ -292,7 +350,7 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
             "rev-parse",
             "--verify",
             "-q",
-            "HEAD",
+            "HEAD^{commit}",
           ])
         : null;
       if (!headOut) {
@@ -300,7 +358,7 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
           check(
             "workspace",
             "fail",
-            `${shadowGitDir} has no baseline checkpoint (HEAD does not resolve); ${journal.detail}`,
+            `${shadowGitDir} has no baseline checkpoint (HEAD commit is unreadable); ${journal.detail}`,
           ),
         );
       } else {
@@ -540,8 +598,12 @@ async function runChecks(dir: string, deps: DoctorDeps): Promise<CheckResult[]> 
   return checks;
 }
 
-export async function runDoctor(dir: string, deps: DoctorDeps): Promise<CommandEnvelope<DoctorData>> {
-  const checks = await runChecks(dir, deps);
+export async function runDoctor(
+  dir: string,
+  deps: DoctorDeps,
+  options: DoctorOptions = {},
+): Promise<CommandEnvelope<DoctorData>> {
+  const checks = await runChecks(dir, deps, options);
   const anyFail = checks.some((c) => c.status === "fail");
   const platformFail = checks[0]?.name === "platform" && checks[0].status === "fail";
 
