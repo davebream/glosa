@@ -31,6 +31,7 @@ import {
   scrollToOffset,
 } from "./outline.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
+import { addressBlocks, addressForRange } from "./address.js";
 import { faceKey, mountFaceControl } from "./face.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
@@ -570,6 +571,9 @@ export function createArtifactPane(host, deps) {
   });
   trayEl.append(trayToggle, trayListEl);
 
+  // The provenance line: written, changed, outside glosa, approval — stated on the page, under the
+  // manuscript, from what this pane can prove (invariant 3). Never a badge, never "synced".
+  const provenanceEl = el("dl", { className: "glosa-provenance", "aria-label": "Provenance", hidden: true });
   const paneMain = el("main", { className: "glosa-pane-main" }, [
     approvalStrip,
     diskChangeEl,
@@ -577,6 +581,7 @@ export function createArtifactPane(host, deps) {
     emptyEl,
     skeletonEl,
     contentEl,
+    provenanceEl,
     classFEl,
     editWrap,
     marginEl,
@@ -1515,6 +1520,13 @@ export function createArtifactPane(host, deps) {
       "aria-label": replacing ? "Edit annotation" : "New annotation",
     });
     if (replacing) form.setAttribute("data-editing", "true");
+    // Pencil, not ink: this entry is not sent yet, and its header says so beside its address.
+    form.append(
+      el("p", { className: "glosa-annotation-head" }, [
+        el("span", { className: "glosa-address", textContent: addressForTarget(record.target) ?? "" }),
+        el("span", { className: "glosa-annotation-who", textContent: "You · pencil, not sent" }),
+      ]),
+    );
     if (record.target?.quote?.exact) {
       // Inner span so the anchor wash hugs the quoted words instead of striping the whole card.
       form.append(
@@ -1904,6 +1916,7 @@ export function createArtifactPane(host, deps) {
     // Measure every dot first, order them down the page, then push each clear of the one above:
     // the gutter shows a countable run instead of a single dot hiding a pile.
     const DOT_STEP = 12; // the 10px dot plus 2px of air
+    const addresses = addressBlocks(contentEl);
     const placed = [];
     for (const item of annotations) {
       const range = rangeForTarget(item.record?.target);
@@ -1920,12 +1933,13 @@ export function createArtifactPane(host, deps) {
       // Several dots in one gutter are only useful if they say which note each one is. Screen
       // readers get the note itself, not seven identical "Go to annotation" buttons.
       const gist = (item.record?.body ?? "").trim();
+      const address = addressForTarget(item.record?.target, addresses);
       const dot = el("button", {
         className: "glosa-marker",
         type: "button",
-        "aria-label": gist
-          ? `Go to annotation: ${gist.length > 60 ? `${gist.slice(0, 60)}…` : gist}`
-          : "Go to annotation",
+        "aria-label": `${address ? `${address} · ` : ""}${
+          gist ? `Go to annotation: ${gist.length > 60 ? `${gist.slice(0, 60)}…` : gist}` : "Go to annotation"
+        }`,
         onClick: () => {
           // Outside Annotate there is no card to jump to yet, so the dot's job is to get the
           // reader to one: it opens the mode that has them, then reveals its own.
@@ -2264,17 +2278,34 @@ export function createArtifactPane(host, deps) {
     cardEl.addEventListener("focusout", off);
   }
 
-  /** One annotation card. The same component in the side rail, in the compact collection tray,
+  /** The passage's address (address.js): "§2.3", derived from the rendered structure on every
+   * call, so it is always the label the reader currently sees in the outline. Null when the
+   * passage is not on the page (lost, or a class-F artifact). */
+  function addressForTarget(target, map) {
+    const range = rangeForTarget(target);
+    return range ? addressForRange(contentEl, range, map) : null;
+  }
+
+  /** One margin entry. The same component in the side rail, in the compact collection tray,
    * and inside the passage's hover preview — only its container changes. */
-  function buildAnnotationCard(item, { actions = true } = {}) {
+  function buildAnnotationCard(item, { actions = true, addresses } = {}) {
     const { record, state } = item;
     const intentLabel = INTENTS.find((i) => i.value === record.intent)?.label ?? record.intent;
+    const address = addressForTarget(record.target, addresses);
     // Honest anchoring: if the quoted passage no longer exists in the current text (edited
     // away, rewritten), the card says "Lost its place" and keeps the original quote — it never
     // underlines different words (client echo of A5 §F10; the daemon's resolver is the
     // authority at delivery time).
     const anchored = Boolean(rangeForTarget(record.target));
     const card = el("div", { className: "glosa-annotation", "data-state": state, "data-anchored": String(anchored) });
+    // The entry's header: its address in the hand, then who wrote it. "You" is honest here — every
+    // entry in this list was written in glosa's own composer (invariant 3).
+    card.append(
+      el("p", { className: "glosa-annotation-head" }, [
+        el("span", { className: "glosa-address", textContent: address ?? "" }),
+        el("span", { className: "glosa-annotation-who", textContent: "You" }),
+      ]),
+    );
     if (record.target?.quote?.exact) {
       card.append(
         el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]),
@@ -2355,7 +2386,44 @@ export function createArtifactPane(host, deps) {
     return card;
   }
 
+  /** One quiet line of facts under the manuscript. Each fact is something this pane can prove:
+   * marks are the entries in its own journal view; "answered" is a session's proven apply lease;
+   * "outside glosa" is a disk change the pane observed against its baseline; approval is the
+   * recorded verdict or the open request. Nothing here is inferred from a session's say-so. */
+  function renderProvenance() {
+    provenanceEl.textContent = "";
+    const shown = Boolean(currentArtifact) && !loading && currentArtifact.class !== "F" && modeState.mode !== "edit";
+    provenanceEl.hidden = !shown;
+    if (!shown) return;
+    const open = annotations.filter((item) => !isTerminalState(item.state)).length;
+    const applied = annotations.filter((item) => item.state === "applied").length;
+    const total = annotations.length;
+    const fact = (term, detail) =>
+      provenanceEl.append(
+        el("div", { className: "glosa-provenance-fact" }, [
+          el("dt", { textContent: term }),
+          el("dd", { textContent: detail }),
+        ]),
+      );
+    fact(
+      "You",
+      total === 0 ? "no marks" : `${total} ${total === 1 ? "mark" : "marks"}${open ? ` · ${open} open` : ""}`,
+    );
+    fact(getProviderName(), applied === 0 ? "nothing applied" : `${applied} applied`);
+    fact("Outside glosa", diskChange ? "changed on disk" : "nothing");
+    const approved = approvalResult && approvalResult.path === currentArtifact.source_path;
+    fact(
+      "Approval",
+      approved
+        ? `approved · ${approvalResult.revisionId.slice(0, 8)}`
+        : matchingApprovalRequest()
+          ? "requested"
+          : "not requested",
+    );
+  }
+
   function renderMargin() {
+    renderProvenance();
     marginEl.textContent = "";
     trayListEl.textContent = "";
     if (modeState.mode !== "review" || !currentArtifact) {
@@ -2408,12 +2476,13 @@ export function createArtifactPane(host, deps) {
     }
     const open = annotations.filter((item) => !isTerminalState(item.state));
     const resolved = annotations.filter((item) => isTerminalState(item.state));
-    for (const item of open) cardHost.append(buildAnnotationCard(item));
+    const addresses = addressBlocks(contentEl); // numbered once per render, not once per entry
+    for (const item of open) cardHost.append(buildAnnotationCard(item, { addresses }));
     if (resolved.length) {
       // Named even when it is the whole list: "Resolved" is the state of the work, and a reader
       // opening a tray of settled cards should not have to infer that from the dots.
       cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
-      for (const item of resolved) cardHost.append(buildAnnotationCard(item));
+      for (const item of resolved) cardHost.append(buildAnnotationCard(item, { addresses }));
     }
     renderTray();
     if (!composer && annotations.length === 0 && requests.length === 0 && cardHost === marginEl) {
