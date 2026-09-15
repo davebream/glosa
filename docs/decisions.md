@@ -44,26 +44,27 @@ boundary and recovery path.
 
 ## The URL fragment is the canonical on-screen focus
 
-The SPA reflects the current workspace and open artifact into the address-bar fragment
-(`#w=<slug>&a=<artifact>`) via `history.replaceState` as the user navigates, not only on load. This
-makes reload/refresh restore the view and makes the URL shareable, so focus lives in one place
-instead of duplicated UI state. The deep-link is no longer one-shot: `readRoute` seeds the initial
-view and `writeFocus` keeps it current thereafter.
+The SPA reflects the current workspace, artifact, surface, mode and read lock into the fragment
+(`w`, `a`, `surface`, `mode`, `lock`). Internal focus changes use `history.replaceState`, so reload
+restores the current view without adding a history entry for each artifact or mode change.
 
-Three constraints hold this inside the security boundary:
+An external fragment change or history traversal in the same tab re-enters the normal bootstrap
+through a guarded reload. Every open pane's existing discard guard must consent first; cancelling
+keeps the editor mounted and restores its current URL. Repeated events share one confirmation and
+the latest requested destination wins. A document surface uses the same pane model with one pane
+and no navigator; it neither restores nor overwrites the workspace's saved tab layout.
 
-- **Fragment, never query string.** Focus stays in the `#` fragment so it is never sent to the
-  daemon or written to its request path (A1 §2) — the same reason the pairing token uses the
-  fragment.
-- **The written fragment carries only `w`/`a`, never `t=`.** `focusHash` is rebuilt from scratch on
-  every call and reads only slug/artifact, so live-reflecting focus can never re-expose the pairing
-  token that `scrubSecrets` strips on load (A3 §3/F24). This is structural, not a runtime filter.
-- **`replaceState`, not `pushState`.** Reflecting focus does not spawn a history entry per artifact;
-  it mutates the current one.
+Three constraints keep this inside the existing security boundary:
 
-Mode (Preview/Annotate/Edit) is deliberately **not** in the URL. It is an act with a stateful save
-guard (leaving Edit while dirty is blocked pending a discard prompt), and a shareable link should
-land in Preview rather than the source editor — modes are acts, not defaults.
+- **Fragment, never query string.** Focus and pairing credentials stay outside daemon request
+  paths (A1 §2).
+- **Reflected focus never contains credentials.** `focusHash` rebuilds only `w`, `a`, `surface`,
+  `mode` and `lock`. Incoming `t`/`p` values are hidden while consent is pending, then passed to
+  the normal bootstrap for tab-scoped pairing and scrubbing (A3 §3/F24). A cancelled link never
+  changes the stored credential or restores a secret to the address bar.
+- **One bootstrap and one data-access module.** Same-tab links retain ordinary handshake,
+  presentation-token redemption, daemon-identity and read-lock behavior. There is no second
+  renderer or credential path for document navigation.
 
 ## Ownership rule
 

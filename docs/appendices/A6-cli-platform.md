@@ -272,6 +272,11 @@
   and bind work without invoking the macOS browser launcher. Plain success output is exactly the URL
   plus a newline; `--json` retains the F26 envelope with
   `data:{slug,path,url,focus?,surface,mode,preview,bound_session?,state_dir?}`.
+- A document URL renders a single pane with the navigator hidden. Opening it in an already-mounted
+  tab, including hash/history navigation, uses the same bootstrap after the existing pane discard
+  guards consent. Cancellation keeps unsaved editor text and the current secret-free URL; document
+  visits do not replace the saved workspace layout. Surface, mode and read lock are honored on both
+  initial and reused-tab opens (R6).
 - `--bind` after successful registration is nonfatal on unknown/stale sessions: the URL is still
   returned, a `bind-failed` warning is appended, and the exit code stays 0. `--preview --bind`
   additionally emits `preview-bind-conflict` (a preview-only visit does not promise a feedback
