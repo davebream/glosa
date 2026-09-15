@@ -85,13 +85,13 @@ until a matching agent session picks them up, so nothing is lost when no session
   >
 </picture>
 
-History lives in a workspace-local shadow repository, so restoring an earlier version never touches
-your project's Git history. Attribution is deliberately conservative: edits made in glosa's own
-editor are yours by construction, and a change glosa did not witness through an apply lease stays
-`Unknown change` rather than being credited to anyone. Edit a tracked file in your own editor and
-glosa records it as exactly that — a file that changed outside glosa, since a named checkpoint,
-attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, no agent is
-nudged with it, and it waits there until you dismiss it.
+History lives in a shadow repository glosa keeps apart from your project's, so restoring an earlier
+version never touches your project's Git history. Attribution is deliberately conservative: edits
+made in glosa's own editor are yours by construction, and a change glosa did not witness through an
+apply lease stays `Unknown change` rather than being credited to anyone. Edit a tracked file in your
+own editor and glosa records it as exactly that — a file that changed outside glosa, since a named
+checkpoint, attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, no
+agent is nudged with it, and it waits there until you dismiss it.
 
 ### An agent can stop and wait for your verdict
 
@@ -216,7 +216,7 @@ workspace remain local, durable, and honestly attributable across many artifacts
 
 - glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)).
 - glosa has no telemetry, cloud sync, or external runtime calls. Your agent may still send content to its own provider under that tool's terms.
-- Versions live in a workspace-local shadow repository. glosa never assumes or modifies your real Git repository.
+- Versions live in a shadow repository glosa keeps for itself: in the workspace's `.glosa/` folder, or under `~/.glosa/state/` when it does not sit beside your files, for example for a single file opened on its own, a folder you cannot write to, or a folder opened with `glosa open --external-state`. glosa never assumes or modifies your real Git repository. Nothing in that history expires and individual versions cannot be deleted; `glosa forget <slug>` deletes a workspace's entire history and leaves your files alone.
 - Provenance is conservative: edits are attributed to a session only when an apply lease proves it; everything else is `human` or `unknown`, never guessed. A change glosa merely finds on disk is reported as an external edit, never as one you made.
 
 If a local bearer token may have leaked, run `glosa token revoke`, then `glosa open <directory>` to
