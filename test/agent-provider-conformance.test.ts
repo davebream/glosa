@@ -81,7 +81,7 @@ for (const { name, make } of providers) {
     test("deliver() resolves to a DeliveryResult with a legal A5 §F23 `via`/`outcome`, never rejects", async () => {
       const provider = make();
       const result = await provider.deliver(SESSION, ENTRY);
-      expect(["channel", "asyncRewake", "gate", "stop", "userprompt", "mcp_pull"]).toContain(result.via);
+      expect(["monitor", "channel", "asyncRewake", "gate", "stop", "userprompt", "mcp_pull"]).toContain(result.via);
       expect(["attempted", "transport_accepted", "presented", "failed"]).toContain(result.outcome);
     });
   });

@@ -114,6 +114,15 @@ describe("glosa doctor", () => {
     expect(JSON.parse(child.stdout.toString("utf8"))).toEqual({ present: true, control: true, scrubbed: false });
   });
 
+  test("names Claude's telemetry setting when it suppresses plugin monitors", async () => {
+    const { deps } = makeDeps({ env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+    const result = await runDoctor(freshDir(), deps);
+    expect(findCheck(result.data.checks, "claude-monitor")).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("remain queued for MCP pull"),
+    });
+  });
+
   test("non-darwin platform -> only the platform check runs, exit 5", async () => {
     const { deps } = makeDeps({ platform: () => "linux" });
     const dir = freshDir();
@@ -331,12 +340,12 @@ describe("glosa doctor", () => {
     expect(afterDrift.exitCode).toBe(9);
   });
 
-  test("optional Channel check is honestly skipped without degrading fallback compatibility", async () => {
+  test("monitor check is honestly skipped when no suppression reason is observable", async () => {
     const { deps } = makeDeps();
     const dir = freshDir();
     const result = await runDoctor(dir, deps);
-    expect(findCheck(result.data.checks, "channel")?.status).toBe("skip");
-    expect(findCheck(result.data.checks, "channel")?.detail).toContain("optional");
+    expect(findCheck(result.data.checks, "claude-monitor")?.status).toBe("skip");
+    expect(findCheck(result.data.checks, "claude-monitor")?.detail).toContain("per interactive Claude session");
   });
 
   test("daemon+proto: unreachable daemon -> FAIL", async () => {

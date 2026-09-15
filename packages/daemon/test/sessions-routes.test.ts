@@ -222,6 +222,67 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(body.drained.map((entry: { id: string }) => entry.id)).toEqual(["parked-1"]);
   });
 
+  test("provider-neutral stream emits parked annotations and keeps them pull-eligible until agent ack", async () => {
+    ctx.pushRegistry = new SessionPushRegistry();
+    const workspace = await workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const bus = busRegistry.get(root);
+    await bus.createEntry("monitor-entry", actionableAnnotation("Parked for the monitor."));
+    await sessionRegistry.register({
+      session_id: "monitor-session",
+      provider: "claude-code",
+      cwd: root,
+      workspace_binding: root,
+      source: "monitor",
+    });
+
+    const response = await fetchFn(req("/api/sessions/monitor-session/stream"));
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    while (!received.includes("event: delivery")) {
+      const chunk = await reader.read();
+      expect(chunk.done).toBe(false);
+      received += decoder.decode(chunk.value);
+    }
+    expect(received).toContain('"id":"monitor-entry"');
+
+    const prematurePresented = await fetchFn(
+      req("/api/sessions/monitor-session/stream/monitor-entry/ack", {
+        method: "POST",
+        body: JSON.stringify({ outcome: "presented" }),
+      }),
+    );
+    expect(prematurePresented.status).toBe(409);
+
+    const transportAck = await fetchFn(
+      req("/api/sessions/monitor-session/stream/monitor-entry/transport-ack", { method: "POST", body: "{}" }),
+    );
+    expect(transportAck.status).toBe(200);
+    await Bun.sleep(0);
+    const attempts = bus.state.entries["monitor-entry"]?.deliveryAttempts as Array<Record<string, unknown>>;
+    expect(attempts.at(-1)).toMatchObject({
+      via: "monitor",
+      outcome: "transport_accepted",
+      session: "monitor-session",
+    });
+
+    const stillEligible = await bus.previewDelivery(1, { session: "monitor-session" }, () => null);
+    expect(stillEligible.entries.map((entry) => entry.id)).toEqual(["monitor-entry"]);
+
+    const presented = await fetchFn(
+      req("/api/sessions/monitor-session/stream/monitor-entry/ack", {
+        method: "POST",
+        body: JSON.stringify({ outcome: "presented" }),
+      }),
+    );
+    expect(presented.status).toBe(200);
+    const afterAck = await bus.previewDelivery(1, { session: "monitor-session" }, () => null);
+    expect(afterAck.entries).toHaveLength(0);
+    await reader.cancel();
+    expect(workspace.canonical_path).toBe(root);
+  });
+
   test("POST /api/sessions/:id/heartbeat extends the lease for a known session", async () => {
     await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
     const res = await fetchFn(req("/api/sessions/sess-1/heartbeat", { method: "POST" }));

@@ -153,7 +153,7 @@ describe("ClaudeCodeProvider.deliver() -> recordDelivery -> WorkspaceBus journal
     const bus = new WorkspaceBus(root);
     await bus.createEntry("inb-1", { kind: "annotation" });
 
-    const LEGAL_VIA = new Set(["channel", "asyncRewake", "gate", "stop", "userprompt", "mcp_pull"]);
+    const LEGAL_VIA = new Set(["monitor", "channel", "asyncRewake", "gate", "stop", "userprompt", "mcp_pull"]);
     const LEGAL_OUTCOME = new Set(["attempted", "transport_accepted", "presented", "failed"]);
     const LEGAL_REASON = new Set(["initial", "re_nudge"]);
 

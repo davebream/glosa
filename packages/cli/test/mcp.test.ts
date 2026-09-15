@@ -138,6 +138,7 @@ class HookClient implements DaemonHookClient {
   deregistered: string[] = [];
   deliveryAcks: Array<[string, string, "presented" | "failed", string?]> = [];
   conversationAcks: Array<[string, string, "transport_accepted" | "presented" | "failed"]> = [];
+  pushedAcks: Array<[string, string, "presented" | "failed"]> = [];
   push?: DaemonHookClient["openConversationPush"];
 
   async register(input: RegisterSessionInput) {
@@ -173,6 +174,10 @@ class HookClient implements DaemonHookClient {
     outcome: "transport_accepted" | "presented" | "failed",
   ) {
     this.conversationAcks.push([sessionId, messageId, outcome]);
+  }
+
+  async acknowledgePushed(sessionId: string, entryId: string, outcome: "presented" | "failed") {
+    this.pushedAcks.push([sessionId, entryId, outcome]);
   }
 
   async openConversationPush(
@@ -262,7 +267,7 @@ describe("official TypeScript MCP SDK contract", () => {
         tools: { listChanged: true },
         experimental: { "claude/channel": {} },
       });
-      expect(connected.client.getInstructions()).toContain("glosa_conversation_ack");
+      expect(connected.client.getInstructions()).toContain("glosa_delivery_ack");
     } finally {
       await connected.close();
     }
@@ -301,7 +306,7 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(response.result.protocolVersion).toBe("2025-06-18");
   });
 
-  test("tools/list is SDK-generated from the nine Zod registrations", async () => {
+  test("tools/list is SDK-generated from the ten Zod registrations", async () => {
     const connected = await connect(deps(new HookClient()));
     try {
       const tools = (await connected.client.listTools()).tools;
@@ -470,6 +475,22 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(result.isError).not.toBe(true);
       expect(structured(result)).toEqual({ message_id: "m-1", delivered: true });
       expect(hook.conversationAcks).toEqual([["claude-session-1", "m-1", "presented"]]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("monitor delivery acknowledgement uses the exact MCP host session", async () => {
+    const hook = new HookClient();
+    const connected = await connect({ ...deps(hook), sessionId: () => "claude-session-1" });
+    try {
+      const result = await callTool(connected.client, {
+        name: "glosa_delivery_ack",
+        arguments: { entry_id: "entry-1" },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(structured(result)).toEqual({ entry_id: "entry-1", presented: true });
+      expect(hook.pushedAcks).toEqual([["claude-session-1", "entry-1", "presented"]]);
     } finally {
       await connected.close();
     }
