@@ -89,6 +89,21 @@ repo's proven `withSessionLease` (`mcp-server/src/state/lock.ts`) for the pre-da
   registration and entry provenance. No source is recursively moved, deleted, or garbage-collected
   as part of adoption.
 
+## Retention — append-only, deleted only whole (issue #156)
+- Nothing a bus records expires. The journal is append-only (F04), inbox payloads are immutable, the
+  shadow repository keeps every checkpointed version of every tracked artifact (F21), and a sealed
+  loose-file source stays at its `~/.glosa/state/<registration-id>` path after adoption. All of it
+  stays under `<bus-path>` — `<work-tree>/.glosa` for a directory workspace,
+  `~/.glosa/state/<registration-id>` for redirected state — until the workspace is forgotten, or
+  until a directory workspace's folder is deleted with its `.glosa` inside it. Index GC's
+  hard-remove only drops the registration and closes the bus; it deletes no bus file.
+- There is no partial purge. `human_edit` and `external_edit` entries name shadow commits by sha and
+  an adopted target's `entry_adopted` aliases name entries in its sealed sources, so deleting some
+  versions or some entries would leave references that resolve to nothing.
+- `glosa forget <workspace>` (A6; `POST /api/workspaces/forget`, A1 §5.20) is the one deletion
+  primitive: it removes the registration and its whole bus, including shadow history and every
+  sealed source it adopted, and never touches work-tree files.
+
 ## F25 — slug
 - Canonical path (realpath→NFC→strip trailing slash) = IDENTITY; slug = route label only.
 - Base = `sanitized-basename-sha256(canonicalPath)hex[:6]`. 24 bits NOT collision-free → detection mandatory.
