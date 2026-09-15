@@ -4,8 +4,6 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { fileURLToPath } from "node:url";
 import completion from "@gunshi/plugin-completion";
 import {
   type Args,
@@ -23,15 +21,11 @@ import {
 } from "gunshi";
 import type { GlosaApiClient } from "./api-client.ts";
 import { EXIT_CODES, printJsonEnvelope, usageEnvelope } from "./envelope.ts";
-import type { HookDeps } from "./hook.ts";
-import type { InitResult, ProviderId, UninstallResult } from "./scoped-init.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const DESCRIPTION = "Writing-first workspace for AI coding agents";
-const HOOK_ENSURE_TIMEOUT_MS = 3000;
 const PUBLIC_COMMANDS = new Set([
   "open",
-  "init",
   "resolve",
   "apply-begin",
   "request-review",
@@ -76,15 +70,9 @@ type DefaultContext = Readonly<CommandContext<GunshiParams>>;
 export interface CliRunDependencies {
   /** Inbox command-boundary seam; production retains the HTTP client. */
   inbox?: { createClient?: () => Promise<GlosaApiClient> };
-  /** Init-specific host dependencies. Omit in production to use the real home and PATH.
-   * `homeDir` also seeds the workspace-root home boundary (issue #146) for every
-   * `resolveCommandDir` call site — `init` and `doctor` both resolve the same user home, so this
-   * is not duplicated as a second seam. */
-  init?: {
-    homeDir?: string;
-    glosaHomeDir?: string;
-    which?: (executable: string) => string | null;
-  };
+  /** The user-home seam for the workspace-root boundary (issue #146) `resolveCommandDir` applies
+   * to `doctor`'s cwd default. Omit in production to use the real home. */
+  home?: { homeDir?: string };
   /** Doctor-specific seams for command-boundary tests. Omit in production for the real daemon. */
   doctor?: {
     createClient?: () => Promise<GlosaApiClient>;
@@ -104,13 +92,11 @@ function lazyHandler<A extends Args>(
 }
 
 /**
- * The workspace root `init`/`doctor` operate on, plus anything worth telling the user about it
+ * The workspace root `doctor` operates on, plus anything worth telling the user about it
  * (issue #96).
  *
  * With NO `dir` argument, the cwd is resolved to its enclosing git repository — the same root
- * `glosa open` now resolves a file to, and the only root at which `.claude/settings.json` and
- * `.mcp.json` actually take effect. Running `glosa init` from `<repo>/docs` used to wire
- * `<repo>/docs/.claude/`, which Claude Code never reads.
+ * `glosa open` resolves a file to.
  *
  * An EXPLICIT `dir` is always honoured literally — silently retargeting an argument the user
  * typed would be worse than the bug — but a non-root directory inside a repo gets a warning
@@ -158,106 +144,6 @@ async function resolveCommandDir(
   return { dir: explicitDir, warnings: [] };
 }
 
-function printInitResult(result: InitResult, json: boolean): void {
-  if (json) {
-    process.stdout.write(
-      `${JSON.stringify({ glosa_json: 1, ok: result.ok, command: "init", exit_code: result.exitCode, data: result.data, warnings: result.warnings, error: result.error ?? null })}\n`,
-    );
-    return;
-  }
-  // Command-level warnings (e.g. #96's "this dir isn't the repo root") sit alongside, not inside,
-  // the diff/changed/error branches below — print them first so they're never lost regardless of
-  // which of those branches returns early.
-  for (const warning of result.warnings) {
-    process.stderr.write(`glosa init: warning: ${warning.message}\n`);
-  }
-  // `--print` on an already-wired workspace produces `diff: ""`. Branching on `!== undefined`
-  // alone made that case write an empty string and exit 0 — `glosa init --print` said literally
-  // nothing, which reads as a broken command rather than as "nothing to change" (issue #96).
-  if (result.diff !== undefined) {
-    if (result.diff.length > 0) process.stdout.write(result.diff);
-    else if (result.changed) {
-      // No file would change, but the run is still `changed` — a provider is being adopted into
-      // the manifest, or a legacy manifest is being migrated. Say which, rather than implying
-      // `init` would be a complete no-op.
-      process.stdout.write("glosa init: no file changes; only the glosa ownership manifest would be updated\n");
-    } else process.stdout.write("glosa init: already up to date, nothing to do\n");
-    return;
-  }
-  if (!result.ok) {
-    process.stderr.write(`glosa init: ${result.error?.message ?? "failed"}\n`);
-    if (result.error?.hint) process.stderr.write(`  hint: ${result.error.hint}\n`);
-    return;
-  }
-  if (!result.changed) {
-    process.stdout.write("glosa init: already up to date, nothing to do\n");
-    return;
-  }
-  process.stdout.write("glosa init: installed hooks + MCP entry\n");
-  process.stdout.write(`  scope:     ${result.data.scope}\n`);
-  process.stdout.write(`  providers: ${result.data.providers.join(", ")}\n`);
-  for (const file of Object.values(result.data.files)) process.stdout.write(`  ${file.path}\n`);
-  if (result.data.activation_help.length > 0) {
-    process.stdout.write(`\nActivation help:\n${result.data.activation_help.map((line) => `  ${line}`).join("\n")}\n`);
-  }
-  if (result.data.providers.includes("claude-code")) {
-    process.stdout.write(
-      "\nRestart or /resume your Claude Code session so it loads glosa; until then annotations are queued, not delivered.\n",
-    );
-  }
-}
-
-function printUninstallResult(result: UninstallResult, json: boolean): void {
-  if (json) {
-    process.stdout.write(
-      `${JSON.stringify({ glosa_json: 1, ok: result.ok, command: "init", exit_code: result.exitCode, data: { ...result.data, removed: result.removed }, warnings: result.warnings, error: result.error ?? null })}\n`,
-    );
-    return;
-  }
-  if (result.error) {
-    process.stderr.write(`glosa init --uninstall: ${result.error.message}\n`);
-    return;
-  }
-  for (const warning of result.warnings) {
-    process.stderr.write(`glosa init --uninstall: ${warning.message}\n`);
-  }
-  process.stdout.write(
-    result.removed.length > 0
-      ? `glosa init --uninstall: removed ${result.removed.length} node(s)\n`
-      : "glosa init --uninstall: nothing to remove\n",
-  );
-}
-
-const INIT_AGENT_HINT = "pass --agent claude-code, --agent codex, or --agent all";
-
-function normalizeInitAgents(values: unknown): { agents?: ProviderId[]; error?: string } {
-  if (values === undefined) return {};
-  const raw = Array.isArray(values) ? values.map(String) : [String(values)];
-  const unique = [...new Set(raw)];
-  if (unique.includes("all") && unique.length > 1)
-    return { error: "--agent all cannot be combined with another --agent" };
-  if (unique.some((value) => value !== "all" && value !== "claude-code" && value !== "codex")) {
-    return { error: `--agent must be claude-code, codex, or all` };
-  }
-  return { agents: unique.includes("all") ? ["claude-code", "codex"] : (unique as ProviderId[]) };
-}
-
-export async function promptInitAgents(
-  input: NodeJS.ReadableStream = process.stdin,
-  output: NodeJS.WritableStream = process.stderr,
-): Promise<ProviderId[]> {
-  const prompt = createInterface({ input, output });
-  try {
-    const answer = await prompt.question("Select agent integration: [1] Claude Code  [2] Codex  [3] all\nChoice: ");
-    if (answer.trim() === "1") return ["claude-code"];
-    if (answer.trim() === "2") return ["codex"];
-    if (answer.trim() === "3") return ["claude-code", "codex"];
-    throw new ArgsValidationError(`invalid provider selection; ${INIT_AGENT_HINT}`);
-  } finally {
-    prompt.close();
-  }
-}
-
 function writeOutput(stream: NodeJS.WritableStream, value: string): Promise<void> {
   if (!value) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -272,51 +158,6 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function sessionFromEnv(): unknown {
-  const sessionId = Bun.env.GLOSA_HOOK_SESSION_ID;
-  const cwd = Bun.env.GLOSA_HOOK_SESSION_CWD;
-  if (!sessionId || !cwd) return {};
-  return { session_id: sessionId, cwd, hook_event_name: "SessionStart", source: "rewake-rearm" };
-}
-
-const MAIN_PATH = fileURLToPath(new URL("./main.ts", import.meta.url));
-
-function spawnRewakeWatcher(sessionId: string, cwd: string): number {
-  const env = { ...Bun.env } as Record<string, string | undefined>;
-  delete env.ANTHROPIC_API_KEY;
-  env.GLOSA_HOOK_SESSION_ID = sessionId;
-  env.GLOSA_HOOK_SESSION_CWD = cwd;
-  const child = Bun.spawn({
-    cmd: [process.execPath, MAIN_PATH, "hook", "rewake-watch"],
-    env,
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  child.unref();
-  return child.pid;
-}
-
-let cachedHookDeps: HookDeps | undefined;
-let lastKnownCwd: string | undefined;
-
-async function hookDeps(): Promise<HookDeps> {
-  if (cachedHookDeps) return cachedHookDeps;
-  const [{ createHttpDaemonClient }, { glosaHome }, provider] = await Promise.all([
-    import("./daemon-client.ts"),
-    import("../../daemon/src/index.ts"),
-    import("../../providers/claude-code/src/index.ts"),
-  ]);
-  const daemonClient = await createHttpDaemonClient({ ensureTimeoutMs: HOOK_ENSURE_TIMEOUT_MS });
-  const leases = new provider.RewakeLeaseStore({ dir: join(glosaHome(), ".sessions") });
-  const rewake = new provider.RewakeCoordinator({
-    leases,
-    spawnWatcher: (sessionId) => spawnRewakeWatcher(sessionId, lastKnownCwd ?? process.cwd()),
-  });
-  cachedHookDeps = { daemonClient, rewake, leases };
-  return cachedHookDeps;
-}
-
 const globalOptions = plugin({
   id: "glosa:global-options",
   setup(context) {
@@ -327,15 +168,8 @@ const globalOptions = plugin({
 });
 
 function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDependencies) {
-  const initRoots = {
-    homeDir: deps.init?.homeDir,
-    glosaHomeDir: deps.init?.glosaHomeDir,
-  };
-  // The user-home seam for the #146 workspace-root boundary, shared by every `resolveCommandDir`
-  // call site (`init`, `doctor`) and `classifyInitTarget` below — `deps.init.homeDir` is already
-  // the real, separately-named user home (distinct from `glosaHomeDir`), so this reuses it rather
-  // than introducing a second "what is home" seam at the CLI layer.
-  const userHome = deps.init?.homeDir ?? homedir();
+  // The user-home seam for the #146 workspace-root boundary (`resolveCommandDir` for `doctor`).
+  const userHome = deps.home?.homeDir ?? homedir();
   const open = lazyHandler(
     {
       name: "open",
@@ -373,14 +207,6 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
           type: "boolean",
           description: "Store directory state under GLOSA_HOME instead of beside it",
         },
-        init: {
-          type: "boolean",
-          description: "Wire the workspace (run `glosa init`) without prompting",
-        },
-        "no-init": {
-          type: "boolean",
-          description: "Never prompt to wire the workspace",
-        },
       },
     },
     async (context) => {
@@ -397,11 +223,6 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         setExitCode(2);
         return;
       }
-      if (values.init && values["no-init"]) {
-        process.stderr.write("glosa open: --init and --no-init are mutually exclusive\n");
-        setExitCode(2);
-        return;
-      }
       const result = await openModule.runOpen(
         (values.target as string | undefined) ?? process.cwd(),
         openModule.realOpenDeps(createHttpGlosaClient),
@@ -415,139 +236,6 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         },
       );
       openModule.printOpenResult(result, Boolean(values.json), Boolean(values.quiet) || urlOnly);
-      // Consent-gated wiring offer AFTER the warning + URL print so the prompt reads as a
-      // follow-up to the not-initialized warning. Never changes open's exit code.
-      await openModule.maybeOfferInit(result, {
-        initFlag: Boolean(values.init),
-        noInitFlag: Boolean(values["no-init"]),
-        json: Boolean(values.json),
-      });
-      setExitCode(result.exitCode);
-    },
-  );
-
-  const init = lazyHandler(
-    {
-      name: "init",
-      description: "Install or remove glosa agent integrations",
-      toKebab: true,
-      args: {
-        ...GLOBAL_ARGS,
-        dir: { type: "positional", required: false, description: "Workspace directory" },
-        scope: { type: "string", description: "Installation scope: workspace or user" },
-        agent: {
-          type: "string",
-          multiple: true,
-          description: "Agent provider: claude-code, codex, or all (repeatable)",
-        },
-        print: { type: "boolean", description: "Print the planned diff without writing" },
-        "dry-run": { type: "boolean", description: "Alias for --print" },
-        force: { type: "boolean", description: "Replace conflicting glosa-owned configuration" },
-        uninstall: { type: "boolean", description: "Remove configuration owned by glosa" },
-        "restore-backup": {
-          type: "boolean",
-          description: "Reserved for the documented backup restore flow",
-          hidden: true,
-        },
-      },
-    },
-    async (context) => {
-      const values = withGlobals(context);
-      const initModule = await import("./scoped-init.ts");
-      const { dir, warnings: dirWarnings } = await resolveCommandDir(
-        values.dir as string | undefined,
-        process.cwd(),
-        userHome,
-      );
-      const scope = (values.scope as string | undefined) ?? "workspace";
-      if (scope !== "workspace" && scope !== "user") {
-        const message = "--scope must be workspace or user";
-        if (values.json) printJsonEnvelope(usageEnvelope("init", message));
-        else process.stderr.write(`glosa init: ${message}\n`);
-        setExitCode(EXIT_CODES.USAGE);
-        return;
-      }
-      const normalized = normalizeInitAgents(values.agent);
-      if (normalized.error) {
-        if (values.json) printJsonEnvelope(usageEnvelope("init", normalized.error));
-        else process.stderr.write(`glosa init: ${normalized.error}\n`);
-        setExitCode(EXIT_CODES.USAGE);
-        return;
-      }
-      if (values.uninstall) {
-        const result = await initModule.runScopedUninstall({
-          dir,
-          scope,
-          agents: normalized.agents,
-          ...initRoots,
-        });
-        printUninstallResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
-        setExitCode(result.exitCode);
-        return;
-      }
-      // Refuse to write agent config into a temp directory or a bare parent holding several
-      // unrelated git repos (issue #96) — this is what following `glosa open`'s pre-fix
-      // `not-initialized` hint into `/private/tmp` or a `~/code`-style parent would have done.
-      // Scope `user` writes under $HOME/$GLOSA_HOME regardless of `dir` (see the provider
-      // descriptors' `targets()`), so the guard only applies to `workspace` scope, where `dir`
-      // itself is the write target.
-      if (scope === "workspace" && !values.force) {
-        const { classifyInitTarget } = await import("../../daemon/src/index.ts");
-        const verdict = classifyInitTarget(dir, { home: userHome });
-        if (verdict.risk !== "none") {
-          let proceed = false;
-          if (!values.json && process.stdin.isTTY) {
-            const { confirmOnTty } = await import("./confirm.ts");
-            proceed = await confirmOnTty(`${verdict.detail}\nWrite glosa's agent config into ${dir} anyway?`);
-          }
-          if (!proceed) {
-            const message = `${verdict.detail} — refusing to write agent config here`;
-            const hint = "pass --force to proceed anyway, or run `glosa init` against the intended project root";
-            if (values.json) {
-              printJsonEnvelope({
-                ok: false,
-                command: "init",
-                exitCode: EXIT_CODES.USAGE,
-                data: {},
-                warnings: dirWarnings,
-                error: { code: "unsafe-init-target", kind: "usage", message, hint },
-              });
-            } else {
-              for (const warning of dirWarnings) process.stderr.write(`glosa init: warning: ${warning.message}\n`);
-              process.stderr.write(`glosa init: ${message}\n  hint: ${hint}\n`);
-            }
-            setExitCode(EXIT_CODES.USAGE);
-            return;
-          }
-        }
-      }
-      let agents = normalized.agents;
-      if (!agents) {
-        const detected = initModule.detectInstallProviders(dir, {
-          ...initRoots,
-          which: deps.init?.which,
-        });
-        if (detected.length === 1) {
-          agents = detected;
-        } else if (values.json || !process.stdin.isTTY) {
-          const message = `provider selection is ambiguous; ${INIT_AGENT_HINT}`;
-          if (values.json) printJsonEnvelope(usageEnvelope("init", message));
-          else process.stderr.write(`glosa init: ${message}\n`);
-          setExitCode(EXIT_CODES.USAGE);
-          return;
-        } else {
-          agents = await promptInitAgents();
-        }
-      }
-      const result = await initModule.runScopedInit({
-        dir,
-        scope,
-        agents,
-        print: Boolean(values.print) || Boolean(values["dry-run"]),
-        force: Boolean(values.force),
-        ...initRoots,
-      });
-      printInitResult({ ...result, warnings: [...dirWarnings, ...result.warnings] }, Boolean(values.json));
       setExitCode(result.exitCode);
     },
   );
@@ -965,75 +653,21 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     },
   );
 
+  // One-release compatibility stub (#152): machines still carrying `glosa hook <event>` entries
+  // in an old `settings.json` / `.codex/hooks.json` must not see a failing hook on every prompt.
+  // Prints nothing, reads nothing, exits 0. Deleted in the release after; hooks are not a rail.
   const hook = lazyHandler(
     {
       name: "hook",
-      description: "Claude Code hook protocol entry point",
+      description: "Removed; silent no-op kept for one release",
       internal: true,
       args: {
         event: { type: "positional", required: false },
-        provider: { type: "string", description: "Hook provider: claude-code or codex" },
+        provider: { type: "string" },
       },
     },
-    async (context) => {
-      const values = withGlobals(context);
-      if (values.event === undefined) {
-        process.stderr.write("glosa hook: missing <event>\n");
-        setExitCode(EXIT_CODES.USAGE);
-        return;
-      }
-      const raw = await readStdin();
-      let input: unknown;
-      try {
-        input = raw.trim().length > 0 ? JSON.parse(raw) : sessionFromEnv();
-      } catch {
-        process.stderr.write("glosa hook: stdin is not valid JSON\n");
-        setExitCode(EXIT_CODES.USAGE);
-        return;
-      }
-      const cwd = (input as { cwd?: unknown } | null)?.cwd;
-      if (typeof cwd === "string") lastKnownCwd = cwd;
-      const { runHook, validateHookInvocation } = await import("./hook.ts");
-      const providerId = (values.provider as string | undefined) ?? "claude-code";
-      const validation = validateHookInvocation(values.event as string, input, providerId);
-      if (validation) {
-        await writeOutput(process.stdout, validation.stdout);
-        await writeOutput(process.stderr, validation.stderr);
-        setExitCode(validation.exitCode);
-        return;
-      }
-      let deps: HookDeps;
-      try {
-        deps = await hookDeps();
-      } catch (error) {
-        // Hooks are one rung in the durable delivery ladder. If daemon discovery cannot finish
-        // inside the hook-specific budget, yield silently so the host prompt is never delayed or
-        // discarded; explicit CLI and MCP clients retain the actionable error.
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "DAEMON_UNREACHABLE") {
-          setExitCode(EXIT_CODES.OK);
-          return;
-        }
-        throw error;
-      }
-      const outcome = await runHook(values.event as string, input, deps, process.pid, providerId);
-      try {
-        await writeOutput(process.stdout, outcome.stdout);
-        await writeOutput(process.stderr, outcome.stderr);
-        if (outcome.delivery) {
-          await deps.daemonClient.acknowledge?.(outcome.delivery.sessionId, outcome.delivery.deliveryId, "presented");
-        }
-      } catch (error) {
-        if (outcome.delivery) {
-          await deps.daemonClient.acknowledge?.(
-            outcome.delivery.sessionId,
-            outcome.delivery.deliveryId,
-            "failed",
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-        throw error;
-      }
-      setExitCode(outcome.exitCode);
+    async () => {
+      setExitCode(EXIT_CODES.OK);
     },
   );
 
@@ -1156,12 +790,8 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         ({ sessionRegistry, pushRegistry }) =>
           new ClaudeCodeProvider({
             liveness: sessionRegistry,
-            channelsEnabled: (session) => pushRegistry.has(session.session_id),
-            sendChannel: (session, entry) => pushRegistry.send(session.session_id, entry),
-            pushVia: (session) => {
-              const transport = pushRegistry.transport(session.session_id);
-              return transport === "monitor" || transport === "channel" ? transport : null;
-            },
+            pushAvailable: (session) => pushRegistry.transport(session.session_id) === "monitor",
+            sendPush: (session, entry) => pushRegistry.send(session.session_id, entry),
           }),
         ({ sessionRegistry, pushRegistry }) =>
           new CodexProvider({
@@ -1181,7 +811,6 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
 
   return {
     open,
-    init,
     resolve,
     "apply-begin": applyBegin,
     "request-review": requestReview,

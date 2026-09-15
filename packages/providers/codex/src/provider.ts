@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/providers-codex — the Codex AgentProvider (R7). Implements the R4 delivery ladder through
-// an optional app-server control-socket subscription, then the durable hook/MCP fallbacks.
+// an optional app-server control-socket subscription, then the durable MCP pull fallback.
 //   rung 1  codex_app_server    `turn/steer` / `turn/start` on a connected exact-thread transport.
-//   rung 2  gate/boundaryDrain  Codex's Stop hook `decision:block` (blocking) or plain-stdout/
-//                               additionalContext (non-blocking) — codex-contract.md §2-3. Collapsed
-//                               into ONE rung, same as the Claude provider's own rung 3 (its `gate`/
-//                               `boundaryDrain` are both hook-drain mechanisms, never two
-//                               independently reachable transports).
-//   rung 3  mcpPull             the entry sits in the durable inbox for the `glosa mcp` pull tool —
-//                               Codex calls glosa as an MCP client (codex-contract.md §6), so this is
-//                               the SAME shape Claude's rung 4 already uses,
-//                               just registered via `config.toml [mcp_servers.glosa]` instead of
-//                               `.mcp.json`.
+//   rung 2  mcpPull             the entry sits in the durable inbox for the `glosa mcp` pull tool —
+//                               Codex calls glosa as an MCP client (codex-contract.md §6), registered
+//                               with `codex mcp add glosa -- glosa mcp`.
 //
 // Structure deliberately mirrors packages/providers/claude-code/src/provider.ts — R7's "adding a
 // CLI = a new provider, never a core change" only holds if both providers satisfy AgentProvider
 // with no core special-casing, and the easiest way to prove that is to keep their internal shape as
-// similar as the underlying mechanics allow. Codex has no Channel or rewake mechanism; its push
-// transport is provider-owned and present only while the local control-socket subscription is live.
+// similar as the underlying mechanics allow. Codex's push transport is provider-owned and present
+// only while the local control-socket subscription is live.
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
@@ -47,8 +40,6 @@ export interface CodexProviderDeps {
   pushAvailable?: (session: SessionBinding) => boolean;
   sendPush?: (session: SessionBinding, entry: DeliverableEntry) => Promise<boolean>;
 }
-
-const FALLBACK_CAPABILITIES: ProviderCapabilities = { push: false, gate: true, boundaryDrain: true, mcpPull: true };
 
 export class CodexProvider implements AgentProvider {
   readonly id = "codex";
@@ -98,9 +89,9 @@ export class CodexProvider implements AgentProvider {
   }
 
   /** Push is session-local and true only while that exact thread owns the registered app-server
-   * stream. Hook boundary and MCP pull remain available regardless. */
+   * stream. MCP pull remains available regardless. */
   capabilities(session: SessionBinding): ProviderCapabilities {
-    return { ...FALLBACK_CAPABILITIES, push: this.deps.pushAvailable?.(session) === true };
+    return { push: this.deps.pushAvailable?.(session) === true, mcpPull: true };
   }
 
   /** Lease/heartbeat only — same invariant as Claude's provider, doubly true for Codex: no Codex
@@ -150,14 +141,10 @@ export class CodexProvider implements AgentProvider {
     return candidates.size === 1 ? [...candidates][0]! : null;
   }
 
-  /** The R4 ladder minus channels, in rung order. Same `outcome` vocabulary discipline as the
-   * Claude provider (A5 §F23's fixed vocab, never free text) — `attempted` for a rung that queues
-   * for a FUTURE touchpoint with no transport confirmation, which is BOTH rungs here: Codex has no
-   * synchronous ack path for either (codex-contract.md §2/§3/§6 — the actual `decision:block` JSON
-   * only gets written once a real `glosa hook codex stop` handler exists, a later T-task; this
-   * method just decides which rung the entry is queued against). Nothing here can throw in the real
-   * provider — `outcome:"failed"` only appears via a capabilities()-narrowed test double, same as
-   * the Claude provider's own no-capability fallback test. */
+  /** The R4 ladder, `push → mcp_pull`. Same `outcome` vocabulary discipline as the Claude
+   * provider (A5 §F23's fixed vocab, never free text) — `attempted` for the pull rung, which queues
+   * for a FUTURE touchpoint with no transport confirmation. `outcome:"failed"` on the push rung
+   * means the socket transport genuinely errored; a declined push (`false`) simply falls through. */
   async deliver(session: SessionBinding, entry: DeliverableEntry): Promise<DeliveryResult> {
     const caps = this.capabilities(session);
 
@@ -175,27 +162,17 @@ export class CodexProvider implements AgentProvider {
       }
     }
 
-    // Rung 2 — gate/boundaryDrain collapsed (codex-contract.md §2-3): Codex's Stop hook is BOTH the
-    // blocking-gate mechanism (`decision:block` + non-empty `reason`) and the non-blocking drain
-    // mechanism (plain stdout / `hookSpecificOutput.additionalContext`) — there is no second,
-    // independently reachable transport behind `boundaryDrain` the way Claude's channel/asyncRewake
-    // sit ABOVE its own gate rung.
-    if (caps.gate || caps.boundaryDrain) {
-      return { via: "gate", outcome: "attempted" };
-    }
-
-    // Rung 3 — MCP pull: the entry waits in the durable inbox for `glosa mcp`'s pull tool, which a
-    // Codex session reaches as an MCP CLIENT via `config.toml [mcp_servers.glosa]`
-    // (codex-contract.md §6) — the same target tool Claude's rung 4 pulls from, just registered
-    // through a different config file.
+    // Rung 2 — MCP pull: the entry waits in the durable inbox for `glosa mcp`'s pull tool, which a
+    // Codex session reaches as an MCP CLIENT (codex-contract.md §6) — the same target tool Claude's
+    // own pull rung uses.
     if (caps.mcpPull) {
       return { via: "mcp_pull", outcome: "attempted" };
     }
 
-    // No capability at all — unreachable for the real Codex provider (both capabilities above are
-    // statically true); only a test double with a narrowed capabilities() hits this. "gate" is
-    // reused as the vocabulary has no "none" value, same as Claude's own fallback.
-    return { via: "gate", outcome: "failed", error: "no_capability_available" };
+    // No capability at all — unreachable for the real Codex provider (`mcpPull` is statically
+    // true); only a test double with a narrowed capabilities() hits this, same as Claude's own
+    // fallback.
+    return { via: "mcp_pull", outcome: "failed", error: "no_capability_available" };
   }
 }
 

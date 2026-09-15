@@ -197,7 +197,7 @@ export async function sendComposerMessage(
     if (!deliverable) throw new Error("invalid_conversation_message");
     delivery = await provider.deliver(session, deliverable);
   } catch {
-    delivery = { via: "gate", outcome: "failed", error: "provider_delivery_failed" };
+    delivery = { via: "mcp_pull", outcome: "failed", error: "provider_delivery_failed" };
   }
   if (delivery.outcome === "failed") delivery = { ...delivery, error: "provider_delivery_failed" };
   const priorAttempts = bus.state.entries[messageId]?.deliveryAttempts;

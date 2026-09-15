@@ -28,8 +28,7 @@ consume this contract. Codex's transport uses its documented local control-plane
 ## Runtime trust boundary
 
 glosa remains local-first and makes no telemetry or external runtime calls. Plugin monitor and Codex
-app-server connections are optional delivery optimizations. Hook, turn-boundary, and MCP delivery
-remain supported fallbacks.
+app-server connections are optional delivery optimizations. MCP pull is the supported fallback.
 
 ## Token lifecycle is a local filesystem authority
 
@@ -73,7 +72,44 @@ Three constraints keep this inside the existing security boundary:
 A change that needs integration-specific code belongs outside this repository. A change belongs in
 glosa only when it strengthens a generic contract that remains useful with zero adapters loaded.
 
-## Agent onboarding is scoped, targeted, and lazy
+## The plugin is the Claude install path; there is no `glosa init`
+
+Decided 2026-09-06, shipped in #151 and #152. `glosa init` hand-merged six hook entries and one MCP
+server into Claude's own config files across two scopes and several config roots, then kept a
+manifest to detect drift. Every reported onboarding failure that month (#147 and the
+version-staleness behind it) was a consequence of that design, and glosa is alpha with no
+compatibility obligations. Claude Code's plugin system already solves distribution, path stability
+(`${CLAUDE_PLUGIN_ROOT}`), updates, and per-session background processes, so the plugin became the
+only Claude install path and `codex mcp add glosa -- glosa mcp` the only Codex one.
+
+With that, every hook rail went too: `SessionStart`/`SessionEnd`/`UserPromptSubmit`/`Stop`/
+`Notification`, the `asyncRewake` watcher, the structured blocking gate, and Claude Code Channels.
+The delivery ladder is `push → mcp_pull`, and `push` is a per-session fact evaluated at
+registration (a monitor that actually connected; an app-server attachment that actually resumed the
+thread), never a property of the installation. One consequence is accepted as a real loss: the
+"agent is waiting on you" attention signal came from the `Notification` hook, and the #150 spike
+found nothing equivalent in a monitor's or MCP server's environment, so the attention badge is
+driven only by glosa's own `attention_request` entries until something else turns up.
+
+Nothing migrates existing installs. `glosa hook <event>` survives one release as a silent exit-0
+stub so a machine still carrying old hook entries never shows a failing hook on every prompt, and
+`glosa doctor` names the leftover entries; both are the whole of the compatibility story.
+
+## Codex `turn/steer` is the agent's own API, not keystroke injection
+
+The roadmap rules out "cmux coupling or terminal-keystroke injection". Codex push is neither: the
+interactive `codex` TUI is itself a client of an app-server, and that app-server exposes a local
+control socket (`$CODEX_HOME/app-server-control/app-server-control.sock`, WebSocket over `AF_UNIX`)
+whose documented JSON-RPC API — `thread/resume`, `turn/start`, `turn/steer`, `turn/completed` — is
+the same interface Codex's own IDE extension uses. glosa speaks that API to add user input to a
+thread it has explicitly bound. Nothing is typed into a TTY, nothing depends on a terminal
+multiplexer, and glosa opens no port: the socket is local, and the app-server is started by the
+user, never by glosa (#161).
+
+## Agent onboarding is scoped, targeted, and lazy (superseded)
+
+**Superseded 2026-09-06** by "The plugin is the Claude install path; there is no `glosa init`"
+above. Kept as the record of why `glosa init` looked the way it did while it existed.
 
 Research snapshot: 2026-07-25. The comparison uses first-party documentation and the current Sentry
 Wizard source rather than assuming the examples in issue #65 remained unchanged.

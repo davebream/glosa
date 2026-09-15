@@ -33,22 +33,14 @@ import { defaultReducer } from "./replay.ts";
 export type EntryKind = "common" | "attention" | "conversation";
 
 // A5 §F23's authoritative delivery_attempt vocabulary, verbatim:
-// `{via:monitor|codex_app_server|channel|asyncRewake|gate|stop|userprompt|mcp_pull, session, outcome:attempted|
+// `{via:monitor|codex_app_server|mcp_pull, session, outcome:attempted|
 // transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. The single canonical
 // definition — `bus.ts`'s `recordDeliveryAttempt`, `agent-provider/interface.ts`'s `DeliveryResult`,
 // and every call site all import these three types from here rather than each declaring their
 // own, which is what a P4.3 review caught: a provider-local `DeliveryOutcome` had drifted to
 // `"delivered"|"failed"`, free text riding in `reason`, and no `via` distinguishing gate/stop/
 // userprompt — none of that is a legal A5 §F23 value.
-export type DeliveryVia =
-  | "monitor"
-  | "codex_app_server"
-  | "channel"
-  | "asyncRewake"
-  | "gate"
-  | "stop"
-  | "userprompt"
-  | "mcp_pull";
+export type DeliveryVia = "monitor" | "codex_app_server" | "mcp_pull";
 export type DeliveryOutcome = "attempted" | "transport_accepted" | "presented" | "failed";
 export type DeliveryReason = "initial" | "re_nudge";
 

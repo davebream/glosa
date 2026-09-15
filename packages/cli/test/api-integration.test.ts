@@ -145,7 +145,6 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
       dirExists: (path) => existsSync(path) && statSync(path).isDirectory(),
       fileExists: (path) => existsSync(path),
       isRegularFile: (path) => existsSync(path) && statSync(path).isFile(),
-      checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }),
     };
 
     const result = await runOpen(workspaceDir, deps, { bindSessionId: sessionId, launchBrowser: false });

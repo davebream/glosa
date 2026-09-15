@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// P4.3 — the Claude Code AgentProvider's interface conformance + the R4 delivery ladder,
-// including the channels-OFF fallback (a SEPARATE gate from a channel smoke test, per R4: "all
-// delivery tests pass with channels disabled"). The real channel-push-into-an-idle-Claude-session
-// and the real asyncRewake watcher process are the P5.4 rehearsal's job (they need a live Claude
-// Code session) — everything here proves the LADDER LOGIC with every transport injected.
+// P4.3 / #152 — the Claude Code AgentProvider's interface conformance + the R4 delivery ladder
+// `push → mcp_pull`, including the monitor-OFF fallback (a session with no connected plugin monitor
+// — telemetry disabled, non-interactive, third-party platform — must still land on MCP pull). The
+// real monitor subprocess is covered by `monitor.test.ts`; everything here proves the LADDER LOGIC
+// with the transport injected.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,9 +77,17 @@ describe("ClaudeCodeProvider — AgentProvider conformance", () => {
     expect(provider.detectSession(null)).toBeNull();
   });
 
-  test("capabilities reports the full Claude Code v1 set (R7: push/gate/boundaryDrain/mcpPull all true)", () => {
-    const provider = new ClaudeCodeProvider({ liveness: liveness() });
-    expect(provider.capabilities(SESSION)).toEqual({ push: true, gate: true, boundaryDrain: true, mcpPull: true });
+  test("capabilities are { push, mcpPull }, with push evaluated per session from a connected monitor (R7)", () => {
+    const noMonitor = new ClaudeCodeProvider({ liveness: liveness() });
+    expect(noMonitor.capabilities(SESSION)).toEqual({ push: false, mcpPull: true });
+    const monitored = new ClaudeCodeProvider({
+      liveness: liveness(),
+      pushAvailable: (session) => session.session_id === "sess-1",
+    });
+    expect(monitored.capabilities(SESSION)).toEqual({ push: true, mcpPull: true });
+    expect(monitored.capabilities({ ...SESSION, session_id: "sess-2" })).toEqual({ push: false, mcpPull: true });
+    // No leftover legacy fields: `gate`/`boundaryDrain` were the hook rungs #152 removed.
+    expect(Object.keys(monitored.capabilities(SESSION)).sort()).toEqual(["mcpPull", "push"]);
   });
 
   test("liveness delegates to the injected liveness source, never a PID check", () => {
@@ -95,134 +103,93 @@ describe("ClaudeCodeProvider — AgentProvider conformance", () => {
   });
 });
 
-describe("ClaudeCodeProvider.deliver — the R4 ladder", () => {
-  test("rung 1: an accepted channel notification delivers via 'channel', no fallback attempted", async () => {
-    let calledSignalWatcher = false;
-    const channelEntries: DeliverableEntry[] = [];
+describe("ClaudeCodeProvider.deliver — the R4 ladder (push → mcp_pull)", () => {
+  test("rung 1: an accepted monitor push delivers via 'monitor', transport_accepted, with the exact entry", async () => {
+    const pushed: DeliverableEntry[] = [];
     const provider = new ClaudeCodeProvider({
       liveness: liveness(),
-      channelsEnabled: () => true,
-      sendChannel: async (_session, entry) => {
-        channelEntries.push(entry);
-        return true;
-      },
-      watcherArmed: () => true,
-      signalWatcher: async () => {
-        calledSignalWatcher = true;
+      pushAvailable: () => true,
+      sendPush: async (_session, entry) => {
+        pushed.push(entry);
         return true;
       },
     });
-
     const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "channel", outcome: "transport_accepted" });
-    expect(channelEntries[0]).toBe(ENTRY); // exact bounded presentation; no provider-side summary
-    expect(calledSignalWatcher).toBe(false);
+    expect(result).toEqual({ via: "monitor", outcome: "transport_accepted" });
+    expect(pushed[0]).toBe(ENTRY); // exact bounded presentation; no provider-side summary
   });
 
-  test("a connected plugin stream records the actual monitor transport", async () => {
+  test("rung 1 declined (stream present but rejects/times out) falls through to mcp_pull", async () => {
     const provider = new ClaudeCodeProvider({
       liveness: liveness(),
-      channelsEnabled: () => true,
-      sendChannel: async () => true,
-      pushVia: () => "monitor",
+      pushAvailable: () => true,
+      sendPush: async () => false,
     });
-    expect(await provider.deliver(SESSION, ENTRY)).toEqual({
-      via: "monitor",
-      outcome: "transport_accepted",
-    });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
   });
 
-  test("rung 1 not accepted (channel present but rejects) falls through to rung 2", async () => {
+  test("a monitor send that throws records outcome:'failed' for that rung (does not silently fall back)", async () => {
     const provider = new ClaudeCodeProvider({
       liveness: liveness(),
-      channelsEnabled: () => true,
-      sendChannel: async () => false,
-      watcherArmed: () => true,
-      signalWatcher: async () => true,
-    });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result.via).toBe("asyncRewake");
-    expect(result.outcome).toBe("transport_accepted");
-  });
-
-  test("a channel send that throws records outcome:'failed' for that rung (does not silently fall back)", async () => {
-    const provider = new ClaudeCodeProvider({
-      liveness: liveness(),
-      channelsEnabled: () => true,
-      sendChannel: async () => {
+      pushAvailable: () => true,
+      sendPush: async () => {
         throw new Error("ECONNRESET");
       },
     });
     const result = await provider.deliver(SESSION, ENTRY);
-    expect(result.via).toBe("channel");
-    expect(result.outcome).toBe("failed");
-    expect(result.error).toBe("ECONNRESET");
+    expect(result).toEqual({ via: "monitor", outcome: "failed", error: "ECONNRESET" });
   });
 
-  test("rung 2: asyncRewake signals the armed watcher when channels are unavailable", async () => {
-    const provider = new ClaudeCodeProvider({
-      liveness: liveness(),
-      watcherArmed: () => true,
-      signalWatcher: async () => true,
-    });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "asyncRewake", outcome: "transport_accepted" });
-  });
-
-  // --- Channels-OFF fallback: a SEPARATE gate from the channel smoke test (R4). ---
-  describe("channels disabled — the fallback rungs still deliver", () => {
-    test("no channelsEnabled/sendChannel deps at all → falls straight to the gate/boundary rung", async () => {
+  // --- Monitor-OFF fallback: the configuration every telemetry-off / non-interactive session is in. ---
+  describe("no connected monitor — MCP pull still delivers", () => {
+    test("no pushAvailable/sendPush deps at all → straight to mcp_pull", async () => {
       const provider = new ClaudeCodeProvider({ liveness: liveness() });
-      const result = await provider.deliver(SESSION, ENTRY);
-      expect(result).toEqual({ via: "gate", outcome: "attempted" });
+      expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
     });
 
-    test("channelsEnabled() returns false → rung 1 is skipped even though sendChannel exists", async () => {
-      let sendChannelCalled = false;
+    test("pushAvailable() false → the sender is never called even though it exists", async () => {
+      let sendCalled = false;
       const provider = new ClaudeCodeProvider({
         liveness: liveness(),
-        channelsEnabled: () => false,
-        sendChannel: async () => {
-          sendChannelCalled = true;
+        pushAvailable: () => false,
+        sendPush: async () => {
+          sendCalled = true;
           return true;
         },
       });
       const result = await provider.deliver(SESSION, ENTRY);
-      expect(sendChannelCalled).toBe(false);
-      expect(result.via).not.toBe("channel");
-      expect(result.outcome).toBe("attempted");
-    });
-
-    test("channels AND asyncRewake both unavailable → rung 3 (gate) delivers", async () => {
-      const provider = new ClaudeCodeProvider({ liveness: liveness(), watcherArmed: () => false });
-      const result = await provider.deliver(SESSION, ENTRY);
-      expect(result).toEqual({ via: "gate", outcome: "attempted" });
-    });
-
-    test("gate/boundaryDrain both false → falls to rung 4 mcp_pull", async () => {
-      const provider = new ClaudeCodeProvider({ liveness: liveness() });
-      // capabilities() is fixed on this provider (always all-true) — simulate a boundary-less
-      // fallback by exercising deliver() through a provider whose capabilities() we override.
-      class NoBoundaryProvider extends ClaudeCodeProvider {
-        override capabilities() {
-          return { push: false, gate: false, boundaryDrain: false, mcpPull: true };
-        }
-      }
-      const noBoundary = new NoBoundaryProvider({ liveness: liveness() });
-      const result = await noBoundary.deliver(SESSION, ENTRY);
+      expect(sendCalled).toBe(false);
       expect(result).toEqual({ via: "mcp_pull", outcome: "attempted" });
+    });
+
+    test("a declared push with no sender attached falls through to mcp_pull", async () => {
+      const provider = new ClaudeCodeProvider({ liveness: liveness(), pushAvailable: () => true });
+      expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
     });
 
     test("every capability false → outcome:'failed', not a thrown promise", async () => {
       class NoCapabilityProvider extends ClaudeCodeProvider {
         override capabilities() {
-          return { push: false, gate: false, boundaryDrain: false, mcpPull: false };
+          return { push: false, mcpPull: false };
         }
       }
       const provider = new NoCapabilityProvider({ liveness: liveness() });
-      const result = await provider.deliver(SESSION, ENTRY);
-      expect(result).toEqual({ via: "gate", outcome: "failed", error: "no_capability_available" });
+      expect(await provider.deliver(SESSION, ENTRY)).toEqual({
+        via: "mcp_pull",
+        outcome: "failed",
+        error: "no_capability_available",
+      });
     });
+  });
+
+  test("the provider never emits a removed transport (channel/asyncRewake/gate/stop/userprompt)", async () => {
+    const removed = new Set(["channel", "asyncRewake", "gate", "stop", "userprompt"]);
+    const providers = [
+      new ClaudeCodeProvider({ liveness: liveness() }),
+      new ClaudeCodeProvider({ liveness: liveness(), pushAvailable: () => true, sendPush: async () => true }),
+      new ClaudeCodeProvider({ liveness: liveness(), pushAvailable: () => true, sendPush: async () => false }),
+    ];
+    for (const provider of providers) expect(removed.has((await provider.deliver(SESSION, ENTRY)).via)).toBe(false);
   });
 });
 
@@ -232,7 +199,6 @@ describe("provider-owned recovery discovery", () => {
       session_id: "exact-id",
       provider: "claude-code",
       cwd: "/agent",
-      channelPush: true,
     });
     expect(discoverClaudeMcpSession({}, "/agent")).toBeNull();
   });

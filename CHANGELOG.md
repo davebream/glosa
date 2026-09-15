@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+
+- `glosa init`, its ownership manifest and backups, `glosa open --init/--no-init`, the
+  `not-initialized`/`init-drifted` warnings, the daemon's `GET /w/:slug/wiring` and
+  `POST /w/:slug/init` routes, the SPA's "wire it now" dialog and "feedback off" badge state, and
+  the `wiring` field on `GET /api/status`. The plugin is the only Claude Code install path and
+  `codex mcp add glosa -- glosa mcp` the only Codex one; glosa writes nothing into agent
+  configuration. (#152)
+- Claude Code Channels (`claude/channel`, the `push-stream` route, `glosa_conversation_ack` and the
+  conversation acknowledgement route), the `asyncRewake` watcher, and every hook rail
+  (`SessionStart`/`SessionEnd`/`UserPromptSubmit`/`Stop`/`Notification`, the blocking gate and
+  turn-boundary drain). The delivery ladder is `push → mcp_pull`; provider capabilities are
+  `{ push, mcpPull }`, evaluated per session; `delivery_attempt.via` is `monitor`,
+  `codex_app_server` or `mcp_pull`, and the drain route refuses any other value. Attention state now
+  comes only from glosa's own `attention_request` entries. `glosa hook <event>` remains for one
+  release as a silent exit-0 stub so old hook entries never fail on every prompt; `glosa doctor`
+  gains a `legacy-config` line naming leftover entries that can be deleted and drops the
+  `hooks`/`mcp`/`mcp-enabled` checks. (#152)
+
 ### Added
 
 - Codex sessions can attach to a separately running local app-server control socket after an exact

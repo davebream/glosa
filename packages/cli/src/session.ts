@@ -51,7 +51,7 @@ export function printSessionBindResult(result: CommandEnvelope<SessionData>, jso
 }
 
 export function discoverMcpIdentity(
-  candidates: Array<{ session_id: string; provider: string; cwd: string; channelPush?: boolean } | null>,
+  candidates: Array<{ session_id: string; provider: string; cwd: string } | null>,
   provider?: string,
 ) {
   const matches = candidates.filter(

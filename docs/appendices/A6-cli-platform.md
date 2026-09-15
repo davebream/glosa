@@ -4,81 +4,30 @@
 - Every subcommand accepts `--json` → exactly one JSON object on stdout: `{glosa_json:1, ok, command, exit_code, data, warnings:[{code,message}], error:{code,kind,message,hint}|null}`. Human mode = prose stdout + diagnostics stderr. Non-TTY does NOT auto-enable --json (explicit flag only).
 - Stable exit codes (append-only, `1` reserved/never emitted): 0 ok · 2 usage · 3 daemon_unreachable · 4 not_a_workspace · 5 platform_unsupported · 6 foreign_config_conflict · 7 review_timeout · 8 entry_error · 9 degraded · 10 protocol_mismatch · 11 restore_conflict · 12 lease_conflict · 70 internal.
 
-## F26 — `glosa init` merge/ownership/uninstall
-- **Purpose and lazy boundary.** `glosa init` installs agent delivery integration; it is not a
-  prerequisite for opening or previewing an artifact. `glosa open` creates the `.glosa/` scaffold
-  and opens the browser without invoking init or writing agent configuration. It is never silent
-  about the gap: an un-init'd workspace produces a `not-initialized` warning, and on a TTY (no
-  `--json`) `open` may additionally offer a one-question consented init (`--init`/`--no-init`
-  bypass; see the command-surface row) — configuration is only ever written after an explicit yes.
-  Preview-only `glosa_present` is likewise init-free and session-independent. Annotate/Edit remain
-  usable as local UI acts without init; when no delivery integration is available the SPA may show
-  a non-blocking setup action, but it never performs configuration writes itself — on the user's
-  explicit consent it asks the daemon, which invokes `glosa init <dir> --json` as a child
-  (A1 §5.19, directory workspaces only; env scrubbed, timeout-bounded, single-flighted).
-- **Workspace-root resolution and the risky-target guard (issue #96).** With no `dir` positional,
-  `init`/`doctor` resolve the cwd to its enclosing git repository — the same rule `glosa open`
-  applies when it resolves an unowned file (requirements.md R1) — rather than operating on the
-  literal cwd, so all three commands agree on one workspace boundary. An explicit `dir` is always
-  honoured literally (never silently retargeted); if it sits inside a repo without being that
-  repo's root, `init`/`doctor` report a `not-repository-root` warning naming the root, but proceed
-  against the given path. Before `--scope workspace` writes anything (`user` scope writes under
-  `$HOME`/`$GLOSA_HOME` regardless of `dir`, so the guard does not apply there), `init` classifies
-  the resolved target: the user's home directory, or any ancestor of it, is refused first — a
-  dotfiles checkout makes `$HOME` a git repository, so checking repo-ness before this would
-  short-circuit to safe and never reach the refusal (issue #146). Below that rung a directory that
-  is itself a git repository is safe; otherwise, a
-  target under a temp root ($TMPDIR, `/tmp`, `/private/tmp`, `/private/var/folders`) or a bare
-  directory containing two or more immediate git-repo subdirectories is refused — exit 2,
-  `error.code: "unsafe-init-target"` — with a hint to pass `--force` or run `init` against the
-  intended project root. On a TTY without `--json`, the refusal instead asks a `[y/N]` confirmation
-  before proceeding. `--uninstall` is never subject to this guard — removing configuration is not
-  the risky direction. The daemon's `POST /w/:slug/init` route (A1 §5.19) surfaces this as the same
-  409-conflict, re-confirm-with-`force:true` shape it already uses for a foreign-config conflict.
-- **Scope.** `--scope workspace|user` is explicit and defaults to `workspace`.
-  `workspace` writes provider project configuration under `<ws>`; `user` writes provider user
-  configuration and is available across workspaces. User scope is never inferred because its hooks
-  run for every project and have a wider overhead/trust surface. For the v1 providers the target
-  files are:
-
-  | Scope | Claude Code provider | Codex provider |
-  |---|---|---|
-  | `workspace` | `<ws>/.claude/settings.json` (hooks), `<ws>/.mcp.json` (MCP) | `<ws>/.codex/hooks.json` (hooks), `<ws>/.codex/config.toml` (MCP) |
-  | `user` | `$CLAUDE_CONFIG_DIR/settings.json` + `$CLAUDE_CONFIG_DIR/.claude.json` when set, else `~/.claude/settings.json` (hooks) and `~/.claude.json` (user-scoped MCP entry) | `~/.codex/hooks.json` (hooks), `~/.codex/config.toml` (MCP) |
-
-  `$CLAUDE_CONFIG_DIR` relocates Claude Code's whole user configuration, and account switchers use
-  it to give each account its own root. `--scope user` therefore targets the root the ASKING
-  session actually reads; ignoring it wrote a file that session never loads and reported success.
-  One `init` still wires one root — `doctor`'s `claude-config-roots` check names the others so an
-  unwired instance is visible rather than silently unsupported. The provider resolves the variable
-  (its name is Claude's knowledge, not the core's); the core supplies only a generic, injectable
-  environment-read capability.
-
-- **Provider targeting.** `--agent claude-code|codex` is repeatable; `--agent all` is the convenience
-  form for both v1 providers and cannot be combined with another `--agent`. Explicit values are
-  authoritative. On install with no `--agent`, provider-owned local probes inspect only executable
-  presence and existing provider configuration. Exactly one detected provider is selected without a
-  prompt. Multiple or zero detections produce one provider-selection prompt on a TTY; non-TTY and
-  `--json` runs exit 2 with an exact `--agent` hint instead of guessing. `--print/--dry-run` never
-  changes the selected target set. Detection never launches an agent, reads a transcript, or performs
-  network access. Uninstall does not detect providers: omitting `--agent` means all providers owned by
-  the selected scope, as defined below.
-- **Provider boundary.** Each package in `packages/providers/*` owns its supported scopes, local
-  detection probe, target paths, desired hook/MCP nodes, ownership signatures, and activation help.
-  The generic CLI consumes provider installation plans and owns only selection, transactional
-  application/rollback, backup retention, and manifest persistence. Adding a provider does not add a
-  provider branch to the CLI core.
-- **Manifest and overlap.** One authoritative manifest per scope records `scope`, selected provider
-  IDs, and per-file ownership: workspace `<ws>/.glosa/init-manifest.json`; user
-  `~/.glosa/init-manifest.json`. A legacy `<ws>/.claude/.glosa-init.json` is read and atomically
-  migrated on the first scoped init/uninstall. Re-running init with another provider extends the
-  manifest transactionally. Because both Claude Code and Codex combine hook layers, an owned
-  installation of the same provider at the other scope would run duplicate hooks; init refuses that
-  overlap with exact uninstall/reinstall commands, and `--force` does not bypass this guard.
-- Ownership dual mechanism (JSON has no comments): manifest records per-file `{path, created, backup, inserted:[{pointer, sha256}]}`; in-band signature fallback = hook commands begin literal `glosa hook ` and MCP key literally `glosa`. Never inject marker keys into Claude schemas.
-- GLOSA_BIN resolution (recorded in manifest): persist the current process's absolute Bun executable plus `run --silent <glosaRoot>/packages/cli/src/main.ts`. Pinning both the runtime and entrypoint keeps hooks working when Claude Code supplies a narrower PATH than the launching shell and avoids relying on the installed script's `#!/usr/bin/env bun` lookup. The same form supports the published package and maintainers running a checkout. Stored so uninstall matches + doctor detects drift. `npx`/`bunx` are one-shot launchers, not persisted hook commands: users running `init` need a durable global or project-local installation, and an obvious package-cache invocation is rejected before any configuration write. `glosa --build-id` prints only the identity and exits without starting a daemon; `glosa --version` remains the root package version.
-- Hook entries written: SessionStart (matcher `startup|resume|clear|compact`) → `glosa hook session-start` (timeout 10) + `glosa hook rewake-watch` (`asyncRewake:true`, default command-hook timeout); SessionEnd → `glosa hook session-end` (timeout 5); UserPromptSubmit → `glosa hook user-prompt-submit` (10); Stop → `glosa hook stop` (10); Notification → `glosa hook notification` (5). Roles: session-start registers {session_id,cwd,transcript_path,source} + drains parked; rewake-watch = rung-2 (rearmed by stop hook via per-session lease, since asyncRewake is one-shot); user-prompt-submit = rung-3 additionalContext; stop = rung-3 drain (≤8) + rewake rearm; session-end releases lease; notification = hook-fed attention state (preferred over transcript permission heuristic). Hook-side daemon discovery is internally capped at three seconds; `DAEMON_UNREACHABLE` at that boundary exits 0 with empty stdout/stderr, leaving durable entries for the next delivery rung, while malformed input and internal errors remain visible and explicit CLI/MCP clients retain their actionable error. A non-empty stdin object that is not a session envelope for the selected provider (no `session_id`/`cwd`/`hook_event_name`/`transcript_path` strings) is a foreign host that imported the same command: exit 0, empty stdout/stderr, no daemon discovery, so that host is never blocked. An empty object or an incomplete envelope (one identity field without the other) remains a usage error, still validated before discovery. Omitting `timeout` is deliberate: Claude Code 2.1.217 rejects an explicit zero despite its schema diagnostic, while the documented default is ten minutes.
-- MCP entry: `{mcpServers:{glosa:{type:"stdio", command:"glosa", args:["mcp"]}}}` (GLOSA_BIN form).
+## F26 — install surface (no `glosa init`, #152)
+- **Claude Code** installs through `/plugin marketplace add davebream/glosa` then `/plugin install
+  glosa`. The plugin carries the MCP server, the `glosa-connect` skill and one per-session monitor;
+  the launcher resolves a local glosa without a `PATH` lookup or download (A2 §F06, A3 §3). Monitor
+  availability is session-scoped; MCP pull remains available when Claude suppresses monitors.
+- **Codex** installs with `codex mcp add glosa -- glosa mcp`. Push additionally needs a separately
+  running app-server control socket (A2 F07 "Codex app-server transport"); glosa never starts it.
+- glosa writes **no agent configuration** — no hooks, no `.mcp.json`, no `config.toml` entries, no
+  ownership manifest, no backups. `glosa open` creates only the `.glosa/` scaffold. `glosa init`,
+  `--print/--force/--uninstall/--restore-backup`, `open --init/--no-init` and the
+  `not-initialized`/`init-drifted` warnings do not exist.
+- **One-release stub.** `glosa hook <event> [--provider <id>]` stays as a silent exit-0 no-op (reads
+  nothing, prints nothing, never discovers a daemon) so a machine still carrying the old
+  `settings.json` / `.codex/hooks.json` entries never shows a failing hook on every prompt. It is
+  deleted in the release after this one. `doctor`'s `legacy-config` check names every leftover
+  glosa entry (`<ws>/.claude/settings*.json`, `$CLAUDE_CONFIG_DIR/settings.json`, `<ws>/.mcp.json`,
+  `.codex/hooks.json`, `[mcp_servers.glosa]` in `.codex/config.toml`, and the old
+  `init-manifest.json` / `.glosa-init.json` files) so the user can delete them; doctor never edits
+  them.
+- **Workspace-root resolution (issue #96/#146).** With no `dir` positional, `doctor` resolves the
+  cwd to its enclosing git repository — the same rule `glosa open` applies when it resolves an
+  unowned file (requirements.md R1) — never the user's home directory or an ancestor of it. An
+  explicit `dir` is always honoured literally; if it sits inside a repo without being that repo's
+  root, `doctor` reports a `not-repository-root` warning naming the root and proceeds.
 - Retrieval command: `glosa inbox get <id> [--cursor <opaque>] [--workspace <path>]`; it is read-only
   and returns the same bounded presentation pages as MCP `glosa_inbox_get`. Metadata and explicit
   binding are exposed by `glosa metadata set|show|clear`, `glosa session bind`, and the equivalent MCP
@@ -89,22 +38,6 @@
   `--all` includes terminal entries. `glosa inbox dismiss <id> [--note] [--workspace <path>]` closes
   an entry `by:"human"` with no `--session` anywhere in its shape — the supported way to reconcile an
   orphaned journal entry (A4 §F04, issue #142) — sharing `resolve`'s entry-error mapping.
-- Codex project integration uses owned entries in `.codex/hooks.json` for SessionStart, SessionEnd,
-  UserPromptSubmit, and Stop plus an owned `[mcp_servers.glosa]` block in `.codex/config.toml`.
-  Installation participates in the same backup/rollback/foreign-entry rules as Claude configuration.
-- Claude installs through `/plugin marketplace add davebream/glosa` then `/plugin install glosa`. Monitor availability is session-scoped; MCP pull remains available when Claude suppresses monitors.
-- Merge algo (transactional, per file, order settings→mcp→manifest): parse (absent→create; invalid JSON→abort exit6 touch nothing); backup `<file>.glosa-backup-<UTC-ISO>` (skip if identical to newest; retain 5); idempotent inserts by identity (hook = exact command string; MCP = key glosa; foreign non-glosa siblings untouched; foreign glosa-key differs & not-owned→exit6 unless --force); atomic temp+fsync+rename preserving indent; update manifest. Second init unchanged → no backup, exit0 data.changed:false. Mid-run failure → restore this-run backups, exit nonzero (no half-install).
-- Flags: `--scope workspace|user`, repeatable `--agent claude-code|codex|all`,
-  `--print/--dry-run` (hunk-level unified diff with 3 lines of context — never a whole-file
-  replacement, issue #96 — no write; an already-wired target with nothing to change reports
-  "already up to date, nothing to do" rather than printing nothing), `--force`, `--uninstall`,
-  `--restore-backup`, `--json`.
-- Uninstall: `--uninstall --agent <id>` removes only that provider from the selected scope; omitting
-  `--agent` removes every glosa-owned provider in that scope, preserving the pre-targeting behavior.
-  Per recorded node, re-hash current node vs recorded — match→remove + prune empty parents; mismatch
-  (externally edited)→leave + warn + exit9. created:true file now empty→delete. Atomic per file;
-  backups retained; manifest deleted when its last provider is removed cleanly. Reminder to relaunch
-  Claude without the dev flag when Claude Code integration is removed.
 
 ## F24/F26 — `glosa token` rotation and revocation
 
@@ -219,7 +152,7 @@
 - Exit codes reuse §F26's stable set — **no new codes** — with `error.code` as the discriminator, the
   same pattern this appendix already uses for `token`'s two distinct exit-70 failures. `0` updated /
   already current / `--check` / downgrade-refused. `2` usage, `update-unmanaged-install` (matching the
-  `durable-install-required` precedent in `glosa init`), `update-unknown-channel`,
+  `durable-install-required` precedent in the former `glosa init`), `update-unknown-channel`,
   `update-unknown-version`, `update-invalid-registry`, `update-suspicious-flag-combo`. `5` non-Darwin.
   `9` `update-unverified` (the probe reported a different version) or `update-unverified-probe-failed`
   (the probe produced no usable version — these are distinct so glosa never describes a mismatch it
@@ -232,7 +165,7 @@
 
 ## F30 — platform
 - **Build/test toolchain:** Bun 1.4.2, pinned in `package.json`'s `packageManager` and both CI/release workflows (#230). JUnit reporting commands (`test:ci`, `test:acceptance`, `test:docs`, `test:full`, `test:stability`) require Bun >=1.4.2 and refuse older versions before starting a child. This is the verified tooling floor, not a claim about the first upstream fix. Bun 1.2.7 reproduces an isolated 10,000-passing-test reporter abort while the plain run succeeds; 1.4.2 emits a complete report. The reporter's internal error is not inferred from its out-of-memory message. Contributor checks and hooks use the toolchain pin. The application runtime floor below remains unchanged.
-- **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (channel floor; asyncRewake works from 2.1.0 but the channel push needs 2.1.80; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
+- **macOS-only v1** (Apple Silicon + Intel); Linux/Windows out of scope (non-Darwin → exit5). Pinned floors: macOS 13 (Ventura), Bun 1.2.7, Git 2.30, Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. (No cmux — glosa is cmux-decoupled; the SPA runs in any browser over localhost.)
 - API `protocol_version` describes wire compatibility (same major and supported minor); content-derived `build_id` identifies the exact runtime source plus root package semver. Compatibility permits an older client to reuse a newer daemon, but identity policy can still refresh an older or same-semver-different daemon. An incompatible newer daemon is never downgraded (exit10).
 - "No build step / zero native deps" = no bundle/transpile (`bun run` direct, no dist/) AND no native addons (no node-gyp/C/Rust/.node/postinstall-compile). Does NOT mean zero prerequisites: Bun, system git (child process, not a module), and a browser are required host software validated by doctor.
 
@@ -251,8 +184,7 @@
 ## Full command surface (global flags: --json --quiet --verbose --port/GLOSA_PORT --help --version --build-id)
 | cmd | args | does | exit |
 |---|---|---|---|
-| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url] [--init\|--no-init]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. An unowned tracked file inside a git repository registers the repo root as a directory workspace, not a loose file over its containing directory (issue #96) — never the user's home directory or an ancestor of it (issue #146: falls through to the bounded loose-file path instead), and an already-registered `directory` workspace naming home or an ancestor is never silently reused for a new file lookup either, surfaced by slug with remediation instead. An explicitly named file excluded by an existing parent workspace opens as a bounded loose document without entering the parent's file list; a directory's explicit focus remains strict. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Un-init'd/drifted workspaces get `not-initialized`/`init-drifted` warnings (exit stays 0) — for a `loose-file` registration the `not-initialized` message never suggests `glosa init` on its worktree, and the consented-init offer below never fires for one; on a TTY without `--json`, a `directory` registration's `not-initialized` additionally offers a one-question consented `glosa init` (`--init` skips the question, `--no-init` suppresses the offer; both together = exit 2). | 0;2;3;5 |
-| `init` | `[dir]` `--scope workspace\|user` `[--agent claude-code\|codex\|all]...` `--print/--force/--uninstall/--restore-backup` | §F26 targeted merge/uninstall; provider prompt only for an unresolved TTY selection; no `dir` resolves the cwd to its enclosing git repo — never the user's home directory or an ancestor of it, falling back to the literal cwd instead (issue #146) — an explicit non-root `dir` warns and is still honoured; `--scope workspace` refuses a temp-root, bare multi-repo-parent, or home-directory(-or-ancestor) target unless `--force` or TTY confirmation (`unsafe-init-target`) | 0;2;6;9;5 |
+| `open` | `[target] [focus] [--document\|--workspace] [--preview] [--bind <session-id>] [--url]` | ensure daemon + register target + optional session bind; open browser by default or print URL with `--url`. File → document surface; dir → workspace surface; explicit surface flags override inference. An unowned tracked file inside a git repository registers the repo root as a directory workspace, not a loose file over its containing directory (issue #96) — never the user's home directory or an ancestor of it (issue #146: falls through to the bounded loose-file path instead), and an already-registered `directory` workspace naming home or an ancestor is never silently reused for a new file lookup either, surfaced by slug with remediation instead. An explicitly named file excluded by an existing parent workspace opens as a bounded loose document without entering the parent's file list; a directory's explicit focus remains strict. Directory opens select the first normalized tracked artifact; `--document` requires one. `--preview` locks Preview (UI affordance, not authorization). Never writes agent configuration and emits no init/wiring warning (#152). | 0;2;3;5 |
 | `update` | `[--check\|--dry-run] [--force] [--channel <tag>] [--to <version>] [--registry <url>] [--allow-offsite-tarball]` | §F33 self-update: resolve the release over a config-independent HTTPS request, verify the tarball against the registry's published sha512, install through the detected package manager, then verify by probing the installed binary | 0;2;5;9;70 |
 | `resolve` | `<id> <applied\|rejected\|deferred\|stale> --session <sid> [--note] [--workspace <path>]` | lifecycle transition (journal append) + close apply-begin lease (post-checkpoint); deferred = re-surface, not terminal. `--workspace` defaults to the cwd; an entry id names one workspace already, so an agent working elsewhere names it rather than being silently scoped to whatever directory it stands in | 0;3;8;2 |
 | `apply-begin` | `<id> --session <sid> [--workspace <path>]` | F05 lease: pre-checkpoint + attribution lease; prints lease token. `--workspace` as for `resolve` | 0;3;8;12;2 |
@@ -262,14 +194,14 @@
 | `session` | `bind <session-id> [--workspace <path>] [--provider <id>]` | register or refresh a session and explicitly bind it to the artifact workspace; provider-owned environment discovery supplies identity, with generic MCP fallback when unavailable | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
 | `forget` | `<workspace> [--yes]` | issue #156: the one supported whole-bus deletion primitive, addressed by slug (see `status --json`), never a path — a workspace's on-disk path may already be gone. Naming a historical loose-file source sealed into a directory workspace resolves to the owning target and forgets the complete unit, never just the source. Removes the registration, journal, inbox, and shadow-git history, including any historical loose-file source sealed into it by adoption; never touches work-tree files. Refuses before any deletion when a live bound session, an unexpired apply lease, or an in-progress adoption exists, naming each blocker (adoption AND new session register/bind on the same target refuse symmetrically while a forget is committing — one shared per-workspace lock). Interactive use previews the exact paths first and asks once; `--yes` skips the prompt; a non-interactive caller (no TTY, or `--json`) without `--yes` is a usage error. Confinement is proven for every member of the deletion set before a durable marker is written or a single file is touched. `glosa doctor`/`glosa status` name an interrupted run explicitly with its exact resume command, even once the workspace's own directory is gone; re-running `forget` on the same slug (or a since-forgotten source's own slug) finishes it and still reports the complete original set of removed paths | 0;2;3;4;12;70 |
-| `doctor` | `[dir] --json [--workspace <registered-slug>] [--repair-baseline]` | 18 enumerated checks, incl. the resolved workspace root (issue #146) | 0(warns ok);9 any FAIL;5 |
+| `doctor` | `[dir] --json [--workspace <registered-slug>] [--repair-baseline]` | 16 enumerated checks, incl. the resolved workspace root (issue #146) and leftover `glosa init` config (#152) | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts; never fails on daemon-down (state in data) | 0;70 |
 | `mcp` | internal | plugin stdio MCP tools and pull fallback | — |
 | `monitor` | internal | plugin session stream transport; requires `--plugin-root` and `--project-dir` | — |
 | `codex-attach` | internal | foreground Codex app-server stream transport; requires exact thread id and accepts `--workspace`, `--cwd`, and `--socket` | — |
-| `hook <event>` | internal | CC hook entry point | per hook |
+| `hook <event>` | internal | removed (#152); silent exit-0 stub for one release, then deleted | 0 |
 | `complete <bash\|zsh\|fish\|powershell>` | shell utility | generate the selected shell's completion script on stdout | 0;2 |
-- `open` auto-creates `.glosa/` scaffold — distinct from `init` (installs CC hook/MCP integration). A workspace can be opened+annotated WITHOUT init (SPA-only, no agent delivery) — but never silently: `open` emits a `not-initialized` warning (or `init-drifted` when glosa-owned config nodes changed since init) naming the fix command and the session-restart step, with exit code 0 preserved. The consented TTY init offer never fires for drift (re-init over drift can require `--force`, which `open` never runs on the user's behalf), never fires non-TTY or under `--json`, and an internal probe failure never breaks `open`.
+- `open` auto-creates the `.glosa/` scaffold and nothing else. A workspace can be opened+annotated with no agent connected (SPA-only); the SPA badge says "no session connected — annotations wait here" and `doctor`'s `pending-delivery` line says "N entries queued, no live session". Neither names an install step, because there is none (#152).
 - `open --url` performs the same token, daemon, registration, optional file deep-link, surface/mode,
   and bind work without invoking the macOS browser launcher. Plain success output is exactly the URL
   plus a newline; `--json` retains the F26 envelope with
@@ -292,7 +224,7 @@
   `approval-conflict`. Any other API failure before the review request is created maps to exit 70
   `internal`, preserving the problem title but not its detail or instance. Exit 9 does not apply:
   no primary operation completed successfully.
-- doctor 18 checks: platform, bun, git, claude-code(WARN if absent), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), workspace-root(the resolved root, named so an unexpected one is visible rather than inferred — issue #146), hooks(manifest hash match/drift), mcp, mcp-enabled(WARN when a settings layer's `enabledMcpjsonServers` names "glosa" while `.mcp.json` defines no such server — the enabled-but-undefined trap), pending-delivery(WARN when entries are queued for this workspace but delivery wiring is unavailable; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), orphaned-entries(WARN when entries have no payload, naming the count and the dismiss hint; SKIP daemon-down), Claude monitor status (WARN when a known environment setting suppresses it, otherwise SKIP because availability is per live session), transcript-root(under allowed CLAUDE_CONFIG_DIR), claude-config-roots(WARN when a Claude config root exists besides the active one — e.g. an account switcher's per-account instance directories — naming each, since transcripts are readable from all of them).
+- doctor 16 checks: platform, bun, git, claude-code(WARN if absent or below the plugin floor), browser, daemon+proto, token/pairing(0600), workspace(.glosa+baseline+matcher non-empty), workspace-root(the resolved root, named so an unexpected one is visible rather than inferred — issue #146), pending-delivery(WARN "N entries queued, no live session" when entries are queued for this workspace and no live session is bound to or running in it; SKIP daemon-down), orphaned-state(WARN when `~/.glosa/state` holds pending entries with no live registration, with the re-open recovery hint; SKIP daemon-down), orphaned-entries(WARN when entries have no payload, naming the count and the dismiss hint; SKIP daemon-down), Claude monitor status (WARN when a known environment setting suppresses it, otherwise SKIP because availability is per live session), transcript-root(under allowed CLAUDE_CONFIG_DIR), claude-config-roots(WARN when a Claude config root exists besides the active one — e.g. an account switcher's per-account instance directories — naming each, since transcripts are readable from all of them and the plugin is installed per root), legacy-config(WARN naming leftover `glosa init` hook/MCP/manifest entries in workspace and user scope that can be deleted; read-only, never degrades the exit code).
 
 ## Metadata and binding output
 
@@ -303,7 +235,7 @@
 - Same-id set and repeated clear are idempotent. A different active id is an explicit conflict.
 - MCP parity tools are `glosa_inbox_pull`, `glosa_inbox_get`, `glosa_metadata_set`,
   `glosa_metadata_show`, `glosa_metadata_clear`, `glosa_session_bind`, `glosa_delivery_ack`,
-  `glosa_conversation_ack` (legacy Channel), and `glosa_present`; their arguments and returned data
+  and `glosa_present`; their arguments and returned data
   match the CLI/API contract.
 - Provider reconnect copy is returned by `GET /api/status`, not generated by CLI core. Each provider's
   `connectPrompt({slug,path})` names its own current-session identity source; the generic fallback is

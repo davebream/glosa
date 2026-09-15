@@ -122,7 +122,7 @@ describe("composite cwd-ancestor session drain (R2/W34)", () => {
     return fetchFn(
       req("/api/sessions/session-root/drain", {
         method: "POST",
-        body: JSON.stringify({ via: "stop" }),
+        body: JSON.stringify({ via: "mcp_pull" }),
       }),
     );
   }
@@ -339,7 +339,7 @@ describe("composite cwd-ancestor session drain (R2/W34)", () => {
       const plan = await originalPreview(...args);
       const contender = await childWorkspace.bus.prepareDelivery(
         1,
-        { via: "stop", session: "session-root", entryId: "planned-first" },
+        { via: "mcp_pull", session: "session-root", entryId: "planned-first" },
         (id, _payload, status) => {
           const planned = plan.entries.find((item) => item.id === id)?.presentation;
           return planned ? { ...planned, status } : null;

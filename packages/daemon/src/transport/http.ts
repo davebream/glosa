@@ -21,8 +21,6 @@ import { type DeliveryVia, isTerminal } from "../bus/lifecycle.ts";
 import { badgePendingCount, hasOpenAttention, orphanedEntryCount, peekJournal } from "../bus/peek.ts";
 import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
-import { probeInitManifest } from "../init-probe.ts";
-import type { InitRunner } from "../init-runner.ts";
 import { BUILD_ID } from "../lifecycle/build-id.ts";
 import { INSTALL_ID } from "../lifecycle/install.ts";
 import { glosaHome } from "../lifecycle/home.ts";
@@ -193,11 +191,6 @@ export interface ApiContext {
    * defaulted to `glosaHome()` at the use site so every hand-built test context keeps compiling;
    * production wires the boot-time home (lifecycle.ts) so a custom `GLOSA_HOME` is honored. */
   home?: string;
-  /** The consent-gated `glosa init` shell-out behind `POST /w/:slug/init` (issue #80, A1 §5.19).
-   * Optional: absent → the route answers 503 (same posture as an absent providerRegistry), so
-   * hand-built test contexts keep compiling and narrow tests can inject a fake. Production wires
-   * `createInitRunner` in lifecycle.ts. */
-  runWorkspaceInit?: InitRunner;
 }
 
 const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
@@ -1049,15 +1042,14 @@ async function handleCompositeSessionDrain(
   });
 }
 
-/** `POST /api/sessions/:id/drain` — prepares the rung-3 turn-boundary payload (UserPromptSubmit's
- * additionalContext + Stop's blocking reason, A6 §F26). Selection, actionable formatting, byte
- * accounting, and reservation happen under one workspace mutex; no `presented` event is written
- * until the output owner calls the acknowledgement route after its stream/protocol write succeeds.
- * An entry whose earlier attempts failed or only reached `transport_accepted` remains eligible.
- * `via` MUST be told apart by the caller, since
- * `"gate"`/`"stop"`/`"userprompt"`/`"asyncRewake"` are distinct transports and only the caller
- * (`glosa hook stop` vs. `user-prompt-submit` vs. `rewake-watch`) knows which one is actually
- * surfacing this drain right now. An unknown session_id is a typed 404, as on heartbeat; clients can re-register before retrying. */
+/** `POST /api/sessions/:id/drain` — prepares the MCP pull payload (`glosa_inbox_pull`, A1 §5.15).
+ * Selection, actionable formatting, byte accounting, and reservation happen under one workspace
+ * mutex; no `presented` event is written until the output owner calls the acknowledgement route
+ * after its protocol write succeeds. An entry whose earlier attempts failed or only reached
+ * `transport_accepted` remains eligible. `via` is always `mcp_pull` — the push transports
+ * (monitor, Codex app-server) have their own stream/ack routes and never go through this
+ * drain-and-mark route. An unknown session_id is a typed 404, as on heartbeat; clients can
+ * re-register before retrying. */
 async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Request): Promise<Response> {
   const url = new URL(req.url);
   const record = ctx.sessionRegistry.get(sessionId);
@@ -1071,7 +1063,7 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
     );
 
   let limit = DRAIN_MAX;
-  let via: DeliveryVia = "userprompt";
+  const via: DeliveryVia = "mcp_pull";
   let entryId: string | undefined;
   let cursor: string | undefined;
   // Issue #205: the immutable scope a generic MCP pull sends for itself, additive and optional (A1
@@ -1105,16 +1097,11 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
         scopePresent = true;
         rawScope = body.scope;
       }
-      // The four "this route surfaced it" transports — never channel/mcp_pull, which have their
-      // own separate delivery paths that don't go through this drain-and-mark route at all.
-      if (
-        body.via === "gate" ||
-        body.via === "stop" ||
-        body.via === "userprompt" ||
-        body.via === "asyncRewake" ||
-        body.via === "mcp_pull"
-      ) {
-        via = body.via;
+      // A client-supplied `via` other than `mcp_pull` is refused rather than recorded: this route
+      // only ever surfaces an MCP pull, and the journal must never carry a transport that did not
+      // actually happen (A5 §F23).
+      if (Object.hasOwn(body, "via") && body.via !== "mcp_pull") {
+        return problem(400, "validation-failed", "via must be mcp_pull", undefined, url.pathname);
       }
     }
   } catch {
@@ -1235,70 +1222,6 @@ async function handleSessionDeliveryAck(
   if (!acknowledged)
     return problem(409, "conflict", "delivery reservation is missing or expired", undefined, url.pathname);
   return Response.json({ acknowledged: true });
-}
-
-function handleSessionPushStream(
-  ctx: ApiContext,
-  sessionId: string,
-  req: Request,
-  server: BunServer | undefined,
-  authSignal?: AbortSignal,
-): Response {
-  const record = ctx.sessionRegistry.get(sessionId);
-  if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
-    return problem(404, "not-found", "unknown live session", undefined, new URL(req.url).pathname);
-  }
-  if (!record.workspace_binding) {
-    return problem(409, "conflict", "session is not explicitly bound", undefined, new URL(req.url).pathname);
-  }
-  if (!ctx.pushRegistry) {
-    return problem(503, "internal", "session push is unavailable", undefined, new URL(req.url).pathname);
-  }
-  const encoder = new TextEncoder();
-  const signals = [req.signal, lifecycleSignal(ctx, authSignal)].filter((signal): signal is AbortSignal => !!signal);
-  const signal = AbortSignal.any(signals);
-  let unregister: (() => void) | undefined;
-  let releaseLease: (() => void) | undefined;
-  let controller: ReadableStreamDefaultController<Uint8Array>;
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    signal.removeEventListener("abort", close);
-    unregister?.();
-    releaseLease?.();
-    try {
-      controller.close();
-    } catch {
-      /* reader cancellation already closed the stream */
-    }
-  };
-  const stream = new ReadableStream<Uint8Array>({
-    start(output) {
-      controller = output;
-      if (signal.aborted) {
-        close();
-        return;
-      }
-      const send = (entry: DeliverableEntry) => {
-        try {
-          controller.enqueue(encoder.encode(`event: conversation_message\ndata: ${JSON.stringify(entry)}\n\n`));
-        } catch (error) {
-          close();
-          throw error;
-        }
-      };
-      unregister = ctx.pushRegistry?.register(sessionId, send, close);
-      releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
-      controller.enqueue(encoder.encode(": connected\n\n"));
-      signal.addEventListener("abort", close, { once: true });
-    },
-    cancel: close,
-  });
-  server?.timeout(req, 0);
-  return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-  });
 }
 
 /** Provider-neutral SSE stream used by plugin transports. It reuses the same bounded presentation
@@ -1490,47 +1413,6 @@ async function handleSessionStreamPresentedAck(
     ...(outcome === "failed" ? { error: "stream_presentation_failed" } : {}),
   });
   if (!acknowledged) return problem(409, "conflict", "entry is not deliverable to this session");
-  return Response.json({ acknowledged: true, delivered: outcome === "presented" });
-}
-
-async function handleConversationAck(
-  ctx: ApiContext,
-  sessionId: string,
-  messageId: string,
-  req: Request,
-): Promise<Response> {
-  const url = new URL(req.url);
-  const record = ctx.sessionRegistry.get(sessionId);
-  if (!record?.workspace_binding) {
-    return problem(404, "not-found", "unknown explicitly bound session", undefined, url.pathname);
-  }
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-  }
-  const outcome = (body as Record<string, unknown> | null)?.outcome;
-  if (outcome !== "transport_accepted" && outcome !== "presented" && outcome !== "failed") {
-    return problem(
-      400,
-      "validation-failed",
-      "outcome must be transport_accepted|presented|failed",
-      undefined,
-      url.pathname,
-    );
-  }
-  if (outcome === "transport_accepted") ctx.pushRegistry?.acknowledgeTransport(sessionId, messageId);
-  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
-  const acknowledged = await bus.acknowledgeConversationMessage(messageId, {
-    session: sessionId,
-    via: "channel",
-    outcome,
-    ...(outcome === "failed" ? { error: "channel_transport_failed" } : {}),
-  });
-  if (!acknowledged) {
-    return problem(409, "conflict", "conversation message does not target this session", undefined, url.pathname);
-  }
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
@@ -2001,134 +1883,6 @@ async function handleWorkspaceForget(ctx: ApiContext, req: Request): Promise<Res
  * in a single round trip, and every piece it needs (`workspaceIndex`, `sessionRegistry`, each
  * workspace's own journal) already lives on `ctx` — there's nothing a second daemon endpoint would
  * add except more network round trips for the CLI to fail independently on. */
-export type WiringState = "live" | "wired" | "unwired";
-
-interface WiringBody {
-  state: WiringState;
-  init: { manifest_present: boolean; manifest_invalid: boolean };
-  sessions: { bound_live: number; routable_live: number };
-  pending_count: number;
-  kind: WorkspaceEntry["kind"];
-}
-
-/** The 3-state wiring signal behind the SPA badge (issue #80, A1 §5.18): `live` = init manifest
- * present AND at least one session the delivery router would actually reach (`forWorkspace` —
- * the same predicate delivery routing uses, so "live" means delivery genuinely lands);
- * `wired` = manifest present but no routable session (restart/resume needed); `unwired` = init
- * never ran. `pending_count` rides along so the badge can say "N queued". NEVER includes a
- * filesystem path (A1 §5.14's rule for SPA-facing workspace routes). */
-function computeWiring(ctx: ApiContext, entry: WorkspaceEntry): WiringBody {
-  const probe = probeInitManifest(entry.worktree_path);
-  const boundLive = ctx.sessionRegistry.explicitlyBoundForWorkspace(entry.canonical_path).length;
-  const routableLive = ctx.sessionRegistry.forWorkspace(entry.canonical_path).length;
-  let pending = 0;
-  try {
-    // BADGE-facing (`GET /w/:slug/wiring`). Its own call, not a value borrowed from the status
-    // row below: this is the fold the badge reads when no status aggregate is in hand, so it
-    // carries its own exclusion and its own assertion.
-    pending = badgePendingCount(peekJournal(entry).state);
-  } catch {
-    // a torn/unreadable journal must not break a status read; 0 is the honest floor here
-  }
-  const state: WiringState = probe.manifest_present ? (routableLive > 0 ? "live" : "wired") : "unwired";
-  return {
-    state,
-    init: probe,
-    sessions: { bound_live: boundLive, routable_live: routableLive },
-    pending_count: pending,
-    kind: entry.kind,
-  };
-}
-
-/** `GET /w/:slug/wiring` (authed-read, issue #80). */
-function handleWiring(ctx: ApiContext, slug: string, pathname: string): Response {
-  const resolved = workspaceOrNotFound(ctx, slug, pathname);
-  if (!resolved.ok) return resolved.response;
-  return Response.json(computeWiring(ctx, resolved.entry));
-}
-
-/** `POST /w/:slug/init` (state-changing, issue #80) — runs `glosa init` for a registered
- * workspace on the client's explicit consent (the SPA's dialog click). CSRF safety is the
- * state-changing route class (Bearer + Origin + Sec-Fetch-Site); the workspace dir comes from
- * the registry entry, never the request. Loose-file workspaces are rejected: their worktree is
- * the CONTAINING directory, and silently writing `.claude/` config into a directory the user
- * may not consider a project would be a surprising mutation — the SPA shows the copyable
- * terminal command instead. */
-async function handleWorkspaceInit(ctx: ApiContext, slug: string, req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
-  if (!resolved.ok) return resolved.response;
-  const entry = resolved.entry;
-  if (!ctx.runWorkspaceInit) {
-    return problem(503, "internal", "workspace init is unavailable", undefined, url.pathname);
-  }
-  if (entry.kind !== "directory") {
-    return problem(400, "validation-failed", "init applies to directory workspaces", undefined, url.pathname);
-  }
-  let force = false;
-  const raw = await req.text();
-  if (raw.length > 0) {
-    try {
-      const body = JSON.parse(raw) as Record<string, unknown> | null;
-      // Forwarded ONLY on an explicit true — --force overwrites a foreign glosa MCP key, so it
-      // must be a deliberate client re-confirmation, never a default.
-      force = body?.force === true;
-    } catch {
-      return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
-    }
-  }
-
-  const result = await ctx.runWorkspaceInit(entry.worktree_path, entry.registration_id, { force });
-  switch (result.kind) {
-    case "completed": {
-      const envelope = result.envelope;
-      if (envelope.exit_code === 0) {
-        const wiring = computeWiring(ctx, entry);
-        // The F26 init envelope reports change per target file (`data.files.<name>.changed`) —
-        // "anything changed" is the aggregate the SPA cares about ("wired now" vs "was already").
-        const files =
-          typeof envelope.data === "object" && envelope.data !== null
-            ? (envelope.data as { files?: Record<string, { changed?: boolean }> }).files
-            : undefined;
-        const changed = files ? Object.values(files).some((f) => f?.changed === true) : true;
-        return Response.json({
-          ok: true,
-          changed,
-          warnings: envelope.warnings,
-          wiring,
-          // Post-init the hooks only take effect at the next SessionStart — this is the field
-          // the SPA turns into "restart or /resume your Claude Code session".
-          restart_required: wiring.sessions.routable_live === 0,
-        });
-      }
-      // Exit 6 = foreign-config conflict (client may re-confirm with force:true); exit 2 = usage,
-      // which the child emits for durable-install-required (ephemeral runner cache), an unsafe
-      // init target (issue #96), and — because this child runs `init` with no `--agent` so the
-      // provider choice stays provider-owned (A6 §F26, AGENTS.md invariant 1) — a provider
-      // selection it refuses to guess at. Only the first is re-confirmable with force:true; the
-      // rest are still honest 409s because the child's own error code + hint ride in `detail`,
-      // which is what the SPA shows next to its "run `glosa init` in the terminal" fallback.
-      if (envelope.exit_code === 6 || envelope.exit_code === 2) {
-        const err = envelope.error;
-        const detail = err
-          ? `${err.code}: ${err.message}${err.hint ? ` — ${err.hint}` : ""}`
-          : `init exited ${envelope.exit_code}`;
-        return problem(409, "conflict", "glosa init reported a conflict", detail, url.pathname);
-      }
-      const failDetail = envelope.error
-        ? `${envelope.error.code}: ${envelope.error.message}`
-        : `init exited ${envelope.exit_code}`;
-      return problem(500, "internal", "glosa init failed", failDetail, url.pathname);
-    }
-    case "timeout":
-      return problem(500, "internal", "glosa init timed out", undefined, url.pathname);
-    case "spawn-failed":
-      return problem(500, "internal", `could not spawn glosa init: ${result.message}`, undefined, url.pathname);
-    case "bad-output":
-      return problem(500, "internal", result.message, undefined, url.pathname);
-  }
-}
-
 function handleStatusAggregate(ctx: ApiContext): Response {
   // Additive (issue #156): a workspace mid a durably-committed `glosa forget` must stay visible
   // here even once its on-disk path has gone missing (`present:false`) — its worktree may simply
@@ -2167,7 +1921,6 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         pending_count: 0,
         has_attention: false,
         orphaned_entry_count: 0,
-        wiring: "unwired" as const,
         lifecycle: "forgetting" as const,
         connect: {
           providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
@@ -2186,10 +1939,8 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         slug: e.slug,
         path: e.worktree_path,
         last_seen: e.last_seen,
-        // BADGE-facing, and the one the SPA actually renders: `agent-feedback.js` reads
-        // `connection.workspace.pending_count ?? wiring.pending_count`, i.e. THIS row first and
-        // `computeWiring`'s only as a fallback. `glosa doctor`'s pending-delivery check reads it
-        // too, and says "queued ... will sit until delivery is wired" — a promise an
+        // BADGE-facing, and the one the SPA actually renders (`agent-feedback.js`). `glosa doctor`'s
+        // pending-delivery check reads it too, and says "queued, no live session" — a promise an
         // `external_edit` can never keep, since it is excluded from delivery eligibility.
         pending_count: badgePendingCount(peek.state),
         has_attention: hasOpenAttention(peek.state),
@@ -2197,9 +1948,6 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         // see `orphanedEntryCount`'s own docstring for the exact orphan signature and why the count
         // reuses this already-computed fold rather than folding the journal a second time.
         orphaned_entry_count: orphanedEntryCount(e, peek),
-        // Additive (issue #80): the same 3-state signal `GET /w/:slug/wiring` serves, so
-        // `glosa status`/`doctor` see wiring without a per-workspace round-trip.
-        wiring: computeWiring(ctx, e).state,
         // Additive (issue #156): a `glosa forget` whose deletion is durably committed — possibly
         // mid-resume after a crash — so `doctor` can name the interrupted state and the exact resume
         // command instead of misreading a mid-deletion workspace as merely "not yet opened".
@@ -2441,13 +2189,6 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     const deliveryId = m[2] as string;
     return { routeClass: "state-changing", handle: (req) => handleSessionDeliveryAck(ctx, sessionId, deliveryId, req) };
   }
-  if (method === "GET" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/push-stream$/))) {
-    const sessionId = m[1] as string;
-    return {
-      routeClass: "authed-read",
-      handle: (req, server, authSignal) => handleSessionPushStream(ctx, sessionId, req, server, authSignal),
-    };
-  }
   if (method === "GET" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream$/))) {
     const sessionId = m[1] as string;
     return {
@@ -2466,14 +2207,6 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     return {
       routeClass: "state-changing",
       handle: (req) => handleSessionStreamPresentedAck(ctx, sessionId, entryId, req),
-    };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/conversation\/([^/]+)\/ack$/))) {
-    const sessionId = m[1] as string;
-    const messageId = m[2] as string;
-    return {
-      routeClass: "state-changing",
-      handle: (req) => handleConversationAck(ctx, sessionId, messageId, req),
     };
   }
 
@@ -2526,15 +2259,6 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     pathname,
   );
   if (composerRoute) return composerRoute;
-  // issue #80: the SPA wiring badge's read + the consent-gated init trigger (A1 §5.18/§5.19).
-  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/wiring$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "authed-read", handle: () => handleWiring(ctx, slug, pathname) };
-  }
-  if (method === "POST" && (m = pathname.match(/^\/w\/([^/]+)\/init$/))) {
-    const slug = m[1] as string;
-    return { routeClass: "state-changing", handle: (req) => handleWorkspaceInit(ctx, slug, req) };
-  }
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/metadata$/))) {
     const slug = m[1] as string;
     return { routeClass: "authed-read", handle: () => handleGetMetadata(ctx, slug, pathname) };

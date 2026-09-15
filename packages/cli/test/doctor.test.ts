@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 18 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 16 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -12,7 +12,6 @@ import { headSha } from "../../daemon/src/git/shadow.ts";
 import { shadowGitDir } from "../../daemon/src/bus/paths.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { type DoctorDeps, printDoctorResult, realDoctorDeps, runDoctor } from "../src/doctor.ts";
-import { runScopedInit } from "../src/scoped-init.ts";
 import { daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { useTempHome } from "./home.ts";
 import { captureStdout } from "./test-utils.ts";
@@ -266,7 +265,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(18);
+    expect(result.data.checks).toHaveLength(16);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -312,32 +311,128 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(18);
+    expect(unreadable.data.checks).toHaveLength(16);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
 
-  test("hooks: no manifest -> WARN; after `glosa init`, matches -> pass; after external drift -> FAIL", async () => {
+  test("no hooks/mcp/mcp-enabled checks remain — `glosa init` is gone (#152)", async () => {
     const { deps } = makeDeps();
+    const result = await runDoctor(freshDir(), deps);
+    const names = result.data.checks.map((c) => c.name);
+    for (const removed of ["hooks", "mcp", "mcp-enabled"]) expect(names).not.toContain(removed);
+    expect(names).toEqual([
+      "platform",
+      "bun",
+      "git",
+      "claude-code",
+      "browser",
+      "daemon+proto",
+      "token/pairing",
+      "workspace",
+      "pending-delivery",
+      "orphaned-state",
+      "claude-monitor",
+      "transcript-root",
+      "claude-config-roots",
+      "orphaned-entries",
+      "workspace-root",
+      "legacy-config",
+    ]);
+    // The removed command may be NAMED (so a user recognises leftovers) but never prescribed.
+    for (const check of result.data.checks) expect(check.detail).not.toMatch(/run `glosa init/);
+  });
+
+  test("legacy-config: nothing left over -> pass", async () => {
+    const { deps } = makeDeps({ homeDir: () => freshDir() });
+    const result = await runDoctor(freshDir(), deps);
+    expect(findCheck(result.data.checks, "legacy-config")).toMatchObject({ status: "pass" });
+  });
+
+  test("legacy-config: leftover `glosa init` entries in every scope are named, never edited (#152)", async () => {
     const dir = freshDir();
+    const userHome = freshDir();
+    const claudeConfig = freshDir();
+    const glosaHome = freshDir();
+    const { deps } = makeDeps({
+      homeDir: () => userHome,
+      claudeConfigDir: () => claudeConfig,
+      glosaHome: () => glosaHome,
+      env: { CODEX_HOME: join(userHome, ".codex") },
+    });
+    // A real opened workspace, so the `workspace` check passes and the exit code below isolates
+    // the legacy-config verdict rather than an unrelated missing baseline.
+    writeFileSync(join(dir, "notes.md"), "# hello\n");
+    const bus = new WorkspaceBus(dir);
+    await bus.reconcile();
+    await bus.close();
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    mkdirSync(join(dir, ".codex"), { recursive: true });
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    mkdirSync(join(dir, ".glosa"), { recursive: true });
+    const hookSettings = JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/opt/glosa/bin/glosa hook session-start" }] }] },
+    });
+    writeFileSync(join(dir, ".claude", "settings.json"), hookSettings);
+    writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["glosa"] }));
+    writeFileSync(join(claudeConfig, "settings.json"), hookSettings);
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { glosa: { command: "glosa", args: ["mcp"] } } }),
+    );
+    writeFileSync(join(dir, ".codex", "hooks.json"), hookSettings);
+    writeFileSync(join(userHome, ".codex", "hooks.json"), hookSettings);
+    writeFileSync(join(dir, ".codex", "config.toml"), '[mcp_servers.glosa]\ncommand = "glosa"\n');
+    writeFileSync(join(userHome, ".codex", "config.toml"), '[mcp_servers.other]\ncommand = "x"\n');
+    writeFileSync(join(dir, ".glosa", "init-manifest.json"), "{}");
+    writeFileSync(join(dir, ".claude", ".glosa-init.json"), "{}");
+    writeFileSync(join(glosaHome, "init-manifest.json"), "{}");
+    const before = Object.fromEntries(
+      [join(dir, ".claude", "settings.json"), join(dir, ".mcp.json"), join(dir, ".codex", "config.toml")].map(
+        (path) => [path, statSync(path).mtimeMs],
+      ),
+    );
 
-    const before = await runDoctor(dir, deps);
-    expect(findCheck(before.data.checks, "hooks")?.status).toBe("warn");
+    const result = await runDoctor(dir, deps);
+    const check = findCheck(result.data.checks, "legacy-config");
+    expect(check?.status).toBe("warn");
+    for (const expected of [
+      join(dir, ".claude", "settings.json"),
+      join(dir, ".claude", "settings.local.json"),
+      join(claudeConfig, "settings.json"),
+      join(dir, ".mcp.json"),
+      join(dir, ".codex", "hooks.json"),
+      join(userHome, ".codex", "hooks.json"),
+      join(dir, ".codex", "config.toml"),
+      join(dir, ".glosa", "init-manifest.json"),
+      join(dir, ".claude", ".glosa-init.json"),
+      join(glosaHome, "init-manifest.json"),
+    ]) {
+      expect(check?.detail).toContain(expected);
+    }
+    // A config.toml without a glosa server is not a leftover; neither is a non-glosa hook.
+    expect(check?.detail).not.toContain(join(userHome, ".codex", "config.toml"));
+    expect(check?.detail).toContain("can be deleted");
+    // Doctor only ever reads: every named file is byte-for-byte as it was.
+    for (const [path, mtime] of Object.entries(before)) expect(statSync(path).mtimeMs).toBe(mtime);
+    // A leftover is advisory — it never degrades the exit code.
+    expect(result.exitCode).toBe(0);
+  });
 
-    await runScopedInit({ dir, agents: ["claude-code"] });
-    const afterInit = await runDoctor(dir, deps);
-    expect(findCheck(afterInit.data.checks, "hooks")?.status).toBe("pass");
-
-    // Externally edit one of glosa's own hook entries — same drift scoped uninstall itself detects.
-    const settingsPath = join(dir, ".claude", "settings.json");
-    const settings = JSON.parse(await Bun.file(settingsPath).text());
-    settings.hooks.SessionStart[0].hooks[0].timeout = 999;
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-
-    const afterDrift = await runDoctor(dir, deps);
-    const hooksCheck = findCheck(afterDrift.data.checks, "hooks");
-    expect(hooksCheck?.status).toBe("fail");
-    expect(afterDrift.exitCode).toBe(9);
+  test("legacy-config: an unreadable or foreign entry is not a leftover", async () => {
+    const dir = freshDir();
+    const { deps } = makeDeps({ homeDir: () => freshDir() });
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "settings.json"), "{not json");
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { other: { command: "other" } },
+        hooks: { Stop: [{ hooks: [{ command: "lint" }] }] },
+      }),
+    );
+    const result = await runDoctor(dir, deps);
+    expect(findCheck(result.data.checks, "legacy-config")?.status).toBe("pass");
   });
 
   test("monitor check is honestly skipped when no suppression reason is observable", async () => {
@@ -410,27 +505,41 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(18);
+    expect(parsed.data.checks).toHaveLength(16);
   });
 
-  test("pending-delivery: queued entries without wiring -> WARN; with wiring -> pass; daemon down -> SKIP", async () => {
+  test("pending-delivery: queued entries with no live session -> WARN; with a live bound session -> pass; daemon down -> SKIP", async () => {
     const { deps, client } = makeDeps();
     const dir = freshDir();
     client.statusResult.workspaces = [
       { slug: "ws", path: dir, last_seen: "2026-07-26T00:00:00Z", pending_count: 2, has_attention: false },
     ];
 
-    // No init manifest -> hooks check warns -> queued entries are stranded.
-    const stranded = await runDoctor(dir, deps);
-    const strandedCheck = findCheck(stranded.data.checks, "pending-delivery");
-    expect(strandedCheck?.status).toBe("warn");
-    expect(strandedCheck?.detail).toContain("2 annotation(s)");
-    expect(strandedCheck?.detail).toContain("delivery is not wired");
+    // No live session -> the queue waits. The wording names the rails that drain it (#152), and
+    // never a `glosa init` step.
+    const waiting = await runDoctor(dir, deps);
+    const waitingCheck = findCheck(waiting.data.checks, "pending-delivery");
+    expect(waitingCheck?.status).toBe("warn");
+    expect(waitingCheck?.detail).toContain("2 entries queued, no live session");
+    expect(waitingCheck?.detail).not.toContain("glosa init");
 
-    // After init the hooks check passes -> same queue is merely pending, not stranded.
-    await runScopedInit({ dir, agents: ["claude-code"] });
-    const wired = await runDoctor(dir, deps);
-    expect(findCheck(wired.data.checks, "pending-delivery")?.status).toBe("pass");
+    // A live session bound to this workspace -> same queue is merely pending, not stranded.
+    client.statusResult.sessions = [
+      {
+        session_id: "live-1",
+        provider: "claude-code",
+        cwd: "/elsewhere",
+        workspace_binding: dir,
+        last_active_at: "2026-07-26T00:00:00Z",
+        liveness: "alive",
+      },
+    ];
+    const live = await runDoctor(dir, deps);
+    expect(findCheck(live.data.checks, "pending-delivery")?.status).toBe("pass");
+
+    // A stale session does not count as delivery.
+    client.statusResult.sessions[0]!.liveness = "stale";
+    expect(findCheck((await runDoctor(dir, deps)).data.checks, "pending-delivery")?.status).toBe("warn");
 
     // Daemon unreachable -> SKIP, never a duplicate warn on top of check 6's fail.
     const { deps: downDeps } = makeDeps({
@@ -499,41 +608,6 @@ describe("glosa doctor", () => {
     expect(findCheck(down.data.checks, "orphaned-entries")?.status).toBe("skip");
   });
 
-  test("mcp-enabled: no settings layers -> pass; enabled+defined -> pass; enabled-but-undefined -> WARN", async () => {
-    const { deps } = makeDeps();
-    const dir = freshDir();
-
-    // No settings layers at all — nothing force-enables an undefined server.
-    const bare = await runDoctor(dir, deps);
-    expect(findCheck(bare.data.checks, "mcp-enabled")?.status).toBe("pass");
-
-    // Init installs the .mcp.json entry; a local layer enabling "glosa" is then consistent.
-    await runScopedInit({ dir, agents: ["claude-code"] });
-    writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["glosa"] }));
-    const consistent = await runDoctor(dir, deps);
-    expect(findCheck(consistent.data.checks, "mcp-enabled")?.status).toBe("pass");
-
-    // Drop the .mcp.json definition while the enablement stays — the half-wired trap.
-    const mcpPath = join(dir, ".mcp.json");
-    const mcp = JSON.parse(await Bun.file(mcpPath).text());
-    delete mcp.mcpServers.glosa;
-    writeFileSync(mcpPath, JSON.stringify(mcp, null, 2));
-
-    const trapped = await runDoctor(dir, deps);
-    const trap = findCheck(trapped.data.checks, "mcp-enabled");
-    expect(trap?.status).toBe("warn");
-    expect(trap?.detail).toContain("settings.local.json");
-    expect(trap?.detail).toContain("does not define it");
-  });
-
-  test("mcp-enabled: invalid settings layer JSON is tolerated (check still runs)", async () => {
-    const { deps } = makeDeps();
-    const dir = freshDir();
-    await runScopedInit({ dir, agents: ["claude-code"] });
-    writeFileSync(join(dir, ".claude", "settings.local.json"), "{not json");
-    const result = await runDoctor(dir, deps);
-    expect(findCheck(result.data.checks, "mcp-enabled")?.status).toBe("pass");
-  });
   test("doctor refuses a ref whose commit object is missing (#226)", async () => {
     const dir = freshDir();
     const { deps } = makeDeps();

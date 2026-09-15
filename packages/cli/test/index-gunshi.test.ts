@@ -6,18 +6,18 @@ import { join } from "node:path";
 import { BUILD_ID } from "../../daemon/src/lifecycle/build-id.ts";
 import { randomPort } from "../../daemon/test/helpers.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
+import type { GlosaApiClient } from "../src/api-client.ts";
 import { run, type CliRunDependencies } from "../src/index.ts";
+import { FakeGlosaApiClient } from "./fake-api-client.ts";
 import { CLI_VERSION } from "../src/version.ts";
 import { useTempHome } from "./home.ts";
 
-// Scoped init checks the opposite-scope manifest even in print mode. Keep this command-boundary
-// suite independent of the developer's real user-scope installation.
+// Keep this command-boundary suite independent of the developer's real Glosa installation.
 useTempHome();
 
 const CLI_PATH = join(import.meta.dir, "../src/main.ts");
 const PUBLIC_COMMANDS = [
   "open",
-  "init",
   "resolve",
   "apply-begin",
   "request-review",
@@ -42,8 +42,8 @@ afterEach(() => {
 });
 
 /** A `.git` marker makes this fixture read as a scratch git repo rather than a bare temp
- * directory, so `glosa init`'s risky-target guard (issue #96) doesn't fire on tests here that
- * exercise `init` incidentally while testing flag-parsing surface, not the guard itself. */
+ * directory, so `doctor`'s workspace-root advice (issue #96) stays quiet on tests here that
+ * exercise it incidentally while testing flag-parsing surface. */
 function freshDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "glosa-gunshi-test-"));
   mkdirSync(join(dir, ".git"));
@@ -143,24 +143,37 @@ describe("Gunshi command surface", () => {
     });
   });
 
+  /** `doctor` against an injected client: the one public command that completes offline with a
+   * full envelope and exit 0 (no daemon spawn, no network), so flag parsing can be observed
+   * through a real command rather than a stand-in. */
+  function offlineDoctorDeps(): CliRunDependencies {
+    const glosaHome = freshDir();
+    return {
+      doctor: {
+        createClient: async () => new FakeGlosaApiClient() as unknown as GlosaApiClient,
+        glosaHome: () => glosaHome,
+      },
+    };
+  }
+
   test("global flags work before and after the subcommand", async () => {
-    const before = await captureRun(["--port", "4711", "--quiet", "init", freshDir(), "--agent", "codex", "--print"]);
+    const before = await captureRun(["--port", "4711", "--quiet", "doctor", freshDir()], offlineDoctorDeps());
     expect(before.exitCode).toBe(0);
     expect(before.stderr).toBe("");
     expect(Bun.env.GLOSA_PORT).toBe("4711");
 
-    const after = await captureRun(["init", freshDir(), "--agent", "codex", "--dry-run", "--verbose", "--port=4712"]);
+    const after = await captureRun(["doctor", freshDir(), "--verbose", "--port=4712"], offlineDoctorDeps());
     expect(after.exitCode).toBe(0);
     expect(after.stderr).toBe("");
     expect(Bun.env.GLOSA_PORT).toBe("4712");
   });
 
-  test("--json remains explicit and works before or after the command", () => {
+  test("--json remains explicit and works before or after the command", async () => {
     for (const args of [
-      ["--json", "init", freshDir(), "--agent", "codex", "--print"],
-      ["init", freshDir(), "--agent", "codex", "--print", "--json"],
+      ["--json", "doctor", freshDir()],
+      ["doctor", freshDir(), "--json"],
     ]) {
-      const result = runCli(args);
+      const result = await captureRun(args, offlineDoctorDeps());
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
       expect(Object.keys(JSON.parse(result.stdout))).toEqual([
@@ -249,10 +262,10 @@ describe("Gunshi command surface", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("open: --init and --no-init are mutually exclusive (usage error before any daemon call)", () => {
-    const r = runCli(["open", "/tmp/nowhere", "--init", "--no-init"]);
+  test("open: the removed --init/--no-init flags are unknown options (#152)", () => {
+    const r = runCli(["open", "/tmp/nowhere", "--init"]);
     expect(r.exitCode).toBe(2);
-    expect(r.stderr).toContain("--init and --no-init are mutually exclusive");
+    expect(r.stderr).toContain("Unknown option: --init");
   });
 
   test("manual parser functions are gone", () => {
@@ -283,17 +296,12 @@ describe("Gunshi completion", () => {
 
     expect(runCli(["complete", "--", "--j"]).stdout).toContain("--json");
     expect(runCli(["complete", "--", "open", "--q"]).stdout).toContain("--quiet");
-    expect(runCli(["complete", "--", "init", "--d"]).stdout).toContain("--dry-run");
+    expect(runCli(["complete", "--", ""]).stdout).not.toContain("init");
   });
 });
 
 describe("internal protocol compatibility", () => {
-  test("hook failure retains its exact bytes and MCP accepts an empty stdio session", () => {
-    expect(runCli(["hook"])).toEqual({
-      exitCode: 2,
-      stdout: "",
-      stderr: "glosa hook: missing <event>\n",
-    });
+  test("MCP accepts an empty stdio session", () => {
     expect(runCli(["mcp"])).toEqual({
       exitCode: 0,
       stdout: "",
@@ -311,7 +319,11 @@ describe("internal protocol compatibility", () => {
     }
   });
 
-  test("a hook yields silently when daemon discovery exceeds its private budget", () => {
+  // #152: `glosa hook <event>` is a silent exit-0 stub for one release, so a machine still
+  // carrying old `settings.json` / `.codex/hooks.json` entries never shows a failing hook on every
+  // prompt. It prints nothing, reads nothing, and never touches daemon discovery — a squatted port
+  // that would stall discovery must not slow it down either.
+  test("`glosa hook` in every legacy shape is a silent, instant exit 0 that never discovers a daemon", () => {
     const port = randomPort();
     const squatter = Bun.serve({
       hostname: "127.0.0.1",
@@ -320,67 +332,32 @@ describe("internal protocol compatibility", () => {
     });
     try {
       const started = performance.now();
-      const result = runCli(["hook", "notification"], {
-        env: { GLOSA_PORT: String(port) },
-        stdin: JSON.stringify({ session_id: "hook-session", cwd: process.cwd() }),
-      });
-
-      expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
-      expect(performance.now() - started).toBeLessThan(5000);
-    } finally {
-      squatter.stop();
-    }
-  }, 7000);
-
-  test("malformed hook input stays visible even when daemon discovery would fail", () => {
-    const port = randomPort();
-    const squatter = Bun.serve({
-      hostname: "127.0.0.1",
-      port,
-      fetch: () => Response.json({ not: "a glosa handshake" }),
-    });
-    try {
-      const result = runCli(["hook", "notification"], {
-        env: { GLOSA_PORT: String(port) },
-        stdin: "{}",
-      });
-
-      expect(result).toEqual({
-        exitCode: 2,
+      for (const argv of [
+        ["hook"],
+        ["hook", "session-start"],
+        ["hook", "notification"],
+        ["hook", "stop", "--provider", "codex"],
+        ["hook", "user-prompt-submit"],
+        ["hook", "rewake-watch"],
+        ["hook", "no-such-event"],
+      ]) {
+        expect(
+          runCli(argv, {
+            env: { GLOSA_PORT: String(port) },
+            stdin: JSON.stringify({ session_id: "hook-session", cwd: process.cwd() }),
+          }),
+        ).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+      }
+      expect(runCli(["hook", "notification"], { env: { GLOSA_PORT: String(port) }, stdin: "{}" })).toEqual({
+        exitCode: 0,
         stdout: "",
-        stderr: "notification: hook input missing session_id/cwd",
+        stderr: "",
       });
-    } finally {
-      squatter.stop();
-    }
-  });
-
-  test("a foreign hook host's payload is a silent success and never waits on daemon discovery", () => {
-    const port = randomPort();
-    const squatter = Bun.serve({
-      hostname: "127.0.0.1",
-      port,
-      fetch: () => Response.json({ not: "a glosa handshake" }),
-    });
-    try {
-      const started = performance.now();
-      const result = runCli(["hook", "user-prompt-submit"], {
-        env: { GLOSA_PORT: String(port) },
-        stdin: JSON.stringify({
-          conversation_id: "conv-1",
-          generation_id: "gen-1",
-          model: "composer",
-          prompt: "hello",
-          attachments: [],
-        }),
-      });
-
-      expect(result).toEqual({ exitCode: 0, stdout: "", stderr: "" });
       expect(performance.now() - started).toBeLessThan(5000);
     } finally {
       squatter.stop();
     }
-  });
+  }, 10_000);
 
   // Issue #139: the error a user meets must say what was FOUND, not merely that time ran out. A
   // held port with nothing answering on it is a proven diagnosis and outranks the budget that

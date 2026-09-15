@@ -156,7 +156,14 @@ Add the official marketplace and install the Claude Code plugin once:
 /plugin install glosa
 ```
 
-Then open a writing workspace:
+For Codex, register the MCP server once:
+
+```sh
+codex mcp add glosa -- glosa mcp
+```
+
+That is the whole install. There is no `glosa init`, and glosa writes nothing into your agent's
+configuration. Then open a writing workspace:
 
 ```sh
 cd /path/to/your/workspace
@@ -198,7 +205,7 @@ runs only when you invoke it, and it sends no identifying data.
 | Agent | Integration |
 |---|---|
 | **Claude Code** | Official plugin with MCP pull and a per-session monitor over the generic push stream. |
-| **Codex** | App-server push when its local control socket is running, with hooks and MCP pull as fallbacks. |
+| **Codex** | App-server push when its local control socket is running, with MCP pull as the fallback. |
 | **Generic MCP host** | Durable feedback can be pulled through the MCP tools without teaching the core about that agent. |
 
 glosa binds feedback to an explicit live session when possible. If more than one session matches, the
@@ -234,7 +241,7 @@ problems well; use the one that best fits the work.
 | Project | Reach for it when | How glosa differs |
 |---|---|---|
 | [Plannotator](https://github.com/backnotprop/plannotator) | You want a mature, on-demand review surface for plans, documents, HTML, code diffs, or pull requests, with broad agent support and optional sharing. | glosa treats a directory as a long-lived writing workspace. Its journal, parked feedback, shadow history, and conservative provenance are designed to survive changes across files, tools, and agent sessions. It deliberately has no sharing service or runtime network egress. |
-| [Agentation](https://github.com/benjitaylor/agentation) | You are reviewing a running React interface and want element, area, or text annotations with selectors an agent can act on. | glosa reviews file-backed Markdown, HTML, and text, then routes durable feedback through agent hooks and MCP. It does not embed a feedback toolbar in the application being reviewed. |
+| [Agentation](https://github.com/benjitaylor/agentation) | You are reviewing a running React interface and want element, area, or text annotations with selectors an agent can act on. | glosa reviews file-backed Markdown, HTML, and text, then routes durable feedback through each agent's own push transport and MCP. It does not embed a feedback toolbar in the application being reviewed. |
 
 Plannotator is the closest neighboring project and a strong place to start for established plan,
 document, or code review today. glosa is exploring a narrower question: can a sensitive writing
@@ -259,7 +266,7 @@ not a public issue. See [SECURITY.md](SECURITY.md).
 ```text
 Claude Code / Codex
         |
-  hooks + MCP
+  plugin monitor / app-server push + MCP
         |
   glosa daemon -------- browser workspace
         |

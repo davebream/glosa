@@ -67,7 +67,7 @@ async function buildHarness(
 
   const entry = await workspaceIndex.upsertWorkspace(root, "glosa-open");
   const delivered: Array<{ session: SessionBinding; entry: DeliverableEntry }> = [];
-  const deliveryResult = { current: { via: "gate", outcome: "attempted" } as DeliveryResult };
+  const deliveryResult = { current: { via: "mcp_pull", outcome: "attempted" } as DeliveryResult };
   const providerRegistry = new AgentProviderRegistry();
   if (opts.withProvider !== false) {
     const provider: AgentProvider = {
@@ -573,7 +573,7 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       accepted: true,
       delivered: false,
       state: "queued",
-      delivery: { via: "gate", outcome: "attempted" },
+      delivery: { via: "mcp_pull", outcome: "attempted" },
     });
     expect(h.delivered).toHaveLength(1);
     expect(h.delivered[0]).toMatchObject({
@@ -698,14 +698,14 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       workspace_binding: h.root,
       source: "startup",
     });
-    h.deliveryResult.current = { via: "gate", outcome: "failed", error: "/private/transcript token-secret" };
+    h.deliveryResult.current = { via: "mcp_pull", outcome: "failed", error: "/private/transcript token-secret" };
     const failed = await composeReq({ message_id: MESSAGE_ID, text: "retry me" });
     expect(failed.status).toBe(502);
     const failedBody = await failed.json();
     expect(failedBody.state).toBe("failed");
     expect(JSON.stringify(failedBody)).not.toContain("token-secret");
 
-    h.deliveryResult.current = { via: "gate", outcome: "attempted" };
+    h.deliveryResult.current = { via: "mcp_pull", outcome: "attempted" };
     expect((await composeReq({ message_id: MESSAGE_ID, text: "retry me" })).status).toBe(202);
     expect(h.delivered).toHaveLength(2);
     const attempts = h.busRegistry.get(h.root).state.entries[MESSAGE_ID]!.deliveryAttempts as Array<{
@@ -723,13 +723,28 @@ describe("POST /w/:slug/transcript/compose — out-of-band composer (F32/R6)", (
       source: "startup",
     });
     expect((await composeReq({ message_id: MESSAGE_ID, text: "ack me" })).status).toBe(202);
-    const ack = await fetch(`http://127.0.0.1:${h.port}/api/sessions/s1/conversation/${MESSAGE_ID}/ack`, {
+    // #152: with Channels gone, a queued composer message reaches the session through the MCP
+    // pull (or a push stream); `presented` is the pull's own acknowledgement, never a separate
+    // conversation-ack route.
+    const authed = {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+      Origin: `http://127.0.0.1:${h.port}`,
+    };
+    const drained = await fetch(`http://127.0.0.1:${h.port}/api/sessions/s1/drain`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json",
-        Origin: `http://127.0.0.1:${h.port}`,
-      },
+      headers: authed,
+      body: JSON.stringify({ via: "mcp_pull" }),
+    });
+    expect(drained.status).toBe(200);
+    const { delivery_id: deliveryId, drained: entries } = (await drained.json()) as {
+      delivery_id: string;
+      drained: Array<{ id: string }>;
+    };
+    expect(entries.map((entry) => entry.id)).toEqual([MESSAGE_ID]);
+    const ack = await fetch(`http://127.0.0.1:${h.port}/api/sessions/s1/deliveries/${deliveryId}/ack`, {
+      method: "POST",
+      headers: authed,
       body: JSON.stringify({ outcome: "presented" }),
     });
     expect(ack.status).toBe(200);

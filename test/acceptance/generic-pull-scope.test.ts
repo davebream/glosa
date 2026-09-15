@@ -351,16 +351,15 @@ describe("generic pull scope is immutable for the whole drain (issue #205)", () 
         cwd: fx.a.canonical_path,
         source: "mcp",
       });
-      // A genuine re-registration, the way any of the four hook transports (gate/stop/userprompt/
-      // asyncRewake) would see it — this route accepts no scope from them, additive-optional field
-      // (A6, contract item 5).
+      // A genuine re-registration, the way a push transport (monitor / app-server) would see it —
+      // the drain route accepts no scope from them, additive-optional field (A6, contract item 5).
       await callRoute(fx, "/api/sessions/register", {
         session_id: sessionId,
         provider: "mcp",
         cwd: fx.b.canonical_path,
         source: "mcp",
       });
-      const res = await callRoute(fx, `/api/sessions/${sessionId}/drain`, { via: "stop" });
+      const res = await callRoute(fx, `/api/sessions/${sessionId}/drain`, { via: "mcp_pull" });
       const body = (await res.json()) as { drained: Array<{ id: string; workspace: string }> };
       expect(body.drained.map((e) => e.id)).toEqual(["b-entry"]);
       expect(body.drained[0]?.workspace).toBe(fx.b.canonical_path);

@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// The two badge-facing folds and the live retention-facing one, over the real daemon (#153,
-// contract A3 and A3b).
-//
-// Why two separate badge assertions rather than one. `spa/src/agent-feedback.js` renders
-// `connection.workspace.pending_count ?? wiring.pending_count` — the `GET /api/status` workspace
-// row FIRST, and `GET /w/:slug/wiring` only as a fallback. Those are two distinct call sites of
-// the badge-facing fold, so each gets its own assertion reading its own value; excluding at one
-// and asserting at the other would be a guard whose value proves nothing.
+// The badge-facing fold and the live retention-facing one, over the real daemon (#153, contract
+// A3 and A3b). Since #152 the badge has exactly one source: the `GET /api/status` workspace row
+// (`spa/src/agent-feedback.js` reads `connection.workspace.pending_count`); the former
+// `GET /w/:slug/wiring` fallback no longer exists, so a second surface cannot disagree with it.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,31 +86,23 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
     const row = body.workspaces.find((workspace: { slug: string }) => workspace.slug === slug);
 
     expect(row).toBeDefined();
-    // This field, not `wiring.pending_count`, is the one `agent-feedback.js` prefers.
+    // This field is the one `agent-feedback.js` renders.
     expect(row.pending_count).toBe(1);
   });
 
-  it("the wiring fallback (GET /w/:slug/wiring) excludes it too, read from its own endpoint", async () => {
-    const { slug, dir } = await openWorkspace();
-    writeFileSync(
-      join(dir, ".glosa", "journal.ndjson"),
-      `${entryLine("inb-annotation", "annotation", 3)}\n${entryLine("inb-external", EXTERNAL_EDIT_KIND, 4)}\n`,
-    );
-
-    const wiring = await (await authed(`/w/${slug}/wiring`)).json();
-    expect(wiring.pending_count).toBe(1);
+  it("the removed wiring route is gone rather than a second, possibly disagreeing surface (#152)", async () => {
+    const { slug } = await openWorkspace();
+    expect((await authed(`/w/${slug}/wiring`)).status).toBe(404);
   });
 
-  it("a workspace whose ONLY entry is an external_edit shows a badge of zero on both surfaces", async () => {
+  it("a workspace whose ONLY entry is an external_edit shows a badge of zero", async () => {
     const { slug, dir } = await openWorkspace();
     writeFileSync(join(dir, ".glosa", "journal.ndjson"), `${entryLine("inb-external", EXTERNAL_EDIT_KIND, 5)}\n`);
 
     const status = await (await authed("/api/status")).json();
     const row = status.workspaces.find((workspace: { slug: string }) => workspace.slug === slug);
-    const wiring = await (await authed(`/w/${slug}/wiring`)).json();
 
     expect(row.pending_count).toBe(0);
-    expect(wiring.pending_count).toBe(0);
     // ...and it is still an open, undismissed entry rather than something that quietly vanished —
     // `has_attention` stays false because its kind is `common`, which is the structural exclusion.
     expect(row.has_attention).toBe(false);

@@ -220,16 +220,6 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       openTranscriptStream: () => () => {}, // returns a no-op stop()
       sendComposerMessage: async () => ({ accepted: true, delivered: false }),
       getComposerMessageStatus: async () => ({ accepted: true, delivered: false, state: "queued" }),
-      // issue #81 — the wiring badge's data-access surface. Default "wired" keeps every
-      // pre-existing test dialog-free; badge-specific tests override per case.
-      getWiringStatus: async () => ({
-        state: "wired",
-        init: { manifest_present: true, manifest_invalid: false },
-        sessions: { bound_live: 0, routable_live: 0 },
-        pending_count: 0,
-        kind: "directory",
-      }),
-      triggerInit: async () => ({ ok: true, changed: true, warnings: [], restart_required: true }),
       ...overrides,
     };
   }
@@ -1046,27 +1036,15 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(activePane(root).getAttribute("data-mode")).toBe("read");
   });
 
-  // --- issue #81: the wiring badge + point-of-action init consent dialog ---
+  // --- issue #95 / #152: the agent-feedback badge is driven by connection state alone ---
 
   const flush = async (n = 8) => {
     for (let i = 0; i < n; i++) await Promise.resolve();
   };
 
-  function wiringOf(state: string, extra: Record<string, unknown> = {}) {
-    return async () => ({
-      state,
-      init: { manifest_present: state !== "unwired", manifest_invalid: false },
-      sessions: { bound_live: state === "live" ? 1 : 0, routable_live: state === "live" ? 1 : 0 },
-      pending_count: 0,
-      kind: "directory",
-      ...extra,
-    });
-  }
-
   test("combined control refreshes unbound/stale/connected without reload and resets green on failure", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
-    let wiringResponse: (() => Promise<unknown>) | null = null;
     let statusResponse: (() => Promise<unknown>) | null = null;
     const statusOf =
       (sessions: unknown[], pendingCount = 0) =>
@@ -1088,10 +1066,6 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
         sessions,
       });
     const da = fakeDataAccess({
-      getWiringStatus: async () => {
-        if (!wiringResponse) throw new Error("status unavailable");
-        return wiringResponse();
-      },
       getStatus: async () => {
         if (!statusResponse) throw new Error("status unavailable");
         return statusResponse();
@@ -1106,16 +1080,14 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(control.getAttribute("data-state")).toBe("unknown");
     expect(control.disabled).toBe(true);
 
-    wiringResponse = wiringOf("unwired");
     statusResponse = statusOf([]);
     (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
     await flush();
     expect(control.getAttribute("data-state")).toBe("unbound");
     expect(control.textContent).toContain("Connect agent");
-    expect(control.textContent).toContain("feedback off");
+    expect(control.textContent).not.toContain("feedback off");
     expect(control.disabled).toBe(false);
 
-    wiringResponse = wiringOf("wired");
     statusResponse = statusOf([
       {
         session_id: "stale-codex-session",
@@ -1158,7 +1130,6 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(control.textContent).toContain("Agent connected");
     expect(control.textContent).toContain("2 queued");
 
-    wiringResponse = null;
     statusResponse = null;
     (da as any).stream.handlers?.onEvent?.({ event: "journal", data: {} });
     await flush();
@@ -1195,89 +1166,11 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     return root;
   }
 
-  test("first annotation in an unwired workspace offers wiring; DECLINING never blocks the save; asked once per workspace", async () => {
-    const da = fakeDataAccess({ getWiringStatus: wiringOf("unwired") });
-    const root = await driveAnnotationSubmit(da);
-
-    const dialog = dom.document.querySelector(".glosa-dialog h2");
-    expect(dialog?.textContent).toBe("This workspace isn't wired for agent feedback");
-    (dom.document.querySelector(".glosa-dialog .glosa-btn-ghost") as any).click(); // Cancel
-    await flush();
-    expect((da as any).posted).toHaveLength(1); // the save happened regardless
-
-    // Second annotation, same workspace + session -> no second dialog.
-    (root.querySelector('[data-mode="review"]') as any).click();
-    const content = root.querySelector(".glosa-content")!;
-    const textNode = content.querySelector("h1")!.firstChild!;
-    const range = dom.document.createRange();
-    range.setStart(textNode, 0);
-    range.setEnd(textNode, 5);
-    const selection = dom.window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
-    await flush();
-    (root.querySelector(".glosa-composer-input") as any).value = "again";
-    (root.querySelector(".glosa-composer-send") as any).click();
-    await flush();
+  test("an annotation in an unbound workspace saves without any consent dialog (#152: nothing to wire)", async () => {
+    const da = fakeDataAccess();
+    await driveAnnotationSubmit(da);
     expect(dom.document.querySelector(".glosa-dialog")).toBeNull();
-    expect((da as any).posted).toHaveLength(2);
-  });
-
-  test("ACCEPTING wires via triggerInit and shows the restart notice; save still proceeds", async () => {
-    const triggered: string[] = [];
-    const da = fakeDataAccess({
-      getWiringStatus: wiringOf("unwired"),
-      triggerInit: async (slug: string) => {
-        triggered.push(slug);
-        return { ok: true, changed: true, warnings: [], restart_required: true };
-      },
-    });
-    await driveAnnotationSubmit(da);
-
-    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Wire it now"
-    await flush();
-    expect(triggered).toEqual(["ws-1"]);
-    const notice = dom.document.querySelector(".glosa-dialog h2");
-    expect(notice?.textContent).toBe("Wired — one step left");
-    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Got it"
-    await flush();
     expect((da as any).posted).toHaveLength(1);
-  });
-
-  test("triggerInit FAILING falls back to the terminal command notice; save still proceeds", async () => {
-    const da = fakeDataAccess({
-      getWiringStatus: wiringOf("unwired"),
-      triggerInit: async () => {
-        throw new Error("init child timed out");
-      },
-    });
-    await driveAnnotationSubmit(da);
-
-    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click(); // "Wire it now"
-    await flush();
-    const notice = dom.document.querySelector(".glosa-dialog h2");
-    expect(notice?.textContent).toBe("Couldn't set up agent feedback");
-    expect(dom.document.querySelector(".glosa-dialog p")?.textContent).toContain("glosa init");
-    (dom.document.querySelector(".glosa-dialog .glosa-save") as any).click();
-    await flush();
-    expect((da as any).posted).toHaveLength(1);
-  });
-
-  test("wired and live workspaces never prompt; unknown wiring never prompts", async () => {
-    for (const getWiringStatus of [
-      wiringOf("wired"),
-      wiringOf("live"),
-      async () => {
-        throw new Error("no route");
-      },
-    ]) {
-      const da = fakeDataAccess({ getWiringStatus });
-      await driveAnnotationSubmit(da);
-      expect(dom.document.querySelector(".glosa-dialog")).toBeNull();
-      expect((da as any).posted).toHaveLength(1);
-      dom.document.body.textContent = ""; // clean mount root between iterations
-    }
   });
 
   describe("an arriving question brings itself to the reader", () => {

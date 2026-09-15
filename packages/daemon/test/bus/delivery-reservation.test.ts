@@ -37,11 +37,7 @@ describe("two-phase delivery reservations", () => {
 
     expect((await bus.prepareDelivery(8, { via: "mcp_pull", session: "session-b" }, build)).count).toBe(0);
     expect(
-      await bus.acknowledgeConversationMessage("message-1", {
-        session: "session-b",
-        via: "mcp_pull",
-        outcome: "presented",
-      }),
+      await bus.acknowledgePushedEntry("message-1", { session: "session-b", via: "monitor", outcome: "presented" }),
     ).toBe(false);
     expect(bus.state.entries["message-1"]?.status).toBe("pending");
 
@@ -62,7 +58,7 @@ describe("two-phase delivery reservations", () => {
       provider: "codex",
     });
     await first.recordDeliveryAttempt("message-restart", {
-      via: "gate",
+      via: "mcp_pull",
       session: "session-a",
       outcome: "attempted",
       reason: "initial",
@@ -79,63 +75,25 @@ describe("two-phase delivery reservations", () => {
     await restarted.close();
   });
 
-  test("Channel transport and presentation are one initial attempt; repeated terminal ack is idempotent", async () => {
-    const root = freshWorkspace();
-    roots.push(root);
-    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
-    await bus.createEntry("message-channel", {
-      kind: "conversation_message",
-      text: "ack once",
-      target_session_id: "session-a",
-      provider: "claude-code",
-    });
-    expect(
-      await bus.acknowledgeConversationMessage("message-channel", {
-        session: "session-a",
-        via: "channel",
-        outcome: "transport_accepted",
-      }),
-    ).toBe(true);
-    expect(
-      await bus.acknowledgeConversationMessage("message-channel", {
-        session: "session-a",
-        via: "channel",
-        outcome: "presented",
-      }),
-    ).toBe(true);
-    expect(
-      await bus.acknowledgeConversationMessage("message-channel", {
-        session: "session-a",
-        via: "channel",
-        outcome: "presented",
-      }),
-    ).toBe(true);
-    expect(bus.state.entries["message-channel"]?.status).toBe("delivered");
-    expect(bus.state.entries["message-channel"]?.deliveryAttempts).toEqual([
-      expect.objectContaining({ outcome: "transport_accepted", reason: "initial" }),
-      expect.objectContaining({ outcome: "presented", reason: "initial" }),
-    ]);
-  });
-
   test("prepare reserves without claiming presentation; ack writes presented afterward", async () => {
     const root = freshWorkspace();
     roots.push(root);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
     await bus.createEntry("e1", payload());
-    const prepared = await bus.prepareDelivery(8, { via: "stop", session: "s1" }, (id, value, status) =>
+    const prepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s1" }, (id, value, status) =>
       buildDeliveryPresentation(id, value, { status }),
     );
     expect(prepared.count).toBe(1);
     expect(bus.state.entries.e1?.deliveryAttempts).toHaveLength(0);
 
-    const concurrent = await bus.prepareDelivery(8, { via: "stop", session: "s2" }, (id, value, status) =>
+    const concurrent = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s2" }, (id, value, status) =>
       buildDeliveryPresentation(id, value, { status }),
     );
     expect(concurrent.count).toBe(0);
 
     expect(await bus.acknowledgeDelivery(prepared.delivery_id!, "presented")).toBe(true);
     expect(bus.state.entries.e1?.deliveryAttempts).toEqual([
-      expect.objectContaining({ via: "stop", session: "s1", outcome: "presented", reason: "initial" }),
+      expect.objectContaining({ via: "mcp_pull", session: "s1", outcome: "presented", reason: "initial" }),
     ]);
   });
 
@@ -160,7 +118,7 @@ describe("two-phase delivery reservations", () => {
     roots.push(root);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
     await bus.createEntry("legacy", { kind: "annotation" });
-    const prepared = await bus.prepareDelivery(8, { via: "stop", session: "s1" }, (id, value, status) =>
+    const prepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s1" }, (id, value, status) =>
       buildDeliveryPresentation(id, value, { status }),
     );
     expect(prepared.count).toBe(0);
@@ -175,7 +133,7 @@ describe("two-phase delivery reservations", () => {
     roots.push(root);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: deterministicClock() });
     for (let i = 0; i < 5; i++) await bus.createEntry(`e${i}`, { ...payload(), body: `${i}:${"ż".repeat(5_000)}` });
-    const prepared = await bus.prepareDelivery(8, { via: "stop", session: "s1" }, (id, value, status) =>
+    const prepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s1" }, (id, value, status) =>
       buildDeliveryPresentation(id, value, { status }),
     );
     expect(prepared.drained.map((entry) => entry.id)).toEqual(["e0", "e1", "e2"]);
@@ -190,9 +148,9 @@ describe("two-phase delivery reservations", () => {
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date(nowMs) });
     await bus.createEntry("e1", payload());
     const build = (id: string, value: unknown, status: string) => buildDeliveryPresentation(id, value, { status });
-    const first = await bus.prepareDelivery(8, { via: "stop", session: "s1" }, build);
+    const first = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s1" }, build);
     nowMs += 30_001;
-    const retry = await bus.prepareDelivery(8, { via: "stop", session: "s2" }, build);
+    const retry = await bus.prepareDelivery(8, { via: "mcp_pull", session: "s2" }, build);
     expect(first.delivery_id).not.toBe(retry.delivery_id);
     expect(retry.drained.map((entry) => entry.id)).toEqual(["e1"]);
     expect(bus.state.entries.e1?.deliveryAttempts).toHaveLength(0);

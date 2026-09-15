@@ -80,7 +80,9 @@ maintainers promote it.
 - Hosted document processing, cloud sync, or a Glosa cloud service.
 - Product telemetry.
 - Remote or mobile workspace access.
-- cmux coupling or terminal-keystroke injection.
+- cmux coupling or terminal-keystroke injection. (Codex push over its app-server socket is the
+  agent's own API, not injection — see "Codex `turn/steer` is the agent's own API" in
+  [docs/decisions.md](docs/decisions.md).)
 - Domain-specific behavior in the generic core.
 
 The normative v1 technical contract remains in [docs/requirements.md](docs/requirements.md).

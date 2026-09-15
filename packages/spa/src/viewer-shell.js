@@ -35,7 +35,6 @@ export function createViewerShell(
     onAttentionEntriesChange,
     onOpenArtifact,
     getCurrentArtifact,
-    onWireWorkspace,
   },
 ) {
   const el = createElement;
@@ -148,7 +147,7 @@ export function createViewerShell(
     [workspacesSection, artifactHeading, artifactList, artifactListEmpty],
   );
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
-  const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays, onWire: onWireWorkspace });
+  const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays });
 
   root.append(
     el("header", { className: "glosa-topbar" }, [

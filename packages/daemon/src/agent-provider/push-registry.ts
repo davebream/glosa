@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Provider-neutral, in-memory bridge between a live session transport and AgentProvider.deliver.
 // Durable truth remains in the workspace inbox/journal; losing this registry on restart only
-// removes the optional push rung and leaves hook/MCP fallback eligible.
+// removes the optional push rung and leaves MCP pull eligible.
 import type { DeliverableEntry } from "./interface.ts";
 
 interface Connection {
   close?: () => void;
   send: (entry: DeliverableEntry) => void;
-  transport: "channel" | "monitor" | "codex_app_server";
+  transport: "monitor" | "codex_app_server";
   accepted: Set<string>;
 }
 
@@ -24,8 +24,8 @@ export class SessionPushRegistry {
   register(
     sessionId: string,
     send: Connection["send"],
-    close?: () => void,
-    transport: Connection["transport"] = "channel",
+    close: (() => void) | undefined,
+    transport: Connection["transport"],
   ): () => void {
     this.connections.get(sessionId)?.close?.();
     this.connections.set(sessionId, { send, close, transport, accepted: new Set() });

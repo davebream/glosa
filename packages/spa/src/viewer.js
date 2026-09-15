@@ -125,7 +125,6 @@ export function mountApp(
     onAttentionEntriesChange: setAttentionEntries,
     onOpenArtifact: (path) => void openArtifact(path),
     getCurrentArtifact: () => activePane()?.path ?? null,
-    onWireWorkspace: wireWorkspace,
   });
   const { attentionTray, agentFeedback, artifactNavigator } = shell;
   const {
@@ -399,7 +398,6 @@ export function mountApp(
       getAttentionEntries: () => attentionEntries,
       refreshAttention: () => attentionTray.refresh(),
       getProviderName: () => feedbackController.providerName() ?? "An agent session",
-      maybeOfferWiring,
       openArtifactInThisPane: (nextPath) => replacePanel(id, nextPath),
       // A presented single document has no tab strip, so its pane carries the whole identity.
       getTabLabel: () => (singlePane ? null : (tabLabels().get(id) ?? id.split("/").pop())),
@@ -621,20 +619,10 @@ export function mountApp(
     dataAccess,
     view: agentFeedback,
     getWorkspaceSlug: () => currentSlug,
-    confirmDialog,
-    noticeDialog,
   });
 
   function refreshAgentFeedback() {
     return feedbackController.refresh();
-  }
-
-  function wireWorkspace() {
-    return feedbackController.wireWorkspace();
-  }
-
-  function maybeOfferWiring() {
-    return feedbackController.maybeOfferWiring();
   }
 
   function startStream() {

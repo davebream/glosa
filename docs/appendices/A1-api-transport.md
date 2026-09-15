@@ -120,16 +120,17 @@ new workspace from the SPA, that's an additive route — not required for v1.)
 
 ### 5.2b `GET /api/status`
 Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
-`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, wiring, connect?}],
+`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, connect?}],
 sessions:[…], orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive,
 issue #79) lists `~/.glosa/state/<id>` buses whose journal still derives pending entries but whose
 registration is gone — stranded user work recoverable by re-opening the original path
 (deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
-route never fails over it. `wiring` (additive, issue #80) is the same 3-state value §5.18 serves.
+route never fails over it. The former `wiring` field is gone (#152): connection state is derived
+from `sessions[]` (explicit `workspace_binding` + `liveness`) and nothing else.
 
 The two `pending_count` fields in this response are DIFFERENT signals and disagree on purpose
-(issue #153, A5 §F23). A workspace row's is BADGE-facing and excludes `external_edit`; the SPA's
-agent-feedback badge prefers this field over §5.18's, so it is the one a reader sees. Each
+(issue #153, A5 §F23). A workspace row's is BADGE-facing and excludes `external_edit`; it is the
+only field the SPA's agent-feedback badge reads. Each
 `orphaned_state` entry's is RETENTION-facing and still counts an undismissed `external_edit` — that
 is stranded user work, which is exactly what the scanner reports.
 
@@ -161,44 +162,11 @@ explicit connection as follows: any alive row whose `workspace_binding` equals t
 connected; otherwise any stale explicit row is stale; otherwise it is unbound. Cwd-ancestor routing
 does not count as an explicit connection.
 
-### 5.18 `GET /w/:slug/wiring`
-Bearer required (authed read; issue #80). The SPA's per-workspace integration-wiring signal:
-```json
-{ "state": "live" | "wired" | "unwired",
-  "init": { "manifest_present": true, "manifest_invalid": false },
-  "sessions": { "bound_live": 1, "routable_live": 1 },
-  "pending_count": 3, "kind": "directory" }
-```
-`live` = init manifest present AND ≥1 session the delivery router (`forWorkspace`, R2 precedence)
-would actually reach; `wired` = manifest present, no routable session (restart/resume needed);
-`unwired` = init never ran. `pending_count` is the BADGE-facing count and excludes `external_edit`
-(issue #153, A5 §F23), matching §5.2b's workspace row; it is not the retention-facing count GC and
-the orphaned-state scanner use. **The response never includes a filesystem path** (§5.14's rule).
-Poll-oriented: freshness comes from client polling + refetch after `POST /w/:slug/init` (which
-returns a fresh wiring object). **404 not-found** — unknown `:slug`.
-
-### 5.19 `POST /w/:slug/init`
-State-changing (Bearer + Origin + `Sec-Fetch-Site` enforced by route class; issue #80). Runs
-`glosa init` for a registered **directory** workspace on the client's explicit consent — consent
-is the client's (the SPA's dialog click); this route's job is to be unforgeable. The workspace dir
-comes from the registry entry, never the request. Body optional: `{ "force"?: true }` — forwarded
-to `--force` only on an explicit true (it overwrites a foreign glosa MCP key). The daemon spawns
-the CLI as a child (`glosa init <dir> --json`, env scrubbed of `ANTHROPIC_API_KEY`/`GIT_*`,
-30s timeout, single-flighted per workspace) and maps the F26 envelope:
-- **200** `{ok:true, changed, warnings, wiring:<§5.18 object>, restart_required}` —
-  `restart_required` is true when no routable live session exists (hooks load at SessionStart).
-- **400 validation-failed** — loose-file workspace (its worktree is the *containing* directory;
-  writing `.claude/` config there would be a surprising mutation — the client shows the terminal
-  command instead; a file inside a git repository resolves to a `directory` registration and never
-  reaches this branch, see requirements.md R1 / issue #96) or invalid body JSON. **404** unknown
-  slug. **409 conflict** — child exit 6 (foreign-config conflict; detail carries the child's
-  `error.code` + hint so the client may re-confirm with `force:true`) or exit 2
-  (`durable-install-required`, or A6 §F26's `unsafe-init-target` — a directory workspace that is
-  itself under a temp root, a bare multi-repo parent, or the user's home directory / an ancestor of
-  it (issue #146); same re-confirm-with-`force:true` path).
-  **500 internal** — other
-  child failures, timeout, spawn failure, unparseable child output; the raw child stdout is never
-  echoed beyond the parsed envelope fields. **503** — runner not wired (narrow test contexts).
+### 5.18 / 5.19 — removed (#152)
+`GET /w/:slug/wiring` and `POST /w/:slug/init` (the consent-gated `glosa init` trigger from issue
+#80) no longer exist; both answer **404**. There is no installation state to report and nothing for
+the daemon to install: connection state (§5.2b `sessions[]`, #95) is the only signal, and Claude is
+wired by its plugin, Codex by `codex mcp add`.
 
 ### 5.3 `GET /w/:slug/artifacts`
 Bearer required. Sidebar listing, natural-sort order in the no-adapter case (adapter pack may
@@ -560,8 +528,11 @@ attempt is fsynced before the response. **200** means terminal `presented`; **20
 `GET /api/sessions/:id/stream` is the provider-neutral authenticated SSE surface. It emits every
 eligible deliverable as the same bounded presentation MCP pull builds, including the parked queue,
 and keeps one live connection per exact session. `POST .../stream/:entry_id/transport-ack` records
-only transport acceptance; `POST .../stream/:entry_id/ack` records explicit presentation. The legacy
-`push-stream` and conversation acknowledgement routes remain during the #151→#152 transition.
+only transport acceptance; `POST .../stream/:entry_id/ack` records explicit presentation. The
+Channel-era `GET /api/sessions/:id/push-stream` and `POST /api/sessions/:id/conversation/:id/ack`
+routes are removed (#152): a conversation message reaches its session through the same stream or
+through MCP pull, and `presented` comes from `glosa_delivery_ack` or the pull's own acknowledgement.
+`POST /api/sessions/:id/drain` accepts only `via:"mcp_pull"`; any other value is **400**.
 
 ### 5.20 `POST /api/workspaces/forget` (contract 1.8, issue #156)
 

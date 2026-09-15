@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// P4.4 — the Codex AgentProvider's interface conformance + the R4 delivery ladder MINUS channels
-// (docs/research/codex-contract.md, T2a). Mirrors
+// P4.4 / #152 — the Codex AgentProvider's interface conformance + the R4 delivery ladder
+// `push → mcp_pull` (docs/research/codex-contract.md). Mirrors
 // packages/providers/claude-code/test/provider.test.ts's structure deliberately — same assertions,
-// same shape, proving the two providers satisfy AgentProvider identically apart from the rungs
-// Codex genuinely doesn't have. The real `glosa hook codex stop`/MCP wiring is a later T-task; this
-// only proves the LADDER LOGIC with capabilities injected/narrowed, same as the Claude suite.
+// same shape, proving the two providers satisfy AgentProvider identically. The real app-server
+// attachment is covered by `app-server.test.ts`; this only proves the LADDER LOGIC with
+// capabilities injected/narrowed, same as the Claude suite.
 import { describe, expect, test } from "bun:test";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,9 +101,10 @@ describe("CodexProvider — AgentProvider conformance", () => {
 
   test("capabilities expose push only while this session has a connected app-server transport", () => {
     const provider = new CodexProvider({ liveness: liveness() });
-    expect(provider.capabilities(SESSION)).toEqual({ push: false, gate: true, boundaryDrain: true, mcpPull: true });
+    expect(provider.capabilities(SESSION)).toEqual({ push: false, mcpPull: true });
     const attached = new CodexProvider({ liveness: liveness(), pushAvailable: () => true });
-    expect(attached.capabilities(SESSION)).toEqual({ push: true, gate: true, boundaryDrain: true, mcpPull: true });
+    expect(attached.capabilities(SESSION)).toEqual({ push: true, mcpPull: true });
+    expect(Object.keys(attached.capabilities(SESSION)).sort()).toEqual(["mcpPull", "push"]);
   });
 
   test("liveness delegates to the injected liveness source, never a PID check", () => {
@@ -125,7 +126,7 @@ describe("CodexProvider — AgentProvider conformance", () => {
   });
 });
 
-describe("CodexProvider.deliver — app-server push before durable fallbacks", () => {
+describe("CodexProvider.deliver — app-server push before the durable MCP pull", () => {
   test("a connected app-server stream is the first rung", async () => {
     const provider = new CodexProvider({
       liveness: liveness(),
@@ -137,54 +138,58 @@ describe("CodexProvider.deliver — app-server push before durable fallbacks", (
       outcome: "transport_accepted",
     });
   });
-  test("gate/boundaryDrain available (the default) → delivers via 'gate', outcome 'attempted'", async () => {
+
+  test("no attachment (the default) → delivers via 'mcp_pull', outcome 'attempted'", async () => {
     const provider = new CodexProvider({ liveness: liveness() });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "gate", outcome: "attempted" });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
   });
 
-  test("gate unavailable, boundaryDrain still available → still delivers via 'gate' (the two rungs are one mechanism)", async () => {
-    class GateOffProvider extends CodexProvider {
-      override capabilities() {
-        return { push: false, gate: false, boundaryDrain: true, mcpPull: true };
-      }
-    }
-    const provider = new GateOffProvider({ liveness: liveness() });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "gate", outcome: "attempted" });
+  test("a declined push (stream returned false) falls through to mcp_pull", async () => {
+    const provider = new CodexProvider({
+      liveness: liveness(),
+      pushAvailable: () => true,
+      sendPush: async () => false,
+    });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
   });
 
-  test("gate AND boundaryDrain both unavailable → falls to rung 3, mcp_pull", async () => {
-    class NoHookDrainProvider extends CodexProvider {
-      override capabilities() {
-        return { push: false, gate: false, boundaryDrain: false, mcpPull: true };
-      }
-    }
-    const provider = new NoHookDrainProvider({ liveness: liveness() });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "mcp_pull", outcome: "attempted" });
+  test("a push that throws records outcome:'failed' for that rung", async () => {
+    const provider = new CodexProvider({
+      liveness: liveness(),
+      pushAvailable: () => true,
+      sendPush: async () => {
+        throw new Error("socket closed");
+      },
+    });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({
+      via: "codex_app_server",
+      outcome: "failed",
+      error: "socket closed",
+    });
   });
 
   test("every capability false → outcome:'failed', not a thrown promise", async () => {
     class NoCapabilityProvider extends CodexProvider {
       override capabilities() {
-        return { push: false, gate: false, boundaryDrain: false, mcpPull: false };
+        return { push: false, mcpPull: false };
       }
     }
     const provider = new NoCapabilityProvider({ liveness: liveness() });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "gate", outcome: "failed", error: "no_capability_available" });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({
+      via: "mcp_pull",
+      outcome: "failed",
+      error: "no_capability_available",
+    });
   });
 
-  test("a declared push with no attached sender falls through to the hook gate", async () => {
+  test("a declared push with no attached sender falls through to mcp_pull", async () => {
     class SpuriousPushProvider extends CodexProvider {
       override capabilities() {
-        return { push: true, gate: true, boundaryDrain: true, mcpPull: true };
+        return { push: true, mcpPull: true };
       }
     }
     const provider = new SpuriousPushProvider({ liveness: liveness() });
-    const result = await provider.deliver(SESSION, ENTRY);
-    expect(result).toEqual({ via: "gate", outcome: "attempted" });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({ via: "mcp_pull", outcome: "attempted" });
   });
 });
 

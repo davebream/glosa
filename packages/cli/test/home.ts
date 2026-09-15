@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// Test-only `GLOSA_HOME` isolation for the CLI suites. `scoped-init.ts`'s `rootsFor()` (A6 §F26)
-// resolves the user-scope ownership manifest at `$GLOSA_HOME ?? ~/.glosa`, so a CLI test that
-// leaves `GLOSA_HOME` unset reads the developer's own install state — and takes a `.lock` beside
-// it. Nothing here ever touches a real `~/.glosa`, matching the standard already stated in
-// packages/daemon/test/helpers.ts:1-4.
+// Test-only `GLOSA_HOME` isolation for the CLI suites. Every CLI command resolves glosa's home at
+// `$GLOSA_HOME ?? ~/.glosa` (token, daemon lock, workspace index), so a CLI test that leaves
+// `GLOSA_HOME` unset reads the developer's own state. Nothing here ever touches a real `~/.glosa`,
+// matching the standard already stated in packages/daemon/test/helpers.ts:1-4.
 //
 // `GLOSA_HOME` rather than `HOME` is the seam because Bun's `os.homedir()` does NOT follow a
 // mutated `process.env.HOME`, so redirecting `HOME` would silently isolate nothing.
@@ -39,8 +38,8 @@ export function useTempHome(): void {
     // The claude-code provider resolves its user-scope target from `$CLAUDE_CONFIG_DIR` when set.
     // A developer running the suite from inside an account-switcher session has it pointed at a
     // real per-account config directory — so leaving it set would aim install tests at live agent
-    // configuration. Cleared here rather than per-suite: this is the one isolation seam
-    // home-isolation.test.ts already requires every root-reaching CLI test to use.
+    // configuration. Cleared here rather than per-suite: this is the one isolation seam every
+    // CLI suite that reaches user-scope state uses.
     delete process.env.CLAUDE_CONFIG_DIR;
     current = mkdtempSync(join(tmpdir(), "glosa-cli-home-"));
     process.env.GLOSA_HOME = current;

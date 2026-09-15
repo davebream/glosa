@@ -5,19 +5,13 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GlosaApiClient } from "../src/api-client.ts";
-import { maybeOfferInit, type OpenDeps, printOpenResult, realOpenDeps, runOpen } from "../src/open.ts";
-import type { InitResult, ScopedOwnershipManifest } from "../src/scoped-init.ts";
+import { type OpenDeps, printOpenResult, realOpenDeps, runOpen } from "../src/open.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { useTempHome } from "./home.ts";
 import { captureStderr, captureStdout } from "./test-utils.ts";
 
-// The default consented-init path reads the user-scope ownership manifest. Never let that one
-// integration test inspect or contend with the developer's real Glosa installation.
+// Never let this suite inspect or contend with the developer's real Glosa installation.
 useTempHome();
-
-/** A "wired" drift result so existing cases stay warning-free by default. */
-const WIRED_MANIFEST = {} as ScopedOwnershipManifest;
-const WIRED = { manifest: WIRED_MANIFEST, manifests: [WIRED_MANIFEST], drifted: [] as string[] };
 
 let dirs: string[] = [];
 function freshDir(): string {
@@ -46,7 +40,6 @@ function makeDeps(overrides: Partial<OpenDeps> = {}): {
     dirExists: () => true,
     fileExists: () => false,
     isRegularFile: () => false,
-    checkManifestDrift: () => WIRED,
     ...overrides,
   };
   return { deps, client, browserCalls };
@@ -405,265 +398,24 @@ describe("glosa open", () => {
     expect(browserCalls).toHaveLength(0);
   });
 
-  // --- un-wired/drifted visibility (issue #78) ---
+  // --- #152: no init, no wiring warnings. Connection state is the only signal. ---
 
-  test("un-init'd workspace -> not-initialized warning, exit stays 0 (A6: open works without init)", async () => {
+  test("open never emits an init/wiring warning and never reaches for an init module", async () => {
     const dir = freshDir();
-    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }) });
-    const result = await runOpen(dir, deps, { launchBrowser: false });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.ok).toBe(true);
-    const warning = result.warnings.find((w) => w.code === "not-initialized");
-    expect(warning).toBeDefined();
-    expect(warning?.message).toContain("`glosa init");
-    expect(warning?.message).toContain("restart or /resume");
-  });
-
-  test("drifted workspace -> init-drifted warning, exit stays 0", async () => {
-    const dir = freshDir();
-    const { deps } = makeDeps({
-      checkManifestDrift: () => ({
-        manifest: WIRED_MANIFEST,
-        manifests: [WIRED_MANIFEST],
-        drifted: ["/x/.mcp.json/mcpServers/glosa"],
-      }),
-    });
-    const result = await runOpen(dir, deps, { launchBrowser: false });
-
-    expect(result.exitCode).toBe(0);
-    const warning = result.warnings.find((w) => w.code === "init-drifted");
-    expect(warning).toBeDefined();
-    expect(warning?.message).toContain("1 node(s) changed");
-    expect(warning?.message).toContain("re-run `glosa init");
-  });
-
-  test("drift probe throwing never breaks open", async () => {
-    const dir = freshDir();
-    const { deps } = makeDeps({
-      checkManifestDrift: () => {
-        throw new Error("probe exploded");
-      },
-    });
+    const { deps } = makeDeps();
     const result = await runOpen(dir, deps, { launchBrowser: false });
     expect(result.exitCode).toBe(0);
-    expect(result.warnings).toHaveLength(0);
+    expect(result.warnings.map((w) => w.code)).not.toContain("not-initialized");
+    expect(result.warnings.map((w) => w.code)).not.toContain("init-drifted");
+    expect("checkManifestDrift" in deps).toBe(false);
   });
 
-  test("not-initialized warning is printed to stderr in human mode", async () => {
+  test("human-mode output mentions no `glosa init` step", async () => {
     const dir = freshDir();
-    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }) });
+    const { deps } = makeDeps();
     const result = await runOpen(dir, deps, { launchBrowser: false });
-
     const err = captureStderr(() => captureStdout(() => printOpenResult(result, false)));
-    expect(err).toContain("glosa open: warning:");
-    expect(err).toContain("not wired for agent feedback");
-  });
-
-  test("--json envelope carries the not-initialized warning code", async () => {
-    const dir = freshDir();
-    const { deps } = makeDeps({ checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }) });
-    const result = await runOpen(dir, deps, { launchBrowser: false });
-
-    const out = captureStdout(() => printOpenResult(result, true));
-    const parsed = JSON.parse(out);
-    expect(parsed.warnings.map((w: { code: string }) => w.code)).toContain("not-initialized");
-  });
-
-  // issue #96: a loose-file registration's worktree is the file's CONTAINING directory — possibly
-  // a system temp dir or a parent holding several unrelated repos — so its `not-initialized` hint
-  // must never tell the user to run `glosa init` on it (A1 §5.19 already refuses that through the
-  // daemon route).
-  test("un-wired loose-file open never suggests `glosa init` on its worktree", async () => {
-    const filePath = join(freshDir(), "note.md");
-    const { deps, client } = makeDeps({ checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }) });
-    client.openWorkspaceResult = { slug: "ws-slug", path: "/tmp/some-dir", kind: "loose-file" };
-    const result = await runOpen(filePath, deps, { launchBrowser: false });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.data.kind).toBe("loose-file");
-    const warning = result.warnings.find((w) => w.code === "not-initialized");
-    expect(warning).toBeDefined();
-    expect(warning?.message).not.toContain("glosa init");
-    expect(warning?.message).toContain("not inside a project glosa can wire");
-  });
-
-  test("an un-wired DIRECTORY open still gets the normal `glosa init <path>` hint", async () => {
-    const dir = freshDir();
-    const { deps, client } = makeDeps({ checkManifestDrift: () => ({ manifest: null, manifests: [], drifted: [] }) });
-    client.openWorkspaceResult = { slug: "ws-slug", path: dir, kind: "directory" };
-    const result = await runOpen(dir, deps, { launchBrowser: false });
-
-    expect(result.data.kind).toBe("directory");
-    const warning = result.warnings.find((w) => w.code === "not-initialized");
-    expect(warning?.message).toContain(`\`glosa init ${dir}\``);
-  });
-});
-
-describe("maybeOfferInit (consented wiring offer)", () => {
-  function unwiredResult(dir: string) {
-    return {
-      ok: true as const,
-      command: "open",
-      exitCode: 0,
-      data: { slug: "s", path: dir, url: "http://127.0.0.1:4646/#x" },
-      warnings: [{ code: "not-initialized", message: "..." }],
-    };
-  }
-  function makeOffer(overrides: Partial<Parameters<typeof maybeOfferInit>[1]> = {}) {
-    const calls: { confirmed: number; initDirs: string[]; stderr: string[] } = {
-      confirmed: 0,
-      initDirs: [],
-      stderr: [],
-    };
-    const opts: Parameters<typeof maybeOfferInit>[1] = {
-      json: false,
-      isTTY: () => true,
-      confirm: async () => {
-        calls.confirmed += 1;
-        return true;
-      },
-      runInit: async (o) => {
-        calls.initDirs.push(o.dir);
-        return { ok: true, exitCode: 0, changed: true, data: {}, warnings: [] } as unknown as InitResult;
-      },
-      stderr: (t) => calls.stderr.push(t),
-      ...overrides,
-    };
-    return { opts, calls };
-  }
-
-  test("TTY + yes -> runInit with the workspace dir + restart line on stderr", async () => {
-    const { opts, calls } = makeOffer();
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.confirmed).toBe(1);
-    expect(calls.initDirs).toEqual(["/ws/a"]);
-    expect(calls.stderr.join("")).toContain("restart or /resume");
-  });
-
-  test("TTY + no -> init never runs", async () => {
-    const { opts, calls } = makeOffer({ confirm: async () => false });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.initDirs).toHaveLength(0);
-  });
-
-  test("non-TTY -> confirm never called", async () => {
-    const { opts, calls } = makeOffer({ isTTY: () => false });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.confirmed).toBe(0);
-    expect(calls.initDirs).toHaveLength(0);
-  });
-
-  test("--json -> never prompts", async () => {
-    const { opts, calls } = makeOffer({ json: true });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.confirmed).toBe(0);
-    expect(calls.initDirs).toHaveLength(0);
-  });
-
-  test("--init runs without confirm, even non-TTY", async () => {
-    const { opts, calls } = makeOffer({ initFlag: true, isTTY: () => false });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.confirmed).toBe(0);
-    expect(calls.initDirs).toEqual(["/ws/a"]);
-  });
-
-  test("--no-init suppresses everything, even with --init absent and TTY", async () => {
-    const { opts, calls } = makeOffer({ noInitFlag: true });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.confirmed).toBe(0);
-    expect(calls.initDirs).toHaveLength(0);
-  });
-
-  test("no not-initialized warning -> nothing happens (drift excluded by design)", async () => {
-    const { opts, calls } = makeOffer();
-    const result = {
-      ...unwiredResult("/ws/a"),
-      warnings: [{ code: "init-drifted", message: "..." }],
-    };
-    await maybeOfferInit(result, opts);
-    expect(calls.confirmed).toBe(0);
-  });
-
-  test("a loose-file result -> nothing happens, even with a not-initialized warning (issue #96)", async () => {
-    const { opts, calls } = makeOffer();
-    const result = {
-      ...unwiredResult("/ws/a"),
-      data: { ...unwiredResult("/ws/a").data, kind: "loose-file" as const },
-    };
-    await maybeOfferInit(result, opts);
-    expect(calls.confirmed).toBe(0);
-    expect(calls.initDirs).toHaveLength(0);
-  });
-
-  test("runInit failure is reported on stderr, never throws", async () => {
-    const { opts, calls } = makeOffer({
-      runInit: async () =>
-        ({
-          ok: false,
-          exitCode: 6,
-          changed: false,
-          data: {},
-          warnings: [],
-          error: { code: "mcp-key-conflict", kind: "conflict", message: "foreign glosa key", hint: "use --force" },
-        }) as unknown as InitResult,
-    });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    const err = calls.stderr.join("");
-    expect(err).toContain("init failed: foreign glosa key");
-    expect(err).toContain("hint: use --force");
-  });
-
-  test("runInit throwing is caught and reported", async () => {
-    const { opts, calls } = makeOffer({
-      runInit: async () => {
-        throw new Error("disk full");
-      },
-    });
-    await maybeOfferInit(unwiredResult("/ws/a"), opts);
-    expect(calls.stderr.join("")).toContain("init failed: disk full");
-  });
-
-  test("default runInit uses runScopedInit — writes .claude/settings.json, not the legacy layout (issue #96)", async () => {
-    const dir = freshDir();
-    // Select Claude Code through a fixture-owned detection input even on a Codex-only host.
-    // Leave settings.json absent so the assertion still proves that scoped init creates it.
-    writeFileSync(join(dir, ".mcp.json"), "{}\n");
-    const { opts, calls } = makeOffer();
-    opts.runInit = undefined; // exercise open.ts's own default instead of makeOffer()'s stub
-    await maybeOfferInit(unwiredResult(dir), opts);
-    expect(calls.stderr.join("")).toContain("wired");
-    expect(existsSync(join(dir, ".claude", "settings.json"))).toBe(true);
-    expect(existsSync(join(dir, ".glosa", "init-manifest.json"))).toBe(true);
-    expect(existsSync(join(dir, ".claude", ".glosa-init.json"))).toBe(false);
-  });
-});
-
-describe("glosa open — relative target resolution", () => {
-  // The daemon is a persistent singleton whose own cwd is arbitrary (whatever process happened
-  // to spawn it). A relative target sent raw would be resolved by the daemon against THAT cwd,
-  // registering the wrong directory. The client must resolve relative targets against its own
-  // cwd before the daemon call so `openPath` is genuinely absolute (its documented contract).
-  function openWorkspacePath(client: FakeGlosaApiClient): unknown {
-    return client.calls.find((c) => c.method === "openWorkspace")?.args[0];
-  }
-
-  test("a bare `.` target resolves against the client cwd, not the daemon cwd", async () => {
-    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
-    const result = await runOpen(".", deps);
-    expect(result.ok).toBe(true);
-    expect(openWorkspacePath(client)).toBe("/client/work/dir");
-  });
-
-  test("a nested relative target (with trailing slash) resolves against the client cwd", async () => {
-    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
-    await runOpen("docs/plans/", deps);
-    expect(openWorkspacePath(client)).toBe("/client/work/dir/docs/plans");
-  });
-
-  test("an absolute target is passed through unchanged regardless of client cwd", async () => {
-    const { deps, client } = makeDeps({ cwd: () => "/client/work/dir", dirExists: () => true });
-    await runOpen("/abs/workspace", deps);
-    expect(openWorkspacePath(client)).toBe("/abs/workspace");
+    expect(err).not.toContain("glosa init");
+    expect(err).not.toContain("restart or /resume");
   });
 });

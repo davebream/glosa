@@ -219,7 +219,7 @@ describe("delivery_attempt is a separate axis — never changes status", () => {
     for (let i = 0; i < N; i++) {
       events.push(
         delivery("e1", {
-          detail: { via: "channel", session: "sess-1", outcome: "presented", reason: i === 0 ? "initial" : "re_nudge" },
+          detail: { via: "monitor", session: "sess-1", outcome: "presented", reason: i === 0 ? "initial" : "re_nudge" },
         }),
       );
     }
@@ -232,7 +232,7 @@ describe("delivery_attempt is a separate axis — never changes status", () => {
   test("a delivery_attempt on a still-pending entry doesn't advance it to delivered", () => {
     const s = fold([
       created("e1"),
-      delivery("e1", { detail: { via: "gate", outcome: "attempted", reason: "initial" } }),
+      delivery("e1", { detail: { via: "mcp_pull", outcome: "attempted", reason: "initial" } }),
     ]);
     expect(s.entries.e1?.status).toBe("pending");
     expect(s.entries.e1?.deliveryAttempts).toHaveLength(1);
@@ -429,16 +429,16 @@ describe("live WorkspaceBus state == a fresh restart's reconcile fold (concurren
 
     await bus.commitTransition("e1", "seen"); // illegal — no-op (no delivered yet)
     await bus.commitTransition("e1", "delivered");
-    await bus.recordDeliveryAttempt("e1", { via: "gate", outcome: "presented", reason: "initial" });
+    await bus.recordDeliveryAttempt("e1", { via: "mcp_pull", outcome: "presented", reason: "initial" });
     await bus.commitTransition("e1", "seen");
-    await bus.recordDeliveryAttempt("e1", { via: "gate", outcome: "presented", reason: "re_nudge" });
+    await bus.recordDeliveryAttempt("e1", { via: "mcp_pull", outcome: "presented", reason: "re_nudge" });
     await bus.commitTransition("e1", "applied");
     await bus.commitTransition("e1", "rejected"); // illegal — already terminal, no-op
 
     await bus.commitTransition("a1", "done"); // illegal — a1 is still "open", no delivered/seen yet
     await bus.commitTransition("a1", "delivered");
     await bus.recordDeliveryAttempt("a1", {
-      via: "channel",
+      via: "monitor",
       session: "sess-1",
       outcome: "presented",
       reason: "initial",

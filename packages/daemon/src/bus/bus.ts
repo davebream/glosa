@@ -1010,53 +1010,6 @@ export class WorkspaceBus {
     });
   }
 
-  /** Direct acknowledgement for a session-targeted conversation message. Channel transports do
-   * not use the hook reservation token, so they acknowledge the immutable entry itself. */
-  acknowledgeConversationMessage(
-    entryId: string,
-    opts: { session: string; via: DeliveryVia; outcome: "transport_accepted" | "presented" | "failed"; error?: string },
-  ): Promise<boolean> {
-    return this.mutex.runExclusive(this.mutexKey, () => {
-      this.assertWritable();
-      const payload = readInboxEntry(this.workspace, entryId);
-      if (!payload || typeof payload !== "object") return false;
-      const record = payload as Record<string, unknown>;
-      if (record.kind !== "conversation_message" || record.target_session_id !== opts.session) return false;
-      const entry = this.state.entries[entryId];
-      if (!entry) return false;
-      if (entry.status === "delivered") return true;
-      const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
-      const latest = attempts.at(-1);
-      const sameChannelAttempt =
-        latest?.via === opts.via && latest?.session === opts.session && latest?.outcome === "transport_accepted";
-      this.recordDeliveryAttemptLocked(entryId, {
-        fsync: true,
-        idem: `conversation:${entryId}:attempt:${opts.outcome}`,
-        via: opts.via,
-        session: opts.session,
-        outcome: opts.outcome,
-        reason: sameChannelAttempt ? (latest.reason ?? "initial") : attempts.length > 0 ? "re_nudge" : "initial",
-        ...(opts.error ? { error: opts.error } : {}),
-      });
-      if (opts.outcome === "presented" && this.state.entries[entryId]?.status !== "delivered") {
-        const event: JournalEvent = {
-          v: 1,
-          event_id: this.ulidFn(),
-          at: this.nowFn().toISOString(),
-          entry: entryId,
-          event: "transition_committed",
-          by: "daemon",
-          idem: `conversation:${entryId}:delivered`,
-          detail: { to: "delivered" },
-        };
-        appendEvent(this.writer, event);
-        applyEvent(this.state, event, this.reducer);
-        this.notify(event);
-      }
-      return true;
-    });
-  }
-
   readEntry(id: string): { payload: unknown; status: string } | null {
     const state = this.state.entries[id];
     if (!state) return null;

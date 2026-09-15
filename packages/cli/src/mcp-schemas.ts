@@ -179,20 +179,6 @@ export const sessionBindOutputSchema = z
   })
   .strict();
 
-export const conversationAckInputSchema = z
-  .object({
-    message_id: messageId,
-    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
-  })
-  .strict();
-
-export const conversationAckOutputSchema = z
-  .object({
-    message_id: messageId,
-    delivered: z.literal(true).describe("Always true on success."),
-  })
-  .strict();
-
 export const deliveryAckInputSchema = z
   .object({
     entry_id: inboxId,
