@@ -31,6 +31,7 @@ import {
   scrollToOffset,
 } from "./outline.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
+import { faceKey, mountFaceControl } from "./face.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
 
@@ -273,6 +274,9 @@ export function createArtifactPane(host, deps) {
     // never printed twice in two adjacent rows. `null` means there is no tab strip at all (the
     // presented-document surface), and the bar carries the whole identity itself.
     getTabLabel = () => null,
+    // The writer's per-artifact face (face.js). Optional: a pane without a store reads in the
+    // default sans and offers no control.
+    faceStore = null,
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?}
@@ -441,12 +445,16 @@ export function createArtifactPane(host, deps) {
     moveGroup.hidden = moveItems.length > 0 && available === 0;
   }
 
+  // The writer's face for this artifact lives here, among the artifact's other settings, not in
+  // the bar: a reading preference is chosen once and then left alone (face.js fills the group).
+  const faceGroup = el("div", { className: "glosa-face-group" });
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
     outlineMenuItem,
     copySourceButton,
     printArtifactButton,
     compareButton,
+    faceGroup,
     moveGroup,
     toolsStatus,
   ]);
@@ -585,6 +593,23 @@ export function createArtifactPane(host, deps) {
   paneEl.setAttribute("data-mode", modeState.mode);
   paneEl.setAttribute("data-editor-face", "rich");
   host.append(paneEl);
+
+  // The writer's face for this artifact, stamped on the pane so every manuscript surface in it —
+  // rendered, rich editor, the quotes that echo it — reads one variable (app.css §1).
+  const faceControl = faceStore
+    ? mountFaceControl(faceGroup, faceStore, {
+        getKey: () => {
+          const facePath = currentArtifact?.source_path ?? path;
+          return facePath ? faceKey(slug, facePath) : null;
+        },
+        onChange: (face) => {
+          if (face === "default") paneEl.removeAttribute("data-face");
+          else paneEl.setAttribute("data-face", face);
+        },
+        onPick: () => setToolsOpen(false, { restoreFocus: true }),
+      })
+    : null;
+  if (!faceStore) faceGroup.hidden = true;
 
   // ---------- the fore-edge index ----------
   //
@@ -2878,6 +2903,7 @@ export function createArtifactPane(host, deps) {
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
       baselineSha = currentArtifact.source_sha256; // a newly loaded artifact fills the face
+      faceControl?.refresh();
     } catch (err) {
       loading = false;
       currentArtifact = null;
@@ -3206,6 +3232,7 @@ export function createArtifactPane(host, deps) {
       if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
       if (outlineFrame) cancelAnimationFrame(outlineFrame);
       outline.destroy();
+      faceControl?.destroy();
       observer?.disconnect();
       teardownRichFace();
       stopClassFViewer?.();

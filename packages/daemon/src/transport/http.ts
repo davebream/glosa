@@ -81,6 +81,8 @@ const SPA_ASSETS: Record<string, string> = {
   // appearance.js owns the page-lifetime controller and workspace popover.
   "appearance-preload.js": "text/javascript; charset=utf-8",
   "appearance.js": "text/javascript; charset=utf-8",
+  // The manuscript face store and its per-artifact control (Default / Serif / Mono).
+  "face.js": "text/javascript; charset=utf-8",
   "bootstrap.js": "text/javascript; charset=utf-8",
   // The SPA's visual system (design brief docs/design/2026-07-21-workspace-review-surface-brief.md).
   "app.css": "text/css; charset=utf-8",

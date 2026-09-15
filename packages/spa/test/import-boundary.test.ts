@@ -262,6 +262,8 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./dialog.js",
     "./artifact-tree.js",
     "./appearance.js",
+    // The writer's per-artifact face: a localStorage preference and a native select, no daemon reach.
+    "./face.js",
     "./attention-tray.js",
     "./agent-feedback.js",
     "./viewer-shell.js",
