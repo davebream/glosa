@@ -67,11 +67,15 @@ same bounded shutdown path as the MCP server.
 The attachment never enumerates threads and never starts, stops, or repairs the app-server. A missing
 socket or a pre-rollout `thread/resume` failure retries with jittered exponential backoff from five to
 sixty seconds while MCP pull remains usable. Homebrew/npm Codex installs do not provide a managed
-daemon; users either install the standalone distribution or separately run:
+daemon. A user who wants one either installs the standalone distribution, runs Codex's own
+`codex app-server daemon bootstrap` (or `start`, once bootstrapped) to install and run a durable
+user-managed app-server, or runs the listener directly:
 
 ```sh
 codex app-server --listen "unix://$CODEX_HOME/app-server-control/app-server-control.sock"
 ```
+
+Whichever way it starts, it stays user-owned: glosa attaches to a socket it finds and starts nothing.
 
 For each `delivery` frame, the attachment sends one text input prefixed `[glosa <entry-id>]`.
 `turn/steer` is used only after this connection observed `turn/started` for the resumed thread and can
