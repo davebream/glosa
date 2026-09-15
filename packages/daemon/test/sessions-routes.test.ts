@@ -283,6 +283,83 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(workspace.canonical_path).toBe(root);
   });
 
+  test("Codex stream requires the exact bound session and journals codex_app_server acceptance", async () => {
+    ctx.pushRegistry = new SessionPushRegistry();
+    await workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const bus = busRegistry.get(root);
+    await sessionRegistry.register({
+      session_id: "codex-bound",
+      provider: "codex",
+      cwd: root,
+      workspace_binding: root,
+      source: "codex-app-server",
+    });
+    await sessionRegistry.register({
+      session_id: "codex-unbound",
+      provider: "codex",
+      cwd: root,
+      source: "mcp",
+    });
+
+    const unbound = await fetchFn(req("/api/sessions/codex-unbound/stream?transport=codex_app_server"));
+    expect(unbound.status).toBe(409);
+
+    const response = await fetchFn(req("/api/sessions/codex-bound/stream?transport=codex_app_server"));
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    const createdAt = Date.now();
+    await bus.createEntry("codex-entry", actionableAnnotation("Reach only the bound Codex thread."));
+    while (!received.includes('"id":"codex-entry"')) {
+      const chunk = await reader.read();
+      expect(chunk.done).toBe(false);
+      received += decoder.decode(chunk.value);
+    }
+    expect(Date.now() - createdAt).toBeLessThan(1_000);
+    const accepted = await fetchFn(
+      req("/api/sessions/codex-bound/stream/codex-entry/transport-ack", { method: "POST", body: "{}" }),
+    );
+    expect(accepted.status).toBe(200);
+    const acceptedAttempts = bus.state.entries["codex-entry"]?.deliveryAttempts as Array<Record<string, unknown>>;
+    expect(acceptedAttempts.at(-1)).toMatchObject({
+      via: "codex_app_server",
+      outcome: "transport_accepted",
+      session: "codex-bound",
+    });
+    const presented = await fetchFn(
+      req("/api/sessions/codex-bound/stream/codex-entry/ack", {
+        method: "POST",
+        body: JSON.stringify({ outcome: "presented" }),
+      }),
+    );
+    expect(presented.status).toBe(200);
+    const presentedAttempts = bus.state.entries["codex-entry"]?.deliveryAttempts as Array<Record<string, unknown>>;
+    expect(presentedAttempts.at(-1)).toMatchObject({
+      via: "codex_app_server",
+      outcome: "presented",
+    });
+
+    await bus.createEntry("codex-message", {
+      kind: "conversation_message",
+      text: "Composer text reaches Codex as user input.",
+      target_session_id: "codex-bound",
+      provider: "codex",
+    });
+    while (!received.includes('"id":"codex-message"')) {
+      const chunk = await reader.read();
+      expect(chunk.done).toBe(false);
+      received += decoder.decode(chunk.value);
+    }
+    expect(received).toContain('"kind":"conversation_message"');
+    expect(received).toContain('"target_session_id":"codex-bound"');
+    const messageAccepted = await fetchFn(
+      req("/api/sessions/codex-bound/stream/codex-message/transport-ack", { method: "POST", body: "{}" }),
+    );
+    expect(messageAccepted.status).toBe(200);
+    await reader.cancel();
+  });
+
   test("POST /api/sessions/:id/heartbeat extends the lease for a known session", async () => {
     await sessionRegistry.register({ session_id: "sess-1", provider: "claude-code", cwd: root, source: "startup" });
     const res = await fetchFn(req("/api/sessions/sess-1/heartbeat", { method: "POST" }));

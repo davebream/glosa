@@ -81,21 +81,34 @@ for (const { name, make } of providers) {
     test("deliver() resolves to a DeliveryResult with a legal A5 §F23 `via`/`outcome`, never rejects", async () => {
       const provider = make();
       const result = await provider.deliver(SESSION, ENTRY);
-      expect(["monitor", "channel", "asyncRewake", "gate", "stop", "userprompt", "mcp_pull"]).toContain(result.via);
+      expect([
+        "monitor",
+        "codex_app_server",
+        "channel",
+        "asyncRewake",
+        "gate",
+        "stop",
+        "userprompt",
+        "mcp_pull",
+      ]).toContain(result.via);
       expect(["attempted", "transport_accepted", "presented", "failed"]).toContain(result.outcome);
     });
   });
 }
 
-// R7 verbatim: "v1 ships: Claude Code provider (deep: push=channels, ...) and a Codex provider
-// (gate + boundaryDrain + mcpPull; push=false — no channels-equivalent)." This is the one place
-// that literal claim is checked against both real providers side by side, not per-package.
-describe("Claude Code vs Codex — the R7 capability split is real, not just documented", () => {
-  test("Claude Code has push (channels); Codex does not", () => {
+// R7: Claude's plugin capability is provider-wide while Codex push exists only for the exact thread
+// with a live app-server attachment. This checks that split against both real providers.
+describe("Claude Code vs Codex — the R7 capability split is session-local", () => {
+  test("Claude Code advertises plugin push; Codex requires its attached session", () => {
     const claude = new ClaudeCodeProvider({ liveness: { liveness: () => "alive" } });
     const codex = new CodexProvider({ liveness: { liveness: () => "alive" } });
+    const attachedCodex = new CodexProvider({
+      liveness: { liveness: () => "alive" },
+      pushAvailable: (session) => session.session_id === SESSION.session_id,
+    });
     expect(claude.capabilities(SESSION).push).toBe(true);
     expect(codex.capabilities(SESSION).push).toBe(false);
+    expect(attachedCodex.capabilities(SESSION).push).toBe(true);
   });
 
   test("both agree on gate + boundaryDrain + mcpPull all true", () => {

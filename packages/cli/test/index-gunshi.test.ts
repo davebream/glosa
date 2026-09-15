@@ -277,7 +277,7 @@ describe("Gunshi completion", () => {
   test("suggests public commands and global/local flags but hides protocol commands", () => {
     const commands = runCli(["complete", "--", ""]);
     for (const command of PUBLIC_COMMANDS) expect(commands.stdout).toContain(command);
-    for (const hidden of ["hook", "mcp", "__daemon", "checkpoints", "diff", "restore"]) {
+    for (const hidden of ["hook", "mcp", "monitor", "codex-attach", "__daemon", "checkpoints", "diff", "restore"]) {
       expect(commands.stdout).not.toContain(hidden);
     }
 

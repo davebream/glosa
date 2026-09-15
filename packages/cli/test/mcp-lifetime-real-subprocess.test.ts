@@ -12,7 +12,7 @@
 // merely that the port was bound.
 import { describe, expect, test } from "bun:test";
 import { createServer, type Socket } from "node:net";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -332,10 +332,34 @@ describe("MCP shim real-process lifetime (#140)", () => {
     writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
     const port = randomPort();
     const daemon = spawnDaemon(home, port);
+    const codexHome = join(home, "codex-home");
+    const socketPath = join(codexHome, "app-server-control", "app-server-control.sock");
+    mkdirSync(join(codexHome, "app-server-control"), { recursive: true });
+    let attachedSocket: Socket | undefined;
+    let resolveAccepted!: () => void;
+    let resolveClosed!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      resolveAccepted = resolve;
+    });
+    const socketClosed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const controlServer = createServer((socket) => {
+      attachedSocket = socket;
+      resolveAccepted();
+      socket.once("close", resolveClosed);
+      socket.on("error", () => {});
+      // Hold the RFC 6455 handshake open. EOF must abort the pending attachment and close this
+      // accepted AF_UNIX socket; process exit alone would not prove that runtime.close owns it.
+    });
+    await new Promise<void>((resolve, reject) => {
+      controlServer.once("error", reject);
+      controlServer.listen(socketPath, resolve);
+    });
     await withCleanup(
       async () => {
         expect(await waitForHandshake(port, 15_000, daemon)).not.toBeNull();
-        const env = baseEnv(home, port, { CLAUDE_CODE_SESSION_ID: "ac3-session" });
+        const env = baseEnv(home, port, { CODEX_HOME: codexHome });
         const proc = Bun.spawn({
           cmd: [process.execPath, MAIN_PATH, "mcp"],
           env,
@@ -344,15 +368,33 @@ describe("MCP shim real-process lifetime (#140)", () => {
           stdout: "pipe",
           stderr: "ignore",
         });
-        // One real registered tool call, so this proves a functioning shim exits on EOF, not a
-        // shim that never got far enough to matter.
-        await handshakeAndRegister(wireStdio(proc));
+        const io = wireStdio(proc);
+        const { request, initialized } = initializeMessages();
+        await io.write(request);
+        expect((await io.readLines(1, 15_000)).length).toBe(1);
+        await io.write(initialized);
+        await io.write({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "glosa_session_bind",
+            arguments: { session_id: "ac3-codex-thread", provider: "codex", workspace: agentCwd },
+          },
+        });
+        expect((await io.readLines(1, 15_000)).length).toBe(1);
+        expect(await Promise.race([accepted.then(() => true), Bun.sleep(5_000).then(() => false)])).toBe(true);
+        const eofAt = Date.now();
         (proc.stdin as unknown as { end(): void }).end();
         const exitCode = await Promise.race([proc.exited, Bun.sleep(15_000).then(() => "TIMEOUT" as const)]);
         expect(exitCode).toBe(0);
         expect(proc.signalCode).toBeNull();
+        expect(Date.now() - eofAt).toBeLessThan(4_500);
+        expect(await Promise.race([socketClosed.then(() => true), Bun.sleep(2_000).then(() => false)])).toBe(true);
       },
       async () => {
+        attachedSocket?.destroy();
+        await new Promise<void>((resolve) => controlServer.close(() => resolve()));
         await stopDaemon(home, daemon);
         cleanupHome(home);
       },

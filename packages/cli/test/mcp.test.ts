@@ -544,6 +544,51 @@ describe("official TypeScript MCP SDK contract", () => {
     }
   });
 
+  test("a Codex bind starts one exact-thread attachment and MCP close aborts it", async () => {
+    const hook = new HookClient();
+    const attached: unknown[] = [];
+    let attachAborted = false;
+    const api: Partial<GlosaApiClient> = {
+      bindSession: async (_workspace, sessionId) => ({ bound: true, session_id: sessionId }),
+    };
+    const connected = await connect({
+      ...deps(hook, api),
+      startCodexAttachment: async (options, signal) => {
+        attached.push(options);
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              attachAborted = true;
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+      },
+    });
+    const result = await callTool(connected.client, {
+      name: "glosa_session_bind",
+      arguments: { workspace: "/review", session_id: "thread-exact", provider: "codex" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(attached).toEqual([{ sessionId: "thread-exact", workspace: "/review", cwd: "/workspace" }]);
+    const pulled = await callTool(connected.client, {
+      name: "glosa_inbox_pull",
+      arguments: { workspace: "/review" },
+    });
+    expect(pulled.isError).not.toBe(true);
+    expect(hook.registered?.session_id).toBe("thread-exact");
+    const acknowledged = await callTool(connected.client, {
+      name: "glosa_delivery_ack",
+      arguments: { entry_id: "entry-1" },
+    });
+    expect(acknowledged.isError).not.toBe(true);
+    expect(hook.pushedAcks.at(-1)).toEqual(["thread-exact", "entry-1", "presented"]);
+    await connected.close();
+    expect(attachAborted).toBe(true);
+  });
+
   test("pull keeps actionable text and acknowledges only after the SDK transport write", async () => {
     const hook = new HookClient();
     const events: string[] = [];
