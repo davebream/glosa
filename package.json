@@ -88,7 +88,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@gunshi/plugin-completion": "0.37.1",
+    "@gunshi/plugin-completion": "0.37.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "chokidar": "^5",
     "diff2html": "^3.4.56",
