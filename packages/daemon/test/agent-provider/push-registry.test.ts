@@ -41,4 +41,20 @@ describe("SessionPushRegistry", () => {
     unregister();
     expect(registry.has("session-a")).toBe(false);
   });
+
+  test("one monitor connection coalesces concurrent sends and remembers transport acceptance", async () => {
+    const registry = new SessionPushRegistry();
+    const entry = conversation("message-2", "session-a");
+    const seen: string[] = [];
+    registry.register("session-a", (value) => seen.push(value.id), undefined, "monitor");
+    const first = registry.send("session-a", entry, 100);
+    const concurrent = registry.send("session-a", entry, 100);
+    expect(seen).toEqual(["message-2"]);
+    expect(registry.transport("session-a")).toBe("monitor");
+    expect(registry.isAwaitingTransport("session-a", entry.id)).toBe(true);
+    expect(registry.acknowledgeTransport("session-a", entry.id)).toBe(true);
+    expect(await Promise.all([first, concurrent])).toEqual([true, true]);
+    expect(await registry.send("session-a", entry, 100)).toBe(true);
+    expect(seen).toEqual(["message-2"]);
+  });
 });

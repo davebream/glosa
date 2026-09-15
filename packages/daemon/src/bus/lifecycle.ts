@@ -40,7 +40,7 @@ export type EntryKind = "common" | "attention" | "conversation";
 // own, which is what a P4.3 review caught: a provider-local `DeliveryOutcome` had drifted to
 // `"delivered"|"failed"`, free text riding in `reason`, and no `via` distinguishing gate/stop/
 // userprompt — none of that is a legal A5 §F23 value.
-export type DeliveryVia = "channel" | "asyncRewake" | "gate" | "stop" | "userprompt" | "mcp_pull";
+export type DeliveryVia = "monitor" | "channel" | "asyncRewake" | "gate" | "stop" | "userprompt" | "mcp_pull";
 export type DeliveryOutcome = "attempted" | "transport_accepted" | "presented" | "failed";
 export type DeliveryReason = "initial" | "re_nudge";
 

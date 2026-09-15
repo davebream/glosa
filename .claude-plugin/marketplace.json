@@ -1,0 +1,16 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "glosa",
+  "description": "The official glosa plugin for local writing and review workflows.",
+  "owner": {
+    "name": "Dawid Leszczyński",
+    "url": "https://github.com/davebream"
+  },
+  "plugins": [
+    {
+      "name": "glosa",
+      "source": "./glosa-plugin",
+      "description": "Local-first writing and review workspace for Claude Code"
+    }
+  ]
+}

@@ -1301,6 +1301,174 @@ function handleSessionPushStream(
   });
 }
 
+/** Provider-neutral SSE stream used by plugin transports. It reuses the same bounded presentation
+ * builder as MCP pull, emits the parked queue on connect, and subscribes to the journal for later
+ * entries. Transport acceptance remains non-terminal; only an explicit agent acknowledgement can
+ * suppress the entry from later pull delivery. */
+async function handleSessionStream(
+  ctx: ApiContext,
+  sessionId: string,
+  req: Request,
+  server: BunServer | undefined,
+  authSignal?: AbortSignal,
+): Promise<Response> {
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown live session", undefined, new URL(req.url).pathname);
+  }
+  if (!record.workspace_binding) {
+    return problem(409, "conflict", "session is not explicitly bound", undefined, new URL(req.url).pathname);
+  }
+  if (!ctx.pushRegistry) {
+    return problem(503, "internal", "session push is unavailable", undefined, new URL(req.url).pathname);
+  }
+
+  const workspace = ctx.workspaceIndex.get(record.workspace_binding);
+  if (!workspace || !workspace.present || (workspace.lifecycle?.state ?? "active") !== "active") {
+    return problem(404, "not-found", "bound workspace is not active", undefined, new URL(req.url).pathname);
+  }
+  const bus = await resolveBus(ctx, workspace);
+  const encoder = new TextEncoder();
+  const signals = [req.signal, lifecycleSignal(ctx, authSignal)].filter((signal): signal is AbortSignal => !!signal);
+  const signal = AbortSignal.any(signals);
+  const sent = new Set<string>();
+  let unregister: (() => void) | undefined;
+  let unsubscribe: (() => void) | undefined;
+  let releaseLease: (() => void) | undefined;
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let pumping = false;
+  let rerun = false;
+  let closed = false;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    signal.removeEventListener("abort", close);
+    unsubscribe?.();
+    unregister?.();
+    releaseLease?.();
+    try {
+      controller.close();
+    } catch {
+      /* reader cancellation already closed the stream */
+    }
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(output) {
+      controller = output;
+      if (signal.aborted) {
+        close();
+        return;
+      }
+      const send = (entry: DeliverableEntry) => {
+        try {
+          controller.enqueue(encoder.encode(`event: delivery\ndata: ${JSON.stringify(entry)}\n\n`));
+        } catch (error) {
+          close();
+          throw error;
+        }
+      };
+      unregister = ctx.pushRegistry?.register(sessionId, send, close, "monitor");
+      releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
+
+      const pump = async () => {
+        if (closed) return;
+        if (pumping) {
+          rerun = true;
+          return;
+        }
+        pumping = true;
+        try {
+          do {
+            rerun = false;
+            const plan = await bus.previewDelivery(
+              DRAIN_MAX,
+              { session: sessionId, excludeEntryIds: sent },
+              (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status),
+            );
+            for (const candidate of plan.entries) {
+              if (closed || !candidate.presentation) break;
+              const entry = candidate.presentation as DeliverableEntry;
+              const accepted = await ctx.pushRegistry!.send(sessionId, entry, 30_000);
+              if (!accepted) break;
+              sent.add(entry.id);
+            }
+            if (plan.has_more && plan.entries.length > 0) rerun = true;
+          } while (rerun && !closed);
+        } finally {
+          pumping = false;
+        }
+      };
+
+      unsubscribe = bus.subscribe(({ event }) => {
+        if (event.event !== "delivery_attempt") void pump();
+      });
+      controller.enqueue(encoder.encode(": connected\n\n"));
+      signal.addEventListener("abort", close, { once: true });
+      void pump();
+    },
+    cancel: close,
+  });
+  server?.timeout(req, 0);
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+  });
+}
+
+async function handleSessionStreamTransportAck(ctx: ApiContext, sessionId: string, entryId: string): Promise<Response> {
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record?.workspace_binding || ctx.pushRegistry?.transport(sessionId) !== "monitor") {
+    return problem(404, "not-found", "unknown monitor session");
+  }
+  if (!ctx.pushRegistry.isAwaitingTransport(sessionId, entryId)) {
+    return problem(409, "conflict", "stream delivery is not awaiting transport acknowledgement");
+  }
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const attempts = bus.state.entries[entryId]?.deliveryAttempts;
+  await bus.recordDeliveryAttempt(entryId, {
+    fsync: true,
+    idem: `monitor:${sessionId}:${entryId}:transport_accepted`,
+    via: "monitor",
+    session: sessionId,
+    outcome: "transport_accepted",
+    reason: Array.isArray(attempts) && attempts.length > 0 ? "re_nudge" : "initial",
+  });
+  if (!ctx.pushRegistry.acknowledgeTransport(sessionId, entryId)) {
+    return problem(409, "conflict", "stream delivery is not awaiting transport acknowledgement");
+  }
+  return Response.json({ acknowledged: true });
+}
+
+async function handleSessionStreamPresentedAck(
+  ctx: ApiContext,
+  sessionId: string,
+  entryId: string,
+  req: Request,
+): Promise<Response> {
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record?.workspace_binding) return problem(404, "not-found", "unknown explicitly bound session");
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON");
+  }
+  const outcome = (body as Record<string, unknown> | null)?.outcome;
+  if (outcome !== "presented" && outcome !== "failed") {
+    return problem(400, "validation-failed", "outcome must be presented|failed");
+  }
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const acknowledged = await bus.acknowledgePushedEntry(entryId, {
+    session: sessionId,
+    via: "monitor",
+    outcome,
+    ...(outcome === "failed" ? { error: "monitor_presentation_failed" } : {}),
+  });
+  if (!acknowledged) return problem(409, "conflict", "entry is not deliverable to this session");
+  return Response.json({ acknowledged: true, delivered: outcome === "presented" });
+}
+
 async function handleConversationAck(
   ctx: ApiContext,
   sessionId: string,
@@ -2254,6 +2422,26 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     return {
       routeClass: "authed-read",
       handle: (req, server, authSignal) => handleSessionPushStream(ctx, sessionId, req, server, authSignal),
+    };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream$/))) {
+    const sessionId = m[1] as string;
+    return {
+      routeClass: "authed-read",
+      handle: (req, server, authSignal) => handleSessionStream(ctx, sessionId, req, server, authSignal),
+    };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream\/([^/]+)\/transport-ack$/))) {
+    const sessionId = m[1] as string;
+    const entryId = m[2] as string;
+    return { routeClass: "state-changing", handle: () => handleSessionStreamTransportAck(ctx, sessionId, entryId) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream\/([^/]+)\/ack$/))) {
+    const sessionId = m[1] as string;
+    const entryId = m[2] as string;
+    return {
+      routeClass: "state-changing",
+      handle: (req) => handleSessionStreamPresentedAck(ctx, sessionId, entryId, req),
     };
   }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/conversation\/([^/]+)\/ack$/))) {

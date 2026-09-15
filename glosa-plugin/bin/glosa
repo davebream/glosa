@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${GLOSA_BIN:-}" ] && [ -x "$GLOSA_BIN" ]; then
+  exec "$GLOSA_BIN" "$@"
+fi
+
+recorded_home="${GLOSA_HOME:-${HOME}/.glosa}"
+recorded_bin="${recorded_home}/bin/glosa"
+if [ -x "$recorded_bin" ] && [ "$recorded_bin" != "$0" ]; then
+  exec "$recorded_bin" "$@"
+fi
+
+plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+checkout_root=$(CDPATH= cd -- "$plugin_root/.." && pwd -P)
+source_bin="$checkout_root/packages/cli/src/main.ts"
+if [ -x "$source_bin" ]; then
+  exec "$source_bin" "$@"
+fi
+
+echo "glosa plugin: no local glosa executable found; install it with: npm install --global @davebream/glosa" >&2
+exit 127

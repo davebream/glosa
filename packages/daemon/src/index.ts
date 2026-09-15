@@ -40,7 +40,7 @@ export * from "./bus/index.ts";
 export type { ParsedBuildId } from "./lifecycle/build-id.ts";
 export { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "./lifecycle/build-id.ts";
 export type { DaemonConnection, EnsureDaemonResult } from "./lifecycle/daemon.ts";
-export { bootDaemon, buildChildEnv, ensureDaemon } from "./lifecycle/daemon.ts";
+export { bootDaemon, buildChildEnv, daemonPeerMismatchReason, ensureDaemon } from "./lifecycle/daemon.ts";
 export type { DaemonDiagnosis, DaemonDiagnosisKind } from "./lifecycle/diagnose.ts";
 export { diagnoseDaemon } from "./lifecycle/diagnose.ts";
 export type { HandshakeResponse } from "./lifecycle/handshake.ts";

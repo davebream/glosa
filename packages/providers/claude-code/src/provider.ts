@@ -55,6 +55,9 @@ export interface ClaudeCodeProviderDeps {
    * rung 1 without removing the sender itself. Omit (or return false) to always fall back. */
   channelsEnabled?: (session: SessionBinding) => boolean;
   sendChannel?: ChannelSender;
+  /** The live push transport registered for this session. During the #151→#152 transition this
+   * can be either the plugin monitor or the legacy Claude Channel shim. */
+  pushVia?: (session: SessionBinding) => "monitor" | "channel" | null;
   /** Whether an asyncRewake watcher is currently armed for this session — backed by
    * `RewakeLeaseStore.isActive` in production. Omit to skip rung 2 entirely (e.g. a provider
    * instance running outside the daemon that has no lease-store access). */
@@ -165,7 +168,9 @@ export class ClaudeCodeProvider implements AgentProvider {
     if (caps.push && this.deps.channelsEnabled?.(session) && this.deps.sendChannel) {
       try {
         const accepted = await this.deps.sendChannel(session, entry);
-        if (accepted) return { via: "channel", outcome: "transport_accepted" };
+        if (accepted) {
+          return { via: this.deps.pushVia?.(session) ?? "channel", outcome: "transport_accepted" };
+        }
       } catch (err) {
         return { via: "channel", outcome: "failed", error: errorMessage(err) };
       }

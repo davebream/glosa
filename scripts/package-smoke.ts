@@ -65,6 +65,12 @@ function assertPackContents(files: string[]): void {
     "packages/providers/claude-code/src/index.ts",
     "packages/providers/codex/src/index.ts",
     "packages/spa/src/index.ts",
+    ".claude-plugin/marketplace.json",
+    "glosa-plugin/.claude-plugin/plugin.json",
+    "glosa-plugin/.mcp.json",
+    "glosa-plugin/monitors/monitors.json",
+    "glosa-plugin/skills/glosa-connect/SKILL.md",
+    "glosa-plugin/bin/glosa",
     "README.md",
     "ROADMAP.md",
     "CHANGELOG.md",
@@ -121,6 +127,8 @@ try {
   if (run(glosa, ["--version"], isolatedEnv) !== expectedVersion)
     fail("installed CLI version does not match package.json");
   if (!run(glosa, ["--help"], isolatedEnv).includes("glosa open")) fail("installed CLI help omits the open command");
+  const recorded = join(glosaHome, "bin", "glosa");
+  if (!existsSync(recorded)) fail("installed CLI did not record its stable plugin launcher symlink");
   if (!run(glosa, ["complete", "bash"], isolatedEnv).includes("bash completion for glosa")) {
     fail("installed CLI did not generate bash completion");
   }

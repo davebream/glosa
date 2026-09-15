@@ -7,20 +7,28 @@ import type { DeliverableEntry } from "./interface.ts";
 interface Connection {
   close?: () => void;
   send: (entry: DeliverableEntry) => void;
+  transport: "channel" | "monitor";
+  accepted: Set<string>;
 }
 
 interface PendingAck {
   resolve: (accepted: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+  promise: Promise<boolean>;
 }
 
 export class SessionPushRegistry {
   private readonly connections = new Map<string, Connection>();
   private readonly pending = new Map<string, PendingAck>();
 
-  register(sessionId: string, send: Connection["send"], close?: () => void): () => void {
+  register(
+    sessionId: string,
+    send: Connection["send"],
+    close?: () => void,
+    transport: Connection["transport"] = "channel",
+  ): () => void {
     this.connections.get(sessionId)?.close?.();
-    this.connections.set(sessionId, { send, close });
+    this.connections.set(sessionId, { send, close, transport, accepted: new Set() });
     return () => {
       const current = this.connections.get(sessionId);
       if (current?.send !== send) return;
@@ -38,31 +46,39 @@ export class SessionPushRegistry {
     return this.connections.has(sessionId);
   }
 
+  transport(sessionId: string): Connection["transport"] | null {
+    return this.connections.get(sessionId)?.transport ?? null;
+  }
+
+  isAwaitingTransport(sessionId: string, entryId: string): boolean {
+    return this.pending.has(`${sessionId}\0${entryId}`);
+  }
+
   send(sessionId: string, entry: DeliverableEntry, timeoutMs = 2_000): Promise<boolean> {
     const connection = this.connections.get(sessionId);
     if (!connection) return Promise.resolve(false);
+    if (connection.accepted.has(entry.id)) return Promise.resolve(true);
     const key = `${sessionId}\0${entry.id}`;
     const prior = this.pending.get(key);
-    if (prior) {
-      clearTimeout(prior.timer);
-      prior.resolve(false);
-      this.pending.delete(key);
-    }
-    return new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(key);
-        resolve(false);
-      }, timeoutMs);
-      timer.unref?.();
-      this.pending.set(key, { resolve, timer });
-      try {
-        connection.send(entry);
-      } catch {
-        clearTimeout(timer);
-        this.pending.delete(key);
-        resolve(false);
-      }
+    if (prior) return prior.promise;
+    let resolvePromise!: (accepted: boolean) => void;
+    const promise = new Promise<boolean>((resolve) => {
+      resolvePromise = resolve;
     });
+    const timer = setTimeout(() => {
+      this.pending.delete(key);
+      resolvePromise(false);
+    }, timeoutMs);
+    timer.unref?.();
+    this.pending.set(key, { resolve: resolvePromise, timer, promise });
+    try {
+      connection.send(entry);
+    } catch {
+      clearTimeout(timer);
+      this.pending.delete(key);
+      resolvePromise(false);
+    }
+    return promise;
   }
 
   acknowledgeTransport(sessionId: string, entryId: string): boolean {
@@ -71,6 +87,7 @@ export class SessionPushRegistry {
     if (!pending) return false;
     clearTimeout(pending.timer);
     this.pending.delete(key);
+    this.connections.get(sessionId)?.accepted.add(entryId);
     pending.resolve(true);
     return true;
   }

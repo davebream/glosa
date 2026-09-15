@@ -74,6 +74,7 @@ export interface DaemonHookClient {
     messageId: string,
     outcome: "transport_accepted" | "presented" | "failed",
   ): Promise<void>;
+  acknowledgePushed?(sessionId: string, entryId: string, outcome: "presented" | "failed"): Promise<void>;
   /**
    * `onOpen`, when given, fires once the stream response is actually established (headers
    * received, body readable) — before the first read, so a caller can measure genuine connected
@@ -184,6 +185,11 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
     },
     async acknowledgeConversation(sessionId, messageId, outcome) {
       await call(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/${encodeURIComponent(messageId)}/ack`, {
+        outcome,
+      });
+    },
+    async acknowledgePushed(sessionId, entryId, outcome) {
+      await call(`/api/sessions/${encodeURIComponent(sessionId)}/stream/${encodeURIComponent(entryId)}/ack`, {
         outcome,
       });
     },

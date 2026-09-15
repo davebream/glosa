@@ -27,6 +27,10 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Message schema (over channel): `selection|mark|ready|error` with `seq`, `quote{exact,prefix,suffix}`, `range{start,end}`. Validate with zod every inbound; unknown → drop+log. Size cap 8KB/msg. Rate limit 50 msg/s/iframe (token bucket, drop excess). All strings = plain text, escaped at every render surface.
 
 ## 3. F24 — token lifecycle + realpath confinement
+- The Claude plugin monitor runs at hook trust and reads the pairing token only after finding a
+  registered workspace. Its launcher resolves `$GLOSA_BIN`, glosa's recorded absolute symlink, or a
+  sibling source checkout in that order; it never searches `PATH` for glosa and never downloads.
+  The monitor's daemon discovery is read-only and never starts, repairs, replaces, or stops a process.
 - Fragment scrub FIRST statement on bootstrap: read `#t=` (durable) or `#p=` (presentation),
   redeem `p` once for the durable token when present, `sessionStorage.setItem('glosa_token', durable)`,
   `history.replaceState` to pathname+search plus non-secret fragment state

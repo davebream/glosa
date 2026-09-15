@@ -112,10 +112,24 @@ describe("ClaudeCodeProvider.deliver — the R4 ladder", () => {
         return true;
       },
     });
+
     const result = await provider.deliver(SESSION, ENTRY);
     expect(result).toEqual({ via: "channel", outcome: "transport_accepted" });
     expect(channelEntries[0]).toBe(ENTRY); // exact bounded presentation; no provider-side summary
     expect(calledSignalWatcher).toBe(false);
+  });
+
+  test("a connected plugin stream records the actual monitor transport", async () => {
+    const provider = new ClaudeCodeProvider({
+      liveness: liveness(),
+      channelsEnabled: () => true,
+      sendChannel: async () => true,
+      pushVia: () => "monitor",
+    });
+    expect(await provider.deliver(SESSION, ENTRY)).toEqual({
+      via: "monitor",
+      outcome: "transport_accepted",
+    });
   });
 
   test("rung 1 not accepted (channel present but rejects) falls through to rung 2", async () => {

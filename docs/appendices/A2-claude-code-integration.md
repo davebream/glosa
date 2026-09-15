@@ -3,57 +3,53 @@
 This appendix specifies the provider boundary, delivery ladder, session registry, and transcript
 mirror. The durable inbox and journal remain authoritative regardless of transport availability.
 
-## F06 — optional Channels capability
+## F06 — plugin monitor capability
 
-Claude Channels are an optional first delivery rung. They are attempted during compatibility
-rehearsal when the installed Claude Code build and policy allow them, but unavailable or rejected
-Channels do not fail the gate when hook or MCP fallback presents the same durable entry.
+The Claude plugin is the install boundary. It carries `.mcp.json`, an always-declared per-session
+monitor, the `glosa-connect` skill, and a launcher that resolves a local glosa executable without a
+`PATH` lookup or download. The monitor receives its exact identity from
+`CLAUDE_CODE_SESSION_ID`; `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PROJECT_DIR}` are expanded into its
+command arguments because Claude does not place them in the monitor environment.
 
-For glosa's bare MCP server, the development activation command is:
+The monitor reads `workspaces.json` without mutating it. Outside a registered workspace it waits for
+that file to change and makes no daemon request. Once the project is registered, it registers with
+`source:"monitor"`, opens `GET /api/sessions/:id/stream`, and holds the session lease through that
+connection. It never starts or repairs a daemon. A disconnect retries with jittered exponential
+backoff whose floor is five seconds and whose cap is sixty seconds.
 
-```bash
-claude --dangerously-load-development-channels server:glosa
-```
+Each bounded stream presentation is written as one stdout line beginning `[glosa <entry-id>]`.
+Successful stdout completion records `via:"monitor", outcome:"transport_accepted"`; it is still
+eligible for MCP pull. Claude calls `glosa_delivery_ack` with the in-band id after the line reaches
+agent context. Only that exact-session acknowledgement records `presented`; conversation messages
+then make their terminal transition.
 
-Never invent or append a `--channels` flag. Consent and organization policy may still deny activation.
-`glosa doctor` reports Channel status as optional and unverified unless a real current-session
-registration signal exists; it never fabricates a pass from configuration presence.
+Claude suppresses plugin monitors when `DISABLE_TELEMETRY=1` or
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and does not run them for noninteractive or unsupported
+hosted-model sessions. `push` is therefore true only while a monitor is connected. MCP tools still
+load in those modes, and doctor names the environment-variable case rather than implying delivery is
+broken. Legacy Channel support remains only until #152 removes the old integration rails.
 
-A Channel notification accepted by the transport records `delivery_attempt` with
-`via:"channel", outcome:"transport_accepted"`. Acceptance does not prove presentation and therefore
-does not change lifecycle status by itself.
-
-The stdio MCP shim reads `CLAUDE_CODE_SESSION_ID`, advertises
-`capabilities.experimental["claude/channel"]`, and opens one authenticated serialized push stream for
-that exact registered session. A live stream—not configuration or an activation flag—is Channel
-availability. It emits `notifications/claude/channel` with the exact composer text and
-`meta.message_id`, then records only `transport_accepted`.
-
-Claude calls `glosa_conversation_ack` after the event reaches its context. That exact-session
-acknowledgement records `presented` and the terminal conversation transition. Without it, the
-immutable entry stays pending and remains eligible for hook/MCP presentation.
-
-## F07 — delivery ladder and asyncRewake
+## F07 — monitor delivery and fallback
 
 Claude delivery uses the best capability available to that live session:
 
 ```text
-Channel → asyncRewake → blocking/turn-boundary hook → MCP pull
+plugin monitor → MCP pull
 ```
 
 - Every rung presents the same provider-neutral, UTF-8-bounded payload.
 - A failed rung never mutates the immutable inbox entry.
 - `delivery_attempt` is a separate journal axis; only an acknowledged presentation may append
   `delivered`.
-- Hook and MCP paths are the required compatibility fallback.
+- MCP pull is the required compatibility fallback.
 - Targeted conversation entries are filtered by `target_session_id`; another bound session cannot
   drain or acknowledge them. Generic MCP pull requires an explicit registered session identity for
   these entries while untargeted inbox behavior remains unchanged.
-- Stop and UserPromptSubmit drains are bounded to eight entries and 32 KiB per batch.
+- The stream emits at most eight entries per selection pass, with 16 KiB per entry and the same
+  32 KiB batch presentation contract used by pull.
 
-`asyncRewake` is one-shot. SessionStart arms one watcher; after a wake, Stop rearms it under a
-per-session lease so repeated entries do not create duplicate watcher processes. If rearm is
-unavailable, the blocking/turn-boundary and MCP rungs still work.
+The existing Channel, `asyncRewake`, and turn-boundary hooks remain executable only during the
+#151→#152 migration window. They are no longer an installation path and are not the release design.
 
 Hook output shapes:
 
@@ -87,7 +83,7 @@ Providers register through the daemon API; no hook writes registry files directl
   "cwd": "/workspace/agent-cwd",
   "workspace_binding": "/workspace/explicit-review-target",
   "transcript_path": "/allowed/config-root/projects/example/session.jsonl",
-  "source": "hook",
+  "source": "monitor",
   "last_active_at": "ISO-8601",
   "lease_expiry": "ISO-8601"
 }
@@ -154,9 +150,8 @@ specified in A1 §5.15 and do not replace any workspace journal as truth.
 a preview-locked URL but never binds a session. A durable global or non-workspace MCP entry may use
 preview-only presentation without `glosa init`. `glosa open` is equally init-free: it registers and
 opens the artifact, creates only glosa workspace state, and never installs agent configuration.
-Init is required only for provider delivery integration (hooks, feedback routing, conversation
-delivery, and optional Channels) and may be installed at workspace or user scope. `glosa doctor`
-reports the effective provider installation and its scope.
+Claude provider delivery is installed only through the plugin marketplace. No per-workspace Claude
+settings are written. `glosa doctor` reports daemon health and any observable monitor suppression.
 
 Bindings are session-scoped and held only in memory. An explicit bind restores them after a daemon
 restart, including registration if needed, rather
@@ -172,7 +167,7 @@ identity and `glosa session bind <current-session-id> --workspace <workspace-pat
 The prompt asks the current agent session to bind itself; glosa never launches an agent, enumerates
 agent CLI processes, selects between candidate sessions, or persists a binding for later restoration.
 
-## F15 — hook registration
+## F15 — legacy hook registration (removed by #152)
 
 `glosa init` owns only its signed entries and merges them transactionally. Provider selection and
 scope orchestration are generic CLI concerns; the Claude Code provider owns the Claude-specific
@@ -214,14 +209,15 @@ artifact viewing, editing, annotation, and inbox delivery remain usable.
 
 ## Compatibility tests
 
-1. Channels accepted when available, and unavailable Channels followed by successful hook/MCP fallback.
-2. Three sequential async wakes do not duplicate watchers and fallback remains available.
+1. A real plugin monitor process idles outside a registered workspace, connects after `glosa open`,
+   and receives parked and live entries without spawning a daemon.
+2. A dropped daemon stream reconnects only after the five-second floor and resumes parked delivery.
 3. Explicit binding routes across different agent/artifact working directories; parked entries drain.
-4. Stop/UserPromptSubmit presentations obey byte/count limits and acknowledgement ordering.
+4. Monitor presentations obey byte/count limits and transport/presentation acknowledgement ordering.
 5. Transcript fixtures cover partial, unknown, corrupt, resume, clear, compact, and large tool results.
-6. Conversation delivery covers unacknowledged Channel transport, acknowledgement-tool success,
-   exact-session hook/MCP fallback, wrong-session isolation, retries, and daemon restart.
+6. Conversation delivery covers unacknowledged monitor transport, acknowledgement-tool success,
+   exact-session MCP fallback, wrong-session isolation, retries, and daemon restart.
 
-The manual T8 report records the installed Claude Code version, actual session model, Channel attempt,
-and the successful transport used. A Channel failure is reported, never hidden; fallback success is a
-separate observed fact.
+The manual T8 report records the installed Claude Code version, actual session model, monitor line
+arrival, and the successful transport used. Monitor suppression or absence is reported separately
+from observed MCP fallback success.

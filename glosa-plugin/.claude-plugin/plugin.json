@@ -1,0 +1,12 @@
+{
+  "name": "glosa",
+  "version": "0.1.0-alpha.21",
+  "description": "Local-first writing and review workspace for Claude Code.",
+  "author": {
+    "name": "Dawid Leszczyński"
+  },
+  "homepage": "https://github.com/davebream/glosa#readme",
+  "repository": "https://github.com/davebream/glosa",
+  "license": "Apache-2.0",
+  "skills": "./skills/"
+}

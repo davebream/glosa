@@ -149,19 +149,24 @@ After the first install, `glosa update` handles this automatically.
 
 </details>
 
-Open a writing workspace first; install agent delivery only when you want feedback routed back:
+Add the official marketplace and install the Claude Code plugin once:
+
+```text
+/plugin marketplace add davebream/glosa
+/plugin install glosa
+```
+
+Then open a writing workspace:
 
 ```sh
 cd /path/to/your/workspace
 glosa open
-glosa init --agent claude-code
 ```
 
-`glosa init` defaults to workspace scope and accepts repeatable `--agent claude-code|codex` flags
-(`--agent all` installs both). Without a flag it selects one locally detected provider or prompts
-once when interactive; scripts and `--json` callers must resolve ambiguity explicitly. Use
-`--scope user` for a user-wide integration. Read-only `glosa open` and `glosa_present` do not
-require init or an agent session. Run `glosa doctor` to verify effective provider installations,
+The plugin supplies Claude's MCP tools and one session monitor. A session started outside a glosa
+workspace stays idle; after `glosa open` registers that directory, the same monitor connects without
+a session restart. Read-only `glosa open` and `glosa_present` do not require an agent session. Run
+`glosa doctor` to diagnose the daemon and monitor suppression,
 or `glosa --help` to see every command. If an inbox entry's payload goes missing — moved or deleted
 by hand — `glosa inbox list` names it and `glosa inbox dismiss <id>` closes it without a session.
 To permanently delete a workspace's registration and bus (never its work-tree files), use
@@ -185,14 +190,14 @@ manager owns your glosa install. It is the only part of glosa that makes an outb
 runs only when you invoke it, and it sends no identifying data.
 
 > [!NOTE]
-> A durable global install is required for `glosa init`: generated hooks must keep working after the
-> current shell exits. `bunx` and `npx` remain suitable for one-shot commands.
+> A durable global install is required by the plugin launcher. `bunx` and `npx` remain suitable for
+> one-shot commands.
 
 ## Agent support
 
 | Agent | Integration |
 |---|---|
-| **Claude Code** | Hooks, MCP pull, turn-boundary delivery, and optional Channels push when the installed build supports it. |
+| **Claude Code** | Official plugin with MCP pull and a per-session monitor over the generic push stream. |
 | **Codex** | Hooks, MCP pull, and turn-boundary delivery through the same provider contract. |
 | **Generic MCP host** | Durable feedback can be pulled through the MCP tools without teaching the core about that agent. |
 

@@ -85,7 +85,7 @@ the same eight. `requirements.md` governs where any summary of it disagrees.
 |---|---|
 | `fault` | storage/fault (kill daemon at each write step → one legal recovered state) |
 | `concurrency` | concurrency |
-| `delivery` | delivery (channels on/off, asyncRewake rearm, boundary, parked/resumed) |
+| `delivery` | delivery (monitor push, reconnect, MCP pull fallback, parked/resumed) |
 | `security` | browser security (the A3 §5 attacks) |
 | `anchor` | anchor corpus (Polish combining chars, md markup, duplicate quotes, stale hashes, transformed HTML) |
 | `transcript` | transcript suite |
@@ -122,16 +122,19 @@ dropping out of it.
 | `concurrency` | `packages/daemon/test/concurrency-real-subprocess.test.ts` |
 | `concurrency` | `packages/daemon/test/git/lease.test.ts` |
 | `concurrency` | `test/acceptance/generic-pull-scope.test.ts` |
+| `delivery` | `packages/daemon/test/monitor.test.ts` |
 | `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
 | `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
 | `delivery` | `packages/cli/test/mcp.test.ts` |
 | `delivery` | `packages/cli/test/mcp-lifetime-real-subprocess.test.ts` |
 | `delivery` | `packages/cli/test/daemon-client.test.ts` |
+| `delivery` | `packages/cli/test/plugin-launcher.test.ts` |
 | `delivery` | `packages/cli/test/api-integration.test.ts` |
 | `delivery` | `packages/daemon/test/bus/delivery-reservation.test.ts` |
 | `delivery` | `packages/daemon/test/delivery/presentation.test.ts` |
 | `delivery` | `packages/daemon/test/agent-provider/push-registry.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/provider.test.ts` |
+| `delivery` | `packages/providers/claude-code/test/monitor.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/rewake.test.ts` |
 | `delivery` | `packages/providers/claude-code/test/delivery-journal.test.ts` |
 | `delivery` | `packages/providers/codex/test/provider.test.ts` |
