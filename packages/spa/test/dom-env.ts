@@ -24,7 +24,8 @@ export interface DomEnv {
   teardown: () => void;
 }
 
-const SKIP = new Set(["window", "self", "top", "parent", "globalThis", "console"]);
+// Runtime constants are immutable; newer Bun correctly rejects even same-value assignments.
+const SKIP = new Set(["window", "self", "top", "parent", "globalThis", "console", "Infinity", "NaN", "undefined"]);
 
 export function installDom(): DomEnv {
   const win = new Window();
