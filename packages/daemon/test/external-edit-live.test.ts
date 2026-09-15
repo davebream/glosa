@@ -6,13 +6,19 @@
 // open — and #153's headline workflow is an external editor plus an agent with NO glosa tab. Every
 // test here therefore opens no stream and registers no listener.
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { type ChokidarOptions, type FSWatcher, watch } from "chokidar";
 import { ArtifactWatcherRegistry, DEFAULT_MAX_WATCHED_WORKSPACES } from "../src/artifact-watcher.ts";
 import { WorkspaceBus } from "../src/bus/bus.ts";
 import { EXTERNAL_EDIT_KIND } from "../src/bus/external-edit.ts";
 import { readInboxEntry } from "../src/bus/inbox.ts";
-import type { WorkspaceTarget } from "../src/workspace.ts";
+import {
+  registrationIdFor,
+  type WorkspaceLocation,
+  type WorkspaceTarget,
+  workspaceRegistrationId,
+} from "../src/workspace.ts";
 import {
   claimTestDaemonIdentity,
   cleanupWorkspace,
@@ -34,7 +40,7 @@ function workspace(): string {
   return root;
 }
 
-function openBus(root: string): WorkspaceBus {
+function openBus(root: WorkspaceTarget): WorkspaceBus {
   epoch += 1_000_000;
   const bus = new WorkspaceBus(root, { ulid: deterministicUlid(epoch), now: deterministicClock(epoch) });
   buses.push(bus);
@@ -50,6 +56,25 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) await Bun.sleep(20);
   if (!predicate()) throw new Error("timed out waiting for the artifact watcher");
+}
+
+/** A real chokidar factory plus a promise that settles once the watch is ARMED. A write made before
+ * then can land while no watch exists yet and produce no event at all — under load that window is
+ * wide enough to lose a test's first save, and a write that early is reconcile's offline catch-up's
+ * to report, never the watcher's. A case that writes and then waits for the watcher awaits this. */
+function armedWatchFactory(): {
+  watchFactory: (paths: string[], options: ChokidarOptions) => FSWatcher;
+  armed: () => Promise<void>;
+} {
+  let ready: Promise<void> = Promise.resolve();
+  return {
+    watchFactory: (paths, options) => {
+      const watcher = watch(paths, options);
+      ready = new Promise<void>((resolve) => watcher.once("ready", () => resolve()));
+      return watcher;
+    },
+    armed: () => ready,
+  };
 }
 
 function externalEditEntries(bus: WorkspaceBus): Array<Record<string, unknown>> {
@@ -75,14 +100,17 @@ describe("A4 — a live external save produces one coalesced entry, with no brow
 
     // Deliberately the REAL default quiet window, not a shortened test value: the claim is that
     // two seconds absorbs an editor's save burst, and a 50 ms window would prove nothing about it.
+    const { watchFactory, armed } = armedWatchFactory();
     const registry = track(
       new ArtifactWatcherRegistry({
+        watchFactory,
         captureExternalEdit: (target) => openBusFor(target, bus).captureExternalEdit(),
       }),
     );
     // No `subscribe`, no listener, no stream — this is the whole amendment.
     registry.ensureWatched(root);
     expect(registry.watchedWorkspaceCount()).toBe(1);
+    await armed();
 
     writeFileSync(join(root, "notes.md"), "line one\nline two\n");
     await Bun.sleep(300);
@@ -134,6 +162,99 @@ describe("A4 — a live external save produces one coalesced entry, with no brow
     await waitUntil(() => registry.watchedWorkspaceCount() === 0, 2_000);
     expect(registry.modeFor(root)).toBeNull();
   });
+});
+
+describe("A4b — a save that replaces the file, as Typora's does, is still one coalesced entry, and watching survives it", () => {
+  // A4 writes in place. Typora is an NSDocument app: it saves with
+  // `-[NSFileManager replaceItemAtURL:withItemAtURL:...]`, which writes the new bytes to a temporary
+  // file OUTSIDE the document's directory and swaps it in, so after every save the path names a new
+  // inode. A loose-file workspace — a manuscript opened from a folder that is not a git repository —
+  // is watched file by file (`chooseMode` returns "files" for bounded tracking), and a per-file
+  // watch follows the inode, not the path. It keeps working only because chokidar re-attaches when
+  // the inode changes (`_handleFile`'s `prevStats.ino !== newStats.ino` branch). With that branch
+  // disabled, only the first replacement is ever seen. Its quiet window still yields one entry
+  // carrying the whole burst — the capture reads the disk when the window closes — but every save
+  // after that produces no entry at all, while A4 and the rest of this file stay green. The
+  // closing save below is what pins it.
+  //
+  // The temp file is written beside the workspace rather than inside it, which is where NSDocument
+  // puts it and keeps a stray `.tmp` out of the directory watch's own events.
+  function replacingSave(scratch: string, path: string, content: string): void {
+    const temp = join(scratch, "save-in-progress", "draft.md");
+    mkdirSync(join(scratch, "save-in-progress"), { recursive: true });
+    writeFileSync(temp, content);
+    renameSync(temp, path);
+  }
+
+  // Only the loose-file shape is pinned. The same save into a DIRECTORY workspace passes with the
+  // inode branch disabled, and with the watcher's add/unlink listeners removed as well, because a
+  // directory watch does not follow inodes and chokidar reports the swap as a change. A case there
+  // could not fail for any reason A4 cannot, so it is left out rather than kept as decoration.
+  test("a loose-file workspace: three replacing saves make one external_edit, and a later replacing save is still captured", async () => {
+    const scratch = realpathSync(workspace());
+    const manuscript = join(scratch, "manuscript");
+    mkdirSync(manuscript);
+    const draft = join(manuscript, "draft.md");
+    writeFileSync(draft, "line one\n");
+    // The daemon lock lives outside the watched folder, and the bus is redirected out of it the way
+    // the index redirects a loose file's bus to `~/.glosa/state/<id>`.
+    claimTestDaemonIdentity(join(scratch, "daemon"));
+    mkdirSync(join(scratch, "state"));
+    const target: WorkspaceLocation = {
+      registration_id: registrationIdFor("loose-file", draft),
+      kind: "loose-file",
+      canonical_path: draft,
+      worktree_path: manuscript,
+      bus_path: join(scratch, "state", "loose"),
+      tracking: { mode: "bounded", paths: ["draft.md"] },
+    };
+    const bus = openBus(target);
+    await bus.reconcile();
+
+    const { watchFactory, armed } = armedWatchFactory();
+    const registry = track(
+      new ArtifactWatcherRegistry({
+        watchFactory,
+        captureExternalEdit: (captured) => {
+          if (workspaceRegistrationId(captured) !== target.registration_id) {
+            throw new Error("watcher passed an unexpected workspace");
+          }
+          return bus.captureExternalEdit();
+        },
+      }),
+    );
+    registry.ensureWatched(target);
+    // Watching file by file is the whole reason this case exists, so it is asserted, not assumed.
+    expect(registry.modeFor(target)).toBe("files");
+    await armed();
+
+    replacingSave(scratch, draft, "line one\nline two\n");
+    await Bun.sleep(300);
+    replacingSave(scratch, draft, "line one\nline two\nline three\n");
+    await Bun.sleep(300);
+    replacingSave(scratch, draft, "line one\nline two\nline three\nline four\n");
+
+    await waitUntil(() => externalEditEntries(bus).length > 0);
+    await Bun.sleep(2_500); // past the window, so an uncoalesced second entry would be here by now
+    const burst = externalEditEntries(bus);
+    expect(burst).toHaveLength(1);
+    expect(burst[0]!.source).toBe("live");
+    // The burst's bytes, all of them. This does NOT show the watch survived a replacement: the capture
+    // reads the disk when the window closes, so it carries the third save even if only the first was
+    // observed.
+    expect(String(burst[0]!.diff)).toContain("+line four");
+
+    // This is the assertion that goes red when chokidar stops re-attaching after an inode change: a
+    // save made after the burst's window has closed can only become an entry if the watch saw it.
+    replacingSave(scratch, draft, "line one\nline two\nline three\nline four\nline five\n");
+    await waitUntil(() => externalEditEntries(bus).length === 2);
+    expect(String(externalEditEntries(bus)[1]!.diff)).toContain("+line five");
+
+    const kinds = Object.keys(bus.state.entries).map(
+      (id) => (readInboxEntry(bus.workspace, id) as { kind?: string } | null)?.kind,
+    );
+    expect(kinds).not.toContain("human_edit");
+  }, 30_000);
 });
 
 describe("A6 — the cross-workspace watcher count is bounded, and that is a different claim from the per-workspace entry cap", () => {
@@ -207,8 +328,10 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const captures: string[] = [];
+    const { watchFactory, armed } = armedWatchFactory();
     const registry = track(
       new ArtifactWatcherRegistry({
+        watchFactory,
         quietWindowMs: 400,
         captureExternalEdit: async (target) => {
           captures.push(typeof target === "string" ? target : target.canonical_path);
@@ -216,6 +339,9 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
       }),
     );
     registry.ensureWatched(root);
+    // Armed first: a write that lands before the watch exists opens no window, and `captures`
+    // would then be empty for a reason that has nothing to do with eviction.
+    await armed();
 
     writeFileSync(join(root, "notes.md"), "one\ntwo\n");
     // Wait long enough for the change to be observed and the window to be OPEN, but not to fire.
@@ -249,8 +375,10 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
     writeFile(root, "notes.md", "one\n");
     const warnings: string[] = [];
     let calls = 0;
+    const { watchFactory, armed } = armedWatchFactory();
     const registry = track(
       new ArtifactWatcherRegistry({
+        watchFactory,
         quietWindowMs: 50,
         warn: (message) => warnings.push(message),
         captureExternalEdit: async () => {
@@ -260,6 +388,7 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
       }),
     );
     registry.ensureWatched(root);
+    await armed();
 
     writeFileSync(join(root, "notes.md"), "one\ntwo\n");
     await waitUntil(() => calls > 0, 5_000);
