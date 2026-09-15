@@ -4,6 +4,18 @@ import { resolve, join } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { checkedFiles, gitEnvironment, ROOT, type Profile } from "./test-plan.ts";
 
+// Build/test tooling has a newer floor than the shipped application: 1.2.7's JUnit
+// reporter can abort on passing tests (#230). This is the verified tooling floor,
+// not a claim about the first upstream version that fixed its internal reporter error.
+export const MIN_JUNIT_BUN = "1.4.2";
+export function assertJUnitRuntime(version = Bun.version): void {
+  if (!Bun.semver.satisfies(version, `>=${MIN_JUNIT_BUN}`)) {
+    throw new Error(
+      `Glosa's JUnit test runner requires Bun >=${MIN_JUNIT_BUN}; found ${version}. Use the packageManager toolchain pin.`,
+    );
+  }
+}
+
 type Case = {
   name: string;
   classname?: string;
@@ -60,6 +72,7 @@ export async function runInvocation(options: {
   root?: string;
   command?: string[];
 }): Promise<number> {
+  assertJUnitRuntime();
   const root = options.root ?? ROOT;
   mkdirSync(options.directory, { recursive: true });
   const prefix = join(options.directory, `${options.profile}-${Date.now()}-${crypto.randomUUID()}`);
