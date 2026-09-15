@@ -113,7 +113,7 @@
   --dur-base: 200ms;
 
   /* Layout. */
-  --nav-width: 260px;
+  --nav-width: 232px; /* the contract's width: at 1440 it leaves the pane its 1205px rail floor */
   --margin-width: 320px;
   --topbar-height: 3rem;
   --artifact-bar-height: 36px;
@@ -931,7 +931,7 @@ input,
   outline-offset: -2px;
 }
 
-/* Mode control: one stable segmented control on the sunken track DESIGN.md §2 reserves for it.
+/* Mode control: one stable segmented control on a sunken track.
    The active segment is a sheet of paper with a hairline edge; the state is carried by weight,
    fill, and edge together, never by colour alone. Track 8px, segments 6px: concentric. */
 .glosa-modebar {
@@ -1789,7 +1789,7 @@ input,
   color: var(--ink);
 }
 
-/* A direction that would do nothing says so. Faint ink and no hover bed — DESIGN.md §5's disabled
+/* A direction that would do nothing says so. Faint ink and no hover bed — the disabled
    treatment minus the fill, which on a menu row would read as more prominent rather than less. */
 .glosa-pane-menu-item:disabled {
   color: var(--faint);
@@ -2267,6 +2267,38 @@ input,
   border-radius: var(--radius-micro);
 }
 
+/* Passage addresses on the page (address.js stamps `data-address` on every top-level block; no
+   node is added, so the quote-and-offset anchors are untouched). In Review a heading always shows
+   its address in the 2rem gutter, and any block shows it while hovered or focused, so the label a
+   margin entry names can be found on the page. Read stays clean paper. */
+.glosa-content > [data-address] {
+  position: relative;
+}
+
+.glosa-pane[data-mode="review"] .glosa-content > [data-address]::before {
+  content: attr(data-address);
+  position: absolute;
+  right: 100%;
+  top: 0.45em;
+  margin-right: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--hand);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+.glosa-pane[data-mode="review"] .glosa-content > :is(h1, h2, h3, h4, h5, h6)[data-address]::before,
+.glosa-pane[data-mode="review"] .glosa-content > [data-address]:hover::before,
+.glosa-pane[data-mode="review"] .glosa-content > [data-address]:focus-visible::before {
+  opacity: 1;
+}
+
 .glosa-content .glosa-annotatable-block:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
@@ -2626,6 +2658,16 @@ input,
 .glosa-foreedge-row:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
+}
+
+/* The outline is the document's addresses: each row leads with the § its heading carries. */
+.glosa-foreedge-address {
+  flex: none;
+  margin-right: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--hand);
 }
 
 .glosa-foreedge-row[aria-current="location"] {
@@ -3628,6 +3670,18 @@ input,
   display: grid;
   gap: var(--space-2);
   box-shadow: none;
+}
+
+/* Below the rail floor the composer FLOATS over the manuscript at its passage (the anchored
+   layout), and a floating thing needs paper under it and the menu's lift, or the words it is
+   about show through the words being written. In the rail it stays typography on the page. */
+.glosa-margin-anchored .glosa-composer {
+  padding: var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-top-color: var(--pencil);
+  border-radius: var(--radius-composer);
+  box-shadow: var(--shadow-menu);
 }
 
 .glosa-composer .glosa-address {

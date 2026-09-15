@@ -738,6 +738,7 @@ export function createArtifactPane(host, deps) {
     }
 
     outlineSourceKey = "";
+    if (surface.kind === "rendered") stampAddresses();
     const headings = collectRenderedHeadings(surface.root);
     const depths = outlineDepths(headings);
     const scrollTop = surface.scroller.scrollTop;
@@ -750,6 +751,9 @@ export function createArtifactPane(host, deps) {
         level: heading.level,
         depth: depths[index],
         text: heading.text,
+        // The § the heading carries on the page (rendered surface only; the rich editor's headings
+        // are not addressed, and the source face has no page to be addressed on).
+        address: surface.kind === "rendered" ? (heading.el.getAttribute?.("data-address") ?? null) : null,
         fraction: tops[index] / extent,
         jump: () => {
           scrollToOffset(surface.scroller, tops[index]);
@@ -1524,7 +1528,7 @@ export function createArtifactPane(host, deps) {
     form.append(
       el("p", { className: "glosa-annotation-head" }, [
         el("span", { className: "glosa-address", textContent: addressForTarget(record.target) ?? "" }),
-        el("span", { className: "glosa-annotation-who", textContent: "You · pencil, not sent" }),
+        el("span", { className: "glosa-annotation-who", textContent: "You · not sent yet" }),
       ]),
     );
     if (record.target?.quote?.exact) {
@@ -1572,7 +1576,7 @@ export function createArtifactPane(host, deps) {
     const send = el("button", {
       className: "glosa-composer-send",
       type: "button",
-      textContent: replacing ? "Replace" : "Send",
+      textContent: replacing ? "Replace" : "Send to session",
       onClick: () => void submitComposer(input),
     });
     send.disabled = Boolean(composer.submitting);
@@ -2410,7 +2414,7 @@ export function createArtifactPane(host, deps) {
       total === 0 ? "no marks" : `${total} ${total === 1 ? "mark" : "marks"}${open ? ` · ${open} open` : ""}`,
     );
     fact(getProviderName(), applied === 0 ? "nothing applied" : `${applied} applied`);
-    fact("Outside glosa", diskChange ? "changed on disk" : "nothing");
+    fact("Outside glosa", diskChange ? "changed on disk" : "no changes");
     const approved = approvalResult && approvalResult.path === currentArtifact.source_path;
     fact(
       "Approval",
@@ -2505,7 +2509,19 @@ export function createArtifactPane(host, deps) {
 
   /** The underlines and gutter dots, repainted. Called from every render and every content
    * change, in every mode — not from renderMargin, which returns early outside Annotate. */
+  /** Stamps every top-level block with its address (address.js) so the page can show the label a
+   * margin entry names. An attribute, never a node: the quote-and-offset anchors and the highlight
+   * ranges read text and stay untouched. Re-run on every render, because the numbering is derived
+   * from the current structure and a morph may have replaced a block. */
+  function stampAddresses() {
+    if (!currentArtifact || currentArtifact.class === "F") return;
+    for (const [block, address] of addressBlocks(contentEl)) {
+      if (block.getAttribute("data-address") !== address) block.setAttribute("data-address", address);
+    }
+  }
+
   function paintAnnotationMarks() {
+    stampAddresses();
     paintAnchorUnderlines();
     renderMarkers();
     paintAgentSidelines();

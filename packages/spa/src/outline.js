@@ -56,7 +56,7 @@ const JUMP_HEADROOM = 24;
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
 
 /**
- * @typedef {{ level: number, depth: number, text: string, fraction: number, jump: () => void }} OutlineEntry
+ * @typedef {{ level: number, depth: number, text: string, address?: string | null, fraction: number, jump: () => void }} OutlineEntry
  */
 
 /** Markdown source is not rendered text: a heading reads `## The **hard** part` on disk and
@@ -314,9 +314,16 @@ export function createOutlineController({ host, id, onOpenChange = () => {} }) {
         role: "treeitem",
         tabIndex: index === activeRow ? 0 : -1,
         "aria-level": String(entry.depth),
-        textContent: entry.text,
         title: entry.text, // rows ellipsize at 200-288px; the full heading stays recoverable
       });
+      // The outline is the document's addresses: the § leads when the heading carries one.
+      if (entry.address) {
+        row.append(
+          el("span", { className: "glosa-foreedge-address", "aria-hidden": "true", textContent: entry.address }),
+        );
+        row.setAttribute("aria-label", `${entry.address} ${entry.text}`);
+      }
+      row.append(document.createTextNode(entry.text));
       const depth = Math.min(entry.depth, 6) - 1;
       row.style.setProperty("--outline-depth", String(depth));
       row.setAttribute("data-depth", String(depth));
