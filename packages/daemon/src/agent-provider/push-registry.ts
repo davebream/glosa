@@ -7,7 +7,7 @@ import type { DeliverableEntry } from "./interface.ts";
 interface Connection {
   close?: () => void;
   send: (entry: DeliverableEntry) => void;
-  transport: "channel" | "monitor";
+  transport: "channel" | "monitor" | "codex_app_server";
   accepted: Set<string>;
 }
 

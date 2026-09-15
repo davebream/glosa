@@ -75,6 +75,14 @@ export interface DaemonHookClient {
     outcome: "transport_accepted" | "presented" | "failed",
   ): Promise<void>;
   acknowledgePushed?(sessionId: string, entryId: string, outcome: "presented" | "failed"): Promise<void>;
+  acknowledgeStreamTransport?(sessionId: string, entryId: string): Promise<void>;
+  openSessionStream?(
+    sessionId: string,
+    transport: "monitor" | "codex_app_server",
+    onEntry: (entry: DrainedEntry) => Promise<void>,
+    signal: AbortSignal,
+    onOpen?: () => void,
+  ): Promise<void>;
   /**
    * `onOpen`, when given, fires once the stream response is actually established (headers
    * received, body readable) — before the first read, so a caller can measure genuine connected
@@ -192,6 +200,46 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       await call(`/api/sessions/${encodeURIComponent(sessionId)}/stream/${encodeURIComponent(entryId)}/ack`, {
         outcome,
       });
+    },
+    async acknowledgeStreamTransport(sessionId, entryId) {
+      await call(
+        `/api/sessions/${encodeURIComponent(sessionId)}/stream/${encodeURIComponent(entryId)}/transport-ack`,
+        {},
+      );
+    },
+    async openSessionStream(sessionId, transport, onEntry, signal, onOpen) {
+      const res = await fetchRequest(
+        `${base}/api/sessions/${encodeURIComponent(sessionId)}/stream?transport=${encodeURIComponent(transport)}`,
+        {
+          headers: {
+            Host: `127.0.0.1:${port}`,
+            Origin: base,
+            Authorization: `Bearer ${loadToken(glosaHome())}`,
+          },
+          signal,
+        },
+      );
+      if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as ApiProblem | null);
+      if (!res.body) throw new Error("session stream response has no body");
+      onOpen?.();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        let boundary = buffered.indexOf("\n\n");
+        while (boundary >= 0) {
+          const frame = buffered.slice(0, boundary);
+          buffered = buffered.slice(boundary + 2);
+          boundary = buffered.indexOf("\n\n");
+          const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+          const data = frame.match(/^data:\s*(.+)$/m)?.[1];
+          if (event !== "delivery" || !data) continue;
+          await onEntry(JSON.parse(data) as DrainedEntry);
+        }
+      }
     },
     async openConversationPush(sessionId, onEntry, signal, onOpen) {
       const res = await fetchRequest(`${base}/api/sessions/${encodeURIComponent(sessionId)}/push-stream`, {

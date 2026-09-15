@@ -1361,10 +1361,15 @@ export class WorkspaceBus {
 
   /** Records that a provider-neutral session stream entry reached agent context. Unlike a drain
    * acknowledgement this path has no reservation token: the in-band entry id printed by the
-   * monitor is the durable identity the agent returns through MCP. */
+   * monitor or injected by the Codex attachment is the durable identity returned through MCP. */
   acknowledgePushedEntry(
     entryId: string,
-    opts: { session: string; via: "monitor"; outcome: "presented" | "failed"; error?: string },
+    opts: {
+      session: string;
+      via: "monitor" | "codex_app_server";
+      outcome: "presented" | "failed";
+      error?: string;
+    },
   ): Promise<boolean> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
@@ -1388,7 +1393,7 @@ export class WorkspaceBus {
       }
       this.recordDeliveryAttemptLocked(entryId, {
         fsync: true,
-        idem: `monitor:${opts.session}:${entryId}:${opts.outcome}`,
+        idem: `${opts.via}:${opts.session}:${entryId}:${opts.outcome}`,
         via: opts.via,
         session: opts.session,
         outcome: opts.outcome,
