@@ -16,6 +16,7 @@ import { mountAgentFeedback } from "./agent-feedback.js";
 import { mountAppearanceControl } from "./appearance.js";
 import { selectRequestToReveal } from "./agent-request.js";
 import { createArtifactPane, MODES } from "./artifact-pane.js";
+import { createFaceStore } from "./face.js";
 import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
 import { createDataAccess } from "./data-access.js";
@@ -71,6 +72,7 @@ export { MODES, INTENTS, initialModeState, isParked, modeReducer, morphArtifactC
  *   appearance?: any,
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
+ *   faceStore?: any,
  * }} [options]
  */
 export function mountApp(
@@ -85,6 +87,8 @@ export function mountApp(
     appearance,
     onFocusChange,
     layoutStorage,
+    // The writer's per-artifact face (face.js). One store for every pane; a test passes its own.
+    faceStore = createFaceStore({ storage: layoutStorage ?? undefined }),
   } = {},
 ) {
   root.textContent = "";
@@ -401,6 +405,7 @@ export function mountApp(
       openArtifactInThisPane: (nextPath) => replacePanel(id, nextPath),
       // A presented single document has no tab strip, so its pane carries the whole identity.
       getTabLabel: () => (singlePane ? null : (tabLabels().get(id) ?? id.split("/").pop())),
+      faceStore,
       openDiffTab: openDiff,
       claimWidth: (target) => dock?.claimWidth(id, target),
       releaseWidth: () => dock?.releaseWidth(id),

@@ -40,3 +40,7 @@ graphify-out/
 
 # local-only historical/private notes
 docs/archive/
+
+# Local visual-review captures and Playwright MCP output: screenshots can contain private manuscripts.
+.impeccable/review/
+.playwright-mcp/

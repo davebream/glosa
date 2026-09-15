@@ -1,48 +1,71 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* @glosa/spa — the visual system (design brief: docs/design/2026-07-21-workspace-review-surface-brief.md).
-   Served as /app/app.css (allowlisted in packages/daemon/src/http.ts). Plain CSS, no build step.
+/* @glosa/spa — the visual system (direction contract: packages/spa/.impeccable/surfaces/src-app-css.md).
+   Served as /app/app.css (allowlisted in packages/daemon/src/transport/http.ts). Plain CSS, no build step.
 
-   The register: light-first editorial workbench. The manuscript is white paper in the center;
-   chrome is a quiet sage-tinted desk around it. One functional accent (deep olive), never a wash.
-   Serif = rendered writing only. Sans = every control. Mono = paths and technical metadata only. */
+   The register: one identity, two hands. The manuscript is the writer's, in the writer's face
+   (Default sans, Serif, Mono — per artifact). The chrome is achromatic and quiet. glosa is
+   recognisable by its marks, not by a typeface or an accent wash: the human's marks are one colour
+   everywhere (the hand); a mark not yet sent is graphite (pencil); a session's answers are printed
+   in ink. Diff green and red are the only other hues on the page. */
 
 /* ---------- 1. Tokens ---------- */
 
 :root {
   color-scheme: light;
 
-  /* Palette (OKLCH; hue 110 = editorial sage/olive; brief §5). */
-  --bg: oklch(1 0 0); /* reading surface — pure white paper */
-  --surface: oklch(0.972 0.004 110); /* control surface — topbar, navigator, panels */
-  --surface-sunken: oklch(0.945 0.006 110); /* segmented-control track, hover beds */
-  --ink: oklch(0.24 0.01 110); /* primary text — ~16:1 on bg */
-  --muted: oklch(0.46 0.012 110); /* secondary text — ~7:1 on bg */
-  --faint: oklch(0.62 0.01 110); /* disabled/tertiary, large glyphs only */
-  --border: oklch(0.885 0.006 110); /* structural rules — visible on paper and on the desk */
-  --border-strong: oklch(0.79 0.01 110); /* interactive edges and hairlines that must be seen */
-  --primary: oklch(0.5 0.1 110); /* workbench accent — actions, selection, focus */
-  --focus: var(--primary);
-  --primary-hover: oklch(0.44 0.1 110);
-  --on-primary: oklch(0.99 0 0);
-  --anchor-wash: oklch(0.94 0.032 120); /* annotation anchor highlight — calm sage, not highlighter */
+  /* Palette (OKLCH). Neutrals carry no hue at all — the desk is grey paper, not tinted paper, so
+     nothing on it competes with the one colour that means "you". */
+  --bg: oklch(1 0 0); /* reading surface — white paper */
+  --surface: oklch(0.97 0 0); /* control surface — topbar, navigator, panels */
+  --surface-sunken: oklch(0.94 0 0); /* segmented-control track, hover beds */
+  --ink: oklch(0.2 0 0); /* primary text — ~16:1 on bg */
+  --muted: oklch(0.5 0 0); /* secondary text — ~5.7:1 on bg */
+  --faint: oklch(0.65 0 0); /* disabled only, never live text */
+  --border: oklch(0.9 0 0); /* structural rules */
+  --border-strong: oklch(0.62 0 0); /* interactive edges — ≥3:1 on paper */
+
+  /* The two hands. `--hand` is the human's mark everywhere it appears: the wash on the words, the
+     address, the margin text, the composer, the caret. `--pencil` is the same mark before it is
+     sent. Nothing a session writes ever takes either; its answers are printed in `--ink`. */
+  --hand: oklch(0.42 0.06 195); /* deep teal, #0F5D5D — free of link, danger, diff and success */
+  --hand-hover: oklch(0.36 0.06 195);
+  --pencil: oklch(0.55 0 0);
+  --hand-wash: color-mix(in oklch, var(--hand) 14%, transparent); /* on the words, in Review */
+  --pencil-wash: color-mix(in oklch, var(--pencil) 16%, transparent);
+  --hand-line: color-mix(in oklch, var(--hand) 70%, transparent); /* the quiet underline in Read */
+  --anchor-wash: color-mix(in oklch, var(--hand) 14%, var(--bg)); /* opaque form, for surfaces */
+
+  /* Actions are ink. The primary button is the page's own black; it never borrows the hand. */
+  --primary: var(--ink);
+  --primary-hover: oklch(0.32 0 0);
+  --on-primary: var(--bg);
+  --focus: var(--hand);
+
+  /* Semantic state. Danger and warning keep shape and text beside them; success green is also
+     the diff's insert colour, and appears nowhere a human mark could be mistaken for it. */
   --danger: oklch(0.5 0.16 25);
   --warn: oklch(0.55 0.12 75);
   --ok: oklch(0.52 0.1 150);
 
-  /* Typography (macOS-only v1 → system stacks, zero webfonts; brief §4). */
-  /* Iowan Old Style is named first on purpose: `ui-serif` resolves to New York in Safari and to
-     nothing in Chromium, and the two faces differ by 65px over a 68ch measure. Naming the book
-     face makes every engine agree with --manuscript-block below; Charter shares its width. */
+  /* Typography. The manuscript takes the writer's face; the chrome is always the system sans;
+     mono is for paths, identifiers and the source face only.
+     Iowan Old Style is named first in the serif stack on purpose: `ui-serif` resolves to New York
+     in Safari and to nothing in Chromium, and the two faces differ by 65px over a 68ch measure. */
   --font-serif: "Iowan Old Style", Charter, ui-serif, Georgia, serif;
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* The manuscript's face and size. A pane sets these from its artifact's chosen face
+     (`.glosa-pane[data-face]`, below); Default is the sans. */
+  --font-manuscript: var(--font-sans);
+  --manuscript-size: 1rem; /* 16 — sans reads at 16 where the serif wants 17 */
+  --manuscript-leading: 1.6;
 
   /* Fixed rem scale, ratio ~1.125 (product register). */
   --text-2xs: 0.6875rem; /* 11 — counts, navigator section labels */
   --text-xs: 0.75rem; /* 12 — state labels, timestamps */
   --text-sm: 0.8125rem; /* 13 — chrome default, annotations */
   --text-base: 0.9375rem; /* 15 — panel body */
-  --text-md: 1.0625rem; /* 17 — manuscript body (serif) */
+  --text-md: 1.0625rem; /* 17 — serif manuscript body */
   --text-lg: 1.1875rem; /* 19 — panel titles */
   --text-xl: 1.375rem; /* 22 — screen headlines */
 
@@ -55,9 +78,9 @@
   --space-8: 2rem;
   --space-12: 3rem;
 
-  /* Radii — DESIGN.md's rounded scale, one name per role. A nested corner is its container's
-     radius minus the padding between them (menu 8px − 4px padding = 4px rows; segmented track
-     8px − 2px = 6px segments), so concentric shapes stay parallel instead of pinching. */
+  /* Radii — one name per role. A nested corner is its container's radius minus the padding
+     between them (menu 8px − 4px padding = 4px rows; segmented track 8px − 2px = 6px segments),
+     so concentric shapes stay parallel instead of pinching. */
   --radius-focus: 2px;
   --radius-micro: 4px;
   --radius-tool: 5px;
@@ -67,9 +90,9 @@
   --radius-overlay: 12px;
   --radius-pill: 999px;
 
-  /* Elevation — only for what genuinely floats (DESIGN.md §4). Two layers each: a tight edge that
-     separates, and a broad lift with an offset so the light has a direction. */
-  --shadow-ink: 0.24 0.01 110;
+  /* Elevation — only for what genuinely floats. Two layers each: a tight edge that separates, and
+     a broad lift with an offset so the light has a direction. */
+  --shadow-ink: 0.2 0 0;
   --shadow-rest: 0 1px 2px oklch(var(--shadow-ink) / 0.06);
   --shadow-menu: 0 1px 2px oklch(var(--shadow-ink) / 0.06), 0 10px 28px -6px oklch(var(--shadow-ink) / 0.16);
   --shadow-tray: 0 -1px 2px oklch(var(--shadow-ink) / 0.05), 0 -12px 32px -8px oklch(var(--shadow-ink) / 0.16);
@@ -83,7 +106,7 @@
   --z-dialog: 50;
   --z-tooltip: 60;
 
-  /* Motion (product: 150–250ms, ease-out; brief §9). */
+  /* Motion (product: 150–250ms, ease-out). */
   --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
   --dur-fast: 150ms;
   --dur-base: 200ms;
@@ -97,13 +120,25 @@
   --measure: 68ch;
   /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
      Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
-     serif context, where `68ch` would measure the sans face and lie by ~110px. MEASURED from the
-     built page, not estimated — the shipped serif (Iowan Old Style: 643px plus two 2rem gutters)
-     is wider than the brief's 642px guess, which was New York's 68ch measure, and the
-     difference is the whole 1130–1187px band where a rail derived from the guess would have
-     overlapped the text. Keep in step with --measure, .glosa-content's padding, and
-     artifact-pane.js's MARGIN_RAIL_FLOOR. */
+     manuscript context, where `68ch` would measure the chrome face and lie by ~110px. MEASURED
+     from the built page in the serif face (Iowan Old Style: 643px plus two 2rem gutters); the sans
+     and mono faces set narrower and the ladder stays conservative for them. Keep in step with
+     --measure, .glosa-content's padding, and artifact-pane.js's MARGIN_RAIL_FLOOR. */
   --manuscript-block: 707px;
+}
+
+/* The writer's face, per artifact. artifact-pane.js stamps the pane from face.js; the whole
+   manuscript surface — rendered, rich editor, quotes that echo it — reads the same variable. */
+.glosa-pane[data-face="serif"] {
+  --font-manuscript: var(--font-serif);
+  --manuscript-size: var(--text-md);
+  --manuscript-leading: 1.65;
+}
+
+.glosa-pane[data-face="mono"] {
+  --font-manuscript: var(--font-mono);
+  --manuscript-size: 0.9375rem;
+  --manuscript-leading: 1.65;
 }
 
 /* Registered so `100ch` is computed where it is DECLARED — inside the source face's mono context
@@ -115,23 +150,23 @@
   initial-value: 0px;
 }
 
-/* The approved dark direction is the same annotated workbench under lower ambient light, not an
-   inverted developer console. Depth comes from a three-step olive-charcoal surface ladder; the
-   accent lightens and softens so it remains legible without glowing. */
+/* Dark is the same page under lower light, never an inverted console: a neutral near-black
+   ground, the ink lifted to parchment-free off-white, the hand lifted only as far as it stays
+   legible without glowing. Pencil stays grey; a session's answers stay ink. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: oklch(0.19 0.012 110);
-  --surface: oklch(0.235 0.014 110);
-  --surface-sunken: oklch(0.275 0.016 110);
-  --ink: oklch(0.92 0.012 105);
-  --muted: oklch(0.72 0.014 105);
-  --faint: oklch(0.56 0.012 105);
-  --border: oklch(0.32 0.014 110);
-  --border-strong: oklch(0.5 0.018 110);
-  --primary: oklch(0.68 0.085 110);
-  --primary-hover: oklch(0.75 0.09 110);
-  --on-primary: oklch(0.19 0.012 110);
-  --anchor-wash: oklch(0.34 0.052 112);
+  --bg: oklch(0.19 0 0);
+  --surface: oklch(0.225 0 0);
+  --surface-sunken: oklch(0.265 0 0);
+  --ink: oklch(0.93 0 0);
+  --muted: oklch(0.7 0 0);
+  --faint: oklch(0.55 0 0);
+  --border: oklch(0.3 0 0);
+  --border-strong: oklch(0.5 0 0);
+  --hand: oklch(0.75 0.08 190); /* #5fbdb3 — the ceiling before teal glows */
+  --hand-hover: oklch(0.8 0.08 190);
+  --pencil: oklch(0.62 0 0);
+  --primary-hover: oklch(0.85 0 0);
   --danger: oklch(0.7 0.14 25);
   --warn: oklch(0.74 0.11 75);
   --ok: oklch(0.7 0.09 150);
@@ -218,7 +253,7 @@ button {
 }
 
 ::selection {
-  background: var(--anchor-wash);
+  background: var(--hand-wash);
 }
 
 /* Browser-drawn surfaces carry the palette too: the caret is the pencil, and a scrollbar that
@@ -226,7 +261,7 @@ button {
 textarea,
 input,
 [contenteditable="true"] {
-  caret-color: var(--primary);
+  caret-color: var(--hand);
 }
 
 .glosa-sidebar,
@@ -271,7 +306,6 @@ input,
 }
 
 .glosa-screen h1 {
-  font-family: var(--font-serif);
   font-size: var(--text-xl);
   font-weight: 600;
   margin: 0;
@@ -372,7 +406,7 @@ input,
 }
 
 .glosa-logo-accent {
-  fill: var(--primary);
+  fill: var(--hand);
 }
 
 /* The navigator's one control: show/hide, at every width and in every mode. */
@@ -1662,6 +1696,64 @@ input,
   text-decoration-thickness: 1px;
 }
 
+/* The face control: the writer's own choice of how the page is set. A native select behind a
+   quiet "Aa" glyph, so the affordance is the platform's rather than an invention. It sits in the
+   artifact bar because the choice belongs to this artifact, not to the workspace. */
+.glosa-face {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 28px;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.glosa-face:hover,
+.glosa-face:focus-within {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.glosa-face-glyph {
+  font-family: var(--font-manuscript);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.glosa-face-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background:
+    transparent
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3" fill="none" stroke="%23808080" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+    no-repeat right var(--space-1) center / 10px 10px;
+  padding: 0 calc(var(--space-1) + 12px) 0 var(--space-1);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.glosa-face-select:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.glosa-face-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-focus);
+}
+
+.glosa-pane[data-active="false"] .glosa-face {
+  display: none;
+}
+
 .glosa-pane-tools {
   position: relative;
   flex: 0 0 auto;
@@ -1993,9 +2085,9 @@ input,
   max-width: calc(var(--measure) + 2 * var(--space-8));
   margin: 0 auto;
   padding: 4rem var(--space-8) 6rem;
-  font-family: var(--font-serif);
-  font-size: var(--text-md);
-  line-height: 1.65;
+  font-family: var(--font-manuscript);
+  font-size: var(--manuscript-size);
+  line-height: var(--manuscript-leading);
   text-wrap: pretty;
   hanging-punctuation: first;
   --prose-gap: 1.2em; /* the space between blocks, in the body's own em so it scales with it */
@@ -2253,7 +2345,6 @@ input,
 }
 
 .glosa-empty-title {
-  font-family: var(--font-serif);
   font-size: var(--text-lg);
   font-weight: 600;
   margin: 0;
@@ -2365,10 +2456,10 @@ input,
   pointer-events: auto;
 }
 
-/* A 24px control 800px tall. An outline round it draws an empty olive capsule the height of the
+/* A 24px control 800px tall. An outline round it draws an empty coloured capsule the height of the
    page, which reads as a rendering fault rather than as focus — so the column lights up instead of
-   being framed: a sunken bed, an olive edge on the side facing the text, and every mark on it
-   going olive at once. Three channels, none of them a box. */
+   being framed: a sunken bed, a hand-coloured edge on the side facing the text, and every mark on it
+   taking the hand at once. Three channels, none of them a box. */
 .glosa-foreedge-rail:focus-visible {
   outline: none;
   background: var(--surface-sunken);
@@ -2768,7 +2859,6 @@ input,
 
 .glosa-rich-i {
   font-style: italic;
-  font-family: var(--font-serif);
 }
 
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding
@@ -2983,7 +3073,7 @@ input,
    precisely how all three silently stopped painting. Keep in step with the HL_* constants. */
 ::highlight(glosa-anchors) {
   text-decoration: underline;
-  text-decoration-color: oklch(0.8 0.07 110);
+  text-decoration-color: var(--hand-line);
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
@@ -2995,20 +3085,20 @@ input,
 
    Scoped through the originating element, which is how highlight pseudo-elements take context. */
 .glosa-pane[data-mode="review"] .glosa-content::highlight(glosa-anchors) {
-  background-color: color-mix(in oklch, var(--anchor-wash) 55%, transparent);
+  background-color: var(--hand-wash);
 }
 
-/* The hovered or focused one, in any mode: full wash, and the pencil line goes olive so the
+/* The hovered or focused one, in any mode: full wash, and the line takes the hand so the
    thread between text and card is not carried by the wash alone. */
 ::highlight(glosa-anchor) {
   background-color: var(--anchor-wash);
-  text-decoration-color: var(--primary);
+  text-decoration-color: var(--hand);
 }
 
 /* Browser selection paint disappears as soon as focus moves into the annotation composer. Keep
    the selected passage visibly attached to that open draft until it is sent or cancelled. */
 ::highlight(glosa-composer-selection) {
-  background-color: var(--anchor-wash);
+  background-color: var(--pencil-wash); /* not sent yet: pencil, not ink */
 }
 
 /* Side-rail cards sit tighter than in-flow ones: one-line quote, smaller padding — smaller
@@ -3032,7 +3122,7 @@ input,
    same sentence as a human annotation without the two fighting for the same pixels.
 
    At rest the rule is graphite: a session pointing at something is not the reviewer's own action,
-   so it spends nothing from the accent budget. It goes olive only while it is the passage being
+   so it spends nothing from the accent budget. It takes the hand only while it is the passage being
    answered, which is exactly what --primary is for. */
 /* Spans the pane; each rule carries its own measured `left`, because the distance that matters
    is to the TEXT column, which a CSS offset against the content box cannot see. */
@@ -3095,7 +3185,7 @@ input,
 }
 
 .glosa-agent-quote {
-  font-family: var(--font-serif);
+  font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
   font-size: var(--text-sm);
@@ -3328,7 +3418,7 @@ input,
 }
 
 .glosa-annotation-quote {
-  font-family: var(--font-serif);
+  font-family: var(--font-manuscript);
   font-style: italic;
   color: var(--muted);
   font-size: var(--text-sm);
@@ -3509,7 +3599,7 @@ input,
 }
 
 .glosa-composer-quote {
-  font-family: var(--font-serif);
+  font-family: var(--font-manuscript);
   font-style: italic;
   font-size: var(--text-sm);
   color: var(--muted);
@@ -3598,11 +3688,10 @@ input,
 }
 
 .glosa-dialog::backdrop {
-  background: oklch(0.24 0.01 110 / 0.3);
+  background: oklch(0.2 0 0 / 0.3);
 }
 
 .glosa-dialog h2 {
-  font-family: var(--font-serif);
   font-size: var(--text-lg);
   font-weight: 600;
   margin: 0 0 var(--space-2);
@@ -4492,18 +4581,18 @@ input,
      takes the accent while it is actually being dragged. */
   --dv-separator-border: var(--border);
   --dv-sash-color: transparent;
-  --dv-active-sash-color: var(--primary);
+  --dv-active-sash-color: var(--hand);
   --dv-active-sash-transition-duration: var(--dur-fast);
   --dv-active-sash-transition-delay: 0ms;
   --dv-transition-duration: var(--dur-base);
 
-  /* The drop target is the one place in the product where olive marks a spatial intent rather
+  /* The drop target is the one place in the product where the hand marks a spatial intent rather
      than a state, and it is gone the instant the pointer is released — which is exactly the
      transient marking the Accent Rarity Rule permits. */
-  --dv-drag-over-background-color: color-mix(in oklch, var(--primary) 12%, transparent);
-  --dv-drag-over-border-color: var(--primary);
-  --dv-drag-over-border: 2px solid var(--primary);
-  --dv-edge-dock-indicator-color: var(--primary);
+  --dv-drag-over-background-color: var(--hand-wash);
+  --dv-drag-over-border-color: var(--hand);
+  --dv-drag-over-border: 2px solid var(--hand);
+  --dv-edge-dock-indicator-color: var(--hand);
 
   --dv-icon-hover-background-color: var(--surface-sunken);
   --dv-context-menu-background-color: var(--bg);
@@ -4603,7 +4692,7 @@ input,
   box-shadow: inset -1px 0 0 var(--border);
 }
 
-/* The active tab's mark: a 2px olive top edge, painted rather than added to the box, so switching
+/* The active tab's mark: a 2px ink top edge, painted rather than added to the box, so switching
    tabs never nudges the strip by two pixels. Weight and the surface change carry it too — the
    edge is never the only signal. dockview reuses ::before for its own 1px divider, so the width
    is restated here or the edge would be one pixel wide on every tab but the first. */
@@ -4618,7 +4707,7 @@ input,
 }
 
 /* An unfocused group's current tab still reads as the sheet it is, in the neutral edge rather
-   than the accent — olive means focus, and there is only one focus. */
+   than the ink — ink means focus, and there is only one focus. */
 .glosa-dock-theme .dv-inactive-group .dv-tab.dv-active-tab::before {
   content: "";
   position: absolute;
@@ -4745,7 +4834,7 @@ input,
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--primary);
+  background: var(--hand); /* an unsaved edit is the human's hand, not yet on disk */
 }
 
 .glosa-tab-close {
@@ -4883,7 +4972,7 @@ input,
   .glosa-pane-main,
   .glosa-content {
     background: #ffffff !important;
-    color: #20251f !important;
+    color: #1f1f1f !important;
   }
 
   .glosa-app,
@@ -4941,25 +5030,25 @@ input,
   }
 
   .glosa-content blockquote {
-    color: #4b5448 !important;
+    color: #4a4a4a !important;
   }
   .glosa-content hr {
-    border-color: #c8cec5 !important;
+    border-color: #cfcfcf !important;
   }
   .glosa-content code,
   .glosa-content pre {
-    background: #f3f5f1 !important;
+    background: #f3f3f3 !important;
   }
   .glosa-content pre {
-    border-color: #c8cec5 !important;
+    border-color: #cfcfcf !important;
   }
   .glosa-content th,
   .glosa-content td {
-    border-color: #c8cec5 !important;
+    border-color: #cfcfcf !important;
   }
   .glosa-content a {
-    color: #365c25 !important;
-    text-decoration-color: #78966c !important;
+    color: #0f5d5d !important;
+    text-decoration-color: #5f9a94 !important;
   }
 }
 
