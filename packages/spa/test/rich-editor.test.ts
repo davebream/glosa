@@ -156,8 +156,13 @@ describe("prosemirror-markdown round-trip (what the serializer alone can carry)"
     // So the assertion moves to where #174's behaviour is still observable — the same fixture with
     // the header removed — and the raw-node document asserts the cost instead. Both halves are here
     // because dropping either one would let a real #174 regression hide behind this comment.
-    const withoutHeader = FIXTURE.split("---\n")[2] ?? "";
-    expect(withoutHeader, "the header-stripped fixture is non-empty").not.toBe("");
+    // #175 ALSO STRIPS THE `%%` COMMENT, and says why rather than leaving a silent extra `.split`:
+    // that block is now a SECOND raw node (`commentFenceRule`, rich-editor.js), so a fixture with
+    // the header alone removed still holds an unmodelled node and never reaches the relative
+    // baseline this assertion is about. Stripping both is what makes "no raw node is present" true
+    // again rather than merely asserted.
+    const withoutHeader = (FIXTURE.split("---\n")[2] ?? "").split("\n\n%%\n")[0] + "\n";
+    expect(withoutHeader, "the header-and-comment-stripped fixture is non-empty").not.toBe("");
     const relaxed = roundtrip(withoutHeader);
     expect(relaxed, "#174 still relaxes when no raw node is present").not.toContain("\\[");
     expect(relaxed).toContain("*[bracketed emphasis]*");
@@ -275,16 +280,7 @@ describe("a vault-shaped note survives an edit in every region (AC-7)", () => {
   }
 });
 
-/** THE ONE KNOWN LIMIT, PINNED SO IT CANNOT GO SILENT (AC-8, design §5.4).
- *
- *  A CRLF file whose header is EDITED writes that header back LF-only. Cause: markdown-it normalises
- *  line endings before a block rule sees `state.src`, so the node's text is LF-only, while
- *  `blockLayout` deliberately resolves spans against the RAW source — which is why an UNEDITED CRLF
- *  header is still copied byte-for-byte.
- *
- *  It is bounded, not corrupting: the collateral guard FIRES, so the writer sees the exact bytes and
- *  is asked before anything is written. The assertion on `collateral.length` is the point of this
- *  test — the day this becomes silent, it goes red. */
+/** Metadata edits retain the source CRLF style, including bytes outside the edited block. */
 describe("a CRLF metadata header (AC-8)", () => {
   const CRLF = "---\r\ntitle: T\r\nstatus: draft\r\n---\r\n\r\nBody.\r\n";
 
@@ -292,14 +288,9 @@ describe("a CRLF metadata header (AC-8)", () => {
     expect(save(CRLF, CRLF).markdown).toBe(CRLF);
   });
 
-  test("edited, the header comes back LF-only — and the writer is ASKED, never told after", () => {
+  test("edited, the header retains CRLF without invented collateral", () => {
     const edited = CRLF.replace("status: draft", "status: review");
-    const result = save(CRLF, edited);
-    expect(result.markdown, "the writer's edit is applied").toContain("status: review");
-    expect(result.markdown, "but the header's own line endings are LF").toContain("---\ntitle: T");
-    expect(result.markdown, "outside the header the \\r bytes survive").toContain("Body.\r\n");
-    // THE LOAD-BEARING ASSERTION. Bounded because it is reported.
-    expect(result.collateral.length, "the collateral guard fires, so this is never silent").toBe(1);
+    expect(save(CRLF, edited)).toEqual({ markdown: edited, collateral: [], degraded: false });
   });
 });
 
@@ -455,6 +446,253 @@ describe("a metadata header is recognised, and only a metadata header", () => {
   });
 });
 
+/** #175's second non-manuscript construct, tested the same way the header above is: one row per
+ *  guard, each pinning what deleting it would swallow or refuse. `commentFenceRule` shares its
+ *  shape with `metadataHeaderRule` but drops guard 1 (root-only) and guard 4 (the non-blank
+ *  guard) — both rows below exist to prove the DROP, not merely to assert the outcome. */
+describe("a `%%` comment is recognised, and only a `%%` comment", () => {
+  const shapeOf = (source: string) =>
+    parseMarkdown(source).content.content.map((node: { type: { name: string } }) => node.type.name);
+  const kindOf = (source: string, index = 0) => parseMarkdown(source).child(index).attrs.kind;
+
+  const cases: Array<{ what: string; source: string; shape: string[]; pins: string }> = [
+    {
+      what: "the happy path, mid-document",
+      pins: "-",
+      source: "# T\n\n%%\nsecret\n%%\n\nBody.\n",
+      shape: ["heading", "glosa_raw", "paragraph"],
+    },
+    // NOT root-only, unlike the header: a comment at the very start of the file is recognised too.
+    {
+      what: "at the document start",
+      pins: "-",
+      source: "%%\nsecret\n%%\n\nBody.\n",
+      shape: ["glosa_raw", "paragraph"],
+    },
+    // The DROPPED non-blank guard: a blank line directly under the opening fence is NOT a thematic
+    // break for `%%` (unlike `---`, `%%` has no other CommonMark meaning to disambiguate from), so
+    // it is admitted rather than refused.
+    {
+      what: "a blank line directly under the opening fence",
+      pins: "guard 4 does not apply",
+      source: "%%\n\nsecret\n%%\n\nBody.\n",
+      shape: ["glosa_raw", "paragraph"],
+    },
+    { what: "an empty comment", pins: "-", source: "%%\n%%\n\nBody.\n", shape: ["glosa_raw", "paragraph"] },
+    {
+      what: "an unclosed fence is not a comment — falls through as a paragraph",
+      pins: "the close-search guard",
+      source: "%%\nsecret\n\nBody.\n",
+      shape: ["paragraph", "paragraph"],
+    },
+    {
+      what: "inside a blockquote",
+      pins: "the rule never fires nested (parity with the header)",
+      source: "> %%\n> secret\n> %%\n\nBody.\n",
+      shape: ["blockquote", "paragraph"],
+    },
+    {
+      what: "an indented fence",
+      pins: "the same-indent guard",
+      source: "  %%\nsecret\n%%\n\nBody.\n",
+      shape: ["paragraph", "paragraph"],
+    },
+    {
+      what: "a comment that is the whole file",
+      pins: "-",
+      source: "%%\nsecret\n%%\n",
+      shape: ["glosa_raw"],
+    },
+    {
+      what: "two separate comments in one document",
+      pins: "-",
+      source: "%%\nfirst\n%%\n\nBody.\n\n%%\nsecond\n%%\n",
+      shape: ["glosa_raw", "paragraph", "glosa_raw"],
+    },
+  ];
+
+  for (const { what, source, shape, pins } of cases) {
+    test(`${what} (pins: ${pins})`, () => {
+      expect(shapeOf(source), what).toEqual(shape);
+      expect(save(source, source).markdown, `${what}: an untouched save is byte-identical`).toBe(source);
+    });
+  }
+
+  test("a `%%` inside a fenced code block is code, never a comment (the fence rule runs first)", () => {
+    const source = "```\n%%\nnot a comment\n%%\n```\n\nBody.\n";
+    expect(shapeOf(source)).toEqual(["code_block", "paragraph"]);
+  });
+
+  test("a backslash-escaped `\\%\\%` is never a comment delimiter", () => {
+    // The rule compares the RAW line text (`\%\%`, five characters), which never equals the
+    // two-character fence — so this line is refused before markdown-it's own generic backslash
+    // escape ever runs, and the line falls through to ordinary paragraph/inline parsing.
+    const source = "\\%\\%\n\nBody.\n";
+    expect(shapeOf(source)).toEqual(["paragraph", "paragraph"]);
+  });
+
+  test("an unclosed inline `%%` is not a comment — literal text, no mark", () => {
+    const source = "Body %% never closes.\n";
+    const doc = parseMarkdown(source);
+    expect(doc.firstChild?.textContent).toBe(source.trimEnd());
+    expect(doc.firstChild?.child(0).marks).toEqual([]);
+  });
+
+  test('the node carries kind: "comment", distinct from a metadata header\'s kind: "metadata"', () => {
+    expect(kindOf("%%\nsecret\n%%\n")).toBe("comment");
+    expect(kindOf("---\ntitle: T\n---\n")).toBe("metadata");
+    // Every bare `glosa_raw` node built without going through either block rule (every fixture in
+    // "the per-node-type opt-out" describe below) still defaults to "metadata" — #175 changed no
+    // caller that predates it.
+    expect(editorSchema.nodes.glosa_raw.create(null, editorSchema.text("x")).attrs.kind).toBe("metadata");
+  });
+
+  test("editing inside a comment writes exactly the edit, byte for byte (parity with the header)", () => {
+    const source = "%%\nA comment block.\nSecond line of the comment.\n%%\n\nBody.\n";
+    const edited = source.replace("A comment block.", "A COMMENT block.");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  /** Nested raw-region regression: "Editing a comment-only list item currently serializes `- %%...` as
+   *  `- - %%...` and degrades with `reparse`." Root cause: `getLines`'s `indent` argument (the
+   *  shared `blockFenceRule`'s own comment explains the mechanism) used to be a bare `0`, so a
+   *  list item's own `- ` marker on the raw node's FIRST line was captured as part of its text —
+   *  and written a SECOND time when the list wrapper re-emitted its own marker on save. Passing
+   *  `state.blkIndent` fixes the capture; these rows prove the save, not merely the shape. */
+  test("a comment-only list item is byte-exact on an untouched save and on an edit inside it", () => {
+    const source = "- %%\n  A private note.\n  Second line.\n  %%\n- visible item\n";
+    expect(save(source, source).markdown, "untouched").toBe(source);
+    const edited = source.replace("A private note.", "A PRIVATE note.");
+    const result = save(source, edited);
+    expect(result.markdown, "no doubled list marker").toBe(edited);
+    expect(result.degraded, "no whole-document fallback").toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("a comment-only blockquote is byte-exact on an untouched save and on an edit inside it", () => {
+    const source = "> %%\n> secret note\n> %%\n\nAfter.\n";
+    expect(save(source, source).markdown, "untouched").toBe(source);
+    const edited = source.replace("secret note", "SECRET note");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("a comment-only item inside a NESTED list is byte-exact on an untouched save and on an edit inside it", () => {
+    const source = "- outer\n  - %%\n    hidden\n    %%\n  - sibling\n";
+    expect(save(source, source).markdown, "untouched").toBe(source);
+    const edited = source.replace("hidden", "HIDDEN");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  /** Comments use the same source line-ending preservation as metadata. */
+  describe("a CRLF `%%` comment (parity with AC-8)", () => {
+    const CRLF = "%%\r\nA comment block.\r\nSecond line.\r\n%%\r\n\r\nBody.\r\n";
+
+    test("unedited, it is copied byte for byte including its \\r", () => {
+      expect(save(CRLF, CRLF).markdown).toBe(CRLF);
+    });
+
+    test("edited, the comment retains CRLF without invented collateral", () => {
+      const edited = CRLF.replace("A comment block.", "A COMMENT block.");
+      expect(save(CRLF, edited)).toEqual({ markdown: edited, collateral: [], degraded: false });
+    });
+  });
+});
+
+/** #175's REPAIR: paired, unescaped inline `%% ... %%` comments — a MARK on the enclosed text
+ *  (`glosa_comment`), not a second opaque node, so the surrounding prose in the same paragraph or
+ *  heading stays ordinary, editable rich content. The first draft's exclusion of this form was
+ *  not authorized and is covered here. */
+describe("an inline `%% ... %%` comment, as a mark inside ordinary prose", () => {
+  const markTextOf = (doc: any) => {
+    const marked: string[] = [];
+    doc.descendants((node: any) => {
+      if (node.isText && node.marks.some((m: any) => m.type.name === "glosa_comment")) marked.push(node.text);
+    });
+    return marked;
+  };
+
+  test("a pair inside a paragraph marks its complete source spelling", () => {
+    const doc = parseMarkdown("Body %% private inline %% visible.\n");
+    expect(doc.firstChild?.type.name).toBe("paragraph");
+    expect(markTextOf(doc)).toEqual(["%% private inline %%"]);
+    expect(doc.firstChild?.textContent).toBe("Body %% private inline %% visible.");
+  });
+
+  test("a pair inside a heading marks its complete source spelling; the heading is still a heading", () => {
+    const doc = parseMarkdown("# Public %% secret %% title\n");
+    expect(doc.firstChild?.type.name).toBe("heading");
+    expect(markTextOf(doc)).toEqual(["%% secret %%"]);
+  });
+
+  test("a soft line break INSIDE one inline pair survives as a literal newline in the mark's own text", () => {
+    const doc = parseMarkdown("Body %% secret line one\nsecret line two %% visible.\n");
+    expect(markTextOf(doc)).toEqual(["%% secret line one\nsecret line two %%"]);
+  });
+
+  test("two inline pairs in one paragraph are two separate marked runs", () => {
+    const doc = parseMarkdown("A %% one %% B %% two %% C\n");
+    expect(markTextOf(doc)).toEqual(["%% one %%", "%% two %%"]);
+  });
+
+  test("a `%%` inside an inline code span never becomes a mark", () => {
+    const doc = parseMarkdown("Use `%% not hidden %%` literally.\n");
+    expect(markTextOf(doc)).toEqual([]);
+    expect(doc.firstChild?.textContent).toContain("%% not hidden %%");
+  });
+
+  test("round trip: the serializer alone writes the mark back as `%% ... %%`, unescaped", () => {
+    expect(roundtrip("Body %% private inline %% visible.\n")).toBe("Body %% private inline %% visible.");
+    // A newline inside the mark survives the serializer too — same mechanism paragraphs already
+    // rely on (#183), reached through a mark rather than only through plain unmarked text.
+    expect(roundtrip("Body %% line one\nline two %% end.\n")).toBe("Body %% line one\nline two %% end.");
+  });
+
+  test("editing text OUTSIDE the mark, in the same paragraph, writes exactly that edit", () => {
+    const source = "Body %% private inline %% visible.\n";
+    const edited = source.replace("visible", "VISIBLE");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("editing text INSIDE the mark writes exactly that edit, and the visible prose beside it is untouched", () => {
+    const source = "Body %% private inline %% visible.\n";
+    const edited = source.replace("private inline", "PRIVATE inline");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("an unmatched inline `%%` never becomes a mark, and an edit beside it is still exact", () => {
+    const source = "Body %% never closes.\n";
+    const edited = source.replace("never closes", "NEVER closes");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+
+  test("an escaped inline delimiter is literal, and editing beside it is still exact", () => {
+    const source = "Body \\%\\% still visible \\%\\% here.\n";
+    const edited = source.replace("still visible", "STILL visible");
+    const result = save(source, edited);
+    expect(result.markdown).toBe(edited);
+    expect(result.degraded).toBe(false);
+    expect(result.collateral).toEqual([]);
+  });
+});
+
 describe("an edited block is the only block that moves", () => {
   /** AC-1 (#143), THE CRITERION #174 DEFERRED (AMD-6).
    *
@@ -577,6 +815,52 @@ describe("blocks added, removed, and moved", () => {
   });
 });
 
+describe("top-level source identity (#175)", () => {
+  for (const kept of ["_same_", "*same*"]) {
+    test(`deleting either duplicate block requires consent: ${kept}`, () => {
+      const result = save("_same_\n\n*same*\n", `${kept}\n`);
+      expect(result.degraded).toBe("source-identity");
+    });
+  }
+
+  test("ambiguous retained blocks cannot silently exchange their original spelling", () => {
+    const result = save("_same_\n\n*same*\n\nTail.\n", "*same*\n\nTail.\n\n_same_\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+
+  test("an intermediate optimal alignment cannot exchange duplicate source bodies", () => {
+    const result = save("_same_\n\nP.\n\nQ.\n\n*same*\n", "P.\n\n*same*\n\n_same_\n\nQ.\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+
+  test("a source reused as a move cannot also feed mixed replacement restoration", () => {
+    const result = save("_moved_\n\nStay.\n", "New *moved*.\n\nStay.\n\n*moved*\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+
+  test("a proven moved destination inside a mixed replacement requires consent", () => {
+    const result = save("_stay_\n\n_moved_\n\nOld.\n", "*moved*\n\nNew.\n\n*stay*\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+
+  test("duplicate-state proof budget exhaustion requires consent", () => {
+    const middle = Array.from({ length: 500 }, (_, i) => `Unique paragraph ${i}.`);
+    const source = ["_alpha_", "*alpha*", ...middle, "_beta_", "*beta*"].join("\n\n") + "\n";
+    const edited = ["_alpha_", "*alpha*", ...middle.toReversed(), "_beta_", "*beta*"].join("\n\n") + "\n";
+    expect(save(source, edited).degraded).toBe("source-identity");
+  });
+
+  test("one moved source with multiple eligible destinations requires consent", () => {
+    const result = save("_same_\n\nOne.\n\nTwo.\n\nThree.\n", "One.\n\nTwo.\n\nThree.\n\n*same*\n\n_same_\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+
+  test("multiple moved candidates require consent even when retained matching is unique", () => {
+    const result = save("_same_\n\n*same*\n\nOne.\n\nTwo.\n\nThree.\n", "One.\n\nTwo.\n\nThree.\n\n*same*\n\n_same_\n");
+    expect(result.degraded).toBe("source-identity");
+  });
+});
+
 describe("collateral is reported, never written silently", () => {
   test("editing inside a callout costs nothing to report — the block goes back as it was", () => {
     // Named "… reports what re-serializing that block would cost" until #174, which made the callout
@@ -611,6 +895,15 @@ describe("collateral is reported, never written silently", () => {
 });
 
 describe("when the splice cannot vouch for itself it says so", () => {
+  test("an unchanged lone-CR document preserves every source byte without consent", () => {
+    for (const source of ["One.\r\rTwo.\r", "_same_\r\r*same*\r"]) {
+      const result = save(source, source);
+      expect(result.markdown).toBe(source);
+      expect(result.collateral).toEqual([]);
+      expect(result.degraded).toBe(false);
+    }
+  });
+
   test("a lone CR refuses to splice rather than slide every block offset", () => {
     const source = "Alpha.\rBeta.\r";
     const result = save(source, "Alpha.\rGamma.\r");
@@ -783,8 +1076,13 @@ describe("what a candidate spelling is checked against", () => {
     // So the assertion moves to where #174's behaviour is still observable — the same fixture with
     // the header removed — and the raw-node document asserts the cost instead. Both halves are here
     // because dropping either one would let a real #174 regression hide behind this comment.
-    const withoutHeader = FIXTURE.split("---\n")[2] ?? "";
-    expect(withoutHeader, "the header-stripped fixture is non-empty").not.toBe("");
+    // #175 ALSO STRIPS THE `%%` COMMENT, and says why rather than leaving a silent extra `.split`:
+    // that block is now a SECOND raw node (`commentFenceRule`, rich-editor.js), so a fixture with
+    // the header alone removed still holds an unmodelled node and never reaches the relative
+    // baseline this assertion is about. Stripping both is what makes "no raw node is present" true
+    // again rather than merely asserted.
+    const withoutHeader = (FIXTURE.split("---\n")[2] ?? "").split("\n\n%%\n")[0] + "\n";
+    expect(withoutHeader, "the header-and-comment-stripped fixture is non-empty").not.toBe("");
     const relaxed = roundtrip(withoutHeader);
     expect(relaxed, "#174 still relaxes when no raw node is present").not.toContain("\\[");
     expect(relaxed).toContain("*[bracketed emphasis]*");
@@ -1229,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(474);
+    ).toBe(482);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1473,6 +1771,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   //   unchanged.
   // · 40/473 after cutting alpha.21: the dated release heading, one block, as at alpha.19 and
   //   alpha.20. `edits` 421 → 422, numerators unchanged.
+  // · 40/482 after #175's metadata/comment decision and current roadmap changes. The generator
+  //   produces 430 edits; per-cause counts and shipped 1/1 versus ablated 35/35 remain unchanged.
   // · 40/472 after #216's fix: a `### Fixed` section under `[Unreleased]` is two blocks, heading
   //   and list, as the alpha.19 fix's section was. `edits` 420 → 421, numerators unchanged.
   // · 40/470 after cutting alpha.20: the dated release heading again, one block, exactly as at
@@ -1541,7 +1841,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
    *  safe is that the numerators below did not move with it (per-cause map totalling 39, 1 shipped
    *  dishonest write, 0 missed and 0 false alarms). `CORPUS_COUNT_NOTE` says the same thing on the
    *  failure itself. */
-  const BLOCKS = 474;
+  const BLOCKS = 482;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1577,7 +1877,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 474 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 482 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1632,7 +1932,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
-  test("metrics 2 and 3 — 1 dishonest write of 423; the guard fires on it and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 430; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 35 of them, and the guard must catch
@@ -1717,7 +2017,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves.
     ).toEqual({
-      edits: 423,
+      edits: 430,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 35, fired: 35 },
     });
@@ -1946,4 +2246,50 @@ describe("the per-node-type opt-out — nothing outside the modelled inventory i
     expect([...MODELLED_NODE_TYPES].sort()).toEqual(Object.keys(markdownSchema.nodes).sort());
     expect([...MODELLED_MARK_TYPES].sort()).toEqual(Object.keys(markdownSchema.marks).sort());
   });
+});
+
+describe("non-manuscript exact edits (#175)", () => {
+  test("deleting one of two identical rendered spans uses guarded fallback when source spelling differs", () => {
+    const source = "_same_ *same* %%note%%\n";
+    const firstDeleted = parseMarkdown("*same* %%note%%\n");
+    const secondDeleted = parseMarkdown("_same_ %%note%%\n");
+    expect(firstDeleted.eq(secondDeleted)).toBe(true);
+    const result = spliceMarkdown(source, parseMarkdown(source), firstDeleted);
+    expect(result.markdown).toBe("*same* %%note%%\n");
+    expect(result.collateral.length).toBeGreaterThan(0);
+  });
+  test("inserting after a decoded entity beside a note retains the entity spelling", () => {
+    const source = "Before &amp; %%note%% after.\n";
+    const expected = "Before &amp;X %%note%% after.\n";
+    expect(spliceMarkdown(source, parseMarkdown(source), parseMarkdown(expected))).toEqual({
+      markdown: expected,
+      collateral: [],
+      degraded: false,
+    });
+  });
+  const sources = {
+    "empty inline note": "Before %%%% after.\n",
+    "inline note beside original emphasis and entity spelling": "Before _em_ &amp; %%private note%% after.\n",
+    "asterisk list note": "* %%\n  private note\n  %%\n* After.\n",
+    "plus list note": "+ %%\n  private note\n  %%\n+ After.\n",
+    "parenthesized ordered list note": "1) %%\n   private note\n   %%\n2) After.\n",
+    "extra-spaced blockquote note": ">  %%\n>  private note\n>  %%\n\nAfter.\n",
+    "mixed line ending note": "%%\r\nprivate note\n%%\r\n\r\nAfter.\n",
+    "CRLF block note": "%%\r\nprivate note\r\n%%\r\n\r\nAfter.\r\n",
+    "list note": "- %%\n  private note\n  %%\n- After.\n",
+    "quoted note": "> %%\n> private note\n> %%\n\nAfter.\n",
+    "nested list note": "- Outer\n  - %%\n    private note\n    %%\n  - After.\n",
+  };
+  for (const [name, source] of Object.entries(sources)) {
+    test(`${name} preserves all bytes beside a single inserted character`, () => {
+      const expected = source.includes("private note")
+        ? source.replace("private note", "private noteX")
+        : source.replace("after", "afterX");
+      expect(spliceMarkdown(source, parseMarkdown(source), parseMarkdown(expected))).toEqual({
+        markdown: expected,
+        collateral: [],
+        degraded: false,
+      });
+    });
+  }
 });

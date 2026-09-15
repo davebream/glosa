@@ -12,6 +12,7 @@
 //      pinned against literal fixtures and data-access.js is asserted to still trip them.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SPA_SRC_DIR = fileURLToPath(new URL("../src/", import.meta.url));
@@ -292,6 +293,23 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     }
   });
 
+  test("the Read/Review static dependency graph cannot reach the editor bundle", () => {
+    const scan = new Bun.Transpiler({ loader: "js" });
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      for (const dependency of scan.scan(readFileSync(file, "utf8")).imports) {
+        if (dependency.kind === "import-statement" && dependency.path.startsWith(".")) {
+          visit(resolve(dirname(file), dependency.path));
+        }
+      }
+    };
+    visit(resolve(SPA_SRC_DIR, "viewer.js"));
+    expect([...seen]).toContain(resolve(SPA_SRC_DIR, "outline.js"));
+    expect([...seen]).not.toContain(resolve(SPA_SRC_DIR, "vendor/prosemirror.js"));
+  });
+
   test("artifact-pane.js's local imports are exactly the sanctioned set", () => {
     const source = read("../src/artifact-pane.js");
     const specifiers = [...source.matchAll(/^import\s+.*?\s+from\s+["']([^"']+)["'];?$/gm)].map((m) => m[1]!);
@@ -366,11 +384,21 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     expect(specifiers).toHaveLength(0);
   });
 
-  test("rich-editor.js imports only its vendored ProseMirror bundle (pure editor — no daemon access)", () => {
+  test("rich-editor.js imports only its vendored bundle and shared markdown modules (pure editor — no daemon access)", () => {
     const source = read("../src/rich-editor.js");
-    // `from "..."` matcher (not the single-line import regex above): this module's one import is
-    // a multi-line named-import block.
+    // Match multiline named imports too. Both shared modules remain subject to the directory-wide
+    // network guard; the exact allowlist here additionally pins the editor's dependency boundary.
     const specifiers = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
-    expect(specifiers).toEqual(["./vendor/prosemirror.js"]);
+    expect(specifiers.sort()).toEqual([
+      "./markdown-non-manuscript.js",
+      "./markdown-parser.js",
+      "./vendor/prosemirror.js",
+    ]);
+  });
+
+  test("the shared markdown tokenizer imports only portable rules and the vendored parser", () => {
+    const specifiers = [...read("../src/markdown-parser.js").matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
+    expect(specifiers.sort()).toEqual(["./markdown-non-manuscript.js", "./vendor/prosemirror.js"]);
+    expect(read("../src/markdown-non-manuscript.js").match(/\bimport\s+(?:["']|[^;]*\bfrom\s+["'])/g)).toBeNull();
   });
 });
