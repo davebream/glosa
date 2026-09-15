@@ -352,8 +352,8 @@ recognises a document's metadata header and emits it as that node.
 
 **Why a property rather than a list.** The entry above warns that enumerating constructs is "how this
 class of bug happens in the first place", and it forward-references this work. So the rule is stated
-as a property — a top-level construct the schema cannot model is preserved verbatim — and only one
-recogniser ships, because measurement said only one was needed. After #174 landed, `%%` comments,
+as a property — a top-level construct the schema cannot model is preserved verbatim — and at that stage only one
+recogniser shipped, because measurement said only one was needed. After #174 landed, `%%` comments,
 callout markers and raw HTML all round-trip byte-identical under an edit; front matter was the only
 one still failing, and the only one that took the WHOLE document down the rewrite path rather than
 merely reporting collateral. Shipping recognisers for the other three would have been enumeration
@@ -363,13 +363,53 @@ making it opaque would take formatting away from a construct writers use constan
 **What the rule knows.** That a `---` fence before any block content, with a non-blank line under it
 and a closing fence, is a document metadata header. That is knowledge about markdown documents, not
 about Obsidian or GitHub — the same class the editor already carries about fences, setext
-underlines and list markers. It deliberately does NOT know `%%` or `[!info]`, which are vendor
-dialect and would be a core/provider boundary violation.
+underlines and list markers. At that stage it did not recognize authoring comments or callout markers. The #175 decision below
+adds generic comment syntax for presentation; callout markers remain ordinary rich content.
 
 **The cost, stated.** The escape relaxation shipped in #174 is per-document: a file holding a header
 gets no relaxation anywhere in it. That is deny-by-default working as specified rather than a
 regression, and narrowing it is forbidden — relying on a transformation happening to be a no-op over
 raw bytes is exactly the corruption the opt-out exists to prevent.
+
+## Non-manuscript regions share one syntax across reading, editing, and the outline (#175)
+
+**Decision.** Glosa recognizes a leading `---` metadata header and paired `%%` authoring comments
+as document syntax. Read/Review hides these regions; rich Edit labels them as document metadata or
+private notes, and source Edit retains the complete source. This extends the earlier metadata-only
+recognizer because preserving bytes alone did not keep authoring notes out of manuscript views.
+The syntax has no dependency on a producer or external integration.
+
+Metadata retains the existing rule: before any block content, an unindented `---`, a non-blank
+following line, and a matching closing `---`. Leading blank lines and trailing fence whitespace
+are accepted. An unmatched header opener remains a thematic break.
+
+A block comment has paired own-line `%%` markers at the container's content indentation. It can
+appear in a list or blockquote, but cannot close outside that container. Inline pairs occur inside
+one CommonMark inline block, including soft line breaks. Unmatched or escaped openers and markers
+inside code spans/fences remain literal. Once a comment opens, its interior is raw text; the first
+unescaped matching pair closes it. Empty inline comments retain their delimiters in rich Edit.
+
+One portable rule module configures the daemon renderer and the browser's CommonMark tokenizer.
+Source outline extraction loads that tokenizer only in source Edit; Read/Review keeps the editor bundle lazy.
+Rendered outlines omit inline-note spans.
+Token range tests compare both starts and ends, including nested blocks and CRLF. Tables remain a
+renderer/editor type difference; the measured table fixture has equal top-level source ranges.
+
+Block comments use the existing raw node with a metadata/comment kind. Inline comments use a mark
+whose text includes the delimiters, so an empty note is not lost when adjacent prose is edited.
+For a changed run containing a known raw region or note mark, compare the old and edited serialized
+trees to locate edits, then project edits disjoint from serializer/source spelling differences onto
+the original bytes. Non-unique optimal match alignments fall back rather than choosing which
+repeated source span survived. Reparse the result against the edited tree before accepting it. This copies
+unchanged container markers, emphasis/entity spelling, and each line ending, including mixed CRLF/LF.
+It applies no escape relaxation or source-spelling normalization to opaque regions. Ambiguous edits
+retain the existing serializer/collateral fallback; both paths keep the independent escaping check.
+Top-level reuse separately proves one source assignment across all optimal retained alignments and
+one-to-one moved completions; distinct-node moves are preassigned, and unchanged documents keep their bytes.
+Ambiguity or a bounded proof that exhausts its state/signature work budget requires consent. The splice
+consumes that assignment once per original, refusing mixed replacements that also reuse a moved source.
+Switching from rich to source refreshes the outline after installing the carried text.
+Real browser keypress/save checks cover notes, adjacent prose, headings, line endings, and containers.
 
 ## A fence's two invented blank lines are restored together, never with an unrelated run
 

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Read/Review and the outline now hide document metadata and paired `%%` authoring notes,
+  including inline notes in headings and prose. Rich Edit labels those regions and preserves
+  their source spelling, including mixed line endings and nested list/blockquote notes. (#175)
+
 ## [0.1.0-alpha.21] — 2026-09-14
 
 ### Fixed
