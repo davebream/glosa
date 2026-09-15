@@ -11,15 +11,35 @@ import { ArtifactWatcherRegistry, type ArtifactWatcherEvent } from "../src/artif
 import type { WorkspaceLocation } from "../src/workspace.ts";
 import { cleanupWorkspace, freshWorkspace, makeDir, makeSymlink, writeFile } from "./matcher/helpers.ts";
 
-// 15 s, not Bun's 5 s default: these waits sit on real chokidar events, which FSEvents delivers with
-// seconds of latency on a loaded macos-14 runner. The "custom matcher config" test below timed out
-// at exactly 5 s on three consecutive CI attempts of a stylesheet-only PR while passing locally
-// every time, and external-edit-live.test.ts already documents the same class. The budget is the
-// wait, not the work.
+// 15 s, not Bun's 5 s default: these waits sit on real chokidar events, which a loaded macos-14
+// runner can take seconds to deliver. The budget is the wait, not the work.
 async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) await Bun.sleep(20);
   if (!predicate()) throw new Error("timed out waiting for artifact watcher state");
+}
+
+/** Save `content` to `path`, then keep re-saving it every 250 ms until `observed()` is true.
+ *
+ * Why the loop: a single write issued right after chokidar's `ready` is not reliably observed on
+ * macOS. `ready` fires when the initial scan is done, but the kernel-side FSEvents stream libuv
+ * opens for a directory watch comes up asynchronously after that and does not replay events from
+ * before it was live, so the very first save can fall into the gap. It did exactly that in CI:
+ * the "custom matcher config" test below waited the full 15 s for a write that had already
+ * happened, both on this suite's own PR and on main, while passing locally every time. A real
+ * editor produces many saves, so the product sees the second one; a test that saves once must
+ * either do the same or assert on a lost cause. Every save writes identical bytes, so the test
+ * still checks that the watcher reacts to a change at this path, not how many saves it took.
+ */
+async function saveUntil(path: string, content: string, observed: () => boolean, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    writeFileSync(path, content);
+    const next = Math.min(Date.now() + 250, deadline);
+    while (!observed() && Date.now() < next) await Bun.sleep(20);
+    if (observed()) return;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for the watcher to see ${path}`);
+  }
 }
 
 class FakeWatcher extends EventEmitter {
@@ -189,8 +209,9 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     registry.subscribe(root, (event) => events.push(event));
     await new Promise<void>((resolve) => watcher!.once("ready", () => resolve()));
 
-    writeFileSync(custom, "two");
-    await waitUntil(() => events.some((event) => event.type === "artifact" && event.data.path === "docs/note.custom"));
+    await saveUntil(custom, "two", () =>
+      events.some((event) => event.type === "artifact" && event.data.path === "docs/note.custom"),
+    );
   }, 20_000);
 
   test("a temporarily absent bounded loose file is watched by exact path and reappears live", async () => {
