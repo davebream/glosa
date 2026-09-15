@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Claude Code now installs through the repository's official plugin marketplace. The plugin carries
+  glosa's MCP server, `glosa-connect` skill, and a per-session monitor that streams parked and live
+  inbox entries without starting the daemon. The launcher uses only explicit or recorded local glosa
+  paths, and `glosa doctor` explains when Claude's telemetry settings suppress monitors. (#151)
+
 ### Fixed
 
 - Document links now switch an existing tab to the requested file and surface, including browser

@@ -224,26 +224,23 @@ the entry survives.
 
 | Capability | Claude Code provider | Codex / other hook-capable provider | Generic MCP host |
 |---|---|---|---|
-| Async push into idle | **channels** (MCP `notifications/claude/channel`; `--dangerously-load-development-channels server:glosa`; wakes idle) | — (honest limit: delivered at next turn/gate) | — |
-| Blocking review gate (sync) | hook gate | **their hook gate** (Codex Stop-hook etc.) | — |
-| Turn-boundary drain (async) | Stop / UserPromptSubmit hooks | their turn hooks | — |
+| Async push into idle | **plugin monitor** over the generic session stream | — (honest limit: delivered at next turn/gate) | — |
+| Blocking review gate (sync) | legacy hook gate during the #151→#152 transition | **their hook gate** (Codex Stop-hook etc.) | — |
+| Turn-boundary drain (async) | legacy Stop / UserPromptSubmit hooks during the transition | their turn hooks | — |
 | Pull on demand | MCP tool | MCP tool | **MCP tool** |
-- Claude channels: correct activation flag + `glosa doctor` verifies *actual* registration, not config
-  presence (A2 §F06). **asyncRewake is one-shot → rearmed by the Stop hook via a per-session lease** to
-  prevent duplicate watchers (A2 §F07). Stop drains are bounded (≤8) and treated as drains, not loops.
-- Channels are treated as **optional compatibility, not a required gate**: all delivery tests pass with
-  channels disabled (the fallback rungs deliver). "Channel smoke test" and "required fallback test" are
-  separate gates.
-- Channel writes prove only `transport_accepted`. A targeted conversation message becomes terminal
+- Monitor availability is the live per-session stream connection, never plugin configuration. Claude
+  suppresses monitors when nonessential traffic/telemetry is disabled and in noninteractive or unsupported
+  hosted-model sessions; `glosa doctor` names the environment-variable case and MCP pull remains available.
+- Monitor writes prove only `transport_accepted`. A targeted conversation message becomes terminal
   `delivered` only after the exact session acknowledges `presented`; until then it remains eligible
-  for hook/MCP fallback. MCP pull identifies the registered target session explicitly.
+  for MCP pull. Every monitor line begins `[glosa <entry-id>]`, which the acknowledgement tool returns.
 - **No cmux.** The universal cross-agent path is the structured blocking gate (Plannotator-proven on
   Claude/Codex/Gemini/Copilot) + turn-boundary drain + MCP-pull.
 - Every injected presentation is UTF-8 bounded: at most 16 KiB per entry and 32 KiB per batch, with
   at most eight entries in journal creation order. Truncation happens only at field or complete-hunk
   boundaries and always carries omitted counts plus `glosa inbox get <id> --cursor <cursor>` and MCP
   `glosa_inbox_get` retrieval instructions. Preparing content reserves it briefly; only a successful
-  hook/channel/MCP write may acknowledge it as `presented`. Failed or expired reservations remain
+  monitor/hook/channel/MCP write may acknowledge it as `presented`. Failed or expired reservations remain
   eligible, and later attempts append `reason:re_nudge` without mutating the inbox payload.
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
@@ -345,7 +342,7 @@ the entry survives.
     transcriptRoots?(): readonly string[]          // provider-owned confinement allowlist
   }
   ```
-  v1 ships: **Claude Code provider** (deep: push=channels, gate+boundary=hooks, mcpPull=tools, transcript
+  v1 ships: **Claude Code provider** (deep: push=plugin monitor, mcpPull=plugin MCP tools, transcript
   mirror) and a **Codex provider** (gate + boundaryDrain + mcpPull; push=false — no channels-equivalent).
   Adding a CLI = a new provider, never a core change.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
@@ -373,7 +370,7 @@ the entry survives.
   backups, uninstall — prints the correct channels dev command, never `--channels`),
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (18 enumerated checks incl. optional-Channel status + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146), `status`,
+  `token rotate|revoke`, `doctor` (18 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
@@ -437,10 +434,9 @@ the entry survives.
   Plannotator-era "Codex Stop-hook + rollout-file parsing" note is the starting point, not gospel. Output:
   a concrete Codex provider contract (which hook fires the blocking gate, its stdin/stdout shape, where
   Codex writes its transcript, whether it speaks MCP). Gate: a written contract the provider is built against.
-- **T2 — providers & delivery**: agent-provider interface (R7); Claude Code provider (channels + asyncRewake
-  rearm + boundary hooks); **Codex provider** (per T2a; gate + boundary + MCP-pull); `glosa init` hook/MCP
-  merge; `resolve`/`apply-begin`/MCP tools. Gate: each capability delivers for each provider; channels-disabled
-  fallback still delivers; asyncRewake rearms across ≥3 sequential entries; journal records correct
+- **T2 — providers & delivery**: agent-provider interface (R7); Claude Code plugin monitor + MCP server;
+  **Codex provider** (per T2a; gate + boundary + MCP-pull); `resolve`/`apply-begin`/MCP tools. Gate: each
+  capability delivers for each provider; monitor-unavailable MCP fallback still delivers; journal records correct
   transport `outcome`.
 - **T3 — SPA shell + class R viewer + three modes + diff/history**: handshake/pairing screens; switcher/
   sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
@@ -463,7 +459,7 @@ the entry survives.
   Gate: compatibility exercised entirely through public contracts with no external code in this repo.
 - **T8 — release gate = deterministic suites + private manual rehearsal**:
   - Deterministic suites (mandatory): storage/fault (kill daemon at each write step → one legal recovered
-    state); concurrency; delivery (channels on/off, asyncRewake rearm, boundary, parked/resumed); browser
+    state); concurrency; delivery (monitor push/reconnect, MCP pull fallback, parked/resumed); browser
     security (the A3 §5 attacks); anchor corpus (Polish combining chars, md markup, duplicate quotes,
     stale hashes, transformed HTML); transcript suite; **explicit-binding topology** (agent cwd differs
     from the artifact workspace and routing still succeeds); editor round-trip (a save re-serializes only the blocks the writer edited; everything else is byte-identical).
@@ -472,12 +468,12 @@ the entry survives.
     data needed for one verbatim and one transformed region. Run an isolated daemon and a real Claude
     Code session from another cwd; bind it explicitly. Exercise human edit/provenance, verbatim source
     resolution and apply lease, transformed feedback without a source edit, parked drain, attention,
-    conversation mirror/fallback, optional Channels/fallback delivery, and a local inert browser CSP probe.
+    conversation mirror/fallback, monitor/MCP delivery, and a local inert browser CSP probe.
     Record exact runtime versions and produce a sanitized report with separate T8 and v1-readiness results.
   - **v1 is done when the deterministic suites are green AND the manual rehearsal passes — not on one model run.**
 
 ## 6. Risks (build-relevant)
-- Channels are research-preview → optional capability, all tests pass with channels off (R4).
+- Claude plugin monitors are unavailable in some host modes → live connection decides push capability and MCP pull remains the fallback (R4).
 - Transcript format internal/unstable → isolated normalizer, fixture tests, fail-soft (R6/A2).
 - `ANTHROPIC_API_KEY` outranks subscription OAuth in spawned/hook contexts → scrub in every spawn; doctor warns.
 - Codex provider is designed to the same interface as Claude's but its gate/transcript shapes differ →
@@ -485,7 +481,7 @@ the entry survives.
 
 ## 7. Normative appendices (in repo as `docs/appendices/`)
 - **A1** api-transport — HTTP contract, streaming-SSE, cursors/resync, capability URLs, versioning.
-- **A2** claude-code-integration — channels flag, asyncRewake rearm, registry, transcript tailer, hook JSON shapes.
+- **A2** claude-code-integration — plugin monitor, MCP fallback, registry, transcript tailer, and the temporary legacy hook migration surface.
 - **A3** security — two-origin split, CSP, MessageChannel bridge, token lifecycle, confinePath, Host/Origin table, attack→test matrix.
 - **A4** filebus-concurrency — journal-as-truth durability, apply-lease attribution, shadow-git mechanics, picomatch matcher, slug.
 - **A5** daemon-architecture — daemon lifecycle, workspace index, lifecycle state-transition table, anchoring resolution contract.

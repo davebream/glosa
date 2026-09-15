@@ -557,9 +557,11 @@ attempt is fsynced before the response. **200** means terminal `presented`; **20
 `transport_accepted`.
 
 `GET /w/:slug/transcript/compose/:message_id` returns the same status for reconnect recovery.
-Authenticated bridge routes `GET /api/sessions/:id/push-stream` and
-`POST /api/sessions/:id/conversation/:message_id/ack` are exact-session transport surfaces. A
-transport acknowledgement never implies presentation.
+`GET /api/sessions/:id/stream` is the provider-neutral authenticated SSE surface. It emits every
+eligible deliverable as the same bounded presentation MCP pull builds, including the parked queue,
+and keeps one live connection per exact session. `POST .../stream/:entry_id/transport-ack` records
+only transport acceptance; `POST .../stream/:entry_id/ack` records explicit presentation. The legacy
+`push-stream` and conversation acknowledgement routes remain during the #151→#152 transition.
 
 ### 5.20 `POST /api/workspaces/forget` (contract 1.8, issue #156)
 
