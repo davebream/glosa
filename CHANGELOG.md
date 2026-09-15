@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- CI and release tests use Bun 1.4.2 to avoid a JUnit reporter abort on passing tests.
+  Older runtimes receive an explicit test-runner version error; report completeness and
+  failure/skip checks remain enforced. The application runtime floor is unchanged. (#230)
 - Missing shadow checkpoint objects now cause a named refusal. Doctor diagnoses the active
   baseline and counts affected inbox entries; explicit `doctor --workspace <slug> --repair-baseline`
   starts new history without changing documents or removing surviving history. Later saves and

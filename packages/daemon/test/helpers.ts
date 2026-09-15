@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  SHUTDOWN_DRAIN_MS,
   type EnsureDaemonOptions,
   type EnsureDaemonResult,
   ensureDaemon as ensureProductionDaemon,
@@ -435,7 +436,12 @@ export async function stopDaemon(home: string, proc: Bun.Subprocess): Promise<vo
   } catch {
     // already dead
   }
-  const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(3000).then(() => false)]);
+  // Let production finish its bounded drain before the test forces exit. An equal deadline
+  // races the daemon's force-close and prevents it from releasing its singleton lock.
+  const exited = await Promise.race([
+    proc.exited.then(() => true),
+    Bun.sleep(SHUTDOWN_DRAIN_MS + 1000).then(() => false),
+  ]);
   if (!exited && proc.exitCode === null) {
     try {
       proc.kill("SIGKILL");

@@ -1934,6 +1934,8 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     });
   });
 
+  // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
+  // Give all 435 edits a bounded budget; no cases or fidelity assertions are skipped.
   test("metrics 2 and 3 — 1 dishonest write of 435; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
@@ -2023,7 +2025,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 35, fired: 35 },
     });
-  });
+  }, 15_000);
 
   test("metric 4 — the blind spot: 3 writes that are dishonest and silent, recorded, NOT ratcheted", () => {
     // THIS METRIC IS A BOUNDARY, NOT A TARGET, and it is here so metric 3's `missed: 0` is never

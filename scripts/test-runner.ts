@@ -4,6 +4,18 @@ import { resolve, join } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { checkedFiles, gitEnvironment, ROOT, type Profile } from "./test-plan.ts";
 
+// Build/test tooling has a newer floor than the shipped application: 1.2.7's JUnit
+// reporter can abort on passing tests (#230). This is the verified tooling floor,
+// not a claim about the first upstream version that fixed its internal reporter error.
+export const MIN_JUNIT_BUN = "1.4.2";
+export function assertJUnitRuntime(version = Bun.version): void {
+  if (!Bun.semver.satisfies(version, `>=${MIN_JUNIT_BUN}`)) {
+    throw new Error(
+      `Glosa's JUnit test runner requires Bun >=${MIN_JUNIT_BUN}; found ${version}. Use the packageManager toolchain pin.`,
+    );
+  }
+}
+
 type Case = {
   name: string;
   classname?: string;
@@ -13,7 +25,10 @@ type Case = {
   error?: unknown;
   skipped?: unknown;
 };
-type Suite = { name: string; time: string; testcase?: Case[] };
+type Suite = { name: string; time: string; testcase?: Case[]; testsuite?: Suite[] };
+function suiteCases(suite: Suite): Case[] {
+  return [...(suite.testcase ?? []), ...(suite.testsuite ?? []).flatMap(suiteCases)];
+}
 export function inspectReport(xml: string, selected: string[]) {
   if (/<!DOCTYPE/i.test(xml)) throw new Error("JUnit must not declare document entities");
   if (XMLValidator.validate(xml) !== true) throw new Error("Malformed JUnit report");
@@ -25,7 +40,7 @@ export function inspectReport(xml: string, selected: string[]) {
   }).parse(xml) as { testsuites?: { tests: string; failures: string; testsuite?: Suite[] } };
   const report = document.testsuites;
   const suites = report?.testsuite ?? [];
-  const cases = suites.flatMap((suite) => suite.testcase ?? []);
+  const cases = suites.flatMap(suiteCases);
   if (!report || cases.length === 0 || Number(report.tests) !== cases.length)
     throw new Error("Missing or inconsistent JUnit test cases");
   if (!Number.isInteger(Number(report.failures)) || Number(report.failures) < 0)
@@ -60,6 +75,7 @@ export async function runInvocation(options: {
   root?: string;
   command?: string[];
 }): Promise<number> {
+  assertJUnitRuntime();
   const root = options.root ?? ROOT;
   mkdirSync(options.directory, { recursive: true });
   const prefix = join(options.directory, `${options.profile}-${Date.now()}-${crypto.randomUUID()}`);

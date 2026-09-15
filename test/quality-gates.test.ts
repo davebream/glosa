@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { MIN_JUNIT_BUN } from "../scripts/test-runner.ts";
 import rootPackage from "../package.json";
 
 const root = resolve(import.meta.dir, "..");
@@ -14,6 +15,15 @@ function job(yaml: string, name: string): string {
 }
 
 describe("repository quality gates", () => {
+  test("CI and release pin the packageManager runtime with the verified JUnit floor (#230)", () => {
+    const pinned = rootPackage.packageManager.replace(/^bun@/, "");
+    expect(Bun.semver.satisfies(pinned, `>=${MIN_JUNIT_BUN}`)).toBe(true);
+    for (const yaml of workflows) {
+      const pins = [...yaml.matchAll(/bun-version: ([^\s]+)/g)].map((match) => match[1]);
+      expect(pins.length).toBeGreaterThan(0);
+      expect([...new Set(pins)]).toEqual([pinned]);
+    }
+  });
   test("local check remains non-writing and includes whole-repository lint and formatting", () => {
     expect(rootPackage.scripts.lint).toBe("biome lint . --no-errors-on-unmatched");
     expect(rootPackage.scripts["format:check"]).toBe("biome format .");

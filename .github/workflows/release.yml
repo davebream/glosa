@@ -22,7 +22,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - id: plan
         env:
           TEST_FORCE_FULL: "true"
@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - name: Lint full repository
         if: needs.prepare.outputs.profile == 'full'
@@ -79,7 +79,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run test:docs
       - name: Preserve test evidence
@@ -108,7 +108,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - name: Execute coverage partition
         env:
@@ -141,7 +141,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - name: Repeat ownership and lifecycle checks
         env:
@@ -169,7 +169,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - name: Verify interactions across the unpartitioned suite
         run: bun run test:full
@@ -196,7 +196,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - name: Require every selected job to succeed
         env:
           TEST_PROFILE: ${{ needs.prepare.outputs.profile }}
@@ -246,7 +246,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.7
+          bun-version: 1.4.2
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
