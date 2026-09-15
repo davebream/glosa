@@ -288,7 +288,12 @@ the entry survives.
   bytes the writer did not touch, glosa shows that collateral and asks before writing, never
   silently. Human edits in glosa → attributed `human` by construction. A save is refused when the file moved
   under the draft since it was opened, rather than silently overwritten, and the writer chooses: keep
-  the edit, take the disk version, or compare first.
+  the edit, take the disk version, or compare first. **Non-manuscript regions** — a leading document
+  metadata header and paired `%%` authoring comments — are hidden in Read/Review and excluded from
+  outline headings. Inline pairs stay within one CommonMark inline block; own-line pairs may span
+  multiple lines within their container. Escaped/unmatched delimiters and markers in code remain
+  literal. Source Edit retains the source; rich Edit labels metadata and private notes and preserves
+  their spelling outside intentional edits (issue #175).
 - **Class R viewer (markdown)**: markdown-it + `data-line` stamping; SSE-driven updates morphed via
   idiomorph (scroll/selection preserved); annotation → W3C record → POST.
 - **Class F viewer (foreign HTML)**: **source-preserving (bridge-augmented)** — served from the

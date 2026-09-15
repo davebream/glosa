@@ -317,6 +317,12 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     "in the middle of it, staying wrapped by the writer's own hand.",
     "",
   ].join("\n");
+  // #175's own real-browser fixture: a `%%`-fenced comment, so the ONE new rich-face affordance
+  // this issue adds (a labeled, editable `glosa_raw[data-glosa-kind="comment"]` region — the
+  // metadata header's OWN raw-node editing was never exercised in this file before #175 either,
+  // so this is new coverage for the mechanism, not a re-run of an existing one) is driven through
+  // a real keypress and a real save, not only through `parseMarkdown`/`spliceMarkdown` directly.
+  const COMMENT_SOURCE = ["%%", "A private note about this passage.", "%%", ""].join("\n");
   const BLOCKQUOTE_SOURCE = [
     "> [!info] A callout",
     "> with a second deliberate line, staying wrapped by the writer's own hand.",
@@ -340,6 +346,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     workspaceRoot = mkdtempSync(join(tmpdir(), "glosa-183-ws-"));
     writeFileSync(join(workspaceRoot, "paragraph.md"), PARAGRAPH_SOURCE);
     writeFileSync(join(workspaceRoot, "blockquote.md"), BLOCKQUOTE_SOURCE);
+    writeFileSync(join(workspaceRoot, "comment.md"), COMMENT_SOURCE);
 
     port = randomPort();
     // The same scrubbed, HOME-redirected environment every child of this file gets; `GLOSA_HOME`
@@ -559,6 +566,95 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   `;
   }
 
+  async function mountOutlinePane(client: CdpClient) {
+    writeFileSync(join(workspaceRoot, "outline.md"), "# Old heading\n\nBody.\n\n## Tail heading\n");
+    await client.evaluate(`(async () => {
+      const { createDataAccess } = await import("/app/data-access.js");
+      const { createArtifactPane } = await import("/app/artifact-pane.js");
+      sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+      const host = document.createElement("div");
+      document.body.append(host);
+      const pane = createArtifactPane(host, {
+        dataAccess: createDataAccess(), slug: ${JSON.stringify(slug)}, path: "outline.md",
+        loadRichEditor: async () => (await import("/app/rich-editor.js")).mountRichEditor,
+      });
+      await pane.ready;
+      window.__outlineTest = { pane, host };
+    })()`);
+  }
+
+  test(
+    "#175: returning to Source refreshes carried heading labels and jump offsets",
+    async () => {
+      const { client } = await launchBrowser();
+      cdp = client;
+      await mountOutlinePane(client);
+      const initial: any = await client.evaluate(`(async () => {
+      const { pane, host } = window.__outlineTest;
+      pane.setMode("edit");
+      host.querySelector(".glosa-face-source").click();
+      await import("/app/markdown-parser.js");
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      pane.toggleOutline();
+      const labels = [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.textContent);
+      host.querySelector(".glosa-face-rich").click();
+      for (let i = 0; i < 100 && !host.querySelector(".ProseMirror h1"); i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      const heading = host.querySelector(".ProseMirror h1");
+      if (!heading) throw new Error("rich heading did not mount");
+      const range = document.createRange();
+      range.selectNodeContents(heading); range.collapse(false);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      heading.closest("[contenteditable]").focus();
+      return labels;
+    })()`);
+      expect(initial).toEqual(["Old heading", "Tail heading"]);
+      await client.keyPress("X");
+      const result: any = await client.evaluate(`(async () => {
+      const { pane, host } = window.__outlineTest;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      host.querySelector(".glosa-face-source").click();
+      const area = host.querySelector("textarea.glosa-edit-area");
+      const rows = [...host.querySelectorAll(".glosa-foreedge-row")];
+      const labels = rows.map(row => row.textContent);
+      rows[1].click();
+      const result = { labels, text: area.value, offset: area.selectionStart };
+      pane.destroy(); host.remove(); delete window.__outlineTest;
+      return result;
+    })()`);
+      expect(result.text).toContain("# Old headingX");
+      expect(result.labels).toEqual(["Old headingX", "Tail heading"]);
+      expect(result.offset).toBe(result.text.indexOf("## Tail heading"));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "#175: pending source parser uses the current face after switching to Read",
+    async () => {
+      const { client } = await launchBrowser();
+      cdp = client;
+      await mountOutlinePane(client);
+      const result: any = await client.evaluate(`(async () => {
+      const { pane, host } = window.__outlineTest;
+      pane.setMode("edit");
+      host.querySelector(".glosa-face-source").click();
+      const area = host.querySelector("textarea.glosa-edit-area");
+      area.value = "# Unsaved source heading\\n\\n## Another source heading";
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+      pane.setMode("read");
+      await import("/app/markdown-parser.js");
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      pane.toggleOutline();
+      const result = { mode: pane.getMode(), labels: [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.textContent) };
+      pane.destroy(); host.remove(); delete window.__outlineTest;
+      return result;
+    })()`);
+      expect(result).toEqual({ mode: "read", labels: ["Old heading", "Tail heading"] });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   async function runScenario(path: string, source: string, needle: string, insertChar: string) {
     const { client, argv } = await launchBrowser();
     cdp = client;
@@ -626,6 +722,127 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     },
     TEST_TIMEOUT_MS,
   );
+
+  test(
+    "#175: a `%%` comment mounts as a labeled, editable glosa_raw region, and a real keypress saves byte-exact",
+    async () => {
+      const { client, argv } = await launchBrowser();
+      cdp = client;
+      let mounted: any;
+      try {
+        mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "comment.md", "private note"));
+        if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
+      } catch (error) {
+        const { out, err } = await terminateAndDrainChrome();
+        throw new Error(`comment.md: mount failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
+      }
+      // The label, read the way a real reader would see it: a real `<pre class="glosa-raw">`
+      // element in the mounted DOM, carrying `data-glosa-kind="comment"` (rich-editor.js's
+      // `toDOM`), and the computed `::before` content app.css attaches to it — not a copy of
+      // either string re-typed into this test, so a future rename of either has to change BOTH
+      // the product code and this assertion or this goes red.
+      const label: any = await client.evaluate(`
+        (async () => {
+          const { container } = window.__glosaTest;
+          const raw = container.querySelector(".glosa-raw");
+          if (!raw) return { ok: false, reason: "no .glosa-raw element mounted" };
+          return {
+            ok: true,
+            kind: raw.getAttribute("data-glosa-kind"),
+            beforeContent: getComputedStyle(raw, "::before").content,
+          };
+        })()
+      `);
+      expect(label.ok, String(label.reason ?? "")).toBe(true);
+      expect(label.kind).toBe("comment");
+      // `content` computes to a CSS-quoted string ("\"Private note …\""); a substring match through
+      // the quoting is what proves the LABEL TEXT itself, not merely that some `content` exists.
+      expect(label.beforeContent).toContain("Private note");
+      expect(label.beforeContent).toContain("hidden from Read/Review");
+
+      try {
+        await client.keyPress("X");
+      } catch (error) {
+        const { out, err } = await terminateAndDrainChrome();
+        throw new Error(`comment.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
+      }
+      let result: any;
+      try {
+        result = await client.evaluate(readDocAndSaveScript(slug, "comment.md"));
+      } catch (error) {
+        const { out, err } = await terminateAndDrainChrome();
+        throw new Error(
+          `comment.md: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`,
+        );
+      }
+      const edited = COMMENT_SOURCE.replace("private note", "private noteX");
+      const diskContent = readFileSync(join(workspaceRoot, "comment.md"), "utf8");
+      expect(result.save.markdown).toBe(edited);
+      expect(result.save.degraded).toBe(false);
+      expect(result.save.collateral).toEqual([]);
+      expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  const NOTE_EDIT_CASES = [
+    { name: "inline interior", source: "Before %% private note %% after.\n", needle: "private note" },
+    { name: "inline neighbor", source: "Before %% private note %% after.\n", needle: "after" },
+    { name: "inline original spelling", source: "Before _em_ &amp; %%private note%% after.\n", needle: "private note" },
+    {
+      name: "inline original spelling neighbor",
+      source: "Before _em_ &amp; %%private note%% after.\n",
+      needle: "after",
+    },
+    { name: "asterisk list note", source: "* %%\n  private note\n  %%\n* After.\n", needle: "private note" },
+    { name: "plus list note", source: "+ %%\n  private note\n  %%\n+ After.\n", needle: "private note" },
+    { name: "parenthesized list note", source: "1) %%\n   private note\n   %%\n2) After.\n", needle: "private note" },
+    { name: "extra-spaced quote note", source: ">  %%\n>  private note\n>  %%\n\nAfter.\n", needle: "private note" },
+    { name: "mixed line ending note", source: "%%\r\nprivate note\n%%\r\n\r\nAfter.\n", needle: "private note" },
+    { name: "empty inline neighbor", source: "Before %%%% after.\n", needle: "after" },
+    { name: "heading inline", source: "# Public %% private note %% title\n", needle: "private note" },
+    { name: "CRLF comment", source: "%%\r\nprivate note\r\n%%\r\n\r\nAfter.\r\n", needle: "private note" },
+    { name: "list comment", source: "- %%\n  private note\n  %%\n- After.\n", needle: "private note" },
+    { name: "blockquote comment", source: "> %%\n> private note\n> %%\n\nAfter.\n", needle: "private note" },
+    {
+      name: "nested list comment",
+      source: "- Outer\n  - %%\n    private note\n    %%\n  - After.\n",
+      needle: "private note",
+    },
+  ];
+  for (const { name, source, needle } of NOTE_EDIT_CASES) {
+    test(
+      `#175: real input and disk save preserve ${name}`,
+      async () => {
+        const path = "note-edit.md";
+        writeFileSync(join(workspaceRoot, path), source);
+        const { client } = await launchBrowser();
+        cdp = client;
+        const mounted: any = await client.evaluate(mountAndPlaceCaretScript(slug, path, needle));
+        expect(mounted.ok, String(mounted.reason ?? "")).toBe(true);
+        const inline: any = await client.evaluate(`(async () => {
+        const {container} = window.__glosaTest;
+        const note = container.querySelector(".glosa-comment-inline");
+        const {collectRenderedHeadings} = await import("/app/outline.js");
+        return {raw:container.querySelector(".glosa-raw code")?.textContent ?? null,
+          label:note ? getComputedStyle(note,"::before").content : null,
+          title:note?.title,headings:collectRenderedHeadings(container).map(row=>row.text)};
+      })()`);
+        if (name.includes("inline")) {
+          expect(inline.label).toContain("Private note");
+          expect(inline.title).toContain("hidden from Read/Review");
+        }
+        if (inline.raw !== null) expect(inline.raw).toBe("%%\nprivate note\n%%");
+        if (name === "heading inline") expect(inline.headings).toEqual(["Public title"]);
+        await client.keyPress("X");
+        const result: any = await client.evaluate(readDocAndSaveScript(slug, path));
+        const expected = source.replace(needle, `${needle}X`);
+        expect(result.save).toEqual({ markdown: expected, collateral: [], degraded: false });
+        expect(readFileSync(join(workspaceRoot, path), "utf8")).toBe(expected);
+      },
+      TEST_TIMEOUT_MS,
+    );
+  }
 
   test(
     "criterion 3: typing several spaces in a row invents no bytes beyond what was typed",

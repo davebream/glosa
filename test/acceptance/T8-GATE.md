@@ -151,6 +151,9 @@ dropping out of it.
 | `anchor` | `packages/daemon/test/anchoring/stale-hashes.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/totality.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/whitespace-fold.test.ts` |
+| `anchor` | `packages/daemon/test/artifact-render-non-manuscript.test.ts` |
+| `anchor` | `packages/spa/test/outline-non-manuscript.test.ts` |
+| `anchor` | `test/acceptance/markdown-non-manuscript-boundaries.test.ts` |
 | `transcript` | `packages/daemon/test/transcript/normalize.test.ts` |
 | `transcript` | `packages/daemon/test/transcript/stream.test.ts` |
 | `transcript` | `packages/spa/test/conversation.test.ts` |

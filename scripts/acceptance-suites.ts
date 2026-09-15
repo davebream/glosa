@@ -107,6 +107,13 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/anchoring/stale-hashes.test.ts",
     "packages/daemon/test/anchoring/totality.test.ts",
     "packages/daemon/test/anchoring/whitespace-fold.test.ts",
+    // #175 — "md markup" in this suite's own clause: the metadata-header/`%%`-comment recognizers
+    // sit in the same `renderMarkdown`/`data-line` pipeline `class-r-basic`/`markup-boundaries`
+    // exercise, and a region hidden in the wrong place shifts the source-line coordinates every
+    // other test in this suite anchors against.
+    "packages/daemon/test/artifact-render-non-manuscript.test.ts",
+    "packages/spa/test/outline-non-manuscript.test.ts",
+    "test/acceptance/markdown-non-manuscript-boundaries.test.ts",
   ],
   transcript: [
     "packages/daemon/test/transcript/normalize.test.ts",

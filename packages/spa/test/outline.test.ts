@@ -5,11 +5,11 @@
 // rail, which section the reader is standing in, and what a typed query matches.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { collectSourceHeadings } from "../src/markdown-parser.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 import {
   collectRenderedHeadings,
   createOutlineController,
-  collectSourceHeadings,
   currentHeadingIndex,
   distributeRules,
   matchesQuery,
@@ -46,11 +46,12 @@ describe("collectSourceHeadings", () => {
     expect(collectSourceHeadings(source).map((heading) => heading.text)).toEqual(["out"]);
   });
 
-  test("reads setext headings but not a thematic break or a list rule", () => {
+  test("reads top-level and nested setext headings but not a thematic break", () => {
     const source = ["Title", "=====", "", "Section", "-------", "", "---", "", "- item", "  ---"].join("\n");
     expect(collectSourceHeadings(source)).toEqual([
       { level: 1, text: "Title", line: 0, offset: 0 },
       { level: 2, text: "Section", line: 3, offset: 13 },
+      { level: 2, text: "item", line: 8, offset: 35 },
     ]);
   });
 

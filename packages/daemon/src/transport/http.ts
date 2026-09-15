@@ -113,6 +113,8 @@ const SPA_ASSETS: Record<string, string> = {
   "attention-tray.js": "text/javascript; charset=utf-8",
   // Rich markdown editor (Edit mode's default face) + its vendored ProseMirror bundle.
   "rich-editor.js": "text/javascript; charset=utf-8",
+  "markdown-parser.js": "text/javascript; charset=utf-8",
+  "markdown-non-manuscript.js": "text/javascript; charset=utf-8",
   "vendor/prosemirror.js": "text/javascript; charset=utf-8",
   // Shared confirm dialog (discard-edits and restore guards).
   "dialog.js": "text/javascript; charset=utf-8",

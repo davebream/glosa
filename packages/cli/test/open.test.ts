@@ -626,6 +626,9 @@ describe("maybeOfferInit (consented wiring offer)", () => {
 
   test("default runInit uses runScopedInit — writes .claude/settings.json, not the legacy layout (issue #96)", async () => {
     const dir = freshDir();
+    // Select Claude Code through a fixture-owned detection input even on a Codex-only host.
+    // Leave settings.json absent so the assertion still proves that scoped init creates it.
+    writeFileSync(join(dir, ".mcp.json"), "{}\n");
     const { opts, calls } = makeOffer();
     opts.runInit = undefined; // exercise open.ts's own default instead of makeOffer()'s stub
     await maybeOfferInit(unwiredResult(dir), opts);

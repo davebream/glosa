@@ -7,6 +7,7 @@ import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
+import { installNonManuscriptRules, tokenLayout } from "../../spa/src/markdown-non-manuscript.js";
 import { fsyncContainingDir, writeAllSync } from "./bus/io.ts";
 
 /** A5 §F10's fixed identity formula — shared here (artifact content responses) and by the later
@@ -36,6 +37,19 @@ function dataLineStamp(md: MarkdownIt): void {
 // re-registering the plugin on every render.
 const renderer = new MarkdownIt({ html: false, linkify: false });
 renderer.use(dataLineStamp);
+// #175 — issue title: "consistent non-manuscript markdown regions". Read/Review must not show a
+// document's own metadata header or a `%%`-fenced authoring comment (block OR inline) as
+// manuscript; both stay recoverable in source editing, and the rich editor's Edit face carries
+// either verbatim/marked and LABELED rather than hidden (rich-editor.js). `installNonManuscriptRules`
+// is the ONE declarative recogniser both this real `MarkdownIt` instance and the vendored one
+// inside packages/spa/src/vendor/prosemirror.js register — see that shared module's own header
+// comment for why a plain, dependency-free module loads in both the daemon's Bun process and the
+// browser SPA (served through transport/http.ts's `SPA_ASSETS`) with no bundler and no framework.
+renderer.use(installNonManuscriptRules);
+
+export function renderMarkdownLayout(source: string) {
+  return tokenLayout(renderer.parse(source, {}));
+}
 
 export function renderMarkdown(source: string): string {
   return renderer.render(source);

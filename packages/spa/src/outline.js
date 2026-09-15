@@ -88,73 +88,13 @@ export function collectRenderedHeadings(root) {
   /** @type {{ level: number, text: string, el: Element }[]} */
   const found = [];
   for (const node of root.querySelectorAll(HEADING_SELECTOR)) {
-    const text = plainHeadingText(node.textContent ?? "");
+    const copy = typeof node.cloneNode === "function" ? node.cloneNode(true) : node;
+    if (copy !== node) for (const comment of copy.querySelectorAll(".glosa-comment-inline")) comment.remove();
+    const text = String(copy.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!text) continue; // an empty heading is a typo, not a destination
     found.push({ level: Number(node.tagName.slice(1)) || 1, text, el: node });
-  }
-  return found;
-}
-
-/**
- * Headings out of markdown source (Edit's source face has no rendered DOM to read).
- *
- * Fenced blocks are skipped, because `# not a heading` inside a shell example is exactly the kind
- * of false destination that makes an outline untrustworthy. Setext headings (`===` / `---` under
- * a line) are included too — they are rare in this corpus but they are real headings, and an
- * outline that silently drops one is worse than no outline.
- *
- * @param {string} source
- * @returns {{ level: number, text: string, line: number, offset: number }[]}
- */
-export function collectSourceHeadings(source) {
-  const text = String(source ?? "");
-  const lines = text.split("\n");
-  /** @type {{ level: number, text: string, line: number, offset: number }[]} */
-  const found = [];
-  let offset = 0;
-  let previousStart = 0;
-  let fence = null;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const lineStart = offset;
-    // Captured before any `continue` below, so a setext underline can always name the offset of
-    // the line above it no matter which branch skipped that line.
-    const prevStart = previousStart;
-    previousStart = lineStart;
-    offset += line.length + 1;
-
-    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    const marker = fenceMatch?.[1] ?? "";
-    if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
-      continue;
-    }
-    if (marker) {
-      fence = marker;
-      continue;
-    }
-
-    const atx = /^\s{0,3}(#{1,6})(?:\s+(.*?))?\s*$/.exec(line);
-    if (atx) {
-      const body = plainHeadingText((atx[2] ?? "").replace(/\s+#+\s*$/, ""));
-      if (body) found.push({ level: (atx[1] ?? "#").length, text: body, line: index, offset: lineStart });
-      continue;
-    }
-
-    const setext = /^\s{0,3}(=+|-+)\s*$/.exec(line);
-    if (setext && index > 0) {
-      const previous = lines[index - 1] ?? "";
-      // A `---` under a blank line is a thematic break, and under a list item it is that item's
-      // rule — neither is a heading, and both are common.
-      if (previous.trim() && !/^\s{0,3}([-*+]|\d+[.)])\s/.test(previous) && !/^\s{0,3}(#{1,6})\s/.test(previous)) {
-        const body = plainHeadingText(previous);
-        // The offset is the heading's own line, not its underline: jumping here must put the
-        // caret on the words, not on the rule under them.
-        if (body) {
-          found.push({ level: setext[1]?.[0] === "=" ? 1 : 2, text: body, line: index - 1, offset: prevStart });
-        }
-      }
-    }
   }
   return found;
 }
