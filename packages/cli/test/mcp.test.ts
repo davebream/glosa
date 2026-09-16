@@ -1456,5 +1456,48 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(abortedWhenAcknowledged.length).toBeGreaterThan(0);
       expect(abortedWhenAcknowledged.every(Boolean)).toBe(true);
     });
+
+    test("criterion 6 — closing the MCP runtime aborts a watch that is still being HELD", async () => {
+      // The test above proves what happens to an acknowledgement during shutdown; it cannot prove
+      // this, because its fake `watch()` returns immediately (review round 4). A held watch is the
+      // whole point of the route — it can sit for up to fifteen minutes — so the thing that has to
+      // be pinned is that `close()` ends one that has not returned. This fake therefore settles
+      // ONLY when the signal it was handed aborts, which is also what makes the ablation bite: take
+      // the signal away and this test hangs to its timeout instead of passing.
+      let sawAbort = false;
+      const runtime = createMcpServer({
+        createDaemonClient: async () => new FakeDaemonClient(),
+        createApiClient: async (signal?: AbortSignal) => {
+          const api: Partial<GlosaApiClient> = {
+            watch: () =>
+              new Promise((_resolve, reject) => {
+                if (!signal) return; // ablated: nothing ever ends this hold
+                const end = () => {
+                  sawAbort = true;
+                  reject(new Error("watch aborted"));
+                };
+                if (signal.aborted) return end();
+                signal.addEventListener("abort", end, { once: true });
+              }),
+          };
+          return api as GlosaApiClient;
+        },
+        sessionId: () => "host-session",
+        cwd: () => "/workspace",
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await runtime.connect(serverTransport);
+      const client = new Client({ name: "glosa-test", version: "1" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const held = client.callTool({ name: "glosa_watch", arguments: { wait_ms: 900000 } }).catch(() => "rejected");
+      await Bun.sleep(50);
+      expect(sawAbort).toBe(false); // genuinely still holding, not already finished
+
+      await runtime.close();
+      await held;
+
+      expect(sawAbort).toBe(true);
+    }, 10_000);
   });
 });

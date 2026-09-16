@@ -247,6 +247,13 @@ export class WorkspaceBus {
   // and skip its journal replay/self-heal/offline-catchup forever. Living on the instance means a
   // fresh instance is un-reconciled by construction — no external bookkeeping to keep in sync.
   private reconciledOnce = false;
+  /** Hydration is THREE states, not two (review round 4). `reconciledOnce` is claimed synchronously
+   * before `reconcile()` is awaited, so it means "a reconcile has STARTED" — reading it as
+   * "hydrated" let a concurrent watch skip its own fold, queue behind that reconcile, and then
+   * answer from default empty state if it failed. `reconcileSettled` is the only flag that means
+   * the derived state actually reflects the journal. */
+  private reconcileSettled = false;
+  private reconcileInFlight: Promise<unknown> | null = null;
   private readonly deliveryReservations = new Map<string, DeliveryReservation>();
 
   // P3.2 — the SSE cursor space (A1 §8.1): `nextSequence` is the physical journal-line offset
@@ -337,10 +344,23 @@ export class WorkspaceBus {
   reconcileOnce(): Promise<ReconcileResult | undefined> {
     if (this.reconciledOnce) return Promise.resolve(undefined);
     this.reconciledOnce = true;
-    return this.reconcile().catch((err) => {
-      this.reconciledOnce = false;
-      throw err;
-    });
+    const running = this.reconcile()
+      .then((result) => {
+        this.reconcileSettled = true;
+        return result;
+      })
+      .catch((err) => {
+        this.reconciledOnce = false;
+        throw err;
+      })
+      .finally(() => {
+        this.reconcileInFlight = null;
+      });
+    // Held so a concurrent reader can WAIT for this pass rather than racing it. Its rejection is
+    // observed by `hydrateForRead`'s own catch as well as by this caller, so a failing reconcile
+    // never surfaces as an unhandled rejection just because a reader also looked at it.
+    this.reconcileInFlight = running;
+    return running;
   }
 
   /** Whether THIS instance has folded its journal yet. The read-only watch route checks it rather
@@ -349,7 +369,7 @@ export class WorkspaceBus {
    * through a bind whose own hydration failed. An unreconciled instance serves empty derived state
    * that is indistinguishable from "nothing to report" — see `resolveBusForRead`. */
   hasReconciled(): boolean {
-    return this.reconciledOnce;
+    return this.reconcileSettled;
   }
 
   /** Folds the journal into this instance's derived state WITHOUT writing anything — no self-heal,
@@ -371,10 +391,22 @@ export class WorkspaceBus {
    * that reaches them. An attempt to pin it through a narrow route context was written and did not
    * work, so it was removed rather than left passing for the wrong reason. Treat this as reasoned,
    * not proven. */
-  hydrateForRead(): void {
-    if (this.reconciledOnce) return;
-    this.state = peekJournal(this.workspace).state;
-    this.nextSequence = countJournalLines(journalPath(this.workspace));
+  async hydrateForRead(): Promise<void> {
+    if (this.reconcileSettled) return;
+    // In flight: wait for it rather than folding underneath it. If it FAILS, fall through and fold,
+    // because a failed reconcile leaves the default empty state behind — the silent-empty answer
+    // this method exists to prevent.
+    if (this.reconcileInFlight) {
+      await this.reconcileInFlight.catch(() => {});
+      if (this.reconcileSettled) return;
+    }
+    // Under the workspace mutex, so the fold cannot interleave with a writer mutating the same
+    // fields, and re-checked inside because a reconcile may have settled while this queued.
+    await this.mutex.runExclusive(this.mutexKey, () => {
+      if (this.reconcileSettled) return;
+      this.state = peekJournal(this.workspace).state;
+      this.nextSequence = countJournalLines(journalPath(this.workspace));
+    });
   }
 
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting
@@ -418,6 +450,14 @@ export class WorkspaceBus {
    * sentinel for "return everything" when passed straight through. */
   currentCursor(): number {
     return this.nextSequence - 1;
+  }
+
+  /** Test-only: the very mutex this bus serialises its writes on, so a test can OCCUPY it and make
+   * the queue-wait window real instead of hoping for a timing coincidence. Exposed because the
+   * defect it pins — authority re-read after the queue wait rather than before it — is invisible
+   * unless something is actually holding the lock. */
+  mutexForTest(): KeyedMutex<string> {
+    return this.mutex;
   }
 
   /** Test/diagnostic-only: how many live subscribers this bus currently has. Lets a test prove a
@@ -1558,9 +1598,17 @@ export class WorkspaceBus {
    * that is not, right now, an `external_edit` entry — the same fail-closed shape
    * `acknowledgePushedEntry` uses for its own kind refusal. Idempotent per (session, entry): a
    * retried ack is a no-op success, not a duplicate journal line. */
-  recordWatchTransportAccepted(session: string, entryIds: readonly string[]): Promise<{ accepted: string[] }> {
+  recordWatchTransportAccepted(
+    session: string,
+    entryIds: readonly string[],
+    stillAuthorised?: () => boolean,
+  ): Promise<{ accepted: string[]; authorityLost?: true }> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
+      // Checked HERE, inside the lock that guards the append, not by the caller before it (review
+      // round 4). `runExclusive` is an asynchronous queue: a caller that validated its binding and
+      // then awaited this method can have lost it while queued, and the append would still land.
+      if (stillAuthorised && !stillAuthorised()) return { accepted: [], authorityLost: true as const };
       const accepted: string[] = [];
       for (const entryId of entryIds) {
         const entry = this.state.entries[entryId];
@@ -1592,9 +1640,13 @@ export class WorkspaceBus {
     entryIds: readonly string[],
     outcome: "presented" | "failed",
     error?: string,
-  ): Promise<{ accepted: string[] }> {
+    stillAuthorised?: () => boolean,
+  ): Promise<{ accepted: string[]; authorityLost?: true }> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.assertWritable();
+      // Same boundary as `recordWatchTransportAccepted`: authority is only meaningful if it is
+      // re-read after the queue wait, inside the lock that guards the append.
+      if (stillAuthorised && !stillAuthorised()) return { accepted: [], authorityLost: true as const };
       const accepted: string[] = [];
       for (const entryId of entryIds) {
         const entry = this.state.entries[entryId];

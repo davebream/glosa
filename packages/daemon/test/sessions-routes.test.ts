@@ -756,6 +756,33 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     });
   });
 
+  test("state-changing auth: both watch acknowledgement routes refuse a missing and a foreign Origin", async () => {
+    // Criterion 9: these two POSTs write delivery attempts, so they must be classified
+    // state-changing, not authed-read. The existing coverage only ever sent a valid self Origin,
+    // which cannot tell the two classifications apart (review round 4).
+    const call = (path: string, origin?: string) => {
+      const headers = new Headers();
+      headers.set("Host", `127.0.0.1:${PORT}`);
+      headers.set("Authorization", `Bearer ${TOKEN}`);
+      headers.set("Content-Type", "application/json");
+      if (origin) headers.set("Origin", origin);
+      return fetchFn(
+        new Request(`http://127.0.0.1:${PORT}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ entries: ["inb-anything"] }),
+        }),
+      );
+    };
+    const routes = ["/api/sessions/sess-origin/watch/transport-ack", "/api/sessions/sess-origin/watch/ack"];
+    const statuses: number[] = [];
+    for (const route of routes) {
+      statuses.push((await call(route)).status);
+      statuses.push((await call(route, "http://evil.example")).status);
+    }
+    expect(statuses).toEqual([403, 403, 403, 403]);
+  });
+
   test("state-changing auth: register with no Origin -> 403", async () => {
     const headers = new Headers();
     headers.set("Host", `127.0.0.1:${PORT}`);

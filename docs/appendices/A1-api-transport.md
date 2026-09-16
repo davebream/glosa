@@ -402,8 +402,8 @@ watcher's quiet-window captures (§F153/A4) made actionable for exactly the sess
 other session. Never a status transition and never a nudge to anyone else: R3 states the product
 promise this route implements. It writes nothing at all, and unlike `GET /w/:slug/stream` it does not
 reconcile the workspace it reads. Hydration happens when a session attaches (§5.11a); a watch that
-finds an unhydrated workspace returns `409 workspace-not-hydrated` rather than answering from empty
-derived state.
+finds an unhydrated workspace folds the journal read-only before answering, rather than serving the
+empty derived state a fresh bus starts with.
 
 `?session=<id>&path=<workspace-relative>&since=<full-sha>&wait_ms=<0…900000>` — `session` is
 required and must be a live, registered session **explicitly bound** to this workspace (the same

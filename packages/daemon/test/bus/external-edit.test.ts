@@ -17,7 +17,9 @@ import { EXTERNAL_EDIT_KIND, isExternalEditEntry } from "../../src/bus/external-
 import { readInboxEntry } from "../../src/bus/inbox.ts";
 import { type DeliveryAttemptRecord, isTerminal } from "../../src/bus/lifecycle.ts";
 import { badgePendingCount, peekJournal, retentionPendingCount } from "../../src/bus/peek.ts";
+import { journalPath } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
+import { workspaceRegistrationId } from "../../src/workspace.ts";
 import { buildDeliveryPresentation, MAX_DELIVERY_ENTRIES } from "../../src/delivery/presentation.ts";
 import { runGit } from "../../src/git/shadow.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
@@ -691,6 +693,44 @@ describe("glosa_watch (#153 Part 2) — the per-session cursor over external_edi
       entries: 0,
       quick: true,
     });
+    await bus.close();
+  });
+});
+
+describe("A8 — watch acknowledgement authority is read at the append, not before the queue wait", () => {
+  test("a session that loses its binding WHILE queued on the workspace mutex appends nothing", async () => {
+    // Review round 4 named the class: check a binding, await something asynchronous, then act on
+    // the stale check. `runExclusive` is a queue, so a route that validated its binding and then
+    // awaited the record method can lose it while waiting and still write the attempt. Holding the
+    // mutex here is what makes that window real and deterministic rather than a timing hope.
+    const root = workspace();
+    const bus = openBus(root);
+    await bus.reconcile();
+    await bus.createEntry("inb-queued-external", {
+      kind: "common",
+      payload_kind: EXTERNAL_EDIT_KIND,
+      path: "notes.md",
+      source: "live",
+    });
+
+    const before = readFileSync(journalPath(root));
+    let bound = true;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Occupy the mutex so the acknowledgement below has to queue behind it.
+    const blocker = bus.mutexForTest().runExclusive(workspaceRegistrationId(root), () => held);
+
+    const acking = bus.recordWatchTransportAccepted("sess-queued", ["inb-queued-external"], () => bound);
+    await Bun.sleep(20);
+    bound = false; // the rebind lands while the acknowledgement is still queued
+    release();
+    await blocker;
+
+    const result = await acking;
+    expect(result).toEqual({ accepted: [], authorityLost: true });
+    expect(readFileSync(journalPath(root)).equals(before)).toBe(true);
     await bus.close();
   });
 });

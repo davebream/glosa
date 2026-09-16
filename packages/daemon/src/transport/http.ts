@@ -513,9 +513,9 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
 /** The same guards as `resolveBus`, WITHOUT the reconciliation.
  *
  * Reconciling self-heals and checkpoints — real writes, which `bus/peek.ts` spells out is exactly
- * what a plain GET must not cause. A held watch is a read, so it takes this: it folds whatever is
- * durably on disk for a workspace that has already been hydrated (session binding does that, and
- * every watcher binds first), and does not hydrate one itself.
+ * what a plain GET must not cause. A held watch is a read, so it takes this: it never reconciles.
+ * Attaching a session is what reconciles (both the binding route and a binding-carrying register),
+ * but the caller does not ASSUME that happened — see the hydration note below.
  *
  * Hydration is a CHECKED INVARIANT here, not an assumption about route order. An earlier version of
  * this route reasoned that a watch always runs behind a bind, and the bind hydrates — review round 3
@@ -525,15 +525,15 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
  * state is empty, which reads exactly like "nothing to report" — a silent wrong answer, worse than
  * an error, because the agent concludes the manuscript is untouched.
  *
- * So the caller checks `hasReconciled()` and refuses rather than serving that silence. The GET still
- * writes nothing either way.
+ * So the caller folds the journal read-only (`WorkspaceBus.hydrateForRead`) rather than serving that
+ * silence, and rather than refusing: §5.11b promises the hold ends returning whatever the cursor
+ * has, honestly, even when empty, and three W3 lifecycle gates assert exactly that 200. The GET
+ * still writes nothing on either path.
  *
- * On what the tests cover: the `register` path is reachable over HTTP and is pinned by F-8b, whose
- * ablation goes red. The other two are not reachable through the public surface — eviction by GC or
- * forget also removes the workspace, so the watch's own guards 404 first, and a bind's hydration
- * failure cannot be forced through HTTP. Ablating the `hasReconciled` check ALONE therefore leaves
- * the suite green. It is kept because the invariant is what the route depends on, and because the
- * three paths that break it were all found by argument rather than by a failing test. */
+ * What remains absent, stated rather than hidden: a reconcile that FAILED at attach leaves drift
+ * uncommitted, and folding the journal cannot invent entries for it. Those appear at the next
+ * successful writer reconciliation. The read is honest about the journal; it does not promise
+ * catch-up it has not run. */
 async function resolveBusForRead(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
   const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
   if (isAdoptingTarget(indexed)) {
@@ -1522,20 +1522,20 @@ async function handleSessionStreamPresentedAck(
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
-/** The admitted binding, re-read after an await (review round 3, F-7/F-3). Both acknowledgement
- * routes capture a record, await `resolveBus`, and then APPEND — a rebind or deregistration inside
- * that window would otherwise write a delivery attempt into a workspace the session no longer owns,
- * which is a provenance claim about a session that was not there. Returns the problem response to
- * send, or null when the session still holds the binding it was admitted under. */
-function bindingMoved(ctx: ApiContext, sessionId: string, owned: string, pathname: string): Response | null {
-  const current = ctx.sessionRegistry.get(sessionId);
-  if (!current || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
-    return problem(404, "not-found", "unknown live session", undefined, pathname);
-  }
-  if (current.workspace_binding !== owned) {
-    return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
-  }
-  return null;
+/** Does this session STILL hold the binding it was admitted under? Synchronous on purpose: it is
+ * handed to the bus record methods and evaluated inside the mutex that guards their append (review
+ * round 4, F-7/F-3).
+ *
+ * Checking it in the route before awaiting the append is not enough, and that was the first
+ * attempt. `runExclusive` is an asynchronous queue, so a request can validate its binding, queue
+ * behind another writer, lose the binding while waiting, and still append — recording a delivery
+ * attempt for a session that had already moved on. Authority is only meaningful re-read at the
+ * moment of the write. */
+function stillBound(ctx: ApiContext, sessionId: string, owned: string): () => boolean {
+  return () => {
+    const current = ctx.sessionRegistry.get(sessionId);
+    return !!current && ctx.sessionRegistry.liveness(sessionId) === "alive" && current.workspace_binding === owned;
+  };
 }
 
 /** `POST /api/sessions/:id/watch/transport-ack` (#153 Part 2, W4) — Origin-gated, records
@@ -1570,9 +1570,13 @@ async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string
     return problem(409, "conflict", "no named id was emitted to this session by a watch response", undefined, pathname);
   }
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
-  const moved = bindingMoved(ctx, sessionId, record.workspace_binding, pathname);
-  if (moved) return moved;
-  const { accepted } = await bus.recordWatchTransportAccepted(sessionId, emitted);
+  const { accepted, authorityLost } = await bus.recordWatchTransportAccepted(
+    sessionId,
+    emitted,
+    stillBound(ctx, sessionId, record.workspace_binding),
+  );
+  if (authorityLost)
+    return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
   if (accepted.length === 0)
     return problem(409, "conflict", "no named id is an in-scope external_edit entry", undefined, pathname);
   return Response.json({ accepted });
@@ -1604,9 +1608,15 @@ async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Re
   }
   const error = typeof parsed?.error === "string" ? parsed.error : undefined;
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
-  const moved = bindingMoved(ctx, sessionId, record.workspace_binding, pathname);
-  if (moved) return moved;
-  const { accepted } = await bus.recordWatchPresented(sessionId, entries as string[], outcome, error);
+  const { accepted, authorityLost } = await bus.recordWatchPresented(
+    sessionId,
+    entries as string[],
+    outcome,
+    error,
+    stillBound(ctx, sessionId, record.workspace_binding),
+  );
+  if (authorityLost)
+    return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
   if (accepted.length === 0) {
     return problem(
       409,
@@ -2284,7 +2294,7 @@ async function handleWorkspaceWatch(
   // An instance nobody reconciled has empty derived state, which reads as "nothing to report".
   // Fold the journal read-only rather than serving that silence, or erroring on a workspace whose
   // journal can be answered from perfectly well. Writes nothing; see `hydrateForRead`.
-  bus.hydrateForRead();
+  await bus.hydrateForRead();
   const signals = [req.signal, lifecycleSignal(ctx, authSignal), admittedLifecycle, bus.closeSignal()].filter(
     (s): s is AbortSignal => !!s,
   );
