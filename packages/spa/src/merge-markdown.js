@@ -250,7 +250,11 @@ function resolveRun(run, mineStatus, theirsStatus, mine, theirs, mineLayout, the
   }
 
   const minePieces = reconstructSide(mineStatus, run, mineBody, mineGroupText);
-  if ((mineTouched && !theirsTouched) || (mineTouched && ambiguous && !theirsTouched)) {
+  // An AMBIGUOUS run never takes an uncontested branch, even when only one side touched it. D5 says
+  // unprovable identity is a conflict, and accepting mine's run here let a block that also aligned
+  // at its own base position be emitted twice — once inside the ambiguous replacement and once at
+  // that position — silently duplicating the writer's own text (review round 11).
+  if (mineTouched && !theirsTouched && !ambiguous) {
     return {
       text: minePieces.join(SEPARATOR),
       side: "mine",
@@ -426,6 +430,19 @@ export function threeWayMerge(base, mine, theirs, mineReport = { collateral: [],
   if (base === mine && base === theirs) {
     return { text: base, merged: [], conflicts: [], baseAvailable: true, collateral: [], degraded: false };
   }
+  // Both sides already agree, whatever they did to get there. There is nothing to merge, nothing
+  // contested and nothing at risk of being dropped — including a change neither side expressed as a
+  // block, which the run machinery would otherwise see as two deletions and lose (review round 10).
+  if (mine === theirs) {
+    return {
+      text: mine,
+      merged: [],
+      conflicts: [],
+      baseAvailable: true,
+      collateral: mineReport.collateral,
+      degraded: mineReport.degraded,
+    };
+  }
 
   const baseDoc = parseMarkdown(base);
   const mineDoc = parseMarkdown(mine);
@@ -478,6 +495,41 @@ export function threeWayMerge(base, mine, theirs, mineReport = { collateral: [],
     const first = theirsStatus[run.start];
     return first.type === "kept" ? first.otherIndex : first.otherStart;
   };
+
+  /** A side's block can be claimed twice: once inside a run that replaced a span of base, and again
+   * at the base position it was separately paired to (a proven move out of that span). Emitting
+   * both duplicates the writer's own text, which is worse than either outcome the run resolution
+   * was choosing between, so a plan that would do it is not trusted at all: identity across this
+   * document is unprovable (D5), and the sanctioned answer is the writer's exact document with one
+   * conflict — no duplication, nothing of theirs merged on a guess (review round 11). */
+  const claimsBlockTwice = (status) => {
+    const pairedElsewhere = new Map();
+    for (let k = 0; k < n; k += 1) {
+      const entry = status[k];
+      if (entry?.type === "kept") pairedElsewhere.set(entry.otherIndex, k);
+    }
+    for (const run of runs) {
+      for (let k = run.start; k < run.end; k += 1) {
+        const entry = status[k];
+        if (entry?.type !== "changed") continue;
+        for (let other = entry.otherStart; other < entry.otherEnd; other += 1) {
+          const basePosition = pairedElsewhere.get(other);
+          if (basePosition !== undefined && (basePosition < run.start || basePosition >= run.end)) return true;
+        }
+      }
+    }
+    return false;
+  };
+  if (claimsBlockTwice(mineStatus) || claimsBlockTwice(theirsStatus)) {
+    return {
+      text: mine,
+      merged: [],
+      conflicts: [{ index: null, mine, theirs, reason: "unprovable-identity" }],
+      baseAvailable: true,
+      collateral: mineReport.collateral,
+      degraded: mineReport.degraded,
+    };
+  }
 
   const resolved = runs.map((run) => ({
     run,
@@ -640,8 +692,19 @@ export function threeWayMerge(base, mine, theirs, mineReport = { collateral: [],
     const baseEdge = edgeBytes(base, baseLayout, which);
     const mineEdge = edgeBytes(mine, mineLayout, which);
     const theirsEdge = edgeBytes(theirs, theirsLayout, which);
-    const changed = [mineEdge, theirsEdge].some((edge) => edge !== null && edge !== baseEdge);
-    if (changed) conflicts.push({ index: null, region: which, mine: mineEdge, theirs: theirsEdge });
+
+    // These bytes are not going into the result — there is no document left to hold them — so this
+    // is a LOSS, not a contest the writer won. Saying otherwise would put it in the preview's
+    // wins list (review round 10).
+    // Shaped the way `conflictLine` renders a loss — `side` and `dropped` — so the dialog names
+    // whose bytes were dropped rather than reading fields that are not there (review round 11).
+    for (const [side, edge] of [
+      ["mine", mineEdge],
+      ["theirs", theirsEdge],
+    ]) {
+      if (edge === null || edge === baseEdge) continue;
+      conflicts.push({ index: null, region: which, carried: false, side, dropped: edge });
+    }
   };
   let leading = "";
   let trailing = "";

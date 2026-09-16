@@ -426,7 +426,12 @@ describe("threeWayMerge — review round 5: a total deletion still reports the e
     // Compared as JSON so the assertion pins the exact entry without depending on how TypeScript
     // infers the union of conflict shapes this JavaScript module can return.
     expect(merged.conflicts.map((conflict) => JSON.stringify(conflict))).toEqual([
-      JSON.stringify({ index: null, region: "leading", mine: null, theirs: "\n" }),
+      // `carried: false` from review round 10: these bytes are not in the result, so this is a loss
+      // rather than a contest the writer won, and the preview must not list it as a win.
+      // Round 11: the entry is shaped the way the preview renders a loss — whose bytes (`side`)
+      // and which bytes (`dropped`) — rather than carrying a two-sided mine/theirs pair the loss
+      // renderer would not read.
+      JSON.stringify({ index: null, region: "leading", carried: false, side: "theirs", dropped: "\n" }),
     ]);
   });
 
@@ -506,5 +511,36 @@ describe("threeWayMerge — review round 9: carriage is positional, and a deleti
       lost: merged.conflicts.filter((conflict) => (conflict as { carried?: unknown }).carried === false).length,
       blockConflicts: merged.conflicts.filter((conflict) => !(conflict as { region?: string }).region).length,
     }).toEqual({ text: "", lost: 0, blockConflicts: 1 });
+  });
+});
+
+describe("threeWayMerge — review round 10: two sides that already agree", () => {
+  test("an identical change neither side expressed as a block is kept, not lost as two deletions", () => {
+    // Base has a block; both sides replaced it with the same reference definition, which parses as
+    // no block at all. The run machinery sees two deletions and would drop the shared text; there
+    // is nothing to merge when the sides already agree.
+    const base = "Only.\n";
+    const same = "[ref]: https://same.example\n";
+
+    const merged = threeWayMerge(base, same, same);
+    expect({ text: merged.text, conflicts: merged.conflicts }).toEqual({ text: same, conflicts: [] });
+  });
+});
+
+describe("threeWayMerge — review round 11: a plan that would duplicate a block is refused", () => {
+  test("a moved block that also belongs to a replaced run is emitted once, not twice", () => {
+    // Mine moves D above B and edits B; disk changed nothing. D is paired to its base position AND
+    // falls inside the span mine replaced, so a naive assembly emits it in both places — silently
+    // duplicating the writer's own text. Identity here is unprovable, so the writer's exact
+    // document is written and the conflict is reported instead.
+    const base = "A.\n\nB.\n\nC.\n\nD.\n";
+    const mine = "A.\n\nD.\n\nB changed.\n\nC.\n";
+
+    const merged = threeWayMerge(base, mine, base);
+    expect({
+      text: merged.text,
+      copiesOfD: merged.text.split("D.").length - 1,
+      conflicts: merged.conflicts.length,
+    }).toEqual({ text: mine, copiesOfD: 1, conflicts: 1 });
   });
 });

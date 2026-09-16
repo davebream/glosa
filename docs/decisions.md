@@ -384,12 +384,16 @@ and only the writer's explicit Keep mine writes it. A few decisions carry it:
   conflict. A region is a block, the source between two blocks, or the source above the first and
   below the last — the bytes between blocks are content too, since a link-reference definition or a
   deliberate blank-line run lives there. Where a region's identity between the base and one side
-  can't be proven — including a split or merge of block counts, or a boundary next to a move or an
-  insertion — that is treated as a conflict too, rather than guessed at.
+  can't be proven — a split or merge of block counts — that is treated as a conflict too, rather than
+  guessed at. A BOUNDARY whose ownership can't be attributed, next to a move or an insertion, is
+  reported differently: it is neither won nor lost, because glosa cannot say whose bytes belonged
+  there, and the preview lists it apart from both.
 - **The writer's version wins every conflict; disk's version is kept everywhere else.** The preview
   names each conflicting region before the write happens, and quotes what disk had there, so that
-  choice is informed rather than assumed. A document markdown parses as no block at all — a lone
-  link-reference definition, say — is one whole-file region and is compared as such; where the
+  choice is informed rather than assumed. Where a side holds source markdown parses as no block
+  at all — a lone link-reference definition, say — it has nothing the aligner can place: when both
+  sides agree there is nothing to merge and the text is kept, and otherwise those bytes are reported
+  as a LOSS if the merged document does not carry them, never as a win the writer took. Where the
   version the writer opened cannot be verified, every differing region is a conflict, blocks and the
   source around them alike. A per-block picker (choosing disk's side for one specific conflict) is a follow-up, not
   part of this fix.
