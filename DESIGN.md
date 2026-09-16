@@ -1,112 +1,113 @@
 ---
 name: glosa
-description: Local-first marginal workspace for reading, marking and approving agent-drafted writing, with honest provenance.
+description: A writing desk beside an agent session. Warm paper, black ink, one vermilion hand.
 colors:
-  reading-surface: "oklch(1 0 0)"
-  control-surface: "oklch(0.97 0 0)"
-  sunken-surface: "oklch(0.94 0 0)"
-  ink: "oklch(0.2 0 0)"
-  ink-hover: "oklch(0.32 0 0)"
-  muted-ink: "oklch(0.5 0 0)"
-  faint-ink: "oklch(0.65 0 0)"
-  quiet-border: "oklch(0.9 0 0)"
-  strong-border: "oklch(0.62 0 0)"
-  hand: "oklch(0.42 0.06 195)"
-  hand-hover: "oklch(0.36 0.06 195)"
-  pencil: "oklch(0.55 0 0)"
-  hand-wash: "color-mix(in oklch, oklch(0.42 0.06 195) 14%, transparent)"
-  pencil-wash: "color-mix(in oklch, oklch(0.55 0 0) 16%, transparent)"
-  hand-line: "color-mix(in oklch, oklch(0.42 0.06 195) 70%, transparent)"
-  anchor-wash: "color-mix(in oklch, oklch(0.42 0.06 195) 14%, oklch(1 0 0))"
-  scrim: "oklch(0.2 0 0 / 0.3)"
-  on-accent: "oklch(1 0 0)"
-  danger: "oklch(0.5 0.16 25)"
-  warning: "oklch(0.55 0.12 75)"
-  success: "oklch(0.52 0.1 150)"
-  dark-reading-surface: "oklch(0.19 0 0)"
-  dark-control-surface: "oklch(0.225 0 0)"
-  dark-sunken-surface: "oklch(0.265 0 0)"
-  dark-ink: "oklch(0.93 0 0)"
-  dark-ink-hover: "oklch(0.85 0 0)"
-  dark-muted-ink: "oklch(0.7 0 0)"
-  dark-faint-ink: "oklch(0.55 0 0)"
-  dark-quiet-border: "oklch(0.3 0 0)"
-  dark-strong-border: "oklch(0.5 0 0)"
-  dark-hand: "oklch(0.75 0.08 190)"
-  dark-hand-hover: "oklch(0.8 0.08 190)"
-  dark-pencil: "oklch(0.62 0 0)"
-  dark-danger: "oklch(0.7 0.14 25)"
-  dark-warning: "oklch(0.74 0.11 75)"
-  dark-success: "oklch(0.7 0.09 150)"
+  paper: "oklch(0.99 0.007 85)"
+  surface: "oklch(0.97 0.006 80)"
+  surface-sunken: "oklch(0.94 0.009 78)"
+  ink: "oklch(0.2 0.012 60)"
+  ink-hover: "oklch(0.34 0.012 60)"
+  muted: "oklch(0.47 0.016 60)"
+  faint: "oklch(0.64 0.012 65)"
+  border: "oklch(0.88 0.01 75)"
+  border-strong: "oklch(0.6 0.014 65)"
+  hand: "oklch(0.52 0.16 42)"
+  hand-hover: "oklch(0.46 0.15 42)"
+  pencil: "oklch(0.56 0.01 65)"
+  danger: "oklch(0.47 0.17 22)"
+  warn: "oklch(0.53 0.11 80)"
+  ok: "oklch(0.5 0.09 150)"
+  dark-paper: "oklch(0.205 0.008 60)"
+  dark-surface: "oklch(0.235 0.009 60)"
+  dark-surface-sunken: "oklch(0.275 0.01 60)"
+  dark-ink: "oklch(0.93 0.01 80)"
+  dark-muted: "oklch(0.72 0.014 70)"
+  dark-rule: "oklch(0.74 0.01 80)"
+  dark-border: "oklch(0.32 0.01 60)"
+  dark-border-strong: "oklch(0.58 0.012 65)"
+  dark-hand: "oklch(0.72 0.13 45)"
+  dark-pencil: "oklch(0.64 0.01 70)"
 typography:
   manuscript-title:
-    fontFamily: "system-ui, -apple-system, sans-serif"
-    fontSize: "2rem"
-    fontWeight: 600
-    lineHeight: 1.15
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "2.5rem"
+    fontWeight: 650
+    lineHeight: 1.1
     letterSpacing: "-0.015em"
   manuscript-section:
-    fontFamily: "system-ui, -apple-system, sans-serif"
-    fontSize: "1.5rem"
-    fontWeight: 600
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.625rem"
+    fontWeight: 620
     lineHeight: 1.25
     letterSpacing: "-0.01em"
   manuscript-subhead:
-    fontFamily: "system-ui, -apple-system, sans-serif"
-    fontSize: "1.125rem"
-    fontWeight: 600
-    lineHeight: 1.35
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.25rem"
+    fontWeight: 620
+    lineHeight: 1.3
   manuscript-body:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.125rem"
+    fontWeight: 400
+    lineHeight: 1.62
+  manuscript-body-sans:
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.6
-  manuscript-body-serif:
-    fontFamily: "Iowan Old Style, Charter, ui-serif, Georgia, serif"
-    fontSize: "1.0625rem"
-    fontWeight: 400
-    lineHeight: 1.65
   manuscript-body-mono:
     fontFamily: "ui-monospace, SF Mono, Menlo, monospace"
     fontSize: "0.9375rem"
     fontWeight: 400
     lineHeight: 1.65
+  note:
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "0.9375rem"
+    fontWeight: 400
+    lineHeight: 1.45
   headline:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "1.375rem"
     fontWeight: 600
     lineHeight: 1.25
   title:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "1.1875rem"
     fontWeight: 600
     lineHeight: 1.25
+  bar-title:
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
+    fontSize: "0.875rem"
+    fontWeight: 600
+    lineHeight: 1.5
   body:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "0.9375rem"
     fontWeight: 400
     lineHeight: 1.6
   label:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 500
     lineHeight: 1.5
+  section-label:
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
+    fontSize: "0.75rem"
+    fontWeight: 600
+    lineHeight: 1.5
+    letterSpacing: "0.06em"
   metadata:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "0.75rem"
     fontWeight: 400
     lineHeight: 1.5
   address:
-    fontFamily: "system-ui, -apple-system, sans-serif"
+    fontFamily: "Source Sans 3, system-ui, -apple-system, sans-serif"
     fontSize: "0.6875rem"
     fontWeight: 700
     lineHeight: 1
     letterSpacing: "0"
-  path:
-    fontFamily: "ui-monospace, SF Mono, Menlo, monospace"
-    fontSize: "0.75rem"
-    fontWeight: 400
-    lineHeight: 1.5
+    fontFeature: "tnum"
   source:
     fontFamily: "ui-monospace, SF Mono, Menlo, monospace"
     fontSize: "0.8125rem"
@@ -132,187 +133,53 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.ink}"
-    textColor: "{colors.on-accent}"
+    textColor: "{colors.paper}"
     typography: "{typography.label}"
     rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
+    padding: "0.25rem 0.75rem"
   button-primary-hover:
     backgroundColor: "{colors.ink-hover}"
-    textColor: "{colors.on-accent}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
-  button-primary-disabled:
-    backgroundColor: "{colors.sunken-surface}"
-    textColor: "{colors.faint-ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
+    textColor: "{colors.paper}"
   button-secondary:
-    backgroundColor: "{colors.reading-surface}"
+    backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
     typography: "{typography.label}"
     rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
+    padding: "0.25rem 0.75rem"
   button-secondary-hover:
-    backgroundColor: "{colors.control-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
-  button-ghost:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
-  button-ghost-hover:
-    backgroundColor: "{colors.sunken-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
-  button-danger:
-    backgroundColor: "{colors.danger}"
-    textColor: "{colors.on-accent}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.1} {spacing.3}"
-  segmented-track:
-    backgroundColor: "{colors.sunken-surface}"
+    backgroundColor: "{colors.surface}"
+  mode-control:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.muted}"
     rounded: "{rounded.panel}"
     padding: "2px"
-  segmented-segment:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.label}"
+  mode-control-segment-active:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.paper}"
     rounded: "{rounded.control}"
-    padding: "0 {spacing.3}"
     height: "24px"
-  segmented-segment-selected:
-    backgroundColor: "{colors.reading-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "0 {spacing.3}"
-    height: "24px"
-  menu:
-    backgroundColor: "{colors.reading-surface}"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.panel}"
-    padding: "{spacing.1}"
-    width: "13rem"
-  menu-row:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.micro}"
-    padding: "{spacing.1} {spacing.2}"
-  menu-row-hover:
-    backgroundColor: "{colors.sunken-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.micro}"
-    padding: "{spacing.1} {spacing.2}"
-  nav-row:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.tool}"
-    padding: "0 {spacing.2} 0 {spacing.1}"
-    height: "28px"
-  nav-row-current:
-    backgroundColor: "{colors.sunken-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.tool}"
-    padding: "0 {spacing.2} 0 {spacing.1}"
-    height: "28px"
-  input:
-    backgroundColor: "{colors.control-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "{spacing.2}"
-  source-editor:
-    backgroundColor: "{colors.reading-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.source}"
-    rounded: "{rounded.panel}"
-    padding: "{spacing.4}"
-  composer-input:
-    backgroundColor: "transparent"
-    textColor: "{colors.pencil}"
-    typography: "{typography.label}"
-    rounded: "0"
-    padding: "{spacing.1} 0 {spacing.2}"
-  chip-intent:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.metadata}"
-    rounded: "{rounded.pill}"
-    padding: "2px {spacing.2}"
-  chip-intent-selected:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.metadata}"
-    rounded: "{rounded.pill}"
-    padding: "2px {spacing.2}"
-  chip-attribution-human:
-    backgroundColor: "{colors.hand}"
-    textColor: "{colors.reading-surface}"
-    typography: "{typography.metadata}"
-    rounded: "{rounded.pill}"
-    padding: "0 {spacing.2}"
-  chip-attribution-session:
-    backgroundColor: "{colors.reading-surface}"
-    textColor: "{colors.ink}"
-    typography: "{typography.metadata}"
-    rounded: "{rounded.pill}"
-    padding: "0 {spacing.2}"
-  chip-attribution-unknown:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
-    typography: "{typography.metadata}"
-    rounded: "{rounded.pill}"
-    padding: "0 {spacing.2}"
-  margin-entry:
-    backgroundColor: "transparent"
-    textColor: "{colors.hand}"
-    typography: "{typography.label}"
-    rounded: "0"
-    padding: "{spacing.2} 0 {spacing.3}"
-  margin-entry-composer:
-    backgroundColor: "transparent"
-    textColor: "{colors.pencil}"
-    typography: "{typography.label}"
-    rounded: "0"
-    padding: "{spacing.2} 0 {spacing.3}"
-  margin-entry-session:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "0"
-    padding: "{spacing.2} 0 {spacing.3}"
-  conversation-turn-human:
-    backgroundColor: "{colors.anchor-wash}"
-    textColor: "{colors.ink}"
-    typography: "{typography.body}"
+    padding: "0 0.75rem"
+  composer:
+    backgroundColor: "{colors.paper}"
     rounded: "{rounded.composer}"
-    padding: "{spacing.3} {spacing.4}"
-  provenance-line:
-    backgroundColor: "transparent"
-    textColor: "{colors.muted-ink}"
+    padding: "0.75rem 1rem 1rem"
+  chip-human:
+    backgroundColor: "{colors.hand}"
+    textColor: "{colors.paper}"
     typography: "{typography.metadata}"
-    rounded: "0"
-    padding: "{spacing.3} {spacing.8} {spacing.8}"
-  dialog:
-    backgroundColor: "{colors.reading-surface}"
+    rounded: "{rounded.pill}"
+    padding: "0 0.5rem"
+  chip-session:
+    backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    typography: "{typography.body}"
+    typography: "{typography.metadata}"
+    rounded: "{rounded.pill}"
+    padding: "0 0.5rem"
+  dialog:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
     rounded: "{rounded.overlay}"
-    padding: "{spacing.6}"
+    padding: "1.5rem"
     width: "26rem"
 ---
 
@@ -320,230 +187,223 @@ components:
 
 ## Overview
 
-**Creative North Star: "One Identity, Two Hands"**
+**Creative North Star: "The Writing Desk, Two Hands"**
 
-glosa is a reading and marking instrument, not a dashboard. The manuscript is the writer's: it is set in the writer's own face, chosen per artifact (Default sans, Serif or Mono), on white paper at a book measure. Nothing in the chrome competes with it. The desk around the page is achromatic grey, hairlines and one segmented mode switch, so the only colour on the screen is the one that means *you*.
+glosa reads like a well-set page, not an app. The whole desk is one warm paper: the manuscript, the top bar, the navigator and the tab strip share the same ground, and the desk's outer regions are divided by printed ink hairlines rather than grey panels. Typography does the structural work. Source Serif 4 sets the manuscript, its headings, every quote of it and every note written in the margin; Source Sans 3, its designed companion, sets the chrome. Both are vendored OFL woff2 served by the daemon, so the page never reaches a font service.
 
-The product is recognisable by its marks, not by a typeface or an accent wash. Two hands write on the page. The human's marks are one deep teal everywhere they appear: the wash on the words in Review, the § address in the gutter, the margin entry, the caret, the selection, the focus ring, the unsaved dot, the drag target and the logo mark itself, an ink comma written as a reader's margin note. A mark that has not been sent yet is the same mark in graphite, the pencil. A session never borrows either: its entries, its chips and its answers are printed in ink, on an ink hairline. Diff green and red, and the semantic danger, warning and success, are the only other hues, and each of those always arrives with a label or a shape.
+Two hands write on the sheet. The human's marks are one burnt vermilion everywhere they appear: the wash and underline on the words, the § address, the note's words, the caret, the selection, the focus ring, the unsaved dot, the drag target, and the comma logo. A mark not yet sent is the same mark in warm graphite, the pencil. A session never borrows either: its entries, chips and answers are printed in ink. Actions are ink too; the chosen mode is struck forward as filled ink inside an ink outline.
 
-The system refuses the calm-editor template (cards in a rail, one decorative accent), source-domain costumes (scriptorium, lab, score), IDE chrome, and every kind of resting elevation. Dark appearance is the same page under lower light, never an inverted console.
+Density is calm and bookish in the manuscript (18px serif on a 68ch measure) and compact in the chrome (13px sans). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.
 
 **Key Characteristics:**
-- Achromatic neutrals in both appearances: every grey has zero chroma, so the hand is the only colour on the desk.
-- Primary actions are the page's own black. The hand is never a button colour.
-- Margin entries are typography on a hairline, aligned to their passage, never cards.
-- Passage addresses ("§2.1") are derived from Markdown structure at render time and shown at headings in Review, on entries and in the outline. They are labels, not identities.
-- A provenance line under the manuscript states, in words, who marked, what a session applied, what changed outside glosa, and what stands approved.
-- Flat at rest; a shadow appears only under something genuinely floating.
+- Warm paper for the entire desk; no grey sidebar, top bar or tab strip.
+- Ink hairlines mark the desk's regions: under the top bar and at the navigator's right edge.
+- One colour means "you": vermilion. Pencil means "not sent yet". Ink means printed, by a session or as an action.
+- Margin entries are typography on a hairline, set in the serif, never cards. The open composer is the one card.
+- Passage addresses ("§2.1") are derived labels painted in the gutter, never inserted into content.
+- A provenance line under the manuscript states in words who marked, what a session applied, what changed outside glosa, and what stands approved.
 
 ## Colors
 
-The palette is white paper, near-black ink, an achromatic desk, and one teal hand; graphite for what is not yet sent.
+Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand and a graphite pencil. OKLCH is the source of truth.
 
 ### Primary
-- **Ink** (`oklch(0.2 0 0)`): Primary text at roughly 16:1 on paper, and the primary button. The Send, Save and Approve buttons are filled ink with paper text; hover lifts to Ink Hover (`oklch(0.32 0 0)`). A session's margin entries, their opening hairline, the focused sideline, the active tab's top edge and the current navigator row are all ink: a session's answer is *printed*.
-- **The Hand** (`oklch(0.42 0.06 195)`, #0F5D5D in the source comment): The human reviewer's colour, deep teal, chosen to sit clear of link blue, danger, diff green and success. It carries the wash on annotated words in Review, the § address in the gutter and on entries, the margin entry's own words, the caret, `::selection`, the focus ring (`--focus` resolves to the hand), the unsaved-tab dot and the parked-edit dot, the dock's drag target and edge indicator, the "human" attribution chip, the human's turns in the conversation pane, the "delivered" state on an entry, and the accent path of the logo mark. Hover darkens to Hand Hover (`oklch(0.36 0.06 195)`). In dark appearance it lifts to `oklch(0.75 0.08 190)`, described in the source as the ceiling before teal glows.
-- **The Pencil** (`oklch(0.55 0 0)`): The same mark before it is sent. The composer's opening hairline, its address, its "You · not sent yet" line, the graphite text being typed and the dashed rule under it are all pencil. Dark: `oklch(0.62 0 0)`.
+- **The Hand, Burnt Vermilion** (`{colors.hand}`, about #b03f00; 5.7:1 on paper): every human mark. The translucent wash on annotated words in Review, the 2px underline in every mode, the § address in the gutter and on entries, the note's words, the caret, `::selection`, the focus ring, the unsaved-tab and parked-edit dots, the "delivered" state, the human attribution chip, the human's turn label in the conversation, the dock's drag target and active sash, and the logo's top layer. Hover deepens to Hand Hover. Dark: `{colors.dark-hand}` (6.9:1).
+- **Ink** (`{colors.ink}`; 17.6:1 on paper): body text, the primary button (Send to session, Save, Approve), the active mode segment, links, the active tab's 2px top edge, a session's entry rule and words, the session chip's edge. Hover lifts to Ink Hover. Ink is also the rule between the desk's regions (see Neutral).
+
+### Secondary
+- **The Pencil, Warm Graphite** (`{colors.pencil}`; 4.5:1 on paper): the same mark before it is sent. The composer's 2px top rule, its address and "You · not sent yet", the typed text and the dashed rule under it, the graphite underlay under its quote, and the pencil wash on the selected passage while the draft is open. Dark: `{colors.dark-pencil}`.
 
 ### Washes
-- **Hand Wash** (`color-mix(in oklch, var(--hand) 14%, transparent)`): The translucent wash on annotated words in Review, browser selection, and the dock's drop target. Translucent so it composes over any text colour.
-- **Anchor Wash** (`color-mix(in oklch, var(--hand) 14%, var(--bg))`): The opaque form of the same wash, for surfaces: the hovered or focused mark, the underlay under a quoted passage in a margin entry, the gutter marker's fill, a selected answer option, and the human's turn in the conversation pane.
-- **Pencil Wash** (`color-mix(in oklch, var(--pencil) 16%, transparent)`): The selected passage while its composer is open and unsent.
-- **Hand Line** (`color-mix(in oklch, var(--hand) 70%, transparent)`): The 2px underline every annotated passage carries in every mode. In Read this line is the only trace of a mark.
-- **Scrim** (`oklch(0.2 0 0 / 0.3)`): The dim behind a blocking dialog.
+- **Hand Wash** (hand at 14% over transparent): annotated words in Review, selection.
+- **Anchor Wash** (hand at 14% mixed into paper, opaque): the hovered or focused mark, the underlay under an entry's quote, the human's conversation turn.
+- **Pencil Wash** (pencil at 16% over transparent): the passage held by an open composer.
+- **Hand Line** (hand at 70% over transparent): the 2px underline every anchored passage carries; the only trace of a mark in Read.
+- **Scrim** (ink at 30%; black at 45% in dark): behind a blocking dialog.
 
 ### Semantic
-- **Danger** (`oklch(0.5 0.16 25)`): Error status text, the destructive button, the "Remove" hover, and diff deletions through the diff pane's variables.
-- **Warning** (`oklch(0.55 0.12 75)`): A stale entry's dot, "Lost its place", the stale connection state, an attention notice.
-- **Success** (`oklch(0.52 0.1 150)`): The "applied" state on an entry, the connected agent state, and the diff's insert colour. It appears nowhere a human mark could be mistaken for it.
+- **Danger, Crimson** (`{colors.danger}`; 7.3:1): errors, destructive actions, the Remove hover, diff deletions. Held apart from the hand by hue and lightness.
+- **Warning, Ochre** (`{colors.warn}`; 5.2:1): stale entries, "Lost its place", attention notices.
+- **Success, Sage** (`{colors.ok}`; 5.6:1): the "applied" state and the diff's insert colour; never anywhere a human mark could be mistaken for it.
 
 ### Neutral
-- **Reading Surface** (`oklch(1 0 0)`): The manuscript, the active tab, menus, dialogs, panels and every button that must read as paper. Also the text colour on a primary button (`--on-primary` is the paper).
-- **Control Surface** (`oklch(0.97 0 0)`): Top bar, navigator, tab strip, history and conversation panels, the compact tray, the sunken code block inside prose.
-- **Sunken Surface** (`oklch(0.94 0 0)`): The segmented control's track, hover beds under rows and icon buttons, disabled fills, the dialog's byte-detail box.
-- **Muted Ink** (`oklch(0.5 0 0)`): Secondary text at roughly 5.7:1: metadata, timestamps, quotes, placeholders, list markers, the resting state of most icon buttons.
-- **Faint Ink** (`oklch(0.65 0 0)`): Disabled text and glyphs only, never live copy.
-- **Quiet Border** (`oklch(0.9 0 0)`): Structural hairlines: panel edges, the desk between panes, table rules, the provenance line's rule.
-- **Strong Border** (`oklch(0.62 0 0)`): Interactive edges at or above 3:1: button and menu borders, the margin entry's opening hairline, a resting sideline, the blockquote rule, a firm table head rule.
-
-### Dark appearance
-Dark is the same desk under lower light. Every neutral stays at zero chroma: paper `oklch(0.19 0 0)`, control surface `oklch(0.225 0 0)`, sunken `oklch(0.265 0 0)`, ink `oklch(0.93 0 0)`, muted `oklch(0.7 0 0)`, faint `oklch(0.55 0 0)`, quiet border `oklch(0.3 0 0)`, strong border `oklch(0.5 0 0)`. The hand lifts to `oklch(0.75 0.08 190)` (#5fbdb3 in the source comment) and its hover to `oklch(0.8 0.08 190)`; the pencil to `oklch(0.62 0 0)`; ink hover to `oklch(0.85 0 0)`; danger, warning and success lift to `oklch(0.7 0.14 25)`, `oklch(0.74 0.11 75)` and `oklch(0.7 0.09 150)`. Whole-entry opacity for settled states is turned off in dark because it compounds contrast loss on small metadata.
+- **Paper** (`{colors.paper}`): the manuscript and the whole desk (`--desk` resolves to paper), menus, dialogs, the composer, the active tab. Also the text on filled ink and filled hand.
+- **Surface** (`{colors.surface}`): code beds, the compact collection tray, secondary-button hover; the composer and dialog fill in dark.
+- **Sunken** (`{colors.surface-sunken}`): hover beds under rows, tabs and mode segments; disabled fills.
+- **Muted Ink** (`{colors.muted}`; 6.7:1): metadata, timestamps, quotes, placeholders, section labels, resting icons and inactive mode labels.
+- **Faint** (`{colors.faint}`): disabled text only, never live copy.
+- **Quiet Border** (`{colors.border}`): rules inside a region: the tab strip's bottom rule, dock separators, the provenance line's rule, the palette query line, table rules.
+- **Strong Border** (`{colors.border-strong}`; 3.9:1): interactive edges: secondary buttons, the margin entry's opening hairline, the blockquote rule, the section-break rule, the composer's edge.
+- **Region Rule** (`--rule`): ink in light; `{colors.dark-rule}` (7.8:1) in dark, stepped below text ink so a full-width rule does not glare. Draws the top bar's bottom edge, the navigator's right edge and the mode control's outline.
 
 ### Named Rules
-**The Two Hands Rule.** Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No exceptions, and no third colour for marks.
+**The Two Hands Rule.** Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No third colour for marks.
 
-**The Achromatic Desk Rule.** Every neutral is `oklch(L 0 0)` in both appearances. Tinted greys are forbidden because any tint competes with the one colour that means "you".
+**The Paper Desk Rule.** The desk is one paper. Chrome regions do not get their own grey fill; they are separated by the Region Rule. Tinted neutrals stay warm and low in chroma so nothing competes with the hand.
 
-**The Ink Actions Rule.** The primary button is the page's own black. The hand is never a button, a link or a panel wash.
+**The Ink Actions Rule.** Buttons and the chosen mode are the page's own ink. The hand is never a button, a link or a panel fill.
 
-**The Status Needs Shape Rule.** Danger, warning, success, delivery and provenance always carry a label, a dot or an edge treatment. A hollow dot is waiting, a filled dot is delivered or applied; a human chip is filled, a session chip is outlined in ink, an unknown chip is dashed. Colour is never the only channel.
+**The Status Needs Shape Rule.** Danger, warning, success, delivery and provenance always carry a label, a dot or an edge. A hollow dot is waiting; a filled dot is delivered (hand), applied (success) or stale (warning). A human chip is filled, a session chip is outlined in ink, an unknown chip is dashed. Colour is never the only channel.
 
-**The Manuscript Contrast Rule.** Long-form body copy, placeholders and 12–13px metadata meet WCAG 2.2 AA in every appearance. If a muted token is marginal, mix it toward Ink; never reach for Faint on live text.
+**The Manuscript Contrast Rule.** Body copy, placeholders and 12–13px metadata meet WCAG 2.2 AA in both appearances. Pencil sits exactly at the 4.5:1 floor, so it is never lightened further; Faint never carries live text.
 
 ## Typography
 
-**Manuscript Font:** the writer's face, per artifact, through one variable (`--font-manuscript`). Default is the system sans (`system-ui, -apple-system, sans-serif`) at 16px; Serif is `"Iowan Old Style", Charter, ui-serif, Georgia, serif` at 17px; Mono is `ui-monospace, "SF Mono", Menlo, monospace` at 15px. The rendered page, the rich editor and every quote that echoes the page read the same variable, so a margin entry's quote is set in the manuscript's face.
-**Chrome Font:** the system sans, always.
-**Mono Font:** `ui-monospace, "SF Mono", Menlo, monospace` for paths, identifiers, tool output, the byte-detail box and the source face of the editor.
+**Manuscript Font:** Source Serif 4 (fallback Iowan Old Style, Charter, Georgia), variable weight, `font-optical-sizing: auto` so titles take the display cut and body the text cut.
+**Chrome Font:** Source Sans 3 (fallback system-ui).
+**Mono Font:** ui-monospace, SF Mono, Menlo, for paths, identifiers, tool output, code and the source editor.
 
-**Character:** The manuscript belongs to the writer, and glosa's identity survives every face unchanged, because it lives in the marks. Iowan Old Style is named first in the serif stack on purpose: `ui-serif` resolves to New York in Safari and to nothing in Chromium, and the two faces differ by 65px over a 68ch measure. Inside the manuscript, emphasis is semibold rather than the serif's full bold, titles carry a touch of negative tracking, list markers step back to Muted Ink with tabular numerals, a blockquote hangs from a one-pixel Strong Border rule in italic muted ink, the section break is a short 4rem rule, and tables are set with horizontal rules only.
+**Character:** A book serif and its designed sans, used at restrained weights (600–650 headings, 600 emphasis) so the page reads as typeset rather than as a magazine.
+
+The writer can switch a page's face in the pane's More menu (Default = serif, Sans, Mono) through one variable, `--font-manuscript`, with its own size and leading. The chooser rows lead with an "Aa" sample in the face they name; the chosen row is told by weight and a drawn check.
 
 ### Hierarchy
-- **Manuscript Title** (600, 2rem, 1.15, −0.015em): The artifact's `h1`, in the manuscript face, with 2rem below it.
-- **Manuscript Section** (600, 1.5rem, 1.25, −0.01em): The artifact's `h2`, opened by 3rem of air above and 0.75rem below.
-- **Manuscript Subhead** (600, 1.125rem, 1.35): The artifact's `h3`; 2rem above, 0.5rem below, closed to 0.75rem above when it follows its section heading directly. `h4`–`h6` sit at 17px, 1.4.
-- **Manuscript Body** (400, 1rem / 1.6 in the sans; 1.0625rem / 1.65 in the serif; 0.9375rem / 1.65 in mono): Rendered prose at a 68ch maximum measure with pretty wrapping and hanging punctuation.
-- **Headline** (600, 1.375rem): Boot screens and screen-level headlines, balanced wrapping.
-- **Title** (600, 1.1875rem): Dialog and panel titles.
-- **Body** (400, 0.9375rem, 1.6): Panel prose, the conversation pane, dialog copy, tables inside the manuscript.
-- **Label** (500, 0.8125rem): Buttons, tabs, menu rows, navigator rows, the annotation body, the chrome default.
-- **Metadata** (400, 0.75rem): Timestamps, state labels, the provenance line, chips, the entry's first line.
-- **Address** (700, 0.6875rem, tabular numerals): The § passage address, in the hand, at headings in the gutter, on entries and leading each outline row.
-- **Path** (400, 0.75rem, mono): The directory in the artifact bar, a session's claimed label.
-- **Source** (400, 0.8125rem, 1.7, mono): The editor's source face and rendered code blocks.
+- **Manuscript Title** (650, 2.5rem, 1.1, −0.015em): the artifact's `h1`, 2rem below.
+- **Manuscript Section** (620, 1.625rem, 1.25, −0.01em): `h2`, 3rem above, 0.75rem below.
+- **Manuscript Subhead** (620, 1.25rem, 1.3): `h3`, 2rem above, 0.5rem below; closes to 0.75rem above when it follows its section directly. `h4`–`h6` at 600, 17px, 1.4.
+- **Manuscript Body** (400, 18px / 1.62 serif; 16px / 1.6 sans; 15px / 1.65 mono): prose on a 68ch measure, pretty wrapping, hanging punctuation. Emphasis is 600, not the full bold.
+- **Note** (400, 15px / 1.45, serif): the words of a margin entry, the composer field and a session's message, in the serif whatever the page face. Notes are writing, not chrome.
+- **Headline** (600, 22px, sans): boot screens. **Title** (600, 19px): dialogs and panels. **Bar Title** (600, 14px): the active artifact's path, centred in the top bar.
+- **Body** (400, 15px / 1.6, sans): panel prose, the conversation, dialog copy.
+- **Label** (500, 13px): buttons, tabs, menu rows, navigator rows; the chrome default.
+- **Section Label** (600, 12px, 0.06em, uppercase, Muted): the heading of a real list: navigator sections, the margin's title and open/settled divider. The Go to palette's group headings use 11px at 0.04em.
+- **Metadata** (400, 12px): timestamps, state rows, chips, the provenance line.
+- **Address** (700, 11px, tabular numerals, sans): the § passage address.
+- **Source** (400, 13px / 1.7, mono): the source editor; code blocks in prose at 13px / 1.6.
 
 ### Named Rules
-**The Reading Measure Rule.** Manuscript prose stays at a 68ch maximum measure with generous line-height. Operational panels may be denser; writing never becomes a data table.
+**The Reading Measure Rule.** Manuscript prose stays at a 68ch measure. Blocks are separated by 1.2em of the body size; the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.
 
-**The Prose Rhythm Rule.** Blocks in the manuscript are separated by 1.2em of the body size, list items by 0.3em, and the page opens with 4rem above the title and closes with 6rem below the last line. Headings always carry more space above than below.
+**The Serif Is Writing Rule.** Anything a person or a session wrote (the manuscript, its quotes, margin notes, the composer field, a session's message) is set in serif; anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.
 
-**The Writer's Face Rule.** The manuscript is set in the artifact's chosen face; the chrome never follows it. Any surface that quotes the page (a margin entry's quote, the composer's quote, a session's quoted passage) is set in the manuscript face, so the thread back to the text is visible.
-
-**The No Display Labels Rule.** Buttons, tabs, chips, paths and state labels never use expressive display typography. There is no display face; the chrome is the system sans at 13px.
+**The Section Label Rule.** Uppercase tracked labels name a list that follows them. They never sit above a headline as a decorative lead-in.
 
 ## Layout
 
-The app is a grid of top bar (3rem), an optional banner, and a main area. The main area holds a 232px navigator on the left and a dock of panes to its right. The navigator's show/hide toggle is pinned to the desk's bottom-left corner, on a 44px footer strip with a Quiet Border rule while the navigator is shown and on its own hairline once hidden, so it never moves and never shifts the logo mark; the dock's 1px gaps show the Quiet Border desk through, so a sash reads as the same one-pixel rule as every other division. Each pane is a container (`container-name: pane`) with a transparent artifact bar on top and a scrolling body below, so every artifact-scoped width rule is written against the pane, not the viewport, because two artifacts can share a screen.
+A grid of top bar (3rem), an optional banner and a main area. The main area holds a 232px navigator and a dock of panes. The top bar has three columns with equal outer columns, so the path title sits at the bar's true centre; the logo sits left, connection state and More sit right. The navigator's show/hide toggle is pinned in the desk's bottom-left corner on a 44px foot strip, so it never shifts the logo. The navigator has no top padding: its first section label shares the tab strip's 36px horizon.
 
-The manuscript column is `--measure` (68ch) plus two 2rem gutters, centred; its painted width is fixed at 707px (`--manuscript-block`, measured in the serif face) so the margin ladder can reason about it from outside the manuscript's font context. The artifact bar spans the pane, 40px tall, in three columns: the directory at the left, the mode control on the pane's centre line (the manuscript's centre line, since the manuscript is centred), and History and More at the right. The outer columns are equal so the control stays centred; the right one never shrinks below its content, so the path gives way first. The bar collapses on its own width: at 520px History drops its word, at 440px the directory drops, at 400px the mode control goes icon-only, at 270px History folds into the More menu. The mode control is the last thing standing.
+Each pane is a container (`pane`), so width rules are written against the pane, not the viewport. The artifact bar (40px, its own `bar` container) holds the directory at left in mono, the mode control on the pane's centre line, and History and More at right; the right column never shrinks, so the path gives way first. It collapses on its own width: at 520px History drops its word, at 440px the directory drops, at 400px the mode control goes icon-only, at 270px History folds into More.
 
-**The margin** is painted, never reserved. From a pane width of 1205px (`MARGIN_RAIL_FLOOR`) the margin is a transparent right rail between 240px and 320px wide, holding entries absolutely positioned beside their passage; it overlays whitespace and the manuscript never moves. Below that, the composer opens at its passage over the manuscript column and the saved entries move into a collection tray at the foot of the pane. Nothing is painted at the left edge: a document's outline is reached through the Go to palette (⌘K), never through the gutter.
+The manuscript column is 68ch plus two 2rem gutters, centred; its painted block is fixed at 707px (`--manuscript-block`) so the margin ladder can reason about it from outside the manuscript's font. The serif at 18px paints 688px, inside that block, so the rail floor did not move.
 
-Passage addresses sit in the manuscript's left 2rem gutter (`right: 100%`, 0.45em from the block's top) so no node is inserted into the rendered content and the quote-and-offset anchors stay untouched.
+**The margin** is painted, never reserved: the manuscript never moves when Review is entered or the first entry arrives. From a pane width of 1205px the margin is a right rail (240–320px) of entries positioned beside their passages over whitespace; below it, saved entries move into a collection tray at the pane's foot. At every width the composer opens at its passage: directly under the selection (flipping above it when there is no room), aligned to its first word and held inside the manuscript column, 26rem wide. A draft never opens in the rail, where it sat far from the words just selected. The outline is reached through Go to (⌘K), never through the gutter.
 
-Compact (< 1024px) hides the logo mark, tightens the top bar, and lets the attention tray span the width. Phone widths (≤ 640px) reduce the manuscript's side padding to 1rem and stack the approval strip. Coarse pointers grow every hit target to 44px without changing the visible vocabulary. The dock floor is one pane at 360px; below that the app scrolls.
+Compact (≤ 1023px) hides the logo, tightens the top bar and lets the tray span the width. Phone (≤ 640px) reduces the manuscript's side padding to 1rem and stacks the approval strip. Coarse pointers grow hit targets to 44px without changing the visible vocabulary. The dock floor is one 360px pane; below that, the app scrolls.
 
 Spacing is a 4pt scale: 0.25 / 0.5 / 0.75 / 1 / 1.5 / 2 / 3rem.
 
 ## Elevation & Depth
 
-The workbench is flat at rest. One-pixel Quiet Border rules, the three-step surface ladder (paper, control, sunken) and spacing carry all structure. A shadow appears only under something that is genuinely above the work for a moment: a menu, a popover, the Go to palette, the compact composer opening at its passage, the entry preview under a hovered mark, the collection tray, and the blocking dialog. Each shadow is two layers: a tight edge that separates and a broad lift with an offset so the light has a direction. In dark appearance shadows become black-based and tighter, and the resting shadow resolves to none.
+Flat at rest. Paper, hairlines and spacing carry all structure. A shadow appears only under something temporarily above the work: menus and popovers, the Go to palette, the composer, the collection tray and the blocking dialog. Every shadow is two layers, a tight separating edge and a broad offset lift, tinted with warm ink (`0.2 0.012 60`). In dark the shadow ink becomes black and tighter, and the resting shadow resolves to none; the dialog and composer lift one surface step instead, and the dialog drops its shadow.
 
 ### Shadow Vocabulary
-- **Menu Lift** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06), 0 10px 28px -6px oklch(0.2 0 0 / 0.16)`): Every menu and popover, the composer and the mark preview.
-- **Tray Edge** (`box-shadow: 0 -1px 2px oklch(0.2 0 0 / 0.05), 0 -12px 32px -8px oklch(0.2 0 0 / 0.16)`): The upward shadow on the collection tray at the foot of a compact pane.
-- **Dialog Float** (`box-shadow: 0 2px 6px oklch(0.2 0 0 / 0.08), 0 24px 56px -12px oklch(0.2 0 0 / 0.24)`): The blocking dialog, paired with the Scrim backdrop.
-- **Rest** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06)`): Defined, and currently used by nothing; the margin entry that once carried it is now a hairline.
+- **Menu Lift** (`box-shadow: 0 1px 2px oklch(0.2 0.012 60 / 0.06), 0 10px 28px -6px oklch(0.2 0.012 60 / 0.16)`): menus, popovers, the composer, the compact mark preview.
+- **Tray Edge** (`box-shadow: 0 -1px 2px oklch(0.2 0.012 60 / 0.05), 0 -12px 32px -8px oklch(0.2 0.012 60 / 0.16)`): the collection tray at a compact pane's foot.
+- **Dialog Float** (`box-shadow: 0 2px 6px oklch(0.2 0.012 60 / 0.08), 0 24px 56px -12px oklch(0.2 0.012 60 / 0.24)`): the blocking dialog over the Scrim.
 
 ### Named Rules
-**The Flat-Until-Floating Rule.** Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace. This is not a preference for subtle shadows: the dock's floating shadows resolve to none, not to something quieter.
+**The Flat-Until-Floating Rule.** Resting panels, entries, tabs and bars cast no shadow. A shadow is earned only by being temporarily above the workspace.
 
-**The Same Desk Rule.** Under low light a shadow is a darker patch of the same desk, not haze: black-based, tighter, and nothing at rest casts one.
+**The Same Desk Rule.** Under the lamp, a shadow is a darker patch of the same desk, not haze.
 
 ## Shapes
 
-One radius per role, and a nested corner is its container's radius minus the padding between them, so concentric shapes stay parallel instead of pinching: menu 8px − 4px padding = 4px rows; segmented track 8px − 2px = 6px segments. Focus 2px, micro 4px, tool 5px, control 6px, panel 8px, composer 10px, overlay 12px, pill 999px.
+One radius per role: focus 2px, micro 4px, tool 5px, control 6px, panel 8px, composer 10px, overlay 12px, pill 999px. A nested corner is its container's radius minus the padding between them (mode track 8px − 2px = 6px segments; menu 8px − 4px = 4px rows).
 
-Marks on the page are square or hairline: margin entries and a session's entry open on a full-width 1px rule with no radius and no fill; the composer is the one card on the page, because it is a draft above the work. Tabs are square; a rounded tab is a card and a card floats. State dots, gutter markers and drawn radios are circles. Borders are one pixel throughout; the only two-pixel edges are the active tab's ink top edge, the focused sideline, the annotation underline, the focus ring and the dock drop target.
+Marks on the page are square or hairline. Margin entries open on a full-width 1px rule with no radius and no fill; tabs are square. State dots and drawn radios are circles; chips are pills. Borders are 1px; the 2px edges are the active tab's ink top, the composer's pencil top, the annotation underline, the focus ring and the drag target.
+
+The logo is the comma overprinted: an ink layer at 45% opacity offset down and right, with the vermilion comma printed opaquely on top, so the ink shows only as an offset edge. In dark the under layer is Muted at 60%.
 
 ## Components
 
 ### Buttons
-- **Shape:** Gently rounded (6px), 13px medium label, padding 0.25rem 0.75rem, 1px border.
-- **Primary** (Send to session, Save, Approve): Filled Ink with paper text, border the same ink. Hover lifts to Ink Hover. Disabled sits on Sunken Surface with Quiet Border and Faint text.
-- **Secondary:** Paper with a Strong Border edge and Ink text; hover to Control Surface.
-- **Ghost:** Transparent, Muted text, no border; hover to a Sunken bed and Ink text.
-- **Danger:** Filled Danger with near-white text; hover mixes 12% toward black.
-- **Focus:** Every control shares one ring: 2px solid in the hand, 2px offset, 2px radius. Text fields do not take the ring; see Inputs.
-- **Recessive verbs** (Edit, Remove, Undo on a margin entry): 12px underlined muted text, no box. Edit and Undo hover to the hand; Remove hovers to Danger.
+Quiet and ink-led.
+- **Shape:** gently rounded (6px), 13px medium label, 0.25rem 0.75rem padding, 1px border.
+- **Primary** (Send to session, Save, Approve): filled ink, paper text; hover to Ink Hover. Disabled: Sunken fill, Quiet Border, Faint text.
+- **Secondary:** paper, Strong Border edge, ink text; hover to Surface. **Ghost:** transparent border.
+- **Focus:** one ring for every control: 2px solid hand, 2px offset, 2px radius.
+- **Recessive verbs** (Edit, Remove, Undo on an entry): 12px underlined Muted text, no box. Edit and Undo hover to the hand; Remove hovers to Danger.
 
-### Segmented Mode Control (Read / Review / Edit)
-- **Style:** A Sunken track (8px) holding 24px segments (6px) with 2px padding and gap; labels 13px medium, Muted. Icons 14px, stroked 1.6. In the artifact bar, where it is the row's one object, segments are 28px with 15px icons; History and More beside it are 32px.
-- **Selected:** Paper fill, Ink text, weight 600, a 1px Quiet Border ring. The selected segment is the same paper as the manuscript below it: the tab strip's active-sheet idiom at control scale.
-- **Parked edit:** A 5px hand dot in the Edit segment's corner marks an unsaved draft parked off screen.
-
-### Menus and Popovers
-- **Style:** Paper on a 1px Strong Border hairline, 8px radius, Menu Lift, 4px padding, 13rem minimum. Rows are 13px, Muted, 4px radius, hover to a Sunken bed and Ink. Disabled rows go Faint with no hover bed. Groups separate with a Quiet Border rule and 4px of air; group headings are 12px semibold Muted with 0.02em tracking.
-- **The Manuscript face group:** Inside the pane's More menu, under the heading "Manuscript face", three radio rows (Default / Serif / Mono). Each row leads with an "Aa" sample set in the face it names; the chosen row is told by weight 600 and a drawn check, never by colour alone. This is a decision: a reading preference is a setting, not primary chrome, so the chooser lives in the menu and never in the artifact bar.
+### Mode Control (Read / Review / Edit)
+- **Style:** an ink outline (1px inset Region Rule) on paper, 8px radius, 2px padding and gap. Segments are 24px, 6px radius, 13px medium Muted labels with icons; hover to a Sunken bed and ink.
+- **Active:** struck forward as filled ink with paper text at 600. Fill, weight and contrast carry the state together.
+- **Parked edit:** a hand dot on the Edit segment marks an unsaved draft parked off screen.
 
 ### Navigator
-- **Style:** Control Surface with a Quiet Border on its right, 232px wide, no top padding so its first heading shares the tab strip's 36px horizon. Section labels are 11px uppercase Muted. Rows are 28px, 13px Ink, 5px radius, hover to a Sunken bed.
-- **Current:** Sunken bed, Ink, weight 600. An artifact that is merely open in another pane is told apart by weight, not by a second colour.
+- **Style:** paper, ink hairline at its right, 232px. Section labels in the Section Label style. Rows are 28px, 13px ink, 5px radius, hover to a Sunken bed; the current row is Sunken, ink, 600.
 
 ### Tabs and Dock
-- **Style:** The strip is Control Surface, 36px, with an inset 1px Quiet Border rule. Tabs are square, 13px, Muted; between resting tabs a 14px-tall Strong Border hairline, not a full-height wall. The active tab takes paper, Ink text, weight 600, 1px Quiet Border sides painted inside the box, and a 2px Ink top edge, so the sheet runs unbroken into the manuscript. An unfocused group's current tab keeps the sheet with a Strong Border top edge.
-- **Unsaved:** A 7px hand dot on the tab. The unsaved edit is the human's hand, not yet on disk.
-- **Drag:** The drop target is Hand Wash inside a 2px hand border, gone the instant the pointer is released. The sash takes the hand only while it is being dragged.
+- **Style:** a 36px strip on paper with a Quiet Border bottom rule painted as an inset, so the active tab runs unbroken into the manuscript. Tabs are square, 13px, Muted; the active tab is paper, ink, 600, with Quiet Border sides and a 2px ink top edge (a neutral edge in an unfocused group).
+- **Unsaved:** a hand dot. **Drag:** Hand Wash inside a 2px hand border; the sash takes the hand only while dragged.
 
 ### Inputs / Fields
-- **Style:** Paper or Control Surface, 6px radius, padding 0.5rem, Ink text; placeholders are Muted (≥ 4.5:1, never default grey). The source editor is a mono textarea at 13px / 1.7 on paper with a Quiet Border and 8px radius.
-- **Focus:** Text fields take a soft ring rather than the button outline: the border turns to the hand and a 3px halo at 14–16% of the hand surrounds it. The conversation composer takes the same ring on `:focus-within`.
-- **Caret:** Every textarea, input and contenteditable draws its caret in the hand.
-- **The annotation composer's field** is the exception: transparent, graphite text, a 1px dashed pencil rule under the words, no box. On focus the line sharpens to solid Ink rather than glowing: writing, not a form field.
+- **Style:** 6px radius, ink text, Muted placeholders. Source editor: mono 13px / 1.7.
+- **Focus:** the border turns to the hand with a 3px halo of hand at 14%.
+- **Caret:** the hand, in every field.
 
 ### Chips
-- **Intent chips** (composer): Free-floating pills, 1px Quiet Border, 12px Muted; hover to a Strong Border and Ink; selected is transparent with an Ink border, Ink text and weight 600. Never a segmented tub.
-- **Attribution chips** (history): 12px semibold pills with a 1px Strong Border. Human is filled in the hand with paper text; session is paper with an Ink border and Ink text; unknown is a dashed Muted outline. Weight and edge carry the difference as well as colour.
-- **Answer options** (a session's question): 13px pills; the radio is drawn (13px ring, 7px hand dot) rather than native, and a selected option takes an Ink border, Anchor Wash fill and weight 600 together.
-- **A session's claimed label:** 11px mono in a dashed Strong Border box beside the verified provider name in 600 Ink, so proven and claimed sit on one line, visibly unequal.
+- **Intent chips** (composer): pills with a Quiet Border, 12px Muted; hover to Strong Border and ink; selected is transparent with an ink border, ink text, 600.
+- **Attribution chips** (history): 12px 600 pills. Human: filled hand, paper text. Session: paper, ink border, ink text. Unknown: dashed Strong Border, Muted.
 
 ### The Margin Entry (signature)
-Not a card. An entry is typography on the same paper as the manuscript, opened by a full-width 1px hairline at the height of its passage, with 0.5rem above and 0.75rem below, and a 0.5rem grid gap between its lines.
-- **First line:** the § address in the hand (11px, 700, tabular numerals), then "You" in 12px semibold Ink. "You" is honest: every entry here was written in glosa's own composer.
-- **Quote:** the passage's words in the manuscript face, italic, 13px Muted, clamped to two lines (one in the side rail), with an Anchor Wash underlay hugging the baseline half of the words like a pencil underline. An entry that has lost its place strikes the quote through and says so in 12px Warning.
-- **Body:** the human's words, 13px, in the hand. Settled (applied) words recede to Muted.
-- **State row:** an 8px dot (hollow Muted while waiting, filled hand when delivered, filled Success when applied, filled Warning when stale) beside a 12px label, then the intent as plain "· Change the words" metadata. Rejected, stale and dismissed entries fade to 75% in light.
-- **Hover thread:** hovering the underlined passage lights the entry's hairline in the hand with a 1px inset; hovering the entry deepens the passage from Hand Line to the full Anchor Wash and turns its underline to the hand. A newly arrived entry flashes its hairline in the hand for 1.2s.
-- **A session's entry** is the same object with authorship said in words: it opens on an Ink hairline, prints its provider name in Ink, its message in 13px Ink, and its quoted passage behind a 2px Strong Border sideline echoing the mark in the manuscript. It never takes the hand.
+Typography on a hairline, not a card: a 1px Strong Border rule at the passage's height, 0.5rem above and 0.75rem below, 0.5rem between lines.
+- **Head:** the § address in the hand (11px, 700, tabular) then "You" in 12px 600 ink.
+- **Quote:** the passage in `--font-manuscript`, italic, 13px Muted, clamped to two lines, over an Anchor Wash underlay on the lower third of the words. A lost anchor strikes the quote through and says "Lost its place" in 12px 600 Warning.
+- **Note:** the human's words in the Note style, in the hand; applied notes recede to Muted.
+- **State row:** an 8px dot (hollow Muted waiting, filled hand delivered, filled Success applied, filled Warning stale) beside a 12px label and the intent as "· Change the words". Rejected, stale and dismissed entries fade to 75% in light.
+- **Hover thread:** hovering the passage lights the entry's rule in the hand; hovering the entry deepens the passage to Anchor Wash with a hand underline. A new entry flashes its rule in the hand for 1.2s.
+- **A session's entry:** the same object with an ink rule, the verified provider name in 600 ink beside its claimed label in a dashed box, and its message in the Note style, in ink. It never takes the hand.
 
-### The Composer (the entry before it is sent)
-A card, because an open draft is genuinely above the work for a moment: padded paper (the Surface step in dark), a 1px Strong Border edge, 10px radius, Menu Lift, and a 2px solid pencil rule along its top, the address and "You · not sent yet" in pencil, the quote in the manuscript face with a graphite underlay, intent chips, the dashed-underline field, and a right-aligned row of Cancel (ghost) and Send to session (primary ink). Nothing is filled in the hand until Send. In a compact pane the same card floats over the manuscript column at its passage, capped at the manuscript's width.
+### The Composer
+The entry before it is sent, and the one card on the page, because an open draft is above the work for a moment. It floats under the passage it is about, in its own layer in the pane's scroll space, so it travels with the words: paper (Surface in dark), 1px Strong Border, 2px pencil top rule, 10px radius, Menu Lift, 0.75rem 1rem 1rem padding. The address and "You · not sent yet" in pencil, the quote over a graphite underlay, intent chips, a transparent field in pencil Note type over a 1px dashed pencil rule that turns solid ink with ink text on focus, then Cancel and Send to session. Nothing takes the hand until Send. On Send at rail widths, the new entry travels from the draft's place to its own beside the passage (280ms, the standard easing), so the reader sees where the note went.
+
+### Mark Preview
+Hovering an annotated passage where the rail is not shown opens the entry under its words as a floating card: paper fill, 1px Strong Border, 10px radius, 0.75rem 1rem padding, Menu Lift. Unlike an entry in the rail it has its own paper, because it floats over the manuscript.
 
 ### Marks on the Page
-Three marking vocabularies share the manuscript and stay distinguishable without colour. **Browser selection** is transient Hand Wash. **A human annotation** lives ON the words: a 2px Hand Line underline in every mode, plus the Hand Wash in Review; the hovered or focused one takes the opaque Anchor Wash and a hand underline. **A session's pointer** stands BESIDE the words as a 2px Strong Border sideline in the gutter, Ink and 3px while it is the passage being answered. Position, not hue, carries the difference, so a session mark and an annotation can cover the same sentence.
-
-Read mode shows no wash. The quiet underline is the only trace of a mark, and the page stays clean paper. This is a decision.
+- **Selection:** transient Hand Wash.
+- **A human annotation** lives on the words: the 2px Hand Line underline in every mode, plus Hand Wash in Review; hovered or focused, the opaque Anchor Wash with a hand underline. Read shows no wash.
+- **A session's pointer** stands beside the words as a sideline in the gutter. Position, not hue, separates it from an annotation.
 
 ### Passage Addresses
-An address is a derived label ("§2.1": the first block under the second section; "¶3" on a headless page; a lone leading `h1` is §0 and sections count from `h2`). In Review every heading shows its address in the left gutter in the hand at 11px / 700, and any block shows its own while hovered or focused. Entries, the composer and the outline lead with the same address. Addresses renumber when the document changes; the anchor is the quote, never the label. Addresses are never inserted into the rendered content: the gutter label is a pseudo-element on the block.
+A derived label ("§2.1"; "¶3" on a headless page; a lone leading `h1` is §0). In Review, headings show their address in the 2rem gutter in the hand, positioned `right: 100%` at 0.45em, and any block shows its own while hovered or focused. Entries, the composer and Go to lead with the same label. Addresses renumber with the document; the anchor is the quote. The gutter label is a pseudo-element; nothing is inserted into rendered content.
 
 ### The Provenance Line (signature)
-Under the manuscript, on its measure, above a Quiet Border rule: a wrapping row of facts in the chrome face at 12px, terms in 600 Ink and details in Muted. The four terms are **You** (marks, and how many are open), the **provider's name** (what it applied), **Outside glosa** (changed on disk or not), and **Approval** (approved with its revision, requested, or not requested). It reports whether the workbench's promises hold for this document; it is never a badge, and it is hidden in Edit.
+Under the manuscript, on its measure, above a Quiet Border rule: a wrapping row of facts in 12px sans, terms in 600 ink and details in Muted: **You**, the **provider's name**, **Outside glosa**, **Approval**. Never a badge; hidden in Edit.
 
 ### Go to (⌘K)
-One palette for the two places a reader goes next: a section of the active document and another file of the workspace. It is asked for, never volunteered; nothing in the gutter opens it. The Dialog recipe at 36rem wide, opening 12vh from the top over the Scrim: a 44px query line in the chrome face at 15px on a Quiet Border rule, then two groups under 11px uppercase Muted labels, the active document's sections first (in document order, 28px rows indented 12px per depth, each leading with its address in the hand, the reader's current section in Primary at 600 and marked "you are here") and then the workspace's files (name in Ink, folder trailing in Muted). Every typed word must match; nothing is reordered by score. `#` narrows to sections and `/` to files. The selected row sits on a Sunken bed. A 11px Muted hint line closes the sheet. It opens on the reader's current section, Enter goes, Escape returns focus to where it was.
+A 36rem sheet 12vh from the top over the Scrim: a 44px transparent query line at 15px sans on a Quiet Border rule (hand on focus), groups under 11px uppercase Muted headings, the document's sections first (28px rows indented 12px per depth, each leading with its address in the hand), then workspace files with their folder trailing in Muted. The selected row sits on a Sunken bed.
 
 ### Conversation Pane
-Turns are prose at 15px / 1.6 with a 12px semibold speaker label. The human's turn sits right-aligned on an Anchor Wash pill (10px radius) with the label in the hand; a session's turn sits left, unboxed, in Ink. Tool calls are 12px mono Muted disclosures. The composer is a paper box with a Strong Border and 10px radius that takes the soft hand ring on focus-within.
-
-### History
-Rows in a paper list with Quiet Border rules; attribution chips as above. The diff pane keeps diff2html's green and red, remapped in dark onto Success and Danger mixes.
+Turns are 15px / 1.6 prose with a 12px 600 speaker label. The human's turn sits right on an Anchor Wash block (10px radius) with the label in the hand; a session's sits left, unboxed, in ink. Tool calls are 12px mono Muted disclosures.
 
 ### Dialog
-Paper, 12px radius, 1.5rem padding, 26rem maximum, Dialog Float over the Scrim. Title at 19px / 600, copy at 15px Muted, the exact bytes in question in a Sunken mono box capped at 40vh, actions right-aligned.
+Paper, Quiet Border, 12px radius, 1.5rem padding, 26rem maximum, Dialog Float over the Scrim. Title 19px 600, copy Muted, actions right-aligned.
 
 ### Motion
-One easing (`cubic-bezier(0.25, 1, 0.5, 1)`) at 150ms for hover and colour, 200ms for position; a menu fades in with a 4px slide, the anchored composer with a 6px rise. Under reduced motion every transition and animation is removed and the arrival flash becomes a static 3px ring.
+One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms for position. Menus and the palette fade in with a short 4–6px slide; the composer rises 6px into place under its passage. The product's one authored moment is the send: a copy of the new entry glides from the draft to its place in the rail in 280ms while the real entry waits invisible beneath it. Under reduced motion transitions and animations are removed.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** give every human mark the hand and every unsent mark the pencil; print everything a session writes in ink.
-- **Do** keep every neutral at zero chroma in both appearances.
-- **Do** set the manuscript in the artifact's chosen face through the one manuscript variable, and set every quote of the page in that same face.
+- **Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink.
+- **Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).
+- **Do** set anything written (manuscript, quotes, notes, the composer field, a session's message) in Source Serif 4, and everything the application says in Source Sans 3.
+- **Do** strike the chosen mode forward as filled ink inside the ink outline.
 - **Do** open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.
-- **Do** lead entries, the composer, the gutter and the outline with the derived § address, and treat it as a label the document can renumber.
+- **Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.
 - **Do** state provenance in words: "You", the provider's name, "Outside glosa", "Approval", "not sent yet", "Lost its place".
-- **Do** pair every colour state with a shape: hollow or filled dot, filled or outlined or dashed chip, weight and edge together.
-- **Do** keep the reading measure at 68ch and paint the margin and the outline over whitespace rather than subtracting a gutter.
-- **Do** keep a save byte-exact: write back only the blocks the writer changed, and when writing a block back would still change bytes they did not touch, show those bytes and ask (save anyway, or drop to the source face) rather than reformatting quietly.
+- **Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.
+- **Do** keep the reading measure at 68ch and paint the margin over whitespace rather than moving the manuscript.
+- **Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service.
 
 ### Don't:
-- **Don't** use the hand for a button, a link, a panel wash or a session's output.
-- **Don't** put the face chooser, or any reading preference, in primary chrome; it lives in the pane's More menu.
-- **Don't** wash annotated words in Read; the quiet underline is the only mark there.
-- **Don't** insert nodes into the rendered manuscript for addresses or marks; the quote-based anchors depend on the DOM staying the writer's.
-- **Don't** print a session's answer in line under the passage yet: the journal does not carry the applied text, so a session's entries stay in the margin, in ink. Revisit when it does.
-- **Don't** draw cards in the margin, rounded tabs, resting shadows, tinted greys, nested cards or coloured side-stripe panels.
+- **Don't** use the hand for a button, a link, a panel fill or a session's output.
+- **Don't** give chrome regions a grey fill of their own; the desk is one paper.
+- **Don't** put the face chooser or any reading preference in primary chrome; it lives in the pane's More menu.
+- **Don't** wash annotated words in Read; the underline is the only mark there.
+- **Don't** insert nodes into the rendered manuscript for addresses or marks.
+- **Don't** draw cards in the margin (the open composer excepted), rounded tabs, resting shadows or coloured side-stripe panels.
 - **Don't** let colour be the only signal for waiting, delivered, applied, stale, human, session or unknown.
-- **Don't** use a display face anywhere, or mono for ordinary prose.
+- **Don't** set uppercase tracked labels above headlines as lead-ins; they only head a list.
+- **Don't** lighten the pencil or use Faint for live text; both are already at their floor.

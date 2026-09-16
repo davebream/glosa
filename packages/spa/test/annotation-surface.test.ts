@@ -184,6 +184,38 @@ describe("the annotation surface", () => {
     expect(composer.style.top).toMatch(/^\d+px$/);
   });
 
+  test("a wide pane still opens the draft AT its passage, never in the rail; the sent entry settles into the rail", async () => {
+    // A pane measured past the rail floor. The rail holds saved entries beside their passages, but
+    // a draft stacked there opened far from the words just selected and was easy to miss.
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1400 });
+    try {
+      const { host } = await mountPane(fakeDataAccess());
+      const margin = q(host, ".glosa-margin");
+
+      selectRange(host, 0, 16);
+      await paint();
+      expect(margin.classList.contains("glosa-margin-side")).toBe(true);
+
+      const composer = q(host, ".glosa-composer");
+      expect(composer).not.toBeNull();
+      expect(composer.closest(".glosa-composer-layer")).not.toBeNull();
+      expect(margin.querySelector(".glosa-composer")).toBeNull();
+      expect(composer.style.top).toMatch(/^\d+px$/);
+
+      q(host, ".glosa-composer-input").value = "tighten this";
+      q(host, ".glosa-composer-send").click();
+      await flush();
+      await paint();
+      expect(q(host, ".glosa-composer")).toBeNull();
+      expect(margin.querySelectorAll(".glosa-annotation")).toHaveLength(1);
+    } finally {
+      if (original) Object.defineProperty(proto, "clientWidth", original);
+      else delete (proto as any).clientWidth;
+    }
+  });
+
   test("the saved set lives in the pane's collection tray, not at the end of a long manuscript", async () => {
     const { host } = await mountPane(fakeDataAccess());
     const tray = q(host, ".glosa-annotations-tray");

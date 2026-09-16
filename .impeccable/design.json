@@ -1,188 +1,389 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-15T00:00:00Z",
+  "generatedAt": "2026-09-16T13:32:30+00:00",
   "title": "Design System: glosa",
-  "source": "packages/spa/src/app.css (section 1, tokens; sections 5–15, components)",
   "extensions": {
     "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "oklch(0.99 0.007 85)",
+        "tonalRamp": [
+          "oklch(0.15 0.007 85)",
+          "oklch(0.27 0.007 85)",
+          "oklch(0.39 0.007 85)",
+          "oklch(0.51 0.007 85)",
+          "oklch(0.63 0.007 85)",
+          "oklch(0.75 0.007 85)",
+          "oklch(0.87 0.007 85)",
+          "oklch(0.95 0.007 85)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "oklch(0.97 0.006 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 80)",
+          "oklch(0.27 0.006 80)",
+          "oklch(0.39 0.006 80)",
+          "oklch(0.51 0.006 80)",
+          "oklch(0.63 0.006 80)",
+          "oklch(0.75 0.006 80)",
+          "oklch(0.87 0.006 80)",
+          "oklch(0.95 0.006 80)"
+        ]
+      },
+      "surface-sunken": {
+        "role": "neutral",
+        "displayName": "Sunken Paper",
+        "canonical": "oklch(0.94 0.009 78)",
+        "tonalRamp": [
+          "oklch(0.15 0.009 78)",
+          "oklch(0.27 0.009 78)",
+          "oklch(0.39 0.009 78)",
+          "oklch(0.51 0.009 78)",
+          "oklch(0.63 0.009 78)",
+          "oklch(0.75 0.009 78)",
+          "oklch(0.87 0.009 78)",
+          "oklch(0.95 0.009 78)"
+        ]
+      },
       "ink": {
         "role": "primary",
-        "displayName": "Ink",
-        "canonical": "oklch(0.2 0 0)",
+        "displayName": "Warm Ink",
+        "canonical": "oklch(0.2 0.012 60)",
         "tonalRamp": [
-          "oklch(0.15 0 0)",
-          "oklch(0.2 0 0)",
-          "oklch(0.32 0 0)",
-          "oklch(0.45 0 0)",
-          "oklch(0.58 0 0)",
-          "oklch(0.7 0 0)",
-          "oklch(0.83 0 0)",
-          "oklch(0.95 0 0)"
+          "oklch(0.15 0.012 60)",
+          "oklch(0.27 0.012 60)",
+          "oklch(0.39 0.012 60)",
+          "oklch(0.51 0.012 60)",
+          "oklch(0.63 0.012 60)",
+          "oklch(0.75 0.012 60)",
+          "oklch(0.87 0.012 60)",
+          "oklch(0.95 0.012 60)"
+        ]
+      },
+      "ink-hover": {
+        "role": "primary",
+        "displayName": "Ink Hover",
+        "canonical": "oklch(0.34 0.012 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 60)",
+          "oklch(0.27 0.012 60)",
+          "oklch(0.39 0.012 60)",
+          "oklch(0.51 0.012 60)",
+          "oklch(0.63 0.012 60)",
+          "oklch(0.75 0.012 60)",
+          "oklch(0.87 0.012 60)",
+          "oklch(0.95 0.012 60)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "oklch(0.47 0.016 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.016 60)",
+          "oklch(0.27 0.016 60)",
+          "oklch(0.39 0.016 60)",
+          "oklch(0.51 0.016 60)",
+          "oklch(0.63 0.016 60)",
+          "oklch(0.75 0.016 60)",
+          "oklch(0.87 0.016 60)",
+          "oklch(0.95 0.016 60)"
+        ]
+      },
+      "faint": {
+        "role": "neutral",
+        "displayName": "Faint Ink",
+        "canonical": "oklch(0.64 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Quiet Border",
+        "canonical": "oklch(0.88 0.01 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 75)",
+          "oklch(0.27 0.01 75)",
+          "oklch(0.39 0.01 75)",
+          "oklch(0.51 0.01 75)",
+          "oklch(0.63 0.01 75)",
+          "oklch(0.75 0.01 75)",
+          "oklch(0.87 0.01 75)",
+          "oklch(0.95 0.01 75)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Strong Border",
+        "canonical": "oklch(0.6 0.014 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.014 65)",
+          "oklch(0.27 0.014 65)",
+          "oklch(0.39 0.014 65)",
+          "oklch(0.51 0.014 65)",
+          "oklch(0.63 0.014 65)",
+          "oklch(0.75 0.014 65)",
+          "oklch(0.87 0.014 65)",
+          "oklch(0.95 0.014 65)"
         ]
       },
       "hand": {
         "role": "primary",
-        "displayName": "The Hand",
-        "canonical": "oklch(0.42 0.06 195)",
-        "hexApprox": "#0F5D5D",
-        "dark": "oklch(0.75 0.08 190)",
+        "displayName": "The Hand, Burnt Vermilion",
+        "canonical": "oklch(0.52 0.16 42)",
         "tonalRamp": [
-          "oklch(0.15 0.04 195)",
-          "oklch(0.25 0.05 195)",
-          "oklch(0.36 0.06 195)",
-          "oklch(0.42 0.06 195)",
-          "oklch(0.55 0.07 192)",
-          "oklch(0.65 0.08 190)",
-          "oklch(0.75 0.08 190)",
-          "oklch(0.95 0.02 190)"
+          "oklch(0.15 0.16 42)",
+          "oklch(0.27 0.16 42)",
+          "oklch(0.39 0.16 42)",
+          "oklch(0.51 0.16 42)",
+          "oklch(0.63 0.16 42)",
+          "oklch(0.75 0.16 42)",
+          "oklch(0.87 0.16 42)",
+          "oklch(0.95 0.16 42)"
+        ]
+      },
+      "hand-hover": {
+        "role": "primary",
+        "displayName": "Hand Hover",
+        "canonical": "oklch(0.46 0.15 42)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 42)",
+          "oklch(0.27 0.15 42)",
+          "oklch(0.39 0.15 42)",
+          "oklch(0.51 0.15 42)",
+          "oklch(0.63 0.15 42)",
+          "oklch(0.75 0.15 42)",
+          "oklch(0.87 0.15 42)",
+          "oklch(0.95 0.15 42)"
         ]
       },
       "pencil": {
-        "role": "primary",
-        "displayName": "The Pencil",
-        "canonical": "oklch(0.55 0 0)",
-        "dark": "oklch(0.62 0 0)",
+        "role": "secondary",
+        "displayName": "The Pencil, Warm Graphite",
+        "canonical": "oklch(0.56 0.01 65)",
         "tonalRamp": [
-          "oklch(0.15 0 0)",
-          "oklch(0.25 0 0)",
-          "oklch(0.35 0 0)",
-          "oklch(0.45 0 0)",
-          "oklch(0.55 0 0)",
-          "oklch(0.62 0 0)",
-          "oklch(0.8 0 0)",
-          "oklch(0.95 0 0)"
+          "oklch(0.15 0.01 65)",
+          "oklch(0.27 0.01 65)",
+          "oklch(0.39 0.01 65)",
+          "oklch(0.51 0.01 65)",
+          "oklch(0.63 0.01 65)",
+          "oklch(0.75 0.01 65)",
+          "oklch(0.87 0.01 65)",
+          "oklch(0.95 0.01 65)"
         ]
-      },
-      "hand-wash": {
-        "role": "primary",
-        "displayName": "Hand Wash",
-        "canonical": "color-mix(in oklch, var(--hand) 14%, transparent)",
-        "note": "Translucent; on the words in Review, browser selection, the dock drop target."
-      },
-      "anchor-wash": {
-        "role": "primary",
-        "displayName": "Anchor Wash",
-        "canonical": "color-mix(in oklch, var(--hand) 14%, var(--bg))",
-        "note": "The opaque form of Hand Wash, for surfaces."
-      },
-      "pencil-wash": {
-        "role": "primary",
-        "displayName": "Pencil Wash",
-        "canonical": "color-mix(in oklch, var(--pencil) 16%, transparent)",
-        "note": "The selected passage while its composer is open and unsent."
-      },
-      "hand-line": {
-        "role": "primary",
-        "displayName": "Hand Line",
-        "canonical": "color-mix(in oklch, var(--hand) 70%, transparent)",
-        "note": "The 2px underline every annotated passage carries in every mode."
-      },
-      "scrim": { "role": "neutral", "displayName": "Scrim", "canonical": "oklch(0.2 0 0 / 0.3)" },
-      "reading-surface": {
-        "role": "neutral",
-        "displayName": "Reading Surface",
-        "canonical": "oklch(1 0 0)",
-        "dark": "oklch(0.19 0 0)",
-        "tonalRamp": [
-          "oklch(0.19 0 0)",
-          "oklch(0.225 0 0)",
-          "oklch(0.265 0 0)",
-          "oklch(0.5 0 0)",
-          "oklch(0.7 0 0)",
-          "oklch(0.94 0 0)",
-          "oklch(0.97 0 0)",
-          "oklch(1 0 0)"
-        ]
-      },
-      "control-surface": {
-        "role": "neutral",
-        "displayName": "Control Surface",
-        "canonical": "oklch(0.97 0 0)",
-        "dark": "oklch(0.225 0 0)"
-      },
-      "sunken-surface": {
-        "role": "neutral",
-        "displayName": "Sunken Surface",
-        "canonical": "oklch(0.94 0 0)",
-        "dark": "oklch(0.265 0 0)"
-      },
-      "muted-ink": {
-        "role": "neutral",
-        "displayName": "Muted Ink",
-        "canonical": "oklch(0.5 0 0)",
-        "dark": "oklch(0.7 0 0)"
-      },
-      "faint-ink": {
-        "role": "neutral",
-        "displayName": "Faint Ink",
-        "canonical": "oklch(0.65 0 0)",
-        "dark": "oklch(0.55 0 0)"
-      },
-      "quiet-border": {
-        "role": "neutral",
-        "displayName": "Quiet Border",
-        "canonical": "oklch(0.9 0 0)",
-        "dark": "oklch(0.3 0 0)"
-      },
-      "strong-border": {
-        "role": "neutral",
-        "displayName": "Strong Border",
-        "canonical": "oklch(0.62 0 0)",
-        "dark": "oklch(0.5 0 0)"
       },
       "danger": {
         "role": "semantic",
-        "displayName": "Danger",
-        "canonical": "oklch(0.5 0.16 25)",
-        "dark": "oklch(0.7 0.14 25)",
+        "displayName": "Crimson Danger",
+        "canonical": "oklch(0.47 0.17 22)",
         "tonalRamp": [
-          "oklch(0.15 0.08 25)",
-          "oklch(0.25 0.12 25)",
-          "oklch(0.38 0.15 25)",
-          "oklch(0.5 0.16 25)",
-          "oklch(0.6 0.15 25)",
-          "oklch(0.7 0.14 25)",
-          "oklch(0.83 0.08 25)",
-          "oklch(0.95 0.03 25)"
+          "oklch(0.15 0.17 22)",
+          "oklch(0.27 0.17 22)",
+          "oklch(0.39 0.17 22)",
+          "oklch(0.51 0.17 22)",
+          "oklch(0.63 0.17 22)",
+          "oklch(0.75 0.17 22)",
+          "oklch(0.87 0.17 22)",
+          "oklch(0.95 0.17 22)"
         ]
       },
-      "warning": {
+      "warn": {
         "role": "semantic",
-        "displayName": "Warning",
-        "canonical": "oklch(0.55 0.12 75)",
-        "dark": "oklch(0.74 0.11 75)",
+        "displayName": "Ochre Warning",
+        "canonical": "oklch(0.53 0.11 80)",
         "tonalRamp": [
-          "oklch(0.15 0.05 75)",
-          "oklch(0.25 0.08 75)",
-          "oklch(0.4 0.11 75)",
-          "oklch(0.55 0.12 75)",
-          "oklch(0.65 0.12 75)",
-          "oklch(0.74 0.11 75)",
-          "oklch(0.85 0.07 75)",
-          "oklch(0.95 0.03 75)"
+          "oklch(0.15 0.11 80)",
+          "oklch(0.27 0.11 80)",
+          "oklch(0.39 0.11 80)",
+          "oklch(0.51 0.11 80)",
+          "oklch(0.63 0.11 80)",
+          "oklch(0.75 0.11 80)",
+          "oklch(0.87 0.11 80)",
+          "oklch(0.95 0.11 80)"
         ]
       },
-      "success": {
+      "ok": {
         "role": "semantic",
-        "displayName": "Success",
-        "canonical": "oklch(0.52 0.1 150)",
-        "dark": "oklch(0.7 0.09 150)",
+        "displayName": "Sage Success",
+        "canonical": "oklch(0.5 0.09 150)",
         "tonalRamp": [
-          "oklch(0.15 0.05 150)",
-          "oklch(0.25 0.07 150)",
-          "oklch(0.4 0.09 150)",
-          "oklch(0.52 0.1 150)",
-          "oklch(0.6 0.1 150)",
-          "oklch(0.7 0.09 150)",
-          "oklch(0.83 0.06 150)",
-          "oklch(0.95 0.02 150)"
+          "oklch(0.15 0.09 150)",
+          "oklch(0.27 0.09 150)",
+          "oklch(0.39 0.09 150)",
+          "oklch(0.51 0.09 150)",
+          "oklch(0.63 0.09 150)",
+          "oklch(0.75 0.09 150)",
+          "oklch(0.87 0.09 150)",
+          "oklch(0.95 0.09 150)"
+        ]
+      },
+      "dark-paper": {
+        "role": "neutral",
+        "displayName": "Lamplit Desk",
+        "canonical": "oklch(0.205 0.008 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.008 60)",
+          "oklch(0.27 0.008 60)",
+          "oklch(0.39 0.008 60)",
+          "oklch(0.51 0.008 60)",
+          "oklch(0.63 0.008 60)",
+          "oklch(0.75 0.008 60)",
+          "oklch(0.87 0.008 60)",
+          "oklch(0.95 0.008 60)"
+        ]
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Lamplit Surface",
+        "canonical": "oklch(0.235 0.009 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.009 60)",
+          "oklch(0.27 0.009 60)",
+          "oklch(0.39 0.009 60)",
+          "oklch(0.51 0.009 60)",
+          "oklch(0.63 0.009 60)",
+          "oklch(0.75 0.009 60)",
+          "oklch(0.87 0.009 60)",
+          "oklch(0.95 0.009 60)"
+        ]
+      },
+      "dark-surface-sunken": {
+        "role": "neutral",
+        "displayName": "Lamplit Sunken",
+        "canonical": "oklch(0.275 0.01 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 60)",
+          "oklch(0.27 0.01 60)",
+          "oklch(0.39 0.01 60)",
+          "oklch(0.51 0.01 60)",
+          "oklch(0.63 0.01 60)",
+          "oklch(0.75 0.01 60)",
+          "oklch(0.87 0.01 60)",
+          "oklch(0.95 0.01 60)"
+        ]
+      },
+      "dark-ink": {
+        "role": "primary",
+        "displayName": "Lamplit Ink",
+        "canonical": "oklch(0.93 0.01 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 80)",
+          "oklch(0.27 0.01 80)",
+          "oklch(0.39 0.01 80)",
+          "oklch(0.51 0.01 80)",
+          "oklch(0.63 0.01 80)",
+          "oklch(0.75 0.01 80)",
+          "oklch(0.87 0.01 80)",
+          "oklch(0.95 0.01 80)"
+        ]
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Lamplit Muted",
+        "canonical": "oklch(0.72 0.014 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.014 70)",
+          "oklch(0.27 0.014 70)",
+          "oklch(0.39 0.014 70)",
+          "oklch(0.51 0.014 70)",
+          "oklch(0.63 0.014 70)",
+          "oklch(0.75 0.014 70)",
+          "oklch(0.87 0.014 70)",
+          "oklch(0.95 0.014 70)"
+        ]
+      },
+      "dark-rule": {
+        "role": "neutral",
+        "displayName": "Lamplit Region Rule",
+        "canonical": "oklch(0.74 0.01 80)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 80)",
+          "oklch(0.27 0.01 80)",
+          "oklch(0.39 0.01 80)",
+          "oklch(0.51 0.01 80)",
+          "oklch(0.63 0.01 80)",
+          "oklch(0.75 0.01 80)",
+          "oklch(0.87 0.01 80)",
+          "oklch(0.95 0.01 80)"
+        ]
+      },
+      "dark-border": {
+        "role": "neutral",
+        "displayName": "Lamplit Quiet Border",
+        "canonical": "oklch(0.32 0.01 60)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 60)",
+          "oklch(0.27 0.01 60)",
+          "oklch(0.39 0.01 60)",
+          "oklch(0.51 0.01 60)",
+          "oklch(0.63 0.01 60)",
+          "oklch(0.75 0.01 60)",
+          "oklch(0.87 0.01 60)",
+          "oklch(0.95 0.01 60)"
+        ]
+      },
+      "dark-border-strong": {
+        "role": "neutral",
+        "displayName": "Lamplit Strong Border",
+        "canonical": "oklch(0.58 0.012 65)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 65)",
+          "oklch(0.27 0.012 65)",
+          "oklch(0.39 0.012 65)",
+          "oklch(0.51 0.012 65)",
+          "oklch(0.63 0.012 65)",
+          "oklch(0.75 0.012 65)",
+          "oklch(0.87 0.012 65)",
+          "oklch(0.95 0.012 65)"
+        ]
+      },
+      "dark-hand": {
+        "role": "primary",
+        "displayName": "Vermilion Under Lamplight",
+        "canonical": "oklch(0.72 0.13 45)",
+        "tonalRamp": [
+          "oklch(0.15 0.13 45)",
+          "oklch(0.27 0.13 45)",
+          "oklch(0.39 0.13 45)",
+          "oklch(0.51 0.13 45)",
+          "oklch(0.63 0.13 45)",
+          "oklch(0.75 0.13 45)",
+          "oklch(0.87 0.13 45)",
+          "oklch(0.95 0.13 45)"
+        ]
+      },
+      "dark-pencil": {
+        "role": "secondary",
+        "displayName": "Lamplit Pencil",
+        "canonical": "oklch(0.64 0.01 70)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 70)",
+          "oklch(0.27 0.01 70)",
+          "oklch(0.39 0.01 70)",
+          "oklch(0.51 0.01 70)",
+          "oklch(0.63 0.01 70)",
+          "oklch(0.75 0.01 70)",
+          "oklch(0.87 0.01 70)",
+          "oklch(0.95 0.01 70)"
         ]
       }
     },
     "typographyMeta": {
       "manuscript-title": {
         "displayName": "Manuscript Title",
-        "purpose": "The artifact's h1, in the artifact's chosen face (Default sans / Serif / Mono) through --font-manuscript."
+        "purpose": "The artifact's h1, in the serif with optical sizing."
       },
       "manuscript-section": {
         "displayName": "Manuscript Section",
@@ -190,328 +391,291 @@
       },
       "manuscript-subhead": {
         "displayName": "Manuscript Subhead",
-        "purpose": "The artifact's h3; closes up to 0.75rem when directly under its section heading."
+        "purpose": "The artifact's h3; closes up under its section."
       },
       "manuscript-body": {
-        "displayName": "Manuscript Body (Default)",
-        "purpose": "Rendered prose in the Default sans face at a 68ch measure."
+        "displayName": "Manuscript Body",
+        "purpose": "Default face: Source Serif 4 at 18px on a 68ch measure."
       },
-      "manuscript-body-serif": {
-        "displayName": "Manuscript Body (Serif)",
-        "purpose": "The same prose when the artifact's face is Serif: 17px, 1.65."
+      "manuscript-body-sans": {
+        "displayName": "Manuscript Body, Sans",
+        "purpose": "The Sans page face, chosen per artifact."
       },
       "manuscript-body-mono": {
-        "displayName": "Manuscript Body (Mono)",
-        "purpose": "The same prose when the artifact's face is Mono: 15px, 1.65."
+        "displayName": "Manuscript Body, Mono",
+        "purpose": "The Mono page face, chosen per artifact."
       },
-      "headline": { "displayName": "Headline", "purpose": "Boot screens and screen-level headlines." },
-      "title": { "displayName": "Title", "purpose": "Dialog and panel titles." },
+      "note": {
+        "displayName": "Note",
+        "purpose": "Margin note words, the composer field and a session's message, always serif."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Boot screens."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Dialog and panel titles."
+      },
+      "bar-title": {
+        "displayName": "Bar Title",
+        "purpose": "The active artifact path, centred in the top bar."
+      },
       "body": {
         "displayName": "Body",
-        "purpose": "Panel prose, conversation turns, dialog copy, tables inside the manuscript."
+        "purpose": "Panel prose, the conversation, dialog copy."
       },
       "label": {
         "displayName": "Label",
-        "purpose": "Buttons, tabs, menu and navigator rows, the annotation body; the chrome default."
+        "purpose": "Buttons, tabs, menu and navigator rows; the chrome default."
+      },
+      "section-label": {
+        "displayName": "Section Label",
+        "purpose": "Uppercase heading of a real list: navigator sections, margin title."
       },
       "metadata": {
         "displayName": "Metadata",
-        "purpose": "Timestamps, state labels, chips, the provenance line, the entry's first line."
+        "purpose": "Timestamps, state rows, chips, the provenance line."
       },
-      "address": { "displayName": "Address", "purpose": "The § passage address, in the hand, with tabular numerals." },
-      "path": { "displayName": "Path", "purpose": "Directories in the artifact bar and a session's claimed label." },
-      "source": { "displayName": "Source", "purpose": "The editor's source face and rendered code blocks." }
-    },
-    "faces": {
-      "variable": "--font-manuscript",
-      "default": { "fontFamily": "system-ui, -apple-system, sans-serif", "size": "1rem", "leading": 1.6 },
-      "serif": {
-        "fontFamily": "\"Iowan Old Style\", Charter, ui-serif, Georgia, serif",
-        "size": "1.0625rem",
-        "leading": 1.65
+      "address": {
+        "displayName": "Address",
+        "purpose": "The derived section-sign passage address, in the hand."
       },
-      "mono": { "fontFamily": "ui-monospace, \"SF Mono\", Menlo, monospace", "size": "0.9375rem", "leading": 1.65 },
-      "chooser": "Radio rows under the heading \"Manuscript face\" in the pane's More menu (face.js mountFaceControl); stored per workspace and artifact path; never in primary chrome."
+      "source": {
+        "displayName": "Source",
+        "purpose": "The source editor."
+      }
     },
     "shadows": [
       {
-        "name": "shadow-rest",
-        "value": "0 1px 2px oklch(0.2 0 0 / 0.06)",
-        "dark": "none",
-        "purpose": "Defined; currently used by nothing. Margin entries and the composer are hairlines now."
-      },
-      {
         "name": "shadow-menu",
-        "value": "0 1px 2px oklch(0.2 0 0 / 0.06), 0 10px 28px -6px oklch(0.2 0 0 / 0.16)",
-        "dark": "0 1px 2px oklch(0 0 0 / 0.35), 0 10px 28px -6px oklch(0 0 0 / 0.5)",
-        "purpose": "Every menu and popover, the fore-edge panel, the anchored composer, the mark preview."
+        "value": "0 1px 2px oklch(0.2 0.012 60 / 0.06), 0 10px 28px -6px oklch(0.2 0.012 60 / 0.16)",
+        "purpose": "Menus, popovers, the composer, the compact mark preview."
       },
       {
         "name": "shadow-tray",
-        "value": "0 -1px 2px oklch(0.2 0 0 / 0.05), 0 -12px 32px -8px oklch(0.2 0 0 / 0.16)",
-        "dark": "0 -1px 2px oklch(0 0 0 / 0.3), 0 -12px 32px -8px oklch(0 0 0 / 0.5)",
-        "purpose": "The upward shadow on the collection tray at the foot of a compact pane."
+        "value": "0 -1px 2px oklch(0.2 0.012 60 / 0.05), 0 -12px 32px -8px oklch(0.2 0.012 60 / 0.16)",
+        "purpose": "The collection tray at a compact pane's foot."
       },
       {
         "name": "shadow-dialog",
-        "value": "0 2px 6px oklch(0.2 0 0 / 0.08), 0 24px 56px -12px oklch(0.2 0 0 / 0.24)",
-        "dark": "0 2px 6px oklch(0 0 0 / 0.4), 0 24px 56px -12px oklch(0 0 0 / 0.6)",
-        "purpose": "The blocking dialog, over the Scrim."
+        "value": "0 2px 6px oklch(0.2 0.012 60 / 0.08), 0 24px 56px -12px oklch(0.2 0.012 60 / 0.24)",
+        "purpose": "The blocking dialog over the scrim."
       },
       {
-        "name": "focus-ring",
-        "value": "outline: 2px solid var(--hand); outline-offset: 2px; border-radius: 2px",
-        "purpose": "Every control. Text fields take a soft ring instead: border in the hand plus 0 0 0 3px at 14–16% of the hand."
+        "name": "shadow-menu-dark",
+        "value": "0 1px 2px oklch(0 0 0 / 0.35), 0 10px 28px -6px oklch(0 0 0 / 0.5)",
+        "purpose": "Menu lift under the lamp: black-based and tighter."
       }
     ],
     "motion": [
-      { "name": "ease-out", "value": "cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "The one easing." },
-      { "name": "dur-fast", "value": "150ms", "purpose": "Hover, colour, background, the menu's arrival." },
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.25, 1, 0.5, 1)",
+        "purpose": "The one easing."
+      },
+      {
+        "name": "dur-fast",
+        "value": "150ms",
+        "purpose": "Hover and colour."
+      },
       {
         "name": "dur-base",
         "value": "200ms",
-        "purpose": "Position: a margin entry sliding to its passage, the anchored composer rising 6px."
+        "purpose": "Position and dock transitions."
       },
       {
-        "name": "annotation-flash",
-        "value": "1.2s ease-out, hairline and inset in the hand fading back to Strong Border",
-        "purpose": "A newly arrived entry. Under reduced motion it becomes a static 3px ring at 18% ink."
+        "name": "entry-flash",
+        "value": "1.2s",
+        "purpose": "A newly arrived margin entry flashes its rule in the hand."
       }
     ],
     "breakpoints": [
       {
-        "name": "pane-rail",
-        "value": "1205px",
-        "container": "pane",
-        "purpose": "From here the margin is a side rail (240–320px) beside the manuscript; below, the composer opens at its passage and entries move to the tray. Matches artifact-pane.js MARGIN_RAIL_FLOOR."
-      },
-      { "name": "bar-history-word", "value": "470px", "container": "bar", "purpose": "History drops its word." },
-      { "name": "bar-directory", "value": "400px", "container": "bar", "purpose": "The directory drops." },
-      { "name": "bar-icon-only", "value": "340px", "container": "bar", "purpose": "The mode control goes icon-only." },
-      {
-        "name": "bar-history-folds",
-        "value": "250px",
-        "container": "bar",
-        "purpose": "History folds into the More menu."
+        "name": "bar-history-word",
+        "value": "520px (artifact bar container)"
       },
       {
-        "name": "outline-panel-floor",
-        "value": "216px",
-        "container": "pane gutter",
-        "purpose": "Below this gutter width the fore-edge index stops opening on hover. Matches artifact-pane.js OUTLINE_PANEL_FLOOR."
+        "name": "bar-directory",
+        "value": "440px (artifact bar container)"
       },
       {
-        "name": "compact",
-        "value": "1023px",
-        "media": "max-width",
-        "purpose": "Logo mark hidden, top bar tightened, attention tray full width."
+        "name": "bar-mode-icons",
+        "value": "400px (artifact bar container)"
+      },
+      {
+        "name": "bar-history-fold",
+        "value": "270px (artifact bar container)"
+      },
+      {
+        "name": "pane-min",
+        "value": "360px"
       },
       {
         "name": "phone",
-        "value": "640px",
-        "media": "max-width",
-        "purpose": "Manuscript side padding 1rem, approval strip stacks, conversation prose 94%."
+        "value": "640px"
       },
-      { "name": "dock-floor", "value": "360px", "purpose": "One pane at its minimum; below this the app scrolls." }
-    ],
-    "layout": {
-      "measure": "68ch",
-      "manuscript-block": "707px",
-      "nav-width": "232px",
-      "margin-width": "clamp(240px, (100cqi − 707px) / 2 − 0.5rem, 320px)",
-      "topbar-height": "3rem",
-      "strip-height": "36px",
-      "artifact-bar-height": "36px",
-      "prose-gap": "1.2em",
-      "page-padding": "4rem 2rem 6rem",
-      "z": { "sticky": 10, "drawer": 20, "tray": 30, "backdrop": 40, "dialog": 50, "tooltip": 60 }
-    }
+      {
+        "name": "compact",
+        "value": "1023px"
+      },
+      {
+        "name": "margin-rail",
+        "value": "1205px (pane container)"
+      }
+    ]
   },
   "components": [
     {
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Send to session, Save, Approve. Filled in the page's own ink; never the hand.",
+      "description": "Send to session, Save, Approve: filled ink, never the hand.",
       "html": "<button class=\"ds-btn-primary\">Send to session</button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.75rem; border-radius: 6px; border: 1px solid var(--ink, oklch(0.2 0 0)); background: var(--ink, oklch(0.2 0 0)); color: var(--bg, oklch(1 0 0)); font: 500 0.8125rem/1.5 system-ui, -apple-system, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1), border-color 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-primary:hover { background: var(--primary-hover, oklch(0.32 0 0)); border-color: var(--primary-hover, oklch(0.32 0 0)); } .ds-btn-primary:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; } .ds-btn-primary:disabled { background: var(--surface-sunken, oklch(0.94 0 0)); border-color: var(--border, oklch(0.9 0 0)); color: var(--faint, oklch(0.65 0 0)); cursor: not-allowed; }"
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;padding:0.25rem 0.75rem;border-radius:6px;border:1px solid var(--ink,oklch(0.2 0.012 60));background:var(--ink,oklch(0.2 0.012 60));color:var(--bg,oklch(0.99 0.007 85));font:500 13px/1.5 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),border-color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-btn-primary:hover{background:oklch(0.34 0.012 60);border-color:oklch(0.34 0.012 60)}.ds-btn-primary:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
       "name": "Secondary Button",
       "kind": "button",
       "refersTo": "button-secondary",
-      "description": "Paper with a strong hairline; hover to the control surface.",
-      "html": "<button class=\"ds-btn\">Compare</button>",
-      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-strong, oklch(0.62 0 0)); background: var(--bg, oklch(1 0 0)); color: var(--ink, oklch(0.2 0 0)); font: 500 0.8125rem/1.5 system-ui, -apple-system, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn:hover { background: var(--surface, oklch(0.97 0 0)); } .ds-btn:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; }"
-    },
-    {
-      "name": "Ghost Button",
-      "kind": "button",
-      "refersTo": "button-ghost",
-      "description": "Cancel and other recessive verbs: muted text, a sunken bed on hover.",
-      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
-      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--muted, oklch(0.5 0 0)); font: 500 0.8125rem/1.5 system-ui, -apple-system, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1), color 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-ghost:hover { background: var(--surface-sunken, oklch(0.94 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; }"
+      "description": "Paper with a strong border edge.",
+      "html": "<button class=\"ds-btn\">Cancel</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;padding:0.25rem 0.75rem;border-radius:6px;border:1px solid oklch(0.6 0.014 65);background:oklch(0.99 0.007 85);color:oklch(0.2 0.012 60);font:500 13px/1.5 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1)}.ds-btn:hover{background:oklch(0.97 0.006 80)}.ds-btn:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
       "name": "Mode Control",
       "kind": "nav",
-      "refersTo": "segmented-segment",
-      "description": "Read / Review / Edit on a sunken track; the selected segment is the same paper as the manuscript below it.",
-      "html": "<div class=\"ds-modebar\" role=\"group\"><button aria-pressed=\"false\">Read</button><button aria-pressed=\"true\">Review</button><button aria-pressed=\"false\">Edit</button></div>",
-      "css": ".ds-modebar { display: inline-flex; padding: 2px; gap: 2px; background: var(--surface-sunken, oklch(0.94 0 0)); border-radius: 8px; } .ds-modebar button { height: 24px; padding: 0 0.75rem; border: none; background: none; border-radius: 6px; color: var(--muted, oklch(0.5 0 0)); font: 500 0.8125rem/1 system-ui, -apple-system, sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1), color 150ms cubic-bezier(0.25, 1, 0.5, 1), box-shadow 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-modebar button:not([aria-pressed=\"true\"]):hover { color: var(--ink, oklch(0.2 0 0)); } .ds-modebar button[aria-pressed=\"true\"] { background: var(--bg, oklch(1 0 0)); color: var(--ink, oklch(0.2 0 0)); font-weight: 600; box-shadow: 0 0 0 1px var(--border, oklch(0.9 0 0)); } .ds-modebar button:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; }"
-    },
-    {
-      "name": "Pane Menu with Face Group",
-      "kind": "nav",
-      "refersTo": "menu",
-      "description": "The workbench's one menu recipe, holding the Manuscript face radio group. The chosen row is told by weight and a drawn check, never by colour.",
-      "html": "<div class=\"ds-menu\"><button class=\"ds-menu-item\">Outline</button><button class=\"ds-menu-item\">Copy source</button><div class=\"ds-menu-group\" role=\"group\" aria-label=\"Manuscript face\"><p class=\"ds-menu-heading\">Manuscript face</p><button class=\"ds-menu-item ds-face\" role=\"menuitemradio\" aria-checked=\"false\" data-face=\"default\"><span class=\"ds-face-sample\" aria-hidden=\"true\">Aa</span>Default</button><button class=\"ds-menu-item ds-face\" role=\"menuitemradio\" aria-checked=\"true\" data-face=\"serif\"><span class=\"ds-face-sample\" aria-hidden=\"true\">Aa</span>Serif</button><button class=\"ds-menu-item ds-face\" role=\"menuitemradio\" aria-checked=\"false\" data-face=\"mono\"><span class=\"ds-face-sample\" aria-hidden=\"true\">Aa</span>Mono</button></div></div>",
-      "css": ".ds-menu { display: flex; flex-direction: column; gap: 1px; min-width: 13rem; padding: 0.25rem; background: var(--bg, oklch(1 0 0)); border: 1px solid var(--border-strong, oklch(0.62 0 0)); border-radius: 8px; box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06), 0 10px 28px -6px oklch(0.2 0 0 / 0.16); font: 0.8125rem/1.5 system-ui, -apple-system, sans-serif; } .ds-menu-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.5rem; border: none; background: none; border-radius: 4px; color: var(--muted, oklch(0.5 0 0)); font: inherit; text-align: left; white-space: nowrap; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1), color 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-menu-item:hover { background: var(--surface-sunken, oklch(0.94 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-menu-item:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: -2px; } .ds-menu-group { display: flex; flex-direction: column; gap: 1px; margin-top: 0.25rem; padding-top: 0.25rem; border-top: 1px solid var(--border, oklch(0.9 0 0)); } .ds-menu-heading { margin: 0; padding: 0.25rem 0.5rem 0; color: var(--muted, oklch(0.5 0 0)); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; } .ds-face { position: relative; padding-right: calc(0.5rem + 18px); } .ds-face[aria-checked=\"true\"] { color: var(--ink, oklch(0.2 0 0)); font-weight: 600; } .ds-face[aria-checked=\"true\"]::after { content: \"\"; position: absolute; right: 0.5rem; top: 50%; width: 9px; height: 5px; margin-top: -4px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); } .ds-face-sample { width: 1.5rem; flex: 0 0 auto; color: var(--ink, oklch(0.2 0 0)); font-size: 0.8125rem; line-height: 1; } .ds-face[data-face=\"default\"] .ds-face-sample { font-family: system-ui, -apple-system, sans-serif; } .ds-face[data-face=\"serif\"] .ds-face-sample { font-family: \"Iowan Old Style\", Charter, ui-serif, Georgia, serif; } .ds-face[data-face=\"mono\"] .ds-face-sample { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; }"
+      "refersTo": "mode-control",
+      "description": "Read / Review / Edit: an ink outline with the chosen mode struck forward as filled ink.",
+      "html": "<div class=\"ds-mode\" role=\"group\"><button>Read</button><button aria-pressed=\"true\">Review</button><button>Edit</button></div>",
+      "css": ".ds-mode{display:inline-flex;padding:2px;gap:2px;background:oklch(0.99 0.007 85);border-radius:8px;box-shadow:inset 0 0 0 1px oklch(0.2 0.012 60)}.ds-mode button{height:24px;padding:0 0.75rem;border:0;border-radius:6px;background:none;color:oklch(0.47 0.016 60);font:500 13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-mode button:not([aria-pressed=\"true\"]):hover{background:oklch(0.94 0.009 78);color:oklch(0.2 0.012 60)}.ds-mode button[aria-pressed=\"true\"]{background:oklch(0.2 0.012 60);color:oklch(0.99 0.007 85);font-weight:600}.ds-mode button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
       "name": "Margin Entry",
       "kind": "custom",
       "refersTo": "margin-entry",
-      "description": "The human's mark, sent. Not a card: a hairline, the § address and \"You\", the quote in the manuscript face, the words in the hand, and a state row with a shaped dot.",
-      "html": "<div class=\"ds-entry\" data-state=\"delivered\"><p class=\"ds-entry-head\"><span class=\"ds-address\">§2.1</span><span class=\"ds-who\">You</span></p><p class=\"ds-quote\"><span>Improve checkout reliability.</span></p><p class=\"ds-body\">This phase has no measurable outcome. Give it a target I can check on day 60.</p><p class=\"ds-state\"><span class=\"ds-dot\" aria-hidden=\"true\"></span><span>Delivered</span><span class=\"ds-intent\">Change the words</span><span class=\"ds-actions\"><button class=\"ds-verb\">Edit</button><button class=\"ds-verb ds-verb-remove\">Remove</button></span></p></div>",
-      "css": ".ds-entry { max-width: 296px; background: transparent; border: 0; border-top: 1px solid var(--border-strong, oklch(0.62 0 0)); border-radius: 0; padding: 0.5rem 0 0.75rem; display: grid; gap: 0.5rem; font: 0.8125rem/1.5 system-ui, -apple-system, sans-serif; color: var(--ink, oklch(0.2 0 0)); } .ds-entry:hover { border-top-color: var(--hand, oklch(0.42 0.06 195)); box-shadow: inset 0 1px 0 var(--hand, oklch(0.42 0.06 195)); } .ds-entry p { margin: 0; } .ds-entry-head { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.75rem; color: var(--muted, oklch(0.5 0 0)); } .ds-address { font-size: 0.6875rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--hand, oklch(0.42 0.06 195)); } .ds-who { font-weight: 600; color: var(--ink, oklch(0.2 0 0)); } .ds-quote { font-family: var(--font-manuscript, \"Iowan Old Style\", Charter, ui-serif, Georgia, serif); font-style: italic; color: var(--muted, oklch(0.5 0 0)); } .ds-quote > span { background: linear-gradient(transparent 64%, var(--anchor-wash, color-mix(in oklch, oklch(0.42 0.06 195) 14%, oklch(1 0 0))) 64%); -webkit-box-decoration-break: clone; box-decoration-break: clone; } .ds-body { color: var(--hand, oklch(0.42 0.06 195)); } .ds-state { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 0.25rem; font-size: 0.75rem; color: var(--muted, oklch(0.5 0 0)); } .ds-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--muted, oklch(0.5 0 0)); background: transparent; } .ds-entry[data-state=\"delivered\"] .ds-dot { background: var(--hand, oklch(0.42 0.06 195)); border-color: var(--hand, oklch(0.42 0.06 195)); } .ds-entry[data-state=\"delivered\"] .ds-state { color: var(--hand, oklch(0.42 0.06 195)); } .ds-intent::before { content: \"· \"; } .ds-intent { color: var(--muted, oklch(0.5 0 0)); } .ds-actions { display: flex; gap: 0.5rem; margin-left: auto; padding-left: 0.5rem; } .ds-verb { border: none; background: none; padding: 0 0.25rem; border-radius: 4px; font: inherit; font-size: 0.75rem; color: var(--muted, oklch(0.5 0 0)); text-decoration: underline; text-decoration-color: color-mix(in oklch, var(--muted, oklch(0.5 0 0)) 40%, transparent); text-underline-offset: 2px; cursor: pointer; } .ds-verb:hover { color: var(--hand, oklch(0.42 0.06 195)); text-decoration-color: currentColor; } .ds-verb-remove:hover { color: var(--danger, oklch(0.5 0.16 25)); } .ds-verb:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; }"
-    },
-    {
-      "name": "Composer",
-      "kind": "input",
-      "refersTo": "composer-input",
-      "description": "The entry before it is sent: the same hairline in pencil, graphite text, a dashed rule under the words, intent chips, and Send in ink. Nothing takes the hand until Send.",
-      "html": "<form class=\"ds-composer\"><p class=\"ds-entry-head\"><span class=\"ds-address\">§2.1</span><span class=\"ds-who\">You · not sent yet</span></p><p class=\"ds-quote\"><span>Improve checkout reliability.</span></p><div class=\"ds-intents\" role=\"group\" aria-label=\"Feedback intent\"><button type=\"button\" aria-pressed=\"true\">Change the words</button><button type=\"button\" aria-pressed=\"false\">Wrong label or split</button><button type=\"button\" aria-pressed=\"false\">Fix how it looks</button></div><textarea class=\"ds-composer-input\" placeholder=\"What should change here?\"></textarea><div class=\"ds-composer-actions\"><button type=\"button\" class=\"ds-btn-ghost\">Cancel</button><button type=\"submit\" class=\"ds-btn-primary\">Send to session</button></div></form>",
-      "css": ".ds-composer { max-width: 296px; background: transparent; border: 0; border-top: 1px solid var(--pencil, oklch(0.55 0 0)); border-radius: 0; padding: 0.5rem 0 0.75rem; display: grid; gap: 0.5rem; font: 0.8125rem/1.5 system-ui, -apple-system, sans-serif; } .ds-composer p { margin: 0; } .ds-composer .ds-entry-head { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.75rem; } .ds-composer .ds-address { font-size: 0.6875rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--pencil, oklch(0.55 0 0)); } .ds-composer .ds-who { font-weight: 500; color: var(--pencil, oklch(0.55 0 0)); } .ds-composer .ds-quote { font-family: var(--font-manuscript, \"Iowan Old Style\", Charter, ui-serif, Georgia, serif); font-style: italic; color: var(--muted, oklch(0.5 0 0)); } .ds-composer .ds-quote > span { background: linear-gradient(transparent 64%, color-mix(in oklch, var(--pencil, oklch(0.55 0 0)) 22%, var(--bg, oklch(1 0 0))) 64%); -webkit-box-decoration-break: clone; box-decoration-break: clone; } .ds-intents { display: flex; flex-wrap: wrap; gap: 0.25rem; } .ds-intents button { padding: 2px 0.5rem; border: 1px solid var(--border, oklch(0.9 0 0)); border-radius: 999px; background: transparent; color: var(--muted, oklch(0.5 0 0)); font: inherit; font-size: 0.75rem; white-space: nowrap; cursor: pointer; transition: background 150ms cubic-bezier(0.25, 1, 0.5, 1), color 150ms cubic-bezier(0.25, 1, 0.5, 1), border-color 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-intents button:hover { border-color: var(--border-strong, oklch(0.62 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-intents button[aria-pressed=\"true\"] { border-color: var(--ink, oklch(0.2 0 0)); color: var(--ink, oklch(0.2 0 0)); font-weight: 600; } .ds-intents button:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; } .ds-composer-input { font: inherit; color: var(--pencil, oklch(0.55 0 0)); caret-color: var(--hand, oklch(0.42 0.06 195)); background: transparent; border: 0; border-bottom: 1px dashed var(--pencil, oklch(0.55 0 0)); border-radius: 0; padding: 0.25rem 0 0.5rem; min-height: 3.5rem; width: 100%; min-width: 0; resize: vertical; } .ds-composer-input::placeholder { color: var(--muted, oklch(0.5 0 0)); } .ds-composer-input:focus-visible { outline: none; color: var(--ink, oklch(0.2 0 0)); border-bottom-color: var(--ink, oklch(0.2 0 0)); border-bottom-style: solid; } .ds-composer-actions { display: flex; justify-content: flex-end; gap: 0.5rem; } .ds-composer .ds-btn-ghost { display: inline-flex; padding: 0.25rem 0.75rem; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--muted, oklch(0.5 0 0)); font: 500 0.8125rem/1.5 system-ui, -apple-system, sans-serif; cursor: pointer; } .ds-composer .ds-btn-ghost:hover { background: var(--surface-sunken, oklch(0.94 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-composer .ds-btn-primary { display: inline-flex; padding: 0.25rem 0.75rem; border-radius: 6px; border: 1px solid var(--ink, oklch(0.2 0 0)); background: var(--ink, oklch(0.2 0 0)); color: var(--bg, oklch(1 0 0)); font: 500 0.8125rem/1.5 system-ui, -apple-system, sans-serif; cursor: pointer; } .ds-composer .ds-btn-primary:hover { background: var(--primary-hover, oklch(0.32 0 0)); border-color: var(--primary-hover, oklch(0.32 0 0)); }"
+      "description": "A human note: typography on a hairline, address and note in the hand, quote in the page face.",
+      "html": "<article class=\"ds-entry\"><p class=\"ds-entry-head\"><span class=\"ds-addr\">§1.1</span><span class=\"ds-who\">You</span></p><p class=\"ds-quote\"><span>A margin is the part of the page nobody asked for.</span></p><p class=\"ds-note\">Could this open the section instead?</p><p class=\"ds-state\"><span class=\"ds-dot\"></span>Delivered <span>· Change the words</span></p></article>",
+      "css": ".ds-entry{max-width:320px;border-top:1px solid oklch(0.6 0.014 65);padding:0.5rem 0 0.75rem;display:grid;gap:0.5rem;background:oklch(0.99 0.007 85);transition:border-color 150ms}.ds-entry:hover{border-top-color:oklch(0.52 0.16 42);box-shadow:inset 0 1px 0 oklch(0.52 0.16 42)}.ds-entry p{margin:0}.ds-entry-head{display:flex;gap:0.5rem;align-items:baseline;font:12px \"Source Sans 3\",system-ui,sans-serif}.ds-addr{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;color:oklch(0.52 0.16 42)}.ds-who{font-weight:600;color:oklch(0.2 0.012 60)}.ds-quote{font:italic 13px/1.5 \"Source Serif 4\",Georgia,serif;color:oklch(0.47 0.016 60)}.ds-quote>span{background:linear-gradient(transparent 64%,color-mix(in oklch,oklch(0.52 0.16 42) 14%,oklch(0.99 0.007 85)) 64%)}.ds-note{font:15px/1.45 \"Source Serif 4\",Georgia,serif;color:oklch(0.52 0.16 42)}.ds-state{display:flex;align-items:center;gap:0.25rem;font:12px \"Source Sans 3\",system-ui,sans-serif;color:oklch(0.52 0.16 42)}.ds-state span:last-child{color:oklch(0.47 0.016 60)}.ds-dot{width:8px;height:8px;border-radius:50%;background:oklch(0.52 0.16 42)}"
     },
     {
       "name": "Session Entry",
       "kind": "custom",
-      "refersTo": "margin-entry-session",
-      "description": "A session's request in the same margin: the same hairline object, printed in ink. Provider verified in 600 ink; the session's own label in a dashed box; the quote behind a sideline; never the hand.",
-      "html": "<div class=\"ds-agent\"><p class=\"ds-agent-who\"><span class=\"ds-agent-provider\">Claude Code</span><span class=\"ds-agent-claimed\">planner</span></p><p class=\"ds-agent-quote\" role=\"button\">Replace the ad-hoc incident channel with a weekly operating review, one owner per follow-up.</p><p class=\"ds-agent-message\">I can name the convener as the on-call lead or leave it to the team. Which?</p><div class=\"ds-agent-options\"><label class=\"ds-agent-option\"><input type=\"radio\" name=\"a\" checked> On-call lead</label><label class=\"ds-agent-option\"><input type=\"radio\" name=\"a\"> Leave it to the team</label></div></div>",
-      "css": ".ds-agent { max-width: 296px; background: transparent; border: 0; border-top: 1px solid var(--ink, oklch(0.2 0 0)); border-radius: 0; padding: 0.5rem 0 0.75rem; display: grid; gap: 0.5rem; font: 0.8125rem/1.5 system-ui, -apple-system, sans-serif; color: var(--ink, oklch(0.2 0 0)); } .ds-agent p { margin: 0; } .ds-agent-who { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.75rem; } .ds-agent-provider { font-weight: 600; } .ds-agent-claimed { font-family: ui-monospace, \"SF Mono\", Menlo, monospace; font-size: 0.6875rem; color: var(--muted, oklch(0.5 0 0)); border: 1px dashed var(--border-strong, oklch(0.62 0 0)); border-radius: 4px; padding: 0 0.25rem; } .ds-agent-quote { font-family: var(--font-manuscript, \"Iowan Old Style\", Charter, ui-serif, Georgia, serif); font-style: italic; color: var(--muted, oklch(0.5 0 0)); border-left: 2px solid var(--border-strong, oklch(0.62 0 0)); padding-left: 0.5rem; cursor: pointer; } .ds-agent-quote:hover { border-left-color: var(--ink, oklch(0.2 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-agent-options { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; } .ds-agent-option { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid var(--border, oklch(0.9 0 0)); border-radius: 999px; padding: 0.25rem 0.75rem; cursor: pointer; } .ds-agent-option input { appearance: none; -webkit-appearance: none; margin: 0; width: 13px; height: 13px; border: 1.5px solid var(--border-strong, oklch(0.62 0 0)); border-radius: 50%; background: var(--bg, oklch(1 0 0)); display: grid; place-content: center; } .ds-agent-option input::before { content: \"\"; width: 7px; height: 7px; border-radius: 50%; transform: scale(0); background: var(--ink, oklch(0.2 0 0)); transition: transform 150ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-agent-option input:checked { border-color: var(--ink, oklch(0.2 0 0)); } .ds-agent-option input:checked::before { transform: scale(1); } .ds-agent-option:has(input:checked) { border-color: var(--ink, oklch(0.2 0 0)); background: var(--anchor-wash, color-mix(in oklch, oklch(0.42 0.06 195) 14%, oklch(1 0 0))); font-weight: 600; } .ds-agent-option input:focus-visible { outline: 2px solid var(--hand, oklch(0.42 0.06 195)); outline-offset: 2px; }"
+      "refersTo": "session-entry",
+      "description": "A session's answer: the same object printed in ink, never the hand.",
+      "html": "<article class=\"ds-sentry\"><p class=\"ds-sentry-who\"><strong>Claude Code</strong><span>drafting</span></p><p class=\"ds-sentry-msg\">Moved the definition to the section's first sentence.</p></article>",
+      "css": ".ds-sentry{max-width:320px;border-top:1px solid oklch(0.2 0.012 60);padding:0.5rem 0 0.75rem;display:grid;gap:0.5rem}.ds-sentry p{margin:0}.ds-sentry-who{display:flex;gap:0.5rem;align-items:baseline;font:12px \"Source Sans 3\",system-ui,sans-serif}.ds-sentry-who strong{font-weight:600;color:oklch(0.2 0.012 60)}.ds-sentry-who span{font:11px ui-monospace,Menlo,monospace;color:oklch(0.47 0.016 60);border:1px dashed oklch(0.6 0.014 65);border-radius:4px;padding:0 0.25rem}.ds-sentry-msg{font:15px/1.45 \"Source Serif 4\",Georgia,serif;color:oklch(0.2 0.012 60)}"
+    },
+    {
+      "name": "Composer",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "The entry before it is sent: the one card, written in pencil until Send.",
+      "html": "<form class=\"ds-composer\"><p class=\"ds-c-head\"><span>§1.1</span> You · not sent yet</p><textarea class=\"ds-c-field\" placeholder=\"Write a note\"></textarea><div class=\"ds-c-actions\"><button type=\"button\" class=\"ds-c-cancel\">Cancel</button><button type=\"button\" class=\"ds-c-send\">Send to session</button></div></form>",
+      "css": ".ds-composer{max-width:320px;display:grid;gap:0.75rem;padding:0.75rem 1rem 1rem;background:oklch(0.99 0.007 85);border:1px solid oklch(0.6 0.014 65);border-top:2px solid oklch(0.56 0.01 65);border-radius:10px;box-shadow:0 1px 2px oklch(0.2 0.012 60 / 0.06),0 10px 28px -6px oklch(0.2 0.012 60 / 0.16)}.ds-c-head{margin:0;font:500 12px \"Source Sans 3\",system-ui,sans-serif;color:oklch(0.56 0.01 65)}.ds-c-head span{font-size:11px;font-weight:700}.ds-c-field{min-height:3.5rem;resize:vertical;border:0;border-bottom:1px dashed oklch(0.56 0.01 65);border-radius:0;background:transparent;padding:0.25rem 0 0.5rem;color:oklch(0.56 0.01 65);font:15px/1.45 \"Source Serif 4\",Georgia,serif;caret-color:oklch(0.52 0.16 42)}.ds-c-field::placeholder{color:oklch(0.47 0.016 60)}.ds-c-field:focus-visible{outline:none;color:oklch(0.2 0.012 60);border-bottom:1px solid oklch(0.2 0.012 60)}.ds-c-actions{display:flex;justify-content:flex-end;gap:0.5rem}.ds-c-actions button{padding:0.25rem 0.75rem;border-radius:6px;font:500 13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer}.ds-c-cancel{border:1px solid transparent;background:none;color:oklch(0.2 0.012 60)}.ds-c-cancel:hover{background:oklch(0.97 0.006 80)}.ds-c-send{border:1px solid oklch(0.2 0.012 60);background:oklch(0.2 0.012 60);color:oklch(0.99 0.007 85)}.ds-c-send:hover{background:oklch(0.34 0.012 60)}.ds-c-actions button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
       "name": "Attribution Chips",
       "kind": "chip",
-      "refersTo": "chip-attribution-human",
-      "description": "The two hands as chips in History: human filled in the hand, session printed in ink on paper, unknown a dashed outline.",
-      "html": "<span class=\"ds-chip\" data-by=\"human\">human</span> <span class=\"ds-chip\" data-by=\"session\">session</span> <span class=\"ds-chip\" data-by=\"unknown\">unknown</span>",
-      "css": ".ds-chip { display: inline-block; font: 600 0.75rem/1.5 system-ui, -apple-system, sans-serif; border-radius: 999px; padding: 0 0.5rem; border: 1px solid var(--border-strong, oklch(0.62 0 0)); white-space: nowrap; } .ds-chip[data-by=\"human\"] { background: var(--hand, oklch(0.42 0.06 195)); border-color: var(--hand, oklch(0.42 0.06 195)); color: var(--bg, oklch(1 0 0)); } .ds-chip[data-by=\"session\"] { background: var(--bg, oklch(1 0 0)); border-color: var(--ink, oklch(0.2 0 0)); color: var(--ink, oklch(0.2 0 0)); } .ds-chip[data-by=\"unknown\"] { border-style: dashed; color: var(--muted, oklch(0.5 0 0)); }"
+      "refersTo": "chip-human",
+      "description": "Human filled in the hand, session outlined in ink, unknown dashed.",
+      "html": "<span class=\"ds-chip ds-human\">You</span> <span class=\"ds-chip ds-session\">Claude Code</span> <span class=\"ds-chip ds-unknown\">Unknown</span>",
+      "css": ".ds-chip{display:inline-block;padding:0 0.5rem;border-radius:999px;border:1px solid oklch(0.6 0.014 65);font:600 12px/1.5 \"Source Sans 3\",system-ui,sans-serif}.ds-human{background:oklch(0.52 0.16 42);border-color:oklch(0.52 0.16 42);color:oklch(0.99 0.007 85)}.ds-session{background:oklch(0.99 0.007 85);border-color:oklch(0.2 0.012 60);color:oklch(0.2 0.012 60)}.ds-unknown{border-style:dashed;color:oklch(0.47 0.016 60)}"
     },
     {
-      "name": "Provenance Line",
-      "kind": "custom",
-      "refersTo": "provenance-line",
-      "description": "Under the manuscript, on its measure: You / the provider / Outside glosa / Approval, as plain facts. Never a badge.",
-      "html": "<dl class=\"ds-provenance\"><div class=\"ds-fact\"><dt>You</dt><dd>3 marks · 1 open</dd></div><div class=\"ds-fact\"><dt>Claude Code</dt><dd>2 applied</dd></div><div class=\"ds-fact\"><dt>Outside glosa</dt><dd>no changes</dd></div><div class=\"ds-fact\"><dt>Approval</dt><dd>not requested</dd></div></dl>",
-      "css": ".ds-provenance { width: 100%; max-width: calc(68ch + 4rem); margin: 0 auto; padding: 0.75rem 2rem 2rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; border-top: 1px solid var(--border, oklch(0.9 0 0)); font: 0.75rem/1.5 system-ui, -apple-system, sans-serif; color: var(--muted, oklch(0.5 0 0)); } .ds-fact { display: flex; gap: 0.25rem; align-items: baseline; white-space: nowrap; } .ds-provenance dt { font-weight: 600; color: var(--ink, oklch(0.2 0 0)); } .ds-provenance dd { margin: 0; }"
-    },
-    {
-      "name": "Passage with Address and Marks",
-      "kind": "custom",
-      "refersTo": "margin-entry",
-      "description": "A heading with its § address in the gutter (Review), an annotated passage on the words (underline in every mode, wash in Review) and a session's sideline beside it.",
-      "html": "<div class=\"ds-page\" data-mode=\"review\"><h2 data-address=\"§2\">Day 31–60 — Create leverage</h2><p data-address=\"§2.1\"><mark class=\"ds-mark\">Improve checkout reliability.</mark></p><p data-address=\"§2.2\" class=\"ds-sidelined\">Replace the ad-hoc incident channel with a weekly operating review, one owner per follow-up.</p></div>",
-      "css": ".ds-page { position: relative; max-width: 68ch; padding: 1rem 2rem; font-family: var(--font-manuscript, \"Iowan Old Style\", Charter, ui-serif, Georgia, serif); font-size: 1.0625rem; line-height: 1.65; color: var(--ink, oklch(0.2 0 0)); background: var(--bg, oklch(1 0 0)); } .ds-page > * { position: relative; margin: 0 0 1.2em; } .ds-page h2 { font-size: 1.5rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 0.75rem; } .ds-page > [data-address]::before { content: attr(data-address); position: absolute; right: 100%; top: 0.45em; margin-right: 0.5rem; font: 700 0.6875rem/1 system-ui, -apple-system, sans-serif; color: var(--hand, oklch(0.42 0.06 195)); white-space: nowrap; opacity: 0; transition: opacity 150ms cubic-bezier(0.25, 1, 0.5, 1); pointer-events: none; } .ds-page[data-mode=\"review\"] > h2[data-address]::before, .ds-page[data-mode=\"review\"] > [data-address]:hover::before { opacity: 1; } .ds-mark { color: inherit; background: none; text-decoration: underline; text-decoration-color: var(--hand-line, color-mix(in oklch, oklch(0.42 0.06 195) 70%, transparent)); text-decoration-thickness: 2px; text-underline-offset: 3px; } .ds-page[data-mode=\"review\"] .ds-mark { background-color: var(--hand-wash, color-mix(in oklch, oklch(0.42 0.06 195) 14%, transparent)); } .ds-mark:hover { background-color: var(--anchor-wash, color-mix(in oklch, oklch(0.42 0.06 195) 14%, oklch(1 0 0))); text-decoration-color: var(--hand, oklch(0.42 0.06 195)); } .ds-sidelined::after { content: \"\"; position: absolute; left: -14px; top: 0.2em; bottom: 0.2em; width: 2px; border-radius: 2px; background: var(--border-strong, oklch(0.62 0 0)); }"
+      "name": "Navigator Section",
+      "kind": "nav",
+      "refersTo": "navigator",
+      "description": "Paper column with an ink hairline, a section label heading its rows.",
+      "html": "<nav class=\"ds-nav\"><h2>Artifacts</h2><button>drafts</button><button aria-current=\"true\">the-slow-page.md</button><button>notes</button></nav>",
+      "css": ".ds-nav{width:232px;padding:0 0.75rem;background:oklch(0.99 0.007 85);border-right:1px solid oklch(0.2 0.012 60);display:grid;font-family:\"Source Sans 3\",system-ui,sans-serif}.ds-nav h2{min-height:36px;display:flex;align-items:center;margin:0 0 0 0.5rem;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.47 0.016 60)}.ds-nav button{height:28px;text-align:left;padding:0 0.5rem;border:0;border-radius:5px;background:none;color:oklch(0.2 0.012 60);font:13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer}.ds-nav button:hover{background:oklch(0.94 0.009 78)}.ds-nav button[aria-current]{background:oklch(0.94 0.009 78);font-weight:600}.ds-nav button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     }
   ],
   "narrative": {
-    "northStar": "One Identity, Two Hands",
-    "overview": "glosa is a reading and marking instrument, not a dashboard. The manuscript is the writer's: it is set in the writer's own face, chosen per artifact (Default sans, Serif or Mono), on white paper at a book measure. Nothing in the chrome competes with it. The desk around the page is achromatic grey, hairlines and one segmented mode switch, so the only colour on the screen is the one that means *you*.\n\nThe product is recognisable by its marks, not by a typeface or an accent wash. Two hands write on the page. The human's marks are one deep teal everywhere they appear: the wash on the words in Review, the § address in the gutter, the margin entry, the caret, the selection, the focus ring, the unsaved dot, the drag target and the accent of the logo mark. A mark that has not been sent yet is the same mark in graphite, the pencil. A session never borrows either: its entries, its chips and its answers are printed in ink, on an ink hairline. Diff green and red, and the semantic danger, warning and success, are the only other hues, and each of those always arrives with a label or a shape.\n\nThe system refuses the calm-editor template (cards in a rail, one decorative accent), source-domain costumes (scriptorium, lab, score), IDE chrome, and every kind of resting elevation. Dark appearance is the same page under lower light, never an inverted console.",
+    "northStar": "The Writing Desk, Two Hands",
+    "overview": "glosa reads like a well-set page, not an app. The whole desk is one warm paper: the manuscript, the top bar, the navigator and the tab strip share the same ground, and the desk's outer regions are divided by printed ink hairlines rather than grey panels. Typography does the structural work. Source Serif 4 sets the manuscript, its headings, every quote of it and every note written in the margin; Source Sans 3, its designed companion, sets the chrome. Both are vendored OFL woff2 served by the daemon, so the page never reaches a font service.\n\nTwo hands write on the sheet. The human's marks are one burnt vermilion everywhere they appear: the wash and underline on the words, the § address, the note's words, the caret, the selection, the focus ring, the unsaved dot, the drag target, and the comma logo. A mark not yet sent is the same mark in warm graphite, the pencil. A session never borrows either: its entries, chips and answers are printed in ink. Actions are ink too; the chosen mode is struck forward as filled ink inside an ink outline.\n\nDensity is calm and bookish in the manuscript (18px serif on a 68ch measure) and compact in the chrome (13px sans). The surface is flat at rest; only things genuinely above the work cast a shadow. Dark is the same desk under a reading lamp: warm near-black ground, ink lifted to warm off-white, the hand lifted only as far as it stays legible without glowing.",
     "keyCharacteristics": [
-      "Achromatic neutrals in both appearances: every grey has zero chroma, so the hand is the only colour on the desk.",
-      "Primary actions are the page's own black. The hand is never a button colour.",
-      "Margin entries are typography on a hairline, aligned to their passage, never cards.",
-      "Passage addresses (\"§2.1\") are derived from Markdown structure at render time and shown at headings in Review, on entries and in the outline. They are labels, not identities.",
-      "A provenance line under the manuscript states, in words, who marked, what a session applied, what changed outside glosa, and what stands approved.",
-      "Flat at rest; a shadow appears only under something genuinely floating."
-    ],
-    "decisions": [
-      "The face chooser lives in the pane's More menu as a radio group, not in the artifact bar or any primary chrome: a reading preference is a setting (2026-09-15).",
-      "The logo mark's accent path takes the hand: the mark is the human's commentary on the text.",
-      "Addresses are shown in the gutter, on entries, in the composer and in the outline, never as nodes inserted into the rendered manuscript, because DOM inserted into the content would break the quote-based anchors.",
-      "The session's in-line answer under the passage is deferred: the journal does not carry the applied text. Session entries are printed in ink in the margin until it does.",
-      "Read mode shows no wash. The quiet underline is the only trace of a mark."
+      "Warm paper for the entire desk; no grey sidebar, top bar or tab strip.",
+      "Ink hairlines mark the desk's regions: under the top bar and at the navigator's right edge.",
+      "One colour means \"you\": vermilion. Pencil means \"not sent yet\". Ink means printed, by a session or as an action.",
+      "Margin entries are typography on a hairline, set in the serif, never cards. The open composer is the one card.",
+      "Passage addresses (\"§2.1\") are derived labels painted in the gutter, never inserted into content.",
+      "A provenance line under the manuscript states in words who marked, what a session applied, what changed outside glosa, and what stands approved."
     ],
     "rules": [
       {
         "name": "The Two Hands Rule",
-        "body": "Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No exceptions, and no third colour for marks.",
+        "body": "Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No third colour for marks.",
         "section": "colors"
       },
       {
-        "name": "The Achromatic Desk Rule",
-        "body": "Every neutral is `oklch(L 0 0)` in both appearances. Tinted greys are forbidden because any tint competes with the one colour that means \"you\".",
+        "name": "The Paper Desk Rule",
+        "body": "The desk is one paper. Chrome regions do not get their own grey fill; they are separated by the Region Rule. Tinted neutrals stay warm and low in chroma so nothing competes with the hand.",
         "section": "colors"
       },
       {
         "name": "The Ink Actions Rule",
-        "body": "The primary button is the page's own black. The hand is never a button, a link or a panel wash.",
+        "body": "Buttons and the chosen mode are the page's own ink. The hand is never a button, a link or a panel fill.",
         "section": "colors"
       },
       {
         "name": "The Status Needs Shape Rule",
-        "body": "Danger, warning, success, delivery and provenance always carry a label, a dot or an edge treatment. A hollow dot is waiting, a filled dot is delivered or applied; a human chip is filled, a session chip is outlined in ink, an unknown chip is dashed. Colour is never the only channel.",
+        "body": "Danger, warning, success, delivery and provenance always carry a label, a dot or an edge. A hollow dot is waiting; a filled dot is delivered (hand), applied (success) or stale (warning). A human chip is filled, a session chip is outlined in ink, an unknown chip is dashed. Colour is never the only channel.",
         "section": "colors"
       },
       {
         "name": "The Manuscript Contrast Rule",
-        "body": "Long-form body copy, placeholders and 12–13px metadata meet WCAG 2.2 AA in every appearance. If a muted token is marginal, mix it toward Ink; never reach for Faint on live text.",
+        "body": "Body copy, placeholders and 12–13px metadata meet WCAG 2.2 AA in both appearances. Pencil sits exactly at the 4.5:1 floor, so it is never lightened further; Faint never carries live text.",
         "section": "colors"
       },
       {
         "name": "The Reading Measure Rule",
-        "body": "Manuscript prose stays at a 68ch maximum measure with generous line-height. Operational panels may be denser; writing never becomes a data table.",
+        "body": "Manuscript prose stays at a 68ch measure. Blocks are separated by 1.2em of the body size; the page opens with 4rem above the title and closes with 6rem below. Headings carry more space above than below.",
         "section": "typography"
       },
       {
-        "name": "The Prose Rhythm Rule",
-        "body": "Blocks in the manuscript are separated by 1.2em of the body size, list items by 0.3em, and the page opens with 4rem above the title and closes with 6rem below the last line. Headings always carry more space above than below.",
+        "name": "The Serif Is Writing Rule",
+        "body": "Anything a person or a session wrote (the manuscript, its quotes, margin notes, the composer field, a session's message) is set in serif; anything the application says (buttons, tabs, states, addresses, provenance) is set in Source Sans 3. Quotes of the page follow `--font-manuscript` so the thread back to the text is visible.",
         "section": "typography"
       },
       {
-        "name": "The Writer's Face Rule",
-        "body": "The manuscript is set in the artifact's chosen face; the chrome never follows it. Any surface that quotes the page (a margin entry's quote, the composer's quote, a session's quoted passage) is set in the manuscript face, so the thread back to the text is visible.",
-        "section": "typography"
-      },
-      {
-        "name": "The No Display Labels Rule",
-        "body": "Buttons, tabs, chips, paths and state labels never use expressive display typography. There is no display face; the chrome is the system sans at 13px.",
+        "name": "The Section Label Rule",
+        "body": "Uppercase tracked labels name a list that follows them. They never sit above a headline as a decorative lead-in.",
         "section": "typography"
       },
       {
         "name": "The Flat-Until-Floating Rule",
-        "body": "Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace. This is not a preference for subtle shadows: the dock's floating shadows resolve to none, not to something quieter.",
+        "body": "Resting panels, entries, tabs and bars cast no shadow. A shadow is earned only by being temporarily above the workspace.",
         "section": "elevation"
       },
       {
         "name": "The Same Desk Rule",
-        "body": "Under low light a shadow is a darker patch of the same desk, not haze: black-based, tighter, and nothing at rest casts one.",
+        "body": "Under the lamp, a shadow is a darker patch of the same desk, not haze.",
         "section": "elevation"
       }
     ],
     "dos": [
-      "Do give every human mark the hand and every unsent mark the pencil; print everything a session writes in ink.",
-      "Do keep every neutral at zero chroma in both appearances.",
-      "Do set the manuscript in the artifact's chosen face through the one manuscript variable, and set every quote of the page in that same face.",
-      "Do open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.",
-      "Do lead entries, the composer, the gutter and the outline with the derived § address, and treat it as a label the document can renumber.",
-      "Do state provenance in words: \"You\", the provider's name, \"Outside glosa\", \"Approval\", \"not sent yet\", \"Lost its place\".",
-      "Do pair every colour state with a shape: hollow or filled dot, filled or outlined or dashed chip, weight and edge together.",
-      "Do keep the reading measure at 68ch and paint the margin and the outline over whitespace rather than subtracting a gutter.",
-      "Do keep a save byte-exact: write back only the blocks the writer changed, and when writing a block back would still change bytes they did not touch, show those bytes and ask (save anyway, or drop to the source face) rather than reformatting quietly."
+      "**Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink.",
+      "**Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).",
+      "**Do** set anything written (manuscript, quotes, notes, the composer field, a session's message) in Source Serif 4, and everything the application says in Source Sans 3.",
+      "**Do** strike the chosen mode forward as filled ink inside the ink outline.",
+      "**Do** open a margin entry on a hairline aligned to its passage, with no fill, no radius and no shadow.",
+      "**Do** lead entries, the composer, the gutter and Go to with the derived § address, and treat it as a label the document can renumber.",
+      "**Do** state provenance in words: \"You\", the provider's name, \"Outside glosa\", \"Approval\", \"not sent yet\", \"Lost its place\".",
+      "**Do** pair every colour state with a shape: hollow or filled dot, filled, outlined or dashed chip.",
+      "**Do** keep the reading measure at 68ch and paint the margin over whitespace rather than moving the manuscript.",
+      "**Do** serve every face from the vendored OFL woff2 files; the runtime never reaches a font service."
     ],
     "donts": [
-      "Don't use the hand for a button, a link, a panel wash or a session's output.",
-      "Don't put the face chooser, or any reading preference, in primary chrome; it lives in the pane's More menu.",
-      "Don't wash annotated words in Read; the quiet underline is the only mark there.",
-      "Don't insert nodes into the rendered manuscript for addresses or marks; the quote-based anchors depend on the DOM staying the writer's.",
-      "Don't print a session's answer in line under the passage yet: the journal does not carry the applied text, so a session's entries stay in the margin, in ink. Revisit when it does.",
-      "Don't draw cards in the margin, rounded tabs, resting shadows, tinted greys, nested cards or coloured side-stripe panels.",
-      "Don't let colour be the only signal for waiting, delivered, applied, stale, human, session or unknown.",
-      "Don't use a display face anywhere, or mono for ordinary prose."
+      "**Don't** use the hand for a button, a link, a panel fill or a session's output.",
+      "**Don't** give chrome regions a grey fill of their own; the desk is one paper.",
+      "**Don't** put the face chooser or any reading preference in primary chrome; it lives in the pane's More menu.",
+      "**Don't** wash annotated words in Read; the underline is the only mark there.",
+      "**Don't** insert nodes into the rendered manuscript for addresses or marks.",
+      "**Don't** draw cards in the margin (the open composer excepted), rounded tabs, resting shadows or coloured side-stripe panels.",
+      "**Don't** let colour be the only signal for waiting, delivered, applied, stale, human, session or unknown.",
+      "**Don't** set uppercase tracked labels above headlines as lead-ins; they only head a list.",
+      "**Don't** lighten the pencil or use Faint for live text; both are already at their floor."
     ]
   }
 }
