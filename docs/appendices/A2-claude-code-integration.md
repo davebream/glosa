@@ -14,8 +14,16 @@ command arguments because Claude does not place them in the monitor environment.
 The monitor reads `workspaces.json` without mutating it. Outside a registered workspace it waits for
 that file to change and makes no daemon request. Once the project is registered, it registers with
 `source:"monitor"`, opens `GET /api/sessions/:id/stream`, and holds the session lease through that
-connection. It never starts or repairs a daemon. A disconnect retries with jittered exponential
-backoff whose floor is five seconds and whose cap is sixty seconds.
+connection. It never starts or repairs a daemon. An ordinary disconnect (plain EOF, error, or
+non-2xx) retries with jittered exponential backoff whose floor is five seconds and whose cap is sixty
+seconds. A stream that ends with the terminal `event: superseded` frame (issue #206: another
+connection for the same session took over) is different: the monitor stops streaming and does not
+re-register or reconnect. It parks, polling `GET /api/sessions/:id/stream/status` on a fixed 15-second
+interval plus up to 3 seconds of jitter (never tighter, no backoff growth), re-running daemon
+discovery and re-reading credentials on every poll. It stays parked on every inconclusive answer
+(daemon unreachable, auth failure, network error, or `connected:true`) and re-enters the normal
+connect loop only once the probe authoritatively reports `connected:false` — including for an unknown
+session id, which is treated as free.
 
 Each bounded stream presentation is written as one stdout line beginning `[glosa <entry-id>]`.
 Successful stdout completion records `via:"monitor", outcome:"transport_accepted"`; it is still
@@ -65,8 +73,15 @@ connection: stdin EOF, SIGHUP, parent loss, or replacement by a newer Codex bind
 same bounded shutdown path as the MCP server.
 
 The attachment never enumerates threads and never starts, stops, or repairs the app-server. A missing
-socket or a pre-rollout `thread/resume` failure retries with jittered exponential backoff from five to
-sixty seconds while MCP pull remains usable. Homebrew/npm Codex installs do not provide a managed
+socket, a pre-rollout `thread/resume` failure, or any ordinary stream end retries with jittered
+exponential backoff from five to sixty seconds while MCP pull remains usable. A stream that ends with
+the terminal `event: superseded` frame (issue #206: another attachment — the MCP shim's bind or a
+separate `glosa codex-attach` — took over the same thread) is different: the attachment stops
+streaming and does not re-register or reconnect. It parks, polling `GET
+/api/sessions/:id/stream/status` on a fixed 15-second interval plus up to 3 seconds of jitter (never
+tighter, no backoff growth), re-establishing its daemon client fresh on every poll. It stays parked on
+every inconclusive answer and re-enters the normal connect loop only once the probe authoritatively
+reports `connected:false` — including for an unknown session id, which is treated as free. Homebrew/npm Codex installs do not provide a managed
 daemon. A user who wants one either installs the standalone distribution, runs Codex's own
 `codex app-server daemon bootstrap` (or `start`, once bootstrapped) to install and run a durable
 user-managed app-server, or runs the listener directly:

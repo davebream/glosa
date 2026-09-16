@@ -197,10 +197,12 @@ describe("Codex app-server protocol", () => {
             await onEntry(ENTRY);
             if (!signal.aborted)
               await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+            return { ended: "eof" as const };
           },
         }),
         random: () => 0,
         sleep: async () => {},
+        now: () => 0,
       },
       controller.signal,
     );
@@ -243,10 +245,14 @@ describe("Codex app-server protocol", () => {
           register: async () => {},
           heartbeat: async () => {},
           acknowledgeStreamTransport: async () => {},
-          openSessionStream: async () => controller.abort(),
+          openSessionStream: async () => {
+            controller.abort();
+            return { ended: "eof" as const };
+          },
         }),
         random: () => 0,
         sleep: async () => {},
+        now: () => 0,
       },
       controller.signal,
     );

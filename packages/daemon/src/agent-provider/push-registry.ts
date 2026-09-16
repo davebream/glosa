@@ -5,7 +5,11 @@
 import type { DeliverableEntry } from "./interface.ts";
 
 interface Connection {
-  close?: () => void;
+  /** Called with the replacing connection's transport when `register` displaces this one, so the
+   * displaced side can write its terminal `event: superseded` frame before it closes (#206). Called
+   * with no argument for every other close cause (shutdown, revocation, cancel, send failure) —
+   * those must stay byte-identical EOF on the wire. */
+  close?: (supersededBy?: Connection["transport"]) => void;
   send: (entry: DeliverableEntry) => void;
   transport: "monitor" | "codex_app_server";
   accepted: Set<string>;
@@ -24,10 +28,10 @@ export class SessionPushRegistry {
   register(
     sessionId: string,
     send: Connection["send"],
-    close: (() => void) | undefined,
+    close: Connection["close"],
     transport: Connection["transport"],
   ): () => void {
-    this.connections.get(sessionId)?.close?.();
+    this.connections.get(sessionId)?.close?.(transport);
     this.connections.set(sessionId, { send, close, transport, accepted: new Set() });
     return () => {
       const current = this.connections.get(sessionId);

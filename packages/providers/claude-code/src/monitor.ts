@@ -20,6 +20,36 @@ export const MONITOR_MAX_DELAY_MS = 60_000;
 export const MONITOR_BACKOFF_FACTOR = 2;
 export const MONITOR_JITTER_RATIO = 0.2;
 
+/** #206: how a superseded monitor decides whether the session is free again — a fixed interval plus
+ * jitter, never tighter than the retry floor above, and no backoff growth (a park is not a
+ * failure). */
+export const PARK_PROBE_BASE_MS = 15_000;
+export const PARK_PROBE_JITTER_MS = 3_000;
+
+export function parkProbeDelay(random: () => number = Math.random): number {
+  return PARK_PROBE_BASE_MS + Math.floor(PARK_PROBE_JITTER_MS * random());
+}
+
+/** #206 review round 1 (F-7): bounds a single ownership-probe HTTP round trip so a request that is
+ * accepted but never answers cannot hang the park loop forever — a timeout is inconclusive, exactly
+ * like a network error or a malformed body. Kept below the probe interval floor so a stalled
+ * request cannot itself delay the next scheduled probe. */
+export const PARK_PROBE_REQUEST_TIMEOUT_MS = 4_000;
+
+/** #206: how long, after a delivery write or its transport acknowledgement fails while the stream
+ * is still open, `registerAndStream` keeps reading before giving up on seeing a `superseded` frame.
+ * Replacement deletes the OLD connection's pending acknowledgement, so a failure right there is the
+ * expected shape of a mid-delivery displacement, not a reason to reconnect and re-displace the new
+ * owner — but an ordinary failure on a healthy connection must not hang forever either. *
+ * 12 s, not the 2 s this shipped with (and deliberately not 15 s, which would collide with the
+ * park-probe interval and make the two sleeps indistinguishable to a test). CI run 35039592341 saw a
+ * displaced monitor deliver an entry only the owner should have had; its log proves that duplicate
+ * delivery but records neither monitor's timeline nor how the stream end was classified, so this
+ * race is the strongest explanation from the code rather than an observed one. Waiting longer costs nothing in the case this exists for —
+ * replacement closes the stream immediately, so EOF ends the wait — and only delays surfacing a
+ * genuine handling error on a stream that stays healthy. */
+export const STREAM_FAILURE_DEADLINE_MS = 12_000;
+
 export interface MonitorOptions {
   sessionId: string;
   projectDir: string;
@@ -33,6 +63,10 @@ export interface MonitorDeps {
   random: () => number;
   sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   waitForWorkspaceChange: (path: string, signal: AbortSignal) => Promise<void>;
+  /** #206 review round 1 (F-7): the parked probe's absolute cadence is scheduled from this clock,
+   * not from wall-clock `Date.now()` directly, so tests can compress a slow-but-bounded probe's
+   * effect on the NEXT probe's spacing without any real waiting. */
+  now: () => number;
 }
 
 interface ExistingDaemon {
@@ -95,6 +129,7 @@ export function realMonitorDeps(): MonitorDeps {
     random: Math.random,
     sleep: defaultSleep,
     waitForWorkspaceChange: defaultWaitForWorkspaceChange,
+    now: Date.now,
   };
 }
 
@@ -168,13 +203,17 @@ async function writeLine(output: MonitorDeps["stdout"], line: string): Promise<v
   });
 }
 
+export interface SessionStreamEnd {
+  ended: "superseded" | "eof";
+}
+
 async function registerAndStream(
   options: MonitorOptions,
   workspace: string,
   connection: ExistingDaemon,
   deps: MonitorDeps,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<SessionStreamEnd> {
   const base = `http://127.0.0.1:${connection.port}`;
   const transcriptPath = deriveMonitorTranscriptPath(options.sessionId, options.projectDir);
   const registered = await deps.fetch(`${base}/api/sessions/register`, {
@@ -201,26 +240,136 @@ async function registerAndStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
+  let superseded = false;
+  // #206: set once a delivery write or its transport acknowledgement fails while the stream is
+  // still open. Supersession takes precedence — keep reading toward EOF instead of surfacing the
+  // failure immediately, bounded so an ordinary failure still gets reported promptly.
+  let failure: { error: unknown } | undefined;
+  let deadlineAt = 0;
+
   while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) return;
+    if (failure && Date.now() >= deadlineAt) throw failure.error;
+    let done: boolean;
+    let value: Uint8Array | undefined;
+    if (failure) {
+      const remaining = Math.max(0, deadlineAt - Date.now());
+      const raced = await Promise.race([
+        reader.read().then((r) => ({ timedOut: false as const, r })),
+        deps.sleep(remaining, signal).then(() => ({ timedOut: true as const })),
+      ]);
+      if (raced.timedOut) throw failure.error;
+      ({ done, value } = raced.r);
+    } else {
+      ({ done, value } = await reader.read());
+    }
+    if (done) {
+      if (failure) {
+        if (superseded) return { ended: "superseded" };
+        throw failure.error;
+      }
+      return { ended: superseded ? "superseded" : "eof" };
+    }
     buffered += decoder.decode(value, { stream: true });
     let boundary = buffered.indexOf("\n\n");
     while (boundary >= 0) {
       const frame = buffered.slice(0, boundary);
       buffered = buffered.slice(boundary + 2);
       boundary = buffered.indexOf("\n\n");
-      if (frame.match(/^event:\s*(.+)$/m)?.[1] !== "delivery") continue;
+      const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+      if (event === "superseded") {
+        superseded = true;
+        continue;
+      }
+      if (event !== "delivery" || failure) continue;
       const data = frame.match(/^data:\s*(.+)$/m)?.[1];
       if (!data) continue;
       const entry = JSON.parse(data) as DeliverableEntry;
-      await writeLine(deps.stdout, `[glosa ${entry.id}] ${JSON.stringify(entry)}`);
-      const ack = await deps.fetch(
-        `${base}/api/sessions/${encodeURIComponent(options.sessionId)}/stream/${encodeURIComponent(entry.id)}/transport-ack`,
-        { method: "POST", headers: headers(connection), body: "{}", signal },
-      );
-      if (!ack.ok) throw new Error(`stream acknowledgement failed (${ack.status})`);
+      try {
+        await writeLine(deps.stdout, `[glosa ${entry.id}] ${JSON.stringify(entry)}`);
+        const ack = await deps.fetch(
+          `${base}/api/sessions/${encodeURIComponent(options.sessionId)}/stream/${encodeURIComponent(entry.id)}/transport-ack`,
+          { method: "POST", headers: headers(connection), body: "{}", signal },
+        );
+        if (!ack.ok) throw new Error(`stream acknowledgement failed (${ack.status})`);
+      } catch (error) {
+        failure = { error };
+        deadlineAt = Date.now() + STREAM_FAILURE_DEADLINE_MS;
+      }
     }
+  }
+  return { ended: superseded ? "superseded" : "eof" };
+}
+
+/** #206: parked between a `superseded` end and an authoritative `connected:false` (including an
+ * unknown session — the normal loop's own register/stream decides from there). No register, no
+ * stream, no delivery output, no lease hold while parked. Every probe re-runs daemon discovery
+ * (`existingDaemon`) and re-reads credentials from scratch.
+ *
+ * Review round 1 (F-6): only a LITERAL boolean `connected` field is authoritative. `{}`, `[]`,
+ * `{connected:null}`, a non-2xx status, a network error, an unparseable body, and (F-7) a request
+ * that never answers within `PARK_PROBE_REQUEST_TIMEOUT_MS` are ALL `null` (inconclusive) — the
+ * caller keeps parking on anything but a proven `false`. The request is bounded and its own
+ * `AbortController` is aborted in `finally` regardless of which side of the race wins, so a slow
+ * daemon never keeps the underlying fetch alive past this function's return. */
+async function probeStreamConnected(
+  sessionId: string,
+  deps: MonitorDeps,
+  signal: AbortSignal,
+): Promise<boolean | null> {
+  const probeAbort = new AbortController();
+  const combined = AbortSignal.any([signal, probeAbort.signal]);
+  const attempt = (async (): Promise<boolean | null> => {
+    const connection = await existingDaemon(deps.home());
+    if (!connection) return null;
+    const base = `http://127.0.0.1:${connection.port}`;
+    let res: Response;
+    try {
+      res = await deps.fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/stream/status`, {
+        headers: headers(connection),
+        signal: combined,
+      });
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return null;
+    }
+    // A top-level `null` parses fine and is not an object; reading a field off it throws, which
+    // would escape this probe as a rejection rather than an inconclusive answer. Check the
+    // envelope before the field (review round 2, F-6).
+    if (typeof body !== "object" || body === null) return null;
+    const connected = (body as { connected?: unknown }).connected;
+    if (connected === true) return true;
+    if (connected === false) return false;
+    return null;
+  })();
+  try {
+    const outcome = await Promise.race([
+      attempt.then((v) => ({ timedOut: false as const, v })),
+      deps.sleep(PARK_PROBE_REQUEST_TIMEOUT_MS, combined).then(() => ({ timedOut: true as const })),
+    ]);
+    return outcome.timedOut ? null : outcome.v;
+  } finally {
+    probeAbort.abort();
+  }
+}
+
+/** Review round 1 (F-7): schedules each probe from an ABSOLUTE cadence — `dueAt` advances by
+ * `parkProbeDelay()` every iteration regardless of how long the previous probe itself took (now
+ * bounded by `PARK_PROBE_REQUEST_TIMEOUT_MS`) — so the gap between probe STARTS stays within the
+ * contract's interval instead of drifting by however long each request happened to take. */
+async function parkUntilFree(sessionId: string, deps: MonitorDeps, signal: AbortSignal): Promise<void> {
+  let dueAt = deps.now();
+  while (!signal.aborted) {
+    dueAt += parkProbeDelay(deps.random);
+    await deps.sleep(Math.max(0, dueAt - deps.now()), signal);
+    if (signal.aborted) return;
+    const connected = await probeStreamConnected(sessionId, deps, signal);
+    if (connected === false) return;
   }
 }
 
@@ -244,14 +393,21 @@ export async function runClaudeMonitor(
       await deps.waitForWorkspaceChange(indexPath, signal);
       continue;
     }
+    let superseded = false;
     try {
       const connection = await existingDaemon(deps.home());
       if (!connection) throw new Error("daemon unavailable");
       const connectedAt = Date.now();
-      await registerAndStream(options, workspace, connection, deps, signal);
+      const result = await registerAndStream(options, workspace, connection, deps, signal);
       if (Date.now() - connectedAt >= 20_000) attempt = 0;
+      superseded = result.ended === "superseded";
     } catch {
       if (signal.aborted) return;
+    }
+    if (superseded) {
+      await parkUntilFree(options.sessionId, deps, signal);
+      attempt = 0;
+      continue;
     }
     await deps.sleep(monitorRetryDelay(attempt, deps.random), signal);
     attempt = Math.min(attempt + 1, 31);
