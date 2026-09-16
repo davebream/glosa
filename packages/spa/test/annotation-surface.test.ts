@@ -216,6 +216,59 @@ describe("the annotation surface", () => {
     }
   });
 
+  test("a pane that widens past the rail floor after its notes loaded moves them from the tray into the rail", async () => {
+    const { host, pane } = await mountPane(fakeDataAccess());
+    await annotate(host, 0, 10, "tighten this");
+    // Measured below the floor when the note rendered, so the card sits in the collection tray.
+    expect(qa(host, ".glosa-tray-list .glosa-annotation")).toHaveLength(1);
+
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1400 });
+    try {
+      pane.remeasure();
+      await paint();
+      const margin = q(host, ".glosa-margin");
+      expect(margin.classList.contains("glosa-margin-side")).toBe(true);
+      // The class alone is not the rail: the card itself has to move out of the tray.
+      expect(margin.querySelectorAll(".glosa-annotation")).toHaveLength(1);
+      expect(qa(host, ".glosa-tray-list .glosa-annotation")).toHaveLength(0);
+      expect(q(host, ".glosa-annotations-tray").hidden).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(proto, "clientWidth", original);
+      else delete (proto as any).clientWidth;
+    }
+  });
+
+  test("the rail stacks notes in page order, so a later note about an earlier passage stays beside it", async () => {
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    const rangeProto = dom.window.Range.prototype as any;
+    const originalRect = rangeProto.getBoundingClientRect;
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1400 });
+    // A passage's height on the page follows its offset in the paragraph.
+    rangeProto.getBoundingClientRect = function () {
+      const top = this.startOffset * 10;
+      return { top, bottom: top + 20, left: 0, right: 0, width: 0, height: 20, x: 0, y: top };
+    };
+    try {
+      const { host } = await mountPane(fakeDataAccess());
+      const full = q(host, "#para").textContent as string;
+      // Written first, about the LATER passage; then a note about the earlier one.
+      await annotate(host, full.indexOf("lambda"), full.indexOf("lambda") + 6, "later passage");
+      await annotate(host, 0, 5, "earlier passage");
+      await paint();
+      const cards = qa(host, ".glosa-margin .glosa-annotation") as any[];
+      const topOf = (text: string) => Number.parseInt(cards.find((c) => c.textContent.includes(text)).style.top, 10);
+      expect(cards).toHaveLength(2);
+      expect(topOf("earlier passage")).toBeLessThan(topOf("later passage"));
+    } finally {
+      rangeProto.getBoundingClientRect = originalRect;
+      if (original) Object.defineProperty(proto, "clientWidth", original);
+      else delete (proto as any).clientWidth;
+    }
+  });
+
   test("the saved set lives in the pane's collection tray, not at the end of a long manuscript", async () => {
     const { host } = await mountPane(fakeDataAccess());
     const tray = q(host, ".glosa-annotations-tray");

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A pane that loaded its notes before its first real width measurement kept them in the collapsed
+  tray at the foot of the page, with an empty margin column, even at widths where the margin column
+  should show. The notes now move into the margin column as soon as the pane is measured wide enough.
+- Notes in the margin column were stacked in the order they were written, so a note added later about
+  an earlier passage was pushed below every other note and far from its words. They are now stacked
+  in page order.
+- Checkboxes and other native controls use the page's ink instead of the browser's default blue.
+
 ## [0.1.0-alpha.23] — 2026-09-16
 
 ### Changed
