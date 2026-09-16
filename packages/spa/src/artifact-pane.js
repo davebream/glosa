@@ -2011,12 +2011,24 @@ export function createArtifactPane(host, deps) {
       return;
     }
     const mainTop = paneMain.getBoundingClientRect().top;
-    let prevBottom = 0;
-    for (const cardEl of positioned) {
+    // Stack in PAGE order, not in the order the cards were written: a note added later about an
+    // earlier passage must not be pushed below every card after it and out of reach of its words.
+    // Cards whose passage is gone keep their relative order after the anchored ones.
+    const measured = positioned.map((cardEl, index) => {
       const item = cardEl._glosaItem;
       const range = item ? rangeForTarget(item.record?.target ?? item.target) : null;
-      const anchorTop = range ? range.getBoundingClientRect().top - mainTop + paneMain.scrollTop : prevBottom + 8;
-      const top = Math.max(anchorTop, prevBottom + (prevBottom ? 8 : 0));
+      const anchorTop = range ? range.getBoundingClientRect().top - mainTop + paneMain.scrollTop : null;
+      return { cardEl, anchorTop, index };
+    });
+    measured.sort((a, b) => {
+      if (a.anchorTop === null || b.anchorTop === null) {
+        return a.anchorTop === b.anchorTop ? a.index - b.index : a.anchorTop === null ? 1 : -1;
+      }
+      return a.anchorTop - b.anchorTop || a.index - b.index;
+    });
+    let prevBottom = 0;
+    for (const { cardEl, anchorTop } of measured) {
+      const top = Math.max(anchorTop ?? prevBottom + 8, prevBottom + (prevBottom ? 8 : 0));
       cardEl.style.top = `${Math.round(top)}px`;
       prevBottom = top + cardEl.offsetHeight;
     }
@@ -3137,8 +3149,7 @@ export function createArtifactPane(host, deps) {
       : new ResizeObserver((entries) => {
           const width = entries[0]?.contentRect?.width ?? paneEl.clientWidth;
           if (Math.round(width) === Math.round(paneWidth)) return;
-          paneWidth = width;
-          layoutMargin();
+          applyPaneWidth(width);
           paintAnnotationMarks();
           // A narrower pane re-wraps the source face, which moves every heading in it.
           outlineSourceKey = "";
@@ -3146,6 +3157,17 @@ export function createArtifactPane(host, deps) {
         });
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
+
+  /** A new pane width. Crossing the rail floor changes WHERE the cards live (the rail beside their
+   * passages, or the collection tray), which only renderMargin decides; a width that stays on the
+   * same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
+   * loaded its notes before its first real measurement with an empty rail and a full tray. */
+  function applyPaneWidth(width) {
+    const wasSide = isSideMargin();
+    paneWidth = width;
+    if (isSideMargin() !== wasSide) renderMargin();
+    else layoutMargin();
+  }
 
   // ---------- artifact loading ----------
 
@@ -3517,8 +3539,7 @@ export function createArtifactPane(host, deps) {
      * observer keeps reporting, but the manuscript's scroll container moved, so anchors must be
      * re-measured against the new box. */
     remeasure() {
-      paneWidth = paneEl.clientWidth;
-      layoutMargin();
+      applyPaneWidth(paneEl.clientWidth);
       renderMarkers();
       outlineSourceKey = "";
       refreshOutline();

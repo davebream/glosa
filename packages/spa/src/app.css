@@ -254,6 +254,8 @@
 
 html {
   height: 100%;
+  /* Native checkboxes, radios and range thumbs take the page's ink rather than the browser's blue. */
+  accent-color: var(--primary);
 }
 
 body {
