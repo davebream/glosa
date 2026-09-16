@@ -16,7 +16,17 @@ const PLUGIN_ROOT = join(import.meta.dir, "../../../glosa-plugin");
  * never read on demand, so two processes' output can be told apart even when they arrive
  * interleaved. Counting happens per OWN process's stream (issue #206 review lesson: "count lines
  * per process from its own stdout"). */
-function trackLines(stream: ReadableStream<Uint8Array>): { lines: string[]; done: Promise<void> } {
+/** `lines` is what the assertions read; `stamped` carries the same lines with the millisecond each
+ * arrived, which is what a CI-only failure needs to be diagnosable — whether the displaced side
+ * came back through its park probe or through an ordinary retry is a question about WHEN (#206,
+ * run 35039592341, where neither could be told apart from the retained log). */
+function trackLines(stream: ReadableStream<Uint8Array>): {
+  lines: string[];
+  stamped: string[];
+  done: Promise<void>;
+} {
+  const startedAt = Date.now();
+  const stamped: string[] = [];
   const lines: string[] = [];
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -29,12 +39,13 @@ function trackLines(stream: ReadableStream<Uint8Array>): { lines: string[]; done
       let boundary = buffer.indexOf("\n");
       while (boundary >= 0) {
         lines.push(buffer.slice(0, boundary));
+        stamped.push(`+${String(Date.now() - startedAt).padStart(6)}ms ${buffer.slice(0, boundary).slice(0, 120)}`);
         buffer = buffer.slice(boundary + 1);
         boundary = buffer.indexOf("\n");
       }
     }
   })();
-  return { lines, done };
+  return { lines, stamped, done };
 }
 
 /** Drains a pipe with nobody caring about its content, only that it never fills and blocks the
@@ -298,7 +309,15 @@ describe("Claude monitor integration", () => {
       // on every parked probe.
       const id2 = await createEntry("clause");
       expect(await waitUntil(() => trackB!.lines.some((l) => l.includes(`[glosa ${id2}] `)), 8_000)).toBe(true);
-      expect(trackA.lines.filter((l) => l.includes(`[glosa ${id2}] `))).toHaveLength(0);
+      // Compared as an object carrying both timelines: when this fails on a runner nobody can
+      // attach to, the message itself has to say WHEN each side printed what, since that is what
+      // separates "the displaced side re-acquired through its probe" from "it never parked and
+      // took an ordinary retry".
+      expect({
+        aPrintedId2: trackA.lines.filter((l) => l.includes(`[glosa ${id2}] `)).length,
+        aTimeline: trackA.stamped,
+        bTimeline: trackB!.stamped,
+      }).toEqual({ aPrintedId2: 0, aTimeline: trackA.stamped, bTimeline: trackB!.stamped });
 
       const id3 = await createEntry("notion");
       expect(await waitUntil(() => trackB!.lines.some((l) => l.includes(`[glosa ${id3}] `)), 8_000)).toBe(true);

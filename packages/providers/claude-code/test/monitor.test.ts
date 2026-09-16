@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SESSION_STREAM_FAILURE_DEADLINE_MS } from "../../../cli/src/daemon-client.ts";
 import { BUILD_ID } from "../../../daemon/src/lifecycle/build-id.ts";
 import { lockPath } from "../../../daemon/src/lifecycle/home.ts";
 import { INSTALL_ID } from "../../../daemon/src/lifecycle/install.ts";
@@ -336,6 +337,20 @@ describe("Claude plugin monitor", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
+  test("the in-flight failure deadline is generous enough for a loaded runner (#206, CI run 35039592341)", () => {
+    // A value pin, not a behaviour test: the behaviour is covered by the barrier test below, which
+    // holds however long the deadline is. What this guards is the NUMBER. At 2s that deadline can
+    // win the race against a `superseded` frame already on its way, which classifies a
+    // displacement as an ordinary error — the strongest code-level explanation for CI run
+    // 35039592341, whose log proves a displaced monitor delivered an entry but records neither
+    // monitor's timeline nor the stream-end classification. Waiting longer costs nothing when a replacement really happened,
+    // because that close ends the read.
+    expect({
+      monitor: STREAM_FAILURE_DEADLINE_MS >= 10_000,
+      client: SESSION_STREAM_FAILURE_DEADLINE_MS >= 10_000,
+    }).toEqual({ monitor: true, client: true });
+  });
+
   test("an in-flight delivery/ack failure does not mask an already-issued superseded frame (barrier, #206)", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-barrier-"));
     const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-barrier-project-")));
@@ -389,7 +404,13 @@ describe("Claude plugin monitor", () => {
       // F-7's separate request-timeout race (`PARK_PROBE_REQUEST_TIMEOUT_MS`) IS a fixed constant,
       // so it's recorded, then also made to never resolve — this fake fetch always answers first.
       sleep: async (ms) => {
-        if (ms <= STREAM_FAILURE_DEADLINE_MS) return new Promise<void>(() => {});
+        // The deadline sleep is the only one whose value is derived from wall-clock `Date.now()`;
+        // every other sleep this loop makes is an exact constant. Discriminating on THAT, rather
+        // than on a magnitude comparison, keeps the test correct however the deadline is tuned —
+        // it used to assume the deadline was the smallest sleep in play, which stopped being true
+        // when the deadline was raised for CI (#206).
+        const scheduled = [PARK_PROBE_BASE_MS, PARK_PROBE_REQUEST_TIMEOUT_MS, MONITOR_MIN_DELAY_MS];
+        if (!scheduled.includes(ms)) return new Promise<void>(() => {});
         sleeps.push(ms);
         if (ms === PARK_PROBE_REQUEST_TIMEOUT_MS) return new Promise<void>(() => {});
         clock += ms;

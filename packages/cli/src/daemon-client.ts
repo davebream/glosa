@@ -68,8 +68,15 @@ export type SessionStreamEnd = { ended: "superseded" | "eof" };
  * still open, `openSessionStream` keeps reading before giving up on seeing a `superseded` frame.
  * Replacement deletes the OLD connection's pending acknowledgement, so a failure right there is the
  * expected shape of a mid-delivery displacement, not a reason to reconnect and re-displace the new
- * owner — but an ordinary failure on a healthy connection must not hang forever either. */
-export const SESSION_STREAM_FAILURE_DEADLINE_MS = 2_000;
+ * owner — but an ordinary failure on a healthy connection must not hang forever either. *
+ * 12 s, not the 2 s this shipped with (and deliberately not 15 s, which would collide with the
+ * park-probe interval and make the two sleeps indistinguishable to a test). CI run 35039592341 saw a
+ * displaced monitor deliver an entry only the owner should have had; its log proves that duplicate
+ * delivery but records neither monitor's timeline nor how the stream end was classified, so this
+ * race is the strongest explanation from the code rather than an observed one. Waiting longer costs nothing in the case this exists for —
+ * replacement closes the stream immediately, so EOF ends the wait — and only delays surfacing a
+ * genuine handling error on a stream that stays healthy. */
+export const SESSION_STREAM_FAILURE_DEADLINE_MS = 12_000;
 
 export interface DaemonClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
