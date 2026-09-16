@@ -251,6 +251,22 @@ const ICONS = {
  * constructs a data-access instance, never reads the workspace list, and never touches the top
  * bar, so a pane is the same component whether it is the only one or one of six.
  */
+let mergeModulePromise = null;
+/** The Keep-mine merge, fetched on demand and remembered.
+ *
+ * NOT a module-scope import: the merge reaches the parser and block aligner in `rich-editor.js`,
+ * which carries the vendored ProseMirror bundle, so importing it eagerly pulls that bundle into
+ * `viewer.js`'s graph and undoes the lazy loading the editor surfaces sit behind
+ * (`import-boundary.test.ts` pins exactly that).
+ *
+ * Warmed when a pane enters Edit, not when Keep mine is clicked. Entering Edit is where a stale
+ * save becomes possible, and it is human time ahead of one — so the conflict dialog never waits on
+ * a fetch at the moment it has something to say. Readers who never edit still never fetch it. */
+function loadMergeModule() {
+  mergeModulePromise ??= import("./merge-markdown.js").then((module) => module.threeWayMerge);
+  return mergeModulePromise;
+}
+
 export function createArtifactPane(host, deps) {
   const {
     dataAccess,
@@ -1371,6 +1387,9 @@ export function createArtifactPane(host, deps) {
     paneEl.setAttribute("data-class", currentArtifact?.class ?? "");
     renderArtifactTools();
     const isEdit = modeState.mode === "edit" && !isClassF;
+    // Entering Edit is where a stale save becomes possible, so start fetching the merge now
+    // rather than when the conflict dialog needs it.
+    if (isEdit) void loadMergeModule();
     if (isEdit && !sourceFace && !richEditor) {
       // #182 R1: a late/first mount fills from the held baseline pair, never from
       // `currentArtifact.content` — an SSE refresh between Edit entry and this mount landing must
@@ -2824,13 +2843,7 @@ export function createArtifactPane(host, deps) {
    * not a separate approximation of it). `pendingSave()` already answers "what would an ordinary
    * save write" for either face; the only thing added here is the disk side and the base. */
   async function keepMineMerge(fresh) {
-    // Imported HERE, not at module scope: `merge-markdown.js` needs the parser and block aligner
-    // from `rich-editor.js`, which carries the vendored ProseMirror bundle. A static import pulls
-    // that whole bundle into `viewer.js`'s eager graph and silently un-does the lazy loading the
-    // editor surfaces are deliberately behind — `import-boundary.test.ts` pins exactly that, and it
-    // caught this. Keep mine is a user action on a stale save, so paying for the bundle at that
-    // moment is right; every reader who never hits one pays nothing.
-    const { threeWayMerge } = await import("./merge-markdown.js");
+    const threeWayMerge = await loadMergeModule();
     const { content: mine, report } = pendingSave();
     const base = await verifiedBaseline();
     return threeWayMerge(base, mine, fresh.content ?? "", report ?? { collateral: [], degraded: false });

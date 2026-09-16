@@ -49,8 +49,15 @@ describe("Edit mode — a save never invents an edit", () => {
     for (let i = 0; i < n; i++) await Promise.resolve();
   };
   const paint = async () => {
-    await flush();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Drains rather than flushing a fixed number of times. The pane fetches the merge module on
+    // demand (it carries the ProseMirror bundle, so it must not be imported eagerly), which adds a
+    // real module-resolution hop to the paths that reach it. Two flushes happened to cover that on
+    // a warm local machine and did not on a loaded CI runner, where the conflict dialog had not
+    // been built yet when the assertion ran. Draining costs nothing when there is nothing pending.
+    for (let i = 0; i < 12; i++) {
+      await flush();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     await flush();
   };
 
