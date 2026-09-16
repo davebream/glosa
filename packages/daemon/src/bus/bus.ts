@@ -18,6 +18,7 @@ import {
   initShadowRepo,
   inspectShadowRepo,
   isAncestorOrEqual,
+  isPathDirty,
   type RepairShadowDeps,
   reclaimIndexLock,
   repairShadowBaseline,
@@ -33,6 +34,7 @@ import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
 import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./journal.ts";
 import {
   APPLY_LEASE_TTL_MS,
+  driftUnderLeaseError,
   isLeaseExpired,
   leaseExpiredError,
   leaseHeldError,
@@ -1290,7 +1292,20 @@ export class WorkspaceBus {
   /** Serializes a glosa editor save/restore with its path-scoped shadow-git checkpoints and the
    * immutable `human_edit` inbox entry derived from the resulting unified diff. Holding the same
    * workspace mutex across before -> mutate -> checkpoint -> diff -> entry creation prevents an
-   * unrelated filesystem change from being folded into this human-attributed edit. */
+   * unrelated filesystem change from being folded into this human-attributed edit.
+   *
+   * #182 R5's honest pre-save boundary: BEFORE `mutate()`, this captures any drift already on
+   * disk for `path` exactly as the watcher's own quiet window would — an `unknown`-attributed
+   * checkpoint plus `external_edit` entries, via the same `captureExternalEditLocked` this
+   * method's public sibling uses — so `before` (this human edit's diff base) already contains
+   * that drift and the diff this commits contains only what `mutate()` itself changed. Without
+   * this, a Keep-mine save that legitimately carries disk's bytes into its own write would still
+   * misattribute those bytes to the human, because `before` was captured too early to have them.
+   *
+   * An active apply lease is the one case this cannot pre-capture honestly (that interval is the
+   * lease's own `resolveEntry`'s to prove, A4 §F05) — refuse rather than fold it into `human`
+   * (`driftUnderLeaseError`) when `path` actually has pending drift; no drift under a lease still
+   * saves exactly as before this existed. */
   captureHumanEdit(
     entryId: string,
     path: string,
@@ -1301,6 +1316,19 @@ export class WorkspaceBus {
       this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      const activeLease = this.state.applyLease;
+      if (activeLease) {
+        if (isLeaseExpired(activeLease, this.nowFn())) {
+          // Same closing-out `applyBegin` already does for a dangling expired lease — nothing
+          // left to refuse over once its own interval is honestly checkpointed as `unknown`.
+          await this.expireLeaseLocked(activeLease);
+          await this.captureExternalEditLocked();
+        } else if (await isPathDirty(this.workspace, path)) {
+          throw driftUnderLeaseError(path, activeLease.leaseId);
+        }
+      } else {
+        await this.captureExternalEditLocked();
+      }
       const before = await headSha(this.workspace);
       mutate();
       const after = await checkpoint(this.workspace, {
@@ -1367,23 +1395,32 @@ export class WorkspaceBus {
 
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-
-      const since = await headSha(this.workspace);
-      const until = await checkpoint(this.workspace, {
-        attribution: "unknown", // A4 §F05: everything the daemon cannot prove, never falsely `human`
-        kind: EXTERNAL_EDIT_CHECKPOINT_KIND,
-      });
-      if (until === since) return { committed: false, suppressed: null, entries: [] };
-
-      const payloads = await externalEditPayloads(this.workspace, since, until, "live", this.nowFn().toISOString());
-      const entries: string[] = [];
-      for (const payload of payloads) {
-        const id = this.ulidFn();
-        this.createEntryLocked(id, payload, { by: "watcher", detail: externalEditDetail(payload) });
-        entries.push(id);
-      }
-      return { committed: true, suppressed: null, entries };
+      return this.captureExternalEditLocked();
     });
+  }
+
+  /** The body of `captureExternalEdit`, minus the mutex acquisition and the lease check —
+   * `captureHumanEdit`'s own pre-save boundary (#182 R5) calls this directly from INSIDE its
+   * already-held critical section (`runExclusive` is not reentrant; a second acquisition of the
+   * same key here would deadlock against itself), after making its own lease decision. Callers
+   * are responsible for `assertWritable`/`reclaimIndexLock`/`initShadowRepo` having already run —
+   * both current callers are already past that point when they reach here. */
+  private async captureExternalEditLocked(): Promise<ExternalEditCapture> {
+    const since = await headSha(this.workspace);
+    const until = await checkpoint(this.workspace, {
+      attribution: "unknown", // A4 §F05: everything the daemon cannot prove, never falsely `human`
+      kind: EXTERNAL_EDIT_CHECKPOINT_KIND,
+    });
+    if (until === since) return { committed: false, suppressed: null, entries: [] };
+
+    const payloads = await externalEditPayloads(this.workspace, since, until, "live", this.nowFn().toISOString());
+    const entries: string[] = [];
+    for (const payload of payloads) {
+      const id = this.ulidFn();
+      this.createEntryLocked(id, payload, { by: "watcher", detail: externalEditDetail(payload) });
+      entries.push(id);
+    }
+    return { committed: true, suppressed: null, entries };
   }
 
   humanEditCheckpoint(kind = "human_edit"): Promise<string> {

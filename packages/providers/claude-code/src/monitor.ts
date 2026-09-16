@@ -25,6 +25,12 @@ export const MONITOR_JITTER_RATIO = 0.2;
  * failure). */
 export const PARK_PROBE_BASE_MS = 15_000;
 export const PARK_PROBE_JITTER_MS = 3_000;
+/** How many consecutive proven-free probes the parked side needs before it resumes (#206
+ * follow-up). One is not enough: it cannot tell a departed owner from an owner reconnecting on the
+ * `MONITOR_MIN_DELAY_MS` floor, and treating that gap as freedom is what let both monitors resume
+ * and print. Two, a full park interval apart, is the smallest count that outlives an ordinary
+ * reconnect. */
+export const PARK_FREE_PROBES_REQUIRED = 2;
 
 export function parkProbeDelay(random: () => number = Math.random): number {
   return PARK_PROBE_BASE_MS + Math.floor(PARK_PROBE_JITTER_MS * random());
@@ -364,12 +370,30 @@ async function probeStreamConnected(
  * contract's interval instead of drifting by however long each request happened to take. */
 async function parkUntilFree(sessionId: string, deps: MonitorDeps, signal: AbortSignal): Promise<void> {
   let dueAt = deps.now();
+  let freeProbes = 0;
   while (!signal.aborted) {
     dueAt += parkProbeDelay(deps.random);
     await deps.sleep(Math.max(0, dueAt - deps.now()), signal);
     if (signal.aborted) return;
     const connected = await probeStreamConnected(sessionId, deps, signal);
-    if (connected === false) return;
+    // A single `connected:false` does not mean the session is free — it can equally be the OWNER
+    // between two connections. The owner's ordinary retry floor is `MONITOR_MIN_DELAY_MS` (5s),
+    // well inside one park interval (15–18s), so a probe landing in that gap would hand ownership
+    // to the parked side and leave both processes printing. That is the failure this guard exists
+    // for: two real monitors both resumed at ~16s and ~17.5s, each reprinting the same entry.
+    //
+    // Requiring TWO consecutive proven `false` probes, a full interval apart, means an owner doing
+    // an ordinary reconnect is back before the second one. A genuinely departed owner costs one
+    // extra interval before the parked side takes over — latency on a fallback path, against a
+    // correctness bug on the main one.
+    if (connected === false) {
+      freeProbes += 1;
+      if (freeProbes >= PARK_FREE_PROBES_REQUIRED) return;
+      continue;
+    }
+    // Anything else — connected, or inconclusive — restarts the count. An inconclusive probe is not
+    // evidence of freedom, so it must not carry a previous `false` forward.
+    freeProbes = 0;
   }
 }
 

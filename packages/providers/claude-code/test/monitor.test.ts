@@ -320,11 +320,13 @@ describe("Claude plugin monitor", () => {
       // a register/stream call WHILE parked, and never an ordinary retry sleep for a superseded end.
       registerCalls: 2,
       streamCalls: 2,
-      statusCalls: 2,
+      statusCalls: 3,
       // Each probe's own request-timeout race sleep (`PARK_PROBE_REQUEST_TIMEOUT_MS`) is invoked
       // once per probe too, alongside the interval sleep that precedes it — it never actually wins
       // here because this fake fetch always answers before it (see the `sleep` mock above).
       sleeps: [
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
@@ -422,15 +424,78 @@ describe("Claude plugin monitor", () => {
 
     expect({ registerCalls, streamCalls, ackCalls, statusCalls, sleeps }).toEqual({
       // The delivery line was written and the ack was attempted (and failed) BEFORE the superseded
-      // frame — precedence still classifies the end as superseded: one park-probe sleep (never a
-      // 5s ordinary retry), then exactly one reconnect once the probe reports free.
+      // frame — precedence still classifies the end as superseded: park-probe sleeps (never a 5s
+      // ordinary retry), then exactly one reconnect once TWO consecutive probes report free
+      // (`PARK_FREE_PROBES_REQUIRED`).
       registerCalls: 2,
       streamCalls: 2,
       ackCalls: 1,
-      statusCalls: 1,
-      sleeps: [PARK_PROBE_BASE_MS, PARK_PROBE_REQUEST_TIMEOUT_MS, MONITOR_MIN_DELAY_MS],
+      statusCalls: 2,
+      sleeps: [
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
+        MONITOR_MIN_DELAY_MS,
+      ],
     });
     expect(writes).toEqual([`[glosa ${ENTRY.id}] ${JSON.stringify(ENTRY)}\n`]);
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  test("a single free probe does not free a parked client — the owner reconnecting looks exactly like that (#206 follow-up)", async () => {
+    // The defect this pins, observed on CI with two real monitor processes: both sides resumed at
+    // ~16s and ~17.5s and each reprinted the same entry. The owner's ordinary retry floor is
+    // `MONITOR_MIN_DELAY_MS` (5s), well inside one park interval, so a probe landing in the owner's
+    // reconnect gap sees `connected:false` and — before this guard — handed ownership straight back
+    // to the parked side. A free probe followed by a connected one must leave it parked.
+    const home = mkdtempSync(join(tmpdir(), "glosa-monitor-tiebreak-"));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-tiebreak-project-")));
+    seedWorkspace(home, project);
+    const daemon = seedFakeDaemon(home);
+    withFakeGlobalFetch(daemon);
+    const abort = new AbortController();
+    let registerCalls = 0;
+    let streamCalls = 0;
+    let statusCalls = 0;
+    let clock = 0;
+    const deps: MonitorDeps = {
+      home: () => home,
+      fetch: (async (input: string | URL | Request) => {
+        const href = String(input);
+        if (href.endsWith("/api/handshake")) return new Response("{}", { status: 200 });
+        if (href.includes("/api/sessions/register")) {
+          registerCalls += 1;
+          return new Response(JSON.stringify({ session_id: "session-1", workspace: project }), { status: 200 });
+        }
+        if (href.includes("/stream/status")) {
+          statusCalls += 1;
+          // free, then the owner is back, then free twice — only the last pair may resume.
+          const connected = statusCalls === 2;
+          return new Response(JSON.stringify({ connected, transport: connected ? "monitor" : null }), { status: 200 });
+        }
+        if (href.includes("/stream")) {
+          streamCalls += 1;
+          if (streamCalls > 1) abort.abort();
+          return streamResponse([sseFrame("superseded", { transport: "monitor" })]);
+        }
+        throw new Error(`unexpected fetch ${href}`);
+      }) as unknown as typeof fetch,
+      stdout: { write: (_chunk, callback) => callback() },
+      random: () => 0,
+      sleep: async (ms) => {
+        if (ms === PARK_PROBE_REQUEST_TIMEOUT_MS) return new Promise<void>(() => {});
+        clock += ms;
+      },
+      waitForWorkspaceChange: async () => {},
+      now: () => clock,
+    };
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+
+    // Four probes before the reconnect: free, CONNECTED (which resets the count), then two free.
+    // With a one-probe rule the reconnect would have happened after the first, at `statusCalls: 1`.
+    expect({ statusCalls, streamCalls }).toEqual({ statusCalls: 4, streamCalls: 2 });
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });
   });
@@ -503,8 +568,10 @@ describe("Claude plugin monitor", () => {
       // and exactly one more connect once the seventh probe reports a literal `connected:false`.
       registerCalls: 2,
       streamCalls: 2,
-      statusCalls: 7,
+      statusCalls: 8,
       sleeps: [
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
@@ -586,8 +653,10 @@ describe("Claude plugin monitor", () => {
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       registerCalls: 2,
       streamCalls: 2,
-      statusCalls: 1,
+      statusCalls: 2,
       sleeps: [
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
@@ -671,8 +740,10 @@ describe("Claude plugin monitor", () => {
       // cycle's actually resolves via that leg.
       registerCalls: 2,
       streamCalls: 2,
-      statusCalls: 2,
+      statusCalls: 3,
       sleeps: [
+        PARK_PROBE_BASE_MS,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS,
@@ -740,7 +811,7 @@ describe("Claude plugin monitor", () => {
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       registerCalls: 2,
       streamCalls: 2,
-      statusCalls: 2,
+      statusCalls: 3,
       // The first interval sleep is the full base delay; the first probe itself then "takes"
       // ELAPSED_DURING_PROBE, so the SECOND interval sleep is shortened by exactly that much —
       // proving the next probe is scheduled from an absolute cadence anchored to the previous
@@ -749,6 +820,8 @@ describe("Claude plugin monitor", () => {
         PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         PARK_PROBE_BASE_MS - ELAPSED_DURING_PROBE,
+        PARK_PROBE_REQUEST_TIMEOUT_MS,
+        PARK_PROBE_BASE_MS,
         PARK_PROBE_REQUEST_TIMEOUT_MS,
         MONITOR_MIN_DELAY_MS,
       ],

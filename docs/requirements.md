@@ -310,8 +310,12 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   split again from the file afterwards. Where re-serializing an edited block would still change
   bytes the writer did not touch, glosa shows that collateral and asks before writing, never
   silently. Human edits in glosa → attributed `human` by construction. A save is refused when the file moved
-  under the draft since it was opened, rather than silently overwritten, and the writer chooses: keep
-  the edit, take the disk version, or compare first. **Non-manuscript regions** — a leading document
+  under the draft since it was opened, rather than silently overwritten, and the writer chooses: **keep
+  mine** (a three-way merge — the version the writer opened, the writer's own edit, and disk's current
+  version — previewed first and written only on that explicit choice; a block only the writer touched
+  keeps the writer's bytes, a block only disk touched keeps disk's bytes, and a block both touched is a
+  conflict the writer's version wins, listed in the preview so that choice is informed), take the disk
+  version, or compare first. **Non-manuscript regions** — a leading document
   metadata header and paired `%%` authoring comments — are hidden in Read/Review and excluded from
   outline headings. Inline pairs stay within one CommonMark inline block; own-line pairs may span
   multiple lines within their container. Escaped/unmatched delimiters and markers in code remain
@@ -467,7 +471,9 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
   reconnect loses no events; a concurrent writer's change on disk is never silently overwritten by
-  a stale save.
+  a stale save — a merge is written only on the writer's explicit Keep mine, never automatically, and
+  what it cannot carry (a conflicting block, or a conflicting source region between or around blocks)
+  is named in the preview rather than dropped silently.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
   the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5

@@ -47,6 +47,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Keep mine on a stale save now merges the writer's edit with disk's own change instead of
+  discarding whichever one the writer did not directly touch: a region only the writer edited keeps
+  the writer's bytes, a region only disk changed keeps disk's bytes, and a region both changed
+  differently is a conflict the writer's version wins, named in the stale-save preview before the
+  write happens. A region is a block, the source between two blocks, or the source above the first
+  and below the last, so a link-reference definition or a deliberate blank-line run is preserved
+  like any other content; anything that cannot be carried is reported rather than dropped quietly. The preview no longer needs a checkpoint to exist. The source face's Keep mine
+  runs the same merge instead of writing the whole textarea over disk's version. The daemon's save
+  route now checkpoints any pending disk drift before writing the human's own edit, so that edit's
+  recorded diff never absorbs bytes the human did not write. (#182)
 - Document links now switch an existing tab to the requested file and surface, including browser
   back/forward navigation. Unsaved editor changes require discard confirmation; cancelling keeps
   the draft and current URL. Document visits preserve the saved workspace tab layout. (#145)

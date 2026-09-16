@@ -1022,7 +1022,7 @@ const MAX_IDENTITY_WORK = 1_000_000;
  * and maximum one-to-one moved completion. Distinct-node moves have one global assignment even
  * when several LCS paths describe them. Duplicate classes need exhaustive proof, within a fixed
  * state/signature work budget; an unfinished proof is never permission to copy source bytes. */
-function pairUnchangedBlocks(original, edited) {
+export function pairUnchangedBlocks(original, edited) {
   const n = original.length;
   const m = edited.length;
   if ((n + 1) * (m + 1) > MAX_RESTORE_CELLS) return null;

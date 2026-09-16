@@ -363,6 +363,106 @@ describe("A5 — glosa's own writes never come back as external", () => {
   });
 });
 
+describe("#182 R5 — captureHumanEdit's own honest pre-save boundary", () => {
+  test("ONE artifact, two blocks: disk changes block B, then a Keep-mine-style save carries B through while only editing block A — the external entry names B, the human entry names A and not B", async () => {
+    // R5's whole reason to exist is a SAME-FILE contamination: a Keep-mine save's own WRITE
+    // legitimately carries disk's block B bytes into its content (that is what the merge does),
+    // so a naive `before`/`after` diff over that one file would show BOTH blocks as "what the
+    // human changed" unless the drift is checkpointed first. Two separate files could never show
+    // this — `captureHumanEdit`'s checkpoint is already scoped to `paths:[path]`, so a change to
+    // a DIFFERENT file could never reach THIS file's diff regardless of pre-capture, which is
+    // exactly why an earlier version of this test (two files, a.md/b.md) could not observe the
+    // defect it claimed to guard: its ablation went red because the external_edit entry vanished,
+    // not because disk bytes actually leaked into the human diff.
+    const root = workspace();
+    writeFile(root, "doc.md", "Block A original.\n\nBlock B original.\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    // B changes on disk — nothing glosa did, and the watcher's quiet window hasn't fired yet.
+    writeFileSync(join(root, "doc.md"), "Block A original.\n\nBlock B changed on disk.\n");
+
+    // The Keep-mine-style save: its OWN write already carries B's disk bytes through (exactly
+    // what a real three-way merge produces), while only A is the writer's own edit. Without R5's
+    // pre-capture, `before` predates B's drift, so the diff this commits would show BOTH blocks
+    // as human-attributed. With it, B's drift is checkpointed `unknown` first, and the diff this
+    // commits shows only A.
+    await bus.captureHumanEdit("edit-a", "doc.md", () => {
+      writeFileSync(join(root, "doc.md"), "Block A EDITED BY WRITER.\n\nBlock B changed on disk.\n");
+    });
+
+    // Checked FIRST, and independent of whether the external entry exists at all: the ablation
+    // this test guards against (no pre-capture) still produces a `human_edit` — it is what THAT
+    // entry's own diff contains which must go red, not merely whether a sibling entry was made.
+    const entries = entriesOf(bus);
+    const humanEdit = entries.find((entry) => entry.payload.kind === "human_edit")!;
+    const files = humanEdit.payload.files as Array<{ path: string; diff: string }>;
+    expect(files).toHaveLength(1);
+    expect(files[0]!.path).toBe("doc.md");
+    expect(files[0]!.diff).toContain("+Block A EDITED BY WRITER.");
+    // THE ASSERTION THE WHOLE MECHANISM EXISTS FOR: B's disk-only bytes appear in this diff only
+    // as bare, unmarked CONTEXT (proving `before` already had them, checkpointed ahead of the
+    // human write) — never with a `+`/`-` change marker, which is what the ablation flips.
+    expect(files[0]!.diff).not.toMatch(/^[+-]Block B changed on disk\.$/m);
+    expect(files[0]!.diff).toContain("\n Block B changed on disk.\n");
+    expect(await trailer(root, humanEdit.payload.checkpoint_after as string, "Glosa-Attribution")).toBe("human");
+
+    // Only now the sibling entry: the drift got its own honest, separately-attributed record.
+    expect(kindsOf(bus)).toEqual([EXTERNAL_EDIT_KIND, "human_edit"].sort());
+    const externalEdit = entries.find((entry) => entry.payload.kind === EXTERNAL_EDIT_KIND)!;
+    expect(externalEdit.payload.path).toBe("doc.md");
+    expect(String(externalEdit.payload.diff)).toContain("+Block B changed on disk.");
+    expect(String(externalEdit.payload.diff)).not.toContain("EDITED BY WRITER");
+    expect(externalEdit.payload.source).toBe("live");
+
+    // The watcher's own quiet window, right after, finds nothing left uncaptured.
+    const watcher = await bus.captureExternalEdit();
+    expect(watcher.committed).toBe(false);
+    await bus.close();
+  });
+
+  test("no drift under an active apply lease — unchanged behaviour, still human, still no refusal", async () => {
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
+    await bus.applyBegin("ann-1", "sess-1");
+
+    await bus.captureHumanEdit("edit-1", "notes.md", () => {
+      writeFileSync(join(root, "notes.md"), "one\nreviewer typed this\n");
+    });
+
+    expect(kindsOf(bus)).toEqual(["annotation", "human_edit"]);
+    await bus.close();
+  });
+
+  test("drift on the exact path under an active apply lease is refused, not attributed to the human", async () => {
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
+    await bus.applyBegin("ann-1", "sess-1");
+
+    // Drift on THIS path while the lease is held — that interval belongs to the lease's own
+    // resolveEntry, not to a save that happens to arrive while it is open.
+    writeFileSync(join(root, "notes.md"), "one\nsomething changed under the lease\n");
+
+    await expect(
+      bus.captureHumanEdit("edit-1", "notes.md", () => {
+        writeFileSync(join(root, "notes.md"), "one\nreviewer typed this\n");
+      }),
+    ).rejects.toMatchObject({ code: "DRIFT_UNDER_LEASE" });
+
+    // Refused, not written: the file still carries the drift, no human_edit exists, and the
+    // drift itself was never folded into a false `human` attribution.
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("one\nsomething changed under the lease\n");
+    expect(kindsOf(bus)).toEqual(["annotation"]);
+    await bus.close();
+  });
+});
+
 describe("A7 — the checkpoint -> entry gap is recoverable", () => {
   test("the scan reads real Glosa-Kind trailers: a human_edit commit in the same unreported range is not swept up", async () => {
     // The recovery walks a commit RANGE, so everything glosa itself committed in that range is in
