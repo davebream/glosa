@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { CAPABILITY_TTL_MS } from "../security/capability.ts";
+import { CLASSF_HOSTNAME } from "../security/hosts.ts";
 import {
   type ArtifactDependencies,
   ArtifactError,
@@ -331,7 +332,7 @@ function mint(deps: ArtifactRouteDependencies, slug: string, artifactPath: strin
   try {
     const minted = mintArtifactCapability(deps, slug, artifactPath);
     return Response.json({
-      url: `http://127.0.0.1:${deps.classFPort}/doc/${minted.token}/${minted.artifactBasename}`,
+      url: `http://${CLASSF_HOSTNAME}:${deps.classFPort}/doc/${minted.token}/${minted.artifactBasename}`,
       nonce: minted.nonce,
       expires_in_s: CAPABILITY_TTL_MS / 1000,
     });

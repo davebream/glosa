@@ -46,6 +46,7 @@ import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
+import { CLASSF_HOSTNAME, isAllowedHost, SPA_HOSTNAMES } from "../security/hosts.ts";
 import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "../security/presentation-token.ts";
 import type { TokenSource } from "../security/token.ts";
 import {
@@ -257,8 +258,8 @@ export interface HandshakeBody {
   started_at: string;
 }
 
-function checkHost(req: Request, port: number): boolean {
-  return req.headers.get("Host") === `127.0.0.1:${port}`;
+function checkHost(req: Request, port: number, hostnames: readonly string[]): boolean {
+  return isAllowedHost(req.headers.get("Host"), port, hostnames);
 }
 
 /** Why a request was refused, at the coarsest granularity that still answers "was the tab holding a
@@ -2710,8 +2711,8 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
       const url = new URL(req.url);
 
       // Host check runs first, unconditionally, before route lookup even knows a route class
-      // exists (A3 §4 Rule 1). Literal mismatch → 400, closed, no body — never 403.
-      if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
+      // exists (A3 §4 Rule 1). Not one of the allowlisted literals → 400, closed, no body — never 403.
+      if (!checkHost(req, ctx.port, SPA_HOSTNAMES)) return new Response(null, { status: 400 });
 
       const route = matchApiRoute(ctx, req, url.pathname);
       if (!route) {
@@ -2822,7 +2823,7 @@ export function createClassFFetch(ctx: {
 
   return async (req) => {
     try {
-      if (!checkHost(req, ctx.port)) return new Response(null, { status: 400 });
+      if (!checkHost(req, ctx.port, [CLASSF_HOSTNAME])) return new Response(null, { status: 400 });
 
       // Refresh before capability lookup. TokenAuthority's generation subscriber clears the
       // shared store, so a rotate/revoke invalidates already-minted iframe URLs too.

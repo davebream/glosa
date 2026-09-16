@@ -250,7 +250,7 @@ workspace remain local, durable, and honestly attributable across many artifacts
 
 ## Local by design
 
-- glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)).
+- glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API at `http://glosa.localhost:4646`, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)). Browsers and macOS answer `.localhost` names on your machine without a DNS lookup. Set `GLOSA_OPEN_HOST=127.0.0.1` to get `http://127.0.0.1:4646` links instead; the daemon accepts both.
 - glosa has no telemetry, cloud sync, or external runtime calls. Your agent may still send content to its own provider under that tool's terms.
 - Versions live in a shadow repository glosa keeps for itself: in the workspace's `.glosa/` folder, or under `~/.glosa/state/` when it does not sit beside your files, for example for a single file opened on its own, a folder you cannot write to, or a folder opened with `glosa open --external-state`. glosa never assumes or modifies your real Git repository. Nothing in that history expires and individual versions cannot be deleted; `glosa forget <slug>` deletes a workspace's entire history and leaves your files alone.
 - Provenance is conservative: edits are attributed to a session only when an apply lease proves it; everything else is `human` or `unknown`, never guessed. A change glosa merely finds on disk is reported as an external edit, never as one you made.

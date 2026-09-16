@@ -224,7 +224,7 @@ export type ForgetWorkspaceResult =
   | { slug: string; requested_slug?: string; confirmed: true; removed: ForgetBusEntry[] };
 
 /** The interface every P5.1 command depends on. `port` is exposed (rather than kept private)
- * because `glosa open` needs it to build the `http://127.0.0.1:<port>/#t=<token>` pairing URL —
+ * because `glosa open` needs it to build the `http://glosa.localhost:<port>/#t=<token>` pairing URL —
  * without this, `runOpen` would have to re-run `ensureDaemon()` itself just to rediscover a port
  * this client already resolved a moment earlier. */
 export interface OpenWorkspaceResult {

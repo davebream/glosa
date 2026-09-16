@@ -3,11 +3,13 @@
 // through the CLI wrapper; these assertions pin the shared classification and ephemeral-token URL
 // contract that `glosa_present` relies on.
 import { describe, expect, test } from "bun:test";
+import { SPA_HOSTNAMES } from "../../daemon/src/security/hosts.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import {
   buildPresentationUrl,
   classifyOpenTarget,
   type OpenPresentationDeps,
+  presentationHostname,
   runOpenPresentation,
 } from "../src/open-presentation.ts";
 import { FakeGlosaApiClient } from "./fake-api-client.ts";
@@ -41,7 +43,7 @@ describe("open-presentation shared contract", () => {
     );
     const params = new URLSearchParams(url.hash.slice(1));
 
-    expect(url.origin).toBe("http://127.0.0.1:4646");
+    expect(url.origin).toBe("http://glosa.localhost:4646");
     expect(params.get("p")).toBe("ephemeral-secret");
     expect(params.has("t")).toBe(false);
     expect(Object.fromEntries(params)).toEqual({
@@ -97,5 +99,21 @@ describe("open-presentation shared contract", () => {
     expect(result.data.url).not.toContain("t=");
     expect(result.data.url).not.toContain("durable-token-must-not-leak");
     expect(result.data).toMatchObject({ surface: "document", mode: "read", preview: true });
+  });
+});
+
+describe("presentation hostname (#159)", () => {
+  test("glosa.localhost by default; GLOSA_OPEN_HOST=127.0.0.1 is the only override", () => {
+    expect(presentationHostname({})).toBe("glosa.localhost");
+    expect(presentationHostname({ GLOSA_OPEN_HOST: "127.0.0.1" })).toBe("127.0.0.1");
+    // Anything else would be a Host the daemon answers with a 400, so it is not honoured.
+    expect(presentationHostname({ GLOSA_OPEN_HOST: "evil.example" })).toBe("glosa.localhost");
+    expect(presentationHostname({ GLOSA_OPEN_HOST: "localhost" })).toBe("glosa.localhost");
+  });
+
+  test("every hostname glosa open can link to is on the daemon's Host allowlist", () => {
+    for (const env of [{}, { GLOSA_OPEN_HOST: "127.0.0.1" }]) {
+      expect(SPA_HOSTNAMES as readonly string[]).toContain(presentationHostname(env));
+    }
   });
 });

@@ -4,7 +4,7 @@ Threat model: other local/remote websites reachable by the user's browser (drive
 iframe/tab, DNS rebinding) — NOT another OS-user process.
 
 ## 0. Topology — two fixed listeners, one daemon
-- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Origin `http://127.0.0.1:4646`.
+- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Two origins, one listener: `http://glosa.localhost:4646` (what `glosa open` links to) and `http://127.0.0.1:4646` (what the CLI, plugin monitor and `GLOSA_OPEN_HOST=127.0.0.1` use). sessionStorage is per origin, so a tab on one name does not see a pairing made on the other; `glosa open` re-pairs through the fragment either way.
 - `GLOSA_CLASSF_PORT` = GLOSA_PORT+1 (default 4647) — class-F foreign HTML only. Origin `http://127.0.0.1:4647`.
 - Two ports ≠ two daemons: one process/lock/lifecycle; two ports = two real origins (scheme+host+port).
 
@@ -13,11 +13,11 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Mint on SPA origin: `POST /w/:slug/capability/:artifactPath` (Bearer + path-confined). Fresh capability per iframe open/reload; never reused.
 - Capability: 256-bit, in-memory `Map<capability,{workspace,artifactRealPath,mintedAt}>`, NOT persisted (restart invalidates — fine). TTL 10 min; expired → 404 (no ambient auth on this origin). One capability scopes one artifact's dir (sibling assets resolve under same capability + realpath check per request).
 - CSP on EVERY class-F response:
-  `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self' http://127.0.0.1:<SPA_PORT>; base-uri 'none'; object-src 'none'; sandbox allow-scripts;` + `Referrer-Policy: no-referrer`.
+  `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self' http://127.0.0.1:<SPA_PORT> http://glosa.localhost:<SPA_PORT>; base-uri 'none'; object-src 'none'; sandbox allow-scripts;` + `Referrer-Policy: no-referrer`.
   - `script-src 'self' 'unsafe-inline'` lets the artifact's inline `<script>` run; no eval, no third-party host.
   - `connect-src 'none' + form-action 'none'` = network lockdown → reconciles "doc JS runs untouched" with "no external calls."
   - **`sandbox allow-scripts` in the CSP header (not just iframe attr)** = the top-level-open fix: applies under ANY load context incl. bare tab; omitting allow-same-origin/popups/top-navigation/forms/modals → every load gets fresh OPAQUE origin. Nothing sensitive lives on this port anyway (token is on SPA port).
-  - `frame-ancestors` → only the glosa SPA may embed it.
+  - `frame-ancestors` → only the glosa SPA may embed it, under either of its two names. The class-F origin itself stays `http://127.0.0.1:<CLASSF_PORT>`: capability URLs are minted against the IP, and its Host allowlist is the IP alone (§4 Rule 1). Framed from `glosa.localhost`, the viewer is cross-site to its parent; nothing depends on that, because the frame is already an opaque sandboxed origin with no storage or network.
 
 ## 2. F18 — iframe sandbox + postMessage bridge trust
 - `<iframe src="<mint url>" sandbox="allow-scripts" referrerpolicy="no-referrer">` — no allow-same-origin + src (not srcdoc) → opaque origin → `event.origin` is `"null"`, so origin checks are useless; use three orthogonal checks:
@@ -75,12 +75,15 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Both token commands use the stable A6 envelope and never include token material in human or JSON
   output. The daemon stats the token file on refresh and warns once per observed permission drift;
   drift is non-fatal so the warning cannot lock the user out of rotation/revocation.
-- SPA-origin CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. (SPA refuses to ever be framed.)
+- SPA-origin CSP (the same string under both SPA hostnames; `'self'` follows whichever the tab loaded): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. (SPA refuses to ever be framed.)
 - Log redaction: one `redact()` at logger boundary — strip `Authorization` values; regex-redact token/capability-shaped path segments `[A-Za-z0-9_-]{32,}`. Grep-enforceable single call site.
 - **confinePath(workspaceRoot, relPath)**: reject absolute or `..`-containing; `path.resolve`; realpath the nearest EXISTING ancestor (so not-yet-created files still confined); reject if realAncestor not under realRoot. ONE shared utility at every path entry point (HTTP routes, class-F mint/serve, adapter manifest, git pathspec); grep-enforced in CI. Rejects lexical traversal AND symlink escape. Argv safety: git paths as discrete argv elements + `--` before first path → filename `--force` can't be a flag.
 
 ## 4. Host/Origin/Auth resolved table
-- Rule 1 (every request, both ports): `Host` MUST literally equal `127.0.0.1:<port>` (no DNS names ever → strongest anti-rebinding: no hostname to re-resolve). Mismatch → 400, close, no body.
+- Rule 1 (every request, both ports): `Host` MUST literally equal one allowlisted name + port. SPA/API port: `127.0.0.1:<port>` or `glosa.localhost:<port>`. Class-F port: `127.0.0.1:<port>` only. No case folding, trailing dot, subdomain or other `.localhost` name. Mismatch → 400, close, no body.
+  - Why a name is allowed at all (#159): rebinding needs a hostname an attacker can answer for — first with their own server, then with `127.0.0.1`. Nobody can answer for `glosa.localhost`. RFC 6761 reserves `.localhost` for loopback; Chrome and Firefox resolve it internally, and the macOS system resolver (used by Safari) synthesizes the answer without a query. Verified on macOS 26.2: `dns-sd -G v4v6 glosa.localhost` answers `localhost.` → `127.0.0.1` / `::1` with interface `-1` (local-only) and TTL 1, and `/etc/hosts` cannot produce that (it does not support wildcards). A page on any other name, including one rebound to loopback, still arrives with its own name as `Host` and gets the 400.
+  - Why not a public domain pointing at `127.0.0.1` (the `*.plex.direct` pattern): that name is resolved by an outside DNS server that can change its answer, which re-opens rebinding; and each resolution is an outbound query, which invariant 5 / A6 §F33 forbid.
+  - Origin is bound to Host: on the SPA port, "self" is `http://<the request's own Host>`, not "any allowlisted origin". A page on one name cannot act on a request addressed to the other.
 - Given Host passes, on SPA origin:
   | Route class | Bearer | Origin rule |
   |---|---|---|
@@ -100,6 +103,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 6. Injected HTML (name/md/annotation/transcript/tool_result) → contextual escaping + script-src 'self' → test: `<script>` payloads render escaped in class R, class-F overlays, conversation mirror.
 7. Local site navigates/frames class-F/handshake → Host literal + Origin table + frame-ancestors → test: foreign origin (a) top-nav handshake non-sensitive + state routes reject, (b) no-Bearer GET → 401, (c) iframe class-F → blocked by frame-ancestors, (d) iframe SPA → blocked.
 8. Fragment token in history/localStorage → replaceState + sessionStorage + rotate/revoke → test: hash empty, no history `t=`, token in sessionStorage not localStorage, revoke → old Bearer 401.
+9. DNS rebinding against the second SPA hostname (#159) → literal two-name allowlist + Origin bound to Host + class-F IP-only → test: near-miss Hosts (`GLOSA.localhost`, `glosa.localhost.`, `evil.glosa.localhost`, `localhost`, missing port, class-F port) → 400 no body; `glosa.localhost` Host with a `127.0.0.1` Origin (and the reverse) → 403; `glosa.localhost` Host on class-F → 400; class-F `frame-ancestors` names the SPA under both hostnames and nothing else.
 
 ### Explicit shadow repair (#226)
 

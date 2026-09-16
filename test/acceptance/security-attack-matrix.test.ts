@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 release gate — "browser security: the A3 §5 attacks"). docs/appendices/A3-security.md
-// §5 names 8 specific attacks with named defenses; each already has scattered per-mechanism unit
+// §5 names 9 specific attacks with named defenses; each already has scattered per-mechanism unit
 // tests across packages/daemon/test/{auth,csp,confine-path,classf-bridge,classf-serve,token,
 // classf-listener,http}.test.ts and packages/spa/test/{classf-viewer,bootstrap}.test.ts — real and
 // individually solid, but no single place lets a reviewer see "is the FULL attack matrix covered"
@@ -20,6 +20,7 @@ import { authorizeRequest, isForeignOrigin } from "../../packages/daemon/src/sec
 import { bridgeShouldAcceptInit } from "../../packages/daemon/src/security/classf-bridge.ts";
 import { confinePath } from "../../packages/daemon/src/security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../../packages/daemon/src/security/csp.ts";
+import { CLASSF_HOSTNAME, isAllowedHost, SPA_HOSTNAMES } from "../../packages/daemon/src/security/hosts.ts";
 import { scrubSecrets } from "../../packages/spa/src/bootstrap.js";
 import {
   checkEventSource,
@@ -287,12 +288,57 @@ describe("A3 §5 attack #7 — foreign-site navigation/framing", () => {
   });
 
   test("isForeignOrigin correctly distinguishes self vs foreign vs absent", () => {
-    const self = new Request(`http://127.0.0.1:${SPA_PORT}/x`, { headers: { Origin: `http://127.0.0.1:${SPA_PORT}` } });
-    const foreign = new Request(`http://127.0.0.1:${SPA_PORT}/x`, { headers: { Origin: "http://127.0.0.1:9999" } });
-    const absent = new Request(`http://127.0.0.1:${SPA_PORT}/x`);
+    const host = `127.0.0.1:${SPA_PORT}`;
+    const self = new Request(`http://127.0.0.1:${SPA_PORT}/x`, {
+      headers: { Host: host, Origin: `http://127.0.0.1:${SPA_PORT}` },
+    });
+    const foreign = new Request(`http://127.0.0.1:${SPA_PORT}/x`, {
+      headers: { Host: host, Origin: "http://127.0.0.1:9999" },
+    });
+    const absent = new Request(`http://127.0.0.1:${SPA_PORT}/x`, { headers: { Host: host } });
     expect(isForeignOrigin(self, SPA_PORT)).toBe(false);
     expect(isForeignOrigin(foreign, SPA_PORT)).toBe(true);
     expect(isForeignOrigin(absent, SPA_PORT)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// #9 — DNS rebinding against the second allowlisted Host (#159)
+// (real-socket proof of the literal allowlist and Origin-to-Host binding:
+// packages/daemon/test/http.test.ts, classf-listener.test.ts)
+// ---------------------------------------------------------------------------------------------
+describe("A3 §5 attack #9 — DNS rebinding with glosa.localhost in the Host allowlist", () => {
+  test("the allowlist is exactly two literals on the SPA port and the IP alone on class-F", () => {
+    expect([...SPA_HOSTNAMES]).toEqual(["127.0.0.1", "glosa.localhost"]);
+    expect(CLASSF_HOSTNAME).toBe("127.0.0.1");
+    // A rebinding page's own name reaches the daemon as its Host — never on the list.
+    for (const host of [
+      "evil.example:4646",
+      "evil.localhost:4646",
+      "x.glosa.localhost:4646",
+      "glosa.localhost.:4646",
+    ]) {
+      expect(isAllowedHost(host, SPA_PORT, SPA_HOSTNAMES)).toBe(false);
+    }
+    expect(isAllowedHost(`glosa.localhost:${SPA_PORT}`, SPA_PORT, SPA_HOSTNAMES)).toBe(true);
+    expect(isAllowedHost(`glosa.localhost:${CLASSF_PORT}`, CLASSF_PORT, [CLASSF_HOSTNAME])).toBe(false);
+  });
+
+  test("Origin is bound to the request's own Host: neither allowlisted name can act for the other", () => {
+    const crossed = new Request(`http://127.0.0.1:${SPA_PORT}/x`, {
+      headers: { Host: `glosa.localhost:${SPA_PORT}`, Origin: `http://127.0.0.1:${SPA_PORT}` },
+    });
+    expect(isForeignOrigin(crossed, SPA_PORT)).toBe(true);
+    expect(authorizeRequest(crossed, { routeClass: "presentation-redeem", port: SPA_PORT, token: "t" })).toEqual({
+      ok: false,
+      status: 403,
+      slug: "invalid-origin",
+    });
+  });
+
+  test("the class-F frame accepts the SPA under both names and nobody else", () => {
+    const csp = classFCspHeaders(SPA_PORT)["Content-Security-Policy"];
+    expect(csp).toContain(`frame-ancestors 'self' http://127.0.0.1:${SPA_PORT} http://glosa.localhost:${SPA_PORT};`);
   });
 });
 

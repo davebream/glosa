@@ -96,6 +96,11 @@ describe("class-F listener — real socket", () => {
     expect(res.status).toBe(400);
   });
 
+  test("class-F stays on the IP: the SPA's second hostname is a Host mismatch here (#159)", async () => {
+    const res = await fetch(classFUrl("/doc/whatever/x.html"), { headers: { Host: `glosa.localhost:${classFPort}` } });
+    expect(res.status).toBe(400);
+  });
+
   test("[A3 §5 #1/#2] the class-F CSP header matches the A3 §1 spec string VERBATIM", async () => {
     writeFileSync(join(root, "notes.html"), "<html><body>hi</body></html>");
     const { url } = await mint("notes.html");
@@ -104,7 +109,7 @@ describe("class-F listener — real socket", () => {
     const expected =
       "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; " +
-      `frame-ancestors 'self' http://127.0.0.1:${API_PORT}; base-uri 'none'; object-src 'none'; ` +
+      `frame-ancestors 'self' http://127.0.0.1:${API_PORT} http://glosa.localhost:${API_PORT}; base-uri 'none'; object-src 'none'; ` +
       "sandbox allow-scripts;";
     expect(res.headers.get("Content-Security-Policy")).toBe(expected);
     expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");

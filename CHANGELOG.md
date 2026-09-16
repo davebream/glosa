@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `glosa open` and `glosa_present` now link to `http://glosa.localhost:4646` instead of
+  `http://127.0.0.1:4646`. The daemon accepts exactly those two Host names on the SPA/API port and
+  keeps the class-F viewer on the IP. Browsers and the macOS resolver answer `.localhost` on the
+  machine, so the name adds no DNS query and no rebinding surface; a page's Origin must match the
+  name its request was addressed to. Tabs already open on `127.0.0.1` keep working, and
+  `GLOSA_OPEN_HOST=127.0.0.1` restores the old link. (#159)
 - Codex sessions can attach to a separately running local app-server control socket after an exact
   MCP bind. Glosa sends bounded feedback as user input with `turn/steer` or `turn/start`, records
   transport acceptance separately from agent acknowledgement, retries first-rollout and disconnect

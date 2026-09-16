@@ -11,8 +11,10 @@ const SELF_ORIGIN = `http://127.0.0.1:${PORT}`;
 const FOREIGN_ORIGIN = "http://evil.example.com";
 const TOKEN = "s3cr3t-token";
 
-function req(init: { origin?: string; bearer?: string; secFetchSite?: string } = {}): Request {
-  const headers = new Headers();
+// Every real request reaching authorizeRequest already passed the Host allowlist, and the self
+// Origin is derived from that Host — so fixtures carry one, like the wire does.
+function req(init: { origin?: string; bearer?: string; secFetchSite?: string; host?: string } = {}): Request {
+  const headers = new Headers({ Host: init.host ?? `127.0.0.1:${PORT}` });
   if (init.origin !== undefined) headers.set("Origin", init.origin);
   if (init.bearer !== undefined) headers.set("Authorization", `Bearer ${init.bearer}`);
   if (init.secFetchSite !== undefined) headers.set("Sec-Fetch-Site", init.secFetchSite);
@@ -199,5 +201,46 @@ describe("authorizeRequest — presentation-redeem", () => {
         token: TOKEN,
       }),
     ).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+});
+
+describe("authorizeRequest — the second allowlisted Host (#159)", () => {
+  const LOCALHOST_HOST = `glosa.localhost:${PORT}`;
+  const LOCALHOST_ORIGIN = `http://glosa.localhost:${PORT}`;
+
+  test("a page on glosa.localhost is self on a request addressed to glosa.localhost", () => {
+    const result = authorizeRequest(req({ host: LOCALHOST_HOST, origin: LOCALHOST_ORIGIN, bearer: TOKEN }), {
+      routeClass: "state-changing",
+      port: PORT,
+      token: TOKEN,
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("Origin is bound to Host: a glosa.localhost page cannot speak on a 127.0.0.1 request", () => {
+    const result = authorizeRequest(req({ origin: LOCALHOST_ORIGIN, bearer: TOKEN }), {
+      routeClass: "state-changing",
+      port: PORT,
+      token: TOKEN,
+    });
+    expect(result).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+
+  test("…and the reverse: a 127.0.0.1 page cannot redeem on a glosa.localhost request", () => {
+    const result = authorizeRequest(req({ host: LOCALHOST_HOST, origin: SELF_ORIGIN }), {
+      routeClass: "presentation-redeem",
+      port: PORT,
+      token: TOKEN,
+    });
+    expect(result).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+
+  test("an unlisted Host yields no self Origin, so even a matching Origin is foreign", () => {
+    const result = authorizeRequest(req({ host: `evil.localhost:${PORT}`, origin: `http://evil.localhost:${PORT}` }), {
+      routeClass: "tokenless-handshake",
+      port: PORT,
+      token: TOKEN,
+    });
+    expect(result).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
   });
 });
