@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A file opened straight into Edit could show an empty rich editor instead of its content when the
+  editor module finished loading before the file's annotations did. The editor now waits for the
+  file to finish loading before it mounts.
+
 ## [0.1.0-alpha.22] — 2026-09-16
 
 ### Removed
