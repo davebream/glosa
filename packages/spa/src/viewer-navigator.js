@@ -2,7 +2,7 @@
 // Navigator visibility and the collapsible workspace switcher. Transport-free — mountApp injects
 // the elements and storage this needs.
 //
-// The navigator has ONE control and ONE behaviour: the top-bar toggle shows or hides a column,
+// The navigator has ONE control and ONE behaviour: the corner toggle shows or hides a column,
 // at every width. It is never an overlay.
 //
 // It used to become a drawer over the manuscript below 1024px, on the theory that a 260px column

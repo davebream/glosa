@@ -477,12 +477,13 @@ export function createArtifactPane(host, deps) {
   // but a pane in Preview and a pane in Annotate with nothing annotated yet look identical, so
   // the state still has to be legible. A quiet label states it without offering it.
   const modeLabel = el("span", { className: "glosa-pane-mode-label" });
+  // Three columns: the path at the left, the mode control centred over the manuscript (which is
+  // itself centred in the pane), the artifact's own actions at the right.
   const artifactBar = el("div", { className: "glosa-artifact-bar" }, [
     artifactIdEl,
     modeLabel,
     modeBar,
-    historyToggle,
-    tools,
+    el("div", { className: "glosa-artifact-actions" }, [historyToggle, tools]),
   ]);
 
   // ---------- pane body ----------

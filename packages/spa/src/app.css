@@ -116,7 +116,8 @@
   --nav-width: 232px; /* the contract's width: at 1440 it leaves the pane its 1205px rail floor */
   --margin-width: 320px;
   --topbar-height: 3rem;
-  --artifact-bar-height: 36px;
+  --artifact-bar-height: 40px;
+  --nav-foot-height: 44px;
   --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
   --measure: 68ch;
   /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
@@ -416,19 +417,63 @@ input,
   fill: var(--hand);
 }
 
-/* The navigator's one control: show/hide, at every width and in every mode. */
+/* The navigator's one control: show/hide, at every width and in every mode. It is pinned to the
+   desk's bottom-left corner rather than placed in the top bar, so it never shifts the mark and
+   never moves between the two states: while the navigator is shown it sits at the column's foot on
+   the navigator's own surface, and once hidden it stays where the reader last clicked it, lifted
+   onto a hairline so it reads as a control over the paper. */
+.glosa-app {
+  position: relative;
+}
+
+/* Shown: a footer strip the width of the navigator, on its surface above a Quiet Border rule, so
+   the tree scrolls under it instead of under a floating button. Hidden: just the control. */
+.glosa-nav-foot {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  height: var(--nav-foot-height);
+  padding: 0 var(--space-3);
+}
+
+.glosa-app[data-nav-open="true"] .glosa-nav-foot {
+  width: calc(var(--nav-width) - 1px);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-app[data-surface="document"] .glosa-nav-foot {
+  display: none;
+}
+
 .glosa-nav-toggle {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
   color: var(--muted);
-  transition: background var(--dur-fast) var(--ease-out);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .glosa-nav-toggle:hover {
   background: var(--surface-sunken);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-nav-toggle {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.glosa-app[data-nav-open="false"] .glosa-nav-toggle:hover {
+  background: var(--surface-sunken);
+  border-color: var(--border-strong);
 }
 
 .glosa-nav-toggle svg {
@@ -1220,7 +1265,7 @@ input,
 /* ---------- 6. Navigator ---------- */
 
 /* A column the work sits beside, at every width. It never floats, never overlays, and never dims
-   the work behind it — the top-bar toggle collapses it to nothing and back, and that choice is
+   the work behind it — the corner toggle collapses it to nothing and back, and that choice is
    remembered. */
 .glosa-sidebar {
   grid-area: nav;
@@ -1230,7 +1275,8 @@ input,
   border-right: 1px solid var(--border);
   /* No top padding: the first heading row is exactly one strip tall, so "Artifacts" sits on the
      same line as the tab labels across the divider — one horizon through the whole desk. */
-  padding: 0 var(--space-3) var(--space-8);
+  /* The bottom padding lets the last row scroll clear of the footer strip that holds the toggle. */
+  padding: 0 var(--space-3) calc(var(--nav-foot-height) + var(--space-2));
 }
 
 .glosa-sidebar h2 {
@@ -1611,21 +1657,48 @@ input,
 
    No container at all. A filled slab the width of the text read as a second header stacked on
    the tab strip; the row is transparent paper, and the one object in it is the segmented mode
-   control on its own sunken track — the tab strip's active-sheet idiom at control scale. The
-   directory sits at the left edge of the measure and the controls at its right, so the row reads
-   as the document's own header line rather than as chrome laid over it. */
+   control on its own sunken track — the tab strip's active-sheet idiom at control scale.
+
+   Revised 2026-09-16: capped to the measure, the controls sat wherever the measure's right edge
+   happened to fall, and with no directory to show for a root artifact the row read as a cluster
+   floating at a random offset. The row now spans the pane in three columns: the path at the left,
+   the mode control on the pane's centre line (which is the manuscript's centre line, since the
+   manuscript is centred), and History and More at the right. The two outer columns are equal, so
+   the control stays centred; the right one never shrinks below its content, so when room runs out
+   the path gives way first. */
 .glosa-artifact-bar {
   grid-area: bar;
   container-type: inline-size;
   container-name: bar;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
-  gap: var(--space-2);
+  column-gap: var(--space-3);
   min-width: 0;
-  width: min(calc(var(--manuscript-block) - 2 * var(--space-8)), calc(100% - 2 * var(--space-4)));
+  width: calc(100% - 2 * var(--space-4));
   height: var(--artifact-bar-height);
   margin: var(--space-2) auto 0;
   padding: 0;
+}
+
+.glosa-artifact-bar > .glosa-artifact-id {
+  grid-column: 1;
+}
+
+/* Only one of these is displayed at a time (active pane: the control; others: the label). */
+.glosa-artifact-bar > .glosa-pane-mode-label,
+.glosa-artifact-bar > .glosa-modebar {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+}
+
+.glosa-artifact-actions {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 /* Only the pane the mode control, the shortcuts and the address bar are all addressing offers
@@ -1858,8 +1931,9 @@ input,
   place-items: center;
   gap: var(--space-1);
   width: auto;
-  min-width: 28px;
-  height: 28px;
+  min-width: 32px;
+  height: 32px;
+  font-size: var(--text-sm);
   padding: 0 var(--space-2);
   border-radius: var(--radius-control);
   color: var(--muted);
@@ -1881,8 +1955,8 @@ input,
 
 .glosa-artifact-bar .glosa-history-toggle svg,
 .glosa-artifact-bar .glosa-tools-trigger svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .glosa-artifact-bar .glosa-history-toggle svg {
@@ -1902,16 +1976,20 @@ input,
   flex: 0 0 auto;
 }
 
+/* In the artifact bar the mode control is the row's one object, so it is set a step larger than
+   the base control: 28px segments on a 32px track, 13px labels, 15px icons. */
 .glosa-artifact-bar .glosa-modebar button {
   display: grid;
   grid-auto-flow: column;
   place-items: center;
   gap: var(--space-1);
+  height: 28px;
+  font-size: var(--text-sm);
 }
 
 .glosa-artifact-bar .glosa-modebar svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -1919,27 +1997,24 @@ input,
   stroke-linejoin: round;
 }
 
-/* The collapse ladder (§6), on PANE width. In order: the directory drops, then the mode control
-   goes icon-only, then History folds into the overflow. The filename and the mode control are
-   the last two things standing. */
-/* The collapse ladder (§6). Keyed on the BAR, not the pane: now that the bar caps at the
-   manuscript measure, the pane can keep growing while the bar stays exactly as wide — so pane
-   width stopped predicting when the bar runs out of room. In order: History drops its word, the
-   directory drops, the mode control goes icon-only, then History folds into the overflow. The
-   filename lives on the tab; the mode control is the last thing standing here. */
-@container bar (max-width: 470px) {
+/* The collapse ladder (§6), keyed on the bar's own width. The thresholds are where the centred
+   three-column row stops fitting at each step: the mode control (237px), History with its word and
+   More (117px) on BOTH sides so the control stays centred, and the column gaps. In order: History
+   drops its word, the directory drops, the mode control goes icon-only, then History folds into
+   the overflow. The filename lives on the tab; the mode control is the last thing standing. */
+@container bar (max-width: 520px) {
   .glosa-artifact-bar .glosa-history-toggle .glosa-control-label {
     display: none;
   }
 }
 
-@container bar (max-width: 400px) {
+@container bar (max-width: 440px) {
   .glosa-artifact-dir {
     display: none;
   }
 }
 
-@container bar (max-width: 340px) {
+@container bar (max-width: 400px) {
   .glosa-artifact-bar .glosa-modebar .glosa-control-label {
     display: none;
   }
@@ -1949,7 +2024,7 @@ input,
   }
 }
 
-@container bar (max-width: 250px) {
+@container bar (max-width: 270px) {
   .glosa-artifact-bar .glosa-history-toggle {
     display: none;
   }
@@ -3556,30 +3631,24 @@ input,
   text-decoration-color: currentColor;
 }
 
-/* Composer: in the margin at full width, a fixed bottom tray in compact (brief §7.3). It is the
-   entry before it is sent, so it opens on the same hairline as a sent entry and writes in pencil:
-   graphite text, a dashed rule under the words, nothing filled in the hand until Send. */
-.glosa-composer {
-  background: transparent;
-  border: 0;
-  border-top: 1px solid var(--pencil);
-  border-radius: 0;
-  padding: var(--space-2) 0 var(--space-3);
-  display: grid;
-  gap: var(--space-2);
-  box-shadow: none;
-}
+/* Composer: in the margin at full width, floating at its passage in compact (brief §7.3). It is
+   the entry before it is sent, so it writes in pencil: graphite text, a dashed rule under the
+   words, nothing filled in the hand until Send.
 
-/* Below the rail floor the composer FLOATS over the manuscript at its passage (the anchored
-   layout), and a floating thing needs paper under it and the menu's lift, or the words it is
-   about show through the words being written. In the rail it stays typography on the page. */
-.glosa-margin-anchored .glosa-composer {
-  padding: var(--space-3);
+   Revised 2026-09-16: it used to be bare typography on a hairline in the rail too, with no inset
+   and no edge. An open draft is genuinely above the work for a moment and sits beside washed,
+   highlighted passages, so as plain text it ran into the page and was hard to read, worst in dark.
+   It is now a card in every layout: padded paper, a Strong Border edge with a 2px pencil top
+   (still the entry-before-it-is-sent rule), and the menu's lift. Sent entries stay hairlines. */
+.glosa-composer {
+  padding: var(--space-3) var(--space-4) var(--space-4);
   background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-top-color: var(--pencil);
+  border-top: 2px solid var(--pencil);
   border-radius: var(--radius-composer);
   box-shadow: var(--shadow-menu);
+  display: grid;
+  gap: var(--space-3);
 }
 
 .glosa-composer .glosa-address {
@@ -3966,7 +4035,12 @@ input,
   --d2h-moved-label-color: var(--primary);
 }
 
-:root[data-theme="dark"] .glosa-composer,
+/* On a dark ground the draft lifts one surface step off the paper; the shadow token already
+   carries the tighter, black-based dark value, so it keeps its lift too. */
+:root[data-theme="dark"] .glosa-composer {
+  background: var(--surface);
+}
+
 :root[data-theme="dark"] .glosa-dialog {
   background: var(--surface);
   box-shadow: none;

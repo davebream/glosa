@@ -413,9 +413,9 @@ Dark is the same desk under lower light. Every neutral stays at zero chroma: pap
 
 ## Layout
 
-The app is a grid of top bar (3rem), an optional banner, and a main area. The main area holds a 232px navigator on the left and a dock of panes to its right; the dock's 1px gaps show the Quiet Border desk through, so a sash reads as the same one-pixel rule as every other division. Each pane is a container (`container-name: pane`) with a transparent artifact bar on top and a scrolling body below, so every artifact-scoped width rule is written against the pane, not the viewport, because two artifacts can share a screen.
+The app is a grid of top bar (3rem), an optional banner, and a main area. The main area holds a 232px navigator on the left and a dock of panes to its right. The navigator's show/hide toggle is pinned to the desk's bottom-left corner, on a 44px footer strip with a Quiet Border rule while the navigator is shown and on its own hairline once hidden, so it never moves and never shifts the logo mark; the dock's 1px gaps show the Quiet Border desk through, so a sash reads as the same one-pixel rule as every other division. Each pane is a container (`container-name: pane`) with a transparent artifact bar on top and a scrolling body below, so every artifact-scoped width rule is written against the pane, not the viewport, because two artifacts can share a screen.
 
-The manuscript column is `--measure` (68ch) plus two 2rem gutters, centred; its painted width is fixed at 707px (`--manuscript-block`, measured in the serif face) so the margin ladder can reason about it from outside the manuscript's font context. The artifact bar spans the manuscript's width, not the pane's: it is the document's own header line. The bar collapses on its own width: at 470px History drops its word, at 400px the directory drops, at 340px the mode control goes icon-only, at 250px History folds into the More menu. The mode control is the last thing standing.
+The manuscript column is `--measure` (68ch) plus two 2rem gutters, centred; its painted width is fixed at 707px (`--manuscript-block`, measured in the serif face) so the margin ladder can reason about it from outside the manuscript's font context. The artifact bar spans the pane, 40px tall, in three columns: the directory at the left, the mode control on the pane's centre line (the manuscript's centre line, since the manuscript is centred), and History and More at the right. The outer columns are equal so the control stays centred; the right one never shrinks below its content, so the path gives way first. The bar collapses on its own width: at 520px History drops its word, at 440px the directory drops, at 400px the mode control goes icon-only, at 270px History folds into the More menu. The mode control is the last thing standing.
 
 **The margin** is painted, never reserved. From a pane width of 1205px (`MARGIN_RAIL_FLOOR`) the margin is a transparent right rail between 240px and 320px wide, holding entries absolutely positioned beside their passage; it overlays whitespace and the manuscript never moves. Below that, the composer opens at its passage over the manuscript column and the saved entries move into a collection tray at the foot of the pane. Nothing is painted at the left edge: a document's outline is reached through the Go to palette (⌘K), never through the gutter.
 
@@ -430,10 +430,10 @@ Spacing is a 4pt scale: 0.25 / 0.5 / 0.75 / 1 / 1.5 / 2 / 3rem.
 The workbench is flat at rest. One-pixel Quiet Border rules, the three-step surface ladder (paper, control, sunken) and spacing carry all structure. A shadow appears only under something that is genuinely above the work for a moment: a menu, a popover, the Go to palette, the compact composer opening at its passage, the entry preview under a hovered mark, the collection tray, and the blocking dialog. Each shadow is two layers: a tight edge that separates and a broad lift with an offset so the light has a direction. In dark appearance shadows become black-based and tighter, and the resting shadow resolves to none.
 
 ### Shadow Vocabulary
-- **Menu Lift** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06), 0 10px 28px -6px oklch(0.2 0 0 / 0.16)`): Every menu and popover, the anchored composer and the mark preview.
+- **Menu Lift** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06), 0 10px 28px -6px oklch(0.2 0 0 / 0.16)`): Every menu and popover, the composer and the mark preview.
 - **Tray Edge** (`box-shadow: 0 -1px 2px oklch(0.2 0 0 / 0.05), 0 -12px 32px -8px oklch(0.2 0 0 / 0.16)`): The upward shadow on the collection tray at the foot of a compact pane.
 - **Dialog Float** (`box-shadow: 0 2px 6px oklch(0.2 0 0 / 0.08), 0 24px 56px -12px oklch(0.2 0 0 / 0.24)`): The blocking dialog, paired with the Scrim backdrop.
-- **Rest** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06)`): Defined, and currently used by nothing; the margin entry and composer that once carried it are now hairlines.
+- **Rest** (`box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.06)`): Defined, and currently used by nothing; the margin entry that once carried it is now a hairline.
 
 ### Named Rules
 **The Flat-Until-Floating Rule.** Resting panels are flat. Shadows are forbidden unless the element is temporarily above the workspace. This is not a preference for subtle shadows: the dock's floating shadows resolve to none, not to something quieter.
@@ -444,7 +444,7 @@ The workbench is flat at rest. One-pixel Quiet Border rules, the three-step surf
 
 One radius per role, and a nested corner is its container's radius minus the padding between them, so concentric shapes stay parallel instead of pinching: menu 8px − 4px padding = 4px rows; segmented track 8px − 2px = 6px segments. Focus 2px, micro 4px, tool 5px, control 6px, panel 8px, composer 10px, overlay 12px, pill 999px.
 
-Marks on the page are square or hairline: margin entries, the composer and a session's entry open on a full-width 1px rule with no radius and no fill. Tabs are square; a rounded tab is a card and a card floats. State dots, gutter markers and drawn radios are circles. Borders are one pixel throughout; the only two-pixel edges are the active tab's ink top edge, the focused sideline, the annotation underline, the focus ring and the dock drop target.
+Marks on the page are square or hairline: margin entries and a session's entry open on a full-width 1px rule with no radius and no fill; the composer is the one card on the page, because it is a draft above the work. Tabs are square; a rounded tab is a card and a card floats. State dots, gutter markers and drawn radios are circles. Borders are one pixel throughout; the only two-pixel edges are the active tab's ink top edge, the focused sideline, the annotation underline, the focus ring and the dock drop target.
 
 ## Components
 
@@ -458,7 +458,7 @@ Marks on the page are square or hairline: margin entries, the composer and a ses
 - **Recessive verbs** (Edit, Remove, Undo on a margin entry): 12px underlined muted text, no box. Edit and Undo hover to the hand; Remove hovers to Danger.
 
 ### Segmented Mode Control (Read / Review / Edit)
-- **Style:** A Sunken track (8px) holding 24px segments (6px) with 2px padding and gap; labels 13px medium, Muted. Icons 14px, stroked 1.6.
+- **Style:** A Sunken track (8px) holding 24px segments (6px) with 2px padding and gap; labels 13px medium, Muted. Icons 14px, stroked 1.6. In the artifact bar, where it is the row's one object, segments are 28px with 15px icons; History and More beside it are 32px.
 - **Selected:** Paper fill, Ink text, weight 600, a 1px Quiet Border ring. The selected segment is the same paper as the manuscript below it: the tab strip's active-sheet idiom at control scale.
 - **Parked edit:** A 5px hand dot in the Edit segment's corner marks an unsaved draft parked off screen.
 
@@ -497,7 +497,7 @@ Not a card. An entry is typography on the same paper as the manuscript, opened b
 - **A session's entry** is the same object with authorship said in words: it opens on an Ink hairline, prints its provider name in Ink, its message in 13px Ink, and its quoted passage behind a 2px Strong Border sideline echoing the mark in the manuscript. It never takes the hand.
 
 ### The Composer (the entry before it is sent)
-Opens on the same hairline as a sent entry, in pencil: a 1px solid pencil rule above, the address and "You · not sent yet" in pencil, the quote in the manuscript face with a graphite underlay, intent chips, the dashed-underline field, and a right-aligned row of Cancel (ghost) and Send to session (primary ink). Nothing is filled in the hand until Send. In a compact pane the composer floats over the manuscript column at its passage, capped at the manuscript's width, carrying Menu Lift because it is then genuinely above the work.
+A card, because an open draft is genuinely above the work for a moment: padded paper (the Surface step in dark), a 1px Strong Border edge, 10px radius, Menu Lift, and a 2px solid pencil rule along its top, the address and "You · not sent yet" in pencil, the quote in the manuscript face with a graphite underlay, intent chips, the dashed-underline field, and a right-aligned row of Cancel (ghost) and Send to session (primary ink). Nothing is filled in the hand until Send. In a compact pane the same card floats over the manuscript column at its passage, capped at the manuscript's width.
 
 ### Marks on the Page
 Three marking vocabularies share the manuscript and stay distinguishable without colour. **Browser selection** is transient Hand Wash. **A human annotation** lives ON the words: a 2px Hand Line underline in every mode, plus the Hand Wash in Review; the hovered or focused one takes the opaque Anchor Wash and a hand underline. **A session's pointer** stands BESIDE the words as a 2px Strong Border sideline in the gutter, Ink and 3px while it is the passage being answered. Position, not hue, carries the difference, so a session mark and an annotation can cover the same sentence.

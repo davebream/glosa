@@ -5,7 +5,7 @@
 // Since the multi-artifact workbench (design brief 2026-09-04 §6) the top bar is WORKSPACE chrome
 // and nothing else. The artifact name, the mode control, History, Copy source and Print all live
 // inside the pane that holds their artifact — one bar cannot honestly speak for two documents.
-// What stays here is true of the whole workspace: the navigator toggle, the brand mark, the
+// What stays here is true of the whole workspace: the navigator and its toggle, the brand mark, the
 // workspace name, the attention tray, Agent feedback, Conversation, Appearance, Keyboard
 // shortcuts, and the connection banner.
 
@@ -152,15 +152,17 @@ export function createViewerShell(
 
   root.append(
     el("header", { className: "glosa-topbar" }, [
-      // The mark holds the bar's left edge; the navigator toggle follows it, so hiding the toggle
-      // (a single presented document) never moves the mark.
-      el("div", { className: "glosa-topbar-lead" }, [brandMark, navToggle]),
+      el("div", { className: "glosa-topbar-lead" }, [brandMark]),
       el("div", { className: "glosa-topbar-title" }, [titleEl]),
       el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
       topbarOverlays,
     ]),
     bannerEl,
     sidebarEl,
+    // The navigator's toggle lives in the desk's bottom-left corner, not in the top bar: on a footer
+    // strip at the foot of the navigator while it is shown, and in the same spot once it is hidden,
+    // so the control that brings it back never moves and never pushes the mark around.
+    el("div", { className: "glosa-nav-foot" }, [navToggle]),
     mainEl,
     conversationEl,
     shortcutsEl,
