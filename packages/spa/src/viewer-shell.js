@@ -55,6 +55,19 @@ export function createViewerShell(
   // The bar's title is the artifact in the active pane — the document the reader is looking at —
   // and falls back to the workspace when no pane is open.
   const titleEl = el("span", { className: "glosa-topbar-name", textContent: "glosa" });
+  // The title is also the way in to Go to (⌘K): shaped like a field so it reads as "find something
+  // here", but a button, because clicking it opens the palette rather than accepting text.
+  const goToTrigger = el(
+    "button",
+    {
+      className: "glosa-goto-trigger",
+      type: "button",
+      "aria-haspopup": "dialog",
+      "aria-keyshortcuts": "Meta+K",
+      title: "Go to a section, a file or a command (⌘K)",
+    },
+    [titleEl, el("kbd", { className: "glosa-goto-key", "aria-hidden": "true", textContent: "⌘K" })],
+  );
   const conversationToggle = el("button", {
     id: "glosa-conversation-toggle",
     className: "glosa-conversation-toggle",
@@ -153,7 +166,7 @@ export function createViewerShell(
   root.append(
     el("header", { className: "glosa-topbar" }, [
       el("div", { className: "glosa-topbar-lead" }, [brandMark]),
-      el("div", { className: "glosa-topbar-title" }, [titleEl]),
+      el("div", { className: "glosa-topbar-title" }, [goToTrigger]),
       el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
       topbarOverlays,
     ]),
@@ -180,6 +193,7 @@ export function createViewerShell(
     elements: {
       navToggle,
       titleEl,
+      goToTrigger,
       conversationToggle,
       shortcutsToggle,
       topbarOverlays,

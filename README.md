@@ -48,11 +48,11 @@ agent drafts -> glosa renders -> you mark or edit -> the note reaches the bound 
 
 ## What glosa does
 
-| Surface | What it is for |
+| On the page | What it is for |
 |---|---|
-| **Read** | Read rendered Markdown, trusted text, or isolated HTML, set as a document rather than terminal output. |
-| **Review** | The margin, both ways. Select words and a note opens right under them; your notes and a session's questions sit beside the passages they are about. |
-| **Edit** | Change the document in a rich editor or its exact source. glosa saves only the blocks you changed and records the edit as yours. |
+| **Reading and notes** | A document opens rendered, with the margin beside it. Select words and a note opens right under them; your notes and a session's questions sit beside the passages they are about. **Notes** hides the margin when you just want to read. |
+| **Edit** | **Edit** (⌘E) turns the same page into an editor, rich or exact source, and **Done** turns it back. glosa saves only the blocks you changed and records the edit as yours. |
+| **Go to** | The document's path in the top bar, or ⌘K, jumps to a section or a file, or runs a command such as hiding notes. |
 | **History** | Compare versions and restore an earlier one without touching your repository's Git history. |
 
 Each document can be set in the default serif, a sans or a mono face from its own menu. The sidebar

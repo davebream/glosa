@@ -543,12 +543,12 @@
       "css": ".ds-btn{display:inline-flex;align-items:center;padding:0.25rem 0.75rem;border-radius:6px;border:1px solid oklch(0.6 0.014 65);background:oklch(0.99 0.007 85);color:oklch(0.2 0.012 60);font:500 13px/1.5 \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1)}.ds-btn:hover{background:oklch(0.97 0.006 80)}.ds-btn:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
     },
     {
-      "name": "Mode Control",
+      "name": "Page Control",
       "kind": "nav",
       "refersTo": "mode-control",
-      "description": "Read / Review / Edit: an ink outline with the chosen mode struck forward as filled ink.",
-      "html": "<div class=\"ds-mode\" role=\"group\"><button>Read</button><button aria-pressed=\"true\">Review</button><button>Edit</button></div>",
-      "css": ".ds-mode{display:inline-flex;padding:2px;gap:2px;background:oklch(0.99 0.007 85);border-radius:8px;box-shadow:inset 0 0 0 1px oklch(0.2 0.012 60)}.ds-mode button{height:24px;padding:0 0.75rem;border:0;border-radius:6px;background:none;color:oklch(0.47 0.016 60);font:500 13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-mode button:not([aria-pressed=\"true\"]):hover{background:oklch(0.94 0.009 78);color:oklch(0.2 0.012 60)}.ds-mode button[aria-pressed=\"true\"]{background:oklch(0.2 0.012 60);color:oklch(0.99 0.007 85);font-weight:600}.ds-mode button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}"
+      "description": "Notes toggle and Edit while reading, Done while editing: an ink outline where notes shown is a quiet pressed bed and Done is struck forward as filled ink.",
+      "html": "<div class=\"ds-mode\" role=\"group\"><button aria-pressed=\"true\" class=\"ds-notes\">Notes</button><button>Edit</button></div>",
+      "css": ".ds-mode{display:inline-flex;padding:2px;gap:2px;background:oklch(0.99 0.007 85);border-radius:8px;box-shadow:inset 0 0 0 1px oklch(0.2 0.012 60)}.ds-mode button{height:24px;padding:0 0.75rem;border:0;border-radius:6px;background:none;color:oklch(0.47 0.016 60);font:500 13px \"Source Sans 3\",system-ui,sans-serif;cursor:pointer;transition:background 150ms cubic-bezier(0.25,1,0.5,1),color 150ms cubic-bezier(0.25,1,0.5,1)}.ds-mode button:not([aria-pressed=\"true\"]):hover{background:oklch(0.94 0.009 78);color:oklch(0.2 0.012 60)}.ds-mode button[aria-pressed=\"true\"]{background:oklch(0.2 0.012 60);color:oklch(0.99 0.007 85);font-weight:600}.ds-mode button:focus-visible{outline:2px solid oklch(0.52 0.16 42);outline-offset:2px}.ds-mode button.ds-notes[aria-pressed=true]{background:oklch(0.94 0.009 78);color:oklch(0.2 0.012 60);font-weight:600}"
     },
     {
       "name": "Margin Entry",

@@ -741,3 +741,32 @@ the daemon would answer them with a 400.
 **What this does not cover.** No TLS and no padlock. On loopback, with a Bearer token and a strict
 CSP, TLS was never the protection. The CLI, plugin monitor and other programmatic clients keep using
 the IP.
+
+## One page with an Edit state, instead of three peer modes
+
+Read, Review and Edit were three segments of equal weight. In use the reader spent most of the time
+reading and marking agent drafts, and switched modes far more often than the design assumed: to fix a
+word, to leave a note while reading, and back. Each switch also moved the page, because Edit handed
+scrolling to an inner editor box and reset the position to the top.
+
+The page is now one surface. Review, the page with notes shown, is the default, because selecting
+text to leave a note is the most common act. Read is that page with notes hidden, behind a single
+Notes toggle. Edit stays a deliberate state rather than becoming click-to-edit: a stray click must
+never create an authored change, because anything saved from glosa's editor is attributed to the
+human by construction, and an agent may be writing the same file. It is entered with one Edit action
+(⌘E) and left with Done, and the page itself scrolls so the reader's place survives the switch.
+
+**Why the state names stay.** `mode=read|review|edit` appears in links, in `glosa open` and in the
+`glosa_present` MCP schema. Keeping the names on the wire means no link, script or agent breaks;
+only the defaults moved, so a link with no mode opens Review.
+
+**Why Edit pauses during an apply lease.** A4 §F05 allows one apply lease per workspace, held while a
+session changes files it will attribute to itself. Editing at the same moment races that write and
+ends in a refused save. The workbench follows `apply_begin` and `apply_end`/`apply_expired` on the
+journal stream and disables Edit meanwhile; a draft already open is kept, with a note saying why to
+wait. A lease that began before the page connected is not visible to it, and the save guard still
+refuses a stale save in that case.
+
+**Why Go to became visible.** The palette was reachable only through ⌘K. Its trigger now sits in the
+top bar where the document's path already was, shaped like a field, and it lists commands (notes,
+Edit or Done) beside sections and files, since the page control carries fewer buttons than before.

@@ -223,6 +223,7 @@ const MODE_ICONS = {
   review:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.2h8M3 8h8M3 11.8h5"/><path d="M17 3.4 13 7.4l-.6 2.4 2.4-.6 4-4a1.3 1.3 0 0 0-1.8-1.8Z"/></svg>',
   edit: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9.5 3.5H4.6A1.6 1.6 0 0 0 3 5.1v10.3A1.6 1.6 0 0 0 4.6 17h10.3a1.6 1.6 0 0 0 1.6-1.6v-4.9"/><path d="M15.1 2.9a1.7 1.7 0 0 1 2.4 2.4L11 11.8l-3.2.8.8-3.2Z"/></svg>',
+  done: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.4 8 14.2 16 5.8"/></svg>',
 };
 
 const ICONS = {
@@ -308,6 +309,14 @@ export function createArtifactPane(host, deps) {
   let diskChange = null;
   let loading = true;
   let modeState = initialModeState(readLock ? "read" : initialMode);
+  /** The view Edit returns to: the page with notes shown or hidden, whichever the reader left. */
+  let lastViewMode = modeState.mode === "edit" ? "review" : modeState.mode;
+  /** The active apply lease the workbench last heard about, or null. While a session holds one,
+   * Edit is paused (see renderModeBar). */
+  let applyPause = null;
+  /** The page's scroll position when Edit was entered or left, restored once the new face mounts,
+   * so switching states keeps the reader's place instead of jumping to the top. */
+  let pendingScrollTop = null;
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
   let richEditor = null; // {getSave, getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   let richMountRequest = 0;
@@ -381,7 +390,7 @@ export function createArtifactPane(host, deps) {
   const artifactDirEl = el("span", { className: "glosa-artifact-dir" }, [artifactDirHeadEl, artifactDirTailEl]);
   const artifactNameEl = el("span", { className: "glosa-artifact-name" });
   const artifactIdEl = el("div", { className: "glosa-artifact-id" }, [artifactDirEl, artifactNameEl]);
-  const modeBar = el("div", { className: "glosa-modebar", role: "group", "aria-label": "View mode" });
+  const modeBar = el("div", { className: "glosa-modebar", role: "group", "aria-label": "Page" });
 
   const historyToggle = el("button", {
     className: "glosa-history-toggle",
@@ -675,9 +684,9 @@ export function createArtifactPane(host, deps) {
     if (!editWrap.hidden) {
       if (!richEl.hidden && richEditor) {
         const surface = richEl.querySelector(".glosa-rich-surface");
-        return surface ? { kind: "rich", root: surface, scroller: surface, block: editWrap } : null;
+        return surface ? { kind: "rich", root: surface, scroller: paneMain, block: editWrap } : null;
       }
-      if (!editArea.hidden) return { kind: "source", root: editArea, scroller: editArea, block: editWrap };
+      if (!editArea.hidden) return { kind: "source", root: editArea, scroller: paneMain, block: editWrap };
       return null;
     }
     if (contentEl.hidden) return null;
@@ -724,10 +733,13 @@ export function createArtifactPane(host, deps) {
       outlineSourceKey = key;
       const headings = sourceHeadingCollector(text);
       const depths = outlineDepths(headings);
+      // The page scrolls in Edit, not the textarea, so each heading's top inside the textarea is
+      // shifted by where the textarea itself sits in the page.
+      const areaTop = editArea.getBoundingClientRect().top - paneMain.getBoundingClientRect().top + paneMain.scrollTop;
       const tops = measureTextareaOffsets(
         editArea,
         headings.map((heading) => heading.offset),
-      );
+      ).map((top) => top + areaTop);
       outlineTops = tops;
       outline.setEntries(
         headings.map((heading, index) => ({
@@ -739,7 +751,7 @@ export function createArtifactPane(host, deps) {
           jump: () => {
             editArea.focus({ preventScroll: true });
             editArea.setSelectionRange(heading.offset, heading.offset);
-            scrollToOffset(editArea, tops[index]);
+            scrollToOffset(paneMain, tops[index]);
           },
         })),
       );
@@ -1100,33 +1112,70 @@ export function createArtifactPane(host, deps) {
   function renderModeBar() {
     const restoreModeFocus = modeBar.contains(document.activeElement);
     modeBar.textContent = "";
-    // Preview lock is a UI affordance expressing intent ("not for review"), not authorization —
-    // Annotate/Edit controls and shortcuts are omitted for this visit; the annotation API still
-    // accepts authenticated POSTs.
-    const visibleModes = readLock ? ["read"] : MODES;
-    for (const mode of visibleModes) {
-      // Opaque class F gets no Edit affordance at all rather than a permanently disabled one —
-      // but only once an artifact is open; before that the control stays whole.
-      if (mode === "edit" && currentArtifact && !canEdit(currentArtifact)) continue;
-      const btn = el("button", { type: "button", "data-mode": mode, onClick: () => setMode(mode) });
-      // Icon plus label: the label is what a comfortable pane shows, the icon is what survives
-      // §6's collapse ladder. The accessible name never depends on which one is painted.
-      btn.innerHTML = `${MODE_ICONS[mode]}<span class="glosa-control-label"></span>`;
-      btn.querySelector(".glosa-control-label").textContent = mode;
-      // Parked work is invisible by nature — the editor holding it is not on screen. The Edit
-      // segment carries a dot and says so in its accessible name, so "my draft is still there"
-      // is something the reviewer can read rather than something they have to trust.
-      const parked = mode === "edit" && isParked(modeState);
-      btn.setAttribute("aria-label", parked ? "Edit, unsaved draft kept" : mode[0].toUpperCase() + mode.slice(1));
-      btn.setAttribute("aria-pressed", String(mode === modeState.mode));
-      if (parked) btn.setAttribute("data-parked", "true");
+    // One page, two states. Reading and reviewing are the same page with the margin shown or
+    // hidden, so they share one Notes toggle; Edit is a deliberate state of that page with Done
+    // to leave it. The three states underneath (read / review / edit) are unchanged, because links,
+    // `glosa open` and `glosa_present` name them. Every button carries the `data-mode` it moves to.
+    //
+    // A read lock is a UI affordance expressing intent ("not for review"), not authorization — the
+    // Notes and Edit controls and their shortcuts are omitted for this visit; the annotation API
+    // still accepts authenticated POSTs.
+    if (!readLock) {
+      if (modeState.mode === "edit") {
+        const done = modeButton(lastViewMode, "done", "Done");
+        done.setAttribute("aria-label", "Done editing");
+        done.setAttribute("aria-pressed", "true");
+        done.setAttribute("data-control", "done");
+        modeBar.append(done);
+      } else {
+        const showing = modeState.mode === "review";
+        const notes = modeButton(showing ? "read" : "review", "review", "Notes");
+        notes.setAttribute("aria-label", showing ? "Hide notes" : "Show notes");
+        notes.setAttribute("aria-pressed", String(showing));
+        notes.setAttribute("data-control", "notes");
+        modeBar.append(notes);
+        // Opaque class F gets no Edit affordance at all rather than a permanently disabled one —
+        // but only once an artifact is open; before that the control stays whole.
+        if (!(currentArtifact && !canEdit(currentArtifact))) {
+          const edit = modeButton("edit", "edit", "Edit");
+          edit.setAttribute("data-control", "edit");
+          // Parked work is invisible by nature — the editor holding it is not on screen. The Edit
+          // button carries a dot and says so in its accessible name, so "my draft is still there"
+          // is something the reviewer can read rather than something they have to trust.
+          const parked = isParked(modeState);
+          if (parked) edit.setAttribute("data-parked", "true");
+          edit.setAttribute("aria-pressed", "false");
+          if (applyPause) {
+            // A session is applying a change under a lease. Editing now would race the session's
+            // write to the same files, so the page waits rather than letting a save be refused.
+            edit.disabled = true;
+            edit.setAttribute("aria-label", "Edit, paused while a session applies a change");
+            edit.title = "A session is applying a change. Edit when it finishes.";
+          } else {
+            edit.setAttribute("aria-label", parked ? "Edit, unsaved draft kept" : "Edit");
+          }
+          modeBar.append(edit);
+        }
+      }
+    }
+    for (const btn of modeBar.querySelectorAll("button")) {
       if (!currentArtifact) btn.disabled = true;
-      modeBar.append(btn);
     }
     modeLabel.textContent = modeState.mode;
     if (restoreModeFocus) {
-      queueMicrotask(() => modeBar.querySelector(`[data-mode="${modeState.mode}"]`)?.focus({ preventScroll: true }));
+      queueMicrotask(() =>
+        (modeBar.querySelector("button:not(:disabled)") ?? modeBar)?.focus?.({ preventScroll: true }),
+      );
     }
+  }
+
+  function modeButton(target, icon, label) {
+    const btn = el("button", { type: "button", "data-mode": target, onClick: () => setMode(target) });
+    // Icon plus label: the label is what a comfortable pane shows, the icon is what survives
+    // §6's collapse ladder. The accessible name never depends on which one is painted.
+    btn.innerHTML = `${MODE_ICONS[icon]}<span class="glosa-control-label"></span>`;
+    btn.querySelector(".glosa-control-label").textContent = label;
+    return btn;
   }
 
   function setEmpty(title, hint) {
@@ -1359,7 +1408,17 @@ export function createArtifactPane(host, deps) {
     }
   }
 
+  /** The source face grows with its text so the page, not the textarea, is what scrolls in Edit:
+   * one scrollbar for the whole page, and the reader's place survives entering and leaving it. */
+  function fitSourceArea() {
+    if (editArea.hidden) return;
+    editArea.style.height = "auto";
+    editArea.style.height = `${editArea.scrollHeight + 2}px`;
+  }
+  editArea.addEventListener("input", fitSourceArea);
+
   function renderContent() {
+    if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(fitSourceArea);
     paneEl.setAttribute("data-mode", modeState.mode);
     const isClassF = currentArtifact?.class === "F";
     paneEl.setAttribute("data-class", currentArtifact?.class ?? "");
@@ -2666,6 +2725,10 @@ export function createArtifactPane(host, deps) {
     }
 
     const previousMode = modeState.mode;
+    if (mode === "edit" && previousMode !== "edit" && applyPause) return;
+    if (previousMode !== "edit" && mode === "edit") lastViewMode = previousMode;
+    if (mode !== "edit") lastViewMode = mode;
+    if ((mode === "edit") !== (previousMode === "edit")) pendingScrollTop = paneMain.scrollTop;
     // Park before the switch, while the editor that holds the draft is still mounted. Nothing
     // here can fail in a way that costs the text: `parkDrafts` reads, it never clears.
     if (previousMode !== mode) parkDrafts();
@@ -2687,7 +2750,31 @@ export function createArtifactPane(host, deps) {
     renderDiskChange();
     void renderHistory();
     onStateChange();
-    if (modeState.mode === "edit" && previousMode !== "edit") paneMain.scrollTop = 0;
+    restorePendingScroll();
+  }
+
+  /** Puts the page back where the reader was before the state changed. Runs now and again on the
+   * next frames, because the rich editor and the re-rendered manuscript mount asynchronously and
+   * the page is shorter than the saved position until they do. */
+  function restorePendingScroll() {
+    if (pendingScrollTop === null) return;
+    const target = pendingScrollTop;
+    const apply = () => {
+      if (pendingScrollTop !== target) return;
+      paneMain.scrollTop = target;
+    };
+    apply();
+    if (typeof requestAnimationFrame === "undefined") {
+      pendingScrollTop = null;
+      return;
+    }
+    requestAnimationFrame(() => {
+      apply();
+      requestAnimationFrame(() => {
+        apply();
+        if (pendingScrollTop === target) pendingScrollTop = null;
+      });
+    });
   }
 
   editArea.addEventListener("input", () => {
@@ -3505,6 +3592,34 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
+    /** The workbench's view of the workspace's apply lease: an object while a session holds one,
+     * null once it ends or expires. Pauses Edit; a draft already open is kept and told why. */
+    setApplyPause(lease) {
+      const next = lease ?? null;
+      if ((applyPause === null) === (next === null)) {
+        applyPause = next;
+        return;
+      }
+      applyPause = next;
+      renderModeBar();
+      if (modeState.mode === "edit") {
+        editStatus.textContent = next
+          ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes."
+          : "";
+      }
+    },
+    /** Hide notes / show notes on the one page: the read ↔ review toggle, for commands. */
+    toggleNotes() {
+      if (readLock || modeState.mode === "edit") return;
+      setMode(modeState.mode === "review" ? "read" : "review");
+    },
+    /** ⌘E: into Edit from the page, or back to the view the reader left. */
+    toggleEdit() {
+      if (readLock) return;
+      if (modeState.mode === "edit") setMode(lastViewMode);
+      else if (!currentArtifact || canEdit(currentArtifact)) setMode("edit");
+    },
+    canEdit: () => !readLock && Boolean(currentArtifact) && canEdit(currentArtifact) && !applyPause,
     /** This document's sections and the one the reader is in, for the workspace's Go to palette. */
     getOutline: () => ({ entries: outlineEntries, current: outlineCurrent }),
     isDirty,

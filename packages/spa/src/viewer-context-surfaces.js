@@ -11,10 +11,10 @@
  * single-pointer equivalents to dragging a release requirement, not a nicety — this sheet and
  * each pane's "Move tab to" menu are where they are findable. */
 export const SHORTCUTS = [
-  ["\u2318 / Ctrl + 1", "Preview"],
-  ["\u2318 / Ctrl + 2", "Annotate"],
-  ["\u2318 / Ctrl + 3", "Edit"],
-  ["\u2318 / Ctrl + K", "Go to a section or a file"],
+  ["\u2318 / Ctrl + E", "Edit this page, or Done"],
+  ["\u2318 / Ctrl + 1", "Hide notes"],
+  ["\u2318 / Ctrl + 2", "Show notes"],
+  ["\u2318 / Ctrl + K", "Go to a section, a file or a command"],
   ["Ctrl + Tab", "Next tab in this pane"],
   ["Ctrl + Shift + Tab", "Previous tab in this pane"],
   ["\u2318 / Ctrl + \u2325 + \u2192", "Focus the pane to the right"],

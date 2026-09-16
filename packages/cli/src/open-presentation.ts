@@ -230,8 +230,10 @@ export async function runOpenPresentation(
     };
   }
 
-  const mode: PresentationMode = options.mode ?? "read";
   const readLock = Boolean(options.readLock);
+  // The default page is the review page: notes shown, drag to leave one. A read-locked visit is
+  // for reading only, so it keeps the read page.
+  const mode: PresentationMode = options.mode ?? (readLock ? "read" : "review");
   const warnings: { code: string; message: string }[] = [];
 
   if (readLock && options.bindSessionId) {

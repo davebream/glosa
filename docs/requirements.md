@@ -297,12 +297,17 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
   consents. Cancellation preserves the mounted editor and restores its secret-free focus URL.
   Workspace, artifact, surface, mode and read lock follow the requested fragment.
-- **Three modes per artifact**, named for what the HUMAN is doing rather than for who the counterparty
-  is: **Read** (rendered, reading-only canvas: navigation and read-only context are progressive
-  disclosures; annotation, restore, and agent composition require an explicit mode transition),
-  **Review** (the anchored two-way margin — the reviewer's own comments AND a session's questions and
-  pointers about a passage, answered where the words are), **Edit** (modify source,
-  save → re-render). Edit has two faces: a rich editor is the default and the byte-exact source
+- **One page per artifact in three states**, named for what the HUMAN is doing rather than for who the
+  counterparty is. **Review** is the default page: the anchored two-way margin, where the reviewer's
+  own comments AND a session's questions and pointers about a passage are answered where the words
+  are, and selecting text opens a comment. **Read** is the same page with notes hidden (rendered,
+  reading-only canvas; annotation, restore, and agent composition need notes shown), reached through
+  one Notes toggle. **Edit** is a deliberate state of that same page (modify source, save →
+  re-render), entered with one Edit action and left with Done, which returns to whichever view was
+  left; the page itself scrolls, so the reader's place survives entering and leaving it. Edit is
+  paused while the workspace's apply lease is held by a session, and a draft already open is kept.
+  The three state names stay on the wire (`mode=` links, `glosa open`, `glosa_present`); a link or
+  command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control. Edit has two faces: a rich editor is the default and the byte-exact source
   textarea stays one toggle away. Saves are **source-preserving** — only the blocks the writer
   edited are re-serialized and everything else is byte-identical; a block the rich editor models is
   written back in the spelling it was read in, and a top-level construct it does not model — a

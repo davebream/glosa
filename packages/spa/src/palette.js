@@ -22,8 +22,10 @@ import { createElement as el } from "./viewer-shell.js";
 
 /**
  * @typedef {{ text: string, depth: number, address?: string | null, jump: () => void }} SectionEntry
+ * @typedef {{ id: string, label: string, detail?: string, run: () => void }} CommandEntry
  * @typedef {{ kind: "section", entry: SectionEntry, depth: number, text: string, address: string | null, current: boolean }
- *   | { kind: "file", path: string, name: string, dir: string, text: string }} PaletteItem
+ *   | { kind: "file", path: string, name: string, dir: string, text: string }
+ *   | { kind: "command", command: CommandEntry, text: string }} PaletteItem
  */
 
 /**
@@ -32,9 +34,10 @@ import { createElement as el } from "./viewer-shell.js";
  *   getFiles: () => string[],
  *   getSections: () => { title: string, entries: SectionEntry[], current: number } | null,
  *   onOpenFile: (path: string) => void,
+ *   getCommands?: () => CommandEntry[],
  * }} options
  */
-export function createCommandPalette({ host, getFiles, getSections, onOpenFile }) {
+export function createCommandPalette({ host, getFiles, getSections, onOpenFile, getCommands = () => [] }) {
   let open = false;
   let destroyed = false;
   /** @type {PaletteItem[]} */ let items = [];
@@ -48,8 +51,8 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
     type: "text",
     autocomplete: "off",
     spellcheck: false,
-    placeholder: "Go to a section or a file",
-    "aria-label": "Go to a section or a file",
+    placeholder: "Go to a section, a file or a command",
+    "aria-label": "Go to a section, a file or a command",
     role: "combobox",
     "aria-expanded": "true",
     "aria-autocomplete": "list",
@@ -61,7 +64,7 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
   const emptyEl = el("p", { className: "glosa-palette-empty", role: "status", hidden: true });
   const hintEl = el("p", {
     className: "glosa-palette-hint",
-    textContent: "↑↓ to move · Enter to go · # sections only · / files only",
+    textContent: "↑↓ to move · Enter to go · # sections · / files · > commands",
   });
   const sheetEl = el("div", { className: "glosa-palette-sheet" }, [inputEl, listEl, emptyEl, hintEl]);
   const rootEl = el(
@@ -76,6 +79,7 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
     const trimmed = raw.trimStart();
     if (trimmed.startsWith("#")) return { scope: "section", query: trimmed.slice(1) };
     if (trimmed.startsWith("/")) return { scope: "file", query: trimmed.slice(1) };
+    if (trimmed.startsWith(">")) return { scope: "command", query: trimmed.slice(1) };
     return { scope: null, query: trimmed };
   }
 
@@ -107,6 +111,11 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
         text: path,
       });
     }
+    // What the reader can DO here, after where they can go. Commands keep the order the workbench
+    // gives them, like every other group: nothing is reordered by score.
+    for (const command of getCommands()) {
+      next.push({ kind: "command", command, text: command.label });
+    }
     items = next;
   }
 
@@ -126,7 +135,8 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
           el("div", {
             className: "glosa-palette-group",
             role: "presentation",
-            textContent: item.kind === "section" ? `Sections · ${sectionsTitle}` : "Files",
+            textContent:
+              item.kind === "section" ? `Sections · ${sectionsTitle}` : item.kind === "file" ? "Files" : "Commands",
           }),
         );
       }
@@ -151,9 +161,14 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
           row.setAttribute("aria-current", "location");
           row.append(el("span", { className: "glosa-palette-meta", textContent: "you are here" }));
         }
-      } else {
+      } else if (item.kind === "file") {
         row.append(el("span", { className: "glosa-palette-label", textContent: item.name }));
         if (item.dir) row.append(el("span", { className: "glosa-palette-meta", textContent: item.dir }));
+      } else {
+        row.append(el("span", { className: "glosa-palette-label", textContent: item.command.label }));
+        if (item.command.detail) {
+          row.append(el("span", { className: "glosa-palette-meta", textContent: item.command.detail }));
+        }
       }
       row.addEventListener("pointermove", () => setActive(index, { scroll: false }));
       row.addEventListener("click", () => pick(index));
@@ -191,7 +206,8 @@ export function createCommandPalette({ host, getFiles, getSections, onOpenFile }
     if (!item) return;
     close({ restoreFocus: false });
     if (item.kind === "section") item.entry.jump();
-    else onOpenFile(item.path);
+    else if (item.kind === "file") onOpenFile(item.path);
+    else item.command.run();
   }
 
   function show() {

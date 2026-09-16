@@ -648,7 +648,9 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const main = inPane(root, ".glosa-pane-main");
     main.scrollTop = 600;
     inPane(root, '.glosa-modebar [data-mode="edit"]').click();
-    expect(main.scrollTop).toBe(0);
+    // Edit is the same page with a caret in it: the reader keeps their place instead of being
+    // sent back to the top.
+    expect(main.scrollTop).toBe(600);
     // §8: the measure follows the face. Rich is prose; Source is markdown and gets the pane.
     expect(activePane(root).getAttribute("data-editor-face")).toBe("rich");
     const richTextbox = root.querySelector('.ProseMirror[role="textbox"]');
@@ -824,7 +826,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    inPane(root, '.glosa-modebar [data-mode="review"]').click();
+    // The page opens with notes shown, so selecting text is enough; no mode switch first.
+    expect(activePane(root).getAttribute("data-mode")).toBe("review");
 
     const content = inPane(root, ".glosa-content");
     const heading = content.querySelector("h1")!;
@@ -898,7 +901,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 5; i++) await Promise.resolve();
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
-    inPane(root, '.glosa-modebar [data-mode="review"]').click();
+    expect(activePane(root).getAttribute("data-mode")).toBe("review");
 
     const heading = inPane(root, '.glosa-content > h1[data-line="0"]');
     const body = inPane(root, '.glosa-content > p[data-line="2"]');
@@ -938,7 +941,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       },
     });
 
-    mountApp(root, { dataAccess: da });
+    // The notes-hidden page: the transcript is read-only context there, and composing needs notes shown.
+    mountApp(root, { dataAccess: da, initialMode: "read" });
     for (let i = 0; i < 5; i++) await Promise.resolve();
     // History lives in a pane now, so there has to be one open to compare the two scopes.
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
@@ -1019,7 +1023,44 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.title).toBe("ws-1 — notes.md");
   });
 
-  test("read lock shows only Read and ignores Review/Edit shortcuts", async () => {
+  test("the title is the way into Go to, and a journal apply lease pauses Edit in the open pane until it ends", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess();
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const trigger = root.querySelector(".glosa-goto-trigger") as any;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    trigger.click();
+    expect((root.querySelector(".glosa-palette") as any).hidden).toBe(false);
+    (root.querySelector(".glosa-palette-input") as any).dispatchEvent(
+      new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+
+    const edit = () => inPane(root, '.glosa-modebar [data-control="edit"]');
+    expect(edit().disabled).toBe(false);
+    da.stream.handlers?.onEvent?.({
+      event: "journal",
+      data: { event: "apply_begin", entry: "inb-9", detail: { lease_id: "L1", expires_at: null } },
+    });
+    expect(edit().disabled).toBe(true);
+    da.stream.handlers?.onEvent?.({
+      event: "journal",
+      data: { event: "apply_end", entry: "inb-9", detail: { lease_id: "L1" } },
+    });
+    expect(edit().disabled).toBe(false);
+
+    // ⌘E is Edit, and again is Done.
+    dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true }));
+    expect(activePane(root).getAttribute("data-mode")).toBe("edit");
+    dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true }));
+    expect(activePane(root).getAttribute("data-mode")).toBe("review");
+  });
+
+  test("read lock shows no Notes or Edit controls and stays on the read page", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
     (mountApp as any)(root, {
@@ -1030,8 +1071,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(root.getAttribute("data-preview-lock")).toBe("true");
-    const modes = Array.from(root.querySelectorAll(".glosa-modebar [data-mode]")).map((el) => (el as any).dataset.mode);
-    expect(modes).toEqual(["read"]);
+    // A locked page is for reading only: no Notes toggle to open the margin, no Edit to change it.
+    expect(root.querySelectorAll(".glosa-modebar [data-mode]")).toHaveLength(0);
     // Mode is pane state now, so it is stamped on the pane rather than on the app root.
     expect(activePane(root).getAttribute("data-mode")).toBe("read");
   });

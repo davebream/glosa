@@ -97,6 +97,49 @@ describe("Review mode — the agent's half of the margin", () => {
     return { host, pane };
   }
 
+  describe("one page: a notes toggle, Edit as a state of it, and a pause while a session applies", () => {
+    const control = (host: any, name: string) => q(host, `.glosa-modebar [data-control="${name}"]`);
+
+    test("the notes toggle moves between the notes-shown and notes-hidden page, and Done returns to whichever was left", async () => {
+      const { host, pane } = await mountPane(fakeDataAccess([]));
+      expect(control(host, "notes").getAttribute("aria-label")).toBe("Hide notes");
+      control(host, "notes").click();
+      await paint();
+      expect(pane.getMode()).toBe("read");
+      expect(control(host, "notes").getAttribute("aria-label")).toBe("Show notes");
+
+      control(host, "edit").click();
+      await paint();
+      expect(pane.getMode()).toBe("edit");
+      // Editing shows only Done: the notes toggle is not a thing to do to a page being edited.
+      expect(control(host, "notes")).toBeNull();
+      control(host, "done").click();
+      await paint();
+      expect(pane.getMode()).toBe("read");
+    });
+
+    test("a session's apply lease pauses Edit, keeps an open draft, and lifts when the lease ends", async () => {
+      const { host, pane } = await mountPane(fakeDataAccess([]));
+      pane.setApplyPause({ lease_id: "L1", expires_at: null });
+      await paint();
+      expect(control(host, "edit").disabled).toBe(true);
+      pane.setMode("edit");
+      expect(pane.getMode()).toBe("review");
+
+      pane.setApplyPause(null);
+      await paint();
+      expect(control(host, "edit").disabled).toBe(false);
+      pane.setMode("edit");
+      expect(pane.getMode()).toBe("edit");
+
+      // A lease that starts while a draft is open does not throw the draft away; it says why to wait.
+      pane.setApplyPause({ lease_id: "L2", expires_at: null });
+      await paint();
+      expect(pane.getMode()).toBe("edit");
+      expect(q(host, ".glosa-edit-status").textContent).toContain("session is applying a change");
+    });
+  });
+
   const askAboutPremise = (over: Record<string, unknown> = {}) => ({
     id: "inb-1",
     created_at: "2026-09-05T10:00:00Z",
