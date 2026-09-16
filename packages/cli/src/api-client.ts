@@ -158,6 +158,14 @@ export interface InboxPresentationResult {
   presentation: DeliverableEntry;
 }
 
+/** `GET /w/:slug/watch`'s response shape (#153 Part 2). `latest_checkpoint` is a SAFE resume
+ * watermark (never a raw "current HEAD") — see `previewWatch`'s docstring in bus.ts. */
+export interface WatchResult {
+  entries: DeliverableEntry[];
+  latest_checkpoint: string | null;
+  has_more: boolean;
+}
+
 export interface InboxListEntry {
   id: string;
   kind: string;
@@ -287,6 +295,26 @@ export interface GlosaApiClient {
   ): Promise<{ bound: true; session_id: string }>;
   /** Mint a short-TTL single-use presentation token for MCP/present URLs (`p=`). */
   mintPresentationToken?(): Promise<{ token: string; expires_in_s: number }>;
+  /** `glosa_watch`'s daemon call (#153 Part 2, `GET /w/:slug/watch`) — a held read; writes
+   * nothing. `waitMs` above 0 holds the connection open until an in-scope `external_edit` lands
+   * for `session`, the connection is cancelled, or the wait elapses. `session` must already be
+   * explicitly bound to the resolved workspace. */
+  watch?(
+    path: string,
+    session: string,
+    opts?: { path?: string; since?: string; waitMs?: number },
+  ): Promise<WatchResult>;
+  /** `POST /api/sessions/:id/watch/transport-ack` — records that the HTTP body of a prior
+   * `watch()` call reached this client, for exactly the entry ids it named. */
+  watchTransportAck?(session: string, entryIds: string[]): Promise<{ accepted: string[] }>;
+  /** `POST /api/sessions/:id/watch/ack` — records `presented` (default) or `failed` after the MCP
+   * tool response reaches stdout. */
+  watchAck?(
+    session: string,
+    entryIds: string[],
+    outcome?: "presented" | "failed",
+    error?: string,
+  ): Promise<{ accepted: string[] }>;
   /** `glosa forget <slug>`'s daemon-side call (issue #156). Addressed by SLUG, not `path` — the
    * whole point is that it must still work once a workspace's on-disk path is gone. `confirm`
    * defaults to `false`: a pure preview that performs the exact same preflight but never marks,
@@ -480,6 +508,29 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
     },
     async mintPresentationToken() {
       return (await call("POST", "/api/presentation-token/mint", {})).json();
+    },
+    async watch(path, session, opts = {}) {
+      const workspace = await openWorkspace(path);
+      const params: Record<string, string> = { session };
+      if (opts.path !== undefined) params.path = opts.path;
+      if (opts.since !== undefined) params.since = opts.since;
+      if (opts.waitMs !== undefined && opts.waitMs > 0) params.wait_ms = String(Math.floor(opts.waitMs));
+      const qs = new URLSearchParams(params).toString();
+      return (await call("GET", `/w/${encodeURIComponent(workspace.slug)}/watch?${qs}`)).json();
+    },
+    async watchTransportAck(session, entryIds) {
+      return (
+        await call("POST", `/api/sessions/${encodeURIComponent(session)}/watch/transport-ack`, { entries: entryIds })
+      ).json();
+    },
+    async watchAck(session, entryIds, outcome, error) {
+      return (
+        await call("POST", `/api/sessions/${encodeURIComponent(session)}/watch/ack`, {
+          entries: entryIds,
+          ...(outcome !== undefined ? { outcome } : {}),
+          ...(error !== undefined ? { error } : {}),
+        })
+      ).json();
     },
     async forgetWorkspace(slug, opts = {}) {
       return (

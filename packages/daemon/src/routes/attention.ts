@@ -7,13 +7,13 @@ import {
   completeAttention,
   createAttention,
   listAttention,
-  markAttentionSeen,
   MAX_ENTRY_WAIT_MS,
+  markAttentionSeen,
   waitForEntryTerminal,
 } from "../services/attention.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { problem } from "../transport/problem.ts";
-import type { RouteMatch } from "./types.ts";
+import type { BunServer, RouteMatch } from "./types.ts";
 
 function mapWorkspace(error: WorkspaceLookupError, pathname: string) {
   if (error.code === "not-found") return problem(404, "not-found", "unknown workspace", undefined, pathname);
@@ -227,7 +227,7 @@ async function create(deps: AttentionDependencies, req: Request) {
   }
 }
 
-async function entryStatus(deps: AttentionDependencies, req: Request) {
+async function entryStatus(deps: AttentionDependencies, req: Request, server?: BunServer) {
   const url = new URL(req.url);
   const path = url.searchParams.get("path");
   const id = url.searchParams.get("entry");
@@ -252,6 +252,12 @@ async function entryStatus(deps: AttentionDependencies, req: Request) {
   }
   try {
     if (waitMs === 0) return Response.json(await attentionEntryStatus(deps, path, id));
+    // #153 Part 2 criterion 5 / A1 §8.3: `Bun.serve` closes an idle connection at its default
+    // ~10s regardless of how long this handler holds it — `waitMs` up to 15 minutes needs the
+    // per-request opt-out the session stream already uses (`transport/http.ts`'s
+    // `handleSessionStream`). Missing here was a latent bug this task's premise delta found: the
+    // route's own test holds for ~50ms, in-process with no bound server, so it never observed it.
+    server?.timeout(req, 0);
     return Response.json(await waitForEntryTerminal(deps, path, id, waitMs, req.signal));
   } catch (error) {
     return mapError(error, url.pathname);
@@ -263,7 +269,7 @@ export function attentionRoutes(deps: AttentionDependencies, method: string, pat
     return { routeClass: "state-changing", handle: (req) => create(deps, req) };
   }
   if (method === "GET" && pathname === "/api/workspaces/entry-status") {
-    return { routeClass: "authed-read", handle: (req) => entryStatus(deps, req) };
+    return { routeClass: "authed-read", handle: (req, server) => entryStatus(deps, req, server) };
   }
   let match: RegExpMatchArray | null;
   if (method === "GET" && (match = pathname.match(/^\/w\/([^/]+)\/inbox$/))) {

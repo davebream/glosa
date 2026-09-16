@@ -13,6 +13,7 @@ import { WorkspaceMetadataRegistry } from "../adapters/workspace-metadata.ts";
 import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
@@ -22,7 +23,7 @@ import { CapabilityStore } from "../security/capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
-import { createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
+import { type BunServer, createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
 import { isHomeOrAncestor } from "../registry/workspace-root.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
@@ -105,6 +106,7 @@ export interface DaemonBackend {
   metadataRegistry: WorkspaceMetadataRegistry;
   providerRegistry: AgentProviderRegistry;
   pushRegistry: SessionPushRegistry;
+  watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
   /** Starts daemon-lifetime watching for workspaces already in the index. Call AFTER serving:
    * it is warm-up, not readiness, and it yields between workspaces. */
@@ -157,6 +159,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
+  const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     warn: (message) => log(home, message),
     // The watcher→bus edge (#153), assembled HERE rather than imported inside the watcher: that
@@ -238,6 +241,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     metadataRegistry,
     providerRegistry,
     pushRegistry,
+    watchEmissions,
     artifactWatcherRegistry,
     adoptionCoordinator,
     sealAdoptionSources,
@@ -343,6 +347,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,
     pushRegistry: backend.pushRegistry,
+    watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
     home,
@@ -351,9 +356,17 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // Bun.serve starts accepting as soon as it returns, but a successful handshake is the public
   // readiness proof. Hold only that route until lock ownership, both listeners, and shutdown are
   // fully wired so clients never observe a new process beside the previous process's stale lock.
-  const readyApiFetch = async (request: Request): Promise<Response> => {
+  // #153 Part 2 (criterion 5) found this dropping `server` entirely — Bun always calls a
+  // `Bun.serve` fetch handler as `fetch(req, server)`, but this wrapper only ever forwarded
+  // `request`, so every downstream `server?.timeout(req, 0)` (the session stream's own included)
+  // silently no-op'd in production: `server` was always `undefined` here, never Bun's real
+  // instance. A held connection was therefore still subject to Bun's default idle close (A1
+  // §8.3) regardless of that call, which is exactly the defect a real bound-daemon test (as
+  // opposed to `http-routes.test.ts`'s in-process, no-bound-server calls) can observe and this
+  // one bound-parameter fix closes for every current and future caller of `server.timeout`.
+  const readyApiFetch = async (request: Request, server: BunServer): Promise<Response> => {
     if (new URL(request.url).pathname === "/api/handshake") await startupReady;
-    return apiFetch(request);
+    return apiFetch(request, server);
   };
   const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
 
@@ -489,7 +502,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
 async function bindMainOrExit(
   home: string,
   port: number,
-  fetch: (req: Request) => Promise<Response>,
+  fetch: (req: Request, server: BunServer) => Promise<Response>,
   errorCsp: Record<string, string>,
 ): Promise<ReturnType<typeof Bun.serve>> {
   try {

@@ -646,3 +646,59 @@ the state and provides an explicit repair command. Repair preserves surviving ob
 new unknown-attributed history root, with a reason recoverable across a crash. It cannot reconstruct
 lost checkpoints or rewrite the old inbox entries that reference them. If all Git and prior checkpoint
 journal evidence is absent, previous initialization is unknowable; first-use behavior remains unchanged.
+
+## Where a cold workspace gets hydrated, so a watch can stay a read (#153 Part 2)
+
+`GET /w/:slug/watch` is a read. Reconciling is not: it self-heals, expires leases, commits drift and
+appends offline catch-up. `bus/peek.ts` already exists to keep GETs free of side effects, so the
+watch resolving its bus with a reconciliation would have made a plain GET a writer.
+
+Dropping the reconciliation alone was not enough. A bus that nobody has opened has never folded its
+journal, and the registry survives a daemon restart while buses do not — so a workspace's offline
+catch-up would have waited for whatever unrelated request happened to open it next, weakening the
+"an agent learns about edits made while it was away" guarantee.
+
+Hydration moved to where a session attaches. `POST /w/:slug/session-binding` reconciles the workspace
+it binds, and so does `POST /api/sessions/register` when the registration itself carries a binding.
+Catch-up lands earlier than before, when a session attaches, rather than later.
+
+**Ordering alone was not enough, and the first version of this decision wrongly said it was.** The
+claim was that a watch always runs behind a bind, so a reconcile always precedes it. Three paths
+break that: `register` could carry a `workspace_binding` and resolve no bus (it now hydrates too); a
+binding can outlive the
+bus that was evicted by GC or `glosa forget`; and hydration is best-effort, so a bind whose reconcile
+throws still returns success. In each, the watch meets a fresh bus whose derived state is empty —
+which reads exactly like "nothing to report". A silent wrong answer is worse than an error here,
+because the agent concludes the manuscript is untouched.
+
+So the watch stopped inferring and started checking. A watch that meets an unreconciled bus folds
+the journal **read-only** — derived state from the bytes on disk, with no self-heal, no lease expiry,
+no drift commit and no catch-up — and answers from that. The GET still writes nothing.
+
+**Why read-only folding rather than refusing.** Refusing was tried first and was wrong twice over:
+§5.11b promises the hold ends "returning whatever the cursor currently has, honestly, even
+`entries:[]`", so an error contradicts the route's own contract, and three existing lifecycle gates
+assert exactly that 200. A workspace whose journal is sitting on disk can be answered correctly; the
+only thing a cold instance genuinely cannot produce is catch-up for drift it has not scanned for, and
+that is what attaching is for.
+
+**What this still does not solve.** If a bus is evicted while its binding survives, and drift lands
+before the session re-attaches, the watch reports the journal honestly but the drift is not in it
+yet. The entry appears once anything reconciles. This is a delay, not a loss, and it is the residue
+of keeping the read a read.
+
+**Why not reconcile in the watch and document it as a write.** It makes every read path a candidate
+writer by precedent, and the surface that most needs to be side-effect-free is the one a client
+polls in a loop.
+
+**Why not hydrate lazily on first read of any kind.** That is the same rule with the trigger hidden:
+which GET pays the cost then depends on arrival order, and the one that pays it is unpredictable.
+
+**Why not rely on the ordering argument after patching the `register` path.** Because the argument
+was already wrong twice, and the cost of it being wrong a third time is silence rather than an error.
+A check costs one boolean and is true regardless of how many attach paths exist later.
+
+**What this does not solve.** Hydration is best-effort at the bind: a bind whose reconcile throws
+still binds, because refusing to bind over a git-toolchain problem would take out delivery that
+never touches git (the `glosa/#38` failure). The next writer reconciles instead, so catch-up is
+delayed in that case, not lost.

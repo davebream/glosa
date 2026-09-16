@@ -90,8 +90,9 @@ version never touches your project's Git history. Attribution is deliberately co
 made in glosa's own editor are yours by construction, and a change glosa did not witness through an
 apply lease stays `Unknown change` rather than being credited to anyone. Edit a tracked file in your
 own editor and glosa records it as exactly that — a file that changed outside glosa, since a named
-checkpoint, attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, no
-agent is nudged with it, and it waits there until you dismiss it.
+checkpoint, attributed to nobody. It is a note in your inbox, not a task: nothing is asked of you, and
+no agent is nudged with it unless its own session explicitly asks to watch for exactly this — it
+waits there until you dismiss it either way.
 
 If checkpoint storage is damaged, `glosa doctor --workspace <slug>` reports it and counts inbox entries
 that reference missing history. `glosa doctor --workspace <slug> --repair-baseline` explicitly starts

@@ -99,7 +99,8 @@ interface PresentationBase {
 export type DeliverableEntry =
   | (PresentationBase & { kind: "annotation"; detail: Record<string, unknown> })
   | (PresentationBase & { kind: "human_edit"; detail: Record<string, unknown> })
-  // Never actually DELIVERED — `eligibleDeliveryEntriesLocked` excludes it — but it is still
+  // Never delivered by ORDINARY delivery — `eligibleDeliveryEntriesLocked` excludes it — though
+  // since #153 Part 2 a bound session can ask for its own via `GET /w/:slug/watch`. It is still
   // retrievable (`glosa inbox get`, MCP `glosa_inbox_get`) and so still needs a presentation that
   // says what it is. Before this kind existed those same hunks reached an agent labelled
   // `human_edit`, which is the lie #144 names.

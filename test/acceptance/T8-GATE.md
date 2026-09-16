@@ -6,7 +6,7 @@ overall v1 readiness may remain blocked by an independent release issue.
 
 ## 1. Deterministic gate
 
-Run from the repository root with Bun 1.2.7 (the pinned CI runtime):
+Run from the repository root with Bun 1.4.2, the toolchain CI pins and the JUnit reporter requires. Bun 1.2.7 remains the APPLICATION runtime floor (A6 §F30) — it is the oldest Bun the daemon supports, not the version the suites run under:
 
 ```sh
 bun run typecheck
@@ -124,6 +124,9 @@ dropping out of it.
 | `concurrency` | `test/acceptance/generic-pull-scope.test.ts` |
 | `delivery` | `packages/daemon/test/monitor.test.ts` |
 | `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `delivery` | `packages/daemon/test/external-edit-http.test.ts` |
+| `delivery` | `packages/daemon/test/external-edit-live.test.ts` |
+| `delivery` | `packages/daemon/test/bus/external-edit.test.ts` |
 | `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
 | `delivery` | `packages/cli/test/mcp.test.ts` |
 | `delivery` | `packages/cli/test/mcp-lifetime-real-subprocess.test.ts` |

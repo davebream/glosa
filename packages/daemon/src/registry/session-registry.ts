@@ -54,6 +54,14 @@ export class SessionRegistry {
   private readonly connections = new Map<string, Map<string, () => void>>();
   private readonly scheduleRefresh: NonNullable<SessionRegistryDeps["scheduleRefresh"]>;
   private readonly ownershipCoordinator?: AdoptionCoordinator;
+  // #153 Part 2 (W3): a held watch captures a session's binding once, at hold-start, and must
+  // stop trusting it the moment that binding actually changes — a rebind or a deregistration,
+  // never a bare heartbeat (which re-upserts the SAME binding constantly and must not thrash this).
+  // Keyed by session id; aborted and dropped (never reused) the instant the binding moves or the
+  // session disappears, so a caller that captured the old controller's signal observes exactly one
+  // event for exactly one lifecycle change, and a fresh `sessionLifecycleSignal` call afterward
+  // hands out a new, live controller for whatever the session is bound to now.
+  private readonly lifecycleControllers = new Map<string, AbortController>();
 
   constructor(deps: SessionRegistryDeps = {}) {
     this.now = deps.now ?? (() => new Date());
@@ -113,7 +121,33 @@ export class SessionRegistry {
     };
     await this.index?.upsertWorkspace(record.workspace_binding ?? record.cwd, "session");
     this.sessions.set(record.session_id, record);
+    // A REBIND, not a heartbeat: the previous binding actually changed value. A held watch that
+    // captured the OLD controller's signal must be told its authority moved — see
+    // `sessionLifecycleSignal`'s docstring. Deleting rather than reusing the controller means the
+    // next `sessionLifecycleSignal` call hands out a fresh, live one for the new binding, instead
+    // of a controller some caller may already be treating as "aborted forever".
+    if (prior && prior.workspace_binding !== record.workspace_binding) {
+      this.lifecycleControllers.get(record.session_id)?.abort();
+      this.lifecycleControllers.delete(record.session_id);
+    }
     return record;
+  }
+
+  /** A signal that fires the moment `sessionId`'s workspace binding changes or the session is
+   * deregistered — never on a bare heartbeat, which re-upserts the SAME binding on the same 60s
+   * cadence a held watch is meant to outlive. A held request (#153 Part 2, W3) captures this ONCE
+   * at hold-start alongside the binding it observed then; the signal firing later is what tells it
+   * that captured binding is no longer this session's authority, so it must stop trusting it
+   * rather than silently keep serving (or later appending against) a workspace the session has
+   * since left. Lazily creates a controller for a session with none yet — every session starts
+   * with a live signal, not a pre-aborted one. */
+  sessionLifecycleSignal(sessionId: string): AbortSignal {
+    let controller = this.lifecycleControllers.get(sessionId);
+    if (!controller) {
+      controller = new AbortController();
+      this.lifecycleControllers.set(sessionId, controller);
+    }
+    return controller.signal;
   }
 
   /** Returns false for an unknown identity, allowing a client to recover registration. */
@@ -269,6 +303,8 @@ export class SessionRegistry {
     return this.mutex.runExclusive(() => {
       for (const release of this.connections.get(sessionId)?.values() ?? []) release();
       this.sessions.delete(sessionId);
+      this.lifecycleControllers.get(sessionId)?.abort();
+      this.lifecycleControllers.delete(sessionId);
     });
   }
 

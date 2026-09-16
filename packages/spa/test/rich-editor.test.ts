@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(542);
+    ).toBe(554);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1850,10 +1850,13 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // (35/35) numerators did not — the bookkeeping case.
   // #182's own decisions.md entry (four new blocks: a heading, two paragraphs, one list) and
   // requirements.md's expanded R6/T3 prose (text grew, no new top-level blocks): 538 → 542 blocks /
-  // 484 → 488 edits. Metric 1's per-cause map (40), and metric 2/3's shipped (1/1) and ablated
-  // (35/35) numerators, held steady across the move — checked directly against the corpus, not
+  // 484 → 488 edits.
+  // #153 Part 2 documents itself in the corpus it measures: CHANGELOG.md's entry and README.md's
+  // watch paragraph are two of the nine, so 542 → 554 blocks / 488 → 500 edits. Metric 1's
+  // per-cause map (40), and metric 2/3's shipped (1/1) and ablated (35/35) numerators, held steady
+  // across this move as across every earlier one — checked directly against the corpus, not
   // assumed.
-  const BLOCKS = 542;
+  const BLOCKS = 554;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1889,7 +1892,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 542 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 554 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1946,7 +1949,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 488; the guard fires on it and, ablated, on 35", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 500; the guard fires on it and, ablated, on 35", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 35 of them, and the guard must catch
@@ -2028,11 +2031,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488) — bookkeeping, not drift, since `shipped` held steady across every
-      // one of those moves. 484 → 488 is #182's own decisions.md/requirements.md growth (see the
-      // BLOCKS comment above).
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500) — bookkeeping, not drift, since `shipped` held steady across every
+      // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
+      // comment above).
     ).toEqual({
-      edits: 488,
+      edits: 500,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 35, fired: 35 },
     });

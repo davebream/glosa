@@ -17,13 +17,14 @@ import {
   headSha,
   initShadowRepo,
   inspectShadowRepo,
-  ShadowHistoryError,
+  isAncestorOrEqual,
   isPathDirty,
+  type RepairShadowDeps,
   reclaimIndexLock,
   repairShadowBaseline,
-  type RepairShadowDeps,
-  type ShadowHealth,
   runGit,
+  type ShadowHealth,
+  ShadowHistoryError,
   safePathspec,
 } from "../git/shadow.ts";
 import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
@@ -248,6 +249,13 @@ export class WorkspaceBus {
   // and skip its journal replay/self-heal/offline-catchup forever. Living on the instance means a
   // fresh instance is un-reconciled by construction — no external bookkeeping to keep in sync.
   private reconciledOnce = false;
+  /** Hydration is THREE states, not two (review round 4). `reconciledOnce` is claimed synchronously
+   * before `reconcile()` is awaited, so it means "a reconcile has STARTED" — reading it as
+   * "hydrated" let a concurrent watch skip its own fold, queue behind that reconcile, and then
+   * answer from default empty state if it failed. `reconcileSettled` is the only flag that means
+   * the derived state actually reflects the journal. */
+  private reconcileSettled = false;
+  private reconcileInFlight: Promise<unknown> | null = null;
   private readonly deliveryReservations = new Map<string, DeliveryReservation>();
 
   // P3.2 — the SSE cursor space (A1 §8.1): `nextSequence` is the physical journal-line offset
@@ -259,6 +267,13 @@ export class WorkspaceBus {
   // WorkspaceBus is the SOLE writer for its root (P2.4's registry invariant).
   private nextSequence = 0;
   private readonly listeners = new Set<(payload: { cursor: number; event: JournalEvent }) => void>();
+  // #153 Part 2 (W3): a held watch's "workspace eviction/forget/close" abort source. Fires exactly
+  // once, from `close()` — the same call `WorkspaceBusRegistry.evict`/`.close` make on a hard
+  // remove or an explicit reopen, and the one `glosa forget`'s `onHardRemove` wiring reaches. A
+  // held watch on THIS instance combines `closeSignal()` into its abort set so a workspace that
+  // disappears out from under it ends the hold instead of leaving it subscribed to a bus nothing
+  // will ever notify again.
+  private readonly closeController = new AbortController();
 
   private assertWritable(): void {
     if (this.state.adoptionSeal) throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
@@ -331,9 +346,72 @@ export class WorkspaceBus {
   reconcileOnce(): Promise<ReconcileResult | undefined> {
     if (this.reconciledOnce) return Promise.resolve(undefined);
     this.reconciledOnce = true;
-    return this.reconcile().catch((err) => {
-      this.reconciledOnce = false;
-      throw err;
+    const running = this.reconcile()
+      .then((result) => {
+        this.reconcileSettled = true;
+        return result;
+      })
+      .catch((err) => {
+        this.reconciledOnce = false;
+        throw err;
+      })
+      .finally(() => {
+        this.reconcileInFlight = null;
+      });
+    // Held so a concurrent reader can WAIT for this pass rather than racing it. Its rejection is
+    // observed by `hydrateForRead`'s own catch as well as by this caller, so a failing reconcile
+    // never surfaces as an unhandled rejection just because a reader also looked at it.
+    this.reconcileInFlight = running;
+    return running;
+  }
+
+  /** Whether THIS instance has folded its journal yet. The read-only watch route checks it rather
+   * than assuming a route order put a reconcile ahead of it: buses do not survive a restart, and a
+   * binding can reach a fresh instance through revival after eviction, or
+   * through a bind whose own hydration failed. An unreconciled instance serves empty derived state
+   * that is indistinguishable from "nothing to report" — see `resolveBusForRead`. */
+  hasReconciled(): boolean {
+    return this.reconcileSettled;
+  }
+
+  /** Folds the journal into this instance's derived state WITHOUT writing anything — no self-heal,
+   * no lease expiry, no drift commit, no catch-up. The read-only half of what `reconcile()` does.
+   *
+   * This is what lets `GET /w/:slug/watch` answer correctly off an instance nobody has reconciled
+   * yet (review round 3, F-8): buses do not survive a restart, and a binding can reach a fresh one
+   * through revival after eviction, or through an attach whose own best-effort hydration
+   * failed. Without this the watch would serve EMPTY derived state, which a caller cannot tell
+   * apart from "nothing to report" — a silent wrong answer.
+   *
+   * What it deliberately does NOT do is offline catch-up, because that writes. Drift that landed
+   * while the daemon was down is reported when a session attaches (`session-binding` and a
+   * binding-carrying `register` both reconcile), not by this call.
+   *
+   * Pinned at this level rather than through HTTP, because the paths that DO reach a cold bus are
+   * awkward to drive from a request: a bus evicted by GC or `glosa forget` while its binding
+   * survives, and an attach whose best-effort hydration threw. Both are real; neither is a route a
+   * test can simply call. `A9` opens a fresh bus over an existing
+   * journal, proves the entry is returned and the journal bytes are unchanged, and proves a FAILING
+   * in-flight reconcile is waited for and then folded past rather than answered empty.
+   *
+   * What stays absent, deliberately: drift that a failed attach reconcile never committed. Folding
+   * the journal cannot invent entries for it, so it appears at the next successful writer
+   * reconciliation. The read is honest about the journal and promises no catch-up it has not run. */
+  async hydrateForRead(): Promise<void> {
+    if (this.reconcileSettled) return;
+    // In flight: wait for it rather than folding underneath it. If it FAILS, fall through and fold,
+    // because a failed reconcile leaves the default empty state behind — the silent-empty answer
+    // this method exists to prevent.
+    if (this.reconcileInFlight) {
+      await this.reconcileInFlight.catch(() => {});
+      if (this.reconcileSettled) return;
+    }
+    // Under the workspace mutex, so the fold cannot interleave with a writer mutating the same
+    // fields, and re-checked inside because a reconcile may have settled while this queued.
+    await this.mutex.runExclusive(this.mutexKey, () => {
+      if (this.reconcileSettled) return;
+      this.state = peekJournal(this.workspace).state;
+      this.nextSequence = countJournalLines(journalPath(this.workspace));
     });
   }
 
@@ -380,11 +458,24 @@ export class WorkspaceBus {
     return this.nextSequence - 1;
   }
 
+  /** Test-only: the very mutex this bus serialises its writes on, so a test can OCCUPY it and make
+   * the queue-wait window real instead of hoping for a timing coincidence. Exposed because the
+   * defect it pins — authority re-read after the queue wait rather than before it — is invisible
+   * unless something is actually holding the lock. */
+  mutexForTest(): KeyedMutex<string> {
+    return this.mutex;
+  }
+
   /** Test/diagnostic-only: how many live subscribers this bus currently has. Lets a test prove a
    * disconnected SSE client's `unsubscribe()` actually ran (no lingering listener) without this
    * class exposing its `listeners` set directly. */
   listenerCount(): number {
     return this.listeners.size;
+  }
+
+  /** See the field docstring above — fires once, from `close()`. */
+  closeSignal(): AbortSignal {
+    return this.closeController.signal;
   }
 
   /** Notifies every subscriber with the sequence number `event` just claimed. Re-derives
@@ -837,9 +928,10 @@ export class WorkspaceBus {
       if (reserved.has(id)) continue;
       const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
       if (isTerminal(kind, entry.status)) continue;
-      // NOT DELIVERABLE (#153): an `external_edit` reports that a file changed on disk with
-      // nothing to attribute it to. There is no action for a session to take on it — it cannot be
-      // "applied", and the change is already in the artifact — so it is excluded here rather than
+      // NOT DELIVERABLE BY ORDINARY DELIVERY (#153): an `external_edit` reports that a file
+      // changed on disk with nothing to attribute it to. There is no action for a session to take
+      // on it — it cannot be "applied", and the change is already in the artifact — so it is
+      // excluded from this gate rather than
       // left to fail presentation, which would journal a `delivery_attempt{outcome:"failed"}` on
       // every drain for an entry that was never meant to be offered. This is the single gate
       // feeding BOTH `previewDelivery` and `prepareDelivery` (A5 §F23), so one exclusion covers
@@ -1346,6 +1438,7 @@ export class WorkspaceBus {
   close(): Promise<void> {
     return this.mutex.runExclusive(this.mutexKey, () => {
       this.writer.close();
+      this.closeController.abort();
     });
   }
 
@@ -1410,6 +1503,213 @@ export class WorkspaceBus {
         this.notify(event);
       }
       return true;
+    });
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // #153 Part 2 — `glosa_watch`: a per-session, held read over `external_edit` entries. Reuses
+  // the kind's existing exclusion from `eligibleDeliveryEntriesLocked` (a watch is a SEPARATE
+  // selection, never that method) and its existing presentation builder; adds nothing but a
+  // per-session "already presented via watch" fold and a safe cursor watermark (W1).
+  // -----------------------------------------------------------------------------------------
+
+  private wasPresentedViaWatchLocked(entry: DerivedState["entries"][string], session: string): boolean {
+    const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
+    return attempts.some(
+      (attempt) => attempt.via === "watch" && attempt.session === session && attempt.outcome === "presented",
+    );
+  }
+
+  /** Every non-terminal `external_edit` entry in scope, oldest journal order first — REGARDLESS of
+   * whether this session has already had it presented via watch. `previewWatchLocked` needs the
+   * full set (not just this session's still-pending ones) to compute W1's safe watermark: a
+   * checkpoint counts as fully accounted for only when EVERY in-scope entry it produced is either
+   * already presented to this session or included in the current response, and an entry already
+   * presented is invisible to the "pending" filter by construction. */
+  private inScopeExternalEditEntriesLocked(path: string | undefined): Array<{
+    id: string;
+    entry: DerivedState["entries"][string];
+    payload: Record<string, unknown>;
+    untilCheckpoint: string;
+  }> {
+    const { entryOrder } = peekJournal(this.workspace);
+    const ids = Object.keys(this.state.entries).sort(
+      (a, b) => (entryOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (entryOrder.get(b) ?? Number.MAX_SAFE_INTEGER),
+    );
+    const out: Array<{
+      id: string;
+      entry: DerivedState["entries"][string];
+      payload: Record<string, unknown>;
+      untilCheckpoint: string;
+    }> = [];
+    for (const id of ids) {
+      const entry = this.state.entries[id]!;
+      if (!isExternalEditEntry(entry)) continue;
+      if (isTerminal("common", entry.status)) continue; // W2: dismissed is never eligible
+      const payload = readInboxEntry(this.workspace, id);
+      if (!payload || typeof payload !== "object") continue;
+      const record = payload as Record<string, unknown>;
+      if (path !== undefined && record.path !== path) continue;
+      const untilCheckpoint = typeof record.until_checkpoint === "string" ? record.until_checkpoint : "";
+      if (!untilCheckpoint) continue;
+      out.push({ id, entry, payload: record, untilCheckpoint });
+    }
+    return out;
+  }
+
+  /** The read half of `glosa_watch` (W4: the GET this backs never writes). Groups in-scope
+   * `external_edit` entries by `until_checkpoint` — contiguous by construction, since
+   * `captureExternalEdit` creates every entry from one capture inside one mutex critical section —
+   * and returns at most `MAX_DELIVERY_ENTRIES` unpresented-to-`session` ones, oldest first, plus a
+   * SAFE `latest_checkpoint` watermark (W1): the newest checkpoint whose every in-scope entry is
+   * either already presented to `session` or included in THIS response. A response never advances
+   * the watermark past a checkpoint it only partially returns. */
+  previewWatch(
+    opts: { session: string; path?: string; since?: string },
+    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+  ): Promise<{ entries: DeliverableEntry[]; has_more: boolean; latest_checkpoint: string | null }> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      const candidates = this.inScopeExternalEditEntriesLocked(opts.path);
+      const groups: (typeof candidates)[] = [];
+      for (const candidate of candidates) {
+        const last = groups.at(-1);
+        if (last && last[0]!.untilCheckpoint === candidate.untilCheckpoint) last.push(candidate);
+        else groups.push([candidate]);
+      }
+
+      const sinceCache = new Map<string, boolean>();
+      const excludedBySince = async (untilCheckpoint: string): Promise<boolean> => {
+        if (opts.since === undefined) return false;
+        const cached = sinceCache.get(untilCheckpoint);
+        if (cached !== undefined) return cached;
+        const result = await isAncestorOrEqual(this.workspace, untilCheckpoint, opts.since);
+        const excluded = result === "ancestor";
+        sinceCache.set(untilCheckpoint, excluded);
+        return excluded;
+      };
+      // "accounted for": already presented to THIS session via watch, excluded by `since`, or
+      // about to be returned in this very response — the three ways an in-scope entry stops being
+      // this response's problem. Computed once per entry and reused by both the selection pass and
+      // the watermark pass below so they can never disagree about the same entry.
+      const accountedFor = async (candidate: (typeof candidates)[number]): Promise<boolean> =>
+        this.wasPresentedViaWatchLocked(candidate.entry, opts.session) ||
+        (await excludedBySince(candidate.untilCheckpoint));
+
+      const selected: typeof candidates = [];
+      const built = new Map<string, DeliverableEntry>();
+      let batchBytes = 0;
+      for (const candidate of candidates) {
+        if (await accountedFor(candidate)) continue;
+        if (selected.length >= MAX_DELIVERY_ENTRIES) break;
+        const presentation = await build(candidate.id, candidate.payload, candidate.entry.status);
+        if (!presentation) continue; // malformed payload — never eligible, never blocks the watermark
+        const separatorBytes = selected.length > 0 ? Buffer.byteLength("\n\n---\n\n", "utf8") : 0;
+        if (batchBytes + separatorBytes + presentation.bytes > MAX_BATCH_PRESENTATION_BYTES) break;
+        selected.push(candidate);
+        built.set(candidate.id, presentation);
+        batchBytes += separatorBytes + presentation.bytes;
+      }
+
+      let hasMore = false;
+      let watermark: string | null = opts.since ?? null;
+      let watermarkStillAdvancing = true;
+      for (const group of groups) {
+        let groupComplete = true;
+        for (const candidate of group) {
+          if (built.has(candidate.id)) continue;
+          if (await accountedFor(candidate)) continue;
+          groupComplete = false;
+          hasMore = true;
+        }
+        if (watermarkStillAdvancing) {
+          if (groupComplete) watermark = group[0]!.untilCheckpoint;
+          else watermarkStillAdvancing = false;
+        }
+      }
+
+      return {
+        entries: selected.map((candidate) => built.get(candidate.id)!),
+        has_more: hasMore,
+        latest_checkpoint: watermark,
+      };
+    });
+  }
+
+  /** `POST /api/sessions/:id/watch/transport-ack` (W4): records that the HTTP body of a watch
+   * response reached the client, for exactly the ids that response actually named. Refuses any id
+   * that is not, right now, an `external_edit` entry — the same fail-closed shape
+   * `acknowledgePushedEntry` uses for its own kind refusal. Idempotent per (session, entry): a
+   * retried ack is a no-op success, not a duplicate journal line. */
+  recordWatchTransportAccepted(
+    session: string,
+    entryIds: readonly string[],
+    stillAuthorised?: () => boolean,
+  ): Promise<{ accepted: string[]; authorityLost?: true }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      // Checked HERE, inside the lock that guards the append, not by the caller before it (review
+      // round 4). `runExclusive` is an asynchronous queue: a caller that validated its binding and
+      // then awaited this method can have lost it while queued, and the append would still land.
+      if (stillAuthorised && !stillAuthorised()) return { accepted: [], authorityLost: true as const };
+      const accepted: string[] = [];
+      for (const entryId of entryIds) {
+        const entry = this.state.entries[entryId];
+        if (!entry || !isExternalEditEntry(entry)) continue;
+        const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+        if (attempts.some((a) => a.via === "watch" && a.session === session && a.outcome === "transport_accepted")) {
+          accepted.push(entryId);
+          continue;
+        }
+        this.recordDeliveryAttemptLocked(entryId, {
+          idem: `watch:${session}:${entryId}:transport_accepted`,
+          via: "watch",
+          session,
+          outcome: "transport_accepted",
+          reason: attempts.length > 0 ? "re_nudge" : "initial",
+        });
+        accepted.push(entryId);
+      }
+      return { accepted };
+    });
+  }
+
+  /** `POST /api/sessions/:id/watch/ack` (W4): records `presented`/`failed` after the MCP response
+   * reaches stdout (`DeliveryAwareTransport`). Refuses any id this session's watch never recorded
+   * `transport_accepted` for — the same "no attempt without a proven transport step first" rule
+   * `eligibleDeliveryEntriesLocked`'s `presented`-suppression assumes for every other `via`. */
+  recordWatchPresented(
+    session: string,
+    entryIds: readonly string[],
+    outcome: "presented" | "failed",
+    error?: string,
+    stillAuthorised?: () => boolean,
+  ): Promise<{ accepted: string[]; authorityLost?: true }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      // Same boundary as `recordWatchTransportAccepted`: authority is only meaningful if it is
+      // re-read after the queue wait, inside the lock that guards the append.
+      if (stillAuthorised && !stillAuthorised()) return { accepted: [], authorityLost: true as const };
+      const accepted: string[] = [];
+      for (const entryId of entryIds) {
+        const entry = this.state.entries[entryId];
+        if (!entry || !isExternalEditEntry(entry)) continue;
+        const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
+        const hasTransportAccepted = attempts.some(
+          (a) => a.via === "watch" && a.session === session && a.outcome === "transport_accepted",
+        );
+        if (!hasTransportAccepted) continue;
+        this.recordDeliveryAttemptLocked(entryId, {
+          fsync: true,
+          idem: `watch:${session}:${entryId}:${outcome}`,
+          via: "watch",
+          session,
+          outcome,
+          reason: "re_nudge",
+          ...(error ? { error } : {}),
+        });
+        accepted.push(entryId);
+      }
+      return { accepted };
     });
   }
 }

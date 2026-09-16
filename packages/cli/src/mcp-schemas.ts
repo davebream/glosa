@@ -88,6 +88,10 @@ const presentationBaseShape = {
 export const inboxPresentationSchema = z.discriminatedUnion("kind", [
   z.object({ ...presentationBaseShape, kind: z.literal("annotation") }).strict(),
   z.object({ ...presentationBaseShape, kind: z.literal("human_edit") }).strict(),
+  // #153 Part 2: was already reachable (unvalidated) through `glosa_inbox_get` on any
+  // `external_edit` id a session already knew about — `glosa_watch` is what first RETURNS one
+  // proactively, which is why this variant is added now rather than earlier.
+  z.object({ ...presentationBaseShape, kind: z.literal("external_edit") }).strict(),
   z.object({ ...presentationBaseShape, kind: z.literal("attention_request") }).strict(),
   z
     .object({
@@ -264,6 +268,67 @@ export const askInputSchema = z
           "answers. On timeout it returns outcome 'unanswered' and the question STAYS in their margin, so a " +
           "later answer still reaches you through the inbox.",
       ),
+  })
+  .strict();
+
+const watchCheckpointSha = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/)
+  .describe("Full 40-hex shadow-git checkpoint sha.");
+
+export const watchInputSchema = z
+  .object({
+    workspace: workspacePath.optional().describe("Workspace directory to watch; defaults to the MCP process cwd."),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe("Workspace-relative artifact to scope the watch to. Omit to watch the whole workspace."),
+    since: watchCheckpointSha
+      .optional()
+      .describe(
+        "A full checkpoint sha previously returned as latest_checkpoint. Entries at or before it are " +
+          "excluded. Omit it to resume from wherever this session left off; when has_more is true, re-call " +
+          "WITHOUT since rather than with an old cursor, so no unpresented entry sharing a split checkpoint " +
+          "is skipped.",
+      ),
+    wait_ms: z
+      .number()
+      .int()
+      .min(0)
+      .max(900_000)
+      .optional()
+      .describe(
+        "How long to hold the call waiting for a new external_edit, in milliseconds (cap 900000 = 15 " +
+          "minutes). 0 or omitted returns immediately with whatever is already pending. Every entry this " +
+          "call returns is marked presented to THIS session only — no other session is nudged by it.",
+      ),
+    session_id: sessionId
+      .optional()
+      .describe(
+        "Registered session to watch as. Must match the MCP host session when provided, and must already " +
+          "be explicitly bound to the target workspace (glosa_session_bind) — an unbound session cannot watch.",
+      ),
+  })
+  .strict();
+
+export const watchOutputSchema = z
+  .object({
+    entries: z
+      .array(inboxPresentationSchema)
+      .describe(
+        "Unpresented external_edit entries in scope, oldest first. Self-echo is not filtered: an entry " +
+          "may be this session's own un-leased write, not necessarily someone else's change.",
+      ),
+    latest_checkpoint: watchCheckpointSha
+      .nullable()
+      .describe(
+        "A safe resume watermark: the newest checkpoint every one of whose in-scope entries is now either " +
+          "presented to this session or already was. Pass it back as since on a LATER call once this " +
+          "response's has_more is false; null when no such checkpoint exists yet.",
+      ),
+    has_more: z.boolean().describe("True when unpresented entries remain; re-call without since to drain them."),
   })
   .strict();
 

@@ -23,8 +23,12 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * v1.9 (issue #206) adds a terminal `event: superseded` frame on `GET /api/sessions/:id/stream`
  * (written only when `register` displaces the connection; every other close cause stays plain EOF)
  * and the read-only `GET /api/sessions/:id/stream/status` ownership probe — additive, N/N-1 safe
- * per A1 §3. */
-export const CONTRACT_VERSION = "1.9";
+ * per A1 §3.
+ * v1.10 (issue #153 Part 2) adds the opt-in held `GET /w/:slug/watch` read over `external_edit`,
+ * its two Origin-gated acknowledgement routes (`POST /api/sessions/:id/watch/transport-ack` and
+ * `POST /api/sessions/:id/watch/ack`), and the `via:"watch"` delivery-attempt vocabulary member —
+ * additive, N/N-1 safe per A1 §3; an N-1 client simply never calls the new routes. */
+export const CONTRACT_VERSION = "1.10";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

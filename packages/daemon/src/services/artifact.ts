@@ -247,6 +247,7 @@ export function actionablePresentation(
   payload: unknown,
   status: string,
   cursor?: string,
+  opts: { watched?: boolean } = {},
 ): (DeliverableEntry & { workspace: string }) | null {
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
@@ -269,6 +270,7 @@ export function actionablePresentation(
     status,
     ...(resolution ? { resolution } : {}),
     ...(cursor ? { cursor } : {}),
+    ...(opts.watched ? { watched: true } : {}),
     maxBytes: Math.max(0, MAX_ENTRY_PRESENTATION_BYTES - utf8Bytes(workspaceLine) - 1),
   });
   if (!presentation) return null;

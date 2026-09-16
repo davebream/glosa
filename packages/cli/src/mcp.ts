@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 // Product-scoped MCP stdio server: durable inbox pull/get, metadata, session bind,
 // delivery acknowledgement, and the Codex app-server attachment.
-import { existsSync, lstatSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import type { Readable, Writable } from "node:stream";
+
 import { dlopen, FFIType } from "bun:ffi";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync } from "node:fs";
+import type { Readable, Writable } from "node:stream";
 import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { z } from "zod";
 import type {
   CallToolResult,
   JSONRPCMessage,
   RequestId,
-  ServerRequest,
   ServerNotification,
+  ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { z } from "zod";
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
-import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
-import { isApiError, type GlosaApiClient } from "./api-client.ts";
+import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
+import { type GlosaApiClient, isApiError } from "./api-client.ts";
 import type { DaemonClient, DrainResult } from "./daemon-client.ts";
 import {
   askInputSchema,
@@ -42,6 +43,8 @@ import {
   presentOutputSchema,
   sessionBindInputSchema,
   sessionBindOutputSchema,
+  watchInputSchema,
+  watchOutputSchema,
 } from "./mcp-schemas.ts";
 import { runOpenPresentation } from "./open-presentation.ts";
 import { realRequestReviewDeps, runRequestReview } from "./request-review.ts";
@@ -51,6 +54,16 @@ interface PendingAck {
   client: DaemonClient;
   sessionId: string;
   deliveryId: string;
+}
+
+/** #153 Part 2: a watch ack is shaped differently from a drain delivery ack (a set of entry ids,
+ * not one reservation token) but reaches stdout through the exact same `DeliveryAwareTransport`
+ * boundary, so it shares `DeliveryAcknowledgements`' pending map rather than growing a second,
+ * parallel bookkeeping structure. */
+interface PendingWatchAck {
+  apiClient: GlosaApiClient;
+  sessionId: string;
+  entryIds: string[];
 }
 
 export interface McpDeps {
@@ -81,6 +94,7 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_delivery_ack",
   "glosa_present",
   "glosa_ask",
+  "glosa_watch",
 ] as const;
 
 const readOnlyClosedWorld = {
@@ -125,6 +139,7 @@ function responseSucceeded(message: JSONRPCMessage): boolean {
 
 class DeliveryAcknowledgements {
   private readonly pending = new Map<RequestId, PendingAck>();
+  private readonly pendingWatch = new Map<RequestId, PendingWatchAck>();
 
   reserve(requestId: RequestId, ack: PendingAck, signal: AbortSignal): void {
     this.pending.set(requestId, ack);
@@ -137,22 +152,62 @@ class DeliveryAcknowledgements {
     );
   }
 
+  /** #153 Part 2 (W4): registers `glosa_watch`'s pending `presented` ack, reached the SAME way a
+   * drain delivery's is — through `DeliveryAwareTransport.send` after a successful stdout write.
+   * A cancelled request records `failed` for the exact ids the watch response named, mirroring
+   * `reserve`'s own cancellation handling. */
+  reserveWatch(requestId: RequestId, ack: PendingWatchAck, signal: AbortSignal): void {
+    this.pendingWatch.set(requestId, ack);
+    const cancelled = () => {
+      void this.watchFailed(requestId, "MCP request cancelled before its response was written").catch(() => {});
+    };
+    signal.addEventListener("abort", cancelled, { once: true });
+    // A signal that aborted BEFORE this listener was attached calls nothing, and the reservation
+    // would then sit pending forever rather than recording the `failed` it owes (review round 6).
+    // Re-checked after registration, which is the same shape `services/watch.ts` uses for its own
+    // listener gap.
+    if (signal.aborted) cancelled();
+  }
+
+  private async watchPresented(requestId: RequestId): Promise<void> {
+    const ack = this.pendingWatch.get(requestId);
+    if (!ack) return;
+    this.pendingWatch.delete(requestId);
+    await ack.apiClient.watchAck?.(ack.sessionId, ack.entryIds, "presented");
+  }
+
+  private async watchFailed(requestId: RequestId, reason: string): Promise<void> {
+    const ack = this.pendingWatch.get(requestId);
+    if (!ack) return;
+    this.pendingWatch.delete(requestId);
+    await ack.apiClient.watchAck?.(ack.sessionId, ack.entryIds, "failed", reason);
+  }
+
   async presented(requestId: RequestId): Promise<void> {
     const ack = this.pending.get(requestId);
-    if (!ack) return;
-    this.pending.delete(requestId);
-    await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "presented");
+    if (ack) {
+      this.pending.delete(requestId);
+      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "presented");
+      return;
+    }
+    await this.watchPresented(requestId);
   }
 
   async failed(requestId: RequestId, reason: string): Promise<void> {
     const ack = this.pending.get(requestId);
-    if (!ack) return;
-    this.pending.delete(requestId);
-    await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "failed", reason);
+    if (ack) {
+      this.pending.delete(requestId);
+      await ack.client.acknowledge?.(ack.sessionId, ack.deliveryId, "failed", reason);
+      return;
+    }
+    await this.watchFailed(requestId, reason);
   }
 
   async failAll(reason: string): Promise<void> {
-    await Promise.allSettled([...this.pending.keys()].map((requestId) => this.failed(requestId, reason)));
+    await Promise.allSettled([
+      ...[...this.pending.keys()].map((requestId) => this.failed(requestId, reason)),
+      ...[...this.pendingWatch.keys()].map((requestId) => this.watchFailed(requestId, reason)),
+    ]);
   }
 }
 
@@ -736,6 +791,65 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         ...(chose ? { chose } : {}),
         anchored: quote !== undefined,
       });
+    },
+  );
+
+  registerTool(
+    "glosa_watch",
+    {
+      title: "Watch for external edits",
+      description:
+        "Block until a tracked artifact changes on disk outside glosa (or the wait elapses), then return " +
+        "the drift as external_edit entries this session has not yet seen. Requires the session to already " +
+        "be explicitly bound to the workspace — call glosa_session_bind first if it has not bound yet. " +
+        "Self-echo is NOT filtered: a returned entry may be this session's own un-leased write, not " +
+        "necessarily someone else's change. Marks entries presented for THIS session only; no other " +
+        "session is nudged by it. When has_more is true, call again WITHOUT since to drain the rest.",
+      inputSchema: watchInputSchema,
+      outputSchema: watchOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: false }),
+        title: "Watch for external edits",
+      },
+    },
+    async ({ workspace, path, since, wait_ms: waitMs, session_id: requestedSession }, extra) => {
+      const hostSession = host()?.session_id;
+      if (hostSession && requestedSession && requestedSession !== hostSession) {
+        throw new Error("session_id does not match the MCP host session");
+      }
+      const sessionId = hostSession ?? requestedSession;
+      if (!sessionId) {
+        throw new Error("glosa_watch requires an explicit session_id when the MCP host does not provide one");
+      }
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      // The request's own cancellation has to reach the HELD GET, not just the acknowledgement
+      // reserved at the end (review round 6). A watch can sit for up to fifteen minutes, so a
+      // client that cancels and gets nothing back would otherwise leave the daemon holding the
+      // request for its full budget, and a cancellation arriving during the transport
+      // acknowledgement would miss the `failed` this shim promises to record.
+      const requestScope = AbortSignal.any(
+        [shutdownAbort.signal, extra.signal].filter((signal): signal is AbortSignal => !!signal),
+      );
+      const apiClient = await deps.createApiClient(requestScope);
+      if (!apiClient.watch) throw new Error("glosa_watch is unavailable");
+      const result = await apiClient.watch(root, sessionId, { path, since, waitMs });
+      const entryIds = result.entries.map((entry) => entry.id);
+      // W4: transport acceptance is recorded once the HTTP body actually reached this shim —
+      // right here, after `watch()` resolved — never merely on the daemon having built a response.
+      if (entryIds.length > 0 && apiClient.watchTransportAck) {
+        await apiClient.watchTransportAck(sessionId, entryIds);
+      }
+      const structuredContent = {
+        entries: result.entries,
+        latest_checkpoint: result.latest_checkpoint,
+        has_more: result.has_more,
+      };
+      if (entryIds.length > 0) {
+        acknowledgements.reserveWatch(extra.requestId, { apiClient, sessionId, entryIds }, extra.signal);
+      }
+      const text =
+        result.entries.length > 0 ? formatPresentationBatch(result.entries) : "glosa watch: no new external edits";
+      return toolResult(structuredContent, text);
     },
   );
 

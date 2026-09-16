@@ -12,7 +12,7 @@
 // for the content (A4 §F21: "attribution in commit TRAILERS not author").
 import { existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { appendEvent, parseJournalEventLine, type JournalEvent, type JournalWriter } from "../bus/journal.ts";
+import { appendEvent, type JournalEvent, type JournalWriter, parseJournalEventLine } from "../bus/journal.ts";
 import { journalPath, shadowGitDir } from "../bus/paths.ts";
 import { currentDaemonIdentity, type DaemonIdentity } from "../lifecycle/daemon-identity.ts";
 import { readLock } from "../lifecycle/lock.ts";
@@ -282,6 +282,28 @@ export async function headSha(root: WorkspaceTarget): Promise<string> {
 export async function diffShas(root: WorkspaceTarget, a: string, b: string): Promise<string> {
   const result = await runGit(root, ["diff", "-M", a, b]);
   return result.stdout;
+}
+
+/** Answers "is `candidate` `of` itself, or an ancestor of it" — the `since` cursor's fail-toward-
+ * showing predicate (#153 Part 2, contract D3/D4). A tri-state, deliberately: `merge-base
+ * --is-ancestor` exits 0/1/other-than-0-or-1 (unknown ref, unrelated history after a baseline
+ * repair — `unreportedDriftCommits` hits the identical exit-128 case), and only the first two are
+ * provable answers. "Unknown" must never collapse into either "excluded" or "included" by
+ * accident: the caller (a watch's `since` filter) is the one place that gets to decide the
+ * direction to fail, and it fails toward showing, never toward silently dropping an entry the
+ * daemon can't actually prove was already seen. */
+export async function isAncestorOrEqual(
+  root: WorkspaceTarget,
+  candidate: string,
+  of: string,
+): Promise<"ancestor" | "not-ancestor" | "unknown"> {
+  if (candidate === of) return "ancestor";
+  const result = await runGit(root, ["merge-base", "--is-ancestor", candidate, of], {
+    allowExitCodes: [0, 1, 128],
+  });
+  if (result.exitCode === 0) return "ancestor";
+  if (result.exitCode === 1) return "not-ancestor";
+  return "unknown";
 }
 
 /** The union `resolveMatchedFiles(root).tracked ∪ HEAD-tracked-under-ruleset` (A4 §F21) — needed

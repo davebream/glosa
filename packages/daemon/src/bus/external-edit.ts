@@ -12,8 +12,15 @@
 // It rides on the existing `common` EntryKind: `dismissed` already terminates a common entry
 // (`lifecycle.ts`'s `COMMON_TERMINALS`), so a person can close one and no new terminal table is
 // needed. It is deliberately NOT actionable — an agent cannot "apply" the fact that a file
-// changed — so it is excluded from delivery eligibility and from the badge-facing pending count,
-// while remaining visible to the retention-facing count (see `peek.ts`).
+// changed — so it is excluded from ORDINARY delivery eligibility and from the badge-facing pending
+// count, while remaining visible to the retention-facing count (see `peek.ts`).
+//
+// "Excluded from delivery" means excluded from delivery that happens TO a session without it
+// asking. Since #153 Part 2 there is one opt-in exception: `GET /w/:slug/watch`, which an
+// explicitly bound session calls for itself. Nothing is pushed, no other session is nudged, and the
+// badge is unchanged — a watch is a session asking about its own workspace, not the entry becoming
+// actionable. Qualify any "never delivered" wording the same way rather than deleting it; the
+// ordinary-delivery exclusion is still the rule.
 //
 // ONE ENTRY PER ARTIFACT (decisions.md): singular `path`, no `files[]`. The grouping question
 // ("these files were edited together") is deliberately out of scope.

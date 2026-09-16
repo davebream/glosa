@@ -7,12 +7,13 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionPushRegistry } from "../src/agent-provider/push-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { WatchEmissionRegistry } from "../src/agent-provider/watch-emissions.ts";
 import { CapabilityStore } from "../src/security/capability.ts";
-import { SessionPushRegistry } from "../src/agent-provider/push-registry.ts";
 import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
 const TOKEN = "sessions-route-test-token-0123456789";
@@ -23,6 +24,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
   let root: string;
   let workspaceIndex: WorkspaceIndex;
   let sessionRegistry: SessionRegistry;
+  let watchEmissions: WatchEmissionRegistry;
   let busRegistry: WorkspaceBusRegistry;
   let ctx: ApiContext;
   let fetchFn: (req: Request) => Promise<Response>;
@@ -33,6 +35,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
 
     workspaceIndex = new WorkspaceIndex({ home });
     sessionRegistry = new SessionRegistry({ index: workspaceIndex });
+    watchEmissions = new WatchEmissionRegistry();
     busRegistry = new WorkspaceBusRegistry();
     workspaceIndex.setLiveSessionPredicate((p) => sessionRegistry.forWorkspace(p).length > 0);
     workspaceIndex.setOnHardRemove((p) => busRegistry.evict(p));
@@ -47,6 +50,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       sessionRegistry,
       getWorkspaceBus: (r) => busRegistry.get(r),
       capabilityStore: new CapabilityStore(),
+      watchEmissions,
     };
     fetchFn = createApiFetch(ctx);
   });
@@ -756,6 +760,33 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     });
   });
 
+  test("state-changing auth: both watch acknowledgement routes refuse a missing and a foreign Origin", async () => {
+    // Criterion 9: these two POSTs write delivery attempts, so they must be classified
+    // state-changing, not authed-read. The existing coverage only ever sent a valid self Origin,
+    // which cannot tell the two classifications apart (review round 4).
+    const call = (path: string, origin?: string) => {
+      const headers = new Headers();
+      headers.set("Host", `127.0.0.1:${PORT}`);
+      headers.set("Authorization", `Bearer ${TOKEN}`);
+      headers.set("Content-Type", "application/json");
+      if (origin) headers.set("Origin", origin);
+      return fetchFn(
+        new Request(`http://127.0.0.1:${PORT}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ entries: ["inb-anything"] }),
+        }),
+      );
+    };
+    const routes = ["/api/sessions/sess-origin/watch/transport-ack", "/api/sessions/sess-origin/watch/ack"];
+    const statuses: number[] = [];
+    for (const route of routes) {
+      statuses.push((await call(route)).status);
+      statuses.push((await call(route, "http://evil.example")).status);
+    }
+    expect(statuses).toEqual([403, 403, 403, 403]);
+  });
+
   test("state-changing auth: register with no Origin -> 403", async () => {
     const headers = new Headers();
     headers.set("Host", `127.0.0.1:${PORT}`);
@@ -782,5 +813,160 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       }),
     );
     expect(res.status).toBe(401);
+  });
+
+  describe("GET /w/:slug/watch (#153 Part 2)", () => {
+    test("criterion 4 — coexists with the monitor: opening or ending a watch neither closes a live session stream nor releases its lease", async () => {
+      ctx.pushRegistry = new SessionPushRegistry();
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      await sessionRegistry.register({
+        session_id: "sess-coexist",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "monitor",
+      });
+
+      const stream = await fetchFn(req("/api/sessions/sess-coexist/stream?transport=monitor"));
+      expect(stream.status).toBe(200);
+      const reader = stream.body!.getReader();
+      await reader.read(); // the ": connected" comment
+      expect(ctx.pushRegistry.has("sess-coexist")).toBe(true);
+
+      const controller = new AbortController();
+      const watch = fetchFn(
+        req(`/w/${workspace.slug}/watch?session=sess-coexist&wait_ms=5000`, { signal: controller.signal }),
+      );
+      await Bun.sleep(20);
+      // The watch is holding, but the monitor stream is untouched by it.
+      expect(ctx.pushRegistry.has("sess-coexist")).toBe(true);
+
+      controller.abort();
+      const watchResult = await watch;
+      expect(watchResult.status).toBe(200);
+      // Ending the watch does not end the stream.
+      expect(ctx.pushRegistry.has("sess-coexist")).toBe(true);
+      await reader.cancel();
+    });
+
+    test("W3 — a rebind mid-hold ends the watch rather than serving (or later appending against) a workspace the session has left", async () => {
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      await sessionRegistry.bind("sess-rebind", root);
+      const other = canonicalize(mkdtempSync(join(tmpdir(), "glosa-sessions-ws-other-")));
+
+      const started = Date.now();
+      const watch = fetchFn(req(`/w/${workspace.slug}/watch?session=sess-rebind&wait_ms=30000`));
+      await Bun.sleep(20);
+      await sessionRegistry.bind("sess-rebind", other);
+
+      const res = await watch;
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      rmSync(other, { recursive: true, force: true });
+    });
+
+    test("W3 — a deregister mid-hold ends the watch", async () => {
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      await sessionRegistry.bind("sess-deregister", root);
+
+      const started = Date.now();
+      const watch = fetchFn(req(`/w/${workspace.slug}/watch?session=sess-deregister&wait_ms=30000`));
+      await Bun.sleep(20);
+      await sessionRegistry.deregister("sess-deregister");
+
+      const res = await watch;
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    test("W3 — a workspace eviction/close mid-hold ends the watch", async () => {
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      await sessionRegistry.bind("sess-evict", root);
+
+      const started = Date.now();
+      const watch = fetchFn(req(`/w/${workspace.slug}/watch?session=sess-evict&wait_ms=30000`));
+      await Bun.sleep(20);
+      await busRegistry.evict(root);
+
+      const res = await watch;
+      expect(res.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    test("W3 — two concurrent watches by the same session both keep their lease; neither cancels the other's hold", async () => {
+      writeFileSync(join(root, "draft.md"), "one\n");
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      const bus = busRegistry.get(root);
+      // `reconcileOnce`, not the bare `reconcile`: it marks this instance settled, so the watch
+      // route's own `hydrateForRead()` is a no-op instead of folding the journal underneath the
+      // write below. The watch no longer calls `resolveBus`/`reconcileOnce` at all — it is a read
+      // and never reconciles — but it still needs this instance to be settled, or it would fold and
+      // race the write. A test-harness race, not a product one (confirmed by a direct repro).
+      await bus.reconcileOnce();
+      await sessionRegistry.bind("sess-dual", root);
+
+      const watchA = fetchFn(req(`/w/${workspace.slug}/watch?session=sess-dual&path=draft.md&wait_ms=10000`));
+      await Bun.sleep(20);
+      const watchB = fetchFn(req(`/w/${workspace.slug}/watch?session=sess-dual&path=draft.md&wait_ms=10000`));
+      await Bun.sleep(20);
+
+      writeFileSync(join(root, "draft.md"), "one\ntwo\n");
+      const captured = await bus.captureExternalEdit();
+      expect(captured.entries).toHaveLength(1);
+
+      const [resA, resB] = await Promise.all([watchA, watchB]);
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+      const bodyA = await resA.json();
+      const bodyB = await resB.json();
+      // Neither request's admission cancelled the other's hold — BOTH independently woke on the
+      // same capture rather than one returning an empty answer because its lease was displaced.
+      expect(bodyA.entries).toHaveLength(1);
+      expect(bodyB.entries).toHaveLength(1);
+      expect(bodyA.entries[0].id).toBe(captured.entries[0]);
+      expect(bodyB.entries[0].id).toBe(captured.entries[0]);
+    });
+
+    test("validation: unknown session, unbound session, foreign (bound elsewhere) session, and a bad wait_ms are all refused", async () => {
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      const unknown = await fetchFn(req(`/w/${workspace.slug}/watch?session=nobody`));
+      expect(unknown.status).toBe(404);
+
+      await sessionRegistry.register({ session_id: "sess-unbound", provider: "mcp", cwd: root, source: "mcp" });
+      const unbound = await fetchFn(req(`/w/${workspace.slug}/watch?session=sess-unbound`));
+      expect(unbound.status).toBe(409);
+
+      const other = canonicalize(mkdtempSync(join(tmpdir(), "glosa-sessions-ws-foreign-")));
+      await sessionRegistry.bind("sess-foreign", other);
+      const foreign = await fetchFn(req(`/w/${workspace.slug}/watch?session=sess-foreign`));
+      expect(foreign.status).toBe(409);
+      rmSync(other, { recursive: true, force: true });
+
+      await sessionRegistry.bind("sess-badwait", root);
+      const badWait = await fetchFn(req(`/w/${workspace.slug}/watch?session=sess-badwait&wait_ms=abc`));
+      expect(badWait.status).toBe(400);
+      const tooLong = await fetchFn(req(`/w/${workspace.slug}/watch?session=sess-badwait&wait_ms=99999999`));
+      expect(tooLong.status).toBe(400);
+    });
+
+    test("client disconnect ends the hold and releases the subscription and lease hold", async () => {
+      const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+      const bus = busRegistry.get(root);
+      await bus.reconcileOnce();
+      await sessionRegistry.bind("sess-disconnect", root);
+
+      const controller = new AbortController();
+      const before = bus.listenerCount();
+      const watch = fetchFn(
+        req(`/w/${workspace.slug}/watch?session=sess-disconnect&wait_ms=30000`, { signal: controller.signal }),
+      );
+      await Bun.sleep(20);
+      expect(bus.listenerCount()).toBe(before + 1);
+
+      controller.abort();
+      const res = await watch;
+      expect(res.status).toBe(200);
+      expect(bus.listenerCount()).toBe(before);
+    });
   });
 });

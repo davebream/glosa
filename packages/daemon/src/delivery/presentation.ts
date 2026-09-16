@@ -88,6 +88,11 @@ export interface BuildPresentationOptions {
   resolution?: Resolution;
   cursor?: string;
   maxBytes?: number;
+  /** #153 Part 2 (D10): true when this presentation is being built for a `glosa_watch` response.
+   * The only kind that reads it is `external_edit` — every watched entry is one, since a watch
+   * only ever surfaces that kind — and it swaps the "nothing is being asked" wording for one that
+   * names why the session is seeing this at all: it asked to watch. */
+  watched?: boolean;
 }
 
 function annotationPresentation(
@@ -241,7 +246,12 @@ function externalEditPresentation(
     `${path} changed on disk outside glosa. attribution is "unknown": no apply-lease and no glosa`,
     "editor save covered this change, so glosa records WHAT changed and does not guess WHO changed",
     "it. there is nothing to apply — the change is already in the file. this is a record, not a",
-    `request; \`glosa inbox dismiss ${id}\` closes it.`,
+    ...(opts.watched
+      ? [
+          "request. you are seeing it because your session explicitly called glosa_watch — nobody",
+          `else was nudged by it; \`glosa inbox dismiss ${id}\` closes it.`,
+        ]
+      : [`request; \`glosa inbox dismiss ${id}\` closes it.`]),
   ].join("\n");
 
   const parsed = splitDiffHunks(diff);

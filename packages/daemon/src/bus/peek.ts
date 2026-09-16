@@ -82,7 +82,9 @@ function nonTerminalEntries(state: DerivedState): DerivedEntryState[] {
  * guard) and `registry/orphan-scan.ts` (the stranded-home-state scanner behind `GET /api/status`).
  *
  * Counts an undismissed `external_edit`, deliberately. #153's decision that an `external_edit`
- * "nudges nobody" is about the BADGE; the same decision also promises such an entry stays pending
+ * "nudges nobody" is about the BADGE, and about delivery nobody asked for — since Part 2 a bound
+ * session can watch for its own (`GET /w/:slug/watch`), which changes neither this count nor the
+ * badge. The same decision also promises such an entry stays pending
  * forever. Excluding it here would tell GC "nothing parked here" and tell orphan-scan "nothing to
  * report" for a workspace whose only outstanding item is exactly that — silently hiding the
  * stranding orphan-scan exists to catch, and making the persistence promise decorative. Two
@@ -96,9 +98,11 @@ export function retentionPendingCount(state: DerivedState): number {
  * `transport/http.ts`'s `computeWiring` (`GET /w/:slug/wiring`) and its `GET /api/status`
  * per-workspace row.
  *
- * Excludes `external_edit`: it is not actionable (nothing to apply — the file already changed),
- * it is excluded from delivery eligibility, and counting it as "N queued" would promise a
- * delivery that by construction never comes.
+ * Excludes `external_edit`: it is not actionable (nothing to apply — the file already changed), it
+ * is excluded from ORDINARY delivery eligibility, and counting it as "N queued" would promise a
+ * push that never comes. Since #153 Part 2 a bound session can pull its own via
+ * `GET /w/:slug/watch` — the one opt-in exception — which changes neither this count nor the badge,
+ * because a session asking about its own workspace is not the entry becoming actionable.
  *
  * Attention entries need no exclusion anywhere and get none: every attention fold filters
  * `entry.kind === "attention"`, and an `external_edit`'s lifecycle kind is `common`, never that
