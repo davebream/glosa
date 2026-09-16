@@ -74,6 +74,29 @@ export function leaseExpiredError(entry: string, leaseId: string, expiresAt: str
   return err;
 }
 
+export interface DriftUnderLeaseError extends Error {
+  code: "DRIFT_UNDER_LEASE";
+  path: string;
+  leaseId: string;
+}
+
+/** #182 R5: `captureHumanEdit`'s honest pre-save boundary refuses rather than guesses when an
+ * active apply-lease holds the workspace AND `path` already has uncommitted drift. The interval
+ * belongs to the lease's own `resolveEntry` (A4 §F05) — checkpointing it here as `unknown` would
+ * leave `resolveEntry`'s later checkpoint with nothing new to stage (idempotency, A4 §F21),
+ * exactly the double-report `captureExternalEdit`'s own lease suppression already avoids for the
+ * watcher. Attributing the interval to the human instead — the alternative if this refusal did
+ * not exist — is the one thing #182 R5 exists to prevent. */
+export function driftUnderLeaseError(path: string, leaseId: string): DriftUnderLeaseError {
+  const err = new Error(
+    `save refused: ${path} has uncommitted drift and an apply-lease (lease_id=${leaseId}) is active — that interval belongs to the lease, not to this save; resolve or wait out the lease and try again`,
+  ) as DriftUnderLeaseError;
+  err.code = "DRIFT_UNDER_LEASE";
+  err.path = path;
+  err.leaseId = leaseId;
+  return err;
+}
+
 /** The lease IS the proof (A4 §F05) — a lease for `entry` held by session A resolved by a caller
  * claiming to be session B would attribute A's edit to B, which is exactly the forgery honest
  * provenance exists to prevent. Never falls back to trusting the caller's `sessionId` for

@@ -33,6 +33,7 @@ import {
 import { choiceDialog, confirmDialog } from "./dialog.js";
 import { addressBlocks, addressForRange } from "./address.js";
 import { faceKey, mountFaceControl } from "./face.js";
+import { threeWayMerge } from "./merge-markdown.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
 
@@ -85,6 +86,9 @@ const STATE_LABELS = {
 // the SAME three names, and the union is rewritten whenever any pane's contribution changes. A
 // `Highlight` holds any number of ranges and ranges are document-scoped, so panes coexist inside
 // one key instead of fighting over it. Keep these three names in step with app.css §10.
+/** How much of a conflicting block's disk text the stale-save preview quotes (#182 D9). Long
+ * enough to recognise the passage, short enough that several conflicts stay readable in a dialog. */
+const CONFLICT_EXCERPT_CHARS = 80;
 const HL_ANCHORS = "glosa-anchors";
 const HL_ANCHOR = "glosa-anchor";
 const HL_COMPOSER = "glosa-composer-selection";
@@ -285,6 +289,11 @@ export function createArtifactPane(host, deps) {
   // keeps tracking the file for display. A refresh never moves this, so a save can stay honest
   // about what it would overwrite even while the pane's display races ahead of it.
   let baselineSha = null;
+  // `currentArtifact.content` from the SAME read that set `baselineSha` (#182 D2/R1) — one atomic
+  // pair, only ever advanced together through `setBaseline` below. This is the "base" a three-way
+  // Keep-mine merge splices onto; never read `currentArtifact.content` for that purpose instead,
+  // since a plain SSE refresh moves it out from under an open, unrelated editor session.
+  let baselineContent = null;
   // Pinned when an edit session begins: {openedCheckpointId, attributionCursor}. Compare's `from`
   // and the disk-change attribution walk's origin (later tasks in this epic).
   let editSession = null;
@@ -1180,6 +1189,14 @@ export function createArtifactPane(host, deps) {
       richEditor = null;
       sourceFace = true;
       renderContent();
+      // #182 F-8: `renderContent()`'s own fallback fills the textarea from
+      // `currentArtifact.content`, which an SSE refresh landing WHILE `loadRichEditor()` was
+      // still pending can have advanced past the held baseline pair — a later Keep-mine merge
+      // would then run against text the writer never actually saw mounted. Fill from the exact
+      // bytes THIS mount was asked to render instead (consistent with whatever baseline pair was
+      // current when `mountRichFace` was called), unless a parked draft still outranks it — the
+      // same precedence `renderContent()` already applies, restated here because it runs after.
+      editArea.value = parkedSourceFor(currentArtifact) ?? markdown;
     } finally {
       if (request === richMountRequest) richEditorLoading = false;
     }
@@ -1242,9 +1259,16 @@ export function createArtifactPane(host, deps) {
    * yet, and `modeState.dirty` survives opening a DIFFERENT artifact in this pane — neither is the
    * question "is there already a live draft for the file about to fill this face".
    */
+  /** The one place `{baselineSha, baselineContent}` moves, always together, from the SAME read
+   * (#182 R1). Every other assignment site below calls this rather than touching either field. */
+  function setBaseline(sha, content) {
+    baselineSha = sha;
+    baselineContent = content;
+  }
+
   function beginEditSession() {
     if (currentArtifact?.class !== "R" || parkedSourceFor(currentArtifact) !== null) return;
-    baselineSha = currentArtifact.source_sha256;
+    setBaseline(currentArtifact.source_sha256, currentArtifact.content ?? "");
     // The baseline just caught up to this sha, so any earlier "changed on disk" fact — recorded
     // against the OLD baseline — no longer describes what a save would refuse. Without this, a
     // clean pane that leaves Edit and returns would keep showing a banner the file has already
@@ -1330,7 +1354,11 @@ export function createArtifactPane(host, deps) {
     renderArtifactTools();
     const isEdit = modeState.mode === "edit" && !isClassF;
     if (isEdit && !sourceFace && !richEditor) {
-      void mountRichFace(parkedSourceFor(currentArtifact) ?? currentArtifact?.content ?? "");
+      // #182 R1: a late/first mount fills from the held baseline pair, never from
+      // `currentArtifact.content` — an SSE refresh between Edit entry and this mount landing must
+      // not hand the rich face bytes newer than the `baselineSha` a Keep-mine merge will verify
+      // against.
+      void mountRichFace(parkedSourceFor(currentArtifact) ?? baselineContent ?? "");
     }
     if (!isEdit) teardownRichFace();
     const richShown = isEdit && !sourceFace && Boolean(richEditor);
@@ -2549,6 +2577,9 @@ export function createArtifactPane(host, deps) {
     // the other document, and the arrangement comes back when Review is left.
     if (modeState.mode === "review" && previousMode !== "review") claimWidth(MARGIN_RAIL_COMFORT);
     else if (previousMode === "review" && modeState.mode !== "review") releaseWidth();
+    // Before renderContent, not after (#182 R1): the first mount inside renderContent reads
+    // `baselineContent`, which this call is what sets for a fresh Edit entry.
+    if (modeState.mode === "edit" && previousMode !== "edit") beginEditSession();
     renderModeBar();
     renderContent();
     // The fact survives the switch (D7); only whether it is SHOWN depends on the mode just
@@ -2556,10 +2587,7 @@ export function createArtifactPane(host, deps) {
     renderDiskChange();
     void renderHistory();
     onStateChange();
-    if (modeState.mode === "edit" && previousMode !== "edit") {
-      paneMain.scrollTop = 0;
-      beginEditSession();
-    }
+    if (modeState.mode === "edit" && previousMode !== "edit") paneMain.scrollTop = 0;
   }
 
   editArea.addEventListener("input", () => {
@@ -2579,8 +2607,13 @@ export function createArtifactPane(host, deps) {
       renderContent();
       return;
     }
-    const save = richEditor && (richEditor.isDirty() || modeState.dirty) ? richEditor.getSave() : null;
-    const carried = save ? save.markdown : (currentArtifact?.content ?? "");
+    // #182 R1: always ask the mounted editor, even when clean — its splice against its OWN mount
+    // source returns that source verbatim when nothing changed, which is the baseline pair's own
+    // bytes. Falling back to `currentArtifact.content` here (an SSE refresh can have moved it past
+    // the pair) is exactly the coherence bug R1 names: a clean Rich→Source switch would otherwise
+    // fill the source face from bytes newer than what a later Keep-mine merge verifies as `base`.
+    const save = richEditor ? richEditor.getSave() : null;
+    const carried = save ? save.markdown : (baselineContent ?? "");
     teardownRichFace();
     sourceFace = true;
     renderContent();
@@ -2683,7 +2716,7 @@ export function createArtifactPane(host, deps) {
       // Re-render (fetch ?render=html) rather than trust `saved.rendered_html` blindly.
       const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
       currentArtifact = fresh;
-      baselineSha = fresh.source_sha256; // the post-save re-read fills the face anew
+      setBaseline(fresh.source_sha256, fresh.content ?? ""); // the post-save re-read fills the face anew
       endEditSession();
       contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
       teardownRichFace(); // remount the rich face from the freshly saved content
@@ -2749,52 +2782,150 @@ export function createArtifactPane(host, deps) {
     }
   }
 
-  /**
-   * What a stale save would overwrite — from the checkpoint pinned at Edit entry to the working
-   * file. REQ-3 asks for "the diff between the disk version and the version you opened"; this is
-   * a named approximation of that (D10), not a silent one: it additionally includes anything
-   * already uncommitted when the writer arrived, because glosa has no client-side differ and the
-   * daemon only computes checkpoint-to-checkpoint (or checkpoint-to-working) ranges. The header
-   * states the range it actually covers rather than implying the one REQ-3 names.
-   *
-   * Degrades rather than blocks: no pin, or a failed call, means no `detail` — the dialog still
-   * opens either way (Step 5).
-   */
-  async function overwritePreview(artifact) {
-    const openedCheckpointId = editSession?.openedCheckpointId;
-    if (!openedCheckpointId) return undefined;
-    try {
-      const { hunks } = await dataAccess.getDiff(slug, { from: openedCheckpointId, to: "working" });
-      // Same rule diff-pane.js uses: a hunk with no path attribution is kept rather than hidden.
-      const unified = (hunks ?? [])
-        .filter((hunk) => !hunk.path || hunk.path === artifact.source_path)
-        .map((hunk) => hunk.diff)
-        .join("\n");
-      const lines = unified.split("\n");
-      const body =
-        lines.length > 200 ? `${lines.slice(0, 200).join("\n")}\n\n…and ${lines.length - 200} more lines.` : unified;
-      return `Changes to this file since the last saved version (${openedCheckpointId.slice(0, 7)}).\n\n${body}`;
-    } catch {
-      return undefined;
-    }
+  /** A5 §F10's own formula (the daemon's `sourceSha256`), computed client-side with Web Crypto so
+   * the pane can hold `baselineSha` to its word before trusting `baselineContent` as a merge base
+   * (#182 D2/D3): SHA256 of the UTF-8 bytes after `\r\n` → `\n`, hex-encoded. */
+  async function sha256Hex(text) {
+    const bytes = new TextEncoder().encode(text.replace(/\r\n/g, "\n"));
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  /** The base a Keep-mine merge may trust, or `null` when there isn't one (D3): no baseline yet,
+   * or `baselineContent` no longer hashes to `baselineSha` — the one check that stands between a
+   * merge and silently treating some OTHER text as "the version the writer opened". */
+  async function verifiedBaseline() {
+    if (baselineSha === null || baselineContent === null) return null;
+    return (await sha256Hex(baselineContent)) === baselineSha ? baselineContent : null;
+  }
+
+  /** What Keep mine would write against `fresh`, computed once and shared by the overwrite
+   * preview and the write itself (D9: the preview is exactly the merge Keep mine would perform,
+   * not a separate approximation of it). `pendingSave()` already answers "what would an ordinary
+   * save write" for either face; the only thing added here is the disk side and the base. */
+  async function keepMineMerge(fresh) {
+    const { content: mine, report } = pendingSave();
+    const base = await verifiedBaseline();
+    return threeWayMerge(base, mine, fresh.content ?? "", report ?? { collateral: [], degraded: false });
   }
 
   /**
-   * *Keep mine* — re-splices the writer's document onto the fresh disk bytes and writes once
-   * through `writeAndSettle` (D6: no block-level three-way merge; a degrading rebase falls through
-   * the existing collateral gate, which asks whenever the splice can't vouch for itself).
+   * What a stale save would overwrite, computed client-side from the merge itself (D9) — no
+   * checkpoint pin needed, so this shows even on a draft with no saved history yet. Degrades to a
+   * base-unavailable notice rather than blocking (Step 5 still opens the dialog).
+   */
+  /** One readable line per conflict: where it is, and a bounded excerpt of the disk text Keep mine
+   * is about to win over. A separator conflict names the boundary rather than a block, because
+   * that is what it is. */
+  function conflictLine(conflict) {
+    const excerpt = (text) => {
+      if (typeof text !== "string" || text === "") return "nothing";
+      const flattened = text.replace(/\s+/g, " ").trim();
+      return flattened.length > CONFLICT_EXCERPT_CHARS
+        ? `“${flattened.slice(0, CONFLICT_EXCERPT_CHARS)}…”`
+        : `“${flattened}”`;
+    };
+    const nameless = conflict.index === null || conflict.index === undefined;
+    // A region between or around blocks is not always whitespace — a link-reference definition or
+    // a stray line lives there too — so it is described as source, never as "spacing" (review
+    // round 6).
+    const where =
+      conflict.region === "separator"
+        ? nameless
+          ? "The source between two blocks"
+          : `The source after block ${conflict.index + 1}`
+        : conflict.region === "leading"
+          ? "The source above the first block"
+          : conflict.region === "trailing"
+            ? "The source below the last block"
+            : conflict.region === "document"
+              ? "The whole file, which has no blocks to align"
+              : nameless
+                ? "A block whose identity glosa could not prove"
+                : `Block ${conflict.index + 1}`;
+    // A `carried: false` entry is not a conflict the writer's version wins — it is the one case
+    // where their bytes do NOT survive, and saying "your version wins there" about it would be
+    // false (review round 8).
+    if (conflict.carried === false) {
+      const whose = conflict.side === "mine" ? "your" : "disk's";
+      return `• ${where}: ${whose} version of it is NOT kept — ${excerpt(conflict.dropped)} is dropped.`;
+    }
+    if (conflict.reason === "unprovable-separator") return `• ${where}: glosa could not tell whose source to keep.`;
+    if (conflict.reason === "unprovable-identity") return `• ${where}: your whole version is kept.`;
+    return `• ${where}: on disk ${excerpt(conflict.theirs)}.`;
+  }
+
+  async function overwritePreview(fresh) {
+    const result = await keepMineMerge(fresh);
+    if (!result.baseAvailable) {
+      const lines = [
+        "Glosa can't verify the version you opened, so every change on both sides is treated as a conflict — Keep mine will use your version everywhere and none of the disk change shown below.",
+        ...result.conflicts.map(conflictLine),
+      ];
+      return lines.join("\n");
+    }
+    const lines = [];
+    // Only disk-originated entries — the writer already knows about their own edit, so the
+    // preview describes what Keep mine does TO DISK's version, not a recap of theirs.
+    const keptFromDisk = result.merged.filter(
+      (entry) => entry.kind === "theirs-changed" || entry.kind === "theirs-inserted",
+    );
+    if (keptFromDisk.length) {
+      lines.push(`${keptFromDisk.length} change${keptFromDisk.length === 1 ? "" : "s"} from disk will be kept.`);
+    }
+    if (result.conflicts.length) {
+      // "blocks" would be a lie for a conflict in the source between them, and the writer should
+      // not have to decode which kind each line is from its wording alone (review rounds 5 and 6).
+      const lost = result.conflicts.filter((conflict) => conflict.carried === false);
+      // `carried: null` is neither: glosa could not attribute the bytes at that boundary, so it
+      // must not be announced as a win for the writer (review round 9).
+      const unattributed = result.conflicts.filter((conflict) => conflict.carried === null);
+      const contested = result.conflicts.filter((conflict) => conflict.carried === undefined);
+      const blockCount = contested.filter((conflict) => !conflict.region).length;
+      const regionCount = contested.length - blockCount;
+      const parts = [];
+      if (blockCount) parts.push(`${blockCount} block${blockCount === 1 ? "" : "s"}`);
+      if (regionCount) parts.push(`${regionCount} other source region${regionCount === 1 ? "" : "s"}`);
+      if (parts.length) {
+        lines.push(`${parts.join(" and ")} changed on both sides — your version wins there:`);
+      }
+      // D6/D9: a count tells the writer that something collided, not what. Name each one and show
+      // the disk text their version is about to win over, bounded so a large block cannot push the
+      // dialog past reading length.
+      lines.push(...contested.map(conflictLine));
+      if (lost.length) {
+        lines.push(`${lost.length} change${lost.length === 1 ? "" : "s"} cannot be carried into the merge:`);
+        lines.push(...lost.map(conflictLine));
+      }
+      if (unattributed.length) {
+        lines.push(
+          `${unattributed.length} boundar${unattributed.length === 1 ? "y" : "ies"} glosa could not attribute to either side:`,
+        );
+        lines.push(...unattributed.map(conflictLine));
+      }
+    }
+    return lines.length ? lines.join("\n") : undefined;
+  }
+
+  /**
+   * *Keep mine* — a three-way merge of the base the writer opened, the writer's current text, and
+   * the fresh disk bytes (#182): a block only the writer touched keeps the writer's bytes, a block
+   * only disk touched keeps disk's bytes, and a block both touched is a conflict the writer's
+   * version wins (D6) — the preview above already showed which. `consentToCollateral` still runs
+   * on the result (R4): the merge carries mine's own splice report through untouched, so #186's
+   * consent for a re-serialized block of the writer's OWN edit is unaffected by the merge.
    *
    * The retry is guarded (D9/AC-19): a second 409 here means the file changed AGAIN while the
    * writer was deciding — reopening the dialog would ask the same question about a version that
    * has already moved on, so this reports and declines instead.
    */
   async function keepMine(artifact, fresh) {
-    const rebased = sourceFace
-      ? { markdown: editArea.value, collateral: [], degraded: false }
-      : richEditor.rebaseOnto(fresh.content ?? "");
-    if ((await consentToCollateral(rebased)) !== "save") return SAVE_DECLINED;
+    const result = await keepMineMerge(fresh);
+    if ((await consentToCollateral(result)) !== "save") return SAVE_DECLINED;
     try {
-      return await writeAndSettle(artifact, rebased.markdown, fresh.source_sha256);
+      return await writeAndSettle(artifact, result.text, fresh.source_sha256);
     } catch (error) {
       if (error?.status === 409) {
         editStatus.setAttribute("data-error", "true");
@@ -2816,7 +2947,7 @@ export function createArtifactPane(host, deps) {
     const choice = await choiceDialog({
       title: "This file changed while you were editing",
       body: `${artifact.source_path} was written after you started. Saving now replaces that version with yours.`,
-      detail: await overwritePreview(artifact),
+      detail: await overwritePreview(fresh),
       choices: [
         { id: "take-disk", label: "Take disk", danger: true },
         { id: "compare", label: "Compare" },
@@ -2987,7 +3118,7 @@ export function createArtifactPane(host, deps) {
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
-      baselineSha = currentArtifact.source_sha256; // a newly loaded artifact fills the face
+      setBaseline(currentArtifact.source_sha256, currentArtifact.content ?? ""); // a newly loaded artifact fills the face
       faceControl?.refresh();
     } catch (err) {
       loading = false;
@@ -3143,7 +3274,7 @@ export function createArtifactPane(host, deps) {
     pendingReport = null;
     clearDiskChange();
     endEditSession();
-    baselineSha = fresh.source_sha256;
+    setBaseline(fresh.source_sha256, fresh.content ?? "");
     // `fresh` may be a re-read staleSave fetched separately from currentArtifact (the stale-save
     // dialog's path) — without this, the reload sequence below would remount over the STALE
     // content that just failed to save, defeating the whole point of "take disk".
