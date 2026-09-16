@@ -9,9 +9,7 @@ import { collectSourceHeadings } from "../src/markdown-parser.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 import {
   collectRenderedHeadings,
-  createOutlineController,
   currentHeadingIndex,
-  distributeRules,
   matchesQuery,
   outlineDepths,
   plainHeadingText,
@@ -102,36 +100,6 @@ describe("outlineDepths", () => {
 
 const gapsOf = (tops: number[]) => tops.slice(1).map((top, index) => top - (tops[index] as number));
 
-describe("distributeRules", () => {
-  test("places a rule where its section actually falls in the document", () => {
-    expect(distributeRules([0, 0.5, 1], 102)).toEqual([0, 50, 100]);
-  });
-
-  test("spreads a crowd to the minimum legible gap instead of drawing one smudge", () => {
-    const gaps = gapsOf(distributeRules([0.5, 0.501, 0.502], 202, { minGap: 5 }));
-    expect(gaps).toEqual([5, 5]);
-  });
-
-  test("a crowd at the very end is pulled back up rather than pushed off the rail", () => {
-    const tops = distributeRules([0.99, 0.995, 1], 102, { minGap: 5 });
-    expect(Math.max(...tops)).toBeLessThanOrEqual(100);
-    expect(gapsOf(tops)).toEqual([5, 5]);
-  });
-
-  test("every rule stays inside the rail even when there are more than it can hold", () => {
-    const fractions = Array.from({ length: 60 }, (_, index) => index / 59);
-    for (const top of distributeRules(fractions, 100)) {
-      expect(top).toBeGreaterThanOrEqual(0);
-      expect(top).toBeLessThanOrEqual(98);
-    }
-  });
-
-  test("survives a document with no measurable extent", () => {
-    expect(distributeRules([Number.NaN, 0.5], 0)).toEqual([0, 0]);
-    expect(distributeRules([], 100)).toEqual([]);
-  });
-});
-
 describe("currentHeadingIndex", () => {
   test("is the last heading whose top has passed the reading line", () => {
     const tops = [0, 400, 900];
@@ -163,128 +131,5 @@ describe("matchesQuery", () => {
   test("an empty query hides nothing", () => {
     expect(matchesQuery("anything", "")).toBe(true);
     expect(matchesQuery("anything", "   ")).toBe(true);
-  });
-});
-
-describe("the fore-edge controller", () => {
-  let dom: DomEnv;
-  let host: any;
-  // happy-dom's DOM classes are nominally distinct from lib.dom's (see dom-env.ts), so DOM
-  // handles are read loosely here — the same idiom viewer.test.ts and workbench.test.ts use.
-  const one = (selector: string): any => host.querySelector(selector);
-  const all = (selector: string): any[] => Array.from(host.querySelectorAll(selector));
-
-  const entry = (text: string, depth = 1, fraction = 0, jump = () => {}) => ({
-    level: depth,
-    depth,
-    text,
-    fraction,
-    jump,
-  });
-
-  beforeEach(() => {
-    dom = installDom();
-    host = dom.document.createElement("div");
-    dom.document.body.append(host);
-  });
-  afterEach(() => dom.teardown());
-
-  test("a document with fewer than two headings gets no instrument at all", () => {
-    const outline = createOutlineController({ host, id: "o1" });
-    outline.setEntries([entry("Only a title")]);
-    expect(outline.hasEntries()).toBe(false);
-    expect(one(".glosa-foreedge").hidden).toBe(true);
-
-    outline.setEntries([entry("Title"), entry("A section", 2, 0.5)]);
-    expect(outline.hasEntries()).toBe(true);
-    expect(one(".glosa-foreedge").hidden).toBe(false);
-    outline.destroy();
-  });
-
-  test("toggle opens the panel, lists every heading, and closes again", () => {
-    const outline = createOutlineController({ host, id: "o2" });
-    outline.setEntries([entry("Title"), entry("One", 2, 0.3), entry("Two", 2, 0.6)]);
-    outline.toggle();
-    expect(outline.isOpen()).toBe(true);
-    expect(all(".glosa-foreedge-row").map((row) => row.textContent)).toEqual(["Title", "One", "Two"]);
-    outline.toggle();
-    expect(outline.isOpen()).toBe(false);
-    expect(one(".glosa-foreedge-panel").hidden).toBe(true);
-    outline.destroy();
-  });
-
-  test("the filter narrows the list in document order and says so when nothing matches", () => {
-    const outline = createOutlineController({ host, id: "o3" });
-    outline.setEntries([
-      entry("Goal and release gate"),
-      entry("Functional requirements", 2, 0.4),
-      entry("Glossary", 2, 0.9),
-    ]);
-    outline.toggle();
-    const filter = one(".glosa-foreedge-filter");
-    const type = (value: string) => {
-      filter.value = value;
-      filter.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    };
-
-    type("g");
-    expect(all(".glosa-foreedge-row").map((row) => row.textContent)).toEqual(["Goal and release gate", "Glossary"]);
-
-    type("nothing here");
-    expect(all(".glosa-foreedge-row")).toHaveLength(0);
-    expect(one(".glosa-foreedge-empty").hidden).toBe(false);
-    outline.destroy();
-  });
-
-  test("a jumped-to heading closes the panel and runs its jump", () => {
-    let jumped = "";
-    const outline = createOutlineController({ host, id: "o4" });
-    outline.setEntries([
-      entry("Title", 1, 0, () => {
-        jumped = "Title";
-      }),
-      entry("Section", 2, 0.5, () => {
-        jumped = "Section";
-      }),
-    ]);
-    outline.toggle();
-    all(".glosa-foreedge-row")[1].click();
-    expect(jumped).toBe("Section");
-    expect(outline.isOpen()).toBe(false);
-    outline.destroy();
-  });
-
-  test("the current section is named in the rail's accessible name, and marked in the open list", () => {
-    const outline = createOutlineController({ host, id: "o5" });
-    outline.setEntries([entry("Title"), entry("Second section", 2, 0.5)]);
-    outline.setCurrent(1);
-    expect(one(".glosa-foreedge-rail").getAttribute("aria-label")).toBe("Outline: in Second section");
-    outline.toggle();
-    expect(one('.glosa-foreedge-row[aria-current="location"]').textContent).toBe("Second section");
-
-    // Scrolling back above the first heading is not "in section one" — it is the preamble, and
-    // saying otherwise would be a small lie told on every scroll.
-    outline.setCurrent(-1);
-    expect(one(".glosa-foreedge-rail").getAttribute("aria-label")).toBe("Outline");
-    expect(one('.glosa-foreedge-row[aria-current="location"]')).toBeNull();
-    outline.destroy();
-  });
-
-  test("a pane with no whitespace left stops volunteering on hover, and still opens when asked", () => {
-    const outline = createOutlineController({ host, id: "o6" });
-    outline.setEntries([entry("Title"), entry("Section", 2, 0.5)]);
-    outline.setCompact(true);
-    one(".glosa-foreedge").dispatchEvent(new dom.window.Event("pointerenter"));
-    expect(outline.isOpen()).toBe(false);
-    outline.toggle();
-    expect(outline.isOpen()).toBe(true);
-    outline.destroy();
-  });
-
-  test("destroy takes the instrument out of the DOM", () => {
-    const outline = createOutlineController({ host, id: "o7" });
-    outline.setEntries([entry("Title"), entry("Section", 2, 0.5)]);
-    outline.destroy();
-    expect(one(".glosa-foreedge")).toBeNull();
   });
 });

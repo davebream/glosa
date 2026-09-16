@@ -23,6 +23,7 @@ import { createDataAccess } from "./data-access.js";
 import { createDiffPane } from "./diff-pane.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
 import { confirmDialog, noticeDialog } from "./dialog.js";
+import { createCommandPalette } from "./palette.js";
 import { createContextSurfaceController } from "./viewer-context-surfaces.js";
 import { createViewerFeedbackController } from "./viewer-feedback.js";
 import { createNavigatorController } from "./viewer-navigator.js";
@@ -133,7 +134,7 @@ export function mountApp(
   const { attentionTray, agentFeedback, artifactNavigator } = shell;
   const {
     navToggle,
-    workspaceNameEl,
+    titleEl,
     conversationToggle,
     shortcutsToggle,
     topbarOverlays,
@@ -294,6 +295,28 @@ export function mountApp(
   function activePane() {
     return activePanelId ? (panes.get(activePanelId) ?? null) : null;
   }
+
+  /** The top bar names the document in the active pane, by its workspace-relative path, and the
+   * workspace itself only while nothing is open. */
+  function refreshTopbarTitle() {
+    const path = activePanelId && isArtifactPanel(activePanelId) ? activePanelId : activePane()?.path;
+    titleEl.textContent = path || currentSlug || "glosa";
+  }
+
+  // Go to (⌘K): the active pane's sections and every file in the workspace, in one list. The
+  // sections come from the pane, which knows which face is showing; the files from the same map
+  // the navigator draws, so the two never disagree about what exists.
+  const palette = createCommandPalette({
+    host: root,
+    getFiles: () => [...knownArtifacts.keys()],
+    getSections: () => {
+      const pane = activePane();
+      const outline = pane?.getOutline?.();
+      if (!pane || !outline?.entries.length || !isArtifactPanel(pane.path)) return null;
+      return { title: pane.path, entries: outline.entries, current: outline.current };
+    },
+    onOpenFile: (path) => void openArtifact(path),
+  });
 
   /** With several artifacts open, the reader has to be able to tell at a glance which pane the
    * mode control, the shortcuts, and the address bar are all talking about. The active tab's
@@ -550,13 +573,9 @@ export function mountApp(
       dock?.moveActivePanel("new");
       return;
     }
-    if (!e.altKey && (e.key === "j" || e.key === "J")) {
-      // The outline of the artifact in the ACTIVE pane. Scoped to one pane on purpose: with two
-      // documents open, a workspace-wide jump list would have to guess which one you meant.
-      const pane = activePane();
-      if (!pane?.hasOutline?.()) return;
+    if (!e.altKey && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
-      pane.toggleOutline();
+      palette.toggle();
       return;
     }
     if (!e.altKey && (e.key === "w" || e.key === "W")) {
@@ -679,6 +698,7 @@ export function mountApp(
       confirmClosePanel: (id) => panes.get(id)?.confirmClose?.() ?? Promise.resolve(true),
       onActivePanelChange: (id) => {
         activePanelId = id;
+        refreshTopbarTitle();
         markActivePane();
         markNavigatorOpenSet();
         reflectFocus();
@@ -696,7 +716,7 @@ export function mountApp(
 
   async function selectWorkspace(slug) {
     currentSlug = slug;
-    workspaceNameEl.textContent = slug ?? "glosa";
+    refreshTopbarTitle();
     attentionTray.setWorkspace(slug);
     artifactNavigator.setWorkspace(slug);
     markCurrent(sidebarList, slug);
@@ -800,6 +820,7 @@ export function mountApp(
     panes.clear();
     dock?.destroy();
     contextSurfaces.destroy();
+    palette.destroy();
     shell.destroy();
   };
   // Keep the callable cleanup contract for existing hosts. URL navigation closes the whole

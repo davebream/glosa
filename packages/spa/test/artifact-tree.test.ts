@@ -9,19 +9,27 @@ import {
 import { installDom, type DomEnv } from "./dom-env.ts";
 
 describe("artifact tree model", () => {
-  test("groups path segments without changing daemon/adapter order", () => {
+  test("groups path segments and orders folders first, then files, by name", () => {
     const root = buildArtifactTree([
       { path: "03_review.md", class: "R" },
       { path: "drafts/02_body.md", class: "R" },
       { path: "01_brief.md", class: "R" },
+      { path: "Notes/z.md", class: "R" },
+      { path: "10_appendix.md", class: "R" },
       { path: "drafts/01_opening.md", class: "R" },
     ]);
 
-    expect(root.children.map((node) => node.name)).toEqual(["03_review.md", "drafts", "01_brief.md"]);
-    const drafts = root.children[1]!;
+    expect(root.children.map((node) => node.name)).toEqual([
+      "drafts",
+      "Notes",
+      "01_brief.md",
+      "03_review.md",
+      "10_appendix.md",
+    ]);
+    const drafts = root.children[0]!;
     expect(drafts.kind).toBe("directory");
     if (drafts.kind === "directory") {
-      expect(drafts.children.map((node) => node.name)).toEqual(["02_body.md", "01_opening.md"]);
+      expect(drafts.children.map((node) => node.name)).toEqual(["01_opening.md", "02_body.md"]);
     }
   });
 

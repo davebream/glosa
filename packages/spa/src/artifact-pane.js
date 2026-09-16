@@ -24,7 +24,6 @@ import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import {
   collectRenderedHeadings,
-  createOutlineController,
   currentHeadingIndex,
   measureTextareaOffsets,
   outlineDepths,
@@ -132,12 +131,6 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
 
-/** The whitespace a pane needs beside its text block before the outline panel will open on hover
- * alone: the panel's 200px floor plus its two 8px insets. Below it the panel can only open over
- * the manuscript, so it waits to be asked. Keep in step with app.css's `.glosa-foreedge-panel`
- * width clamp. */
-export const OUTLINE_PANEL_FLOOR = 216;
-
 /** How far a session's sideline sits from the text column. Close enough to read as a mark on
  * those lines rather than as chrome beside them; far enough not to crowd the measure. */
 const SIDELINE_GUTTER = 14;
@@ -242,8 +235,6 @@ const ICONS = {
   compare:
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3.5H4.4A1.4 1.4 0 0 0 3 4.9v10.2a1.4 1.4 0 0 0 1.4 1.4H7M13 3.5h2.6A1.4 1.4 0 0 1 17 4.9v10.2a1.4 1.4 0 0 1-1.4 1.4H13M10 2v16"/></svg>',
   move: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><path d="M11.5 4v12"/></svg>',
-  // The fore-edge itself, at icon scale: three rules of falling length, flush right.
-  outline: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M6.5 10H17M10 15h7"/></svg>',
 };
 
 /**
@@ -430,12 +421,6 @@ export function createArtifactPane(host, deps) {
     setToolsOpen(false, { restoreFocus: true });
     printArtifact();
   });
-  // The keyboard/pointer door to the fore-edge for readers who never hover it, and the ONLY door
-  // on a pane too narrow to paint the rail clear of the text. Same surface either way.
-  const outlineMenuItem = menuItem("glosa-tools-outline", ICONS.outline, "Outline", () => {
-    setToolsOpen(false);
-    outline.toggle();
-  });
   // Named for exactly what one click does. "Compare versions" would promise a version picker;
   // that picker is the History surface, one row above.
   const compareButton = menuItem("glosa-tools-compare", ICONS.compare, "Compare with last saved version", () => {
@@ -478,7 +463,6 @@ export function createArtifactPane(host, deps) {
   const faceGroup = el("div", { className: "glosa-face-group" });
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
-    outlineMenuItem,
     copySourceButton,
     printArtifactButton,
     compareButton,
@@ -493,12 +477,13 @@ export function createArtifactPane(host, deps) {
   // but a pane in Preview and a pane in Annotate with nothing annotated yet look identical, so
   // the state still has to be legible. A quiet label states it without offering it.
   const modeLabel = el("span", { className: "glosa-pane-mode-label" });
+  // Three columns: the path at the left, the mode control centred over the manuscript (which is
+  // itself centred in the pane), the artifact's own actions at the right.
   const artifactBar = el("div", { className: "glosa-artifact-bar" }, [
     artifactIdEl,
     modeLabel,
     modeBar,
-    historyToggle,
-    tools,
+    el("div", { className: "glosa-artifact-actions" }, [historyToggle, tools]),
   ]);
 
   // ---------- pane body ----------
@@ -643,18 +628,26 @@ export function createArtifactPane(host, deps) {
     : null;
   if (!faceStore) faceGroup.hidden = true;
 
-  // ---------- the fore-edge index ----------
+  // ---------- the outline, as data ----------
   //
-  // Painted, never reserved. The rail and its panel are absolutely positioned children of the
-  // pane, so no width and no mode ever subtracts a gutter from the measure — a pane narrow enough
-  // that the artifact fills it keeps the whole artifact, and the rail moves into the 2rem padding
-  // `.glosa-content` and `.glosa-edit-wrap` already carry. See outline.js for the three rules the
-  // instrument holds itself to.
+  // The pane knows which surface is showing, so it collects the headings and owns the jumps; the
+  // workspace's Go to palette (⌘K) is where a reader asks for them. Nothing is painted here.
 
-  const outline = createOutlineController({
-    host: paneEl,
-    id: `glosa-outline-${Math.random().toString(36).slice(2, 9)}`,
-  });
+  /** @type {import("./outline.js").OutlineEntry[]} */
+  let outlineEntries = [];
+  /** Index into `outlineEntries` of the section the reader is standing in, or -1. */
+  let outlineCurrent = -1;
+  const outline = {
+    /** @param {import("./outline.js").OutlineEntry[]} next */
+    setEntries(next) {
+      outlineEntries = Array.isArray(next) ? next : [];
+      if (outlineCurrent >= outlineEntries.length) outlineCurrent = -1;
+    },
+    /** @param {number} index */
+    setCurrent(index) {
+      outlineCurrent = Number.isInteger(index) && index >= 0 && index < outlineEntries.length ? index : -1;
+    },
+  };
   /** Heading offsets inside the CURRENT surface's scroll content, in document order. Kept beside
    * the entries because tracking the reading position on every scroll frame must not re-measure
    * the document. */
@@ -683,19 +676,6 @@ export function createArtifactPane(host, deps) {
     }
     if (contentEl.hidden) return null;
     return { kind: "rendered", root: contentEl, scroller: paneMain, block: contentEl };
-  }
-
-  /** Publishes the measured left edge of the text block so the panel can size itself to the
-   * whitespace beside it rather than over it. One custom property; app.css does the clamping. */
-  function layoutOutline() {
-    const surface = outlineSurface();
-    const block = surface?.block;
-    const space = block ? Math.max(0, block.getBoundingClientRect().left - paneEl.getBoundingClientRect().left) : 0;
-    paneEl.style.setProperty("--outline-space", `${Math.round(space)}px`);
-    // Below this the panel's 200px floor no longer fits in the whitespace, so opening it means
-    // covering the writing. The rail keeps reporting position; it just stops volunteering.
-    outline.setCompact(space < OUTLINE_PANEL_FLOOR);
-    outline.remeasure();
   }
 
   function syncOutlineCurrent() {
@@ -742,14 +722,12 @@ export function createArtifactPane(host, deps) {
         editArea,
         headings.map((heading) => heading.offset),
       );
-      const extent = Math.max(1, editArea.scrollHeight);
       outlineTops = tops;
       outline.setEntries(
         headings.map((heading, index) => ({
           level: heading.level,
           depth: depths[index],
           text: heading.text,
-          fraction: tops[index] / extent,
           // Jumping in the source face moves the CARET too: the reader opened the outline to get
           // somewhere in order to type there.
           jump: () => {
@@ -771,7 +749,6 @@ export function createArtifactPane(host, deps) {
     const scrollTop = surface.scroller.scrollTop;
     const base = surface.scroller.getBoundingClientRect().top;
     const tops = headings.map((heading) => heading.el.getBoundingClientRect().top - base + scrollTop);
-    const extent = Math.max(1, surface.scroller.scrollHeight);
     outlineTops = tops;
     outline.setEntries(
       headings.map((heading, index) => ({
@@ -781,7 +758,6 @@ export function createArtifactPane(host, deps) {
         // The § the heading carries on the page (rendered surface only; the rich editor's headings
         // are not addressed, and the source face has no page to be addressed on).
         address: surface.kind === "rendered" ? (heading.el.getAttribute?.("data-address") ?? null) : null,
-        fraction: tops[index] / extent,
         jump: () => {
           scrollToOffset(surface.scroller, tops[index]);
           // Scrolling alone leaves a keyboard reader where they were. Focus follows the jump, on
@@ -827,7 +803,6 @@ export function createArtifactPane(host, deps) {
   function paneMenuControls() {
     return [
       historyMenuItem,
-      outlineMenuItem,
       copySourceButton,
       printArtifactButton,
       compareButton,
@@ -885,9 +860,6 @@ export function createArtifactPane(host, deps) {
     const available = artifactPath !== null;
     copySourceButton.hidden = !available;
     printArtifactButton.hidden = !available;
-    // A document with fewer than two headings has no outline, and offering an empty one is worse
-    // than not offering it. `outline.hasEntries()` is the single source for that everywhere.
-    outlineMenuItem.hidden = !available || !outline.hasEntries();
     compareButton.hidden = !available || !openDiffTab;
     if (toolsStatusArtifactPath !== artifactPath) {
       toolsStatusArtifactPath = artifactPath;
@@ -1449,7 +1421,6 @@ export function createArtifactPane(host, deps) {
     updateAnnotatableBlocks();
     renderMargin();
     refreshOutline();
-    layoutOutline();
   }
 
   /** Mounts (or re-mounts, on a path change) the class-F viewer — P4.1. A fresh capability is
@@ -3089,11 +3060,9 @@ export function createArtifactPane(host, deps) {
           paneWidth = width;
           layoutMargin();
           paintAnnotationMarks();
-          // A narrower pane re-wraps the source face, which moves every heading in it, and it
-          // moves the text block the panel sizes itself against in every face.
+          // A narrower pane re-wraps the source face, which moves every heading in it.
           outlineSourceKey = "";
           refreshOutline();
-          layoutOutline();
         });
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
@@ -3434,9 +3403,8 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
-    /** ⌘J, and the pane menu's Outline row. Toggles, so the same key puts it away. */
-    toggleOutline: () => outline.toggle(),
-    hasOutline: () => outline.hasEntries(),
+    /** This document's sections and the one the reader is in, for the workspace's Go to palette. */
+    getOutline: () => ({ entries: outlineEntries, current: outlineCurrent }),
     isDirty,
     annotationCount: () => annotations.length,
     isMissing: () => paneEl.hasAttribute("data-missing"),
@@ -3474,7 +3442,6 @@ export function createArtifactPane(host, deps) {
       renderMarkers();
       outlineSourceKey = "";
       refreshOutline();
-      layoutOutline();
     },
     confirmClose: () => confirmDiscard(),
     destroy() {
@@ -3485,7 +3452,6 @@ export function createArtifactPane(host, deps) {
       editArea.removeEventListener("input", onSourceInputForOutline);
       if (outlineSourceTimer) clearTimeout(outlineSourceTimer);
       if (outlineFrame) cancelAnimationFrame(outlineFrame);
-      outline.destroy();
       faceControl?.destroy();
       observer?.disconnect();
       teardownRichFace();

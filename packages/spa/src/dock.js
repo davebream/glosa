@@ -175,6 +175,9 @@ export function createDock(host, deps) {
         const state = getTabState(id) ?? {};
         glyph.innerHTML = state.kind === "diff" ? DIFF_GLYPH : (CLASS_GLYPHS[state.artifactClass] ?? CLASS_GLYPHS.R);
         label.textContent = state.label ?? id;
+        // The label reserves its bold width at rest (see `.glosa-tab-label::after`), so
+        // activating a tab changes its weight without changing its size.
+        label.setAttribute("data-label", state.label ?? id);
         element.title = state.tooltip ?? id;
         element.setAttribute("data-missing", String(Boolean(state.missing)));
         badges.textContent = "";

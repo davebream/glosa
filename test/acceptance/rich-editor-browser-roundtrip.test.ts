@@ -750,8 +750,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       host.querySelector(".glosa-face-source").click();
       await import("/app/markdown-parser.js");
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      pane.toggleOutline();
-      const labels = [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.textContent);
+      // The outline the Go to palette lists: the pane's own entries, read as data.
+      const labels = pane.getOutline().entries.map(entry => entry.text);
       host.querySelector(".glosa-face-rich").click();
       for (let i = 0; i < 100 && !host.querySelector(".ProseMirror h1"); i++)
         await new Promise(resolve => setTimeout(resolve, 10));
@@ -770,9 +770,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       host.querySelector(".glosa-face-source").click();
       const area = host.querySelector("textarea.glosa-edit-area");
-      const rows = [...host.querySelectorAll(".glosa-foreedge-row")];
-      const labels = rows.map(row => row.textContent);
-      rows[1].click();
+      const entries = pane.getOutline().entries;
+      const labels = entries.map(entry => entry.text);
+      entries[1].jump();
       const result = { labels, text: area.value, offset: area.selectionStart };
       pane.destroy(); host.remove(); delete window.__outlineTest;
       return result;
@@ -800,10 +800,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       pane.setMode("read");
       await import("/app/markdown-parser.js");
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      pane.toggleOutline();
-      // Rendered headings carry a § address span inside the row; the title attribute is the bare
-      // heading, which is what this test compares (the source-parsed outlines above have none).
-      const result = { mode: pane.getMode(), labels: [...host.querySelectorAll(".glosa-foreedge-row")].map(row => row.title) };
+      // Entry text is the bare heading; a rendered heading's § address travels separately.
+      const result = { mode: pane.getMode(), labels: pane.getOutline().entries.map(entry => entry.text) };
       pane.destroy(); host.remove(); delete window.__outlineTest;
       return result;
     })()`);

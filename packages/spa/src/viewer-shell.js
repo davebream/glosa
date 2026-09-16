@@ -5,7 +5,7 @@
 // Since the multi-artifact workbench (design brief 2026-09-04 §6) the top bar is WORKSPACE chrome
 // and nothing else. The artifact name, the mode control, History, Copy source and Print all live
 // inside the pane that holds their artifact — one bar cannot honestly speak for two documents.
-// What stays here is true of the whole workspace: the navigator toggle, the brand mark, the
+// What stays here is true of the whole workspace: the navigator and its toggle, the brand mark, the
 // workspace name, the attention tray, Agent feedback, Conversation, Appearance, Keyboard
 // shortcuts, and the connection banner.
 
@@ -51,9 +51,10 @@ export function createViewerShell(
     '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M7.5 4v12"/><path class="glosa-nav-toggle-fill" d="M4.25 5h2.5v10h-2.5z"/></svg>';
   const brandMark = el("span", { className: "glosa-brand-mark", role: "img", "aria-label": "glosa" });
   brandMark.innerHTML =
-    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-ink" fill-rule="evenodd" d="M14 4C8.48 4 4 8.48 4 14s4.48 10 10 10c2.1 0 4.05-.65 5.65-1.75v-5.1A5.76 5.76 0 0 1 14 19.75 5.75 5.75 0 1 1 19.65 13V5.75A9.93 9.93 0 0 0 14 4Z"/><path class="glosa-logo-accent" d="M19.5 4H24v18.35C24 27.3 20.9 30 15.5 30H11v-4h4.5c2.75 0 4-1.16 4-3.72V4Z"/></svg>';
-  // The bar's title slot now names what the bar actually controls: the workspace.
-  const workspaceNameEl = el("span", { className: "glosa-workspace-name", textContent: "glosa" });
+    '<svg viewBox="0 0 32 32" aria-hidden="true"><path class="glosa-logo-accent" d="M 10.94 3.21 C 11.23 3.19 11.78 3.21 12.09 3.21 L 14.15 3.21 C 17.28 3.2 22.41 3 25.19 4.31 C 26.19 4.78 27 5.56 27.37 6.61 C 28.33 9.35 26.38 14.58 25.2 17.08 C 22.68 22.39 17.31 26.56 11.85 28.51 C 11.34 28.69 10.77 28.85 10.25 29 C 10.13 28.75 10.02 28.5 9.91 28.24 C 11.77 27.37 13.39 26.34 14.72 24.75 C 15.04 24.36 15.38 23.97 15.65 23.55 C 20.86 15.29 9.97 16.08 5.24 17.56 C 4.57 17.77 3.82 17.28 3.71 16.56 C 3.67 16.33 3.7 16.1 3.79 15.89 C 3.92 15.57 4.34 15.09 4.57 14.79 C 4.81 14.46 5.05 14.12 5.27 13.78 C 6.77 11.48 8.15 8.87 8.94 6.23 C 9.33 4.9 9.17 3.49 10.94 3.21Z"/></svg>';
+  // The bar's title is the artifact in the active pane — the document the reader is looking at —
+  // and falls back to the workspace when no pane is open.
+  const titleEl = el("span", { className: "glosa-topbar-name", textContent: "glosa" });
   const conversationToggle = el("button", {
     id: "glosa-conversation-toggle",
     className: "glosa-conversation-toggle",
@@ -151,14 +152,17 @@ export function createViewerShell(
 
   root.append(
     el("header", { className: "glosa-topbar" }, [
-      navToggle,
-      brandMark,
-      el("div", { className: "glosa-topbar-title" }, [workspaceNameEl]),
+      el("div", { className: "glosa-topbar-lead" }, [brandMark]),
+      el("div", { className: "glosa-topbar-title" }, [titleEl]),
       el("div", { className: "glosa-topbar-actions" }, [agentFeedbackHost, tools]),
       topbarOverlays,
     ]),
     bannerEl,
     sidebarEl,
+    // The navigator's toggle lives in the desk's bottom-left corner, not in the top bar: on a footer
+    // strip at the foot of the navigator while it is shown, and in the same spot once it is hidden,
+    // so the control that brings it back never moves and never pushes the mark around.
+    el("div", { className: "glosa-nav-foot" }, [navToggle]),
     mainEl,
     conversationEl,
     shortcutsEl,
@@ -175,7 +179,7 @@ export function createViewerShell(
   return {
     elements: {
       navToggle,
-      workspaceNameEl,
+      titleEl,
       conversationToggle,
       shortcutsToggle,
       topbarOverlays,
