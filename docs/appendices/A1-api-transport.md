@@ -11,8 +11,10 @@ those are cross-referenced, not duplicated.
 ## 1. Transport baseline
 
 - Bind `127.0.0.1` only. Every request (including `GET /api/handshake`) is Origin- and
-  Host-allowlisted first, before any other processing — a rejected Origin/Host returns `403`
-  with no body, regardless of route or auth state.
+  Host-allowlisted first, before any other processing. The Host allowlist is exactly
+  `127.0.0.1:<port>` and `glosa.localhost:<port>` on this port (A3 §4 Rule 1, #159); a rejected
+  Host returns `400` with no body, and a foreign Origin returns `403`, regardless of route or auth
+  state. "Foreign" means anything other than `http://<the request's own Host>`.
 - All request/response bodies are `application/json` except SSE streams
   (`text/event-stream`) and the class-F document route (`text/html`).
 - Errors use a minimal RFC 9457-shaped envelope, `application/problem+json`:
@@ -99,12 +101,13 @@ those are cross-referenced, not duplicated.
 
 ## 5. Route catalog
 
-Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `:path` /
+Base URL: `http://127.0.0.1:<port>` or `http://glosa.localhost:<port>` (A3 §4 Rule 1). Browsers
+are linked to the second; programmatic clients use the first. `:slug` is the workspace slug (R1). Every `:path` /
 `:artifactPath` param is validated per §6 before use.
 
 ### 5.1 `GET /api/handshake`
-No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
-which returns 403 per §1).
+No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
+400 for Host, 403 for Origin, per §1).
 ```json
 { "contract_version": "1.10", "daemon_version": "0.3.1", "paired": true }
 ```

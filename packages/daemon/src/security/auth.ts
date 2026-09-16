@@ -7,6 +7,7 @@
 // case this function can return.
 
 import type { ProblemSlug } from "../transport/problem.ts";
+import { selfOriginFor } from "./hosts.ts";
 import { tokenMatches } from "./token.ts";
 
 export type RouteClass =
@@ -22,8 +23,8 @@ export type AuthorizeResult = { ok: true } | { ok: false; status: number; slug: 
 
 export interface AuthorizeOptions {
   routeClass: RouteClass;
-  /** The port this request arrived on — used to compute the expected "self" Origin
-   * (`http://127.0.0.1:<port>`), never to build a hostname. */
+  /** The port this request arrived on — used with the already-allowlisted `Host` to compute the
+   * expected "self" Origin (`http://<host>:<port>`). */
   port: number;
   token: string | null;
 }
@@ -33,13 +34,15 @@ function bearerOf(req: Request): string | null {
   return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
 }
 
-/** Is this request's Origin present AND foreign (not `http://127.0.0.1:<port>`)? Exported so the
+/** Is this request's Origin present AND foreign — not `http://<Host>` for an allowlisted Host
+ * (A3 §4)? A page on `glosa.localhost` is foreign to a request addressed to `127.0.0.1`, and the
+ * reverse. Exported so the
  * route-lookup layer (http.ts) can apply the same "reject a foreign Origin" rule even on a path
  * with no matching route — a 404-vs-403 split by route existence would let a hostile page probe
  * for real routes (P1.3 review item 1). */
 export function isForeignOrigin(req: Request, port: number): boolean {
   const origin = req.headers.get("Origin");
-  return origin !== null && origin !== `http://127.0.0.1:${port}`;
+  return origin !== null && origin !== selfOriginFor(req.headers.get("Host"), port);
 }
 
 export function authorizeRequest(req: Request, opts: AuthorizeOptions): AuthorizeResult {

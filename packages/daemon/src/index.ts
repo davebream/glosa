@@ -74,6 +74,7 @@ export { authorizeRequest, isForeignOrigin } from "./security/auth.ts";
 export type { ConfineResult } from "./security/confine-path.ts";
 export { confinePath } from "./security/confine-path.ts";
 export { classFCspHeaders, spaCspHeaders } from "./security/csp.ts";
+export { CLASSF_HOSTNAME, isAllowedHost, SPA_HOSTNAMES, selfOriginFor } from "./security/hosts.ts";
 export type { TokenMutationDeps, TokenSource } from "./security/token.ts";
 export {
   ensureToken,

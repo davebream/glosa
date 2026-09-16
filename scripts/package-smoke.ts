@@ -134,7 +134,8 @@ try {
   }
 
   const url = run(glosa, ["open", "--url", workspace], isolatedEnv).trim();
-  if (!/^http:\/\/127\.0\.0\.1:\d+\/#t=/.test(url)) fail(`glosa open --url returned an unexpected URL: ${url}`);
+  // glosa open links browsers to glosa.localhost; the daemon also accepts 127.0.0.1 (A3 §4 Rule 1, #159).
+  if (!/^http:\/\/glosa\.localhost:\d+\/#t=/.test(url)) fail(`glosa open --url returned an unexpected URL: ${url}`);
   daemonPid = readLock()?.pid;
   if (!daemonPid) fail("glosa open --url did not leave an owned daemon lock");
 

@@ -58,6 +58,39 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(text).toBe("");
   });
 
+  it("Host allowlist is literal: near-miss spellings of glosa.localhost → 400, no body [A3 §4 Rule 1, #159]", async () => {
+    for (const host of [
+      `GLOSA.localhost:${port}`,
+      `glosa.localhost.:${port}`,
+      `evil.glosa.localhost:${port}`,
+      `localhost:${port}`,
+      "glosa.localhost",
+      `glosa.localhost:${classFPort}`,
+    ]) {
+      const res = await fetch(apiUrl("/api/handshake"), { headers: { Host: host } });
+      expect(res.status, host).toBe(400);
+      expect(await res.text(), host).toBe("");
+    }
+  });
+
+  it("glosa.localhost is a full second Host: self Origin + Bearer reaches an authed route [#159]", async () => {
+    const res = await fetch(apiUrl("/api/workspaces"), {
+      headers: {
+        Host: `glosa.localhost:${port}`,
+        Origin: `http://glosa.localhost:${port}`,
+        Authorization: `Bearer ${TOKEN}`,
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("a rebinding page cannot borrow the other allowlisted name's Origin → 403 [A3 §5 #9]", async () => {
+    const res = await fetch(apiUrl("/api/handshake"), {
+      headers: { Host: `glosa.localhost:${port}`, Origin: `http://127.0.0.1:${port}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("handshake: no Origin → 200 + superset body (P1.2 fields + A1 §5.1 fields)", async () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);

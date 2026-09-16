@@ -5,7 +5,7 @@
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { GlosaApiClient, OpenWorkspaceResult } from "./api-client.ts";
 import { isApiError } from "./api-client.ts";
-import { type CommandEnvelope, EXIT_CODES, daemonUnreachableEnvelope } from "./envelope.ts";
+import { type CommandEnvelope, daemonUnreachableEnvelope, EXIT_CODES } from "./envelope.ts";
 
 export type OpenSurface = "document" | "workspace";
 export type PresentationMode = "read" | "review" | "edit";
@@ -175,8 +175,20 @@ export function classifyOpenTarget(
   };
 }
 
+/** The hostname `glosa open` links a browser to. `glosa.localhost` is the default (#159); it is one
+ * of the two names the daemon's Host allowlist accepts (A3 §4 Rule 1), and browsers and the macOS
+ * resolver answer it locally. `GLOSA_OPEN_HOST=127.0.0.1` restores the IP link. Any other value is
+ * ignored: the daemon would answer it with a 400. */
+export function presentationHostname(env: Record<string, string | undefined> = Bun.env): string {
+  return env.GLOSA_OPEN_HOST === "127.0.0.1" ? "127.0.0.1" : "glosa.localhost";
+}
+
 /** Build the SPA deep-link fragment: pairing secret + non-secret route state. */
-export function buildPresentationUrl(port: number, opts: PresentFragmentOptions): string {
+export function buildPresentationUrl(
+  port: number,
+  opts: PresentFragmentOptions,
+  hostname: string = presentationHostname(),
+): string {
   const params = new URLSearchParams();
   if (opts.pairing.kind === "durable") params.set("t", opts.pairing.token);
   else params.set("p", opts.pairing.token);
@@ -185,7 +197,7 @@ export function buildPresentationUrl(port: number, opts: PresentFragmentOptions)
   params.set("surface", opts.surface);
   params.set("mode", opts.mode);
   if (opts.readLock) params.set("lock", "read");
-  return `http://127.0.0.1:${port}/#${params.toString()}`;
+  return `http://${hostname}:${port}/#${params.toString()}`;
 }
 
 export async function runOpenPresentation(

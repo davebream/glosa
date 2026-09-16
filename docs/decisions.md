@@ -702,3 +702,42 @@ A check costs one boolean and is true regardless of how many attach paths exist 
 still binds, because refusing to bind over a git-toolchain problem would take out delivery that
 never touches git (the `glosa/#38` failure). The next writer reconciles instead, so catch-up is
 delayed in that case, not lost.
+
+## The browser address is `glosa.localhost`; a public domain pointing at loopback is rejected (#159)
+
+`glosa open` links browsers to `http://glosa.localhost:<port>`. The SPA/API listener's Host
+allowlist (A3 §4 Rule 1) grows from one literal to exactly two: `127.0.0.1:<port>` and
+`glosa.localhost:<port>`. The class-F listener keeps the IP alone.
+
+**Why a hostname does not reopen rebinding.** The original rule banned every DNS name because a name
+is something a hostile page can re-point: serve its script under the name, then answer the name with
+`127.0.0.1`. That needs someone outside the machine to answer for the name. For `.localhost` nobody
+does. RFC 6761 reserves it, Chrome and Firefox resolve it internally, and the macOS system resolver
+(Safari's path) synthesizes a loopback answer. The spike checked that last one, because it decided
+whether Safari was covered: on macOS 26.2, `dns-sd -G v4v6 glosa.localhost` returns `localhost.` →
+`127.0.0.1` / `::1` on interface `-1` with TTL 1, which `/etc/hosts` cannot produce. A rebinding page
+still arrives with its own name as `Host` and gets the 400.
+
+**Why Origin is bound to the request's Host rather than to "either name".** Two names are two origins
+with separate sessionStorage. Letting a page on one act on requests addressed to the other gives a
+real tab nothing, and would turn two independent origins into a set of equivalent ones.
+
+**Why class-F stays on the IP.** Minting capability URLs against one fixed origin keeps the class-F
+listener exactly as it was. Only `frame-ancestors` widens, so the SPA can frame the viewer under
+either name. Framed from `glosa.localhost`, the viewer is cross-site to its parent; the frame is
+already an opaque sandboxed origin with no storage or network, so nothing depended on being same-site.
+
+**Why not a public domain with an A record for `127.0.0.1` (the `*.plex.direct` pattern).** An outside
+nameserver answers for it and can change the answer, which is rebinding again. Every resolution is
+also an outbound query to a resolver and to the domain's own nameserver, which is the heartbeat
+invariant 5 and A6 §F33 forbid.
+
+**Why the default flipped rather than staying opt-in.** Tabs on `127.0.0.1` keep working because the
+daemon accepts both names, and `glosa open` pairs through the URL fragment, so a tab on the new name
+pairs on first load. The only cost is that an already-paired tab and a new tab no longer share
+sessionStorage. `GLOSA_OPEN_HOST=127.0.0.1` restores the IP link; other values are ignored because
+the daemon would answer them with a 400.
+
+**What this does not cover.** No TLS and no padlock. On loopback, with a Bearer token and a strict
+CSP, TLS was never the protection. The CLI, plugin monitor and other programmatic clients keep using
+the IP.

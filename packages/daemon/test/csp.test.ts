@@ -13,7 +13,7 @@ describe("classFCspHeaders — A3 §1 exact string", () => {
     expect(headers["Content-Security-Policy"]).toBe(
       "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; " +
-        "frame-ancestors 'self' http://127.0.0.1:4646; base-uri 'none'; object-src 'none'; " +
+        "frame-ancestors 'self' http://127.0.0.1:4646 http://glosa.localhost:4646; base-uri 'none'; object-src 'none'; " +
         "sandbox allow-scripts;",
     );
     expect(headers["Referrer-Policy"]).toBe("no-referrer");
@@ -21,7 +21,9 @@ describe("classFCspHeaders — A3 §1 exact string", () => {
 
   test("the SPA port is interpolated into frame-ancestors, not hardcoded", () => {
     const headers = classFCspHeaders(9999);
-    expect(headers["Content-Security-Policy"]).toContain("frame-ancestors 'self' http://127.0.0.1:9999;");
+    expect(headers["Content-Security-Policy"]).toContain(
+      "frame-ancestors 'self' http://127.0.0.1:9999 http://glosa.localhost:9999;",
+    );
   });
 });
 

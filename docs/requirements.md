@@ -265,7 +265,8 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
 - Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins.
-- **Auth**: `Host` must literally equal `127.0.0.1:<port>` on every request (no DNS → anti-rebinding);
+- **Auth**: `Host` must literally equal an allowlisted name + port on every request — `127.0.0.1:<port>`
+  or, on the SPA/API port only, `glosa.localhost:<port>` (resolved on-device, never by a DNS query → anti-rebinding; #159);
   Bearer token (128-bit, `~/.glosa/token` 0600) on API requests via `Authorization` header; **SSE uses
   `fetch()`-streaming (NOT native EventSource) so the header rides normally**; the class-F iframe loads
   via a **one-time 256-bit capability URL** on port 4647 (no ambient token there). Origin allowlist is

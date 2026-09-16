@@ -169,7 +169,7 @@ describe("glosa open", () => {
     expect(result.data.preview).toBe(false);
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(1);
-    expect(browserCalls[0]).toContain("http://127.0.0.1:4646/#");
+    expect(browserCalls[0]).toContain("http://glosa.localhost:4646/#");
     expect(browserCalls[0]).toContain("t=test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
     expect(browserCalls[0]).toContain("mode=read");
