@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(567);
+    ).toBe(568);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1862,7 +1862,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // the workbench redesign, 562 → 565 blocks / 508 → 511 edits, numerators unchanged.
   // The empty-rich-face fix's `### Fixed` heading and list under `[Unreleased]`: 565 → 567 blocks /
   // 511 → 512 edits, numerators unchanged.
-  const BLOCKS = 567;
+  // The Ink Weather redesign: DESIGN.md rewritten for the new visual world (new Mark Preview
+  // section) and a `### Changed` entry under `[Unreleased]`: 567 → 568 blocks / 512 → 512 edits,
+  // numerators unchanged.
+  const BLOCKS = 568;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1898,7 +1901,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 40 of 567 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 40 of 568 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {

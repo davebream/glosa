@@ -24,9 +24,11 @@ describe("face preference", () => {
     expect(faceKey("ws-1", "plans/a.md")).not.toBe(faceKey("ws-2", "plans/a.md"));
   });
 
-  test("missing, invalid or unreadable values default to the sans", () => {
+  test("missing, invalid or unreadable values fall back to Default, the serif", () => {
     expect(readFace(fakeStorage(), "k")).toBe("default");
     expect(readFace(fakeStorage({ k: "gothic" }), "k")).toBe("default");
+    // A page chosen as "serif" before the serif became the default keeps its serif as Default.
+    expect(readFace(fakeStorage({ k: "serif" }), "k")).toBe("default");
     expect(
       readFace(
         {
@@ -44,10 +46,10 @@ describe("face preference", () => {
     const store = createFaceStore({ storage });
     const a = faceKey("ws", "a.md");
     const b = faceKey("ws", "b.md");
-    store.set(a, "serif");
-    expect(store.get(a)).toBe("serif");
+    store.set(a, "sans");
+    expect(store.get(a)).toBe("sans");
     expect(store.get(b)).toBe("default");
-    expect(storage.map.get(a)).toBe("serif");
+    expect(storage.map.get(a)).toBe("sans");
     store.set(a, "default");
     expect(storage.map.has(a)).toBe(false);
     expect(() => store.set(a, "gothic")).toThrow(TypeError);
@@ -97,8 +99,8 @@ describe("mountFaceControl", () => {
     expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
 
     rows()[1]!.click();
-    expect(store.get(key)).toBe("serif");
-    expect(applied.at(-1)).toBe("serif");
+    expect(store.get(key)).toBe("sans");
+    expect(applied.at(-1)).toBe("sans");
     expect(picks).toBe(1);
     expect(rows().map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
 
@@ -129,7 +131,9 @@ describe("the face reaches the manuscript through one variable", () => {
   test("app.css sets the manuscript from --font-manuscript and stamps it per pane", () => {
     const css = readFileSync(new URL("../src/app.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.glosa-content\s*\{[^}]*font-family:\s*var\(--font-manuscript\)/);
-    expect(css).toMatch(/\.glosa-pane\[data-face="serif"\]\s*\{[^}]*--font-manuscript:\s*var\(--font-serif\)/);
+    // Default is the serif: the root sets it, and only Sans and Mono are stamped on a pane.
+    expect(css).toMatch(/:root\s*\{[^}]*--font-manuscript:\s*var\(--font-serif\)/);
+    expect(css).toMatch(/\.glosa-pane\[data-face="sans"\]\s*\{[^}]*--font-manuscript:\s*var\(--font-sans\)/);
     expect(css).toMatch(/\.glosa-pane\[data-face="mono"\]\s*\{[^}]*--font-manuscript:\s*var\(--font-mono\)/);
     // The rendered manuscript never names the serif directly any more: the writer's face decides.
     expect(css).not.toMatch(/\.glosa-content\s*\{[^}]*var\(--font-serif\)/);

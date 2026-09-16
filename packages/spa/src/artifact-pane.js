@@ -286,7 +286,7 @@ export function createArtifactPane(host, deps) {
     // presented-document surface), and the bar carries the whole identity itself.
     getTabLabel = () => null,
     // The writer's per-artifact face (face.js). Optional: a pane without a store reads in the
-    // default sans and offers no control.
+    // default serif and offers no control.
     faceStore = null,
   } = deps;
 
@@ -562,6 +562,11 @@ export function createArtifactPane(host, deps) {
   // the human wrote sits ON the manuscript, what a session pointed at stands NEXT to it.
   const sidelinesEl = el("div", { className: "glosa-sidelines", "aria-hidden": "true" });
   const previewEl = el("div", { className: "glosa-annotation-preview", hidden: true });
+  // The open draft floats at its passage at every width. A draft stacked into the rail beside the
+  // saved notes opened hundreds of pixels from the words just selected and was easy to miss; the
+  // passage is where the reader's eyes already are. Once sent, the new entry glides from here to
+  // its place in the rail (`settleIntoMargin`).
+  const composerLayerEl = el("div", { className: "glosa-composer-layer" });
   const historyEl = el("section", { className: "glosa-history", hidden: true, "aria-label": "Version history" });
 
   // The collection, at compact widths. The composer goes to the passage; the SET of annotations
@@ -600,6 +605,7 @@ export function createArtifactPane(host, deps) {
     markersEl,
     sidelinesEl,
     previewEl,
+    composerLayerEl,
   ]);
   const paneEl = el("section", { className: "glosa-pane", "aria-label": "Artifact" }, [
     artifactBar,
@@ -1038,7 +1044,7 @@ export function createArtifactPane(host, deps) {
       if (composer) composer.error = approvalError;
       renderMargin();
       renderApprovalStrip();
-      queueMicrotask(() => marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true }));
+      queueMicrotask(() => composerLayerEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true }));
       return;
     }
 
@@ -1238,7 +1244,7 @@ export function createArtifactPane(host, deps) {
       }
     }
     if (composer) {
-      const input = marginEl.querySelector(".glosa-composer-input");
+      const input = composerLayerEl.querySelector(".glosa-composer-input");
       parkedComposer = {
         path: currentArtifact?.source_path ?? null,
         state: { ...composer, draft: input instanceof HTMLTextAreaElement ? input.value : composer.draft },
@@ -1483,10 +1489,16 @@ export function createArtifactPane(host, deps) {
   function openComposer(record, { returnFocus = null, replacing = null, draft = "" } = {}) {
     closePreview();
     composer = { record, returnFocus, replacing, draft, error: "", submitting: false };
-    // Compact widths: the composer opens AT the passage, so the passage has to be on screen for
-    // it to have anywhere to open. Centring it also leaves room for the popover below it.
-    if (!isSideMargin()) {
-      const box = anchorBox(record?.target);
+    // The composer opens AT the passage, so the passage has to be on screen for it to have
+    // anywhere to open. A selection the reader just dragged already is; a revision opened from a
+    // rail card may not be, so centre it then, which also leaves room for the draft below it.
+    const openBox = anchorBox(record?.target);
+    const onScreen =
+      openBox &&
+      openBox.top >= paneMain.scrollTop &&
+      openBox.bottom <= paneMain.scrollTop + paneMain.clientHeight - 120;
+    if (!onScreen) {
+      const box = openBox;
       if (box) {
         const centred = box.top - Math.max(0, (paneMain.clientHeight - (box.bottom - box.top)) / 2 - 40);
         paneMain.scrollTop = Math.max(0, centred);
@@ -1504,7 +1516,7 @@ export function createArtifactPane(host, deps) {
     // Native focus normally scrolls the nearest scroll container until the newly inserted control
     // is visible; for a long artifact that would undo the anchor scroll above. Keep keyboard focus
     // moving into the composer, but leave the manuscript exactly where this put it.
-    marginEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true });
+    composerLayerEl.querySelector(".glosa-composer-input")?.focus({ preventScroll: true });
   }
 
   function closeComposer() {
@@ -1544,7 +1556,9 @@ export function createArtifactPane(host, deps) {
       // entry exists, so a failure here leaves two visible notes rather than none; the old card
       // stays with an honest label instead of quietly vanishing while still queued for delivery.
       if (replacing) await removeAnnotation(replacing, { failureLabel: "Still queued — remove it by hand" });
+      const draftBox = composerLayerEl.querySelector(".glosa-composer")?.getBoundingClientRect() ?? null;
       closeComposer();
+      settleIntoMargin(annotations.at(-1), draftBox);
       onStateChange();
     } catch (error) {
       composer.submitting = false;
@@ -1553,7 +1567,7 @@ export function createArtifactPane(host, deps) {
           ? `Couldn't send this annotation: ${error.message}`
           : "Couldn't send this annotation. Try again.";
       renderMargin();
-      queueMicrotask(() => marginEl.querySelector(".glosa-composer-input")?.focus());
+      queueMicrotask(() => composerLayerEl.querySelector(".glosa-composer-input")?.focus());
     }
   }
 
@@ -1808,6 +1822,8 @@ export function createArtifactPane(host, deps) {
     return {
       top: Math.min(...rects.map((r) => r.top)) - main.top + paneMain.scrollTop,
       bottom: Math.max(...rects.map((r) => r.bottom)) - main.top + paneMain.scrollTop,
+      // Where the selection starts on its first line, so a draft can open under its first word.
+      left: rects[0].left - main.left,
     };
   }
 
@@ -1815,8 +1831,19 @@ export function createArtifactPane(host, deps) {
    * space below is too tight, and clamped into the pane's visible band so it can never open
    * off-screen. Positioned in scroll space, so it travels with the passage as the reader scrolls
    * — the popover IS at the text, which is the whole contract. */
-  function placeAtAnchor(node, target, { gap = 10 } = {}) {
+  function placeAtAnchor(node, target, { gap = 10, alignToSelection = false } = {}) {
     const box = anchorBox(target);
+    if (alignToSelection) {
+      // Under the selection's first word, pulled back inside the manuscript column (or the pane,
+      // when the pane is narrower than the column) so the draft never hangs off either edge.
+      const width = node.offsetWidth;
+      const column = contentEl.getBoundingClientRect();
+      const main = paneMain.getBoundingClientRect();
+      const minLeft = Math.max(16, column.left - main.left);
+      const maxLeft = Math.min(paneMain.clientWidth - 16, column.right - main.left) - width;
+      const wanted = box ? box.left - 16 : minLeft;
+      node.style.left = `${Math.round(Math.max(minLeft, Math.min(wanted, Math.max(minLeft, maxLeft))))}px`;
+    }
     const height = node.offsetHeight;
     const viewTop = paneMain.scrollTop;
     const viewBottom = viewTop + paneMain.clientHeight;
@@ -1919,7 +1946,55 @@ export function createArtifactPane(host, deps) {
     );
   }
 
-  /** Aligns each margin card (and the open composer) beside its anchor: anchor rect → offset in
+  /** The send moment: the entry that was just written glides from where its draft stood to its
+   * place in the rail, so the reader sees where the note went instead of watching it vanish from
+   * the passage. Rail widths only (the compact tray is collapsed), never under reduced motion,
+   * and purely decorative: the card is already in place when the animation starts. */
+  function settleIntoMargin(item, fromBox) {
+    if (!item || !fromBox || !isSideMargin()) return;
+    if (typeof window === "undefined" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (typeof requestAnimationFrame === "undefined") return;
+    const cardFor = () => [...marginEl.querySelectorAll(".glosa-annotation")].find((c) => c._glosaItem === item);
+    const run = () => {
+      const cardEl = cardFor();
+      if (!cardEl || typeof cardEl.animate !== "function") return;
+      // A copy travels, not the card: the send also triggers state and journal re-renders that
+      // replace the rail's nodes, and an animation on a replaced node simply stops. The copy is
+      // outside the pane's render tree, so nothing can pull it out from under the motion.
+      const to = cardEl.getBoundingClientRect();
+      const ghost = cardEl.cloneNode(true);
+      ghost.classList.add("glosa-annotation-ghost");
+      ghost.setAttribute("aria-hidden", "true");
+      Object.assign(ghost.style, {
+        position: "fixed",
+        top: `${to.top}px`,
+        left: `${to.left}px`,
+        width: `${to.width}px`,
+        right: "auto",
+        margin: "0",
+      });
+      document.body.append(ghost);
+      cardEl.style.opacity = "0";
+      const done = () => {
+        ghost.remove();
+        const current = cardFor();
+        if (current) current.style.opacity = "";
+      };
+      const motion = ghost.animate(
+        [
+          { transform: `translate(${fromBox.left - to.left}px, ${fromBox.top - to.top}px)`, opacity: 0.4 },
+          { transform: "translate(0, 0)", opacity: 1 },
+        ],
+        { duration: 280, easing: "cubic-bezier(0.25, 1, 0.5, 1)" },
+      );
+      motion.onfinish = done;
+      motion.oncancel = done;
+    };
+    // renderMargin aligns the rail on the next frame; measure the card's resting place after it.
+    requestAnimationFrame(() => requestAnimationFrame(run));
+  }
+
+  /** Aligns each margin card beside its anchor, and the open composer under its passage: anchor rect → offset in
    * the shared scroll space → absolute top, collision-stacked downward so cards never overlap.
    * No-op in compact, where CSS lays the margin out in flow. */
   function layoutMargin() {
@@ -1928,11 +2003,11 @@ export function createArtifactPane(host, deps) {
     // Compact: the margin is not a block under the manuscript any more, it is the coordinate
     // space the open composer floats in beside its own passage.
     marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "review");
-    const positioned = [...marginEl.querySelectorAll(".glosa-annotation, .glosa-composer")];
+    const positioned = [...marginEl.querySelectorAll(".glosa-annotation")];
+    const form = composerLayerEl.querySelector(".glosa-composer");
+    if (form && composer) placeAtAnchor(form, composer.record?.target, { alignToSelection: true });
     if (!side) {
       for (const cardEl of positioned) cardEl.style.top = "";
-      const form = marginEl.querySelector(".glosa-composer");
-      if (form && composer) placeAtAnchor(form, composer.record?.target);
       return;
     }
     const mainTop = paneMain.getBoundingClientRect().top;
@@ -2470,6 +2545,7 @@ export function createArtifactPane(host, deps) {
     renderProvenance();
     marginEl.textContent = "";
     trayListEl.textContent = "";
+    composerLayerEl.textContent = "";
     if (modeState.mode !== "review" || !currentArtifact) {
       if (composer) composer = null;
       closePreview();
@@ -2499,7 +2575,7 @@ export function createArtifactPane(host, deps) {
     if (composer) {
       const form = buildComposer();
       form._glosaItem = composer.record ? { record: composer.record } : null;
-      marginEl.append(form);
+      composerLayerEl.append(form);
     }
     // Open work first, settled work after it under its own heading. An annotation a session has
     // already applied is a record of what happened, not something still asking to be read — but it

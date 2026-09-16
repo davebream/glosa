@@ -6,7 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The workspace has a new look meant for calm, long writing sessions: warm paper instead of grey
+  panels, near-black ink hairlines between regions, and burnt vermilion for everything you mark
+  (underlines, margin notes, § addresses, caret, focus and the logo). Documents are set in
+  Source Serif 4 by default, with serif headings and serif margin notes; the chrome uses its
+  companion, Source Sans 3. Both faces ship with glosa and load from the daemon, so nothing is
+  fetched from a font service. The Read / Review / Edit control is now an ink outline with the
+  current mode filled in. Layout and behaviour are unchanged.
+- The per-document face menu is now Default (serif), Sans and Mono. A document you had switched
+  to Serif opens in Default, which is the same serif.
+- A new note's draft now opens directly under the words you selected at every window width,
+  instead of in the margin column at wide ones, where it was easy to miss. When you send it, the
+  note glides into its place in the margin.
+- Edit's Source view is centred in the pane, under the mode control, instead of hugging the left.
+
 ### Fixed
+
+- Hovering a marked passage in a narrower pane showed your note with the page's text bleeding
+  through it. The note now sits on its own paper.
 
 - A file opened straight into Edit could show an empty rich editor instead of its content when the
   editor module finished loading before the file's annotations did. The editor now waits for the

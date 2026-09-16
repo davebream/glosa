@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the manuscript's face, per artifact. The page belongs to the writer, and the writer
-// chooses how it is set: Default (the system sans), Serif, or Mono. glosa's identity does not live
+// chooses how it is set: Default (Source Serif 4), Sans (Source Sans 3), or Mono. glosa's identity does not live
 // in the face — every mark, address and margin entry reads the same in all three — so this is a
 // reading preference, durable per artifact, and never anything a session can see or change.
 //
@@ -8,8 +8,10 @@
 // artifact path. Storage failure never prevents a page-local change.
 
 export const FACE_STORAGE_PREFIX = "glosa_face:";
-export const FACES = Object.freeze(["default", "serif", "mono"]);
-export const FACE_LABELS = Object.freeze({ default: "Default", serif: "Serif", mono: "Mono" });
+// A page stored as "serif" before the serif became the default is no longer a face here; it reads
+// back as "default", which now sets it in the same serif.
+export const FACES = Object.freeze(["default", "sans", "mono"]);
+export const FACE_LABELS = Object.freeze({ default: "Default", sans: "Sans", mono: "Mono" });
 
 export function isFace(value) {
   return FACES.includes(value);

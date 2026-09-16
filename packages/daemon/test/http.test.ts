@@ -445,7 +445,27 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const body = await res.text();
     // The served bytes are the mark on disk, whatever the mark currently is.
     expect(body).toBe(readFileSync(new URL("../../spa/src/glosa-mark.svg", import.meta.url), "utf8"));
+    // Two inks: the under layer and the hand printed over it.
+    expect(body).toContain('class="under"');
     expect(body).toContain('class="accent"');
+  });
+
+  it("GET /app/fonts/*.woff2 serves the vendored faces byte-for-byte", async () => {
+    for (const name of [
+      "source-serif-4-roman.woff2",
+      "source-serif-4-italic.woff2",
+      "source-sans-3-roman.woff2",
+      "source-sans-3-italic.woff2",
+    ]) {
+      const res = await fetch(apiUrl(`/app/fonts/${name}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("font/woff2");
+      const served = new Uint8Array(await res.arrayBuffer());
+      const onDisk = new Uint8Array(readFileSync(new URL(`../../spa/src/fonts/${name}`, import.meta.url)));
+      // A text round-trip would replace invalid UTF-8 sequences and change both length and bytes.
+      expect(served.byteLength).toBe(onDisk.byteLength);
+      expect(Buffer.compare(Buffer.from(served), Buffer.from(onDisk))).toBe(0);
+    }
   });
 
   it("GET /app/<unknown file> → 404, not a filesystem read", async () => {

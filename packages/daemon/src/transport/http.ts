@@ -16,6 +16,7 @@ import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import { createHash } from "node:crypto";
 import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
@@ -86,7 +87,7 @@ const SPA_ASSETS: Record<string, string> = {
   // appearance.js owns the page-lifetime controller and workspace popover.
   "appearance-preload.js": "text/javascript; charset=utf-8",
   "appearance.js": "text/javascript; charset=utf-8",
-  // The manuscript face store and its per-artifact control (Default / Serif / Mono).
+  // The manuscript face store and its per-artifact control (Default / Sans / Mono).
   "face.js": "text/javascript; charset=utf-8",
   // Passage addresses ("§2.3"), derived from the rendered Markdown structure.
   "address.js": "text/javascript; charset=utf-8",
@@ -95,6 +96,12 @@ const SPA_ASSETS: Record<string, string> = {
   "app.css": "text/css; charset=utf-8",
   // The product mark is a fixed, self-adapting SVG used by the shell and browser chrome.
   "glosa-mark.svg": "image/svg+xml",
+  // The two faces of the visual system, vendored so the runtime never reaches a font service
+  // (A3: no external calls). Licences: src/fonts/OFL.txt. Served as bytes, never decoded as text.
+  "fonts/source-serif-4-roman.woff2": "font/woff2",
+  "fonts/source-serif-4-italic.woff2": "font/woff2",
+  "fonts/source-sans-3-roman.woff2": "font/woff2",
+  "fonts/source-sans-3-italic.woff2": "font/woff2",
   // P3.3 additions — the class-R viewer + its ONE data-access module (R6), and idiomorph
   // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
   // bare-specifier import).
@@ -393,8 +400,9 @@ function serveSpaAsset(req: Request, pathname: string): Response {
   if (contentType === undefined) {
     return problem(404, "not-found", "no such static asset", undefined, pathname);
   }
-  const body = readFileSync(join(SPA_SRC_DIR, name), "utf8");
-  const etag = `"${sourceSha256(Buffer.from(body, "utf8"))}"`;
+  // Read bytes, not text: a font decoded as UTF-8 and re-encoded would reach the browser corrupt.
+  const body = readFileSync(join(SPA_SRC_DIR, name));
+  const etag = `"${contentType.startsWith("font/") ? createHash("sha256").update(body).digest("hex") : sourceSha256(body)}"`;
   const headers = {
     "Content-Type": contentType,
     "Cache-Control": "private, no-cache",

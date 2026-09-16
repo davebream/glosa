@@ -46,3 +46,12 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+## SIL Open Font License 1.1 components
+
+- Source Serif 4, copyright 2014 The Source Serif 4 Project Authors
+  (https://github.com/adobe-fonts/source-serif). Shipped as a Latin and Latin Extended-A subset.
+- Source Sans 3, copyright 2010-2020 Adobe (http://www.adobe.com/), with Reserved Font Name
+  "Source". Shipped complete and unmodified apart from WOFF2 compression.
+
+The full license text for both families is in `packages/spa/src/fonts/OFL.txt`.

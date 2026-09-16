@@ -42,6 +42,17 @@ describe("SPA static asset graph", () => {
       const response = await fetchFn(request(path));
       expect(response.status, `${path} must be present in the SPA asset allowlist`).toBe(200);
 
+      // A stylesheet's own url() references (the vendored faces) are part of the graph too.
+      if (path.endsWith(".css")) {
+        const css = await response.text();
+        for (const match of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+          const ref = match[1]!;
+          if (ref.startsWith("data:") || ref.startsWith("#")) continue;
+          pending.push(new URL(ref, `${ORIGIN}${path}`).pathname);
+        }
+        continue;
+      }
+
       if (!path.endsWith(".js")) continue;
       expect(response.headers.get("Content-Type"), `${path} must be served as JavaScript`).toBe(
         "text/javascript; charset=utf-8",
