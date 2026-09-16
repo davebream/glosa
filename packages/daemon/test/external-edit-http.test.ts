@@ -242,7 +242,7 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
 
   test("F-8b — a session bound by REGISTER, never by the binding route, does not get a silently cold watch", async () => {
     // Review round 3 disproved the ordering claim this route's hydration rested on. `register`
-    // accepts `workspace_binding` in its body and never resolves a bus, so a session can be live
+    // accepted `workspace_binding` in its body and resolved no bus, so a session could be live
     // and explicitly bound without anything having reconciled its workspace. The watch that
     // follows would then serve a 200 with no entries for an edit made while the daemon was down —
     // silently wrong, which is worse than an error.

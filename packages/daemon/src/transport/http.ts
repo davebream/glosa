@@ -519,7 +519,8 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
  *
  * Hydration is a CHECKED INVARIANT here, not an assumption about route order. An earlier version of
  * this route reasoned that a watch always runs behind a bind, and the bind hydrates — review round 3
- * disproved it three ways: `register` accepts a `workspace_binding` and resolves no bus; a binding
+ * disproved it three ways. `register` accepts a `workspace_binding` and USED to resolve no bus (it
+ * now hydrates, best-effort, like the binding route); a binding
  * can be revived after its bus was evicted by GC or forget; and the bind's own hydration is
  * best-effort and swallows failure. In all three the watch meets a fresh instance whose derived
  * state is empty, which reads exactly like "nothing to report" — a silent wrong answer, worse than
@@ -2174,7 +2175,9 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         last_seen: e.last_seen,
         // BADGE-facing, and the one the SPA actually renders (`agent-feedback.js`). `glosa doctor`'s
         // pending-delivery check reads it too, and says "queued, no live session" — a promise an
-        // `external_edit` can never keep, since it is excluded from delivery eligibility.
+        // `external_edit` cannot keep, since it is excluded from ORDINARY delivery eligibility.
+        // Since #153 Part 2 a bound session can still pull its own through `GET /w/:slug/watch`,
+        // which is the opt-in exception and deliberately changes neither this count nor the badge.
         pending_count: badgePendingCount(peek.state),
         has_attention: hasOpenAttention(peek.state),
         // Additive (issue #142): journal entries whose immutable inbox payload has gone missing —

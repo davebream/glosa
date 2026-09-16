@@ -610,7 +610,8 @@ Catch-up lands earlier than before, when a session attaches, rather than later.
 
 **Ordering alone was not enough, and the first version of this decision wrongly said it was.** The
 claim was that a watch always runs behind a bind, so a reconcile always precedes it. Three paths
-break that: `register` can carry a `workspace_binding` and resolve no bus; a binding can outlive the
+break that: `register` could carry a `workspace_binding` and resolve no bus (it now hydrates too); a
+binding can outlive the
 bus that was evicted by GC or `glosa forget`; and hydration is best-effort, so a bind whose reconcile
 throws still returns success. In each, the watch meets a fresh bus whose derived state is empty —
 which reads exactly like "nothing to report". A silent wrong answer is worse than an error here,

@@ -365,7 +365,7 @@ export class WorkspaceBus {
 
   /** Whether THIS instance has folded its journal yet. The read-only watch route checks it rather
    * than assuming a route order put a reconcile ahead of it: buses do not survive a restart, and a
-   * binding can reach a fresh instance through `register`, through revival after eviction, or
+   * binding can reach a fresh instance through revival after eviction, or
    * through a bind whose own hydration failed. An unreconciled instance serves empty derived state
    * that is indistinguishable from "nothing to report" — see `resolveBusForRead`. */
   hasReconciled(): boolean {
@@ -377,7 +377,7 @@ export class WorkspaceBus {
    *
    * This is what lets `GET /w/:slug/watch` answer correctly off an instance nobody has reconciled
    * yet (review round 3, F-8): buses do not survive a restart, and a binding can reach a fresh one
-   * through `register`, through revival after eviction, or through a bind whose own hydration
+   * through revival after eviction, or through an attach whose own best-effort hydration
    * failed. Without this the watch would serve EMPTY derived state, which a caller cannot tell
    * apart from "nothing to report" — a silent wrong answer.
    *
