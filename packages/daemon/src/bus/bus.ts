@@ -385,12 +385,14 @@ export class WorkspaceBus {
    * while the daemon was down is reported when a session attaches (`session-binding` and a
    * binding-carrying `register` both reconcile), not by this call.
    *
-   * NOT currently falsifiable by the suite, and that is a known gap rather than a claim. Both HTTP
-   * attach paths hydrate before a watch can run, so ablating this method leaves the tests green; the
-   * cases it exists for — a binding outliving its bus, a bind whose hydration threw — have no route
-   * that reaches them. An attempt to pin it through a narrow route context was written and did not
-   * work, so it was removed rather than left passing for the wrong reason. Treat this as reasoned,
-   * not proven. */
+   * Pinned at this level rather than through HTTP, because both attach routes hydrate before a watch
+   * can run and no production route reaches a cold bus: `A9` opens a fresh bus over an existing
+   * journal, proves the entry is returned and the journal bytes are unchanged, and proves a FAILING
+   * in-flight reconcile is waited for and then folded past rather than answered empty.
+   *
+   * What stays absent, deliberately: drift that a failed attach reconcile never committed. Folding
+   * the journal cannot invent entries for it, so it appears at the next successful writer
+   * reconciliation. The read is honest about the journal and promises no catch-up it has not run. */
   async hydrateForRead(): Promise<void> {
     if (this.reconcileSettled) return;
     // In flight: wait for it rather than folding underneath it. If it FAILS, fall through and fold,

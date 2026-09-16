@@ -457,7 +457,9 @@ hydration is best-effort, so a watch that meets an unreconciled bus folds the jo
 before answering — no self-heal, no lease expiry, no catch-up, no write — rather than serving empty
 derived state, which a caller cannot tell apart from "nothing to report". Offline catch-up remains
 the attach path's job, so drift that landed while the daemon was down is reported once a session
-binds or registers, not by the watch. See `docs/decisions.md` — "Where a cold workspace gets
+binds or registers, not by the watch. Attach hydration is best-effort: if its reconcile fails, the
+drift it would have committed stays absent until the next successful writer reconciliation, and a
+watch in the meantime reports the journal honestly without it. See `docs/decisions.md` — "Where a cold workspace gets
 hydrated".
 
 The client acknowledges receipt through the two routes below, mirroring the session stream's own

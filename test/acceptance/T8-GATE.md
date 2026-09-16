@@ -6,7 +6,7 @@ overall v1 readiness may remain blocked by an independent release issue.
 
 ## 1. Deterministic gate
 
-Run from the repository root with Bun 1.2.7 (the pinned CI runtime):
+Run from the repository root with Bun 1.4.2, the toolchain CI pins and the JUnit reporter requires. Bun 1.2.7 remains the APPLICATION runtime floor (A6 §F30) — it is the oldest Bun the daemon supports, not the version the suites run under:
 
 ```sh
 bun run typecheck

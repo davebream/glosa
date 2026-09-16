@@ -889,9 +889,9 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
   }
 
   // `register` can establish a binding on its own, without the session-binding route and without
-  // ever touching a bus (review round 3, F-8). Hydrate here too, on the same best-effort terms, so
-  // the common path still has a reconciled workspace by the time a watch arrives. The invariant is
-  // NOT assumed from this call: `resolveBusForRead` checks it.
+  // ever touching a bus (review round 3, F-8). Hydrate here too, on the same best-effort terms. It
+  // is NOT assumed to have worked: a watch folds the journal read-only when it meets an unhydrated
+  // bus, and drift this reconcile fails to commit stays absent until the next successful writer.
   if (record.workspace_binding) {
     try {
       await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
@@ -1532,7 +1532,14 @@ async function handleSessionStreamPresentedAck(
  * attempt for a session that had already moved on. Authority is only meaningful re-read at the
  * moment of the write. */
 function stillBound(ctx: ApiContext, sessionId: string, owned: string): () => boolean {
+  // Captured BEFORE the first await, so the predicate compares a generation and not just a value.
+  // Comparing values alone misses ABA: rebind A→B→A, or deregister and re-register with the same
+  // binding, restores every compared field while the authority this request was admitted under is
+  // gone (review round 5). The signal for that generation has fired by then, and no later one can
+  // un-fire it.
+  const admitted = ctx.sessionRegistry.sessionLifecycleSignal(sessionId);
   return () => {
+    if (admitted?.aborted) return false;
     const current = ctx.sessionRegistry.get(sessionId);
     return !!current && ctx.sessionRegistry.liveness(sessionId) === "alive" && current.workspace_binding === owned;
   };
@@ -1565,16 +1572,15 @@ async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string
   if (!Array.isArray(entries) || entries.length === 0 || !entries.every((e) => typeof e === "string")) {
     return problem(400, "validation-failed", "entries must be a non-empty array of entry ids", undefined, pathname);
   }
+  // Captured before the first await, which is what makes it a GENERATION check rather than a value
+  // comparison (review round 5).
+  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   const emitted = (entries as string[]).filter((id) => ctx.watchEmissions?.isAwaitingTransport(sessionId, id));
   if (emitted.length === 0) {
     return problem(409, "conflict", "no named id was emitted to this session by a watch response", undefined, pathname);
   }
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
-  const { accepted, authorityLost } = await bus.recordWatchTransportAccepted(
-    sessionId,
-    emitted,
-    stillBound(ctx, sessionId, record.workspace_binding),
-  );
+  const { accepted, authorityLost } = await bus.recordWatchTransportAccepted(sessionId, emitted, authorised);
   if (authorityLost)
     return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
   if (accepted.length === 0)
@@ -1607,13 +1613,15 @@ async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Re
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, pathname);
   }
   const error = typeof parsed?.error === "string" ? parsed.error : undefined;
+  // Same reason as `transport-ack`: captured before the first await.
+  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
   const { accepted, authorityLost } = await bus.recordWatchPresented(
     sessionId,
     entries as string[],
     outcome,
     error,
-    stillBound(ctx, sessionId, record.workspace_binding),
+    authorised,
   );
   if (authorityLost)
     return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
@@ -2287,9 +2295,9 @@ async function handleWorkspaceWatch(
   // one belonging to the generation it was admitted under, so that ABA sequence aborts it (review
   // round 2, F-7).
   const admittedLifecycle = ctx.sessionRegistry.sessionLifecycleSignal(sessionId);
-  // A read: no reconciliation here (see `resolveBusForRead`). Binding and registration both hydrate,
-  // but neither is assumed to have succeeded — an unhydrated workspace is refused below rather than
-  // answered from empty derived state.
+  // A read: no reconciliation here (see `resolveBusForRead`). Attaching a session hydrates, but
+  // neither attach route is assumed to have succeeded — an unhydrated workspace is folded read-only
+  // rather than answered from empty derived state.
   const bus = await resolveBusForRead(ctx, entry);
   // An instance nobody reconciled has empty derived state, which reads as "nothing to report".
   // Fold the journal read-only rather than serving that silence, or erroring on a workspace whose
@@ -2327,6 +2335,10 @@ async function handleWorkspaceWatch(
     // made ackable under authority that has since moved.
     const stillAdmitted = ctx.sessionRegistry.get(sessionId);
     const authorityHeld =
+      // The captured generations first: a value comparison alone cannot see an A→B→A rebind, and a
+      // closed bus can still answer from state read before it closed (review round 5).
+      !admittedLifecycle?.aborted &&
+      !bus.closeSignal().aborted &&
       !!stillAdmitted &&
       ctx.sessionRegistry.liveness(sessionId) === "alive" &&
       stillAdmitted.workspace_binding === entry.canonical_path;

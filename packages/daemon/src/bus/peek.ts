@@ -98,9 +98,11 @@ export function retentionPendingCount(state: DerivedState): number {
  * `transport/http.ts`'s `computeWiring` (`GET /w/:slug/wiring`) and its `GET /api/status`
  * per-workspace row.
  *
- * Excludes `external_edit`: it is not actionable (nothing to apply — the file already changed),
- * it is excluded from delivery eligibility, and counting it as "N queued" would promise a
- * delivery that by construction never comes.
+ * Excludes `external_edit`: it is not actionable (nothing to apply — the file already changed), it
+ * is excluded from ORDINARY delivery eligibility, and counting it as "N queued" would promise a
+ * push that never comes. Since #153 Part 2 a bound session can pull its own via
+ * `GET /w/:slug/watch` — the one opt-in exception — which changes neither this count nor the badge,
+ * because a session asking about its own workspace is not the entry becoming actionable.
  *
  * Attention entries need no exclusion anywhere and get none: every attention fold filters
  * `entry.kind === "attention"`, and an `external_edit`'s lifecycle kind is `common`, never that

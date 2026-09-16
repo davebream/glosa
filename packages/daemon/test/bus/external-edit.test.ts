@@ -734,3 +734,68 @@ describe("A8 — watch acknowledgement authority is read at the append, not befo
     await bus.close();
   });
 });
+
+describe("A9 — read-only hydration folds the journal without writing", () => {
+  test("a fresh bus over an existing journal returns the entry, and the journal bytes do not change", async () => {
+    // The mechanism that stops a watch answering "nothing to report" off a bus nobody reconciled.
+    // It was unfalsifiable through HTTP because both attach routes hydrate first (review round 5
+    // asked for it here instead, where a fresh bus over an existing journal is one line).
+    const root = workspace();
+    const writer = openBus(root);
+    await writer.reconcile();
+    await writer.createEntry("inb-cold-fold", {
+      kind: "common",
+      payload_kind: EXTERNAL_EDIT_KIND,
+      path: "notes.md",
+      source: "live",
+    });
+    await writer.close();
+
+    const cold = openBus(root); // nothing has reconciled THIS instance
+    expect(Object.keys(cold.state.entries)).toEqual([]);
+
+    const before = readFileSync(journalPath(root));
+    await cold.hydrateForRead();
+    const after = readFileSync(journalPath(root));
+
+    expect(Object.keys(cold.state.entries)).toEqual(["inb-cold-fold"]);
+    expect(after.equals(before)).toBe(true);
+    await cold.close();
+  });
+
+  test("hydration waits for a FAILING in-flight reconcile and then folds, rather than serving empty state", async () => {
+    // The third path from round 3: attach hydration is best-effort, so a watch can meet a bus whose
+    // reconcile is in flight and about to fail. Reading the "a reconcile started" flag as "hydrated"
+    // is what made this answer empty; the fix waits, sees the failure, and folds anyway.
+    const root = workspace();
+    const writer = openBus(root);
+    await writer.reconcile();
+    await writer.createEntry("inb-failed-attach", {
+      kind: "common",
+      payload_kind: EXTERNAL_EDIT_KIND,
+      path: "notes.md",
+      source: "live",
+    });
+    await writer.close();
+
+    const cold = openBus(root);
+    let failReconcile!: (err: Error) => void;
+    const pending = new Promise<never>((_resolve, reject) => {
+      failReconcile = reject;
+    });
+    // Stand in for an attach-time reconcile that is still running and will throw.
+    (cold as unknown as { reconcile: () => Promise<unknown> }).reconcile = () => pending;
+    const attach = cold.reconcileOnce().catch(() => {});
+
+    const reading = cold.hydrateForRead();
+    await Bun.sleep(20);
+    expect(Object.keys(cold.state.entries)).toEqual([]); // genuinely still waiting
+
+    failReconcile(new Error("attach reconcile failed"));
+    await attach;
+    await reading;
+
+    expect(Object.keys(cold.state.entries)).toEqual(["inb-failed-attach"]);
+    await cold.close();
+  });
+});
