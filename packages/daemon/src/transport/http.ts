@@ -517,13 +517,23 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
  * durably on disk for a workspace that has already been hydrated (session binding does that, and
  * every watcher binds first), and does not hydrate one itself.
  *
- * Belt and braces, deliberately. Bindings live in memory, so a watch can only run behind a bind in
- * this process, and the bind hydrated the bus; the paths that drop a bus (GC hard-remove, adoption
- * sealing, forget) all make the watch's own guards refuse before it gets here. Ablating this line
- * alone therefore does NOT turn the F-8 test red, and no test can make it do so through the API —
- * what it buys is that "a watch never reconciles" holds by construction rather than by that
- * ordering argument staying true. Keep it that way: a future caller that reaches a watch without a
- * bind would otherwise silently start writing from a GET. */
+ * Hydration is a CHECKED INVARIANT here, not an assumption about route order. An earlier version of
+ * this route reasoned that a watch always runs behind a bind, and the bind hydrates — review round 3
+ * disproved it three ways: `register` accepts a `workspace_binding` and resolves no bus; a binding
+ * can be revived after its bus was evicted by GC or forget; and the bind's own hydration is
+ * best-effort and swallows failure. In all three the watch meets a fresh instance whose derived
+ * state is empty, which reads exactly like "nothing to report" — a silent wrong answer, worse than
+ * an error, because the agent concludes the manuscript is untouched.
+ *
+ * So the caller checks `hasReconciled()` and refuses rather than serving that silence. The GET still
+ * writes nothing either way.
+ *
+ * On what the tests cover: the `register` path is reachable over HTTP and is pinned by F-8b, whose
+ * ablation goes red. The other two are not reachable through the public surface — eviction by GC or
+ * forget also removes the workspace, so the watch's own guards 404 first, and a bind's hydration
+ * failure cannot be forced through HTTP. Ablating the `hasReconciled` check ALONE therefore leaves
+ * the suite green. It is kept because the invariant is what the route depends on, and because the
+ * three paths that break it were all found by argument rather than by a failing test. */
 async function resolveBusForRead(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
   const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
   if (isAdoptingTarget(indexed)) {
@@ -876,6 +886,18 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
     if (error instanceof SessionProviderConflict)
       return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
     throw error;
+  }
+
+  // `register` can establish a binding on its own, without the session-binding route and without
+  // ever touching a bus (review round 3, F-8). Hydrate here too, on the same best-effort terms, so
+  // the common path still has a reconciled workspace by the time a watch arrives. The invariant is
+  // NOT assumed from this call: `resolveBusForRead` checks it.
+  if (record.workspace_binding) {
+    try {
+      await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+    } catch {
+      /* registration succeeded; hydration is an optimisation, and the watch checks the invariant */
+    }
   }
 
   return Response.json({
@@ -1500,6 +1522,22 @@ async function handleSessionStreamPresentedAck(
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
+/** The admitted binding, re-read after an await (review round 3, F-7/F-3). Both acknowledgement
+ * routes capture a record, await `resolveBus`, and then APPEND — a rebind or deregistration inside
+ * that window would otherwise write a delivery attempt into a workspace the session no longer owns,
+ * which is a provenance claim about a session that was not there. Returns the problem response to
+ * send, or null when the session still holds the binding it was admitted under. */
+function bindingMoved(ctx: ApiContext, sessionId: string, owned: string, pathname: string): Response | null {
+  const current = ctx.sessionRegistry.get(sessionId);
+  if (!current || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown live session", undefined, pathname);
+  }
+  if (current.workspace_binding !== owned) {
+    return problem(409, "conflict", "session is no longer bound to this workspace", undefined, pathname);
+  }
+  return null;
+}
+
 /** `POST /api/sessions/:id/watch/transport-ack` (#153 Part 2, W4) — Origin-gated, records
  * `delivery_attempt{via:"watch", session, outcome:"transport_accepted"}` for exactly the ids the
  * client's own watch response body named, once the HTTP body actually reached it.
@@ -1532,6 +1570,8 @@ async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string
     return problem(409, "conflict", "no named id was emitted to this session by a watch response", undefined, pathname);
   }
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const moved = bindingMoved(ctx, sessionId, record.workspace_binding, pathname);
+  if (moved) return moved;
   const { accepted } = await bus.recordWatchTransportAccepted(sessionId, emitted);
   if (accepted.length === 0)
     return problem(409, "conflict", "no named id is an in-scope external_edit entry", undefined, pathname);
@@ -1564,6 +1604,8 @@ async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Re
   }
   const error = typeof parsed?.error === "string" ? parsed.error : undefined;
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const moved = bindingMoved(ctx, sessionId, record.workspace_binding, pathname);
+  if (moved) return moved;
   const { accepted } = await bus.recordWatchPresented(sessionId, entries as string[], outcome, error);
   if (accepted.length === 0) {
     return problem(
@@ -2235,9 +2277,14 @@ async function handleWorkspaceWatch(
   // one belonging to the generation it was admitted under, so that ABA sequence aborts it (review
   // round 2, F-7).
   const admittedLifecycle = ctx.sessionRegistry.sessionLifecycleSignal(sessionId);
-  // A read: no reconciliation here (see `resolveBusForRead`). Session binding hydrates the
-  // workspace, and a watcher always binds first.
+  // A read: no reconciliation here (see `resolveBusForRead`). Binding and registration both hydrate,
+  // but neither is assumed to have succeeded — an unhydrated workspace is refused below rather than
+  // answered from empty derived state.
   const bus = await resolveBusForRead(ctx, entry);
+  // An instance nobody reconciled has empty derived state, which reads as "nothing to report".
+  // Fold the journal read-only rather than serving that silence, or erroring on a workspace whose
+  // journal can be answered from perfectly well. Writes nothing; see `hydrateForRead`.
+  bus.hydrateForRead();
   const signals = [req.signal, lifecycleSignal(ctx, authSignal), admittedLifecycle, bus.closeSignal()].filter(
     (s): s is AbortSignal => !!s,
   );
@@ -2262,6 +2309,24 @@ async function handleWorkspaceWatch(
     const result = await waitForWatch(bus, { session: sessionId, path, since, waitMs, signal }, (id, payload, status) =>
       buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, { watched: true }),
     );
+    // Revalidate the admitted authority before anything leaves this handler (review round 3,
+    // F-7/F-3). `waitForWatch` can settle on an authority-loss abort and still carry entries it
+    // read earlier, so a rebind, deregistration or bus close during the hold would otherwise let
+    // this response emit — and register — entries belonging to a workspace this session no longer
+    // watches. Checked here, after the await and before `noteEmitted`, so nothing is emitted or
+    // made ackable under authority that has since moved.
+    const stillAdmitted = ctx.sessionRegistry.get(sessionId);
+    const authorityHeld =
+      !!stillAdmitted &&
+      ctx.sessionRegistry.liveness(sessionId) === "alive" &&
+      stillAdmitted.workspace_binding === entry.canonical_path;
+    if (!authorityHeld) {
+      // §5.11b: the hold ends returning what the cursor has, honestly — so this stays a 200 rather
+      // than becoming an error. What it must NOT do is hand over entries read under authority that
+      // has since moved, which is what an authority-loss abort would otherwise carry out of
+      // `waitForWatch`. Empty, and nothing made ackable.
+      return Response.json({ entries: [], latest_checkpoint: result.latest_checkpoint, has_more: false });
+    }
     // Record what this response hands over BEFORE handing it over, so `watch/transport-ack` can
     // tell an id this session was really given from one it merely knows the name of (review round
     // 2). An emission that never reaches the client simply expires unacked.

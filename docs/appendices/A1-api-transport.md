@@ -23,6 +23,7 @@ those are cross-referenced, not duplicated.
   `<slug>` values used below: `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
   `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
+
   `forget-stale-preview` (contract 1.8, §5.20), `home-workspace-registered`
   (400 — the workspace that owns this path is the user's home directory or an ancestor of it, from
   a registration of that directory — made before the boundary existed, or made deliberately since,
@@ -399,9 +400,10 @@ added it alongside the new watch route below, which needs the identical fix for 
 Bearer required, authed-read. An opt-in held read over `external_edit` entries — the daemon-lifetime
 watcher's quiet-window captures (§F153/A4) made actionable for exactly the session that asks, and no
 other session. Never a status transition and never a nudge to anyone else: R3 states the product
-promise this route implements. It appends nothing of its own to the journal; like any first read of
-a workspace — `GET /w/:slug/stream` included — it may open that workspace's bus, and opening one runs
-its ordinary reconciliation, which is where a baseline or catch-up event at that moment comes from.
+promise this route implements. It writes nothing at all, and unlike `GET /w/:slug/stream` it does not
+reconcile the workspace it reads. Hydration happens when a session attaches (§5.11a); a watch that
+finds an unhydrated workspace returns `409 workspace-not-hydrated` rather than answering from empty
+derived state.
 
 `?session=<id>&path=<workspace-relative>&since=<full-sha>&wait_ms=<0…900000>` — `session` is
 required and must be a live, registered session **explicitly bound** to this workspace (the same
@@ -445,11 +447,18 @@ lease hold and neither cancels the other's; a watch never touches the session-st
 connection or lease key, so it neither closes nor is closed by a live monitor stream.
 
 A watch never writes — not even the self-heal and checkpoint a reconciliation performs, which is why
-it resolves its bus without one. That holds because a watch cannot run before a bind: bindings are
-in-memory, the route refuses a watch that has no binding, and `POST /w/:slug/session-binding`
-hydrates the workspace it binds (reconciling it once). So the first request to touch a workspace is
-never a watch, and offline catch-up still lands at the moment a session attaches rather than waiting
-for some unrelated writer. See `docs/decisions.md` — "Where a cold workspace gets hydrated".
+it resolves its bus without one. Hydration happens where a session attaches: both
+`POST /w/:slug/session-binding` and a `POST /api/sessions/register` that carries a
+`workspace_binding` reconcile the workspace once, so offline catch-up lands when a session attaches
+rather than waiting for some unrelated writer.
+
+That is not assumed to have succeeded. A binding can outlive its bus (GC, `glosa forget`), and
+hydration is best-effort, so a watch that meets an unreconciled bus folds the journal READ-ONLY
+before answering — no self-heal, no lease expiry, no catch-up, no write — rather than serving empty
+derived state, which a caller cannot tell apart from "nothing to report". Offline catch-up remains
+the attach path's job, so drift that landed while the daemon was down is reported once a session
+binds or registers, not by the watch. See `docs/decisions.md` — "Where a cold workspace gets
+hydrated".
 
 The client acknowledges receipt through the two routes below, mirroring the session stream's own
 two-phase transport/presented split (§5.16).

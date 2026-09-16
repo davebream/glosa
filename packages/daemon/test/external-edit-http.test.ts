@@ -235,6 +235,43 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
     expect({ changed: !before.equals(after), size: after.length }).toEqual({ changed: false, size: before.length });
   }, 40_000);
 
+  test("F-8b — a session bound by REGISTER, never by the binding route, does not get a silently cold watch", async () => {
+    // Review round 3 disproved the ordering claim this route's hydration rested on. `register`
+    // accepts `workspace_binding` in its body and never resolves a bus, so a session can be live
+    // and explicitly bound without anything having reconciled its workspace. The watch that
+    // follows would then serve a 200 with no entries for an edit made while the daemon was down —
+    // silently wrong, which is worse than an error.
+    const { slug, dir } = await openWorkspace();
+    const journal = join(dir, ".glosa", "journal.ndjson");
+
+    await stopDaemon(home, proc);
+    writeFileSync(join(dir, "notes.md"), "one\nedited while the daemon was down\n");
+    proc = spawnDaemon(home, port, { GLOSA_CLASSF_PORT: String(port + 1) });
+    expect(await waitForHandshake(port, 15_000, proc)).not.toBeNull();
+
+    // Bound by register alone — the session-binding route is never called.
+    const registered = await postAuthed("/api/sessions/register", {
+      session_id: "sess-register-bound",
+      provider: "mcp",
+      cwd: dir,
+      source: "mcp",
+      workspace_binding: dir,
+    });
+    expect(registered.status).toBe(200);
+
+    const res = await authed(`/w/${slug}/watch?session=sess-register-bound&wait_ms=0`);
+    const after = readFileSync(journal).toString();
+
+    // Whatever the answer is, it must not be "200 with nothing to report" off an unhydrated bus.
+    // Either the workspace was hydrated (so the drift is reported), or the watch says it cannot
+    // answer yet. Silence is the one outcome this pins out.
+    const body = res.status === 200 ? ((await res.json()) as { entries: unknown[] }) : null;
+    expect({
+      hydrated: after.includes(EXTERNAL_EDIT_KIND),
+      silentlyEmpty: res.status === 200 && body?.entries.length === 0,
+    }).toEqual({ hydrated: true, silentlyEmpty: false });
+  }, 40_000);
+
   test("watch/transport-ack refuses an entry id no watch handed this session, and accepts it once one has", async () => {
     // Honest provenance (AGENTS.md invariant 3): a `transport_accepted` record asserts the entry
     // reached this session. Scope alone cannot assert that — entry ids show up in ordinary reads,

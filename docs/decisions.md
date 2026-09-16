@@ -604,10 +604,33 @@ journal, and the registry survives a daemon restart while buses do not — so a 
 catch-up would have waited for whatever unrelated request happened to open it next, weakening the
 "an agent learns about edits made while it was away" guarantee.
 
-Hydration moved to the binding instead. `POST /w/:slug/session-binding` reconciles the workspace it
-binds, and the watch route refuses a session that has no binding, so no ordering reaches a watch
-before a reconcile has happened. Catch-up lands earlier than before, at the moment a session
-attaches, rather than later.
+Hydration moved to where a session attaches. `POST /w/:slug/session-binding` reconciles the workspace
+it binds, and so does `POST /api/sessions/register` when the registration itself carries a binding.
+Catch-up lands earlier than before, when a session attaches, rather than later.
+
+**Ordering alone was not enough, and the first version of this decision wrongly said it was.** The
+claim was that a watch always runs behind a bind, so a reconcile always precedes it. Three paths
+break that: `register` can carry a `workspace_binding` and resolve no bus; a binding can outlive the
+bus that was evicted by GC or `glosa forget`; and hydration is best-effort, so a bind whose reconcile
+throws still returns success. In each, the watch meets a fresh bus whose derived state is empty —
+which reads exactly like "nothing to report". A silent wrong answer is worse than an error here,
+because the agent concludes the manuscript is untouched.
+
+So the watch stopped inferring and started checking. A watch that meets an unreconciled bus folds
+the journal **read-only** — derived state from the bytes on disk, with no self-heal, no lease expiry,
+no drift commit and no catch-up — and answers from that. The GET still writes nothing.
+
+**Why read-only folding rather than refusing.** Refusing was tried first and was wrong twice over:
+§5.11b promises the hold ends "returning whatever the cursor currently has, honestly, even
+`entries:[]`", so an error contradicts the route's own contract, and three existing lifecycle gates
+assert exactly that 200. A workspace whose journal is sitting on disk can be answered correctly; the
+only thing a cold instance genuinely cannot produce is catch-up for drift it has not scanned for, and
+that is what attaching is for.
+
+**What this still does not solve.** If a bus is evicted while its binding survives, and drift lands
+before the session re-attaches, the watch reports the journal honestly but the drift is not in it
+yet. The entry appears once anything reconciles. This is a delay, not a loss, and it is the residue
+of keeping the read a read.
 
 **Why not reconcile in the watch and document it as a write.** It makes every read path a candidate
 writer by precedent, and the surface that most needs to be side-effect-free is the one a client
@@ -615,6 +638,10 @@ polls in a loop.
 
 **Why not hydrate lazily on first read of any kind.** That is the same rule with the trigger hidden:
 which GET pays the cost then depends on arrival order, and the one that pays it is unpredictable.
+
+**Why not rely on the ordering argument after patching the `register` path.** Because the argument
+was already wrong twice, and the cost of it being wrong a third time is silence rather than an error.
+A check costs one boolean and is true regardless of how many attach paths exist later.
 
 **What this does not solve.** Hydration is best-effort at the bind: a bind whose reconcile throws
 still binds, because refusing to bind over a git-toolchain problem would take out delivery that

@@ -343,6 +343,40 @@ export class WorkspaceBus {
     });
   }
 
+  /** Whether THIS instance has folded its journal yet. The read-only watch route checks it rather
+   * than assuming a route order put a reconcile ahead of it: buses do not survive a restart, and a
+   * binding can reach a fresh instance through `register`, through revival after eviction, or
+   * through a bind whose own hydration failed. An unreconciled instance serves empty derived state
+   * that is indistinguishable from "nothing to report" — see `resolveBusForRead`. */
+  hasReconciled(): boolean {
+    return this.reconciledOnce;
+  }
+
+  /** Folds the journal into this instance's derived state WITHOUT writing anything — no self-heal,
+   * no lease expiry, no drift commit, no catch-up. The read-only half of what `reconcile()` does.
+   *
+   * This is what lets `GET /w/:slug/watch` answer correctly off an instance nobody has reconciled
+   * yet (review round 3, F-8): buses do not survive a restart, and a binding can reach a fresh one
+   * through `register`, through revival after eviction, or through a bind whose own hydration
+   * failed. Without this the watch would serve EMPTY derived state, which a caller cannot tell
+   * apart from "nothing to report" — a silent wrong answer.
+   *
+   * What it deliberately does NOT do is offline catch-up, because that writes. Drift that landed
+   * while the daemon was down is reported when a session attaches (`session-binding` and a
+   * binding-carrying `register` both reconcile), not by this call.
+   *
+   * NOT currently falsifiable by the suite, and that is a known gap rather than a claim. Both HTTP
+   * attach paths hydrate before a watch can run, so ablating this method leaves the tests green; the
+   * cases it exists for — a binding outliving its bus, a bind whose hydration threw — have no route
+   * that reaches them. An attempt to pin it through a narrow route context was written and did not
+   * work, so it was removed rather than left passing for the wrong reason. Treat this as reasoned,
+   * not proven. */
+  hydrateForRead(): void {
+    if (this.reconciledOnce) return;
+    this.state = peekJournal(this.workspace).state;
+    this.nextSequence = countJournalLines(journalPath(this.workspace));
+  }
+
   /** Runs the startup reconcile sequence (its own short-lived writer) and adopts the resulting
    * derived state as this bus's baseline. Call once before serving live writes. */
   reconcile(): Promise<ReconcileResult> {
