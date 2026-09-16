@@ -92,7 +92,12 @@ export type ProblemSlug =
   // `prepareArtifactSave`) used to share `conflict` with routes that have nothing to do with it.
   // Named separately so the SPA can open the stale-save dialog on exactly this condition, never on
   // the unrelated `workspace-adopting` 409 that can also reach this route.
-  | "source-changed";
+  | "source-changed"
+  // #182 R5 addition — `PUT /w/:slug/artifacts/:path`'s honest pre-save boundary
+  // (`captureHumanEdit`, bus.ts): an active apply-lease plus pending drift on this exact path.
+  // Distinct from `lease-conflict` (that one's about a SECOND apply-begin); this route's own
+  // refusal is about a SAVE arriving while a lease already holds the workspace.
+  | "drift-under-lease";
 
 export function problem(
   status: number,

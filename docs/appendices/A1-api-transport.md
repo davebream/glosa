@@ -20,7 +20,9 @@ those are cross-referenced, not duplicated.
   { "type": "https://glosa.local/errors/<slug>", "title": "<human summary>",
     "status": <int>, "detail": "<optional>", "instance": "<request path>" }
   ```
-  `<slug>` values used below: `invalid-origin`, `unauthorized`, `contract-mismatch`,
+  Common `<slug>` values, not an exhaustive catalogue — each route's own section and the status
+  table below are authoritative, and routes added since have their own (`source-changed` §5.4a,
+  `drift-under-lease` §5.4a): `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
   `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
   `forget-stale-preview` (contract 1.8, §5.20), `home-workspace-registered`
@@ -211,6 +213,10 @@ than applied — this is what the Edit-mode stale-save dialog keys on (R6).
 - **409 source-changed** — `If-Match`'s `source_sha256` no longer matches what is on disk; nothing
   was written. Distinct from the `workspace-adopting` `409` that can also reach this route (§9) —
   a caller must discriminate on `type`, never on a bare `409` status.
+- **409 drift-under-lease** (#182) — an apply-lease is active and `:path` has drift on disk this
+  save cannot honestly pre-capture (A4 §F05): the interval belongs to that lease's own `resolve`,
+  not to this save. Nothing was written. A save against a path with no such drift is unaffected by
+  an active lease and proceeds normally.
 
 ### 5.5 `GET /w/:slug/stream`
 Bearer required. Artifact/journal SSE stream — full protocol in §7... see §8 (SSE resync).
@@ -827,7 +833,7 @@ data: <json>
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
+| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
 | 500 | unhandled daemon error | any route |
 

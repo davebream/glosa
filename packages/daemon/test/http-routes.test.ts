@@ -1392,8 +1392,13 @@ describe("A1 §5 route catalog", () => {
     expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("v1 — original\n"); // bytes match the target checkpoint
 
     const rows = await fetchFn(req(`/w/${slug}/checkpoints`)).then((r) => r.json());
-    expect(rows.length).toBe(beforeCount + 1); // append-only — the count GREW, nothing was rewritten
+    // #182 R5: `captureHumanEdit`'s pre-save boundary honestly checkpoints the "v3" bytes this
+    // restore is about to discard as their OWN `unknown`-attributed checkpoint before it runs —
+    // rather than the pre-#182 behaviour of silently discarding a real on-disk change with no
+    // record at all. Two new rows, not one: the drift, then the restore.
+    expect(rows.length).toBe(beforeCount + 2); // append-only — the count GREW, nothing was rewritten
     expect(rows[0]).toMatchObject({ by: "human", summary: "restore", checkpoint_id: body.checkpoint_id });
+    expect(rows[1]).toMatchObject({ by: "unknown" });
   });
 
   test("restore-then-diff-clean: after a successful restore, diffing the restored-to checkpoint against the working tree is empty", async () => {

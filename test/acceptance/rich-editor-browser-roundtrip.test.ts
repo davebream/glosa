@@ -812,6 +812,175 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     TEST_TIMEOUT_MS,
   );
 
+  test(
+    "#182: Keep mine merges a real keypress in the rich editor with a real disk-only change, byte-exact on disk",
+    async () => {
+      const path = "keepmine.md";
+      const base = [
+        "# Title",
+        "",
+        "Paragraph A holds the writer's own words.",
+        "",
+        "Paragraph B holds a different sentence entirely.",
+        "",
+      ].join("\n");
+      writeFileSync(join(workspaceRoot, path), base);
+
+      const { client } = await launchBrowser();
+      cdp = client;
+
+      await client.evaluate(`(async () => {
+        const { createDataAccess } = await import("/app/data-access.js");
+        const { createArtifactPane } = await import("/app/artifact-pane.js");
+        sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+        const host = document.createElement("div");
+        document.body.append(host);
+        const dataAccess = createDataAccess();
+        // Records every PUT this scenario issues — the assertion below pins there are exactly
+        // two: the writer's own stale attempt (refused), then Keep mine's real merge (the
+        // property this whole test exists to prove, criterion 4).
+        window.__putCalls = [];
+        const realPut = dataAccess.putArtifact.bind(dataAccess);
+        dataAccess.putArtifact = async (...args) => {
+          window.__putCalls.push({ path: args[1], content: args[2], ifMatch: args[3]?.ifMatch });
+          return realPut(...args);
+        };
+        const pane = createArtifactPane(host, {
+          dataAccess,
+          slug: ${JSON.stringify(slug)},
+          path: ${JSON.stringify(path)},
+          initialMode: "edit",
+          loadRichEditor: async () => (await import("/app/rich-editor.js")).mountRichEditor,
+        });
+        await pane.ready;
+        window.__keepMineTest = { pane, host };
+      })()`);
+
+      const placed: any = await client.evaluate(`(async () => {
+        const { host } = window.__keepMineTest;
+        for (let i = 0; i < 200 && !host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]"); i++)
+          await new Promise(resolve => setTimeout(resolve, 25));
+        const editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");
+        if (!editable) return { ok: false, reason: "rich face did not mount" };
+        const walker = document.createTreeWalker(editable, NodeFilter.SHOW_TEXT);
+        let node, idx = -1;
+        const needle = ${JSON.stringify("own words.")};
+        while ((node = walker.nextNode())) {
+          idx = node.nodeValue.indexOf(needle);
+          if (idx !== -1) break;
+        }
+        if (idx === -1) return { ok: false, reason: "needle not found in the mounted document" };
+        const range = document.createRange();
+        range.setStart(node, idx + needle.length);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        editable.focus();
+        return { ok: true };
+      })()`);
+      if (!placed.ok) throw new Error(`caret placement failed: ${placed.reason}`);
+
+      // A genuine keypress, through the browser's own input pipeline, into paragraph A —
+      // `Input.dispatchKeyEvent` (via `keyPress`), never `Input.insertText`/`execCommand`, which
+      // do not exercise the same DOM-mutation path a real keystroke does (see this file's header).
+      await client.keyPress("X");
+      const afterKeypress: any = await client.evaluate(`(async () => {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const { host } = window.__keepMineTest;
+        const editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");
+        return { text: editable?.textContent ?? null };
+      })()`);
+      // Criterion 1's "read `getDoc()`, not a screenshot" applies equally to the pane-level flow:
+      // the keypress actually landed in the live ProseMirror document before Save is ever clicked.
+      expect(afterKeypress.text).toContain("own words.XParagraph B");
+
+      // Someone else writes paragraph B directly to disk WHILE the pane still holds its original
+      // baseline sha — the exact race #182 exists for. Not through glosa at all: a plain fs write,
+      // standing in for a second writer (another glosa instance, or a hand edit).
+      const onDisk = base.replace(
+        "Paragraph B holds a different sentence entirely.",
+        "Paragraph B holds a different sentence entirely, replaced on disk.",
+      );
+      writeFileSync(join(workspaceRoot, path), onDisk);
+
+      const staleDialog: any = await client.evaluate(`(async () => {
+        const { host } = window.__keepMineTest;
+        host.querySelector(".glosa-save").click();
+        for (let i = 0; i < 200 && !document.querySelector("dialog[open] h2"); i++)
+          await new Promise(resolve => setTimeout(resolve, 25));
+        const dialog = document.querySelector("dialog[open]");
+        if (!dialog) return { ok: false, reason: "the stale-save dialog never opened" };
+        return {
+          ok: true,
+          title: dialog.querySelector("h2")?.textContent,
+          detail: dialog.querySelector(".glosa-dialog-detail")?.textContent ?? null,
+        };
+      })()`);
+      if (!staleDialog.ok) throw new Error(staleDialog.reason);
+      expect(staleDialog.title).toBe("This file changed while you were editing");
+      // The preview names disk's kept change WITHOUT a checkpoint pin (D9) — computed from the
+      // merge itself.
+      expect(staleDialog.detail).toContain("1 change from disk will be kept.");
+
+      const settled: any = await client.evaluate(`(async () => {
+        const { host } = window.__keepMineTest;
+        const dialog = document.querySelector("dialog[open]");
+        const buttons = [...dialog.querySelectorAll("button")];
+        const button = buttons.find((b) => b.textContent === "Keep mine");
+        if (!button) return { ok: false, reason: "no Keep mine button", buttonTexts: buttons.map((b) => b.textContent) };
+        button.click();
+        let remaining = null;
+        for (let i = 0; i < 200; i++) {
+          remaining = document.querySelector("dialog[open]");
+          const status = host.querySelector(".glosa-edit-status")?.textContent ?? "";
+          // Not just "the dialog closed" — the pane's own settle sequence (writeAndSettle's
+          // re-GET/remount tail) must have finished too, or the disk read below could win a race
+          // against the write it is trying to observe.
+          if (!remaining && status === "Saved.") return { ok: true };
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return {
+          ok: false,
+          reason: "Keep mine did not settle (dialog closed + status Saved.) before the deadline",
+          status: host.querySelector(".glosa-edit-status")?.textContent ?? null,
+          title: remaining?.querySelector("h2")?.textContent ?? null,
+          buttons: [...(remaining?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
+        };
+      })()`);
+      if (!settled.ok) throw new Error(JSON.stringify(settled));
+
+      const putCalls: any = await client.evaluate(`window.__putCalls`);
+      // Exactly two writes: the writer's own stale attempt (refused, disk untouched by it), then
+      // Keep mine's real three-way merge — both survive, at once, in ONE further write (#182).
+      expect(putCalls).toHaveLength(2);
+      expect(putCalls[0].content).not.toContain("replaced on disk");
+      expect(putCalls[1].content).toContain("replaced on disk");
+      expect(putCalls[1].content).toContain("own words.X");
+
+      // Byte-exact on disk: both survive. Not the DOM, not a screenshot — the saved source file.
+      const finalDiskContent = readFileSync(join(workspaceRoot, path), "utf8");
+      expect(finalDiskContent).toBe(
+        [
+          "# Title",
+          "",
+          "Paragraph A holds the writer's own words.X",
+          "",
+          "Paragraph B holds a different sentence entirely, replaced on disk.",
+          "",
+        ].join("\n"),
+      );
+
+      await client.evaluate(`(() => {
+        const { pane, host } = window.__keepMineTest;
+        pane.destroy();
+        host.remove();
+        delete window.__keepMineTest;
+      })()`);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   async function runScenario(path: string, source: string, needle: string, insertChar: string) {
     const { client, argv } = await launchBrowser();
     cdp = client;

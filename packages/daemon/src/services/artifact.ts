@@ -48,6 +48,7 @@ export type ArtifactErrorCode =
   | "not-found"
   | "class-f-not-editable"
   | "source-changed"
+  | "drift-under-lease"
   | "unknown-checkpoint"
   | "artifact-missing-at-checkpoint"
   | "restore-conflict"
@@ -181,7 +182,19 @@ export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: P
   const { workspace, match } = prepared;
   const bus = await workspaceBus(deps, workspace);
   const inboxId = id();
-  const captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
+  let captured: { checkpoint_before: string; checkpoint_after: string } | null;
+  try {
+    captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
+  } catch (error) {
+    // #182 R5: the bus refuses a save it cannot honestly pre-capture drift for (an active,
+    // unexpired apply-lease plus pending drift on this exact path) rather than folding that
+    // interval into `human`. Surfaced as its own artifact error, not the bus's DRIFT_UNDER_LEASE
+    // code, so the route layer stays the one place that turns an error into an HTTP problem.
+    if (error instanceof Error && (error as { code?: string }).code === "DRIFT_UNDER_LEASE") {
+      throw new ArtifactError("drift-under-lease", { path: match.path });
+    }
+    throw error;
+  }
   return {
     source_path: match.path,
     source_sha256: sourceSha256(Buffer.from(content, "utf8")),

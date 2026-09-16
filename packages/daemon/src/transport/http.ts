@@ -125,6 +125,8 @@ const SPA_ASSETS: Record<string, string> = {
   // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
   "dock.js": "text/javascript; charset=utf-8",
   "artifact-pane.js": "text/javascript; charset=utf-8",
+  // #182 — the pure three-way merge behind Keep mine, imported by artifact-pane.js.
+  "merge-markdown.js": "text/javascript; charset=utf-8",
   // The fore-edge index: one pane's document outline, drawn in the whitespace the manuscript
   // already leaves. Pure DOM over entries the pane hands it — no transport of its own.
   "outline.js": "text/javascript; charset=utf-8",

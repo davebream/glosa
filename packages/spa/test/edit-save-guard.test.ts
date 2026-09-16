@@ -19,8 +19,17 @@
 // ProseMirror cannot mount in happy-dom, so the rich editor is a stub here; what the real one
 // returns is proven in rich-editor.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { createArtifactPane } from "../src/artifact-pane.js";
 import { type DomEnv, installDom, installModalDialogs } from "./dom-env.ts";
+
+/** A5 §F10's own formula (also `merge-markdown.js`'s `sha256Hex`, computed with Web Crypto in the
+ * browser) — used here to build a fixture whose `source_sha256` the pane's own `verifiedBaseline`
+ * check actually accepts, rather than the placeholder "sha-1"/"sha-2" strings the other cases use
+ * for artifacts the merge never needs to trust as a base. */
+function realSha256(text: string): string {
+  return createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex");
+}
 
 describe("Edit mode — a save never invents an edit", () => {
   let dom: DomEnv;
@@ -40,8 +49,15 @@ describe("Edit mode — a save never invents an edit", () => {
     for (let i = 0; i < n; i++) await Promise.resolve();
   };
   const paint = async () => {
-    await flush();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Drains rather than flushing a fixed number of times. The pane fetches the merge module on
+    // demand (it carries the ProseMirror bundle, so it must not be imported eagerly), which adds a
+    // real module-resolution hop to the paths that reach it. Two flushes happened to cover that on
+    // a warm local machine and did not on a loaded CI runner, where the conflict dialog had not
+    // been built yet when the assertion ran. Draining costs nothing when there is nothing pending.
+    for (let i = 0; i < 12; i++) {
+      await flush();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     await flush();
   };
 
@@ -60,9 +76,9 @@ describe("Edit mode — a save never invents an edit", () => {
    * settable at all: `renderContent` always mounts the rich face in Edit, so without a way to
    * force `isDirty()` false the pane cannot obtain a clean pane to assert against.
    *
-   * `rebase.report` is a separate, independently settable box for `rebaseOnto`'s return value
-   * (AC-17 needs `degraded: "block-mismatch"` back from a call the splice itself never produces),
-   * so a test sets it after constructing the stub and before mounting.
+   * No `rebaseOnto` here (#182): Keep mine no longer calls it — it goes through the same
+   * `getSave()`/merge path as an ordinary save (see `keepMineMerge` in artifact-pane.js), so this
+   * stub's `getSave()` is what every test, including a degrading one (AC-17), drives through.
    */
   function stubRichEditor(
     save: { markdown: string; collateral?: unknown[]; degraded?: string | false },
@@ -70,9 +86,6 @@ describe("Edit mode — a save never invents an edit", () => {
   ) {
     const target = { collateral: [] as unknown[], degraded: false as string | false, ...save };
     const calls = { destroyed: 0, mountedWith: [] as string[] };
-    const rebase: { report: { markdown: string; collateral: unknown[]; degraded: string | false } | null } = {
-      report: null,
-    };
     const mount = (_container: unknown, { markdown }: { markdown: string }) => {
       calls.mountedWith.push(markdown); // what text this face was actually filled from
       const report =
@@ -81,14 +94,13 @@ describe("Edit mode — a save never invents an edit", () => {
         getSave: () => report,
         getMarkdown: () => report.markdown,
         isDirty: () => dirty,
-        rebaseOnto: (_newSource: string) => rebase.report ?? report,
         focus: () => {},
         destroy: () => {
           calls.destroyed += 1;
         },
       };
     };
-    return { loadRichEditor: async () => mount, calls, rebase };
+    return { loadRichEditor: async () => mount, calls };
   }
 
   function fakeDataAccess(overrides: Record<string, unknown> = {}) {
@@ -386,6 +398,44 @@ describe("Edit mode — a save never invents an edit", () => {
 
     expect(modal()).toBeNull();
     expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-1" }]);
+  });
+
+  test("#182 criterion 2: the base survives a park-and-remount — the writer's edit AND disk's change both land in a Keep-mine write", async () => {
+    const base = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
+    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
+    const { host, pane, da } = await mountEditPane(stubRichEditor(edited), {
+      disk: { content: base, rendered_html: "<p>After.</p>", source_sha256: realSha256(base) },
+    });
+
+    // Dirty switch away and back — parks the draft and remounts over it (`parkDrafts` →
+    // `renderContent`), which `beginEditSession` deliberately does NOT treat as a new baseline.
+    pane.setMode("read");
+    await paint();
+
+    // Disk changes a DIFFERENT block (the callout) while the draft is parked.
+    const onDisk = "> [!info] A callout\n> with a second line, changed on disk.\n\nAfter.\n";
+    da.disk.content = onDisk;
+    da.disk.source_sha256 = "sha-3";
+    await pane.refreshArtifact();
+
+    pane.setMode("edit");
+    await paint();
+
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+    saveButton(host).click();
+    await paint();
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    expect(da.put).toEqual([
+      {
+        path: "notes.md",
+        content: "> [!info] A callout\n> with a second line, changed on disk.\n\nAfter, edited.\n",
+        ifMatch: "sha-3",
+      },
+    ]);
   });
 
   test("AC-4: a clean pane in Edit that takes a disk change and is then typed into saves against the sha the editor was mounted over, not the frame's", async () => {
@@ -693,52 +743,105 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put).toEqual([]);
   });
 
-  test("AC-16: the dialog shows what would be overwritten, and still opens when the diff call fails", async () => {
+  test("AC-16 (#182 D9): the dialog previews the merge itself — kept disk changes, conflicts, or a base-unavailable notice — needing no checkpoint pin", async () => {
+    const base = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
     const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
 
-    // The preview is shown: the range header, and the path-filtered hunk text.
+    // A verified base (real sha) plus a genuine disk-only change: the preview names it as a kept
+    // change, computed client-side — no checkpoint, no getDiff call at all.
     {
       const { host, da } = await mountEditPane(stubRichEditor(edited), {
-        checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }],
-      });
-      await paint(); // let the pin land, giving overwritePreview a checkpoint to diff from
-      da.diff = { hunks: [{ path: "notes.md", diff: "@@ -1 +1 @@\n-old\n+new", attribution: "session:x" }] };
-      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
-
-      saveButton(host).click();
-      await paint();
-
-      const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
-      expect(detail).toContain("Changes to this file since the last saved version (cp-abc1)");
-      expect(detail).toContain("@@ -1 +1 @@");
-
-      // Close this scenario's dialog before the next one opens its own — modal() queries the
-      // whole document, and a dialog left open would still be found by the next scenario's check.
-      modalButton("Cancel").click();
-      await paint();
-    }
-
-    // A failing getDiff still opens the dialog — a daemon hiccup must not block the writer from
-    // answering at all.
-    {
-      const { host, da } = await mountEditPane(stubRichEditor(edited), {
-        checkpoints: [{ checkpoint_id: "cp-abc1234", at: "2026-09-06T10:00:00Z" }],
+        disk: { content: base, rendered_html: "<p>After.</p>", source_sha256: realSha256(base) },
       });
       await paint();
+      da.disk.content = "> [!info] A callout\n> with a second line, changed on disk.\n\nAfter.\n";
       da.getDiff = async () => {
-        throw new Error("boom");
+        throw new Error("getDiff must not be called — the preview no longer depends on a pin");
       };
       da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
 
       saveButton(host).click();
       await paint();
 
+      const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
+      expect(detail).toContain("1 change from disk will be kept.");
+
+      modalButton("Cancel").click();
+      await paint();
+    }
+
+    // No verified base (the placeholder sha the other fixtures use never matches a real hash) —
+    // the dialog still opens, and says the base could not be verified, rather than guessing.
+    {
+      const { host, da } = await mountEditPane(stubRichEditor(edited));
+      await paint();
+      da.disk.content = "> [!info] A callout\n> with a second line.\n\nSomeone else's paragraph.\n";
+      da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+      saveButton(host).click();
+      await paint();
+
       expect(modal()).toBeTruthy();
-      expect(modal()?.querySelector(".glosa-dialog-detail")).toBeFalsy();
+      const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
+      expect(detail).toContain("can't verify the version you opened");
     }
   });
 
-  test("AC-10: Keep mine issues exactly one further write, carrying the re-read sha and the rebased markdown", async () => {
+  test("#182 review round 2 (D6/D9): the preview names each conflicting block and quotes the disk text mine wins over", async () => {
+    // Both sides change the SAME block, so the merge reports a conflict. A count alone would not
+    // tell the writer which passage their version is about to overwrite; the preview must name the
+    // block and show disk's text for it.
+    const base = "# Title\n\nParagraph A.\n\nParagraph B.\n";
+    const edited = { markdown: "# Title\n\nParagraph A, the writer's version.\n\nParagraph B.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(edited), {
+      disk: { content: base, rendered_html: "<p>A</p>", source_sha256: realSha256(base) },
+    });
+    await paint();
+    da.disk.content = "# Title\n\nParagraph A, rewritten on disk.\n\nParagraph B.\n";
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+
+    const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
+    expect({
+      saysHowMany: detail.includes("1 block changed on both sides"),
+      namesTheBlock: detail.includes("Block 2"),
+      quotesDiskText: detail.includes("rewritten on disk"),
+    }).toEqual({ saysHowMany: true, namesTheBlock: true, quotesDiskText: true });
+
+    modalButton("Cancel").click();
+    await paint();
+  });
+
+  test("#182 review rounds 5-6: a conflict in the source between blocks is not counted or named as a block", async () => {
+    // Both sides change the region between the two blocks, differently. The dialog must not call
+    // that "1 block changed on both sides" — the writer would look for a changed paragraph — and
+    // it must not call it "spacing" either, since such a region can hold real Markdown.
+    const base = "# Title\n\nParagraph A.\n\nParagraph B.\n";
+    const edited = { markdown: "# Title\n\n\nParagraph A.\n\nParagraph B.\n" };
+    const { host, da } = await mountEditPane(stubRichEditor(edited), {
+      disk: { content: base, rendered_html: "<p>A</p>", source_sha256: realSha256(base) },
+    });
+    await paint();
+    da.disk.content = "# Title\n\n\n\nParagraph A.\n\nParagraph B.\n";
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+
+    const detail = (modal()?.querySelector(".glosa-dialog-detail") as any)?.textContent ?? "";
+    expect({
+      callsItASourceRegion: detail.includes("other source region"),
+      namesWhere: detail.includes("The source after block 1"),
+      callsItABlock: detail.includes("1 block changed"),
+    }).toEqual({ callsItASourceRegion: true, namesWhere: true, callsItABlock: false });
+
+    modalButton("Cancel").click();
+    await paint();
+  });
+
+  test("AC-10: Keep mine issues exactly one further write, carrying the re-read sha and the merged markdown", async () => {
     const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
     const { host, da } = await mountEditPane(stubRichEditor(edited));
     da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
@@ -755,27 +858,163 @@ describe("Edit mode — a save never invents an edit", () => {
     expect(da.put).toEqual([{ path: "notes.md", content: edited.markdown, ifMatch: "sha-fresh" }]);
   });
 
-  test("AC-17: a degrading rebase reaches the collateral consent gate before any write; declining writes nothing", async () => {
-    const edited = { markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n" };
-    const stub = stubRichEditor(edited);
-    stub.rebase.report = { markdown: "REWRITTEN\n", collateral: [], degraded: "block-mismatch" };
-    const { host, da } = await mountEditPane(stub);
+  test("AC-17 (#182 R4): mine's own degrading splice report still reaches the collateral consent gate through the merge; declining writes nothing", async () => {
+    // #182 removed the `rebaseOnto` call Keep mine used to make; the degraded report now has to
+    // ride through `getSave()` and the merge's pass-through instead (R4) — this is the ablation
+    // R4 names: dropping that pass-through, or the `consentToCollateral` call after it, is exactly
+    // what would make this test stop catching a degrading Keep mine.
+    const edited = {
+      markdown: "> [!info] A callout\n> with a second line.\n\nAfter, edited.\n",
+      degraded: "block-mismatch" as const,
+    };
+    const { host, da } = await mountEditPane(stubRichEditor(edited));
     da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
 
     saveButton(host).click();
     await paint();
-    expect(modal()).toBeTruthy(); // the stale-save dialog
+    // The ordinary save's own collateral gate fires first — a degrading report reaches it here
+    // exactly as any other save's does. Consenting is what lets the write attempt (and its 409)
+    // happen at all.
+    expect(modal()?.querySelector("p")?.textContent).toContain("rewrites the whole thing");
+    modalButton("Save anyway").click();
+    await paint();
 
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
     modalButton("Keep mine").click();
     await paint();
 
-    // The collateral gate — not a second write, and not the stale-save dialog reopened.
+    // Keep mine's own merge carries mine's SAME splice report through (R4) — asked again, not
+    // silently dropped, and still not a second write.
     expect(modal()?.querySelector("p")?.textContent).toContain("rewrites the whole thing");
     expect(da.put).toEqual([]);
 
     modalButton("Cancel").click();
     await paint();
     expect(da.put).toEqual([]);
+  });
+
+  test("#182 R1: a clean Rich→Source switch after an SSE refresh fills from the baseline pair, not the refreshed content", async () => {
+    const base = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
+    const { host, pane, da } = await mountEditPane(stubRichEditor({ markdown: base }, { dirty: false }));
+    expect(pane.isDirty()).toBe(false);
+
+    // An SSE-driven refresh moves `currentArtifact.content` while the (clean) editor stays
+    // mounted over the ORIGINAL bytes — the bug R1 names is filling the source face from THIS
+    // instead of from the pair the rich face was actually opened over.
+    da.disk.content = "> [!info] A callout\n> with a second line.\n\nSomeone else's change entirely.\n";
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+
+    (host.querySelector(".glosa-face-source") as any).click();
+    await paint();
+    expect((host.querySelector(".glosa-edit-area") as any).value).toBe(base);
+  });
+
+  test("#182 F-8: a delayed rich-mount failure, racing an SSE refresh, fills the source face from the bytes it was asked to mount, and the base a later Keep-mine merge uses does not move either", async () => {
+    const base = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
+    // A working loader for the pane's own initial mount (construction fires more than one mount
+    // attempt before the artifact even loads — irrelevant plumbing this test must not depend on),
+    // swapped for a controllable, never-settling one only once the pane has already loaded
+    // cleanly, so the ONE pending mount left afterward is unambiguously the one this test drives.
+    const clean = stubRichEditor({ markdown: base }, { dirty: false });
+    let currentLoad = clean.loadRichEditor;
+    const { host, pane, da } = await mountEditPane(
+      { loadRichEditor: () => currentLoad() },
+      { disk: { content: base, rendered_html: "<p>After.</p>", source_sha256: realSha256(base) } },
+    );
+    expect(pane.isDirty()).toBe(false);
+
+    let rejectMount: (error: unknown) => void = () => {};
+    currentLoad = () => new Promise((_resolve, reject) => (rejectMount = reject));
+    // Force a fresh rich mount, through the SAME face-toggle path a writer's own click takes —
+    // Source then Rich again — so this is the one, unambiguous, pending mount attempt.
+    (host.querySelector(".glosa-face-source") as any).click();
+    await paint();
+    (host.querySelector(".glosa-face-rich") as any).click();
+    await paint();
+
+    // The mount is still pending (loadRichEditor never resolved) when an SSE refresh lands,
+    // advancing `currentArtifact.content` past the held baseline pair.
+    const onDiskDuringMount = "> [!info] A callout\n> with a second line, changed WHILE MOUNTING.\n\nAfter.\n";
+    da.disk.content = onDiskDuringMount;
+    da.disk.source_sha256 = "sha-mid-mount";
+    await pane.refreshArtifact();
+
+    // Only now does the mount actually fail.
+    rejectMount(new Error("rich editor failed to load"));
+    await paint();
+
+    expect((host.querySelector(".glosa-face-source") as any).getAttribute("aria-pressed")).toBe("true");
+    const textarea = host.querySelector(".glosa-edit-area") as any;
+    // Filled from the ORIGINAL bytes this mount was asked to render, not from the SSE-refreshed
+    // `currentArtifact.content` that raced ahead of it while `loadRichEditor()` was pending.
+    expect(textarea.value).toBe(base);
+
+    // The base a later Keep-mine merge uses did not move either: a source-face edit plus a
+    // genuine, further disk change merges cleanly against the ORIGINAL base, not the bytes that
+    // merely raced past it during the failed mount.
+    const myEdit = "> [!info] A callout\n> with a second line.\n\nAfter, MY EDIT.\n";
+    textarea.value = myEdit;
+    textarea.dispatchEvent(new dom.window.Event("input"));
+    await paint();
+
+    const onDiskAtSave = "> [!info] A callout\n> with a second line, changed on disk for real.\n\nAfter.\n";
+    da.disk.content = onDiskAtSave;
+    da.disk.source_sha256 = "sha-fresh";
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    expect(da.put).toEqual([
+      {
+        path: "notes.md",
+        content: "> [!info] A callout\n> with a second line, changed on disk for real.\n\nAfter, MY EDIT.\n",
+        ifMatch: "sha-fresh",
+      },
+    ]);
+  });
+
+  test("#182 criterion 3: Keep mine from the SOURCE face runs the real three-way merge too, not a whole-file write", async () => {
+    const base = "> [!info] A callout\n> with a second line.\n\nAfter.\n";
+    const { host, da } = await mountEditPane(stubRichEditor({ markdown: base }), {
+      disk: { content: base, rendered_html: "<p>After.</p>", source_sha256: realSha256(base) },
+    });
+
+    (host.querySelector(".glosa-face-source") as any).click();
+    await paint();
+    const textarea = host.querySelector(".glosa-edit-area") as any;
+    const myEdit = "> [!info] A callout\n> with a second line.\n\nAfter, MY EDIT.\n";
+    textarea.value = myEdit;
+    textarea.dispatchEvent(new dom.window.Event("input"));
+    await paint();
+
+    // Disk changed a DIFFERENT block — the callout — while the writer was editing "After.".
+    const onDisk = "> [!info] A callout\n> with a second line, changed on disk.\n\nAfter.\n";
+    da.disk.content = onDisk;
+    da.disk.source_sha256 = "sha-fresh";
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+    expect(modal()?.querySelector("h2")?.textContent).toBe("This file changed while you were editing");
+
+    modalButton("Keep mine").click();
+    await paint();
+
+    // Both survive, byte-exact — the whole point of #182, and only reachable from the source
+    // face through the real merge, never through a whole-file `editArea.value` write.
+    expect(da.put).toEqual([
+      {
+        path: "notes.md",
+        content: "> [!info] A callout\n> with a second line, changed on disk.\n\nAfter, MY EDIT.\n",
+        ifMatch: "sha-fresh",
+      },
+    ]);
   });
 
   test("AC-19: a second 409 on the Keep-mine retry does not re-open the dialog", async () => {

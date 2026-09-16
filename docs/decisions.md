@@ -360,6 +360,60 @@ Three decisions carry the mechanism:
   editing" during an ordinary workspace adoption; the dedicated slug is what lets the SPA tell the
   two apart.
 
+## Keep mine merges disk's own change instead of discarding it
+
+Maintainer decision, 2026-09-16 (issue #182). Keep mine used to re-splice the writer's whole live
+document onto the fresh disk bytes, treating disk as the "original" and the writer's document as
+the "edit" — which could tell "the writer touched this block" from "disk changed this block" only
+when the writer's OWN edit happened to fall in the disk-changed block too. Anywhere else, a disk-only
+change (a block disk inserted, deleted, or edited that the writer never touched) was silently lost:
+the write simply carried the writer's whole document over it.
+
+The fix is a real three-way merge — the version the writer opened (the base), the writer's edit, and
+the fresh disk version — never automatic: a stale save's dialog previews what the merge would do,
+and only the writer's explicit Keep mine writes it. A few decisions carry it:
+
+- **The base has to be the exact bytes the writer opened, sha-verified.** The pane already tracked a
+  baseline sha for the stale-save refusal above; Keep mine additionally holds the baseline's own
+  bytes alongside it, carried through every park and face switch the same way the sha already was,
+  and checks the held bytes still hash to that sha before trusting them as a base. Without a
+  verified base, every block mine and disk disagree on is treated as a conflict and the writer's own
+  version wins everywhere — nothing of disk's version is merged in on a guess.
+- **A conflict is the same region changed on both sides to different results, or both sides
+  inserting at the same position.** The same change made independently on both sides is not a
+  conflict. A region is a block, the source between two blocks, or the source above the first and
+  below the last — the bytes between blocks are content too, since a link-reference definition or a
+  deliberate blank-line run lives there. Where a region's identity between the base and one side
+  can't be proven — a split or merge of block counts — that is treated as a conflict too, rather than
+  guessed at. A BOUNDARY whose ownership can't be attributed, next to a move or an insertion, is
+  reported differently: it is neither won nor lost, because glosa cannot say whose bytes belonged
+  there, and the preview lists it apart from both.
+- **The writer's version wins every conflict; disk's version is kept everywhere else.** The preview
+  names each conflicting region before the write happens, and quotes what disk had there, so that
+  choice is informed rather than assumed. Where a side holds source markdown parses as no block
+  at all — a lone link-reference definition, say — it has nothing the aligner can place: when both
+  sides agree there is nothing to merge and the text is kept, and otherwise those bytes are reported
+  as a LOSS if the merged document does not carry them, never as a win the writer took. Where the
+  version the writer opened cannot be verified, every differing region is a conflict, blocks and the
+  source around them alike. A per-block picker (choosing disk's side for one specific conflict) is a follow-up, not
+  part of this fix.
+- **The source face runs the same merge, over parsed blocks of its own text.** Before this, Keep
+  mine from the source face wrote the textarea's contents whole, with no splice and no protection
+  for disk's changes at all.
+- **The merge never re-serializes a block it did not need to.** Every surviving block is either the
+  base's own bytes, the writer's own bytes, or disk's own bytes, copied verbatim — so a block the
+  writer edited in a spelling the serializer would otherwise change (an alternate list marker, for
+  instance) still keeps that exact spelling, the same guarantee an ordinary save already gives a
+  single writer.
+- **The daemon's own save path checkpoints pending drift before it writes, not after.** A save that
+  legitimately carries disk's bytes into its own write must not have those bytes misattributed to
+  the writer just because the disk-side watcher had not yet checkpointed them. The artifact save now
+  captures any such pending drift as its own unattributed checkpoint first, under the same workspace
+  serialization the watcher itself uses, so the write it then makes is diffed against a base that
+  already contains that drift — the resulting human-attributed entry contains only what the writer's
+  own save changed. A save that arrives while another writer's lease is open and that specific file
+  has pending drift is refused outright, rather than guessing which side that interval belongs to.
+
 ## An edited block is written back in its own spelling, not the serializer's
 
 Re-serializing an edited block wrote the serializer's spelling of everything in it, so changing one
