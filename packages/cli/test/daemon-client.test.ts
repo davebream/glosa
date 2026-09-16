@@ -12,7 +12,7 @@ import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isApiError } from "../src/api-client.ts";
-import { createHttpDaemonClient, type DaemonHookClient } from "../src/daemon-client.ts";
+import { createHttpDaemonClient, type DaemonClient } from "../src/daemon-client.ts";
 import { tokenPath } from "../../daemon/src/security/token.ts";
 import {
   cleanupHome,
@@ -21,6 +21,7 @@ import {
   spawnDaemon,
   stopDaemon,
   waitForHandshake,
+  waitUntil,
 } from "../../daemon/test/helpers.ts";
 
 const TOKEN = "daemon-client-session-stream-real-token-0123456789";
@@ -28,7 +29,7 @@ const TOKEN = "daemon-client-session-stream-real-token-0123456789";
 interface RealDaemon {
   port: number;
   home: string;
-  client: DaemonHookClient;
+  client: DaemonClient;
   register(body: Record<string, unknown>): Promise<void>;
 }
 
@@ -160,7 +161,7 @@ describe("createHttpDaemonClient().openSessionStream against a real daemon (issu
     });
   }, 30_000);
 
-  test("a replacement connection closes the prior one cleanly — openSessionStream returns, it does not throw", async () => {
+  test("a replacement connection closes the prior one cleanly — openSessionStream resolves ended:'superseded', it does not throw", async () => {
     await withRealDaemon(async ({ client, register }) => {
       const agentCwd = realDir();
       const workspace = realDir();
@@ -173,10 +174,12 @@ describe("createHttpDaemonClient().openSessionStream against a real daemon (issu
       });
 
       let firstSettled: "resolved" | "rejected" | null = null;
+      let firstResult: { ended: "superseded" | "eof" } | undefined;
       const firstAbort = new AbortController();
       const first = client.openSessionStream!("bound-session", "monitor", async () => {}, firstAbort.signal)
-        .then(() => {
+        .then((result) => {
           firstSettled = "resolved";
+          firstResult = result;
         })
         .catch(() => {
           firstSettled = "rejected";
@@ -187,8 +190,9 @@ describe("createHttpDaemonClient().openSessionStream against a real daemon (issu
       await Bun.sleep(300);
       expect(firstSettled).toBeNull();
 
-      // A2/A1 §5.12: a second stream for the SAME session replaces the first, which the daemon's
-      // SessionPushRegistry closes cleanly (production replacement path, not a test seam).
+      // A2/A1 §5.12, #206: a second stream for the SAME session replaces the first, which the
+      // daemon's SessionPushRegistry closes cleanly (production replacement path, not a test seam)
+      // and signals with a terminal `event: superseded` frame before EOF.
       const secondAbort = new AbortController();
       const second = client.openSessionStream!("bound-session", "monitor", async () => {}, secondAbort.signal);
 
@@ -196,7 +200,82 @@ describe("createHttpDaemonClient().openSessionStream against a real daemon (issu
       // TS's control-flow narrowing tracks `firstSettled`'s declaration-site literal straight
       // through the `.then`/`.catch` closures above; the cast just restates its real declared
       // type so the assertion below type-checks against what the closures can actually assign.
-      expect(firstSettled as "resolved" | "rejected" | null).toBe("resolved"); // clean EOF: fell through, never threw
+      expect(firstSettled as "resolved" | "rejected" | null).toBe("resolved"); // superseded: fell through, never threw
+      expect(firstResult).toEqual({ ended: "superseded" });
+
+      secondAbort.abort();
+      await second.catch(() => {});
+    });
+  }, 30_000);
+
+  test("an in-flight delivery/ack failure does not mask an already-issued superseded frame (barrier, #206)", async () => {
+    await withRealDaemon(async ({ client, register, port }) => {
+      const agentCwd = realDir();
+      const workspace = realDir();
+      await register({
+        session_id: "barrier-session",
+        provider: "claude-code",
+        cwd: agentCwd,
+        source: "mcp",
+        workspace_binding: workspace,
+      });
+
+      const base = `http://127.0.0.1:${port}`;
+      const authHeaders = { Authorization: `Bearer ${TOKEN}`, Origin: base, Host: `127.0.0.1:${port}` };
+      const workspacesRes = await fetch(`${base}/api/workspaces`, { headers: authHeaders });
+      const slug = ((await workspacesRes.json()) as Array<{ slug: string; path: string }>).find(
+        (w) => w.path === workspace,
+      )?.slug;
+      expect(slug).toBeDefined();
+
+      writeFileSync(join(workspace, "notes.md"), "A sentence for review.\n");
+      const created = await fetch(`${base}/w/${slug}/annotations`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "annotation",
+          artifact_path: "notes.md",
+          body: "Please clarify this sentence.",
+          intent: "content",
+          target: { quote: { exact: "sentence" }, position: { start: 2, end: 10 } },
+        }),
+      });
+      expect(created.status).toBe(201);
+      const entryId = ((await created.json()) as { id: string }).id;
+
+      let releaseGate: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      let seenEntryId: string | undefined;
+      const firstAbort = new AbortController();
+      const first = client.openSessionStream!(
+        "barrier-session",
+        "monitor",
+        async (entry) => {
+          seenEntryId = entry.id;
+          await gate; // block delivery handling until the test releases it, below
+          const ack = await fetch(
+            `${base}/api/sessions/barrier-session/stream/${encodeURIComponent(entry.id)}/transport-ack`,
+            { method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: "{}" },
+          );
+          if (!ack.ok) throw new Error(`ack failed (${ack.status})`); // replacement deleted the pending ack
+        },
+        firstAbort.signal,
+      );
+
+      expect(await waitUntil(() => seenEntryId !== undefined, 5_000)).toBe(true);
+      expect(seenEntryId).toBe(entryId);
+
+      // Replace the stream WHILE `onEntry` is still blocked: the daemon closes+signals the first
+      // connection now, well before its own ack attempt ever runs.
+      const secondAbort = new AbortController();
+      const second = client.openSessionStream!("barrier-session", "monitor", async () => {}, secondAbort.signal);
+      await Bun.sleep(300); // let the replacement actually land before the ack races it
+
+      releaseGate();
+      const result = await first;
+      expect(result).toEqual({ ended: "superseded" }); // supersession wins over the in-flight ack failure
 
       secondAbort.abort();
       await second.catch(() => {});

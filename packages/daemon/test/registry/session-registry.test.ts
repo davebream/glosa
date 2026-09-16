@@ -14,7 +14,7 @@ describe("session recovery and connection-held leases (#141)", () => {
         session_id: "s",
         provider: "codex",
         cwd: "/agent",
-        source: "hook",
+        source: "mcp",
         transcript_path: "/transcript",
       }),
       registry.bind("s", "/target-two"),
@@ -171,8 +171,7 @@ describe("SessionRegistry — liveness without PID", () => {
   test("never checks PID liveness (grep guard: no process.kill / kill( call sites)", () => {
     const sessionRegistrySrc = readFileSync(new URL("../../src/registry/session-registry.ts", import.meta.url), "utf8");
     // Strip `//` line comments before scanning — the module docstrings deliberately MENTION
-    // process.kill (explaining why it's banned here, unlike lockfile-fallback.ts), and those
-    // mentions must not trip this guard.
+    // process.kill (explaining why it's banned here), and those mentions must not trip this guard.
     const stripComments = (src: string): string =>
       src
         .split("\n")

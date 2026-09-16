@@ -117,13 +117,12 @@ export function cleanupHome(home: string): void {
 // crashed run leaked its block forever; the root grew monotonically until every socket test on the
 // machine failed, in isolation too, with nothing to hint that the fix was `rm -rf` on a directory.
 //
-// `packages/daemon/src/registry/lockfile-fallback.ts` solves its equivalent problem with an owner
-// pid plus `kill(pid, 0)` liveness bounded by an abandon ceiling, and that is the right answer
-// THERE: it guards an ordinary file, and no filesystem offers compare-and-delete, so a reclaimer
-// that reads a dead record and then unlinks it can unlink the LIVE record a second reclaimer just
-// put in its place — which is why that module also has to re-prove ownership afterwards and can
-// raise LEASE_STOLEN. Copying that here would import the same residual race and a TTL that is a
-// guess either way.
+// An ordinary file guarded by an owner pid plus `kill(pid, 0)` liveness bounded by an abandon
+// ceiling is the right answer for THAT class of resource: no filesystem offers compare-and-delete,
+// so a reclaimer that reads a dead record and then unlinks it can unlink the LIVE record a second
+// reclaimer just put in its place — which is why that pattern also has to re-prove ownership
+// afterwards. Copying that here would import the same residual race and a TTL that is a guess
+// either way.
 //
 // We do not need it, because the resource being reserved is itself a kernel object. bind(2) is a
 // real compare-and-swap, and the kernel closes the socket when the owner dies for ANY reason —

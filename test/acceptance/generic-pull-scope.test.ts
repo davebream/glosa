@@ -17,9 +17,9 @@
 // MCP transport (`packages/cli/test/mcp.test.ts`'s own pattern), and the real composite-drain route
 // over a real `SessionRegistry`/`WorkspaceIndex`/`WorkspaceBusRegistry` via `createApiFetch` in temp
 // dirs (`packages/daemon/test/composite-session-drain.test.ts`'s own pattern). Only a
-// `DaemonHookClient` adapter and the ordering barrier below are test-owned glue — the existing
-// `HookClient` fake in mcp.test.ts discards its session id on drain and cannot fail on this defect
-// (A4; see that file's line-56 test, which this suite never touches).
+// `DaemonClient` adapter and the ordering barrier below are test-owned glue — the existing
+// `FakeDaemonClient` fake in mcp.test.ts discards its session id on drain and cannot fail on this
+// defect (A4; see that file's line-56 test, which this suite never touches).
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +29,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
-  DaemonHookClient,
+  DaemonClient,
   DrainOptions,
   DrainResult,
   RegisterSessionInput,
@@ -121,7 +121,7 @@ async function teardownFixture(fx: Fixture): Promise<void> {
   rmSync(fx.bRoot, { recursive: true, force: true });
 }
 
-/** The one raw-route call site every fake `DaemonHookClient` below shares — real HTTP-route code
+/** The one raw-route call site every fake `DaemonClient` below shares — real HTTP-route code
  * (`createApiFetch`), never a stand-in that discards its session id or scope (A4). */
 async function callRoute(fx: Fixture, path: string, body?: unknown): Promise<Response> {
   const headers = new Headers();
@@ -176,7 +176,7 @@ async function driveOverlappingPulls(fx: Fixture): Promise<Overlap> {
     resolveBRegistered = resolve;
   });
 
-  const client: DaemonHookClient = {
+  const client: DaemonClient = {
     async register(input: RegisterSessionInput): Promise<RegisterSessionResult> {
       const res = await callRoute(fx, "/api/sessions/register", input);
       const result = (await res.json()) as RegisterSessionResult;
@@ -215,7 +215,7 @@ async function driveOverlappingPulls(fx: Fixture): Promise<Overlap> {
   };
 
   const deps: McpDeps = {
-    createHookClient: async () => client,
+    createDaemonClient: async () => client,
     createApiClient: async () => ({}) as never,
     cwd: () => fx.aRoot,
   };
@@ -372,7 +372,7 @@ describe("generic pull scope is immutable for the whole drain (issue #205)", () 
     const fx = await buildFixture();
     try {
       const calls: string[] = [];
-      const client: DaemonHookClient = {
+      const client: DaemonClient = {
         async register(input: RegisterSessionInput) {
           return (await callRoute(fx, "/api/sessions/register", input)).json();
         },
@@ -398,7 +398,7 @@ describe("generic pull scope is immutable for the whole drain (issue #205)", () 
         },
       };
       const deps: McpDeps = {
-        createHookClient: async () => client,
+        createDaemonClient: async () => client,
         createApiClient: async () => ({}) as never,
         session: () => ({ session_id: "host-205", provider: "mcp", cwd: fx.a.canonical_path }),
       };

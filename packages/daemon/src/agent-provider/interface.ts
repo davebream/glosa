@@ -107,7 +107,7 @@ export type DeliverableEntry =
   | (PresentationBase & { kind: "attention_request"; detail: Record<string, unknown> })
   | (PresentationBase & {
       kind: "conversation_message";
-      /** Exact, unmodified UTF-8 composer text. `text` remains the bounded hook/MCP presentation. */
+      /** Exact, unmodified UTF-8 composer text. `text` remains the bounded push/MCP presentation. */
       message: string;
       message_bytes: number;
       target_session_id: string;
@@ -128,7 +128,7 @@ export interface AgentProvider {
   connectPrompt(target: ProviderConnectTarget): ProviderConnectPrompt;
   /** From a raw session/event payload → a `SessionBinding`, or `null` if the payload doesn't carry
    * enough to identify a session (malformed/foreign event). Pure — no I/O. */
-  detectSession(hookEvent: unknown): SessionBinding | null;
+  detectSession(payload: unknown): SessionBinding | null;
   /** Evaluated per session (R7) — never a provider-wide constant. */
   capabilities(session: SessionBinding): ProviderCapabilities;
   /** Uses the best available capability (the R4 ladder) to get `entry` in front of the agent.

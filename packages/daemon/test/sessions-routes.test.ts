@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// P4.3 — the `/api/sessions/...` surface `glosa hook <event>` calls into (A2 §F08/R2): register,
-// heartbeat, deregister, drain. Same harness style as http-routes.test.ts — a real `createApiFetch`
-// pipeline in-process against real `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry`
-// instances over real tmp workspaces.
+// P4.3 — the `/api/sessions/...` surface the monitor, the Codex attachment, and the MCP shim call
+// into (A2 §F08/R2): register, heartbeat, deregister, drain. Same harness style as
+// http-routes.test.ts — a real `createApiFetch` pipeline in-process against real
+// `WorkspaceIndex`/`SessionRegistry`/`WorkspaceBusRegistry` instances over real tmp workspaces.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,7 +85,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       session_id: "manual",
       provider: "codex",
       cwd: root,
-      source: "hook",
+      source: "mcp",
       transcript_path: "/fixture.jsonl",
       lease_expiry: new Date(0).toISOString(),
     });
@@ -96,6 +96,16 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect((await bind({ session_id: "manual", provider: "claude-code" })).status).toBe(409);
     expect((await bind({ session_id: "bad", cwd: "/nonexistent-recovery-cwd" })).status).toBe(400);
     expect(sessionRegistry.get("bad")).toBeNull();
+  });
+
+  test("an explicit bind records the caller's source, and `manual` when it supplies none (A2 §F08, R2)", async () => {
+    const workspace = await workspaceIndex.upsertWorkspace(root, "session");
+    const bind = (body: unknown) =>
+      fetchFn(req(`/w/${workspace.slug}/session-binding`, { method: "POST", body: JSON.stringify(body) }));
+    expect((await bind({ session_id: "bare" })).status).toBe(200);
+    expect(sessionRegistry.get("bare")?.source).toBe("manual");
+    expect((await bind({ session_id: "from-cli", source: "cli" })).status).toBe(200);
+    expect(sessionRegistry.get("from-cli")?.source).toBe("cli");
   });
 
   for (const end of ["cancel", "shutdown", "revoke", "replace"] as const) {
@@ -140,10 +150,20 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
         expect(sessionRegistry.liveness("stream-session")).toBe("alive");
       }
       if (end === "cancel") await reader.cancel();
-      if (end === "shutdown") shutdown.abort();
-      if (end === "revoke") generation.abort();
+      if (end === "shutdown" || end === "revoke") {
+        if (end === "shutdown") shutdown.abort();
+        else generation.abort();
+        // #206: shutdown and revocation are still byte-identical plain EOF — no superseded frame.
+        expect(await reader.read()).toEqual({ done: true, value: undefined });
+      }
       if (end === "replace") {
         const next = await fetchFn(req("/api/sessions/stream-session/stream?transport=monitor"));
+        // #206: the displaced reader's next read consumes the terminal `superseded` frame, THEN EOF.
+        const superseded = await reader.read();
+        expect(superseded.done).toBe(false);
+        expect(new TextDecoder().decode(superseded.value)).toBe(
+          `event: superseded\ndata: ${JSON.stringify({ transport: "monitor" })}\n\n`,
+        );
         expect((await reader.read()).done).toBe(true);
         expect(callbacks.size).toBe(1);
         await reader.cancel(); // old reader cannot release the replacement
@@ -157,6 +177,40 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       expect(sessionRegistry.liveness("stream-session")).toBe("stale");
     });
   }
+
+  test("GET /api/sessions/:id/stream/status answers from the push registry alone: unknown, connected, displaced, closed", async () => {
+    ctx.pushRegistry = new SessionPushRegistry();
+
+    const unknown = await fetchFn(req("/api/sessions/nobody-here/stream/status"));
+    expect(unknown.status).toBe(200);
+    expect(await unknown.json()).toEqual({ connected: false, transport: null });
+    expect(sessionRegistry.get("nobody-here")).toBeNull(); // no registration, no heartbeat, no lease
+
+    await sessionRegistry.register({
+      session_id: "probe-session",
+      provider: "claude-code",
+      cwd: root,
+      workspace_binding: root,
+      source: "monitor",
+    });
+    const first = await fetchFn(req("/api/sessions/probe-session/stream?transport=monitor"));
+    expect(first.status).toBe(200);
+    const firstReader = first.body!.getReader();
+    await firstReader.read(); // consume ": connected"
+
+    const connected = await fetchFn(req("/api/sessions/probe-session/stream/status"));
+    expect(await connected.json()).toEqual({ connected: true, transport: "monitor" });
+
+    const second = await fetchFn(req("/api/sessions/probe-session/stream?transport=monitor"));
+    expect(second.status).toBe(200);
+    await firstReader.read(); // the displaced reader's own superseded frame
+    const stillConnected = await fetchFn(req("/api/sessions/probe-session/stream/status"));
+    expect(await stillConnected.json()).toEqual({ connected: true, transport: "monitor" }); // now the REPLACEMENT
+
+    await second.body!.cancel();
+    const afterClose = await fetchFn(req("/api/sessions/probe-session/stream/status"));
+    expect(await afterClose.json()).toEqual({ connected: false, transport: null });
+  });
 
   async function ack(sessionId: string, deliveryId: string, outcome: "presented" | "failed" = "presented") {
     return fetchFn(

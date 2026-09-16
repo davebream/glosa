@@ -851,9 +851,9 @@ export class WorkspaceBus {
         if (typeof target === "string" && target !== opts.session) continue;
       }
       const attempts = Array.isArray(entry.deliveryAttempts) ? (entry.deliveryAttempts as DeliveryAttemptRecord[]) : [];
-      // `transport_accepted` only proves that a channel/watcher accepted the payload, not that
-      // it reached agent context. Only a post-output `presented` acknowledgement suppresses the
-      // turn-boundary/MCP safety-net drain permanently.
+      // `transport_accepted` only proves that a push transport (monitor or codex_app_server)
+      // accepted the payload, not that it reached agent context. Only a post-output `presented`
+      // acknowledgement suppresses the MCP-pull safety-net drain permanently.
       if (attempts.some((attempt) => attempt.outcome === "presented")) continue;
       eligible.push([id, entry, payload]);
     }

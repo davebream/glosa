@@ -22,7 +22,7 @@ import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/work
 import { ensureToken, glosaHome } from "../../daemon/src/index.ts";
 import { formatPresentationBatch } from "../../daemon/src/delivery/presentation.ts";
 import { isApiError, type GlosaApiClient } from "./api-client.ts";
-import type { DaemonHookClient, DrainResult } from "./daemon-client.ts";
+import type { DaemonClient, DrainResult } from "./daemon-client.ts";
 import {
   askInputSchema,
   askOutputSchema,
@@ -48,7 +48,7 @@ import { realRequestReviewDeps, runRequestReview } from "./request-review.ts";
 import { CLI_VERSION } from "./version.ts";
 
 interface PendingAck {
-  client: DaemonHookClient;
+  client: DaemonClient;
   sessionId: string;
   deliveryId: string;
 }
@@ -59,7 +59,7 @@ export interface McpDeps {
    * client so in-flight and future calls on that client reject when shutdown starts. Ordinary
    * (non-shutdown) calls are unaffected: the signal never fires until shutdown begins.
    */
-  createHookClient: (signal?: AbortSignal) => Promise<DaemonHookClient>;
+  createDaemonClient: (signal?: AbortSignal) => Promise<DaemonClient>;
 
   createApiClient: (signal?: AbortSignal) => Promise<GlosaApiClient>;
   cwd?: () => string;
@@ -283,7 +283,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   // Bound into every client an active tool handler creates. It fires immediately when shutdown
   // starts, so ordinary calls are unaffected until then; once it fires, in-flight and future calls
   // on those clients reject instead of hanging — this is what cancels a mid-flight `glosa_ask`
-  // long poll or a stuck hook call.
+  // long poll or a stuck tool call.
   const shutdownAbort = new AbortController();
   // Every currently-running tool call's whole lifecycle — registration/heartbeat included, not
   // just the handler — keyed by its own promise. `close()` waits for this set to drain (after
@@ -320,7 +320,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     const activity = prior
       .catch(() => {})
       .then(async () => {
-        const client = await deps.createHookClient(shutdownAbort.signal);
+        const client = await deps.createDaemonClient(shutdownAbort.signal);
         if (registered.get(session.session_id) === registrationKey) {
           try {
             await client.heartbeat(session.session_id);
@@ -403,7 +403,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       const generic = !hostSession && !requestedSession;
       const session = identity(requestedSession, undefined, generic ? workspace : undefined);
       const sessionId = session.session_id;
-      const client = await deps.createHookClient(shutdownAbort.signal);
+      const client = await deps.createDaemonClient(shutdownAbort.signal);
       // Sends the SAME cwd this call's own `ensureSession` registered (or re-registered) —
       // captured here rather than re-read from the registry row, which a concurrent generic pull
       // sharing this shim's one synthetic session id can legitimately move before this drain
@@ -573,7 +573,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       if (!sessionId) {
         throw new Error("glosa_delivery_ack requires an explicit session_id when the MCP host does not provide one");
       }
-      const client = await deps.createHookClient(shutdownAbort.signal);
+      const client = await deps.createDaemonClient(shutdownAbort.signal);
       if (!client.acknowledgePushed) throw new Error("pushed-entry acknowledgement is unavailable");
       await client.acknowledgePushed(sessionId, entryId, "presented");
       return toolResult({ entry_id: entryId, presented: true });

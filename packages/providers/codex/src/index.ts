@@ -13,12 +13,4 @@ export {
 export type { CodexAttachDeps, CodexAttachOptions, CodexControlClient } from "./app-server.ts";
 export { UnixWebSocket } from "./unix-websocket.ts";
 export type { CodexProviderDeps, SessionLivenessSource } from "./provider.ts";
-export { looksLikeCodexHookInput } from "./hook-types.ts";
-export type {
-  CodexHookInput,
-  CodexSessionEndHookInput,
-  CodexSessionStartHookInput,
-  CodexStopHookBlockOutput,
-  CodexStopHookInput,
-  CodexUserPromptSubmitHookInput,
-} from "./hook-types.ts";
+export { looksLikeSessionPayload } from "./session-payload.ts";

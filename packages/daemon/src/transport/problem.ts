@@ -37,9 +37,9 @@ export type ProblemSlug =
   | "not-implemented"
   // The daemon's generic 409: any conflict that doesn't get its own dedicated slug. Used across
   // several unrelated routes (composite acknowledgement outcome, delivery reservation, session
-  // binding, conversation targeting, apply-begin lease, annotation withdrawal on a closed entry,
-  // `glosa init` conflicts) — a caller must not match on this slug alone to identify any one of
-  // them; each route's own condition is what's actually being asserted.
+  // binding, conversation targeting, apply-begin lease, annotation withdrawal on a closed entry)
+  // — a caller must not match on this slug alone to identify any one of them; each route's own
+  // condition is what's actually being asserted.
   | "conflict"
   | "approval-conflict"
   // R9 addition, sibling of `approval-conflict` and deliberately NOT the same answer. Uniqueness

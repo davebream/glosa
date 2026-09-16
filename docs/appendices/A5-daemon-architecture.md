@@ -17,8 +17,9 @@
   that cannot participate remain fail-closed and receive manual PID/port verification and
   termination guidance; no client manufactures a lock or signals an unverified PID.
 - `ensureDaemon({timeoutMs})` applies one monotonic deadline to every handshake, port probe,
-  replacement wait, and spawn wait. Hooks pass 3000 ms; explicit CLI and MCP clients default to
-  12000 ms. Before removing any lock or spawning without one, the client must observe three
+  replacement wait, and spawn wait. Explicit CLI and MCP clients default to
+  12000 ms; there is no hook caller (`glosa hook <event>` is a silent stub that never calls
+  discovery, #152). Before removing any lock or spawning without one, the client must observe three
   consecutive clean `ECONNREFUSED` results 100 ms apart while the exact ownership state remains
   unchanged, **and then prove the port free by binding it**. A refused connect is not evidence that
   a port is free: a daemon whose event loop has stopped keeps its listening socket but stops
@@ -46,7 +47,7 @@
 - Shutdown: SIGTERM → `server.stop(false)` on both listeners → SSE `event:bye` and close all journal/transcript streams → await active HTTP handlers and every workspace-bus mutex → fsync+close journal writers → unlink lock ONLY if `instance_id` matches → exit0. The drain is bounded at 3s; timeout force-closes both listeners, retains the ownership check, logs forced shutdown, and exits. A shutdown that has begun is itself bounded at 8s: past that the daemon releases its lock and exits regardless, because `shuttingDown` already suppresses every later signal, so a drain that never finishes is indistinguishable from the ignored SIGTERM it was meant to answer. SPA clients consume `bye` internally and reconnect immediately with their last cursor; later failures use normal backoff. A severed apply lease reconciles subsequent edits as `unknown`; only a completed matching lease may yield `session:<id>`, and shutdown never invents a `human` fallback. No idle self-shutdown in v1.
 
 ## F19 — global workspace index `~/.glosa/workspaces.json`
-- **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/hooks/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.
+- **Daemon-only writer**, serialized via in-process async mutex, temp+fsync+rename. All clients (CLI/MCP) mutate via daemon API, never write the file → also fixes F08 session-registration race.
 - Schema v4:
   `{version:4,updated_at,workspaces:{<registration_id>:{registration_id,kind,canonical_path,worktree_path,bus_path,tracking,slug,slug_len,source,first_seen,last_seen,present,file_identity?,lifecycle}},adoptions,forget_operations}`.
   `tracking` is `{mode:"matcher"}` or `{mode:"bounded",paths:[<relative-path>,…]}`. Registration

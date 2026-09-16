@@ -62,6 +62,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Read/Review and the outline now hide document metadata and paired `%%` authoring notes,
   including inline notes in headings and prose. Rich Edit labels those regions and preserves
   their source spelling, including mixed line endings and nested list/blockquote notes. (#175)
+- Two live push connections for the same session no longer ping-pong ownership forever. The daemon
+  now signals a displaced `GET /api/sessions/:id/stream` connection with a terminal
+  `event: superseded` frame (daemon shutdown, token revocation/rotation, cancel and send failure
+  still close with plain EOF) and exposes a read-only `GET /api/sessions/:id/stream/status`
+  ownership probe. The Claude plugin monitor and the Codex app-server attachment stop reconnecting
+  on supersession, park, and poll that probe every 15-18 seconds until it reports the session free,
+  re-acquiring the stream without a daemon restart. (#206)
 
 ## [0.1.0-alpha.21] — 2026-09-14
 

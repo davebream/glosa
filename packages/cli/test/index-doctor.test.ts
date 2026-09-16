@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.1 / issue #96 — `run(["doctor", ...])`'s CLI wiring for the shared workspace-root rule: the
-// cwd default resolves to the enclosing git repository (the same root `glosa init`/`glosa open`
-// use), and an explicit non-root `dir` inside a repo gets a `not-repository-root` warning rather
+// cwd default resolves to the enclosing git repository (the same root `glosa open`
+// uses), and an explicit non-root `dir` inside a repo gets a `not-repository-root` warning rather
 // than silently checking the wrong directory. `runDoctor`'s own 15 checks are covered exhaustively
 // in doctor.test.ts — this only proves index.ts resolves and reports the directory correctly.
 import { afterEach, describe, expect, test } from "bun:test";

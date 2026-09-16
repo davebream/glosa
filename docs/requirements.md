@@ -89,13 +89,14 @@ generic.**
   clients proceed only after re-reading a matching lock/handshake pair. Corrupt or mismatched locks
   are never overwritten, lockless older daemons remain fail-closed with manual recovery guidance,
   and lock and handshake identity/PID/instance must agree before any signal is sent. Client-side
-  discovery has one caller-supplied wall-clock budget (three seconds for hooks, twelve seconds for
-  explicit CLI/MCP calls), permits at most one detached spawn, and requires three consecutive
+  discovery has one caller-supplied wall-clock budget — **twelve seconds**, the single default for
+  every CLI/MCP call, since `glosa hook <event>` is a silent stub that never calls discovery at all
+  (#152) — permits at most one detached spawn, and requires three consecutive
   `ECONNREFUSED` probes 100 ms apart **and a successful bind of the port** before treating it as
   free — a refused connection is not evidence a port is free, because a daemon that has stopped
   accepting still holds its listening socket. Ownership changes or an
-  exhausted budget fail closed without unlinking or spawning; hook discovery failure exits quietly
-  so another durable delivery rung can retry later. A daemon that stops running its event loop
+  exhausted budget fail closed without unlinking or spawning, surfacing as a thrown
+  `DAEMON_UNREACHABLE` error to the caller. A daemon that stops running its event loop
   releases its own ownership record and ends its process rather than holding the port
   indefinitely, and every client message about an unresponsive owner names the recovery a user can
   actually perform on one.
@@ -157,7 +158,8 @@ generic.**
   transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls or an open
   session transport connection every 20 seconds (never `kill(pid,0)`). Closing a connection stops
   refreshes; it does not end the lease immediately. `source` is `monitor`, `codex-app-server`,
-  `mcp`, or `cli` (explicit bind); there are no hook sources (#152).
+  `mcp`, or `cli` (explicit bind), or `manual` for an explicit bind that sends none; there are no
+  hook sources (#152).
   MCP registers on first tool use and re-registers after an unknown-session heartbeat. Explicit bind
   also registers unknown identities and refreshes stale ones; missing provider identity uses generic
   `mcp`, which a subsequent concrete provider may enrich. Omitted registration fields preserve
@@ -270,7 +272,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.8: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.9: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, presentation-token mint/redeem, whole-bus
@@ -425,12 +427,12 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 
 ## 4. Non-functional  (detail: A6 §F30)
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
-  Claude Code 2.1.80 (channel floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. Non-Darwin →
+  Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. Non-Darwin →
   exit 5.
 - **Privacy**: loopback-only; zero telemetry/external runtime calls; class-F network egress blocked by
   CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE
-  reconnect replays from cursor; watcher catch-up on restart). Any face (hook/MCP/CLI) failing changes
+  reconnect replays from cursor; watcher catch-up on restart). Any face (push/MCP/CLI) failing changes
   which mechanism delivers, never whether the entry survives.
 - **No build step** = no bundle/transpile + no native/compiled addons (`bun run` direct); Bun, system
   git, a browser are required host software (A6 §F30). Scrub `ANTHROPIC_API_KEY` from every spawned
@@ -447,10 +449,13 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   registry (A5 §F19). Gate: every lifecycle transition + crash-recovery (fault injection at each write
   boundary) + concurrency (two sessions/one cwd, duplicate resolve) + routing incl. parked-drain.
 - **T2a — pin the Codex integration contract** (research sub-task, BEFORE the Codex provider build):
-  verify current (mid-2026) Codex CLI hook/gate/transcript-file mechanics against real docs/source — the
-  Plannotator-era "Codex Stop-hook + rollout-file parsing" note is the starting point, not gospel. Output:
-  a concrete Codex provider contract (which hook fires the blocking gate, its stdin/stdout shape, where
-  Codex writes its transcript, whether it speaks MCP). Gate: a written contract the provider is built against.
+  verify current Codex CLI transport/transcript-file mechanics against real docs/source — the
+  Plannotator-era "Codex Stop-hook + rollout-file parsing" note was the starting point, not gospel,
+  and its hook-gate mechanism is retired with the hooks (#152). Output:
+  `docs/research/codex-contract.md`, a concrete Codex provider contract (the app-server
+  control-socket push mechanism and its `thread/resume`/`turn/start`/`turn/steer`/`turn/completed`
+  shape, where Codex writes its transcript, and its role as an MCP client). Gate: a written
+  contract the provider is built against.
 - **T2 — providers & delivery**: agent-provider interface (R7); Claude Code plugin monitor + MCP server;
   **Codex provider** (per T2a; app-server push + MCP pull); `resolve`/`apply-begin`/MCP tools. Gate: each
   capability delivers for each provider; monitor-unavailable MCP fallback still delivers; journal records correct
@@ -494,9 +499,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 ## 6. Risks (build-relevant)
 - Claude plugin monitors are unavailable in some host modes → live connection decides push capability and MCP pull remains the fallback (R4).
 - Transcript format internal/unstable → isolated normalizer, fixture tests, fail-soft (R6/A2).
-- `ANTHROPIC_API_KEY` outranks subscription OAuth in spawned/hook contexts → scrub in every spawn; doctor warns.
-- Codex provider is designed to the same interface as Claude's but its gate/transcript shapes differ →
-  verify current Codex hook contract during T2 (the Plannotator-era snapshot is the starting point, not gospel).
+- `ANTHROPIC_API_KEY` outranks subscription OAuth in spawned contexts → scrub in every spawn; doctor warns.
+- Codex provider is designed to the same interface as Claude's but its push-transport/transcript shapes
+  differ → pinned by T2a's `docs/research/codex-contract.md` against real source, not the
+  Plannotator-era snapshot.
 
 ## 7. Normative appendices (in repo as `docs/appendices/`)
 - **A1** api-transport — HTTP contract, streaming-SSE, cursors/resync, capability URLs, versioning.

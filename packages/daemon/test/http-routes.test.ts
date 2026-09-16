@@ -140,7 +140,7 @@ describe("A1 §5 route catalog", () => {
         instruction: `Read TEST_SESSION_ID and bind ${target.slug} at ${target.path}.`,
       }),
       detectSession: () => null,
-      capabilities: () => ({ push: false, gate: false, boundaryDrain: false, mcpPull: true }),
+      capabilities: () => ({ push: false, mcpPull: true }),
       deliver: async () => ({ via: "mcp_pull", outcome: "attempted" }),
       liveness: () => "alive",
       transcriptPath: () => null,
@@ -1589,7 +1589,7 @@ describe("A1 §5 route catalog", () => {
       session_id: "sess-live",
       provider: "claude-code",
       cwd: root,
-      source: "hook",
+      source: "mcp",
     });
     const res = await fetchFn(
       stateChangingReq(`/w/${slug}/session-binding`, {
@@ -2541,7 +2541,7 @@ describe("A1 §5 route catalog", () => {
         provider: "claude-code",
         cwd: root,
         workspace_binding: root,
-        source: "hook",
+        source: "mcp",
       });
 
       const res = await fetchFn(forgetReq({ slug, confirm: true }));
@@ -2621,7 +2621,7 @@ describe("A1 §5 route catalog", () => {
       const registerReq = stateChangingReq("/api/sessions/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: "race-1", provider: "claude-code", cwd: root, source: "hook" }),
+        body: JSON.stringify({ session_id: "race-1", provider: "claude-code", cwd: root, source: "mcp" }),
       });
 
       const [forgetRes, registerRes] = await Promise.all([
@@ -2662,7 +2662,7 @@ describe("A1 §5 route catalog", () => {
         stateChangingReq(`/w/${slug}/session-binding`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: "bind-1", provider: "claude-code", cwd: root, source: "hook" }),
+          body: JSON.stringify({ session_id: "bind-1", provider: "claude-code", cwd: root, source: "mcp" }),
         }),
       );
       expect(bindRes.status).toBe(409);
@@ -2673,7 +2673,7 @@ describe("A1 §5 route catalog", () => {
         stateChangingReq("/api/sessions/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: "register-1", provider: "claude-code", cwd: root, source: "hook" }),
+          body: JSON.stringify({ session_id: "register-1", provider: "claude-code", cwd: root, source: "mcp" }),
         }),
       );
       expect(registerRes.status).toBe(409);
@@ -2741,7 +2741,7 @@ describe("A1 §5 route catalog", () => {
           stateChangingReq(`/w/${source.slug}/session-binding`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session_id: "alias-bind", provider: "claude-code", cwd: adoptRoot, source: "hook" }),
+            body: JSON.stringify({ session_id: "alias-bind", provider: "claude-code", cwd: adoptRoot, source: "mcp" }),
           }),
         );
         expect(bindRes.status).toBe(200);
@@ -2759,7 +2759,7 @@ describe("A1 §5 route catalog", () => {
               provider: "claude-code",
               cwd: adoptRoot,
               workspace_binding: source.canonical_path,
-              source: "hook",
+              source: "mcp",
             }),
           }),
         );
@@ -2822,7 +2822,7 @@ describe("A1 §5 route catalog", () => {
             provider: "claude-code",
             cwd: adoptRoot,
             workspace_binding: source.canonical_path,
-            source: "hook",
+            source: "mcp",
           }),
         });
         const forgetReq2 = stateChangingReq("/api/workspaces/forget", {
@@ -3060,7 +3060,7 @@ describe("A1 §5 route catalog", () => {
             session_id: "registrationless-register",
             provider: "claude-code",
             cwd: root,
-            source: "hook",
+            source: "mcp",
           }),
         }),
       );
@@ -3158,7 +3158,7 @@ describe("A1 §5 route catalog", () => {
             provider: "claude-code",
             cwd: root,
             workspace_binding: root,
-            source: "hook",
+            source: "mcp",
           }),
         }),
       );

@@ -9,8 +9,8 @@
 // /private/tmp`. Following that hint writes agent config into a system temp dir or a broad parent
 // holding several unrelated repos.
 //
-// The rule, in one place, used by the daemon's open resolution and by the CLI's `init`/`doctor`
-// cwd defaults: **a path's workspace root is its enclosing git repository, with one boundary**
+// The rule, in one place, used by the daemon's open resolution and by the CLI's `doctor`
+// cwd default: **a path's workspace root is its enclosing git repository, with one boundary**
 // (issue #146): that repository is never the user's home directory or an ancestor of it. On a
 // machine whose home is itself a git checkout (a dotfiles repo, common), the unbounded walk
 // reached `$HOME` for anything with no nearer repository and every caller adopted the user's

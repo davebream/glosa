@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — the daemon-facing API `glosa hook <event>` calls into (A2 §F08/R2: "providers
-// register live agent sessions via hooks → daemon API (never direct file writes)"). A thin
-// interface + one real HTTP-backed implementation, so every hook handler in hook.ts depends on
-// the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes the handlers
-// testable with an in-memory fake instead of a live daemon subprocess.
+// @glosa/cli — the daemon-facing session-registration/drain API the MCP shim and Codex attachment
+// call into (A2 §F08/R2: "providers register live agent sessions via push transports → daemon API
+// (never direct file writes)"). A thin interface + one real HTTP-backed implementation, so every
+// caller depends on the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes
+// them testable with an in-memory fake instead of a live daemon subprocess.
 
 import { apiError, type ApiProblem } from "./api-client.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
@@ -50,15 +50,35 @@ export interface DrainOptions {
 /** Issue #205: the generic `glosa_inbox_pull` path's own operation. `workspace` is the scope the
  * pull was asked for — the daemon captures it once and uses it for the whole drain, immune to a
  * concurrent re-registration moving the session's row afterward (contract "shape B"). Deliberately
- * NOT a field on `DrainOptions`: the four hook transports (`gate`/`stop`/`userprompt`/`asyncRewake`)
- * must keep resolving scope from the row, and giving them no way to even spell a scope is what makes
- * that structural rather than a convention every caller has to remember. */
+ * NOT a field on `DrainOptions`: an identified session's own drain must keep resolving scope from
+ * its registry row, and giving it no way to even spell a scope is what makes that structural rather
+ * than a convention every caller has to remember. */
 export interface ScopedPullDrainOptions {
   workspace: string;
   limit?: number;
 }
 
-export interface DaemonHookClient {
+/** How `openSessionStream` ended (#206). `superseded`: the daemon's `event: superseded` frame
+ * arrived — a replacement connection took the session; the caller must park, not reconnect.
+ * `eof`: an ordinary close with no such frame (daemon shutdown, token revocation/rotation, client
+ * cancel, send failure, or a network drop) — the caller's existing retry-with-backoff applies. */
+export type SessionStreamEnd = { ended: "superseded" | "eof" };
+
+/** #206: how long, after `onEntry` (or its transport acknowledgement) fails while the stream is
+ * still open, `openSessionStream` keeps reading before giving up on seeing a `superseded` frame.
+ * Replacement deletes the OLD connection's pending acknowledgement, so a failure right there is the
+ * expected shape of a mid-delivery displacement, not a reason to reconnect and re-displace the new
+ * owner — but an ordinary failure on a healthy connection must not hang forever either. *
+ * 12 s, not the 2 s this shipped with (and deliberately not 15 s, which would collide with the
+ * park-probe interval and make the two sleeps indistinguishable to a test). CI run 35039592341 saw a
+ * displaced monitor deliver an entry only the owner should have had; its log proves that duplicate
+ * delivery but records neither monitor's timeline nor how the stream end was classified, so this
+ * race is the strongest explanation from the code rather than an observed one. Waiting longer costs nothing in the case this exists for —
+ * replacement closes the stream immediately, so EOF ends the wait — and only delays surfacing a
+ * genuine handling error on a stream that stays healthy. */
+export const SESSION_STREAM_FAILURE_DEADLINE_MS = 12_000;
+
+export interface DaemonClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
   heartbeat(sessionId: string): Promise<void>;
   deregister(sessionId: string): Promise<void>;
@@ -77,11 +97,19 @@ export interface DaemonHookClient {
     onEntry: (entry: DrainedEntry) => Promise<void>,
     signal: AbortSignal,
     onOpen?: () => void,
-  ): Promise<void>;
+  ): Promise<SessionStreamEnd>;
+  /** `GET /api/sessions/:id/stream/status` (#206) — the parked client's ownership probe. Never
+   * registers, heartbeats, or holds a lease; an unknown session id is a legitimate `connected:false`
+   * answer, not an error. */
+  sessionStreamStatus?(sessionId: string): Promise<{ connected: boolean; transport: string | null }>;
 }
 
 export interface DaemonUnreachableError extends Error {
   code: "DAEMON_UNREACHABLE";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
 
 export interface HttpDaemonClientOptions {
@@ -102,11 +130,11 @@ function unreachableError(reason: string): DaemonUnreachableError {
   return err;
 }
 
-/** The real `DaemonHookClient` — `ensureDaemon()` (find-or-spawn, R1) once per call site, then an
+/** The real `DaemonClient` — `ensureDaemon()` (find-or-spawn, R1) once per call site, then an
  * authed `fetch` against the `/api/sessions/...` surface (http.ts's P4.3 additions). Every call
  * sets `Origin` to the daemon's own self-origin — these are trusted local-process calls, not
  * browser requests, but the state-changing route class still requires it (A3 §4). */
-export async function createHttpDaemonClient(options: HttpDaemonClientOptions = {}): Promise<DaemonHookClient> {
+export async function createHttpDaemonClient(options: HttpDaemonClientOptions = {}): Promise<DaemonClient> {
   const conn = await ensureDaemon({ timeoutMs: options.ensureTimeoutMs });
   if (!conn.ok) {
     throw unreachableError(
@@ -118,11 +146,11 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
   const fetchRequest = options.fetch ?? fetch;
   const shutdownSignal = options.signal;
 
-  async function call(path: string, body?: unknown): Promise<Response> {
+  async function call(path: string, body?: unknown, method: "POST" | "GET" = "POST"): Promise<Response> {
     let res: Response;
     try {
       res = await fetchRequest(`${base}${path}`, {
-        method: "POST",
+        method,
         headers: {
           Host: `127.0.0.1:${port}`,
           Origin: base,
@@ -132,9 +160,9 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           // arrived — and the daemon accepts only the current credential, with no grace period.
           // Pinning it here turned the next call on any such client into a silent 401.
           Authorization: `Bearer ${loadToken(glosaHome())}`,
-          "Content-Type": "application/json",
+          ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
         },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: method === "POST" && body !== undefined ? JSON.stringify(body) : undefined,
         ...(shutdownSignal ? { signal: shutdownSignal } : {}),
       });
     } catch (error) {
@@ -204,9 +232,36 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
+      let superseded = false;
+      // #206: set once `onEntry` (or its caller's own transport acknowledgement, thrown back
+      // through `onEntry`) fails while the stream is still open. Supersession takes precedence: a
+      // replacement deletes the OLD connection's pending acknowledgement, so a failure right here is
+      // the expected shape of a mid-delivery displacement — keep reading toward EOF instead of
+      // surfacing it immediately, bounded so an ordinary failure still gets reported promptly.
+      let failure: { error: unknown } | undefined;
+      let deadlineAt = 0;
       while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (failure && Date.now() >= deadlineAt) throw failure.error;
+        let done: boolean;
+        let value: Uint8Array | undefined;
+        if (failure) {
+          const remaining = Math.max(0, deadlineAt - Date.now());
+          const raced = await Promise.race([
+            reader.read().then((r) => ({ timedOut: false as const, r })),
+            sleep(remaining).then(() => ({ timedOut: true as const })),
+          ]);
+          if (raced.timedOut) throw failure.error;
+          ({ done, value } = raced.r);
+        } else {
+          ({ done, value } = await reader.read());
+        }
+        if (done) {
+          if (failure) {
+            if (superseded) return { ended: "superseded" };
+            throw failure.error;
+          }
+          return { ended: superseded ? "superseded" : "eof" };
+        }
         buffered += decoder.decode(value, { stream: true });
         let boundary = buffered.indexOf("\n\n");
         while (boundary >= 0) {
@@ -214,11 +269,26 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           buffered = buffered.slice(boundary + 2);
           boundary = buffered.indexOf("\n\n");
           const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+          if (event === "superseded") {
+            superseded = true;
+            continue;
+          }
+          if (event !== "delivery" || failure) continue;
           const data = frame.match(/^data:\s*(.+)$/m)?.[1];
-          if (event !== "delivery" || !data) continue;
-          await onEntry(JSON.parse(data) as DrainedEntry);
+          if (!data) continue;
+          try {
+            await onEntry(JSON.parse(data) as DrainedEntry);
+          } catch (error) {
+            failure = { error };
+            deadlineAt = Date.now() + SESSION_STREAM_FAILURE_DEADLINE_MS;
+          }
         }
       }
+      return { ended: superseded ? "superseded" : "eof" };
+    },
+    async sessionStreamStatus(sessionId) {
+      const res = await call(`/api/sessions/${encodeURIComponent(sessionId)}/stream/status`, undefined, "GET");
+      return res.json();
     },
   };
 }

@@ -2,8 +2,9 @@
 // @glosa/daemon — INSTALL identity: which tree this process is running out of (A5 §F13).
 //
 // Deliberately separate from build-id.ts. Build identity hashes every runtime source file, which
-// is far too expensive to pay on paths that only need to know *where* glosa lives — and `glosa
-// hook …` runs on every agent prompt. Everything here is one realpath and one short hash.
+// is far too expensive to pay on paths that only need to know *where* glosa lives — and every
+// CLI/MCP call's `ensureDaemon()` handshake, plus the monitor's own reconnect loop, does exactly
+// that on every invocation. Everything here is one realpath and one short hash.
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";

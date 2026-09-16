@@ -1,14 +1,15 @@
 import type { ShadowDiagnosis } from "../../daemon/src/git/shadow-health.ts";
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — P5.1: the broader daemon-facing client the non-hook CLI surface (open/resolve/
+// @glosa/cli — P5.1: the broader daemon-facing client the CLI surface (open/resolve/
 // apply-begin/request-review/status) calls into. Same shape convention as daemon-client.ts's
-// `DaemonHookClient` (an interface + one real HTTP-backed implementation) — every command handler
+// `DaemonClient` (an interface + one real HTTP-backed implementation) — every command handler
 // depends on the INTERFACE, never on `fetch`/`ensureDaemon` directly, which is what makes each
-// command testable with an in-memory fake (mirrors hook.test.ts's `FakeDaemonClient` convention)
+// command testable with an in-memory fake (mirrors mcp.test.ts's `FakeDaemonClient` convention)
 // instead of a live daemon subprocess. Kept as a SEPARATE client from `daemon-client.ts`'s
-// `DaemonHookClient` rather than folded into it: that one is deliberately minimal (exactly the
-// four hook-facing routes), and every hook handler's test only ever needs to fake those four —
-// widening that interface would mean every hook test's fake grows methods it never calls.
+// `DaemonClient` rather than folded into it: that one is deliberately minimal (exactly the MCP
+// shim's and Codex attachment's session-registration and pull routes), and their tests only ever
+// need to fake those — widening this interface into that one would mean every one of those
+// tests' fakes grows methods it never calls.
 
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
