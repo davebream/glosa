@@ -327,6 +327,9 @@ export function createArtifactPane(host, deps) {
    * answer held only in the card's DOM would be erased by an unrelated session's activity. */
   const answerDrafts = new Map();
   let richEditorLoading = false;
+  /** The most recent bytes any caller asked the rich face to mount, including ones that arrived
+   * while the editor module was still loading. See `mountRichFace`. */
+  let pendingRichMarkdown = null;
   let annotations = []; // [{record, id, state, attempts?, error?}] for THIS pane's one artifact
   let composer = null; // {record, replacing?, ...} while the annotation composer is open
   let trayOpen = false; // the compact collection tray: collapsed to its count strip by default
@@ -1167,14 +1170,26 @@ export function createArtifactPane(host, deps) {
   /** Mounts the rich face over `markdown`. A DOM that can't host a ProseMirror view (or any
    * other mount failure) falls back to the source textarea rather than a broken editor. */
   async function mountRichFace(markdown) {
-    if (richEditorLoading) return;
+    if (richEditorLoading) {
+      // A newer mount request arrived while the editor module was still loading. Dropping it
+      // mounts whatever the FIRST caller happened to hold, and the first call can happen before
+      // the baseline pair has arrived — so the face came up EMPTY. Invisible while the module was
+      // already in the page (the load resolved in the same tick), and immediate once it is fetched
+      // lazily, which is how `import-boundary.test.ts` and the browser round-trip ended up
+      // demanding opposite things. Hand the in-flight mount the newer bytes instead of discarding
+      // them; both callers pass the same held-baseline expression, so the later evaluation is the
+      // one that actually has it.
+      pendingRichMarkdown = markdown;
+      return;
+    }
     richEditorLoading = true;
+    pendingRichMarkdown = markdown;
     const request = ++richMountRequest;
     try {
       const mountRichEditor = await loadRichEditor();
       if (request !== richMountRequest || sourceFace || modeState.mode !== "edit" || !currentArtifact) return;
       richEditor = mountRichEditor(richEl, {
-        markdown,
+        markdown: pendingRichMarkdown ?? markdown,
         onDirty: () => {
           modeState = modeReducer(modeState, { type: "edited" });
           editStatus.textContent = "";
@@ -1195,15 +1210,19 @@ export function createArtifactPane(host, deps) {
       // bytes THIS mount was asked to render instead (consistent with whatever baseline pair was
       // current when `mountRichFace` was called), unless a parked draft still outranks it — the
       // same precedence `renderContent()` already applies, restated here because it runs after.
-      editArea.value = parkedSourceFor(currentArtifact) ?? markdown;
+      editArea.value = parkedSourceFor(currentArtifact) ?? pendingRichMarkdown ?? markdown;
     } finally {
-      if (request === richMountRequest) richEditorLoading = false;
+      if (request === richMountRequest) {
+        richEditorLoading = false;
+        pendingRichMarkdown = null;
+      }
     }
   }
 
   function teardownRichFace() {
     richMountRequest += 1;
     richEditorLoading = false;
+    pendingRichMarkdown = null;
     richEditor?.destroy();
     richEditor = null;
   }
