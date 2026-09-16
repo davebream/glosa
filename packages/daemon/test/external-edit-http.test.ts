@@ -200,11 +200,16 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
     // daemon is DOWN is the second — a reconcile only writes when it finds drift, so with no
     // offline edit a cold bus reconciles silently and the journal is byte-identical either way.
     //
-    // The third is what the test is really built around. A watch cannot reach a cold bus at all:
-    // bindings live in memory, so the restart drops this session's, and the route refuses a watch
-    // that has no binding. That refusal plus "binding hydrates" is the whole guarantee — there is
-    // no order of requests that reaches a watch before someone has reconciled. So both halves are
-    // asserted here, and the byte comparison measures what the watch adds on top of the bind.
+    // The third is what the test is really built around. A watch cannot run UNBOUND: bindings live
+    // in memory, so the restart drops this session's, and the route refuses a watch that has no
+    // binding. Both halves are asserted here, and the byte comparison measures what the watch adds
+    // on top of the bind.
+    //
+    // That is not the same as "a watch can never meet a cold bus" — it can, when GC or
+    // `glosa forget` evicts one whose binding survives, or when an attach's best-effort hydration
+    // throws. Those are why the route folds the journal read-only instead of trusting the ordering;
+    // they are just not reachable from a request, which is why `hydrateForRead` is pinned at bus
+    // level (`A9`) rather than here.
     //
     // What this test does NOT pin is the watch's non-reconciling resolver itself: with the bind
     // hydrating first, swapping it back for the reconciling one is an observable no-op, and it

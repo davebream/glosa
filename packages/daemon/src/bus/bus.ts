@@ -385,8 +385,10 @@ export class WorkspaceBus {
    * while the daemon was down is reported when a session attaches (`session-binding` and a
    * binding-carrying `register` both reconcile), not by this call.
    *
-   * Pinned at this level rather than through HTTP, because both attach routes hydrate before a watch
-   * can run and no production route reaches a cold bus: `A9` opens a fresh bus over an existing
+   * Pinned at this level rather than through HTTP, because the paths that DO reach a cold bus are
+   * awkward to drive from a request: a bus evicted by GC or `glosa forget` while its binding
+   * survives, and an attach whose best-effort hydration threw. Both are real; neither is a route a
+   * test can simply call. `A9` opens a fresh bus over an existing
    * journal, proves the entry is returned and the journal bytes are unchanged, and proves a FAILING
    * in-flight reconcile is waited for and then folded past rather than answered empty.
    *
@@ -924,9 +926,10 @@ export class WorkspaceBus {
       if (reserved.has(id)) continue;
       const kind = entry.kind === "attention" ? "attention" : entry.kind === "conversation" ? "conversation" : "common";
       if (isTerminal(kind, entry.status)) continue;
-      // NOT DELIVERABLE (#153): an `external_edit` reports that a file changed on disk with
-      // nothing to attribute it to. There is no action for a session to take on it — it cannot be
-      // "applied", and the change is already in the artifact — so it is excluded here rather than
+      // NOT DELIVERABLE BY ORDINARY DELIVERY (#153): an `external_edit` reports that a file
+      // changed on disk with nothing to attribute it to. There is no action for a session to take
+      // on it — it cannot be "applied", and the change is already in the artifact — so it is
+      // excluded from this gate rather than
       // left to fail presentation, which would journal a `delivery_attempt{outcome:"failed"}` on
       // every drain for an entry that was never meant to be offered. This is the single gate
       // feeding BOTH `previewDelivery` and `prepareDelivery` (A5 §F23), so one exclusion covers

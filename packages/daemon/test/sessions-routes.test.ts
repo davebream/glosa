@@ -897,11 +897,11 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       writeFileSync(join(root, "draft.md"), "one\n");
       const workspace = await workspaceIndex.upsertWorkspace(root, "session");
       const bus = busRegistry.get(root);
-      // `reconcileOnce`, not the bare `reconcile`: it flags this instance as already reconciled, so
-      // the watch route's own `resolveBus -> reconcileOnce()` call is a same-tick no-op instead of a
-      // second, concurrently-queued reconcile pass whose offline-catchup step could race the write
-      // below and commit it first — a test-harness race, not a product one (confirmed by a direct
-      // repro before this fix).
+      // `reconcileOnce`, not the bare `reconcile`: it marks this instance settled, so the watch
+      // route's own `hydrateForRead()` is a no-op instead of folding the journal underneath the
+      // write below. The watch no longer calls `resolveBus`/`reconcileOnce` at all — it is a read
+      // and never reconciles — but it still needs this instance to be settled, or it would fold and
+      // race the write. A test-harness race, not a product one (confirmed by a direct repro).
       await bus.reconcileOnce();
       await sessionRegistry.bind("sess-dual", root);
 

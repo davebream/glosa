@@ -9,8 +9,8 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Two ports ≠ two daemons: one process/lock/lifecycle; two ports = two real origins (scheme+host+port).
 
 ## 1. F03 — class-F separate origin + CSP
-- Serve: `GET /doc/<capability>/<artifact-id>/<path...>` on class-F origin ONLY; never accepts Bearer — the capability IS the auth.
-- Mint on SPA origin: `POST /w/<slug>/api/classf/mint {artifact_path}` (Bearer + path-confined) → `{url, nonce, expires_at}`. Fresh capability per iframe open/reload; never reused.
+- Serve: `GET /doc/:token/<path...>` on class-F origin ONLY (the class-F listener's only route); never accepts Bearer — the capability IS the auth.
+- Mint on SPA origin: `POST /w/:slug/capability/:artifactPath` (Bearer + path-confined). Fresh capability per iframe open/reload; never reused.
 - Capability: 256-bit, in-memory `Map<capability,{workspace,artifactRealPath,mintedAt}>`, NOT persisted (restart invalidates — fine). TTL 10 min; expired → 404 (no ambient auth on this origin). One capability scopes one artifact's dir (sibling assets resolve under same capability + realpath check per request).
 - CSP on EVERY class-F response:
   `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self' http://127.0.0.1:<SPA_PORT>; base-uri 'none'; object-src 'none'; sandbox allow-scripts;` + `Referrer-Policy: no-referrer`.

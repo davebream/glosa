@@ -477,7 +477,10 @@ for exactly the named ids.
   silently dropped from `accepted` rather than failing the whole call.
 - **404 not-found** — `:id` names no session explicitly bound to a workspace.
 - **409 conflict** — no named id was emitted to this session by a watch response, or none is an
-  in-scope `external_edit`.
+  in-scope `external_edit`, or the session is no longer bound to this workspace. The last is read
+  INSIDE the mutex that guards the append: the binding is captured before the body is read, and a
+  rebind (including away and back, which restores every compared value) invalidates the generation
+  the request was admitted under, so nothing is appended under authority that has moved.
 
 Emission is tracked per session, in memory, with a short TTL. Scope is not sufficient on its own:
 entry ids appear in ordinary reads, so accepting any in-scope `external_edit` would let a token
@@ -496,7 +499,9 @@ ids — never merely after the daemon built one. Refuses any id this session's w
 ```
 - **200** `{ "accepted": ["inb-…"] }`
 - **404 not-found** — `:id` names no session explicitly bound to a workspace.
-- **409 conflict** — none of the named ids has an accepted watch transport for this session.
+- **409 conflict** — none of the named ids has an accepted watch transport for this session, or the
+  session is no longer bound to this workspace (same generation check as §5.11c, read inside the
+  append's own mutex).
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
@@ -911,9 +916,11 @@ data: <json>
 ### 8.3 Heartbeat (defeats Bun's idle-socket close)
 - Bun's default HTTP idle timeout closes a connection that's been quiet too long — this bites
   long-open SSE streams with no events. Two independent mitigations, both required:
-  1. The daemon explicitly sets a large/disabled idle timeout on SSE responses specifically
-     (`Bun.serve({ idleTimeout: 0, ... })` scoped to the stream route, not globally — other
-     routes keep a normal timeout so a hung request doesn't leak a socket forever).
+  1. The daemon disables the idle timeout PER REQUEST, on the held ones only: `server.timeout(req, 0)`
+     called from the handler that is about to hold (the SSE streams and `GET /w/:slug/watch`). Not a
+     `Bun.serve({ idleTimeout })` option — that is server-wide and cannot be scoped to a route, so
+     using it would either leak sockets on every hung request or keep closing the held ones. Every
+     other request keeps the server's normal timeout.
   2. **Belt-and-suspenders**: the daemon also emits `event: heartbeat` (empty `data`, no `id` —
      heartbeats don't advance the cursor) every **15s** on every open stream connection,
      regardless of real event traffic. This covers any intermediary (a future reverse proxy, a
