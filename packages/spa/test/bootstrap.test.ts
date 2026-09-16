@@ -379,8 +379,8 @@ describe("scrubSecrets — preserves non-secret route state", () => {
 });
 
 describe("selectScreen", () => {
-  test("the bundled SPA advertises contract 1.9", () => {
-    expect(CONTRACT_VERSION).toBe("1.9");
+  test("the bundled SPA advertises contract 1.10", () => {
+    expect(CONTRACT_VERSION).toBe("1.10");
   });
 
   test("handshake null (fetch failed/threw) → down", () => {
@@ -404,7 +404,7 @@ describe("selectScreen", () => {
   });
 
   test("token present + paired:true + matching major → ready", () => {
-    const handshake = { contract_version: "1.9", daemon_version: "0.1.0", paired: true };
+    const handshake = { contract_version: "1.10", daemon_version: "0.1.0", paired: true };
     expect(selectScreen(handshake, "some-token")).toBe("ready");
   });
 

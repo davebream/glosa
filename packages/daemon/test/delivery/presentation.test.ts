@@ -147,4 +147,31 @@ describe("actionable inbox presentations", () => {
       (result?.detail?.files as unknown[] | undefined)?.length ?? -1,
     );
   });
+
+  function externalEdit() {
+    return {
+      kind: "external_edit",
+      path: "draft.md",
+      diff: "diff --git a/draft.md b/draft.md\n--- a/draft.md\n+++ b/draft.md\n@@ -1 +1,2 @@\n one\n+two",
+      since_checkpoint: "a".repeat(40),
+      until_checkpoint: "b".repeat(40),
+      observed_at: "2026-09-16T00:00:00.000Z",
+      source: "live",
+    };
+  }
+
+  test("external_edit (#153 Part 2 D10): ordinary retrieval says 'a record, not a request'; a watch says the session asked to watch, and nobody else was nudged", () => {
+    const ordinary = buildDeliveryPresentation("inb-ext-1", externalEdit(), { status: "pending" });
+    expect(ordinary?.text).toContain("this is a record, not a");
+    expect(ordinary?.text).toContain("request; `glosa inbox dismiss inb-ext-1` closes it.");
+    expect(ordinary?.text).not.toContain("glosa_watch");
+
+    const watched = buildDeliveryPresentation("inb-ext-1", externalEdit(), { status: "pending", watched: true });
+    expect(watched?.text).toContain("this is a record, not a");
+    expect(watched?.text).toContain("session explicitly called glosa_watch — nobody");
+    expect(watched?.text).toContain("else was nudged by it");
+    expect(watched?.text).toContain("`glosa inbox dismiss inb-ext-1` closes it.");
+    // Same underlying facts either way — only the framing sentence differs.
+    expect(watched?.detail).toEqual(ordinary?.detail);
+  });
 });

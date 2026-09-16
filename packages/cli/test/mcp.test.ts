@@ -5,14 +5,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type CallToolResult, LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import type { EntryStatus, GlosaApiClient } from "../src/api-client.ts";
+import { apiError } from "../src/api-client.ts";
 import type { DaemonClient, DrainResult, RegisterSessionInput, ScopedPullDrainOptions } from "../src/daemon-client.ts";
 import {
+  closeWithinBudget,
   createMcpServer,
   GLOSA_MCP_TOOL_NAMES,
   type GlosaMcpServer,
-  type McpDeps,
-  closeWithinBudget,
   MCP_SHUTDOWN_BUDGET_MS,
+  type McpDeps,
   runMcpServer,
 } from "../src/mcp.ts";
 import {
@@ -23,11 +24,11 @@ import {
   metadataSetInputSchema,
   metadataShowInputSchema,
   sessionBindInputSchema,
+  watchInputSchema,
   workspaceMetadataDescriptorSchema,
 } from "../src/mcp-schemas.ts";
-import { CLI_VERSION } from "../src/version.ts";
-import { apiError } from "../src/api-client.ts";
 import { discoverMcpIdentity } from "../src/session.ts";
+import { CLI_VERSION } from "../src/version.ts";
 
 test("MCP host discovery rejects ambiguous providers and permits explicit selection", () => {
   const claude = { session_id: "a", provider: "claude-code", cwd: "/agent" };
@@ -353,6 +354,25 @@ describe("official TypeScript MCP SDK contract", () => {
         valid: [{ session_id: "s1" }, { session_id: "s1", workspace: "/w" }],
         invalid: [{}, { session_id: "" }, { session_id: "s1", extra: true }],
       },
+      {
+        schema: watchInputSchema,
+        valid: [
+          {},
+          { workspace: "/w" },
+          { path: "draft.md" },
+          { since: "a".repeat(40), wait_ms: 900_000 },
+          { session_id: "s1", wait_ms: 0 },
+        ],
+        invalid: [
+          { wait_ms: -1 },
+          { wait_ms: 900_001 },
+          { wait_ms: 1.5 },
+          { since: "not-a-sha" },
+          { since: "a".repeat(39) },
+          { workspace: 1 },
+          { extra: true },
+        ],
+      },
     ] as const;
 
     for (const example of cases) {
@@ -390,6 +410,7 @@ describe("official TypeScript MCP SDK contract", () => {
       for (const [name, args] of [
         ["glosa_inbox_pull", { session_id: "other-session" }],
         ["glosa_delivery_ack", { entry_id: "e-1", session_id: "other-session" }],
+        ["glosa_watch", { session_id: "other-session" }],
       ] as const) {
         const result = await callTool(connected.client, { name, arguments: args });
         expect(result.isError).toBe(true);
@@ -1179,5 +1200,261 @@ describe("official TypeScript MCP SDK contract", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe("glosa_watch — the held read half, exercised through the real SDK (#153 Part 2)", () => {
+    function externalEditPresentation(id: string, text = `glosa external_edit ${id}\nhunk`) {
+      return {
+        id,
+        workspace: "/workspace",
+        kind: "external_edit" as const,
+        status: "pending",
+        text,
+        bytes: Buffer.byteLength(text, "utf8"),
+        detail: { path: "draft.md", since_checkpoint: "a".repeat(40), until_checkpoint: "b".repeat(40) },
+        truncation: { truncated: false, omitted_bytes: 0, omitted_hunks: 0 },
+        retrieval: { command: `glosa inbox get ${id}`, mcp_tool: "glosa_inbox_get" as const },
+      };
+    }
+
+    test("resolves session identity like other session tools: the MCP host session is used, and an explicit one is honoured with no host bound", async () => {
+      const hook = new FakeDaemonClient();
+      const seen: Array<{ session: string; opts?: unknown }> = [];
+      const api: Partial<GlosaApiClient> = {
+        watch: async (_path, session, opts) => {
+          seen.push({ session, opts });
+          return { entries: [], latest_checkpoint: null, has_more: false };
+        },
+      };
+      const withHost = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+      try {
+        const result = await callTool(withHost.client, { name: "glosa_watch", arguments: {} });
+        expect(result.isError).not.toBe(true);
+        expect(seen[0]?.session).toBe("host-session");
+      } finally {
+        await withHost.close();
+      }
+
+      const withoutHost = await connect(deps(hook, api));
+      try {
+        const result = await callTool(withoutHost.client, {
+          name: "glosa_watch",
+          arguments: { session_id: "explicit-session" },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(seen[1]?.session).toBe("explicit-session");
+      } finally {
+        await withoutHost.close();
+      }
+    });
+
+    test("requires an explicit session_id when the MCP host provides no session identity", async () => {
+      const hook = new FakeDaemonClient();
+      const connected = await connect(deps(hook, {}));
+      try {
+        const result = await callTool(connected.client, { name: "glosa_watch", arguments: {} });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("requires an explicit session_id"),
+          }),
+        ]);
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("returns {entries, latest_checkpoint, has_more} and forwards path/since/wait_ms to the daemon call", async () => {
+      const hook = new FakeDaemonClient();
+      const calls: unknown[] = [];
+      const api: Partial<GlosaApiClient> = {
+        watch: async (path, session, opts) => {
+          calls.push([path, session, opts]);
+          return {
+            entries: [externalEditPresentation("inb-ext-1")],
+            latest_checkpoint: "c".repeat(40),
+            has_more: true,
+          };
+        },
+        watchTransportAck: async () => ({ accepted: ["inb-ext-1"] }),
+      };
+      const connected = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_watch",
+          arguments: { workspace: "/target", path: "draft.md", since: "a".repeat(40), wait_ms: 5000 },
+        });
+        expect(result.isError).not.toBe(true);
+        expect(calls).toEqual([["/target", "host-session", { path: "draft.md", since: "a".repeat(40), waitMs: 5000 }]]);
+        expect(structured(result)).toEqual({
+          entries: [externalEditPresentation("inb-ext-1")],
+          latest_checkpoint: "c".repeat(40),
+          has_more: true,
+        });
+        expect(result.content[0]).toEqual(
+          expect.objectContaining({ type: "text", text: expect.stringContaining("inb-ext-1") }),
+        );
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("an empty result names no new external edits and asks for no transport-ack", async () => {
+      const hook = new FakeDaemonClient();
+      let transportAckCalls = 0;
+      const api: Partial<GlosaApiClient> = {
+        watch: async () => ({ entries: [], latest_checkpoint: null, has_more: false }),
+        watchTransportAck: async (session, entryIds) => {
+          transportAckCalls++;
+          return { accepted: entryIds };
+        },
+      };
+      const connected = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+      try {
+        const result = await callTool(connected.client, { name: "glosa_watch", arguments: {} });
+        expect(result.isError).not.toBe(true);
+        expect(result.content[0]).toEqual({ type: "text", text: "glosa watch: no new external edits" });
+        expect(transportAckCalls).toBe(0);
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("transport acceptance is recorded once the HTTP body reaches the shim, and presented only after the SDK writes the response", async () => {
+      const hook = new FakeDaemonClient();
+      const events: string[] = [];
+      const api: Partial<GlosaApiClient> = {
+        watch: async () => {
+          events.push("watch");
+          return { entries: [externalEditPresentation("inb-ext-1")], latest_checkpoint: null, has_more: false };
+        },
+        watchTransportAck: async (_session, entryIds) => {
+          events.push("transport-ack");
+          return { accepted: entryIds };
+        },
+        watchAck: async (_session, _entryIds, outcome) => {
+          events.push(outcome ?? "presented");
+          return { accepted: ["inb-ext-1"] };
+        },
+      };
+      const connected = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+      const send = connected.serverTransport.send.bind(connected.serverTransport);
+      connected.serverTransport.send = async (message, options) => {
+        await send(message, options);
+        if (
+          "result" in message &&
+          typeof message.result === "object" &&
+          message.result &&
+          "content" in message.result
+        ) {
+          events.push("write");
+        }
+      };
+      try {
+        await callTool(connected.client, { name: "glosa_watch", arguments: {} });
+        await waitFor(() => events.includes("presented"), "post-write watch acknowledgement");
+        // transport-ack happens right after the daemon call resolves — BEFORE the SDK write —
+        // and `presented` only after it, mirroring `DeliveryAwareTransport`'s own boundary.
+        expect(events).toEqual(["watch", "transport-ack", "write", "presented"]);
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("a failed stdout write records failed, not presented", async () => {
+      const hook = new FakeDaemonClient();
+      const acks: Array<[string, string]> = [];
+      const api: Partial<GlosaApiClient> = {
+        watch: async () => ({
+          entries: [externalEditPresentation("inb-ext-1")],
+          latest_checkpoint: null,
+          has_more: false,
+        }),
+        watchTransportAck: async (_session, entryIds) => ({ accepted: entryIds }),
+        watchAck: async (session, _entryIds, outcome) => {
+          acks.push([session, outcome ?? "presented"]);
+          return { accepted: ["inb-ext-1"] };
+        },
+      };
+      const connected = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+      const send = connected.serverTransport.send.bind(connected.serverTransport);
+      connected.serverTransport.send = async (message, options) => {
+        if (
+          "result" in message &&
+          typeof message.result === "object" &&
+          message.result &&
+          "content" in message.result
+        ) {
+          throw new Error("stdout unavailable");
+        }
+        await send(message, options);
+      };
+      try {
+        void callTool(connected.client, { name: "glosa_watch", arguments: {} }).catch(() => {});
+        await waitFor(() => acks.length === 1, "failed watch acknowledgement");
+        expect(acks[0]).toEqual(["host-session", "failed"]);
+      } finally {
+        await connected.close();
+      }
+    });
+
+    test("#140 a watch acknowledgement issued during shutdown finds its client already cancelled", async () => {
+      // Same technique as the drain-delivery equivalent above: delay the transport's own `send`
+      // so the tool response is still in flight when shutdown starts, putting the watch
+      // acknowledgement squarely inside `close()`'s `failAll` rather than racing to beat it.
+      const abortedWhenAcknowledged: boolean[] = [];
+      const acks: string[] = [];
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const stalled = new Proxy(serverTransport, {
+        get(target, prop, receiver) {
+          if (prop === "send")
+            return (...args: unknown[]) =>
+              Bun.sleep(200).then(() => (target.send as (...a: unknown[]) => Promise<void>)(...args));
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+        set(target, prop, value) {
+          Reflect.set(target, prop, value);
+          return true;
+        },
+      }) as typeof serverTransport;
+
+      const runtime = createMcpServer({
+        createDaemonClient: async () => new FakeDaemonClient(),
+        createApiClient: async (signal?: AbortSignal) => {
+          const api: Partial<GlosaApiClient> = {
+            watch: async () => ({
+              entries: [externalEditPresentation("inb-ext-1")],
+              latest_checkpoint: null,
+              has_more: false,
+            }),
+            watchTransportAck: async (_session, entryIds) => ({ accepted: entryIds }),
+            watchAck: async (_session, _entryIds, outcome) => {
+              abortedWhenAcknowledged.push(signal?.aborted === true);
+              acks.push(outcome ?? "presented");
+              return { accepted: ["inb-ext-1"] };
+            },
+          };
+          return api as GlosaApiClient;
+        },
+        sessionId: () => "host-session",
+        cwd: () => "/workspace",
+      });
+      await runtime.connect(stalled);
+      const client = new Client({ name: "glosa-test", version: "1" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      void client.callTool({ name: "glosa_watch", arguments: {} }).catch(() => {});
+      await Bun.sleep(50);
+
+      await runtime.close();
+      await Bun.sleep(50); // let any acknowledgement racing the close actually land
+
+      expect(acks).toEqual(["failed"]);
+      expect(abortedWhenAcknowledged.length).toBeGreaterThan(0);
+      expect(abortedWhenAcknowledged.every(Boolean)).toBe(true);
+    });
   });
 });

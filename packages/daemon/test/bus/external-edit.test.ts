@@ -15,12 +15,13 @@ import { join } from "node:path";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import { EXTERNAL_EDIT_KIND, isExternalEditEntry } from "../../src/bus/external-edit.ts";
 import { readInboxEntry } from "../../src/bus/inbox.ts";
-import { isTerminal } from "../../src/bus/lifecycle.ts";
+import { type DeliveryAttemptRecord, isTerminal } from "../../src/bus/lifecycle.ts";
 import { badgePendingCount, peekJournal, retentionPendingCount } from "../../src/bus/peek.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
-import { buildDeliveryPresentation } from "../../src/delivery/presentation.ts";
+import { buildDeliveryPresentation, MAX_DELIVERY_ENTRIES } from "../../src/delivery/presentation.ts";
 import { runGit } from "../../src/git/shadow.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { waitForWatch } from "../../src/services/watch.ts";
 import {
   claimTestDaemonIdentity,
   cleanupWorkspace,
@@ -193,7 +194,7 @@ describe("A2 — offline catch-up stops lying (#144's reproduction)", () => {
 });
 
 describe("A3 — delivery eligibility excludes it (its own fold, its own assertion)", () => {
-  test("no delivery path offers an external_edit, while a sibling annotation is still offered", async () => {
+  test("no ORDINARY delivery path offers an external_edit (a watch is the one opt-in exception, #153 Part 2), while a sibling annotation is still offered", async () => {
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const bus = openBus(root);
@@ -448,5 +449,248 @@ describe("A7 — the checkpoint -> entry gap is recoverable", () => {
     // ...and the scan does not then report the same commit a second time.
     expect(healed.externalEditIds).toEqual([]);
     expect(Object.keys(healed.state.entries)).toHaveLength(1);
+  });
+});
+
+describe("glosa_watch (#153 Part 2) — the per-session cursor over external_edit", () => {
+  const watchBuild = (id: string, payload: unknown, status: string) =>
+    buildDeliveryPresentation(id, payload, { status, watched: true });
+
+  test("criterion 3 — per-session only: A's watch+ack marks nothing for B, both counts and eligibility are unchanged, and a second watch by A returns nothing new while B still gets it", async () => {
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    writeFileSync(join(root, "notes.md"), "one\ntwo\n");
+    const captured = await bus.captureExternalEdit();
+    expect(captured.entries).toHaveLength(1);
+    const id = captured.entries[0]!;
+
+    const before = peekJournal(root).state;
+    const beforeBadge = badgePendingCount(before);
+    const beforeRetention = retentionPendingCount(before);
+
+    const firstWatch = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(firstWatch.entries.map((e) => e.id)).toEqual([id]);
+    const { accepted: transportAccepted } = await bus.recordWatchTransportAccepted("sess-a", [id]);
+    expect(transportAccepted).toEqual([id]);
+    const { accepted: presented } = await bus.recordWatchPresented("sess-a", [id], "presented");
+    expect(presented).toEqual([id]);
+
+    const rawAttempts = bus.state.entries[id]?.deliveryAttempts;
+    const attempts = Array.isArray(rawAttempts) ? (rawAttempts as DeliveryAttemptRecord[]) : [];
+    expect(attempts.filter((a) => a.session === "sess-a").map((a) => a.outcome)).toEqual([
+      "transport_accepted",
+      "presented",
+    ]);
+    expect(attempts.some((a) => a.session === "sess-b")).toBe(false);
+
+    // Status is unchanged (a mark is an attempt, never a transition) and every OTHER surface still
+    // agrees with pre-watch: no delivery path offers it, the badge still excludes it, retention
+    // still counts it.
+    expect(bus.state.entries[id]?.status).toBe("pending");
+    const build = (entryId: string, payload: unknown, status: string) =>
+      buildDeliveryPresentation(entryId, payload, { status });
+    const monitorPreview = await bus.previewDelivery(8, { session: "sess-a" }, build);
+    const pullPrepared = await bus.prepareDelivery(8, { via: "mcp_pull", session: "sess-a" }, build);
+    expect(monitorPreview.entries.some((e) => e.id === id)).toBe(false);
+    expect(pullPrepared.drained.some((e) => e.id === id)).toBe(false);
+    const after = peekJournal(root).state;
+    expect(badgePendingCount(after)).toBe(beforeBadge);
+    expect(retentionPendingCount(after)).toBe(beforeRetention);
+
+    // A's own second watch (no `since`) sees nothing new — it was presented to A already.
+    const secondWatchByA = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(secondWatchByA.entries).toEqual([]);
+    expect(secondWatchByA.has_more).toBe(false);
+
+    // B, bound to the same workspace but never watching, still gets it on ITS first watch — a
+    // per-session mark, not a global one.
+    const watchByB = await bus.previewWatch({ session: "sess-b" }, watchBuild);
+    expect(watchByB.entries.map((e) => e.id)).toEqual([id]);
+    await bus.close();
+  });
+
+  test("W2 — a dismissal that wins the mutex is never returned by a watch; a pending sibling still is", async () => {
+    const root = workspace();
+    writeFile(root, "a.md", "a1\n");
+    writeFile(root, "b.md", "b1\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    writeFileSync(join(root, "a.md"), "a1\na2\n");
+    writeFileSync(join(root, "b.md"), "b1\nb2\n");
+    const captured = await bus.captureExternalEdit();
+    expect(captured.entries).toHaveLength(2);
+    const [first, second] = captured.entries as [string, string];
+    const firstPath = (readInboxEntry(root, first) as Record<string, unknown>).path;
+    const dismissedId = firstPath === "a.md" ? first : second;
+    const pendingId = dismissedId === first ? second : first;
+
+    await bus.commitTransition(dismissedId, "dismissed", { by: "human" });
+    const watched = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(watched.entries.map((e) => e.id)).toEqual([pendingId]);
+    await bus.close();
+  });
+
+  test("criterion 7 — an offline_catchup entry created before the watch started is returned by an initial watch without since", async () => {
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const before = openBus(root);
+    await before.reconcile();
+    await before.close();
+
+    writeFileSync(join(root, "notes.md"), "one\ntwo\n"); // the daemon is down for this edit
+    const result = await restart(root);
+    expect(result.externalEditIds).toHaveLength(1);
+
+    const after = openBus(root);
+    await after.reconcile();
+    const watched = await after.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(watched.entries.map((e) => e.id)).toEqual(result.externalEditIds);
+    expect(watched.entries[0]?.detail?.source).toBe("offline_catchup");
+    await after.close();
+  });
+
+  test("D11 — an edit made during an apply lease never becomes external_edit and stays invisible to a watch", async () => {
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
+    await bus.applyBegin("ann-1", "sess-1");
+    writeFileSync(join(root, "notes.md"), "one\nsession wrote this\n");
+    await bus.captureExternalEdit();
+
+    const watched = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(watched.entries).toEqual([]);
+    await bus.close();
+  });
+
+  test("W1 — a checkpoint that produces more entries than the per-response cap never advances the watermark past the split, and draining loses none", async () => {
+    const root = workspace();
+    const total = MAX_DELIVERY_ENTRIES + 2;
+    for (let i = 0; i < total; i++) writeFile(root, `f${i}.md`, "v1\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    for (let i = 0; i < total; i++) writeFileSync(join(root, `f${i}.md`), "v1\nv2\n");
+    const captured = await bus.captureExternalEdit();
+    expect(captured.entries).toHaveLength(total);
+    const allIds = new Set(captured.entries);
+
+    const firstPage = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(firstPage.entries).toHaveLength(MAX_DELIVERY_ENTRIES);
+    expect(firstPage.has_more).toBe(true);
+    // The regression this pins: a checkpoint split across the cap must NEVER yield a `since` a
+    // caller could use to skip the remainder — the watermark stays behind the whole split group.
+    expect(firstPage.latest_checkpoint).toBeNull();
+
+    // Draining through since=latest_checkpoint (null → no filter at all) re-offers the same
+    // unpresented page rather than silently skipping anything — proof that this cursor can never
+    // lose entries even if a caller drives it that way instead of acking.
+    const sincePage = await bus.previewWatch(
+      { session: "sess-a", since: firstPage.latest_checkpoint ?? undefined },
+      watchBuild,
+    );
+    expect(sincePage.entries.map((e) => e.id).sort()).toEqual(firstPage.entries.map((e) => e.id).sort());
+
+    // The REAL drain contract: ack what you were given, then re-watch for the rest (W1's "a
+    // consumer drains by re-watching while has_more").
+    const firstIds = firstPage.entries.map((e) => e.id);
+    await bus.recordWatchTransportAccepted("sess-a", firstIds);
+    await bus.recordWatchPresented("sess-a", firstIds, "presented");
+
+    const secondPage = await bus.previewWatch({ session: "sess-a" }, watchBuild);
+    expect(secondPage.has_more).toBe(false);
+    expect(secondPage.entries).toHaveLength(total - MAX_DELIVERY_ENTRIES);
+    // Now that every entry sharing the checkpoint is accounted for (all presented), the watermark
+    // finally advances to it.
+    expect(secondPage.latest_checkpoint).not.toBeNull();
+
+    const seen = new Set([...firstIds, ...secondPage.entries.map((e) => e.id)]);
+    expect(seen).toEqual(allIds);
+    await bus.close();
+  });
+
+  test("criterion 1 — a held watch wakes on a real capture and returns the coalesced entry, ordered after the write", async () => {
+    const root = workspace();
+    writeFile(root, "draft.md", "line one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    const held = waitForWatch(bus, { session: "sess-a", path: "draft.md", waitMs: 10_000 }, watchBuild);
+    // Give the held wait a real chance to reach its subscribed state before the write lands —
+    // otherwise a fast write could race the subscription and this would only prove the initial
+    // read caught it, not that a live capture wakes an already-waiting caller (L-issue-164-2: wait
+    // for the watcher's own readiness before the first write).
+    await Bun.sleep(20);
+    writeFileSync(join(root, "draft.md"), "line one\nline two\n");
+    const captured = await bus.captureExternalEdit();
+    expect(captured.entries).toHaveLength(1);
+
+    const result = await held;
+    expect(result.waited).toBe(true);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.id).toBe(captured.entries[0]);
+    expect(result.entries[0]?.kind).toBe(EXTERNAL_EDIT_KIND);
+    expect(String(result.entries[0]?.text)).toContain('attribution is "unknown"');
+    expect(String(result.entries[0]?.text)).toContain("+line two");
+    await bus.close();
+  });
+
+  test("criterion 2 — an entry created between the initial read and the subscription is returned, not stranded until wait_ms", async () => {
+    const root = workspace();
+    writeFile(root, "draft.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    const started = Date.now();
+    const result = await waitForWatch(bus, { session: "sess-a", waitMs: 10_000 }, watchBuild, undefined, {
+      // Deliberately widens the sub-microtask read→subscribe gap (`waitForWatch`'s own
+      // `afterInitialRead` test seam) rather than racing it with sleeps: the write and its capture
+      // land AFTER the initial read already observed nothing, and COMPLETE before `bus.subscribe`
+      // registers — so a live notification could never see this entry, only the post-subscribe
+      // re-read can. A regression here would strand this call for the full 10 s wait_ms.
+      afterInitialRead: async () => {
+        writeFileSync(join(root, "draft.md"), "one\ntwo\n");
+        await bus.captureExternalEdit();
+      },
+    });
+    const elapsed = Date.now() - started;
+
+    expect(result.waited).toBe(true);
+    expect(result.entries).toHaveLength(1);
+    // Nowhere near the 10 s `waitMs` — proof it was caught by the post-subscribe re-read, not by
+    // eventually timing out with an honest empty answer.
+    expect(elapsed).toBeLessThan(2_000);
+    await bus.close();
+  });
+
+  test("F-7 — an abort landing between the initial read and the subscription still ends the hold", async () => {
+    const root = workspace();
+    writeFile(root, "draft.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    // An AbortSignal that has ALREADY fired does not call a listener registered afterwards. Abort
+    // inside the same widened gap the test above uses, so the signal is spent before `waitForWatch`
+    // can register for it: without the post-registration check the hold would run the full wait_ms
+    // with the client already gone, or the session already rebound elsewhere.
+    const controller = new AbortController();
+    const started = Date.now();
+    const result = await waitForWatch(
+      bus,
+      { session: "sess-a", waitMs: 10_000, signal: controller.signal },
+      watchBuild,
+      undefined,
+      { afterInitialRead: async () => controller.abort() },
+    );
+    const elapsed = Date.now() - started;
+
+    expect({ waited: result.waited, entries: result.entries.length, quick: elapsed < 2_000 }).toEqual({
+      waited: true,
+      entries: 0,
+      quick: true,
+    });
+    await bus.close();
   });
 });

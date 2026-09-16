@@ -6,6 +6,7 @@
 // Route families own URL/body validation and exact problem mapping. The top-level pipeline keeps
 // host checks, route precedence, authorization, contract-version enforcement, and body limits.
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapt
 import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
 import { WorkspaceAdoptedError, type WorkspaceBus } from "../bus/bus.ts";
@@ -22,8 +24,8 @@ import { badgePendingCount, hasOpenAttention, orphanedEntryCount, peekJournal } 
 import { CompositeDeliveryRegistry } from "../delivery/composite-reservations.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_ENTRY_PRESENTATION_BYTES, utf8Bytes } from "../delivery/presentation.ts";
 import { BUILD_ID } from "../lifecycle/build-id.ts";
-import { INSTALL_ID } from "../lifecycle/install.ts";
 import { glosaHome } from "../lifecycle/home.ts";
+import { INSTALL_ID } from "../lifecycle/install.ts";
 import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
 import { forgetWorkspace } from "../registry/forget-workspace.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
@@ -37,11 +39,12 @@ import {
 } from "../registry/workspace-index.ts";
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
-import { shadowRoutes } from "../routes/shadow.ts";
 import { composerRoutes } from "../routes/composer.ts";
+import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
 import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
+import { confinePath } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { PRESENTATION_TOKEN_TTL_MS, type PresentationTokenStore } from "../security/presentation-token.ts";
 import type { TokenSource } from "../security/token.ts";
@@ -50,6 +53,7 @@ import {
   actionablePresentation as buildArtifactPresentation,
   listInboxEntries,
 } from "../services/artifact.ts";
+import { MAX_ENTRY_WAIT_MS, waitForWatch } from "../services/watch.ts";
 import { getOrRegisterWorkspace } from "../services/workspace-access.ts";
 import { confineTranscriptPath } from "../transcript/root.ts";
 import { createTranscriptStreamResponse } from "../transcript/stream.ts";
@@ -182,6 +186,11 @@ export interface ApiContext {
    * the supported zero-provider core and yields an honest delivery-unavailable response. */
   providerRegistry?: AgentProviderRegistry;
   pushRegistry?: SessionPushRegistry;
+  /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
+   * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
+   * refuses rather than falling back to the old "any in-scope external_edit" rule, because that
+   * rule is the defect it replaces. */
+  watchEmissions?: WatchEmissionRegistry;
   /** Daemon-owned shared artifact watcher. Optional only for narrow route/stream tests. */
   artifactWatcherRegistry?: ArtifactWatcherRegistry;
   /** Lifecycle signal used to send `event: bye` and close long-lived streams on SIGTERM. */
@@ -501,6 +510,37 @@ async function resolveBus(ctx: ApiContext, root: WorkspaceTarget): Promise<Works
   return bus;
 }
 
+/** The same guards as `resolveBus`, WITHOUT the reconciliation.
+ *
+ * Reconciling self-heals and checkpoints — real writes, which `bus/peek.ts` spells out is exactly
+ * what a plain GET must not cause. A held watch is a read, so it takes this: it folds whatever is
+ * durably on disk for a workspace that has already been hydrated (session binding does that, and
+ * every watcher binds first), and does not hydrate one itself.
+ *
+ * Belt and braces, deliberately. Bindings live in memory, so a watch can only run behind a bind in
+ * this process, and the bind hydrated the bus; the paths that drop a bus (GC hard-remove, adoption
+ * sealing, forget) all make the watch's own guards refuse before it gets here. Ablating this line
+ * alone therefore does NOT turn the F-8 test red, and no test can make it do so through the API —
+ * what it buys is that "a watch never reconciles" holds by construction rather than by that
+ * ordering argument staying true. Keep it that way: a future caller that reaches a watch without a
+ * bind would otherwise silently start writing from a GET. */
+async function resolveBusForRead(ctx: ApiContext, root: WorkspaceTarget): Promise<WorkspaceBus> {
+  const indexed = ctx.workspaceIndex.getWorkspaceByRegistration(workspaceRegistrationId(root));
+  if (isAdoptingTarget(indexed)) {
+    throw new AdoptionError("workspace-adopting", "workspace adoption is in progress");
+  }
+  if (isBeingForgotten(indexed)) {
+    throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+  }
+  if (!indexed) {
+    const canonicalPath = typeof root === "string" ? root : root.canonical_path;
+    if (ctx.workspaceIndex.activeForgetOperationForCanonicalPath(canonicalPath)) {
+      throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+    }
+  }
+  return ctx.getWorkspaceBus(root);
+}
+
 function artifactAccess(ctx: ApiContext): ArtifactAccessDependencies {
   return {
     workspaceIndex: ctx.workspaceIndex,
@@ -584,6 +624,19 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
     if (error instanceof SessionProviderConflict)
       return problem(409, "session-provider-conflict", error.message, undefined, url.pathname);
     throw error;
+  }
+
+  // #153 Part 2: hydrate the workspace bus HERE rather than on the watch's own read. Opening a bus
+  // reconciles it, and reconciliation self-heals and checkpoints — real writes, which is exactly
+  // what `bus/peek.ts` says a plain GET must never cause. Binding is already a state-changing route
+  // and the one every watcher passes through first, so the write lands where writes are allowed and
+  // `GET /w/:slug/watch` stays a read that sees an already-reconciled journal, offline catch-up
+  // included. Failure is not fatal to the binding itself: the session is bound either way, and the
+  // next write path reconciles.
+  try {
+    await resolveBus(ctx, owner);
+  } catch {
+    /* binding succeeded; hydration is an optimisation for the reads that follow it */
   }
 
   return Response.json({ bound: true, session_id: sessionId });
@@ -843,6 +896,9 @@ async function handleSessionHeartbeat(ctx: ApiContext, sessionId: string): Promi
  * the active registry and keeps the journal audit trail. Also a no-op-safe 200 for an unknown id. */
 async function handleSessionDeregister(ctx: ApiContext, sessionId: string): Promise<Response> {
   await ctx.sessionRegistry.deregister(sessionId);
+  // A later registration reusing this id inherits no ackable emissions from the session that just
+  // left; the TTL would get there eventually, deregistration is the honest moment.
+  ctx.watchEmissions?.forgetSession(sessionId);
   return Response.json({ ok: true });
 }
 
@@ -1444,6 +1500,83 @@ async function handleSessionStreamPresentedAck(
   return Response.json({ acknowledged: true, delivered: outcome === "presented" });
 }
 
+/** `POST /api/sessions/:id/watch/transport-ack` (#153 Part 2, W4) — Origin-gated, records
+ * `delivery_attempt{via:"watch", session, outcome:"transport_accepted"}` for exactly the ids the
+ * client's own watch response body named, once the HTTP body actually reached it.
+ *
+ * Provenance is the whole point of the route, so it is checked here rather than assumed. This used
+ * to accept any id that was currently an `external_edit` entry in the bound workspace, reasoning
+ * that the bus-level scope check stood in for `handleSessionStreamTransportAck`'s
+ * `isAwaitingTransport`. It does not: entry ids appear in ordinary reads, so any bearer of the
+ * token could mint `transport_accepted` — and then `presented`, which gates on it — for an entry
+ * no watch ever delivered to that session, writing a delivery record that never happened
+ * (AGENTS.md invariant 3). `WatchEmissionRegistry` supplies the missing half: only ids a watch
+ * response actually emitted to THIS session are ackable. */
+async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string, req: Request): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record?.workspace_binding)
+    return problem(404, "not-found", "unknown explicitly bound session", undefined, pathname);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, pathname);
+  }
+  const entries = (body as Record<string, unknown> | null)?.entries;
+  if (!Array.isArray(entries) || entries.length === 0 || !entries.every((e) => typeof e === "string")) {
+    return problem(400, "validation-failed", "entries must be a non-empty array of entry ids", undefined, pathname);
+  }
+  const emitted = (entries as string[]).filter((id) => ctx.watchEmissions?.isAwaitingTransport(sessionId, id));
+  if (emitted.length === 0) {
+    return problem(409, "conflict", "no named id was emitted to this session by a watch response", undefined, pathname);
+  }
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const { accepted } = await bus.recordWatchTransportAccepted(sessionId, emitted);
+  if (accepted.length === 0)
+    return problem(409, "conflict", "no named id is an in-scope external_edit entry", undefined, pathname);
+  return Response.json({ accepted });
+}
+
+/** `POST /api/sessions/:id/watch/ack` (#153 Part 2, W4) — Origin-gated, records `presented`
+ * (default) or `failed` after the MCP tool response reaches stdout (`DeliveryAwareTransport`).
+ * `recordWatchPresented` refuses any id this session's watch never recorded `transport_accepted`
+ * for, mirroring `handleSessionStreamPresentedAck`'s "no attempt without proven transport" rule. */
+async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Request): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record?.workspace_binding)
+    return problem(404, "not-found", "unknown explicitly bound session", undefined, pathname);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, pathname);
+  }
+  const parsed = body as Record<string, unknown> | null;
+  const entries = parsed?.entries;
+  if (!Array.isArray(entries) || entries.length === 0 || !entries.every((e) => typeof e === "string")) {
+    return problem(400, "validation-failed", "entries must be a non-empty array of entry ids", undefined, pathname);
+  }
+  const outcome = parsed?.outcome ?? "presented";
+  if (outcome !== "presented" && outcome !== "failed") {
+    return problem(400, "validation-failed", "outcome must be presented|failed", undefined, pathname);
+  }
+  const error = typeof parsed?.error === "string" ? parsed.error : undefined;
+  const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
+  const { accepted } = await bus.recordWatchPresented(sessionId, entries as string[], outcome, error);
+  if (accepted.length === 0) {
+    return problem(
+      409,
+      "conflict",
+      "no named id has an accepted watch transport for this session",
+      undefined,
+      pathname,
+    );
+  }
+  return Response.json({ accepted });
+}
+
 // -------------------------------------------------------------------------------------------
 // P5.1 additions — the CLI-facing `/api/workspaces/...` surface (A6 §F26's `open`/`resolve`/
 // `apply-begin`/`request-review`/`status` command surface). Not in A1 §5 (same footing as every
@@ -2026,6 +2159,126 @@ function handleStatusAggregate(ctx: ApiContext): Response {
   });
 }
 
+const WATCH_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** `GET /w/:slug/watch?session=&path=&since=&wait_ms=` (#153 Part 2) — an opt-in held read over
+ * `external_edit`. Session identity/binding is validated exactly like the session stream
+ * (`handleSessionStream`'s own checks, above): registered, alive, and explicitly bound to THIS
+ * workspace — a watch is per-session by construction, so an unbound or foreign session has no
+ * scope to watch. D7/W3: this is a SEPARATE held request from the monitor stream — it never
+ * touches `SessionPushRegistry` and holds the session lease under its own, per-request
+ * `holdConnection` key, so it neither closes nor is closed by a live monitor stream, and two
+ * concurrent watches by the same session never cancel each other's lease refresh. W3's lifecycle
+ * abort set (session rebind/deregistration via `sessionLifecycleSignal`, workspace eviction/
+ * forget/close via `bus.closeSignal()`) ends the hold the moment the binding this request captured
+ * stops being authoritative, rather than serving (or, on the ack routes, appending against) a
+ * workspace the session has since left. W4: this GET writes nothing — the client acknowledges
+ * transport receipt and presentation through the two POSTs below. */
+async function handleWorkspaceWatch(
+  ctx: ApiContext,
+  slug: string,
+  req: Request,
+  server: BunServer | undefined,
+  authSignal?: AbortSignal,
+): Promise<Response> {
+  const url = new URL(req.url);
+  const pathname = url.pathname;
+  const resolved = workspaceOrNotFound(ctx, slug, pathname);
+  if (!resolved.ok) return resolved.response;
+  const entry = resolved.entry;
+
+  const sessionId = url.searchParams.get("session");
+  if (!sessionId) return problem(400, "validation-failed", "session is required", undefined, pathname);
+  const record = ctx.sessionRegistry.get(sessionId);
+  if (!record || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown live session", undefined, pathname);
+  }
+  if (!record.workspace_binding || record.workspace_binding !== entry.canonical_path) {
+    return problem(409, "conflict", "session is not explicitly bound to this workspace", undefined, pathname);
+  }
+
+  let path: string | undefined;
+  const rawPath = url.searchParams.get("path");
+  if (rawPath !== null) {
+    if (!confinePath(entry.worktree_path, rawPath).ok) {
+      return problem(400, "invalid-path", "path must be workspace-relative and confined", undefined, pathname);
+    }
+    path = rawPath
+      .split("/")
+      .map((segment) => segment.normalize("NFC"))
+      .join("/");
+  }
+
+  const since = url.searchParams.get("since") ?? undefined;
+  if (since !== undefined && !WATCH_SHA_PATTERN.test(since)) {
+    return problem(400, "validation-failed", "since must be a full shadow-git checkpoint sha", undefined, pathname);
+  }
+
+  const rawWait = url.searchParams.get("wait_ms");
+  let waitMs = 0;
+  if (rawWait !== null) {
+    waitMs = Number(rawWait);
+    if (!Number.isFinite(waitMs) || !Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_ENTRY_WAIT_MS) {
+      return problem(
+        400,
+        "validation-failed",
+        `wait_ms must be an integer between 0 and ${MAX_ENTRY_WAIT_MS}`,
+        undefined,
+        pathname,
+      );
+    }
+  }
+
+  // Captured with the ADMISSION, before any await: a rebind away and back, or a deregister followed
+  // by re-registration with the same binding, leaves the post-await state identical while handing a
+  // later caller a fresh, un-aborted controller. Taking the signal here means this request holds the
+  // one belonging to the generation it was admitted under, so that ABA sequence aborts it (review
+  // round 2, F-7).
+  const admittedLifecycle = ctx.sessionRegistry.sessionLifecycleSignal(sessionId);
+  // A read: no reconciliation here (see `resolveBusForRead`). Session binding hydrates the
+  // workspace, and a watcher always binds first.
+  const bus = await resolveBusForRead(ctx, entry);
+  const signals = [req.signal, lifecycleSignal(ctx, authSignal), admittedLifecycle, bus.closeSignal()].filter(
+    (s): s is AbortSignal => !!s,
+  );
+  const signal = AbortSignal.any(signals);
+  // The binding was checked before `resolveBus` awaited. A rebind landing in that window would hand
+  // us a lifecycle signal for the NEW generation, which never fires for the request admitted under
+  // the old one — so the hold would run its full `wait_ms` against a workspace this session no
+  // longer watches. Re-read the binding now that the signal exists and refuse if it moved (review
+  // round 1, F-7).
+  const admitted = ctx.sessionRegistry.get(sessionId);
+  if (!admitted || ctx.sessionRegistry.liveness(sessionId) !== "alive") {
+    return problem(404, "not-found", "unknown live session", undefined, pathname);
+  }
+  if (admitted.workspace_binding !== entry.canonical_path) {
+    return problem(409, "conflict", "session is not explicitly bound to this workspace", undefined, pathname);
+  }
+  // W3: a unique key per request, never the stream's `"push"` key — two concurrent watches by the
+  // same session each get their own handle, and neither cancels the monitor stream's lease.
+  const releaseLease = ctx.sessionRegistry.holdConnection(sessionId, `watch:${randomUUID()}`);
+  server?.timeout(req, 0);
+  try {
+    const result = await waitForWatch(bus, { session: sessionId, path, since, waitMs, signal }, (id, payload, status) =>
+      buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, { watched: true }),
+    );
+    // Record what this response hands over BEFORE handing it over, so `watch/transport-ack` can
+    // tell an id this session was really given from one it merely knows the name of (review round
+    // 2). An emission that never reaches the client simply expires unacked.
+    ctx.watchEmissions?.noteEmitted(
+      sessionId,
+      result.entries.map((emitted) => emitted.id),
+    );
+    return Response.json({
+      entries: result.entries,
+      latest_checkpoint: result.latest_checkpoint,
+      has_more: result.has_more,
+    });
+  } finally {
+    releaseLease();
+  }
+}
+
 /** `GET /w/:slug/stream` (A1 §5.5/§8, P3.2) — resolves the slug, ensures the bus is reconciled
  * (so `bus.currentCursor()`/`bus.state` reflect the journal before anything subscribes to it),
  * then hands off to stream.ts, which owns the actual SSE mechanics. Kept a thin wrapper here so
@@ -2233,6 +2486,14 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     const entryId = m[2] as string;
     return { routeClass: "state-changing", handle: () => handleSessionStreamTransportAck(ctx, sessionId, entryId) };
   }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/watch\/transport-ack$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSessionWatchTransportAck(ctx, sessionId, req) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/watch\/ack$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSessionWatchAck(ctx, sessionId, req) };
+  }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream\/([^/]+)\/ack$/))) {
     const sessionId = m[1] as string;
     const entryId = m[2] as string;
@@ -2264,6 +2525,15 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     pathname,
   );
   if (artifactRoute) return artifactRoute;
+  // #153 Part 2: the opt-in held `external_edit` watch (D5/W3/W4) — distinct from the stream
+  // below, deliberately: it never shares `SessionPushRegistry` or its `holdConnection` key.
+  if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/watch$/))) {
+    const slug = m[1] as string;
+    return {
+      routeClass: "authed-read",
+      handle: (req, server, authSignal) => handleWorkspaceWatch(ctx, slug, req, server, authSignal),
+    };
+  }
   // P3.2: artifact/journal SSE stream (A1 §5.5, full protocol §8).
   if (method === "GET" && (m = pathname.match(/^\/w\/([^/]+)\/stream$/))) {
     const slug = m[1] as string;

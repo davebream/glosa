@@ -124,6 +124,9 @@ dropping out of it.
 | `concurrency` | `test/acceptance/generic-pull-scope.test.ts` |
 | `delivery` | `packages/daemon/test/monitor.test.ts` |
 | `delivery` | `packages/daemon/test/provider-topology-real-subprocess.test.ts` |
+| `delivery` | `packages/daemon/test/external-edit-http.test.ts` |
+| `delivery` | `packages/daemon/test/external-edit-live.test.ts` |
+| `delivery` | `packages/daemon/test/bus/external-edit.test.ts` |
 | `delivery` | `packages/daemon/test/sessions-routes.test.ts` |
 | `delivery` | `packages/cli/test/mcp.test.ts` |
 | `delivery` | `packages/cli/test/mcp-lifetime-real-subprocess.test.ts` |

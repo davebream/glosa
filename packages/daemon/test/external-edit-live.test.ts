@@ -6,15 +6,17 @@
 // open — and #153's headline workflow is an external editor plus an agent with NO glosa tab. Every
 // test here therefore opens no stream and registers no listener.
 import { afterEach, describe, expect, test } from "bun:test";
-import { unlinkSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ChokidarOptions, type FSWatcher, watch } from "chokidar";
 import { ArtifactWatcherRegistry, DEFAULT_MAX_WATCHED_WORKSPACES } from "../src/artifact-watcher.ts";
-import { headSha } from "../src/git/shadow.ts";
-import { shadowGitDir } from "../src/bus/paths.ts";
 import { WorkspaceBus } from "../src/bus/bus.ts";
 import { EXTERNAL_EDIT_KIND } from "../src/bus/external-edit.ts";
 import { readInboxEntry } from "../src/bus/inbox.ts";
+import { shadowGitDir } from "../src/bus/paths.ts";
+import { buildDeliveryPresentation } from "../src/delivery/presentation.ts";
+import { headSha } from "../src/git/shadow.ts";
+import { waitForWatch } from "../src/services/watch.ts";
 import {
   registrationIdFor,
   type WorkspaceLocation,
@@ -516,4 +518,60 @@ describe("the bound that protects the machine is watch ENTRIES summed across wor
     expect(registry.watchedEntryTotal()).toBeLessThanOrEqual(12);
     expect(registry.watchedEntryTotal()).toBeGreaterThan(0);
   });
+});
+
+describe("glosa_watch (#153 Part 2) — criterion 1: wake on a real capture, with the real 2s quiet window", () => {
+  test("a session blocked in a watch for draft.md wakes with the single coalesced entry, its hunks, and unknown attribution, within quiet window + capture latency of the LAST of three real saves", async () => {
+    const root = workspace();
+    claimTestDaemonIdentity(root);
+    writeFile(root, "draft.md", "line one\n");
+    const bus = openBus(root);
+    await bus.reconcile(); // the baseline a daemon start establishes
+
+    // Deliberately the REAL default quiet window (2s), not a shortened test value — criterion 1
+    // is explicit that a watch's wake is measured against it, not against a window narrowed for
+    // test speed.
+    const { watchFactory, armed } = armedWatchFactory();
+    const registry = track(
+      new ArtifactWatcherRegistry({
+        watchFactory,
+        captureExternalEdit: (target) => openBusFor(target, bus).captureExternalEdit(),
+      }),
+    );
+    registry.ensureWatched(root);
+    await armed();
+
+    const build = (id: string, payload: unknown, status: string) =>
+      buildDeliveryPresentation(id, payload, { status, watched: true });
+    // Blocked BEFORE any save lands — a real held watch, not a poll — with a wait_ms far longer
+    // than the quiet window plus capture latency could ever take, so a genuine wake (rather than
+    // the timer) is what settles this promise.
+    const held = waitForWatch(bus, { session: "sess-a", path: "draft.md", waitMs: 20_000 }, build);
+
+    writeFileSync(join(root, "draft.md"), "line one\nline two\n");
+    await Bun.sleep(300);
+    writeFileSync(join(root, "draft.md"), "line one\nline two\nline three\n");
+    await Bun.sleep(300);
+    writeFileSync(join(root, "draft.md"), "line one\nline two\nline three\nline four\n");
+    const lastSaveAt = Date.now();
+
+    const result = await held;
+    const elapsedSinceLastSave = Date.now() - lastSaveAt;
+
+    expect(result.waited).toBe(true);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.kind).toBe(EXTERNAL_EDIT_KIND);
+    // The single coalesced entry for the whole burst, hunks included, not just the first save.
+    expect(String(result.entries[0]?.text)).toContain("+line two");
+    expect(String(result.entries[0]?.text)).toContain("+line three");
+    expect(String(result.entries[0]?.text)).toContain("+line four");
+    expect(String(result.entries[0]?.text)).toContain('attribution is "unknown"');
+    // Ordering, not a hard latency promise (W6): it must land at or after the quiet window closes
+    // following the LAST save, and this generous bound is a harness watchdog, not a product SLA.
+    expect(elapsedSinceLastSave).toBeGreaterThanOrEqual(2_000);
+    expect(elapsedSinceLastSave).toBeLessThan(10_000);
+
+    // Exactly one entry ever existed — the burst coalesced, it did not just answer on the first.
+    expect(externalEditEntries(bus)).toHaveLength(1);
+  }, 30_000);
 });

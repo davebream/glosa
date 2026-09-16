@@ -592,3 +592,31 @@ the state and provides an explicit repair command. Repair preserves surviving ob
 new unknown-attributed history root, with a reason recoverable across a crash. It cannot reconstruct
 lost checkpoints or rewrite the old inbox entries that reference them. If all Git and prior checkpoint
 journal evidence is absent, previous initialization is unknowable; first-use behavior remains unchanged.
+
+## Where a cold workspace gets hydrated, so a watch can stay a read (#153 Part 2)
+
+`GET /w/:slug/watch` is a read. Reconciling is not: it self-heals, expires leases, commits drift and
+appends offline catch-up. `bus/peek.ts` already exists to keep GETs free of side effects, so the
+watch resolving its bus with a reconciliation would have made a plain GET a writer.
+
+Dropping the reconciliation alone was not enough. A bus that nobody has opened has never folded its
+journal, and the registry survives a daemon restart while buses do not — so a workspace's offline
+catch-up would have waited for whatever unrelated request happened to open it next, weakening the
+"an agent learns about edits made while it was away" guarantee.
+
+Hydration moved to the binding instead. `POST /w/:slug/session-binding` reconciles the workspace it
+binds, and the watch route refuses a session that has no binding, so no ordering reaches a watch
+before a reconcile has happened. Catch-up lands earlier than before, at the moment a session
+attaches, rather than later.
+
+**Why not reconcile in the watch and document it as a write.** It makes every read path a candidate
+writer by precedent, and the surface that most needs to be side-effect-free is the one a client
+polls in a loop.
+
+**Why not hydrate lazily on first read of any kind.** That is the same rule with the trigger hidden:
+which GET pays the cost then depends on arrival order, and the one that pays it is unpredictable.
+
+**What this does not solve.** Hydration is best-effort at the bind: a bind whose reconcile throws
+still binds, because refusing to bind over a git-toolchain problem would take out delivery that
+never touches git (the `glosa/#38` failure). The next writer reconciles instead, so catch-up is
+delayed in that case, not lost.

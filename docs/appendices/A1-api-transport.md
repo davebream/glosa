@@ -103,7 +103,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.9", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.10", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -389,7 +389,103 @@ it, so the turn resumes at the moment the human sends.
   caller wanting longer reissues the request.
 
 The subscription is taken BEFORE the status is re-read. An entry can go terminal between an initial
-read and the subscription, and that gap would otherwise strand the caller until its deadline.
+read and the subscription, and that gap would otherwise strand the caller until its deadline. Like
+every held response on this daemon (§8.3), this route disables Bun's default idle-connection close
+for the life of the hold (`server.timeout(req, 0)`) — issue #153 Part 2 found this call missing here
+(a latent bug the route's own in-process test could not observe, since it binds no real server) and
+added it alongside the new watch route below, which needs the identical fix for the identical reason.
+
+### 5.11b `GET /w/:slug/watch` (issue #153 Part 2)
+Bearer required, authed-read. An opt-in held read over `external_edit` entries — the daemon-lifetime
+watcher's quiet-window captures (§F153/A4) made actionable for exactly the session that asks, and no
+other session. Never a status transition and never a nudge to anyone else: R3 states the product
+promise this route implements. It appends nothing of its own to the journal; like any first read of
+a workspace — `GET /w/:slug/stream` included — it may open that workspace's bus, and opening one runs
+its ordinary reconciliation, which is where a baseline or catch-up event at that moment comes from.
+
+`?session=<id>&path=<workspace-relative>&since=<full-sha>&wait_ms=<0…900000>` — `session` is
+required and must be a live, registered session **explicitly bound** to this workspace (the same
+requirement `POST /w/:slug/session-binding` establishes and the session stream already enforces).
+`path` scopes the watch to one artifact; omitted, the whole workspace is in scope. `since` is a full
+40-hex shadow-git checkpoint sha, an optional lower bound. `wait_ms` follows §5.11a's own rule exactly
+(integer `0…900000`, refused rather than shortened) and this route disables Bun's idle-connection
+close the same way (§8.3).
+
+Without `since`, the cursor is authoritative and lossless: every in-scope, non-terminal
+`external_edit` this session has not yet had `presented` via a watch, oldest journal order first, up
+to the drain cap (eight entries / 32 KiB per response, §5.15's own bounds). `since` additionally
+excludes entries whose checkpoint IS `since` or an ancestor OF it — everything at or before the point
+the caller is resuming from — and keeps everything that descends from it; when ancestry cannot be
+proven (e.g. after a baseline repair) the entry is INCLUDED — this cursor fails toward showing, never toward
+silently dropping something the daemon cannot prove was already seen.
+
+- **200**
+```json
+{ "entries": [ /* external_edit presentations, oldest first */ ], "latest_checkpoint": "3fae…|null", "has_more": false }
+```
+  `latest_checkpoint` is a SAFE resume watermark, not raw shadow HEAD: the full sha of the newest
+  checkpoint every one of whose in-scope entries is now either in this response or already presented
+  to this session. A response never advances it past a checkpoint it only partially returns (a
+  checkpoint producing more entries than the per-response cap never yields a `since` a caller could
+  use to skip the remainder) — `null` when no such checkpoint exists yet. `has_more:true` means: call
+  again WITHOUT `since` to drain the rest, rather than resupplying this response's `latest_checkpoint`.
+  Presented entries carry the same bounded, cursorable presentation §5.15 uses, with wording that
+  states plainly the session is seeing this because it asked to watch. Self-echo is NOT filtered: an
+  `external_edit` has unknown origin by construction (A4 §F05) and may be this session's own
+  un-leased write.
+- **400 validation-failed** — bad `wait_ms`, or `path` outside the workspace.
+- **404 not-found** — unknown `:slug`, or `session` names no live registered session.
+- **409 conflict** — `session` is registered but not explicitly bound to this workspace.
+
+The hold ends — returning whatever the cursor currently has, honestly, even `entries:[]` — on: the
+client disconnecting; `wait_ms` elapsing; `session`'s workspace binding changing or the session
+deregistering (the binding this request captured is no longer authoritative); or this workspace's
+bus closing (eviction, `glosa forget`). Two concurrent watches by the same session each keep their own
+lease hold and neither cancels the other's; a watch never touches the session-stream's push
+connection or lease key, so it neither closes nor is closed by a live monitor stream.
+
+A watch never writes — not even the self-heal and checkpoint a reconciliation performs, which is why
+it resolves its bus without one. That holds because a watch cannot run before a bind: bindings are
+in-memory, the route refuses a watch that has no binding, and `POST /w/:slug/session-binding`
+hydrates the workspace it binds (reconciling it once). So the first request to touch a workspace is
+never a watch, and offline catch-up still lands at the moment a session attaches rather than waiting
+for some unrelated writer. See `docs/decisions.md` — "Where a cold workspace gets hydrated".
+
+The client acknowledges receipt through the two routes below, mirroring the session stream's own
+two-phase transport/presented split (§5.16).
+
+### 5.11c `POST /api/sessions/:id/watch/transport-ack` (issue #153 Part 2)
+Bearer required, Origin-gated (state-changing). Records that the HTTP body of a prior watch response
+actually reached the caller — `delivery_attempt{via:"watch", session, outcome:"transport_accepted"}`
+for exactly the named ids.
+```json
+{ "entries": ["inb-…", "inb-…"] }
+```
+- **200** `{ "accepted": ["inb-…"] }` — only ids a prior watch response actually emitted to `:id`,
+  and that are still an `external_edit` entry belonging to its bound workspace; anything else is
+  silently dropped from `accepted` rather than failing the whole call.
+- **404 not-found** — `:id` names no session explicitly bound to a workspace.
+- **409 conflict** — no named id was emitted to this session by a watch response, or none is an
+  in-scope `external_edit`.
+
+Emission is tracked per session, in memory, with a short TTL. Scope is not sufficient on its own:
+entry ids appear in ordinary reads, so accepting any in-scope `external_edit` would let a token
+bearer record a delivery that never happened — and `5.11d` gates on exactly that record. A daemon
+restart drops the emissions, which costs an un-ackable window (the entry stays undelivered and is
+re-offered on the next watch), never a false attribution.
+
+### 5.11d `POST /api/sessions/:id/watch/ack` (issue #153 Part 2)
+Bearer required, Origin-gated (state-changing). Records `presented` (default) or `failed` after the
+consumer (the MCP shim's `DeliveryAwareTransport`) has actually written the response carrying these
+ids — never merely after the daemon built one. Refuses any id this session's watch never recorded
+`transport_accepted` for first, the identical "no attempt without proven transport" rule
+`eligibleDeliveryEntriesLocked`'s presented-suppression already assumes for every other `via`.
+```json
+{ "entries": ["inb-…"], "outcome": "presented", "error": "optional string, only with failed" }
+```
+- **200** `{ "accepted": ["inb-…"] }`
+- **404 not-found** — `:id` names no session explicitly bound to a workspace.
+- **409 conflict** — none of the named ids has an accepted watch transport for this session.
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
@@ -816,6 +912,14 @@ data: <json>
      (not even a heartbeat) for >45s (3 missed heartbeats).
 5. Client reconnect backoff: 250ms base, ×2 factor, capped at 5s, ±20% jitter — standard
    thundering-herd avoidance, irrelevant at single-client scale but free to specify once.
+
+A bounded HELD request (§5.11a `entry-status`, §5.11b `watch`) needs only mitigation 1
+(`server.timeout(req, 0)` for that one request) and never mitigation 2: it always answers within
+its own `wait_ms` cap (≤900s), so there is a fixed upper bound on how "quiet" the connection can ever
+be and no heartbeat is needed to keep an intermediary convinced it is alive. Issue #153 Part 2 found
+`entry-status` missing mitigation 1 entirely — a latent defect an in-process route test (no bound
+`Bun.serve`, so nothing times out) could not observe — and fixed it alongside the new `watch` route,
+which needs the identical disable for the identical reason.
 
 ## 9. Status code summary
 

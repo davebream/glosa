@@ -33,14 +33,20 @@ import { defaultReducer } from "./replay.ts";
 export type EntryKind = "common" | "attention" | "conversation";
 
 // A5 §F23's authoritative delivery_attempt vocabulary, verbatim:
-// `{via:monitor|codex_app_server|mcp_pull, session, outcome:attempted|
+// `{via:monitor|codex_app_server|mcp_pull|watch, session, outcome:attempted|
 // transport_accepted|presented|failed, reason:initial|re_nudge, error?}`. The single canonical
 // definition — `bus.ts`'s `recordDeliveryAttempt`, `agent-provider/interface.ts`'s `DeliveryResult`,
 // and every call site all import these three types from here rather than each declaring their
 // own, which is what a P4.3 review caught: a provider-local `DeliveryOutcome` had drifted to
 // `"delivered"|"failed"`, free text riding in `reason`, and no `via` distinguishing gate/stop/
 // userprompt — none of that is a legal A5 §F23 value.
-export type DeliveryVia = "monitor" | "codex_app_server" | "mcp_pull";
+//
+// `"watch"` (#153 Part 2) extends the vocabulary rather than reusing `mcp_pull`: a watch is a
+// per-session mark against an `external_edit` — a kind every OTHER `via` never touches
+// (`eligibleDeliveryEntriesLocked` excludes it before any of monitor/codex_app_server/mcp_pull
+// ever see it) — and collapsing it into `mcp_pull` would blur an honest audit trail that answers
+// "did this session ask to watch, or did it just happen to pull the inbox" (A5 §F23).
+export type DeliveryVia = "monitor" | "codex_app_server" | "mcp_pull" | "watch";
 export type DeliveryOutcome = "attempted" | "transport_accepted" | "presented" | "failed";
 export type DeliveryReason = "initial" | "re_nudge";
 

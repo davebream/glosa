@@ -36,6 +36,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   glosa's MCP server, `glosa-connect` skill, and a per-session monitor that streams parked and live
   inbox entries without starting the daemon. The launcher uses only explicit or recorded local glosa
   paths, and `glosa doctor` explains when Claude's telemetry settings suppress monitors. (#151)
+- A session can now opt in to being nudged by its own `external_edit`s: `glosa_watch` (MCP) and
+  `GET /w/:slug/watch` (HTTP) block for up to 15 minutes on an in-scope, not-yet-seen external edit
+  and return it the moment the daemon-lifetime watcher's quiet window closes, rather than requiring
+  the session to keep asking. The mark is per session only — no other session's stream, MCP pull,
+  badge count, or inbox listing changes — and self-echo is not filtered, so a returned entry may be
+  the watching session's own un-leased write. Fixes the same held-request defect for both this route
+  and the existing `entry-status` route: Bun's default idle-connection close was cutting a long hold
+  at roughly ten seconds regardless of the caller's own `wait_ms`. (#153)
 
 ### Fixed
 

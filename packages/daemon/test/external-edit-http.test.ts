@@ -4,7 +4,7 @@
 // (`spa/src/agent-feedback.js` reads `connection.workspace.pending_count`); the former
 // `GET /w/:slug/wiring` fallback no longer exists, so a second surface cannot disagree with it.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXTERNAL_EDIT_KIND } from "../src/bus/external-edit.ts";
@@ -52,6 +52,32 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
 
   function authed(path: string): Promise<Response> {
     return fetch(`http://127.0.0.1:${port}${path}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  }
+
+  function postAuthed(path: string, body: unknown): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: `http://127.0.0.1:${port}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Registers a session and explicitly binds it to `slug` — a watch requires exactly this, the
+   * same as the session stream. */
+  async function boundSession(slug: string, dir: string, sessionId: string): Promise<void> {
+    const registered = await postAuthed("/api/sessions/register", {
+      session_id: sessionId,
+      provider: "mcp",
+      cwd: dir,
+      source: "mcp",
+    });
+    expect(registered.status).toBe(200);
+    const bound = await postAuthed(`/w/${slug}/session-binding`, { session_id: sessionId });
+    expect(bound.status).toBe(200);
   }
 
   async function openWorkspace(): Promise<{ slug: string; dir: string }> {
@@ -142,4 +168,139 @@ describe("external_edit and the counts the daemon serves — real subprocess", (
     const body = await (await authed("/api/status")).json();
     expect(body.orphaned_state).toEqual([]);
   });
+
+  // Criterion 5 / A1 §8.3: `Bun.serve` closes an idle connection at its own default (~10s on Bun
+  // 1.2.7 per this task's premise probe) unless the handler calls `server.timeout(req, 0)` —
+  // which neither route did before this task. Only a REAL bound daemon subprocess can observe
+  // this: `http-routes.test.ts`'s in-process `createApiFetch` calls have no bound `server` at all
+  // (there is nothing to time out), so they are structurally blind to the defect this proves fixed.
+  test("a watch held for 15s (past the ~10s idle default) returns 200 with entries:[] and the current latest_checkpoint", async () => {
+    const { slug, dir } = await openWorkspace();
+    await boundSession(slug, dir, "sess-watch-15s");
+
+    const started = Date.now();
+    const res = await authed(`/w/${slug}/watch?session=sess-watch-15s&wait_ms=15000`);
+    const elapsed = Date.now() - started;
+
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeGreaterThanOrEqual(14_000);
+    const body = await res.json();
+    expect(body).toEqual({ entries: [], has_more: false, latest_checkpoint: null });
+  }, 25_000);
+
+  test("F-8 — a watch is a read: on a workspace whose bus is COLD after a daemon restart, the journal is byte-identical across one", async () => {
+    // Reconciling self-heals and checkpoints, which `bus/peek.ts` spells out is exactly what a
+    // plain GET must not cause. The window where that matters is a bus nobody has opened yet: the
+    // registry survives a restart on disk while buses do not, so after one the first request to
+    // touch a workspace could be a watch.
+    //
+    // Making this observable took three arrangements, each learned by ablating a version that
+    // proved nothing. The restart is one: watching an already-open workspace leaves a reconcile
+    // with nothing to do, so it passed with the fix reverted. Editing the manuscript while the
+    // daemon is DOWN is the second — a reconcile only writes when it finds drift, so with no
+    // offline edit a cold bus reconciles silently and the journal is byte-identical either way.
+    //
+    // The third is what the test is really built around. A watch cannot reach a cold bus at all:
+    // bindings live in memory, so the restart drops this session's, and the route refuses a watch
+    // that has no binding. That refusal plus "binding hydrates" is the whole guarantee — there is
+    // no order of requests that reaches a watch before someone has reconciled. So both halves are
+    // asserted here, and the byte comparison measures what the watch adds on top of the bind.
+    //
+    // What this test does NOT pin is the watch's non-reconciling resolver itself: with the bind
+    // hydrating first, swapping it back for the reconciling one is an observable no-op, and it
+    // stays green. `resolveBusForRead`'s own comment says so rather than letting the name of this
+    // test imply otherwise.
+    const { slug, dir } = await openWorkspace();
+    const journal = join(dir, ".glosa", "journal.ndjson");
+
+    await stopDaemon(home, proc);
+    writeFileSync(join(dir, "notes.md"), "one\nedited while the daemon was down\n");
+    proc = spawnDaemon(home, port, { GLOSA_CLASSF_PORT: String(port + 1) });
+    expect(await waitForHandshake(port, 15_000, proc)).not.toBeNull();
+
+    // Half one: unbound, the watch is refused outright rather than served off a cold bus.
+    const unbound = await authed(`/w/${slug}/watch?session=sess-watch-cold&wait_ms=0`);
+    expect(unbound.status).toBe(404);
+    expect(readFileSync(journal).toString()).not.toContain(EXTERNAL_EDIT_KIND);
+
+    // Half two: binding is what hydrates, so it is the bind that reports the offline drift.
+    await boundSession(slug, dir, "sess-watch-cold");
+    const before = readFileSync(journal);
+    expect(before.toString()).toContain(EXTERNAL_EDIT_KIND);
+
+    const res = await authed(`/w/${slug}/watch?session=sess-watch-cold&wait_ms=0`);
+    expect(res.status).toBe(200);
+
+    const after = existsSync(journal) ? readFileSync(journal) : Buffer.alloc(0);
+    expect({ changed: !before.equals(after), size: after.length }).toEqual({ changed: false, size: before.length });
+  }, 40_000);
+
+  test("watch/transport-ack refuses an entry id no watch handed this session, and accepts it once one has", async () => {
+    // Honest provenance (AGENTS.md invariant 3): a `transport_accepted` record asserts the entry
+    // reached this session. Scope alone cannot assert that — entry ids show up in ordinary reads,
+    // so gating on "is an external_edit in the bound workspace" let any token bearer mint a
+    // delivery that never happened, and `presented` then gates on that same forged record.
+    const { slug, dir } = await openWorkspace();
+    const journal = join(dir, ".glosa", "journal.ndjson");
+
+    await stopDaemon(home, proc);
+    writeFileSync(join(dir, "notes.md"), "one\nedited while the daemon was down\n");
+    proc = spawnDaemon(home, port, { GLOSA_CLASSF_PORT: String(port + 1) });
+    expect(await waitForHandshake(port, 15_000, proc)).not.toBeNull();
+    await boundSession(slug, dir, "sess-ack-provenance");
+
+    // The bind reported the offline edit, so a real external_edit id exists and is in scope — the
+    // id an attacker would name. Nothing has been watched yet.
+    const found = readFileSync(journal)
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { event: string; entry?: string; detail?: { kind?: string } })
+      .find((event) => event.event === "entry_created" && event.detail?.kind === EXTERNAL_EDIT_KIND)?.entry;
+    expect(found).toBeString();
+    const externalEditId = found as string;
+
+    const forged = await postAuthed("/api/sessions/sess-ack-provenance/watch/transport-ack", {
+      entries: [externalEditId],
+    });
+    expect(forged.status).toBe(409);
+    // The refusal has to be a refusal to WRITE, not just a status code.
+    expect(readFileSync(journal).toString()).not.toContain("transport_accepted");
+
+    // Once a watch has actually handed the entry over, the same call is the legitimate one.
+    const watched = await authed(`/w/${slug}/watch?session=sess-ack-provenance&wait_ms=0`);
+    expect(watched.status).toBe(200);
+    expect(((await watched.json()) as { entries: Array<{ id: string }> }).entries.map((e) => e.id)).toContain(
+      externalEditId,
+    );
+
+    const honest = await postAuthed("/api/sessions/sess-ack-provenance/watch/transport-ack", {
+      entries: [externalEditId],
+    });
+    expect(honest.status).toBe(200);
+    expect(await honest.json()).toEqual({ accepted: [externalEditId] });
+    expect(readFileSync(journal).toString()).toContain("transport_accepted");
+  }, 40_000);
+
+  test("entry-status held for 15s (past the ~10s idle default) returns 200 rather than closing early", async () => {
+    const { dir } = await openWorkspace();
+    const created = await postAuthed("/api/workspaces/attention-request", {
+      path: dir,
+      action: "review",
+      message: "still open at 15s?",
+    });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+
+    const started = Date.now();
+    const res = await authed(
+      `/api/workspaces/entry-status?path=${encodeURIComponent(dir)}&entry=${encodeURIComponent(id)}&wait_ms=15000`,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeGreaterThanOrEqual(14_000);
+    const body = await res.json();
+    expect(body).toMatchObject({ id, status: "open", waited: true });
+  }, 25_000);
 });

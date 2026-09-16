@@ -201,8 +201,13 @@ generic.**
   shadow-git checkpoints and bounded unified hunks; it never includes a full artifact body.
 - **`external_edit` is a record, not a request.** It reports that a file changed outside glosa; there
   is nothing to apply, because the change is already in the artifact. It is therefore excluded from
-  delivery eligibility and from the badge-facing pending count, and no agent is ever nudged with one.
-  It remains retrievable (`glosa inbox get`, MCP) and is still counted by the retention-facing
+  ordinary delivery eligibility and from the badge-facing pending count, and no agent is ever nudged
+  with one **unless its own session explicitly watches for it** (issue #153 Part 2's `glosa_watch` /
+  `GET /w/:slug/watch`, detail A1/A5 §F23). A watch is opt-in and per-session: it marks the entries it
+  returns `presented` (`via:"watch"`) for the watching session only — no status transition, no effect
+  on any other session's monitor stream, MCP pull, badge count, or the retention-facing count below —
+  and it does not filter self-echo, so a returned entry may be the watching session's own un-leased
+  write. It remains retrievable (`glosa inbox get`, MCP) and is still counted by the retention-facing
   signals — GC's hard-remove guard and the stranded-home-state scanner — so an undismissed one is
   parked work that blocks deletion rather than work that vanishes. `glosa inbox dismiss` closes it;
   nothing else does, and there is no TTL.
@@ -272,10 +277,11 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.9: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.10: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
-  (full history), transcript stream, inbox/attention, presentation-token mint/redeem, whole-bus
+  (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
+  acknowledgement routes (issue #153 Part 2), presentation-token mint/redeem, whole-bus
   deletion (`glosa forget`, issue #156)) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
