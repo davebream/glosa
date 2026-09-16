@@ -103,7 +103,7 @@ Base URL: `http://127.0.0.1:<port>`. `:slug` is the workspace slug (R1). Every `
 No auth, Origin-gated only. **200** always (Origin/Host allowlist is the only rejection path,
 which returns 403 per §1).
 ```json
-{ "contract_version": "1.8", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.9", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -533,6 +533,40 @@ Channel-era `GET /api/sessions/:id/push-stream` and `POST /api/sessions/:id/conv
 routes are removed (#152): a conversation message reaches its session through the same stream or
 through MCP pull, and `presented` comes from `glosa_delivery_ack` or the pull's own acknowledgement.
 `POST /api/sessions/:id/drain` accepts only `via:"mcp_pull"`; any other value is **400**.
+
+#### Replacement and ownership (contract 1.9, issue #206)
+
+Registering a second stream for a session id closes the first, which is the documented replacement
+path. The displaced connection now receives one terminal frame before that close:
+
+```
+event: superseded
+data: {"transport":"monitor"}
+```
+
+`data.transport` names the transport that took the session. The frame is written **only** on
+replacement. Daemon shutdown, token rotation or revocation, client cancellation and a send failure
+all close the stream exactly as before, with no frame, so a client can tell "someone else owns this
+session now" from "the connection dropped, retry". A client that does not recognise the frame
+ignores it, as it ignores any non-`delivery` event, and falls back to its ordinary retry.
+
+`GET /api/sessions/:id/stream/status` answers that question without opening a stream. Bearer
+required, read-only: it registers nothing, sends no heartbeat, takes no session lease, and writes
+nothing to the journal.
+
+- **200** `{ "connected": true, "transport": "monitor" | "codex_app_server" }` while a live stream
+  connection exists for that exact session id, and `{ "connected": false, "transport": null }` when
+  none does. The answer comes from the push registry alone, so it is about the connection and not
+  about the session's registration: a session id the registry holds no connection for — never
+  registered, never streamed, or its stream already closed — answers `connected:false`, while a
+  connection that outlives its registration (a `deregister` that leaves the stream open) still
+  answers `connected:true` until that stream closes.
+- Only a literal boolean `connected` is authoritative. A client that gets anything else — a missing
+  field, a non-boolean, a non-2xx status, an unreachable daemon — has learned nothing and must not
+  treat it as free.
+
+A displaced client is expected to stop streaming and poll this route until it reports the session
+free, rather than reconnecting immediately and displacing the new owner in turn (A2 F06).
 
 ### 5.20 `POST /api/workspaces/forget` (contract 1.8, issue #156)
 

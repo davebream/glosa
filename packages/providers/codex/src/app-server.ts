@@ -8,6 +8,22 @@ export const CODEX_ATTACH_MIN_DELAY_MS = 5_000;
 export const CODEX_ATTACH_MAX_DELAY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** #206: how a superseded attachment decides whether the session is free again — a fixed interval
+ * plus jitter, never tighter than the retry floor above, and no backoff growth (a park is not a
+ * failure). */
+export const CODEX_PARK_PROBE_BASE_MS = 15_000;
+export const CODEX_PARK_PROBE_JITTER_MS = 3_000;
+
+export function codexParkProbeDelay(random: () => number = Math.random): number {
+  return CODEX_PARK_PROBE_BASE_MS + Math.floor(CODEX_PARK_PROBE_JITTER_MS * random());
+}
+
+/** #206 review round 1 (F-7): bounds a single ownership-probe round trip so a request that is
+ * accepted but never answers cannot hang the park loop forever — a timeout is inconclusive, exactly
+ * like a network error or a malformed body. Kept below the probe interval floor so a stalled
+ * request cannot itself delay the next scheduled probe. */
+export const CODEX_PARK_PROBE_REQUEST_TIMEOUT_MS = 4_000;
+
 interface RpcResponse {
   id?: number;
   result?: unknown;
@@ -48,10 +64,17 @@ export interface CodexAttachDeps {
       transport: "codex_app_server",
       onEntry: (entry: DeliverableEntry) => Promise<void>,
       signal: AbortSignal,
-    ): Promise<void>;
+    ): Promise<{ ended: "superseded" | "eof" }>;
+    /** #206 parked-state ownership probe. Absent (older daemon client stub) is treated the same as
+     * an inconclusive answer — stay parked rather than guess. */
+    sessionStreamStatus?(sessionId: string): Promise<{ connected: boolean; transport: string | null }>;
   }>;
   random(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
+  /** #206 review round 1 (F-7): the parked probe's absolute cadence is scheduled from this clock,
+   * not from wall-clock `Date.now()` directly, so tests can compress a slow-but-bounded probe's
+   * effect on the NEXT probe's spacing without any real waiting. */
+  now(): number;
 }
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -201,7 +224,69 @@ export const codexAttachmentRuntime = {
   createControlClient: CodexJsonRpcClient.connect,
   random: Math.random,
   sleep: abortableSleep,
+  now: Date.now,
 } as const;
+
+/** #206: parked between a `superseded` end and an authoritative `connected:false` (including an
+ * unknown session — the normal loop's own register/stream decides from there). No register, no
+ * stream, no delivery output, no lease hold while parked. Every probe re-runs
+ * `deps.createDaemonClient` from scratch so daemon discovery and credentials are always fresh. */
+/** Review round 1 (F-6): only a LITERAL boolean `connected` field is authoritative. A missing
+ * `sessionStreamStatus` method, a malformed/absent `connected` field, a thrown error, and (F-7) a
+ * request that never answers within `CODEX_PARK_PROBE_REQUEST_TIMEOUT_MS` are ALL `null`
+ * (inconclusive) — the caller keeps parking on anything but a proven `false`. The request is
+ * bounded and its own `AbortController` is aborted in `finally` regardless of which side of the
+ * race wins, so a slow daemon never keeps the underlying client alive past this function's return. */
+async function probeSessionConnected(
+  sessionId: string,
+  deps: CodexAttachDeps,
+  signal: AbortSignal,
+): Promise<boolean | null> {
+  const probeAbort = new AbortController();
+  const combined = AbortSignal.any([signal, probeAbort.signal]);
+  const attempt = (async (): Promise<boolean | null> => {
+    let daemon: Awaited<ReturnType<CodexAttachDeps["createDaemonClient"]>>;
+    try {
+      daemon = await deps.createDaemonClient(combined);
+    } catch {
+      return null;
+    }
+    if (!daemon.sessionStreamStatus) return null;
+    let status: { connected?: unknown } | undefined;
+    try {
+      status = (await daemon.sessionStreamStatus(sessionId)) as { connected?: unknown } | undefined;
+    } catch {
+      return null;
+    }
+    if (status?.connected === true) return true;
+    if (status?.connected === false) return false;
+    return null;
+  })();
+  try {
+    const outcome = await Promise.race([
+      attempt.then((v) => ({ timedOut: false as const, v })),
+      deps.sleep(CODEX_PARK_PROBE_REQUEST_TIMEOUT_MS, combined).then(() => ({ timedOut: true as const })),
+    ]);
+    return outcome.timedOut ? null : outcome.v;
+  } finally {
+    probeAbort.abort();
+  }
+}
+
+/** Review round 1 (F-7): schedules each probe from an ABSOLUTE cadence — `dueAt` advances by
+ * `codexParkProbeDelay()` every iteration regardless of how long the previous probe itself took
+ * (now bounded by `CODEX_PARK_PROBE_REQUEST_TIMEOUT_MS`) — so the gap between probe STARTS stays
+ * within the contract's interval instead of drifting by however long each request happened to take. */
+async function parkUntilFree(sessionId: string, deps: CodexAttachDeps, signal: AbortSignal): Promise<void> {
+  let dueAt = deps.now();
+  while (!signal.aborted) {
+    dueAt += codexParkProbeDelay(deps.random);
+    await deps.sleep(Math.max(0, dueAt - deps.now()), signal);
+    if (signal.aborted) return;
+    const connected = await probeSessionConnected(sessionId, deps, signal);
+    if (connected === false) return;
+  }
+}
 
 export async function runCodexAttachment(
   options: CodexAttachOptions,
@@ -214,6 +299,7 @@ export async function runCodexAttachment(
     const combined = AbortSignal.any([signal, attemptAbort.signal]);
     let control: CodexControlClient | undefined;
     let removeCompleted: (() => void) | undefined;
+    let superseded = false;
     try {
       control = await deps.createControlClient(options.socketPath ?? codexControlSocketPath(), combined);
       await control.resume(options.sessionId);
@@ -241,14 +327,23 @@ export async function runCodexAttachment(
       removeCompleted = control.onTurnCompleted(() => {
         void daemon.heartbeat(options.sessionId).catch(() => {});
       });
-      await Promise.race([stream, control.closed]);
+      const outcome = await Promise.race([
+        stream.then((result) => ({ via: "stream" as const, result })),
+        control.closed.then(() => ({ via: "closed" as const })),
+      ]);
       if (Date.now() - connectedAt >= 20_000) attempt = 0;
+      superseded = outcome.via === "stream" && outcome.result.ended === "superseded";
     } catch {
       if (signal.aborted) return;
     } finally {
       removeCompleted?.();
       attemptAbort.abort();
       control?.close();
+    }
+    if (superseded) {
+      await parkUntilFree(options.sessionId, deps, signal);
+      attempt = 0;
+      continue;
     }
     await deps.sleep(codexAttachRetryDelay(attempt, deps.random), signal);
     attempt = Math.min(attempt + 1, 31);

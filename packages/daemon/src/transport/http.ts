@@ -1277,10 +1277,23 @@ async function handleSessionStream(
   let rerun = false;
   let closed = false;
 
-  const close = () => {
+  const close = (supersededBy?: "monitor" | "codex_app_server") => {
     if (closed) return;
     closed = true;
-    signal.removeEventListener("abort", close);
+    signal.removeEventListener("abort", abortClose);
+    if (supersededBy) {
+      // #206: the ONLY frame that ever precedes close(). Written before unsubscribe/unregister/
+      // release so a reader already blocked in `read()` observes it ahead of EOF — daemon shutdown,
+      // token revocation/rotation, client cancel and send failure never pass a reason here and stay
+      // byte-identical EOF.
+      try {
+        controller.enqueue(
+          encoder.encode(`event: superseded\ndata: ${JSON.stringify({ transport: supersededBy })}\n\n`),
+        );
+      } catch {
+        /* stream already torn down underneath us; nothing left to signal */
+      }
+    }
     unsubscribe?.();
     unregister?.();
     releaseLease?.();
@@ -1290,6 +1303,7 @@ async function handleSessionStream(
       /* reader cancellation already closed the stream */
     }
   };
+  const abortClose = () => close();
 
   const stream = new ReadableStream<Uint8Array>({
     start(output) {
@@ -1342,15 +1356,24 @@ async function handleSessionStream(
         if (event.event !== "delivery_attempt") void pump();
       });
       controller.enqueue(encoder.encode(": connected\n\n"));
-      signal.addEventListener("abort", close, { once: true });
+      signal.addEventListener("abort", abortClose, { once: true });
       void pump();
     },
-    cancel: close,
+    cancel: () => close(),
   });
   server?.timeout(req, 0);
   return new Response(stream, {
     headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
   });
+}
+
+/** `GET /api/sessions/:id/stream/status` (#206) — an authenticated, read-only ownership probe. It
+ * answers from `SessionPushRegistry` alone: no session-registry lookup, no liveness check, no lease
+ * hold, no registration. An unknown session id honestly reports `connected:false` the same as a
+ * known one with no live connection — a parked client's probe treats both as "free". */
+function handleSessionStreamStatus(ctx: ApiContext, sessionId: string): Response {
+  const transport = ctx.pushRegistry?.transport(sessionId) ?? null;
+  return Response.json({ connected: transport !== null, transport });
 }
 
 async function handleSessionStreamTransportAck(ctx: ApiContext, sessionId: string, entryId: string): Promise<Response> {
@@ -2199,6 +2222,10 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
       routeClass: "authed-read",
       handle: (req, server, authSignal) => handleSessionStream(ctx, sessionId, req, server, authSignal),
     };
+  }
+  if (method === "GET" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream\/status$/))) {
+    const sessionId = m[1] as string;
+    return { routeClass: "authed-read", handle: () => handleSessionStreamStatus(ctx, sessionId) };
   }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/stream\/([^/]+)\/transport-ack$/))) {
     const sessionId = m[1] as string;

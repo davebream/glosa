@@ -58,6 +58,19 @@ export interface ScopedPullDrainOptions {
   limit?: number;
 }
 
+/** How `openSessionStream` ended (#206). `superseded`: the daemon's `event: superseded` frame
+ * arrived — a replacement connection took the session; the caller must park, not reconnect.
+ * `eof`: an ordinary close with no such frame (daemon shutdown, token revocation/rotation, client
+ * cancel, send failure, or a network drop) — the caller's existing retry-with-backoff applies. */
+export type SessionStreamEnd = { ended: "superseded" | "eof" };
+
+/** #206: how long, after `onEntry` (or its transport acknowledgement) fails while the stream is
+ * still open, `openSessionStream` keeps reading before giving up on seeing a `superseded` frame.
+ * Replacement deletes the OLD connection's pending acknowledgement, so a failure right there is the
+ * expected shape of a mid-delivery displacement, not a reason to reconnect and re-displace the new
+ * owner — but an ordinary failure on a healthy connection must not hang forever either. */
+export const SESSION_STREAM_FAILURE_DEADLINE_MS = 2_000;
+
 export interface DaemonHookClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
   heartbeat(sessionId: string): Promise<void>;
@@ -77,11 +90,19 @@ export interface DaemonHookClient {
     onEntry: (entry: DrainedEntry) => Promise<void>,
     signal: AbortSignal,
     onOpen?: () => void,
-  ): Promise<void>;
+  ): Promise<SessionStreamEnd>;
+  /** `GET /api/sessions/:id/stream/status` (#206) — the parked client's ownership probe. Never
+   * registers, heartbeats, or holds a lease; an unknown session id is a legitimate `connected:false`
+   * answer, not an error. */
+  sessionStreamStatus?(sessionId: string): Promise<{ connected: boolean; transport: string | null }>;
 }
 
 export interface DaemonUnreachableError extends Error {
   code: "DAEMON_UNREACHABLE";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }
 
 export interface HttpDaemonClientOptions {
@@ -118,11 +139,11 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
   const fetchRequest = options.fetch ?? fetch;
   const shutdownSignal = options.signal;
 
-  async function call(path: string, body?: unknown): Promise<Response> {
+  async function call(path: string, body?: unknown, method: "POST" | "GET" = "POST"): Promise<Response> {
     let res: Response;
     try {
       res = await fetchRequest(`${base}${path}`, {
-        method: "POST",
+        method,
         headers: {
           Host: `127.0.0.1:${port}`,
           Origin: base,
@@ -132,9 +153,9 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           // arrived — and the daemon accepts only the current credential, with no grace period.
           // Pinning it here turned the next call on any such client into a silent 401.
           Authorization: `Bearer ${loadToken(glosaHome())}`,
-          "Content-Type": "application/json",
+          ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
         },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: method === "POST" && body !== undefined ? JSON.stringify(body) : undefined,
         ...(shutdownSignal ? { signal: shutdownSignal } : {}),
       });
     } catch (error) {
@@ -204,9 +225,36 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
+      let superseded = false;
+      // #206: set once `onEntry` (or its caller's own transport acknowledgement, thrown back
+      // through `onEntry`) fails while the stream is still open. Supersession takes precedence: a
+      // replacement deletes the OLD connection's pending acknowledgement, so a failure right here is
+      // the expected shape of a mid-delivery displacement — keep reading toward EOF instead of
+      // surfacing it immediately, bounded so an ordinary failure still gets reported promptly.
+      let failure: { error: unknown } | undefined;
+      let deadlineAt = 0;
       while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (failure && Date.now() >= deadlineAt) throw failure.error;
+        let done: boolean;
+        let value: Uint8Array | undefined;
+        if (failure) {
+          const remaining = Math.max(0, deadlineAt - Date.now());
+          const raced = await Promise.race([
+            reader.read().then((r) => ({ timedOut: false as const, r })),
+            sleep(remaining).then(() => ({ timedOut: true as const })),
+          ]);
+          if (raced.timedOut) throw failure.error;
+          ({ done, value } = raced.r);
+        } else {
+          ({ done, value } = await reader.read());
+        }
+        if (done) {
+          if (failure) {
+            if (superseded) return { ended: "superseded" };
+            throw failure.error;
+          }
+          return { ended: superseded ? "superseded" : "eof" };
+        }
         buffered += decoder.decode(value, { stream: true });
         let boundary = buffered.indexOf("\n\n");
         while (boundary >= 0) {
@@ -214,11 +262,26 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           buffered = buffered.slice(boundary + 2);
           boundary = buffered.indexOf("\n\n");
           const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+          if (event === "superseded") {
+            superseded = true;
+            continue;
+          }
+          if (event !== "delivery" || failure) continue;
           const data = frame.match(/^data:\s*(.+)$/m)?.[1];
-          if (event !== "delivery" || !data) continue;
-          await onEntry(JSON.parse(data) as DrainedEntry);
+          if (!data) continue;
+          try {
+            await onEntry(JSON.parse(data) as DrainedEntry);
+          } catch (error) {
+            failure = { error };
+            deadlineAt = Date.now() + SESSION_STREAM_FAILURE_DEADLINE_MS;
+          }
         }
       }
+      return { ended: superseded ? "superseded" : "eof" };
+    },
+    async sessionStreamStatus(sessionId) {
+      const res = await call(`/api/sessions/${encodeURIComponent(sessionId)}/stream/status`, undefined, "GET");
+      return res.json();
     },
   };
 }

@@ -19,8 +19,12 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * the held-review repair additionally adds the preview/commit `member_fingerprint` field and the
  * `forget-stale-preview` error slug on the same route, and a registration-less `status` row for a
  * forget operation whose target registration has already been fully removed — all additive, N/N-1
- * safe per A1 §3. */
-export const CONTRACT_VERSION = "1.8";
+ * safe per A1 §3.
+ * v1.9 (issue #206) adds a terminal `event: superseded` frame on `GET /api/sessions/:id/stream`
+ * (written only when `register` displaces the connection; every other close cause stays plain EOF)
+ * and the read-only `GET /api/sessions/:id/stream/status` ownership probe — additive, N/N-1 safe
+ * per A1 §3. */
+export const CONTRACT_VERSION = "1.9";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

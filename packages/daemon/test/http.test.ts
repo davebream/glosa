@@ -62,7 +62,7 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     const res = await fetch(apiUrl("/api/handshake"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.contract_version).toBe("1.8");
+    expect(body.contract_version).toBe("1.9");
     expect(body.daemon_version).toBe(APP_VERSION);
     expect(body.build_id).toBe(BUILD_ID);
     expect(body.paired).toBe(true); // token file exists
@@ -210,9 +210,9 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(body.type).toContain("contract-mismatch");
   });
 
-  it("X-Contract-Version minor mismatch (1.9) → 200 + X-Contract-Warning: stale-minor", async () => {
+  it("X-Contract-Version minor mismatch (1.8) → 200 + X-Contract-Warning: stale-minor", async () => {
     const res = await fetch(apiUrl("/api/workspaces"), {
-      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "1.9" },
+      headers: { Authorization: `Bearer ${TOKEN}`, "X-Contract-Version": "1.8" },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Contract-Warning")).toBe("stale-minor");
