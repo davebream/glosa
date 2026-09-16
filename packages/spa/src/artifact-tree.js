@@ -61,9 +61,10 @@ function fileId(path) {
 }
 
 /**
- * Builds a path trie in O(total path segments). Children stay in first-appearance order, which
- * preserves the adapter-defined sidebar order supplied by the daemon instead of silently applying
- * a second client-side sort.
+ * Builds a path trie in O(total path segments), then orders every level the way an IDE's file
+ * tree does: directories first, then files, each group by name (case-insensitive, numeric-aware,
+ * so `2.md` precedes `10.md`). The daemon's own order is not kept: it reflects the order artifacts
+ * were registered in, which is no order a reader can predict.
  *
  * @param {ArtifactSummary[]} artifacts
  * @returns {DirectoryNode}
@@ -100,7 +101,19 @@ export function buildArtifactTree(artifacts) {
     parent.children.push({ kind: "file", id: fileId(artifact.path), path: artifact.path, name, artifact });
   }
 
+  sortTree(root);
   return root;
+}
+
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/** @param {DirectoryNode} directory */
+function sortTree(directory) {
+  directory.children.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+    return byName.compare(a.name, b.name);
+  });
+  for (const child of directory.children) if (child.kind === "directory") sortTree(child);
 }
 
 /**

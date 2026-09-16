@@ -6,7 +6,7 @@
 // exercised end-to-end. Route-class × Origin/Bearer combinatorics live in auth.test.ts;
 // confinement combinatorics live in confine-path.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
 import { tokenPath } from "../src/security/token.ts";
 import { cleanupHome, freshHome, randomPort, spawnDaemon, stopDaemon, waitForHandshake } from "./helpers.ts";
@@ -443,7 +443,9 @@ describe("daemon HTTP pipeline — real subprocess", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/svg+xml");
     const body = await res.text();
-    expect(body).toContain("A lowercase g whose olive marginal stroke becomes its descender.");
+    // The served bytes are the mark on disk, whatever the mark currently is.
+    expect(body).toBe(readFileSync(new URL("../../spa/src/glosa-mark.svg", import.meta.url), "utf8"));
+    expect(body).toContain('class="accent"');
   });
 
   it("GET /app/<unknown file> → 404, not a filesystem read", async () => {
