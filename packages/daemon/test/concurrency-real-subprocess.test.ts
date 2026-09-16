@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // P5.2 (T8 release gate — concurrency). The existing concurrency suites
-// (bus/concurrency.test.ts, bus/mutex.test.ts, registry/lockfile-fallback.test.ts,
+// (bus/concurrency.test.ts, bus/mutex.test.ts,
 // sessions-routes.test.ts's "two concurrent drain calls") all prove correctness under concurrent
 // PROMISES inside ONE test process — real and valuable (the daemon is single-process, so its own
 // event-loop interleaving is exactly what those tests exercise), but they never prove the daemon
 // correctly serializes writes when the REQUESTS themselves arrive over a real network socket from
-// an actually separate OS process, the way two real `glosa` CLI invocations (or a CLI call racing
-// a hook hitting the daemon at the same moment) would in production. `lifecycle.test.ts`'s
+// an actually separate OS process, the way two real `glosa` CLI invocations racing each other
+// would in production. `lifecycle.test.ts`'s
 // "bootDaemon — subprocess fault/concurrency" describe DOES spawn real OS processes, but only to
 // race DAEMON BOOT (the lock file) — not to race WRITES to one already-running daemon's
 // workspace-level state (inbox/journal/lease).

@@ -81,13 +81,16 @@ streaming and does not re-register or reconnect. It parks, polling `GET
 /api/sessions/:id/stream/status` on a fixed 15-second interval plus up to 3 seconds of jitter (never
 tighter, no backoff growth), re-establishing its daemon client fresh on every poll. It stays parked on
 every inconclusive answer and re-enters the normal connect loop only once the probe authoritatively
-reports `connected:false` — including for an unknown session id, which is treated as free. Homebrew/npm
-Codex installs do not provide a managed daemon; users either install the standalone distribution or
-separately run:
+reports `connected:false` — including for an unknown session id, which is treated as free. Homebrew/npm Codex installs do not provide a managed
+daemon. A user who wants one either installs the standalone distribution, runs Codex's own
+`codex app-server daemon bootstrap` (or `start`, once bootstrapped) to install and run a durable
+user-managed app-server, or runs the listener directly:
 
 ```sh
 codex app-server --listen "unix://$CODEX_HOME/app-server-control/app-server-control.sock"
 ```
+
+Whichever way it starts, it stays user-owned: glosa attaches to a socket it finds and starts nothing.
 
 For each `delivery` frame, the attachment sends one text input prefixed `[glosa <entry-id>]`.
 `turn/steer` is used only after this connection observed `turn/started` for the resumed thread and can
@@ -119,8 +122,10 @@ Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registr
 tool call, and an open session transport refresh it. Connection-held refreshes run
 every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then
 expires normally. Old timers cannot refresh a deregistered or replacement session. The generic
-connection handle is used by the monitor and Codex subscription transports. Registration sources
-are `monitor`, `codex-app-server`, `mcp`, and `cli` (explicit bind); there are no hook sources.
+connection handle is used by the monitor and Codex subscription transports. The registration
+sources glosa's own callers send are `monitor`, `codex-app-server`, `mcp`, and `cli` (explicit bind);
+an explicit bind that sends no `source`, such as `glosa open --bind`, is recorded as `manual`. There
+are no hook sources.
 
 The MCP shim additionally polls its own OS-level parent pid and exits when it changes (issue #140),
 alongside stdin EOF and SIGHUP. That poll decides only the shim's own lifetime — a process ending
@@ -131,8 +136,9 @@ inspecting or polling any process itself.
 The MCP shim discovers provider identity through provider-owned environment readers, registers on
 first tool use, and heartbeats thereafter. Only Claude Code supplies one: a shim started by Claude
 Code — from a project `.mcp.json` or a plugin's own `.mcp.json` — reads `CLAUDE_CODE_SESSION_ID`.
-**Codex supplies nothing.** A server spawned from `[mcp_servers.*]` receives eight fixed environment
-variables and no Codex identity under any configuration, so a Codex shim has no host identity of its
+**Codex supplies nothing.** A server spawned from `[mcp_servers.*]` inherits only an allowlist of
+host variables that are set (eight were set in the measurement below), plus its own `env` table, and
+no Codex identity under any configuration, so a Codex shim has no host identity of its
 own and takes the thread id from an explicit bind carrying `CODEX_THREAD_ID`, which the agent reads
 from its own shell environment (`connectPrompt`). Measurements in
 `docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`.

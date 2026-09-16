@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/cli — the daemon-facing API `glosa hook <event>` calls into (A2 §F08/R2: "providers
-// register live agent sessions via hooks → daemon API (never direct file writes)"). A thin
-// interface + one real HTTP-backed implementation, so every hook handler in hook.ts depends on
-// the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes the handlers
-// testable with an in-memory fake instead of a live daemon subprocess.
+// @glosa/cli — the daemon-facing session-registration/drain API the MCP shim and Codex attachment
+// call into (A2 §F08/R2: "providers register live agent sessions via push transports → daemon API
+// (never direct file writes)"). A thin interface + one real HTTP-backed implementation, so every
+// caller depends on the INTERFACE, never on `fetch`/`ensureDaemon` directly — that's what makes
+// them testable with an in-memory fake instead of a live daemon subprocess.
 
 import { apiError, type ApiProblem } from "./api-client.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
@@ -50,9 +50,9 @@ export interface DrainOptions {
 /** Issue #205: the generic `glosa_inbox_pull` path's own operation. `workspace` is the scope the
  * pull was asked for — the daemon captures it once and uses it for the whole drain, immune to a
  * concurrent re-registration moving the session's row afterward (contract "shape B"). Deliberately
- * NOT a field on `DrainOptions`: the four hook transports (`gate`/`stop`/`userprompt`/`asyncRewake`)
- * must keep resolving scope from the row, and giving them no way to even spell a scope is what makes
- * that structural rather than a convention every caller has to remember. */
+ * NOT a field on `DrainOptions`: an identified session's own drain must keep resolving scope from
+ * its registry row, and giving it no way to even spell a scope is what makes that structural rather
+ * than a convention every caller has to remember. */
 export interface ScopedPullDrainOptions {
   workspace: string;
   limit?: number;
@@ -71,7 +71,7 @@ export type SessionStreamEnd = { ended: "superseded" | "eof" };
  * owner — but an ordinary failure on a healthy connection must not hang forever either. */
 export const SESSION_STREAM_FAILURE_DEADLINE_MS = 2_000;
 
-export interface DaemonHookClient {
+export interface DaemonClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
   heartbeat(sessionId: string): Promise<void>;
   deregister(sessionId: string): Promise<void>;
@@ -123,11 +123,11 @@ function unreachableError(reason: string): DaemonUnreachableError {
   return err;
 }
 
-/** The real `DaemonHookClient` — `ensureDaemon()` (find-or-spawn, R1) once per call site, then an
+/** The real `DaemonClient` — `ensureDaemon()` (find-or-spawn, R1) once per call site, then an
  * authed `fetch` against the `/api/sessions/...` surface (http.ts's P4.3 additions). Every call
  * sets `Origin` to the daemon's own self-origin — these are trusted local-process calls, not
  * browser requests, but the state-changing route class still requires it (A3 §4). */
-export async function createHttpDaemonClient(options: HttpDaemonClientOptions = {}): Promise<DaemonHookClient> {
+export async function createHttpDaemonClient(options: HttpDaemonClientOptions = {}): Promise<DaemonClient> {
   const conn = await ensureDaemon({ timeoutMs: options.ensureTimeoutMs });
   if (!conn.ok) {
     throw unreachableError(

@@ -27,7 +27,7 @@ export type Liveness = "alive" | "stale";
 
 export interface SessionRegistryDeps {
   now?: () => Date;
-  /** A2 §F08: 60-second lease refreshed by hooks, MCP activity, or an open connection. */
+  /** A2 §F08: 60-second lease refreshed by registration, MCP activity, or an open connection. */
   leaseTtlMs?: number;
   index?: WorkspaceIndex;
   /** Injectable scheduler for deterministic connection/expiry tests. */
@@ -69,8 +69,8 @@ export class SessionRegistry {
       });
   }
 
-  /** Merge under the same lock as binding: an MCP refresh cannot erase a hook's transcript
-   * or a user's explicit binding. Publish only after workspace persistence succeeds. */
+  /** Merge under the same lock as binding: an MCP refresh cannot erase a push registration's
+   * transcript or a user's explicit binding. Publish only after workspace persistence succeeds. */
   register(input: RegisterInput): Promise<SessionRecord> {
     return this.mutex.runExclusive(() => this.upsert(input));
   }

@@ -1,212 +1,360 @@
-# Codex CLI integration contract (T2a)
+# Codex CLI integration contract (research note)
 
-Pins the concrete mechanics the `packages/providers/codex` `AgentProvider` implementation is built
-against — per requirements.md T2a: "verify current (mid-2026) Codex CLI hook/gate/transcript-file
-mechanics against real docs/source — the Plannotator-era 'Codex Stop-hook + rollout-file parsing'
-note is the starting point, not gospel."
+Pins the concrete mechanics `packages/providers/codex`'s `AgentProvider` implementation is built
+against. This note is non-normative research support: where it and a normative appendix disagree,
+the appendix governs and this note is corrected, never the reverse.
 
-**Verified 2026-07-21** against the `openai/codex` GitHub repository's `main` branch source (not
-blog paraphrase) — specifically `codex-rs/hooks/src/schema.rs`, `codex-rs/hooks/src/events/{session_start,stop,user_prompt_submit,session_end,common}.rs`,
-and `codex-rs/core/src/hook_runtime.rs`. Secondary confirmation from the official docs at
-`developers.openai.com/codex/hooks` (redirects to `learn.chatgpt.com/docs/hooks`) and
-`developers.openai.com/codex/mcp`, which agree with the source on every point checked. Where the
-two sources agreed, that's marked **CONFIRMED**; where only inferred from source without an
-explicit docs statement, marked **INFERRED (source-grounded)**; where neither source answered the
-question, marked **UNCONFIRMED**.
+**Refreshed 2026-09-15** against the `openai/codex` GitHub repository's `main` branch at commit
+`1427825c4044d48b513c7d4ea32b84e58806a188` (source, not blog paraphrase) — a sparse checkout of
+`codex-rs/{hooks,plugin,features,protocol/src,app-server-protocol/src,app-server/src,app-server-client,app-server-transport/src,rollout/src,cli/src,rmcp-client/src}`,
+`codex-rs/tui/src/lib.rs`, `codex-rs/core/src/hook_runtime.rs`, `codex-rs/core/src/mcp*`, and
+`docs/`. Every factual claim below cites one of those paths; a claim the snapshot cannot support is
+marked **UNCONFIRMED** rather than guessed. This pass corrects several shape errors a prior pass
+introduced (wrong output nesting, a claimed universal envelope that doesn't hold, missing enum
+variants) — every struct cited below was re-read field-by-field against `schema.rs`/`main.rs` for
+this pass, not assumed from the earlier draft.
 
-**Amended 2026-09-06.** Sections 6 and 7 carry corrections from the session-identity spike
-(`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`, Codex CLI 0.153.4): the
-`[mcp_servers.*]` environment carries no Codex identity, `codex mcp-server` now exists, and the
-app-server control socket is a real push path. Everything else below is the 2026-07-21 pass and was
-not re-verified.
+**Prior passes**, superseded by this one where they overlap: **2026-07-21** against
+`codex-rs/hooks/src/schema.rs`, `codex-rs/hooks/src/events/{session_start,stop,user_prompt_submit,session_end,common}.rs`
+and `codex-rs/core/src/hook_runtime.rs`, cross-checked
+against the (now-unavailable to this snapshot) official docs. **Amended 2026-09-06**
+(`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`, Codex CLI 0.153.4): found
+the app-server control socket as a real push path and corrected the "Codex has no MCP server mode"
+claim. This pass re-verifies §4 fully against the pinned commit above, and re-verifies §6 as far as
+the sparse snapshot allows — the one sub-claim it cannot reach (which of Codex's tools reads
+`CODEX_THREAD_ID`) is marked below as still resting on the 2026-09-06 spike's live measurement,
+not on this snapshot.
 
-The headline finding: Codex CLI's hook system (as of mid-2026) is no longer the old single
-`notify`-on-turn-complete callback the Plannotator-era note assumed. It has grown into a
-multi-event hook framework (`hooks.json` / `config.toml [hooks]`) whose event names, JSON field
-names, and blocking semantics are close enough to Claude Code's own hooks that the two providers
-can share almost the same shape of logic — this made the provider genuinely easy to build to spec,
-not a coincidence to be suspicious of; Anthropic and OpenAI hook conventions appear to have
-converged independently on the same `session_id`/`cwd`/`transcript_path`/`hook_event_name` /
-`decision:block` vocabulary.
+glosa's own contract has moved since those passes: the Stop-hook blocking gate and the
+turn-boundary drain this note originally pinned were **retired in #152** — the current delivery
+ladder is `push → mcp_pull` (R4), and neither the Claude nor the Codex provider implements a
+blocking gate. §9 below keeps that mechanism's description because it is still accurate
+Codex-source content — every hook the Codex CLI ships works exactly as described — but it is no
+longer glosa's contract, and is marked historical accordingly.
 
-## 1. Hook events that exist **CONFIRMED**
+**More broadly: §§1–3 and §5 below are Codex-source research only.** They describe Codex's own
+hook/plugin/transcript system exactly as its source implements it, not anything glosa currently
+does. glosa's Codex provider consumes none of it — it has exactly two rungs, the app-server push
+(§4) and MCP pull (§6), stated as glosa's actual contract in §7. An earlier pass blurred this line
+in several places — calling the hook event set "the set glosa can ever be asked to handle", calling
+glosa "hook-capable", sourcing glosa's transcripts from "hook events", and hanging R6/R9's
+attention model on a hypothetical Codex `Notification` equivalent. Those are corrected below:
+glosa's attention model (R9) is driven solely by its own `attention_request` entries
+(`glosa_ask`, `request-review`) and reads no provider hook at all, for either Claude or Codex.
 
-`codex-protocol::protocol::HookEventName`: `PreToolUse`, `PermissionRequest`, `PostToolUse`,
-`PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `SubagentStart`,
-`SubagentStop`, `Stop`. Discovery order (highest to lowest precedence, later merges rather than
-replaces): `~/.codex/hooks.json` → `~/.codex/config.toml [hooks]` → `<repo>/.codex/hooks.json`
-(requires the project be trusted) → `<repo>/.codex/config.toml [hooks]` → plugin-bundled
-`hooks/hooks.json` → org-enforced `requirements.toml` managed hooks.
+## 1. Hook events, and the fields on Codex's own hook payloads (Codex-source research only) **CONFIRMED (source)**
 
-There is **no `Notification` event** — Claude Code's attention-state hook (R6: "Attention state
-from the provider's `Notification` hook, not a transcript stall heuristic") has no Codex
-equivalent. `PermissionRequest` fires when Codex needs an approval decision, which is the closest
-analog, but it's a distinct signal (approval-needed, not "the agent flagged something for the
-human") — **this is an honest gap, not solved by this task** (the Codex provider doesn't implement
-an attention channel; R9's attention model falls back to whatever the generic/no-hook default is
-for a Codex session).
+`codex_protocol::protocol::HookEventName` (`codex-rs/protocol/src/protocol.rs:1578`) is the
+complete, closed set of hook events Codex's own hook engine dispatches — a fact about Codex, not a
+set glosa consumes:
 
-## 2. The blocking gate → Codex's `Stop` hook **CONFIRMED (source)**
-
-`codex-rs/hooks/src/events/stop.rs` — `Stop` fires when the agent's turn completes; it is
-synchronous/blocking (the turn genuinely does not finish until every matched handler returns).
-
-**Stdin** (`StopCommandInput`, `codex-rs/hooks/src/schema.rs:575`), one JSON object on stdin,
-snake_case fields, no camelCase transform:
-```json
-{
-  "session_id": "<thread-id string>",
-  "turn_id": "<string>",
-  "transcript_path": "<path string> | null",
-  "cwd": "<absolute path string>",
-  "hook_event_name": "Stop",
-  "model": "<model slug>",
-  "permission_mode": "<string>",
-  "stop_hook_active": false,
-  "last_assistant_message": "<string> | null"
-}
 ```
-(`SubagentStop` carries the same shape plus `agent_transcript_path`, `agent_id`, `agent_type`.)
-
-**Stdout/exit contract** — glosa's Codex hook handler for the gate rung must emit exactly this:
-- Exit 0, stdout `{"decision":"block","reason":"<non-empty string>"}` → the turn is blocked from
-  actually stopping; `reason` is injected as a **continuation prompt fragment** for the next turn
-  (`StopOutcome.continuation_fragments`, via `codex_protocol::items::HookPromptFragment`) — this is
-  the delivery mechanism: the pending entry's content rides in `reason`. A `block` with an empty/
-  whitespace-only `reason` is rejected as a hook **failure** (`HookRunStatus::Failed`), not treated
-  as a no-op — glosa must never emit an empty reason.
-- Exit 0, stdout `{"continue":false,"stopReason":"..."}` → stops processing entirely and
-  **overrides** any `decision:block` in the same payload (verified directly in
-  `stop.rs`'s `continue_false_overrides_block_decision` test) — glosa's hook handler must never
-  emit both in the same response.
-- Exit code **2**, non-empty stderr → same blocking effect as `decision:block`, with stderr as the
-  reason (a legacy/scriptable alternative to the JSON form — glosa's daemon-invoked hook always
-  controls its own exit code, so this repo uses the JSON form, not this path).
-- Empty/no stdout on exit 0 → hook completes as a no-op (`HookRunStatus::Completed`), nothing
-  delivered.
-
-This is Codex's Stop-hook analog of Claude's `decision:block` — confirms the R4 table's "their hook
-gate (Codex Stop-hook etc.)" row is accurate, and gives the exact JSON glosa's `glosa hook codex
-stop` handler (out of scope for this task — the CLI wiring is a later T-task) must produce.
-
-## 3. Turn-boundary drain — same `Stop` hook, non-blocking form **CONFIRMED (source)**
-
-Codex has no separate "async drain" hook distinct from `Stop`/`UserPromptSubmit` — exactly as
-Claude Code doesn't either (the existing `ClaudeCodeProvider.deliver()` already collapses `gate`
-and `boundaryDrain` into one rung for this reason, `packages/providers/claude-code/src/provider.ts:146`).
-For Codex the non-blocking path is the same `Stop` hook (or `UserPromptSubmit`, stdin shape below)
-returning plain stdout text or `hookSpecificOutput.additionalContext` instead of `decision:block` —
-this surfaces the pending entry as context without holding up the turn. The Codex provider mirrors
-Claude's design: `gate` and `boundaryDrain` collapse into one ladder rung, `via:"gate"`.
-
-**`UserPromptSubmit` stdin** (`UserPromptSubmitCommandInput`, `schema.rs:554`):
-```json
-{
-  "session_id": "<thread-id string>",
-  "turn_id": "<string>",
-  "agent_id": "<string> | (omitted)",
-  "agent_type": "<string> | (omitted)",
-  "transcript_path": "<path string> | null",
-  "cwd": "<absolute path string>",
-  "hook_event_name": "UserPromptSubmit",
-  "model": "<model slug>",
-  "permission_mode": "<string>",
-  "prompt": "<the user's submitted prompt text>"
-}
+PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd,
+UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt
 ```
 
-## 4. `SessionStart` — session identity + `source` **CONFIRMED (source)**
+**There is no single input envelope shared by every event** — checked field-by-field against every
+`*CommandInput` struct in `codex-rs/hooks/src/schema.rs`. Only these fields are on every one:
+`session_id`, `transcript_path`, `cwd`, `hook_event_name`. Beyond that it fragments:
+- `turn_id` is on every event except `SessionStart` and `SessionEnd` (`schema.rs:499-523`).
+- `model` is on every event except `SessionEnd` (`SessionEndCommandInput`, `schema.rs:515-523`: just
+  `session_id`/`transcript_path`/`cwd`/`hook_event_name`/`reason`).
+- `permission_mode` is on every event except `SessionEnd`, `PreCompact` and `PostCompact`. The two
+  compact events carry `trigger` instead (`PreCompactCommandInput`/`PostCompactCommandInput`,
+  `schema.rs:347-382`).
+- `source` (`"startup"|"resume"|"clear"|"compact"`) is **`SessionStart`-only**
+  (`schema.rs:499-510`). `SubagentStart` has no `source` field despite otherwise looking like a
+  turn-scoped event (`SubagentStartCommandInput`, `schema.rs:549-562`).
+- `reason` is `SessionEnd`-only.
+- `agent_id`/`agent_type` are optional on the tool-scoped events (`PreToolUse`,
+  `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`,
+  `schema.rs:278-582`) and required (non-optional strings) on `SubagentStart`/`SubagentStop`;
+  absent entirely from `SessionStart`, `SessionEnd`, `Stop`, `Interrupt`.
+- `stop_hook_active`/`last_assistant_message` are `Stop`/`SubagentStop`-only; `SubagentStop`
+  additionally carries `agent_transcript_path` (`schema.rs:606-621`).
 
-`SessionStartCommandInput` (`schema.rs:486`):
+`Interrupt` (`codex-rs/hooks/src/events/interrupt.rs`; input `InterruptCommandInput`,
+`schema.rs:626-636`) fires when a running turn is interrupted; its stdin is
+`session_id`/`turn_id`/`transcript_path`/`cwd`/`hook_event_name`/`model`/`permission_mode` — the
+same shape as `Stop` minus the stop-specific fields, not a distinct envelope of its own.
+
+Hook discovery (`codex-rs/hooks/src/engine/discovery.rs:118-198`) appends handlers from every source
+rather than letting one replace another, in this load order: managed requirement handlers first
+(`append_managed_requirement_handlers`); then each configuration layer from lowest to highest
+(`layers_low_to_high`), taking that layer's `hooks.json` folder and its `config.toml [hooks]` table
+(with a warning when a layer uses both); then plugin-bundled hook sources
+(`append_plugin_hook_sources`). An `allow_managed_hooks_only` requirement limits discovery to
+managed sources. This is load and display order. The snapshot's discovery code does not by itself
+establish which handler wins when several apply to one event, so this note makes no precedence claim.
+
+**Hook output fields.** Most hooks' stdout JSON shares a universal envelope
+(`codex-rs/hooks/src/engine/output_parser.rs`'s `UniversalOutput`, sourced from
+`HookUniversalOutputWire`, `schema.rs:87-99`, flattened via `#[serde(flatten)]` into every
+`*CommandOutputWire` struct **except one**):
+
 ```json
-{
-  "session_id": "<thread-id string>",
-  "transcript_path": "<path string> | null",
-  "cwd": "<absolute path string>",
-  "hook_event_name": "SessionStart",
-  "model": "<model slug>",
-  "permission_mode": "<string>",
-  "source": "startup" | "resume" | "clear" | "compact"
-}
+{ "continue": true, "stopReason": "<string>", "suppressOutput": false, "systemMessage": "<string>" }
 ```
-`source`'s four values are byte-identical to Claude Code's own `SessionStartHookInput.source`
-enum (`packages/providers/claude-code/src/hook-types.ts:16`) — no translation needed between
-providers for this field. `SessionEnd` also exists (`SessionEndCommandInput`, `schema.rs:502`) with
-`session_id`/`transcript_path`/`cwd`/`hook_event_name`/`reason`, mirroring Claude's `SessionEnd`.
 
-**No PID anywhere in any Codex hook payload** — same as Claude Code (A2 §F08's finding). Confirms
-liveness must be lease/heartbeat-only for Codex too; there's no `kill(pid,0)` even to be tempted by.
+`InterruptCommandOutputWire` (`schema.rs:485-488`) is that one exception: it carries **only** an
+optional `systemMessage` — no `continue`/`stopReason`/`suppressOutput` field exists on it at all —
+matching `InterruptOutcome` (`interrupt.rs`), which has no blocking or continuation semantics
+whatsoever (no `should_block`/`should_stop`, only `hook_events`).
 
-## 5. Transcript / rollout file **CONFIRMED (docs) + INFERRED (source, path pattern)**
+On top of the universal envelope (where it applies), each event type layers its own fields. This
+paragraph covers the decision and context fields that shape a turn; `schema.rs` is the complete
+inventory. `Stop`/`SubagentStop`/`PostToolUse`/`UserPromptSubmit` add `decision:"block"` + non-empty
+`reason` (`BlockDecisionWire`). `PreToolUse` has **two separate decision channels**, not one: a legacy
+top-level `decision:"approve"|"block"` (`PreToolUseDecisionWire`, `schema.rs:267-273`, no third
+value), and `hookSpecificOutput.permissionDecision:"allow"|"deny"|"ask"`
+(`PreToolUsePermissionDecisionWire`, `schema.rs:257-265`), with sibling `permissionDecisionReason`,
+`updatedInput` and `additionalContext` (`PreToolUseHookSpecificOutputWire`, `schema.rs:244-255`).
+`PostToolUse`'s `hookSpecificOutput` carries `additionalContext` and `updatedMCPToolOutput`
+(`PostToolUseHookSpecificOutputWire`, `schema.rs:231-239`). `PermissionRequest` nests its decision
+**two levels deep**: `hookSpecificOutput.decision.behavior:"allow"|"deny"`
+(`PermissionRequestDecisionWire`, `schema.rs:189-226`) — `decision` is an object, not a bare string.
+On that object, `message` is accepted and becomes the denial message (`events/permission_request.rs`,
+`PermissionRequestDecision::Deny { message }`); `updatedInput` and `updatedPermissions` are reserved
+and fail closed if present; `interrupt` is reserved and fails closed only when `true` (the source's
+own doc comments on each field). `SessionStart`, `SubagentStart` and `UserPromptSubmit` add
+`hookSpecificOutput.additionalContext`.
 
-Every Codex hook payload above carries `transcript_path` directly — glosa never has to derive or
-guess the path (same as Claude). Independently, Codex's on-disk session storage (for `codex
-resume`) lives at `~/.codex/sessions/YYYY/MM/DD/rollout-<session-id>.jsonl` — one JSONL file per
-session recording the full event stream (prompts, model responses, tool calls/results, approval
-decisions, token counts). `transcriptPath()` on the provider returns `session.transcript_path`
-verbatim, exactly like the Claude provider — it never needs to reconstruct the `YYYY/MM/DD` path
-itself. The **JSONL line format itself** (per-event schema for the conversation-mirror parser, R6's
-"vendored normalized `TranscriptEvent` layer") is **UNCONFIRMED** at the field level — that's a
-separate, later task (the conversation mirror's Codex event mapper), not required for the
-`AgentProvider` interface this task implements, and is flagged here rather than guessed.
+Codex's own hook system has no `Notification` event in this closed set. This is
+Codex-source information only, offered for whoever eventually designs a Codex-specific signal;
+glosa's own attention model does not need or use it (see the intro above and §8).
 
-## 6. MCP — glosa is the server, Codex the client **CONFIRMED (docs + 2026-09-06 run)**
+## 2. Legacy `notify` — a deprecated compatibility shim, not gone (Codex-source research only) **CONFIRMED (source)**
 
-Codex CLI's documented MCP support (`developers.openai.com/codex/mcp`, `codex mcp add/list/login`,
-config at `~/.codex/config.toml` `[mcp_servers.<name>]` or project-scoped `.codex/config.toml` for
-trusted projects) is what `mcpPull` needs: glosa runs its own MCP server (the existing `glosa mcp`
-tool, same one the Claude provider's rung 4 targets), and a Codex session has `glosa` registered as
-one of its `mcp_servers` — the pull direction is "Codex calls glosa's tool," never "glosa calls into
-Codex." The mechanism is identical in shape to Claude's mcpPull, just configured via `config.toml`
-instead of `.mcp.json`.
+The prior passes described `notify` as something the multi-event hook framework "superseded."
+Source in this snapshot shows the truth is narrower: `codex-rs/hooks/src/legacy_notify.rs` still
+exists and still runs, config-gated by an optional `legacy_notify_argv: Option<Vec<String>>` on the
+hook registry (`codex-rs/hooks/src/registry.rs:43`, wired at `registry.rs:125-127`). When configured,
+it fires on the turn-complete (`AfterAgent`) event and spawns the configured argv with one extra
+JSON argument (`UserNotification::AgentTurnComplete{thread_id,turn_id,cwd,client,input_messages,last_assistant_message}`,
+kebab-case on the wire). The source itself marks it
+`// TODO: Remove this hook and its environment plumbing when legacy notify support is removed` —
+still present, but explicitly slated for eventual removal, and superseded in practice by `Stop`/
+`SessionEnd` hooks for any Codex-side consumer that needs a turn-completion or session-end signal.
+Nothing in glosa depends on `notify` or on any hook; this section is grounded here only to correct
+the prior note's overstatement about Codex's own history, not because it matters to glosa's design.
 
-**Amended 2026-09-06** (`docs/compatibility/2026-09-06-session-identity-and-delivery-spike.md`,
-Codex CLI 0.153.4). Two statements in the 2026-07-21 pass no longer hold:
+## 3. Plugins: manifest, absence of a monitor component, and feature stages (Codex-source research only) **CONFIRMED (source)**
 
-- The claim that Codex is **client-only** and has "no documented `codex mcp-server`/equivalent" is
-  stale. `codex mcp-server` exists in the current CLI ("Start Codex as an MCP server (stdio)"), as
-  does `codex app-server`. Nothing in glosa depends on this either way; it is corrected so the doc is
-  not cited for it.
-- A server spawned from `[mcp_servers.<name>]` receives a **fixed eight-variable environment**
-  (`HOME LANG LOGNAME PATH SHELL TMPDIR USER __CF_USER_TEXT_ENCODING`) plus whatever the server's own
-  `env` table declares. It gets no `CODEX_THREAD_ID`, `CODEX_SESSION_ID` or `CODEX_HOME`, and
-  `shell_environment_policy.inherit = "all"` does not widen it. A glosa MCP server started by Codex
-  therefore cannot identify its own thread. The thread id reaches glosa through an explicit bind: the
-  agent's **shell tool** does see `CODEX_THREAD_ID` (verified equal to the session id Codex printed),
-  which is what `connectPrompt` in `packages/providers/codex/src/provider.ts` already asks it to
-  read.
+A plugin manifest's declarable components (`codex_plugin::manifest::PluginManifestPaths`,
+`codex-rs/plugin/src/manifest.rs:19-24`) are exactly four: `skills` (a list), `mcp_servers`
+(a path or inline object), `apps`, and `hooks` (a list of paths, or inline `HooksFile`s). **There is
+no monitor, watcher, or background-process component type anywhere in the manifest schema** — a
+Codex plugin can bundle skills, an MCP server, an app, and/or hooks, and nothing else. This confirms
+by absence that Codex has no plugin-native equivalent of Claude's per-session plugin monitor; the
+Codex provider's own push transport (§4 below) is not plugin-delivered at all.
 
-## 7. The concrete provider contract this pins
+Feature-flag stages (`codex-rs/features/src/lib.rs`'s `FeatureSpec` table):
+- `hooks` (`Feature::CodexHooks`, `features/src/lib.rs:1187`) — `Stage::Stable`, `default_enabled: true`.
+- `plugins` (`Feature::Plugins`, `features/src/lib.rs:1395`) — `Stage::Stable`, `default_enabled: true`.
+- `plugin_hooks` (`Feature::PluginHooks`, `features/src/lib.rs:1413`) — `Stage::Removed`, `default_enabled: false`,
+  documented in the enum itself as "Removed compatibility flag for plugin-bundled lifecycle hooks"
+  (`features/src/lib.rs:242`). A config file that still sets `plugin_hooks` is silently ignored, not
+  rejected — the flag exists only so an old config doesn't hard-fail.
 
-| R4 rung | Claude Code | Codex | Codex mechanism |
-|---|---|---|---|
-| push (async, idle) | plugin monitor | **app-server socket** | `thread/resume` + `turn/start`/`turn/steer` over `$CODEX_HOME/app-server-control/app-server-control.sock`, verified 2026-09-06 (#161). Not present on a default install — see the spike note. The 2026-07-21 "no equivalent exists" finding was true of hooks and `notify`, and wrong about the app-server. |
-| gate (blocking) | Stop/UserPromptSubmit hook `decision:block` | Stop hook `decision:block` + non-empty `reason` | §2 above |
-| boundaryDrain (async) | Stop/UserPromptSubmit hook, non-blocking | Stop/UserPromptSubmit hook, non-blocking (plain stdout / `additionalContext`) | §3 above |
-| mcpPull | `glosa mcp` tool via `.mcp.json` | `glosa mcp` tool via `config.toml [mcp_servers.glosa]` | §6 above |
+Both hooks and plugins are therefore stable, on-by-default Codex features, not experiments — the
+2026-07-21 framing of a "multi-event hook framework" as something new/emerging no longer applies;
+it's the established baseline. None of this is glosa's own behavior — glosa is not a Codex plugin
+and consumes no Codex hook.
 
-`capabilities = { push: <exact thread attachment connected>, gate: true, boundaryDrain: true,
-mcpPull: true }`. Push is evaluated per session from the live `codex_app_server` stream connection,
-never from Codex installation or socket existence. A normal Homebrew/npm install has no managed
-daemon, so the ordinary fallback remains hook boundary delivery plus MCP pull.
+## 4. The app-server model — this is glosa's actual Codex push mechanism **CONFIRMED (source)**
 
-`detectSession(hookEvent)` accepts any payload carrying `session_id` (string) + `cwd` (string) —
-structurally identical guard to Claude's `looksLikeClaudeHookInput`, since every Codex
-`*CommandInput` struct carries exactly those two fields under exactly those two names. `source`
-comes from the payload's own `source` field when present (`SessionStart`), else falls back to
-`hook_event_name` (`Stop`/`UserPromptSubmit`/etc. carry no `source` field), exactly mirroring the
-Claude provider's fallback (`packages/providers/claude-code/src/provider.ts:74`).
+**TUI runs on the app-server; there is no separate legacy TUI transport.** The `tui_app_server`
+legacy config key is recognized only to be silently dropped (`codex-rs/features/src/lib.rs:589-591`,
+matched and `continue`d with no effect) — it used to gate whether the TUI spoke to a local
+app-server; now that path is unconditional, and the TUI's own remote-attach code
+(`codex-rs/tui/src/lib.rs:397-408`, `resolve_remote_addr`) resolves a bare `unix://` URL to the same
+control socket every other app-server client uses.
+
+**Control socket path, as the source actually builds it** (not assumed from a CLI flag or a prior
+comment): `codex-rs/app-server-transport/src/transport/mod.rs:56-73` defines
+`app_server_control_socket_path(codex_home)` as
+`codex_home.join("app-server-control").join("app-server-control.sock")` — exactly
+`$CODEX_HOME/app-server-control/app-server-control.sock`.
+Every consumer (`codex-rs/tui/src/lib.rs`, `codex-rs/cli/src/main.rs`,
+`codex-rs/cli/src/doctor/background.rs`) resolves the path through this one function — matches
+`packages/providers/codex/src/unix-websocket.ts`'s `codexControlSocketPath()` exactly.
+
+**Multiple simultaneous connections are supported.** The control-socket acceptor loop
+(`codex-rs/app-server-transport/src/transport/unix_socket.rs:80-136`, `run_control_socket_acceptor`)
+`tokio::spawn`s a fresh task per accepted connection and immediately goes back to `accept()`ing —
+there's no single-client assumption anywhere in the accept loop, so glosa's MCP shim attaching
+alongside a live TUI session (or another tool) on the same socket is a supported shape, not an
+edge case glosa has to defend against.
+
+**Push mechanics** — `codex_app_server_protocol` (`codex-rs/app-server-protocol/src/protocol/common.rs`)
+still names exactly the four methods glosa's attachment uses:
+- `thread/resume` (`common.rs:565`, params `ThreadResumeParams` in
+  `codex-rs/app-server-protocol/src/protocol/v2/thread.rs:351`, including `exclude_turns: bool` at
+  line 420) — resumes a specific `thread_id` without replaying its history.
+- `turn/start` (`common.rs:1033`, params `TurnStartParams`,
+  `codex-rs/app-server-protocol/src/protocol/v2/turn.rs:166`, `input: Vec<UserInput>`) — starts a
+  turn on an idle thread.
+- `turn/steer` (`common.rs:1045`, params `TurnSteerParams`, `v2/turn.rs:291`) — steers an
+  **already-active** turn; `expected_turn_id: String` (`v2/turn.rs:312`, `expectedTurnId` on the
+  wire) is a required precondition field, not optional — the request fails outright if it doesn't
+  match the live turn, exactly the guard glosa's `CodexJsonRpcClient.deliver()` relies on.
+- `turn/completed` notification (`common.rs:1932`, `"turn/completed"`) — the boundary signal glosa's
+  attachment uses to clear its tracked active-turn id and to drive its own heartbeat
+  (`packages/providers/codex/src/app-server.ts`'s `onTurnCompleted`).
+
+This is exactly the shape `packages/providers/codex/src/{unix-websocket.ts,app-server.ts}`
+implement — nothing in this refresh contradicts the existing provider code.
+
+**New since the 2026-09-06 spike, noted but not load-bearing for glosa**: the CLI now has a
+`codex app-server daemon {bootstrap,start,restart,stop,update,enable-remote-control,disable-remote-control,version}`
+subcommand tree (`AppServerDaemonSubcommand`, `codex-rs/cli/src/main.rs:786-816`; the outer
+`AppServerSubcommand::Daemon` wrapper is at `main.rs:761-763`) for installing a durable,
+user-managed app-server process — `version` ("print local CLI and running app-server versions as
+JSON", `main.rs:815-816`) was missing from the 2026-07-21/09-06 framing and is included here. This
+is an explicit opt-in a user runs, not a default — it doesn't change glosa's own rule that `push`
+is a live-connection fact per session, never inferred from installation (R4). A2 §F07 names
+`codex app-server daemon bootstrap`/`start` alongside the raw `--listen` invocation for this reason.
+
+## 5. Transcript / rollout file (Codex-source claim, then glosa's actual code path) **CONFIRMED (source)**
+
+Codex-source fact, research only: every hook event's stdin struct carries `transcript_path`
+directly (§1) — a hypothetical future Codex hook consumer would never have to derive or guess it
+from anything else. This is not glosa's code path: glosa's Codex provider does not consume hook
+events at all (no rung reads them; §7's two rungs are app-server push and MCP pull).
+
+Independently, Codex's on-disk session storage doc comment (`codex-rs/rollout/src/list.rs:436`)
+confirms the layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` —
+matching `packages/providers/codex/src/provider.ts`'s `transcriptPath()` scan exactly (same
+three-level date directories, same `rollout-` prefix stripping). In glosa's actual code,
+`transcriptPath()` returns `session.transcript_path` verbatim only when it was already present on
+the `SessionBinding` — which would require either an explicit MCP bind that supplied one, or a
+(currently uncalled-in-production) `detectSession(payload)` invocation against a payload that had
+one. The live app-server push registration path supplies neither: `app-server.ts`'s
+`daemon.register({session_id, provider, cwd, workspace_binding, source})` call carries no
+`transcript_path` field at all. So in practice, every push-registered Codex session's
+`transcriptPath()` call falls through to this directory scan — it is the normal path today, not a
+fallback for a rare miss.
+
+**New in this pass**: a background compression worker (`codex-rs/rollout/src/compression.rs`) can
+rewrite a "cold" (not recently modified) rollout file to `<name>.jsonl.zst` to save disk. It only
+targets cold files (`compress_rollout_if_cold_blocking`, `compression.rs:648`), so a live registered
+session's own transcript — actively being appended to — is never a compression target; this doesn't
+affect the `AgentProvider` interface. It is relevant to whoever eventually builds the conversation
+mirror's Codex event mapper against **older** sessions, since `provider.ts`'s current scan only
+matches `*.jsonl`, not `*.jsonl.zst`. The JSONL line-level event schema itself remains
+**UNCONFIRMED** at the field level — still a separate, later task, not required for `AgentProvider`.
+
+## 6. MCP — glosa is the server, Codex the client **CONFIRMED (source, this pass) / UNCONFIRMED where noted**
+
+**Codex's MCP client surface, re-verified this pass.** `codex mcp {list,get,add,remove,login,logout}`
+(`McpSubcommand`, `codex-rs/cli/src/mcp_cmd.rs:65-71`) is the current subcommand set — a superset of
+the "add/list/login" this note previously named, all still present. `add`'s own doc comment
+confirms where a server launcher entry lands: `~/.codex/config.toml`
+(`mcp_cmd.rs:51`, `find_codex_home()` + `load_global_mcp_servers()`/`ConfigEditsBuilder` at
+`mcp_cmd.rs:294,415-425`). That is what `mcpPull` needs — glosa runs its own MCP server
+(`glosa mcp`), and a Codex session has `glosa` registered as one of its `mcp_servers`; the pull
+direction is always "Codex calls glosa's tool." The prior claim of an additional **project-scoped**
+`.codex/config.toml` location for `mcp_servers` has **no citation in this snapshot** — `mcp_cmd.rs`
+names only the global `~/.codex/config.toml` — so it is removed here rather than repeated
+unverified.
+
+The prior claim that "`codex mcp-server` exists" is **contradicted by this snapshot**: the full
+top-level `Subcommand` enum (`codex-rs/cli/src/main.rs:149-243`) has no `mcp-server` variant, and
+the literal string `"mcp-server"` does not appear anywhere in this checkout. That claim is removed
+rather than carried forward. `codex app-server` does exist (§4), but it speaks its own
+`thread/turn` JSON-RPC protocol, not MCP — citing it as an "MCP-facing process" conflated two
+different protocols, so that framing is also dropped.
+
+**The environment a spawned local MCP server actually receives.** `create_env_for_mcp_server`
+(`codex-rs/rmcp-client/src/utils.rs:16-59`), called from the local stdio launcher
+(`codex-rs/rmcp-client/src/stdio_server_launcher.rs:276`), builds the child environment from an
+allowlist, `DEFAULT_ENV_VARS` (unix, `utils.rs:162-175`): `HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`,
+`__CF_USER_TEXT_ENCODING`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ`. Each name is copied only when it
+is set in Codex's own environment (`filter_map(|var| env::var_os(var)…)`). On top of that come the
+names the server's own `env` table declares (`local_stdio_env_var_names`, `utils.rs:90-100`), and
+the custom-CA keys when set. The 2026-09-06 spike observed eight variables. That is consistent with
+this allowlist on a host where `LC_ALL`, `TERM` and `TZ` were unset, and it is how A2 §F08 states the
+result. No `CODEX_THREAD_ID`, `CODEX_SESSION_ID` or `CODEX_HOME` is on the allowlist or added by this
+function. A glosa MCP server started by Codex therefore cannot identify its own thread from its
+spawn environment; the thread id reaches glosa through an explicit bind instead.
+
+**UNCONFIRMED (2026-09-06 spike, not re-verified) — which Codex tool actually exposes `CODEX_THREAD_ID`.**
+The constant `CODEX_THREAD_ID_ENV_VAR` and a populating step do exist in this snapshot
+(`codex-rs/protocol/src/shell_environment.rs:7,150-153`, `populate_env`'s "Step 6 - Populate the
+thread ID environment variable when provided"), which shows Codex has *a* mechanism that can inject
+`CODEX_THREAD_ID` into a spawned process's environment. This sparse checkout does not include the
+caller that would confirm it is specifically the agent's **shell tool** invocation that receives
+it, rather than some other Codex-spawned subprocess — that specific attribution rests on the
+2026-09-06 spike's live measurement ("verified equal to the session id Codex printed"), not on a
+source path in this snapshot. `connectPrompt` in `packages/providers/codex/src/provider.ts` still
+asks the agent to read `CODEX_THREAD_ID` from its own shell environment; nothing here contradicts
+that, but this pass cannot independently confirm the exact call site.
+
+## 7. glosa's current Codex contract
+
+Per `docs/requirements.md` R4, the delivery ladder is **`push → mcp_pull`**; there is no hook rung
+of any kind, blocking or otherwise (#152). For Codex:
+
+| Rung | Mechanism | Grounded in |
+|---|---|---|
+| push (async, idle-or-active) | app-server control socket: `thread/resume` once, then `turn/steer` (active turn known) or `turn/start` (otherwise) per delivered entry | §4 |
+| mcp_pull | `glosa mcp` tool via `.codex/config.toml [mcp_servers.glosa]`, Codex as the calling client | §6 |
+
+`capabilities = { push: <exact thread has a live app-server attachment>, mcpPull: true }` —
+`push` is evaluated per session from the live connection, never from Codex installation or socket
+existence (R4); a normal Homebrew/npm install has no socket listening by default, so the ordinary
+fallback is MCP pull alone. `detectSession(payload)` accepts any payload carrying `session_id`
+(string) + `cwd` (string) — every Codex `*CommandInput` struct in §1 carries exactly those two
+fields under exactly those names, so this guard is structural, not heuristic, and mirrors the
+Claude provider's own `looksLikeSessionPayload` guard exactly. `source` reads the payload's own
+`source` field when present (`SessionStart` only — §1 confirms `SubagentStart` has no `source`
+field), else falls back to `hook_event_name`, matching
+`packages/providers/claude-code/src/provider.ts`'s fallback.
 
 ## 8. What's honestly unresolved
 
-- **No attention-hook equivalent** (§1) — out of scope for the `AgentProvider` interface (R7), but
-  worth flagging for whoever builds R9's attention model against a Codex session: it will need a
-  different signal than Claude's `Notification` hook, or degrade gracefully.
-- **Rollout JSONL event schema** (§5) — path is confirmed, line-level event shape is not; the
-  conversation-mirror's Codex event mapper is a separate, later piece of work.
-- **Whether `codex --dangerously-*`-style flags exist for anything Codex-side analogous to Claude's
-  channels** — not found in either source; treated as confirmed-absent per §7, but if a future
-  Codex release adds an async push mechanism, `capabilities.push` and this doc both need revisiting.
-- This document reflects the `openai/codex` `main` branch on 2026-07-21. Codex CLI is a fast-moving
-  target (T2a's own framing: "may be a moving research target") — a version pin worth re-checking
-  before the T8 release gate.
+- **No Codex-side attention signal, by design, not as a gap to fill** (§1) — R9's attention model
+  reads no provider hook at all, for Claude or Codex; it is driven solely by glosa's own
+  `attention_request` entries. This is current, shipped behavior, not something "whoever builds R9"
+  still has to solve.
+- **Rollout JSONL event schema** (§5) — path and naming confirmed; line-level event shape is not;
+  compressed (`.jsonl.zst`) cold rollouts are a new wrinkle for that future mapper, not for the
+  current `AgentProvider`.
+- **Which Codex tool reads `CODEX_THREAD_ID`** (§6) — the environment-injection mechanism is
+  confirmed present in this snapshot; the specific "the shell tool sees it" attribution still rests
+  on the 2026-09-06 spike's live run, not on a source path this sparse checkout includes. Re-verify
+  with a wider checkout or a fresh live run before depending on it for anything new.
+- The removed "`codex mcp-server`" and "project-scoped `.codex/config.toml`" claims (§6) — dropped
+  as unsupported by this snapshot, not confirmed false; a future wider checkout could re-add either
+  one with a real citation if it turns out to exist elsewhere in the tree.
+- This document reflects `openai/codex` `main` at `1427825c4044d48b513c7d4ea32b84e58806a188`
+  (2026-09-15). Codex CLI is a fast-moving target — a pin worth re-checking before any release gate
+  that depends on this note.
+
+## 9. Historical — the Stop-hook blocking gate and turn-boundary drain (retired by #152)
+
+Kept for its source-grounding value only. **This is not glosa's contract.** Before #152 removed
+every hook rung, glosa's plan was to implement a Codex `Stop`-hook handler mirroring Claude's
+`decision:block` gate. That mechanism still exists in current Codex source exactly as described
+below — nothing here is stale about Codex itself — it's simply no longer something glosa builds.
+
+**The gate.** `codex-rs/hooks/src/events/stop.rs` — `Stop` fires when a turn completes; it is
+synchronous/blocking. Stdin (`StopCommandInput`, `codex-rs/hooks/src/schema.rs`) carries
+`session_id`/`turn_id`/`transcript_path`/`cwd`/`hook_event_name`/`model`/`permission_mode`/
+`stop_hook_active`/`last_assistant_message`. Stdout/exit contract: exit 0 with
+`{"decision":"block","reason":"<non-empty>"}` blocks the stop and injects `reason` as a continuation
+prompt fragment (`HookPromptFragment`, `stop.rs`); a `block` with an empty `reason` is rejected as a
+hook **failure**, not a no-op (`block_decision_without_reason_is_invalid` test, `stop.rs`). Exit 0
+with `{"continue":false,"stopReason":"..."}` overrides any `decision:block` in the same payload
+(`continue_false_overrides_block_decision` test, `stop.rs`). Exit code 2 with non-empty stderr has
+the same blocking effect as `decision:block`, stderr as the reason. Empty/no stdout on exit 0 is a
+no-op.
+
+**The drain.** The non-blocking form used the same `Stop`/`UserPromptSubmit` hooks, returning plain
+stdout or `hookSpecificOutput.additionalContext` instead of `decision:block` — surfacing a pending
+entry as context without holding up the turn. Claude Code never had a separate async-drain hook
+either; both providers would have collapsed `gate` and `boundaryDrain` into one rung for the same
+reason.
+
+Neither rung is implemented by `packages/providers/codex/src` today; the provider's only two rungs
+are `codex_app_server` push and `mcp_pull` (§7).
