@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.22] — 2026-09-16
+
 ### Removed
 
 - `glosa init`, its ownership manifest and backups, `glosa open --init/--no-init`, the
@@ -51,6 +53,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and the existing `entry-status` route: Bun's default idle-connection close was cutting a long hold
   at roughly ten seconds regardless of the caller's own `wait_ms`. (#153)
 
+### Changed
+
+- The workbench has a new look built around two hands. Neutrals carry no hue; the human reviewer's
+  marks, caret, selection and unsaved work take a deep teal "hand" colour, an unsent note is in
+  "pencil", and anything a session writes is printed in ink. Annotations in the margin read as
+  entries on the page rather than cards, with the passage's address (`§1.2.3`, derived from the
+  document's headings and never stored in it) on the entry and in the gutter. A
+  provenance line under the manuscript states your open marks, what the session applied, and
+  whether the file changed outside glosa. Each artifact can be read in the default sans, a serif
+  or a mono face from the pane's More menu, remembered per workspace and path. `DESIGN.md` now
+  describes this system.
+- ⌘K / Ctrl+K opens a Go to palette listing the active document's sections and then every file in
+  the workspace (`#` narrows to sections, `/` to files). It replaces the hover outline rail at the
+  pane's left edge. The top bar centres the active artifact's path, the navigator toggle sits in
+  the navigator's bottom-left corner, folders sort before files by natural name order, and the
+  active tab no longer changes width when its label turns bold.
+
 ### Fixed
 
 - Keep mine on a stale save now merges the writer's edit with disk's own change instead of
@@ -81,8 +100,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `event: superseded` frame (daemon shutdown, token revocation/rotation, cancel and send failure
   still close with plain EOF) and exposes a read-only `GET /api/sessions/:id/stream/status`
   ownership probe. The Claude plugin monitor and the Codex app-server attachment stop reconnecting
-  on supersession, park, and poll that probe every 15-18 seconds until it reports the session free,
-  re-acquiring the stream without a daemon restart. (#206)
+  on supersession, park, and poll that probe every 15-18 seconds. They take the stream back only
+  after two probes in a row report the session free, so an owner that is merely between two
+  connections is not displaced; no daemon restart is needed. (#206)
 
 ## [0.1.0-alpha.21] — 2026-09-14
 
