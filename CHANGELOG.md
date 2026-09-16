@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0-alpha.24] — 2026-09-16
 
 ### Changed
 
@@ -856,7 +856,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.23...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.24...HEAD
+[0.1.0-alpha.24]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.23...v0.1.0-alpha.24
 [0.1.0-alpha.23]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.22...v0.1.0-alpha.23
 [0.1.0-alpha.18]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.17...v0.1.0-alpha.18
 [0.1.0-alpha.17]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.15...v0.1.0-alpha.17
