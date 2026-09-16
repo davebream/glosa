@@ -1362,11 +1362,15 @@ export function createArtifactPane(host, deps) {
     // Entering Edit is where a stale save becomes possible, so start fetching the merge now
     // rather than when the conflict dialog needs it.
     if (isEdit) void loadMergeModule();
-    if (isEdit && !sourceFace && !richEditor) {
+    if (isEdit && !sourceFace && !richEditor && !loading) {
       // #182 R1: a late/first mount fills from the held baseline pair, never from
       // `currentArtifact.content` — an SSE refresh between Edit entry and this mount landing must
       // not hand the rich face bytes newer than the `baselineSha` a Keep-mine merge will verify
       // against.
+      // Not while `loadArtifact` is still fetching: the baseline pair is not this file's yet, and
+      // a mount begun now captures that stale or empty text. If the module then resolved while
+      // `hydrateAnnotations` was still waiting, nothing handed the mount the arrived file, so the
+      // face came up empty over a file with content. `loadArtifact` renders again once it is in.
       void mountRichFace(parkedSourceFor(currentArtifact) ?? baselineContent ?? "");
     }
     if (!isEdit) teardownRichFace();

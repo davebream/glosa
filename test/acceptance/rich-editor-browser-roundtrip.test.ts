@@ -811,6 +811,62 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   );
 
   test(
+    "a pane opened directly in Edit fills the rich face with the file even when the editor module loads before the annotations do",
+    async () => {
+      // The race CI hit under load: the editor module resolved after the artifact arrived but while
+      // `hydrateAnnotations` was still waiting, and the face mounted over the empty string a mount
+      // started during the load had captured — an empty editor over a file that has content, which
+      // a save would then write back. Here the annotations are held until the module has resolved
+      // (or 1.5 s pass, for a pane that correctly does not load the module until the file is in), so
+      // the ordering is forced rather than left to the machine's speed.
+      const path = "opened-in-edit.md";
+      writeFileSync(join(workspaceRoot, path), "# Opened in Edit\n\nThe body the face must show.\n");
+
+      const { client } = await launchBrowser();
+      cdp = client;
+
+      const mounted: any = await client.evaluate(`(async () => {
+        const { createDataAccess } = await import("/app/data-access.js");
+        const { createArtifactPane } = await import("/app/artifact-pane.js");
+        sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+        const host = document.createElement("div");
+        document.body.append(host);
+        const dataAccess = createDataAccess();
+        let moduleLoaded = false;
+        const realGetAnnotations = dataAccess.getAnnotations.bind(dataAccess);
+        dataAccess.getAnnotations = async (...args) => {
+          for (let i = 0; i < 60 && !moduleLoaded; i++) await new Promise(resolve => setTimeout(resolve, 25));
+          return realGetAnnotations(...args);
+        };
+        const pane = createArtifactPane(host, {
+          dataAccess,
+          slug: ${JSON.stringify(slug)},
+          path: ${JSON.stringify(path)},
+          initialMode: "edit",
+          loadRichEditor: async () => {
+            const { mountRichEditor } = await import("/app/rich-editor.js");
+            moduleLoaded = true;
+            return mountRichEditor;
+          },
+        });
+        await pane.ready;
+        let editable = null;
+        for (let i = 0; i < 200; i++) {
+          editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");
+          if (editable) break;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const result = { mounted: Boolean(editable), text: editable?.textContent ?? null };
+        pane.destroy(); host.remove();
+        return result;
+      })()`);
+      expect(mounted).toEqual({ mounted: true, text: "Opened in EditThe body the face must show." });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "#182: Keep mine merges a real keypress in the rich editor with a real disk-only change, byte-exact on disk",
     async () => {
       const path = "keepmine.md";
