@@ -56,6 +56,32 @@ describe("the Go to palette", () => {
   });
   afterEach(() => dom.teardown());
 
+  test("commands follow sections and files, keep their order, narrow with > and run on Enter", () => {
+    const ran: string[] = [];
+    const palette = createCommandPalette({
+      host,
+      getFiles: () => files,
+      getSections: () => sections,
+      onOpenFile: (path) => opened.push(path),
+      getCommands: () => [
+        { id: "notes", label: "Hide notes", run: () => ran.push("notes") },
+        { id: "edit", label: "Edit", detail: "⌘E", run: () => ran.push("edit") },
+      ],
+    });
+    palette.open();
+    expect(all(".glosa-palette-group").map((node) => node.textContent)).toEqual([
+      "Sections · docs/requirements.md",
+      "Files",
+      "Commands",
+    ]);
+    type(">");
+    expect(labels()).toEqual(["Hide notes", "Edit"]);
+    key("ArrowDown");
+    key("Enter");
+    expect(ran).toEqual(["edit"]);
+    expect(one(".glosa-palette").hidden).toBe(true);
+  });
+
   test("stays hidden until asked, then lists the active document's sections before the files", () => {
     const palette = mount();
     expect(one(".glosa-palette").hidden).toBe(true);

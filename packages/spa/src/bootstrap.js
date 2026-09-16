@@ -397,7 +397,8 @@ async function main() {
   if (screen === "ready") {
     const readyEl = document.querySelector('[data-screen="ready"]');
     const surface = route.surface ?? "workspace";
-    const initialMode = route.mode ?? "read";
+    // No mode in the link: open the default page, notes shown. A read lock pins the read page itself.
+    const initialMode = route.mode ?? (route.readLock ? "read" : "review");
     const readLock = Boolean(route.readLock);
     // viewer.js is intentionally not yet checked; adapt its incomplete inferred parameter type
     // at this one import seam while keeping bootstrap's full call contract explicit.

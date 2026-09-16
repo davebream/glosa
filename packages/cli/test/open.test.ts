@@ -165,14 +165,15 @@ describe("glosa open", () => {
     expect(result.ok).toBe(true);
     expect(result.data.slug).toBe("abc123");
     expect(result.data.surface).toBe("workspace");
-    expect(result.data.mode).toBe("read");
+    // The default page is the review page; only a read-locked visit opens on the read page.
+    expect(result.data.mode).toBe("review");
     expect(result.data.preview).toBe(false);
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(1);
     expect(browserCalls[0]).toContain("http://glosa.localhost:4646/#");
     expect(browserCalls[0]).toContain("t=test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
-    expect(browserCalls[0]).toContain("mode=read");
+    expect(browserCalls[0]).toContain("mode=review");
     expect(browserCalls[0]).toContain("a=01-first.md");
     expect(browserCalls[0]).not.toContain("lock=");
   });
@@ -392,7 +393,7 @@ describe("glosa open", () => {
       path: dir,
       url: result.data.url,
       surface: "workspace",
-      mode: "read",
+      mode: "review",
       preview: false,
     });
     expect(browserCalls).toHaveLength(0);

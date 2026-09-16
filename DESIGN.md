@@ -324,10 +324,20 @@ Quiet and ink-led.
 - **Focus:** one ring for every control: 2px solid hand, 2px offset, 2px radius.
 - **Recessive verbs** (Edit, Remove, Undo on an entry): 12px underlined Muted text, no box. Edit and Undo hover to the hand; Remove hovers to Danger.
 
-### Mode Control (Read / Review / Edit)
-- **Style:** an ink outline (1px inset Region Rule) on paper, 8px radius, 2px padding and gap. Segments are 24px, 6px radius, 13px medium Muted labels with icons; hover to a Sunken bed and ink.
-- **Active:** struck forward as filled ink with paper text at 600. Fill, weight and contrast carry the state together.
-- **Parked edit:** a hand dot on the Edit segment marks an unsaved draft parked off screen.
+### Page Control (Notes · Edit, or Done)
+- **Style:** an ink outline (1px inset Region Rule) on paper, 8px radius, 2px padding and gap, centred in the artifact bar. Buttons are 28px, 6px radius, 13px medium Muted labels with icons; hover to a Sunken bed and ink.
+- **Reading:** a Notes toggle and Edit. Notes shown is a quiet pressed bed (Sunken, ink) rather than a fill, because showing notes is a view of the same page. The toggle's accessible name says what it does: "Hide notes" or "Show notes".
+- **Editing:** only Done, struck forward as filled ink with paper text at 600, because editing is the state the page is in. Done returns to whichever view was left.
+- **Paused:** while a session holds the workspace's apply lease, Edit is disabled and says why; a draft already open stays open with a status line.
+- **Parked edit:** a hand dot on Edit marks an unsaved draft parked off screen.
+
+### Go to Trigger
+- **Style:** the top bar's title, drawn as a quiet field: 30px, Quiet Border, 6px radius, Surface fill, the document path in 14px/600 ink on the left and a `⌘K` keycap (11px/600 Muted in a Quiet Border box on paper) on the right. Hover sharpens the edge to Strong Border on paper.
+- **Behaviour:** a button, not an input: clicking it opens the Go to palette, which lists the document's sections, the workspace's files and the commands that apply now (Hide or Show notes, Edit or Done). `#`, `/` and `>` narrow to each group.
+
+### Edit on the Page
+- **Scrolling:** the page scrolls in Edit, never an inner editor box. The formatting toolbar (with the Rich/Source toggle on its row) sticks to the top of the pane, and the Save row sticks to the bottom on paper above a Quiet Border rule. The source face grows with its text.
+- **Place:** entering and leaving Edit keeps the page's scroll position.
 
 ### Navigator
 - **Style:** paper, ink hairline at its right, 232px. Section labels in the Section Label style. Rows are 28px, 13px ink, 5px radius, hover to a Sunken bed; the current row is Sunken, ink, 600.

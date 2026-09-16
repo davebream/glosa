@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- A document now opens as one page with your notes shown, so you can select text and leave a note
+  without switching modes first. **Notes** hides or shows the margin, and **Edit** (⌘E) turns the
+  same page into an editor; **Done** returns to the view you left. Editing keeps your place on the
+  page instead of jumping to the top, and the formatting toolbar and Save stay in reach while you
+  scroll. Links, `glosa open` and `glosa_present` still accept `read`, `review` and `edit`; a link
+  that names no mode, and `glosa open` without `--read`, now opens with notes shown.
+- Edit is paused while an agent session is applying a change to the workspace, so a save cannot
+  race the session's write. A draft you already have open stays open and says why to wait.
+- The document's path in the top bar is now the way into Go to (⌘K). Go to also lists what you can
+  do to the page right now, such as hiding notes or editing; type `>` to show only those.
+
 ### Fixed
 
 - A pane that loaded its notes before its first real width measurement kept them in the collapsed

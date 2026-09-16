@@ -83,7 +83,7 @@ export function mountApp(
     initialSlug,
     initialArtifact,
     surface = "workspace",
-    initialMode = "read",
+    initialMode = "review",
     readLock = false,
     appearance,
     onFocusChange,
@@ -114,7 +114,7 @@ export function mountApp(
   /** @type {Map<string, any>} */
   const panes = new Map(); // panel id → pane handle
   let activePanelId = null;
-  let requestedMode = MODES.includes(initialMode) ? initialMode : "read";
+  let requestedMode = MODES.includes(initialMode) ? initialMode : "review";
 
   // A single presented document is one document: no tab strip, no dock (brief §4).
   const singlePane = surface === "document";
@@ -135,6 +135,7 @@ export function mountApp(
   const {
     navToggle,
     titleEl,
+    goToTrigger,
     conversationToggle,
     shortcutsToggle,
     topbarOverlays,
@@ -316,7 +317,59 @@ export function mountApp(
       return { title: pane.path, entries: outline.entries, current: outline.current };
     },
     onOpenFile: (path) => void openArtifact(path),
+    getCommands: () => paletteCommands(),
   });
+  goToTrigger.addEventListener("click", () => palette.open());
+  goToTrigger.setAttribute("aria-label", "Go to");
+
+  /** What the reader can do to the page in front of them, in a fixed order. Only what applies right
+   * now is listed, so the palette never offers an action that would do nothing. */
+  function paletteCommands() {
+    const pane = activePane();
+    const commands = [];
+    if (pane && isArtifactPanel(pane.path) && !readLock) {
+      const mode = pane.getMode?.();
+      if (mode === "edit") {
+        commands.push({ id: "done", label: "Done editing", detail: "⌘E", run: () => pane.toggleEdit?.() });
+      } else {
+        commands.push({
+          id: "notes",
+          label: mode === "review" ? "Hide notes" : "Show notes",
+          run: () => pane.toggleNotes?.(),
+        });
+        if (pane.canEdit?.())
+          commands.push({ id: "edit", label: "Edit", detail: "⌘E", run: () => pane.toggleEdit?.() });
+      }
+    }
+    return commands;
+  }
+
+  /** The workspace's apply lease as the journal stream reports it (A4 §F05: at most one per
+   * workspace). While a session holds one, every pane pauses Edit. A lease that began before this
+   * page connected is not known here; the save guard still refuses a stale save in that case. */
+  let applyLease = null;
+  let applyLeaseTimer = null;
+  function setApplyLease(lease) {
+    applyLease = lease;
+    if (applyLeaseTimer) clearTimeout(applyLeaseTimer);
+    applyLeaseTimer = null;
+    if (lease?.expires_at) {
+      const ms = Date.parse(lease.expires_at) - Date.now();
+      if (ms > 0) applyLeaseTimer = setTimeout(() => setApplyLease(null), ms);
+      else applyLease = null;
+    }
+    for (const pane of panes.values()) pane.setApplyPause?.(applyLease);
+  }
+  function trackApplyLease(frame) {
+    if (frame?.event === "apply_begin" && frame.detail?.lease_id) {
+      setApplyLease({ lease_id: frame.detail.lease_id, expires_at: frame.detail.expires_at ?? null });
+    } else if (
+      (frame?.event === "apply_end" || frame?.event === "apply_expired") &&
+      (!applyLease || !frame.detail?.lease_id || frame.detail.lease_id === applyLease.lease_id)
+    ) {
+      setApplyLease(null);
+    }
+  }
 
   /** With several artifacts open, the reader has to be able to tell at a glance which pane the
    * mode control, the shortcuts, and the address bar are all talking about. The active tab's
@@ -412,6 +465,7 @@ export function mountApp(
       const [, path, from, to] = splitDiffId(id);
       const pane = createDiffPane(host, { dataAccess, slug: currentSlug, path, from, to, describeVersion });
       panes.set(id, pane);
+      if (applyLease) pane.setApplyPause?.(applyLease);
       return pane;
     }
     const pane = createArtifactPane(host, {
@@ -439,6 +493,7 @@ export function mountApp(
       },
     });
     panes.set(id, pane);
+    if (applyLease) pane.setApplyPause?.(applyLease);
     pane.element.setAttribute("data-active", String(id === activePanelId));
     void pane.ready.then(() => {
       refreshTabs();
@@ -578,6 +633,12 @@ export function mountApp(
       palette.toggle();
       return;
     }
+    if (!e.altKey && !e.shiftKey && (e.key === "e" || e.key === "E")) {
+      if (readLock || !activePane()) return;
+      e.preventDefault();
+      activePane().toggleEdit?.();
+      return;
+    }
     if (!e.altKey && (e.key === "w" || e.key === "W")) {
       if (!activePanelId) return;
       e.preventDefault();
@@ -665,6 +726,7 @@ export function mountApp(
         if (frame.event === "artifact" && frame.data?.path) refreshOpenArtifact(frame.data.path);
         if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") {
+          trackApplyLease(frame.data);
           for (const pane of panes.values()) {
             if (pane.applyJournalEvent(frame.data)) break;
           }

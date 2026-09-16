@@ -571,6 +571,51 @@ input,
   text-overflow: ellipsis;
 }
 
+/* The title doubles as the way into Go to. Shaped like a quiet field so it reads as "find
+   something here" without shouting, and wide enough to be an obvious target; the ⌘K keycap says
+   the same thing to keyboard readers. Hover and focus sharpen the edge to ink. */
+.glosa-goto-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: min(22rem, 100%);
+  max-width: 34rem;
+  height: 30px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.glosa-goto-trigger:hover {
+  border-color: var(--border-strong);
+  background: var(--bg);
+}
+
+.glosa-goto-trigger .glosa-topbar-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.glosa-goto-key {
+  flex: 0 0 auto;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted);
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-micro);
+  background: var(--bg);
+}
+
 .glosa-topbar-actions {
   display: flex;
   align-items: center;
@@ -1042,9 +1087,11 @@ input,
   outline-offset: -2px;
 }
 
-/* Mode control: an ink outline holding every mode, the chosen one struck forward as filled ink.
-   The state is carried by fill, weight and contrast together, never by colour alone. Track 8px,
-   segments 6px: concentric. */
+/* The page control: one ink outline holding what can be done to this page. Reading, it holds the
+   Notes toggle and Edit; editing, it holds Done, struck forward as filled ink because that is the
+   state the page is in. Notes shown is a quieter pressed bed, not a fill: it is a view of the same
+   page, not a different page. State is carried by fill, weight and the accessible name together,
+   never by colour alone. Track 8px, buttons 6px: concentric. */
 .glosa-modebar {
   display: flex;
   padding: 2px;
@@ -1076,6 +1123,26 @@ input,
   background: var(--primary);
   color: var(--on-primary);
   font-weight: 600;
+}
+
+.glosa-modebar button[data-control="notes"][aria-pressed="true"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-modebar button[data-parked="true"] {
+  position: relative;
+}
+
+.glosa-modebar button[data-parked="true"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--hand); /* an unsaved draft is the human's hand, parked */
 }
 
 .glosa-modebar button:disabled {
@@ -1695,8 +1762,30 @@ input,
   position: relative; /* the margin overlay and its anchor-aligned cards position against this */
 }
 
-.glosa-pane[data-mode="edit"] .glosa-pane-main {
-  overflow: hidden;
+/* Edit is the same page with a caret in it: the page keeps scrolling, rather than handing the
+   scroll to an inner editor box, so there is one scrollbar and the reader's place survives the
+   switch. The editor's toolbar and the Save row stay pinned to the page's edges instead. */
+.glosa-pane[data-mode="edit"] .glosa-edit-topbar,
+.glosa-pane[data-mode="edit"] .glosa-rich-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--bg);
+}
+
+.glosa-pane[data-mode="edit"] .glosa-edit-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-sticky);
+  background: var(--bg);
+  padding-block: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.glosa-pane[data-mode="edit"] .glosa-disk-change {
+  position: sticky;
+  top: 0;
+  z-index: calc(var(--z-sticky) + 1);
 }
 
 /* The artifact bar (§6). Not a bar: a transparent header row on the pane's paper, spanning the
@@ -2744,11 +2833,10 @@ input,
    as a resolved length, usable from outside the serif context. Same token, same column, so the
    inner surface's own serif `68ch` lands inside it exactly. */
 .glosa-edit-wrap {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  min-height: 100%;
   width: 100%;
   max-width: var(--manuscript-block);
   margin: 0 auto;
@@ -2791,10 +2879,11 @@ input,
 }
 
 .glosa-edit-area {
-  flex: 1;
+  flex: 0 0 auto;
   width: 100%;
   min-height: 16rem;
   resize: none;
+  overflow: hidden; /* grows with its text (artifact-pane.js fitSourceArea); the page scrolls */
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   line-height: 1.7;
@@ -2842,11 +2931,20 @@ input,
 }
 
 .glosa-pane[data-editor-face="rich"] .glosa-edit-topbar {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-8);
+  /* Zero-height and sticky, so the toggle rides the toolbar's row and stays with it while the page
+     scrolls underneath (an absolutely positioned toggle would scroll away from a sticky toolbar). */
+  position: sticky;
+  top: 0;
+  height: 0;
+  overflow: visible;
+  align-items: flex-start;
+  z-index: calc(var(--z-sticky) + 1);
+  background: transparent;
+}
+
+.glosa-pane[data-editor-face="rich"] .glosa-edit-topbar .glosa-editor-face {
   height: 35px; /* the toolbar's own height, so the two read as one row */
-  z-index: 1;
+  align-items: center;
 }
 
 /* Keep the formatting buttons clear of the toggle sharing their row. */
@@ -2937,8 +3035,7 @@ input,
    4rem opening once the toolbar above has taken its share, so switching modes moves the first
    line by a couple of pixels instead of by a paragraph. */
 .glosa-rich-surface.glosa-content {
-  flex: 1;
-  overflow-y: auto;
+  flex: 1 0 auto;
   padding: var(--space-3) 0 var(--space-8);
   margin: 0 auto;
   max-width: var(--measure);
@@ -4644,6 +4741,16 @@ input,
 @media (max-width: 640px) {
   .glosa-topbar {
     gap: var(--space-1);
+  }
+
+  /* No keyboard to advertise, and no room for a wide field: the trigger shrinks to its title. */
+  .glosa-goto-trigger {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .glosa-goto-key {
+    display: none;
   }
 
   .glosa-nav-toggle {

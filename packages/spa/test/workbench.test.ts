@@ -212,8 +212,8 @@ describe("the multi-artifact workbench", () => {
   test("annotation marks survive every mode — leaving Review never erases where the marks are", async () => {
     const { root } = await mountWithTwoTabs();
     const pane = activePane(root);
-    pane.querySelector('.glosa-modebar [data-mode="review"]').click();
-    await flush();
+    // The page opens with notes shown.
+    expect(pane.getAttribute("data-mode")).toBe("review");
 
     const content = pane.querySelector(".glosa-content");
     const block = content.querySelector("p[data-line]");
@@ -415,6 +415,10 @@ describe("the multi-artifact workbench", () => {
 
     // The old defect reserved margin space on MODE, at a VIEWPORT width. Nothing may do that now:
     // the rail lives in whitespace the manuscript was never using, or it is not placed at all.
+    expect(main.style.paddingRight).toBe("");
+    // Hide notes first, so showing them again is the transition under test.
+    pane.querySelector('.glosa-modebar [data-mode="read"]').click();
+    await flush();
     expect(main.style.paddingRight).toBe("");
     pane.querySelector('.glosa-modebar [data-mode="review"]').click();
     await flush();
