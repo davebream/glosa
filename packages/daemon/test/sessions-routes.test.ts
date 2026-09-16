@@ -12,6 +12,7 @@ import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { WatchEmissionRegistry } from "../src/agent-provider/watch-emissions.ts";
 import { CapabilityStore } from "../src/security/capability.ts";
 import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
@@ -23,6 +24,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
   let root: string;
   let workspaceIndex: WorkspaceIndex;
   let sessionRegistry: SessionRegistry;
+  let watchEmissions: WatchEmissionRegistry;
   let busRegistry: WorkspaceBusRegistry;
   let ctx: ApiContext;
   let fetchFn: (req: Request) => Promise<Response>;
@@ -33,6 +35,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
 
     workspaceIndex = new WorkspaceIndex({ home });
     sessionRegistry = new SessionRegistry({ index: workspaceIndex });
+    watchEmissions = new WatchEmissionRegistry();
     busRegistry = new WorkspaceBusRegistry();
     workspaceIndex.setLiveSessionPredicate((p) => sessionRegistry.forWorkspace(p).length > 0);
     workspaceIndex.setOnHardRemove((p) => busRegistry.evict(p));
@@ -47,6 +50,7 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       sessionRegistry,
       getWorkspaceBus: (r) => busRegistry.get(r),
       capabilityStore: new CapabilityStore(),
+      watchEmissions,
     };
     fetchFn = createApiFetch(ctx);
   });

@@ -401,7 +401,7 @@ Bearer required, authed-read. An opt-in held read over `external_edit` entries �
 watcher's quiet-window captures (§F153/A4) made actionable for exactly the session that asks, and no
 other session. Never a status transition and never a nudge to anyone else: R3 states the product
 promise this route implements. It writes nothing at all, and unlike `GET /w/:slug/stream` it does not
-reconcile the workspace it reads. Hydration happens when a session attaches (§5.11a); a watch that
+reconcile the workspace it reads. Hydration happens when a session attaches (§5.12, and a `register` that carries a `workspace_binding`); a watch that
 finds an unhydrated workspace folds the journal read-only before answering, rather than serving the
 empty derived state a fresh bus starts with.
 

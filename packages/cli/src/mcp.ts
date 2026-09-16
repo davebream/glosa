@@ -158,13 +158,15 @@ class DeliveryAcknowledgements {
    * `reserve`'s own cancellation handling. */
   reserveWatch(requestId: RequestId, ack: PendingWatchAck, signal: AbortSignal): void {
     this.pendingWatch.set(requestId, ack);
-    signal.addEventListener(
-      "abort",
-      () => {
-        void this.watchFailed(requestId, "MCP request cancelled before its response was written").catch(() => {});
-      },
-      { once: true },
-    );
+    const cancelled = () => {
+      void this.watchFailed(requestId, "MCP request cancelled before its response was written").catch(() => {});
+    };
+    signal.addEventListener("abort", cancelled, { once: true });
+    // A signal that aborted BEFORE this listener was attached calls nothing, and the reservation
+    // would then sit pending forever rather than recording the `failed` it owes (review round 6).
+    // Re-checked after registration, which is the same shape `services/watch.ts` uses for its own
+    // listener gap.
+    if (signal.aborted) cancelled();
   }
 
   private async watchPresented(requestId: RequestId): Promise<void> {
@@ -820,7 +822,15 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         throw new Error("glosa_watch requires an explicit session_id when the MCP host does not provide one");
       }
       const root = workspace ?? (deps.cwd ?? process.cwd)();
-      const apiClient = await deps.createApiClient(shutdownAbort.signal);
+      // The request's own cancellation has to reach the HELD GET, not just the acknowledgement
+      // reserved at the end (review round 6). A watch can sit for up to fifteen minutes, so a
+      // client that cancels and gets nothing back would otherwise leave the daemon holding the
+      // request for its full budget, and a cancellation arriving during the transport
+      // acknowledgement would miss the `failed` this shim promises to record.
+      const requestScope = AbortSignal.any(
+        [shutdownAbort.signal, extra.signal].filter((signal): signal is AbortSignal => !!signal),
+      );
+      const apiClient = await deps.createApiClient(requestScope);
       if (!apiClient.watch) throw new Error("glosa_watch is unavailable");
       const result = await apiClient.watch(root, sessionId, { path, since, waitMs });
       const entryIds = result.entries.map((entry) => entry.id);

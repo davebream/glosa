@@ -1457,6 +1457,52 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(abortedWhenAcknowledged.every(Boolean)).toBe(true);
     });
 
+    test("cancelling the MCP request aborts the held watch itself, not just the acknowledgement", async () => {
+      // Review round 6: the API client was built from the shutdown signal alone, so the request's
+      // own cancellation was not observed until the acknowledgement was reserved — after both the
+      // held GET and the transport ack had already run. A watch can hold for fifteen minutes, so a
+      // cancelled request would leave the daemon holding it for the full budget.
+      let watchSawAbort = false;
+      const runtime = createMcpServer({
+        createDaemonClient: async () => new FakeDaemonClient(),
+        createApiClient: async (signal?: AbortSignal) => {
+          const api: Partial<GlosaApiClient> = {
+            watch: () =>
+              new Promise((_resolve, reject) => {
+                if (!signal) return; // ablated: request cancellation never reaches the watch
+                const end = () => {
+                  watchSawAbort = true;
+                  reject(new Error("watch aborted"));
+                };
+                if (signal.aborted) return end();
+                signal.addEventListener("abort", end, { once: true });
+              }),
+          };
+          return api as GlosaApiClient;
+        },
+        sessionId: () => "host-session",
+        cwd: () => "/workspace",
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await runtime.connect(serverTransport);
+      const client = new Client({ name: "glosa-test", version: "1" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const cancel = new AbortController();
+      const held = client
+        .callTool({ name: "glosa_watch", arguments: { wait_ms: 900000 } }, undefined, { signal: cancel.signal })
+        .catch(() => "cancelled");
+      await Bun.sleep(50);
+      expect(watchSawAbort).toBe(false); // genuinely still held
+
+      cancel.abort();
+      await held;
+      await Bun.sleep(20);
+
+      expect(watchSawAbort).toBe(true);
+      await runtime.close();
+    }, 10_000);
+
     test("criterion 6 — closing the MCP runtime aborts a watch that is still being HELD", async () => {
       // The test above proves what happens to an acknowledgement during shutdown; it cannot prove
       // this, because its fake `watch()` returns immediately (review round 4). A held watch is the

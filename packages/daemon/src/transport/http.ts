@@ -638,11 +638,14 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
 
   // #153 Part 2: hydrate the workspace bus HERE rather than on the watch's own read. Opening a bus
   // reconciles it, and reconciliation self-heals and checkpoints — real writes, which is exactly
-  // what `bus/peek.ts` says a plain GET must never cause. Binding is already a state-changing route
-  // and the one every watcher passes through first, so the write lands where writes are allowed and
-  // `GET /w/:slug/watch` stays a read that sees an already-reconciled journal, offline catch-up
-  // included. Failure is not fatal to the binding itself: the session is bound either way, and the
-  // next write path reconciles.
+  // what `bus/peek.ts` says a plain GET must never cause. Binding is already a state-changing route,
+  // so the write lands where writes are allowed and `GET /w/:slug/watch` stays a read.
+  //
+  // NOT the only way a session attaches, and the watch does not assume it was: `register` can carry
+  // a `workspace_binding` and hydrates for the same reason, and a watch that still meets an
+  // unreconciled bus folds the journal read-only rather than answering from empty state. Failure
+  // here is not fatal to the binding — the session is bound either way, and the drift this reconcile
+  // would have committed stays absent until the next successful writer reconciliation.
   try {
     await resolveBus(ctx, owner);
   } catch {
@@ -1562,6 +1565,18 @@ async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string
   const record = ctx.sessionRegistry.get(sessionId);
   if (!record?.workspace_binding)
     return problem(404, "not-found", "unknown explicitly bound session", undefined, pathname);
+  // Built before the body read, so the capture is the first thing this handler does with authority.
+  //
+  // Review round 6 called the later placement a live race: a rebind A→B→A while the body streams
+  // would capture the REPLACEMENT generation. That does not hold on this path, and it was checked
+  // rather than argued — `createApiFetch` calls `readBodyCapped(req)` and rebuilds the request over
+  // the drained bytes BEFORE `route.handle`, so by the time any handler runs `req.json()` resolves
+  // from memory and spans nothing. A test built on a streaming body could not observe the window
+  // because the window does not exist; it was removed rather than kept as decoration.
+  //
+  // The capture stays here anyway: it costs nothing, and it keeps the ordering correct by
+  // construction rather than by depending on a transport-layer detail that could change.
+  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   let body: unknown;
   try {
     body = await req.json();
@@ -1572,9 +1587,6 @@ async function handleSessionWatchTransportAck(ctx: ApiContext, sessionId: string
   if (!Array.isArray(entries) || entries.length === 0 || !entries.every((e) => typeof e === "string")) {
     return problem(400, "validation-failed", "entries must be a non-empty array of entry ids", undefined, pathname);
   }
-  // Captured before the first await, which is what makes it a GENERATION check rather than a value
-  // comparison (review round 5).
-  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   const emitted = (entries as string[]).filter((id) => ctx.watchEmissions?.isAwaitingTransport(sessionId, id));
   if (emitted.length === 0) {
     return problem(409, "conflict", "no named id was emitted to this session by a watch response", undefined, pathname);
@@ -1597,6 +1609,8 @@ async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Re
   const record = ctx.sessionRegistry.get(sessionId);
   if (!record?.workspace_binding)
     return problem(404, "not-found", "unknown explicitly bound session", undefined, pathname);
+  // Same boundary as `transport-ack`, for the same reason recorded there.
+  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   let body: unknown;
   try {
     body = await req.json();
@@ -1613,8 +1627,6 @@ async function handleSessionWatchAck(ctx: ApiContext, sessionId: string, req: Re
     return problem(400, "validation-failed", "outcome must be presented|failed", undefined, pathname);
   }
   const error = typeof parsed?.error === "string" ? parsed.error : undefined;
-  // Same reason as `transport-ack`: captured before the first await.
-  const authorised = stillBound(ctx, sessionId, record.workspace_binding);
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(record.workspace_binding) ?? record.workspace_binding);
   const { accepted, authorityLost } = await bus.recordWatchPresented(
     sessionId,
