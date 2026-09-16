@@ -12,13 +12,16 @@ the exit criteria that close it.
 
 ## Now
 
-- **Phase 2: onboarding without ceremony.** Install into Claude Code with a plugin and into Codex
-  with `codex mcp add`, let both push feedback to an idle session, and retire `glosa init` with the
-  hooks it installs and the older ways of waking a session (the rewake hook and Claude Code
-  Channels). Track: [#165](https://github.com/davebream/glosa/issues/165).
+- **Phase 3: several agents on one workspace.** Visible per-artifact and per-entry claims and a
+  signals channel between sessions, in place of today's single apply lease (the lock one agent holds
+  while it applies a change). Track: [#166](https://github.com/davebream/glosa/issues/166).
 
 ## Recently completed
 
+- **Phase 2: onboarding without ceremony.** Claude Code installs glosa through a plugin and Codex
+  through `codex mcp add`, both push feedback to an idle session, and `glosa init`, its hooks, the
+  rewake hook and Claude Code Channels are gone. Shipped in alpha.22. Track:
+  [#165](https://github.com/davebream/glosa/issues/165).
 - **A readable local address.** `glosa open` links to `http://glosa.localhost:4646`, and
   `127.0.0.1` keeps working beside it, without adding a DNS rebinding risk. Shipped in alpha.22.
   Track: [#159](https://github.com/davebream/glosa/issues/159).
@@ -43,9 +46,6 @@ the exit criteria that close it.
 
 ## Next
 
-- **Phase 3: several agents on one workspace.** Visible per-artifact and per-entry claims and a
-  signals channel between sessions, in place of today's single apply lease (the lock one agent holds
-  while it applies a change). Track: [#166](https://github.com/davebream/glosa/issues/166).
 - **Phase 4: editor and workbench.** Front matter and `%%` comments handled consistently, and the
   multi-artifact workbench reconciled with what shipped. Track:
   [#167](https://github.com/davebream/glosa/issues/167).
