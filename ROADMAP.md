@@ -1,6 +1,6 @@
 # Glosa roadmap
 
-Last reviewed: 2026-09-14
+Last reviewed: 2026-09-16
 
 Glosa's maintainers own this roadmap. It describes accepted product direction, not a promise that
 every item will ship. The public [Glosa Roadmap project](https://github.com/users/davebream/projects/5)
@@ -19,6 +19,9 @@ the exit criteria that close it.
 
 ## Recently completed
 
+- **A readable local address.** `glosa open` links to `http://glosa.localhost:4646`, and
+  `127.0.0.1` keeps working beside it, without adding a DNS rebinding risk. Shipped in alpha.22.
+  Track: [#159](https://github.com/davebream/glosa/issues/159).
 - **Phase 1: the loop is honest.** A change made in another editor is reported as an external edit,
   never as an edit you made in glosa; a workspace is never your home directory; `glosa mcp`
   processes exit when their host closes, hangs up, or goes away; a workspace can be forgotten.
@@ -65,8 +68,6 @@ the exit criteria that close it.
   ([#160](https://github.com/davebream/glosa/issues/160)).
 - Whether glosa should ever launch an agent session itself, which it deliberately does not do today
   ([#157](https://github.com/davebream/glosa/issues/157)).
-- An optional `glosa.localhost` address beside `127.0.0.1`
-  ([#159](https://github.com/davebream/glosa/issues/159)).
 - Support beyond macOS after the local-first security and lifecycle contracts are portable.
 - Dictation capture when a clear workflow remains after evaluating provider-native voice support.
 - Stable public extension contracts beyond workspace metadata v1 and the current provider interface.
