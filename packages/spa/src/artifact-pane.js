@@ -33,7 +33,6 @@ import {
 import { choiceDialog, confirmDialog } from "./dialog.js";
 import { addressBlocks, addressForRange } from "./address.js";
 import { faceKey, mountFaceControl } from "./face.js";
-import { threeWayMerge } from "./merge-markdown.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
 
@@ -2806,6 +2805,13 @@ export function createArtifactPane(host, deps) {
    * not a separate approximation of it). `pendingSave()` already answers "what would an ordinary
    * save write" for either face; the only thing added here is the disk side and the base. */
   async function keepMineMerge(fresh) {
+    // Imported HERE, not at module scope: `merge-markdown.js` needs the parser and block aligner
+    // from `rich-editor.js`, which carries the vendored ProseMirror bundle. A static import pulls
+    // that whole bundle into `viewer.js`'s eager graph and silently un-does the lazy loading the
+    // editor surfaces are deliberately behind — `import-boundary.test.ts` pins exactly that, and it
+    // caught this. Keep mine is a user action on a stale save, so paying for the bundle at that
+    // moment is right; every reader who never hits one pays nothing.
+    const { threeWayMerge } = await import("./merge-markdown.js");
     const { content: mine, report } = pendingSave();
     const base = await verifiedBaseline();
     return threeWayMerge(base, mine, fresh.content ?? "", report ?? { collateral: [], degraded: false });
