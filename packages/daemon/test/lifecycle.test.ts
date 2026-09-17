@@ -1168,8 +1168,10 @@ describe("ensureDaemon — client", () => {
     process.env.GLOSA_HOME = home;
     process.env.GLOSA_PORT = String(port);
 
+    let spawned: number | null = null;
     try {
       const result = await ensureDaemonWithDependencies({ timeoutMs: 8000 }, acceleratedFirstPoll());
+      if (result.ok) spawned = result.pid;
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.reason).toContain(`the previous glosa daemon (PID ${exiting.pid}) is still shutting down`);
@@ -1177,6 +1179,15 @@ describe("ensureDaemon — client", () => {
       expect(lockOf(home)?.instance_id).toBe("gl-fake");
       expect(exiting.exitCode).toBeNull();
     } finally {
+      // Only reached with a regression, but a daemon started against a home this test deletes would
+      // otherwise outlive the run.
+      if (spawned !== null) {
+        try {
+          process.kill(spawned, "SIGTERM");
+        } catch {
+          // already dead
+        }
+      }
       exiting.kill("SIGKILL");
       if (savedHome === undefined) delete process.env.GLOSA_HOME;
       else process.env.GLOSA_HOME = savedHome;
