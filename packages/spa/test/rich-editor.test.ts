@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(615);
+    ).toBe(629);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1879,12 +1879,14 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // Cutting alpha.25: CHANGELOG.md's dated release heading plus an `### Added` heading and list for
   // starred workspaces, 600 → 602 blocks / 541 → 542 edits, numerators unchanged.
   // #270: its own `docs/decisions.md` entry and a CHANGELOG `## [Unreleased]` section with `###
-  // Fixed`/`### Changed` bullets, 602 → 615 blocks / 542 → 554 edits. `shipped` held at 1; `ablated`
+  // Fixed`/`### Changed` bullets, 602 → 615 blocks / 542 → 554 edits.
+  // #271: the same shape again for per-block editing — a decisions entry and a new `## [Unreleased]`
+  // section, 615 → 629 blocks / 554 → 567 edits, `ablated` 38 → 39 on that heading's reference link. `shipped` held at 1; `ablated`
   // moved 37 → 38 and metric 1's ONLY per-cause move is `link reference definition inlined`, which
   // is the release shape the comment below describes — `## [Unreleased]` already has its definition
   // at the foot of the file, so the new heading is a reference link the ablated path re-serializes
   // and the shipped path restores.
-  const BLOCKS = 615;
+  const BLOCKS = 629;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1920,7 +1922,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 43 of 615 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 44 of 629 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1942,11 +1944,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(43);
+    expect(misses).toBeLessThanOrEqual(44);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
     // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
-    // (39 → 40), plus `## [0.1.0-alpha.23]`, which alpha.23 gave a link definition (40 → 41), plus `## [0.1.0-alpha.24]`, which alpha.24 gave a link definition (41 → 42), plus #270's own `## [Unreleased]` heading, whose definition was already at the foot of the file (42 → 43). A genuine
+    // (39 → 40), plus `## [0.1.0-alpha.23]`, which alpha.23 gave a link definition (40 → 41), plus `## [0.1.0-alpha.24]`, which alpha.24 gave a link definition (41 → 42), plus #270's own `## [Unreleased]` heading, whose definition was already at the foot of the file (42 → 43), plus #271's, for the same reason (43 → 44). A genuine
     // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
     //
     // THE RELEASE CASE MOVES A NUMERATOR BY CONSTRUCTION, and that is worth stating plainly because
@@ -1963,7 +1965,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
         "the per-cause record, a NUMERATOR totalling 42. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 22,
+      "link reference definition inlined": 23,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -1977,10 +1979,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 554; the guard fires on it and, ablated, on 38", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 567; the guard fires on it and, ablated, on 39", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
-    // the restoration off the writes really are dishonest, currently 38 of them, and the guard must catch
+    // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
     // every one. A re-run of the first design of this guard, which routed `faithful` through the
     // restoration, historically scored 0 fired and 35 missed (before #143 removed one case). The ablation is an OMITTED ARGUMENT — the
     // wrapper called without source bytes is M1 only, exactly what the pure-insertion path does —
@@ -2063,9 +2065,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above).
     ).toEqual({
-      edits: 554,
+      edits: 567,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 38, fired: 38 },
+      ablated: { dishonest: 39, fired: 39 },
     });
   }, 15_000);
 

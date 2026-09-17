@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A block is editable by clicking it.** Pressing **Edit** used to replace the whole document with
+  a separate editor: the page flashed, every annotation and passage address disappeared, the scroll
+  position landed somewhere near where you left it, and the caret went to the button that stops
+  editing. Now clicking a paragraph puts a caret in that paragraph. The page is never replaced, so
+  your notes stay on screen, the margin stays where it was, and nothing moves. Click away and only
+  that paragraph repaints; your typing reaches disk once the page has been quiet for a moment.
+  `Cmd-Z` works inside the block you are in, and outside one it takes back the last block you
+  changed. `Esc` closes a block and puts you back on it.
+- **The mode control is just the notes toggle now.** There is no Edit button and no Done button,
+  because there is no longer a state the whole page enters. The byte-exact source editor is in the
+  pane's **More** menu as **Edit source**, which is what it is for: front matter, a table you would
+  rather type by hand, a block that will not parse. Everything it does — saving, conflict handling,
+  telling you when a re-serialization would change markup you did not touch — is unchanged.
+
+### Fixed
+
+- The daemon now serves `run-spans.js`. It was missing from the module allowlist, which would have
+  taken the workbench down in a browser while every unit test passed; a test now holds the allowlist
+  against the source directory so the next missing module is caught when it is added.
+
 ## [0.1.0-alpha.26] — 2026-09-17
 
 ### Fixed
