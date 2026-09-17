@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   released its lock, and with many watched workspaces that took 30 seconds or more, with the daemon
   frozen for the whole time. A daemon that is exiting now leaves its file watches for the system
   to release, and stops starting new ones, so it hands over in well under a second.
+- A glosa command could start a second daemon while the previous one was still shutting down: with
+  the old daemon's port already closed but its lock still held, the lock looked abandoned. A command
+  now waits for a daemon that is still exiting, and if it takes too long, stops with a message that
+  names the process instead of starting another daemon beside it.
 
 ## [0.1.0-alpha.24] — 2026-09-16
 
