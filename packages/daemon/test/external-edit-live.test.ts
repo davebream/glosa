@@ -8,7 +8,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ChokidarOptions, type FSWatcher, watch } from "chokidar";
 import { ArtifactWatcherRegistry, DEFAULT_MAX_WATCHED_WORKSPACES } from "../src/artifact-watcher.ts";
 import { WorkspaceBus } from "../src/bus/bus.ts";
 import { EXTERNAL_EDIT_KIND } from "../src/bus/external-edit.ts";
@@ -32,6 +31,7 @@ import {
   freshWorkspace,
   writeFile,
 } from "./git/helpers.ts";
+import { armedWatchFactory } from "./watch-helpers.ts";
 
 const roots: string[] = [];
 const registries: ArtifactWatcherRegistry[] = [];
@@ -63,8 +63,8 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<
 }
 
 /** Save, then keep re-saving identical bytes every 250 ms until `observed()` is true. A single
- * write issued right after chokidar's `ready` can be lost on macOS: the FSEvents stream behind a
- * directory watch comes up asynchronously after `ready` and does not replay earlier events. The
+ * write issued right after a watch starts can be lost on macOS: the FSEvents stream behind it
+ * comes up asynchronously and does not replay earlier events. The
  * "warns once and keeps watching" test below saw exactly that in CI, waiting the full 15 s for a
  * first save that had already happened. A real editor saves many times, so the product sees the
  * next one; this loop gives a single-save test the same property. See the twin helper in
@@ -78,25 +78,6 @@ async function saveUntil(path: string, content: string, observed: () => boolean,
     if (observed()) return;
     if (Date.now() >= deadline) throw new Error(`timed out waiting for the watcher to see ${path}`);
   }
-}
-
-/** A real chokidar factory plus a promise that settles once the watch is ARMED. A write made before
- * then can land while no watch exists yet and produce no event at all — under load that window is
- * wide enough to lose a test's first save, and a write that early is reconcile's offline catch-up's
- * to report, never the watcher's. A case that writes and then waits for the watcher awaits this. */
-function armedWatchFactory(): {
-  watchFactory: (paths: string[], options: ChokidarOptions) => FSWatcher;
-  armed: () => Promise<void>;
-} {
-  let ready: Promise<void> = Promise.resolve();
-  return {
-    watchFactory: (paths, options) => {
-      const watcher = watch(paths, options);
-      ready = new Promise<void>((resolve) => watcher.once("ready", () => resolve()));
-      return watcher;
-    },
-    armed: () => ready,
-  };
 }
 
 function externalEditEntries(bus: WorkspaceBus): Array<Record<string, unknown>> {
@@ -221,13 +202,13 @@ describe("A4b — a save that replaces the file, as Typora's does, is still one 
   // `-[NSFileManager replaceItemAtURL:withItemAtURL:...]`, which writes the new bytes to a temporary
   // file OUTSIDE the document's directory and swaps it in, so after every save the path names a new
   // inode. A loose-file workspace — a manuscript opened from a folder that is not a git repository —
-  // is watched file by file (`chooseMode` returns "files" for bounded tracking), and a per-file
-  // watch follows the inode, not the path. It keeps working only because chokidar re-attaches when
-  // the inode changes (`_handleFile`'s `prevStats.ino !== newStats.ino` branch). With that branch
-  // disabled, only the first replacement is ever seen. Its quiet window still yields one entry
-  // carrying the whole burst — the capture reads the disk when the window closes — but every save
-  // after that produces no entry at all, while A4 and the rest of this file stay green. The
-  // closing save below is what pins it.
+  // is watched for its exact files (`chooseMode` returns "files" for bounded tracking). A watch on
+  // the FILE would follow the inode, not the path, and see only the first replacement; the watch is
+  // therefore on the file's DIRECTORY, filtered to the file's path, which sees every swap. If it
+  // stopped following replacements, the quiet window would still yield one entry carrying the whole
+  // burst — the capture reads the disk when the window closes — but every save after that would
+  // produce no entry at all, while A4 and the rest of this file stay green. The closing save below
+  // is what pins it.
   //
   // The temp file is written beside the workspace rather than inside it, which is where NSDocument
   // puts it and keeps a stray `.tmp` out of the directory watch's own events.
@@ -238,10 +219,9 @@ describe("A4b — a save that replaces the file, as Typora's does, is still one 
     renameSync(temp, path);
   }
 
-  // Only the loose-file shape is pinned. The same save into a DIRECTORY workspace passes with the
-  // inode branch disabled, and with the watcher's add/unlink listeners removed as well, because a
-  // directory watch does not follow inodes and chokidar reports the swap as a change. A case there
-  // could not fail for any reason A4 cannot, so it is left out rather than kept as decoration.
+  // Only the loose-file shape is pinned. A DIRECTORY workspace is one recursive watch on its root,
+  // which does not follow inodes at all and reports the swap as a change to the path, so a case
+  // there could not fail for any reason A4 cannot; it is left out rather than kept as decoration.
   test("a loose-file workspace: three replacing saves make one external_edit, and a later replacing save is still captured", async () => {
     const scratch = realpathSync(workspace());
     const manuscript = join(scratch, "manuscript");
@@ -296,7 +276,7 @@ describe("A4b — a save that replaces the file, as Typora's does, is still one 
     // observed.
     expect(String(burst[0]!.diff)).toContain("+line four");
 
-    // This is the assertion that goes red when chokidar stops re-attaching after an inode change: a
+    // This is the assertion that goes red when the watch stops following a replaced file: a
     // save made after the burst's window has closed can only become an entry if the watch saw it.
     replacingSave(scratch, draft, "line one\nline two\nline three\nline four\nline five\n");
     await waitUntil(() => externalEditEntries(bus).length === 2);
@@ -317,7 +297,7 @@ describe("A6 — the cross-workspace watcher count is bounded, and that is a dif
     // its job, not the old cap under a new name.
     const registry = track(
       new ArtifactWatcherRegistry({
-        maxWatchEntries: 4_096,
+        maxTrackedArtifacts: 4_096,
         maxWatchedWorkspaces: 2,
         warn: (message) => warnings.push(message),
       }),
@@ -337,7 +317,7 @@ describe("A6 — the cross-workspace watcher count is bounded, and that is a dif
     expect(admitted).toHaveLength(2);
     expect(refused).toHaveLength(3);
     expect(registry.watchedWorkspaceCount()).toBe(2);
-    expect(admitted.map((root) => registry.modeFor(root))).toEqual(["directories", "directories"]);
+    expect(admitted.map((root) => registry.modeFor(root))).toEqual(["tree", "tree"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("2-workspace safety budget");
 
@@ -349,25 +329,25 @@ describe("A6 — the cross-workspace watcher count is bounded, and that is a dif
     stop();
   });
 
-  test("the per-workspace entry cap still bounds paths within one workspace, independently", () => {
+  test("the per-workspace tracked-artifact cap still bounds one workspace, independently", () => {
     const warnings: string[] = [];
     const registry = track(
       new ArtifactWatcherRegistry({
-        maxWatchEntries: 2,
+        maxTrackedArtifacts: 2,
         maxWatchedWorkspaces: 64,
         warn: (message) => warnings.push(message),
       }),
     );
     const root = workspace();
-    writeFile(root, "docs/note.md", "one");
+    for (const name of ["a", "b", "c"]) writeFile(root, `docs/${name}.md`, name);
     registry.ensureWatched(root);
 
-    // Downgraded to `files` by the PER-WORKSPACE budget while the cross-workspace count is 1 — the
-    // two bounds are not the same claim and neither stands in for the other.
-    expect(registry.modeFor(root)).toBe("files");
+    // Disabled by the PER-WORKSPACE budget while the cross-workspace count is 1 — the two bounds are
+    // not the same claim and neither stands in for the other.
+    expect(registry.modeFor(root)).toBe("disabled");
     expect(registry.watchedWorkspaceCount()).toBe(1);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("entry safety budget");
+    expect(warnings[0]).toContain("tracked artifacts");
   });
 
   test("the shipped default is a stated constant, not an accident of the per-workspace cap", () => {
@@ -451,7 +431,7 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
 
     expect(registry.watchedWorkspaceCount()).toBe(1);
     expect(warnings.filter((message) => message.includes("external-edit capture failed"))).toHaveLength(1);
-    // Explicit budget: this waits on two real chokidar events plus two quiet windows, and Bun's
+    // Explicit budget: this waits on two real filesystem events plus two quiet windows, and Bun's
     // default 5s is tight enough that it flakes under full-suite load even though the work is fast.
   }, 20_000);
 });
@@ -466,57 +446,28 @@ function openBusFor(target: WorkspaceTarget, bus: WorkspaceBus): WorkspaceBus {
 }
 
 describe("the bound that protects the machine is watch ENTRIES summed across workspaces, not workspaces", () => {
-  // Why this exists. The A6 test above pins the workspace COUNT, and passed throughout — while
-  // alpha.19 exhausted memory on a real machine and took it down three times. Its two ceilings
-  // (4096 entries per workspace, 64 workspaces) were each enforced and never multiplied: their
-  // product is 262,144 filesystem watches. The A6 fixture set the two budgets "far apart on
-  // purpose" and gave every workspace one file, which is exactly the shape in which the product
-  // cannot be observed. So this measures the axis that actually ran out.
-  test("many workspaces, each individually well under the per-workspace cap, cannot exceed the total", () => {
+  // There used to be a third bound here: 8,192 watch entries summed across every workspace, because
+  // each entry was a real per-file watch and alpha.19's 64 x 4,096 of them exhausted a machine. With
+  // one recursive watch per workspace that sum no longer measures anything a machine runs out of,
+  // and it was refusing small workspaces live updates by warm-up order (#219). This pins its absence:
+  // many small workspaces are all watched, and only the workspace count can refuse one.
+  test("many small workspaces are all watched; no summed entry budget refuses them", () => {
     const warnings: string[] = [];
-    const registry = track(
-      new ArtifactWatcherRegistry({
-        // Deliberately NOT limiting: a failure below cannot be either of these two doing the work.
-        maxWatchEntries: 4_096,
-        maxWatchedWorkspaces: 64,
-        maxTotalWatchEntries: 12,
-        warn: (message) => warnings.push(message),
-      }),
-    );
+    const registry = track(new ArtifactWatcherRegistry({ warn: (message) => warnings.push(message) }));
 
-    // Eight workspaces of five directories each: 40 entries wanted, every workspace a rounding
-    // error against its own 4096 cap, and 64 workspaces is never reached. Only the total binds.
-    const opened: { root: string; mode: string | null }[] = [];
-    for (let i = 0; i < 8; i++) {
+    const modes: (string | null)[] = [];
+    for (let i = 0; i < 12; i++) {
       const root = workspace();
-      for (let d = 0; d < 5; d++) writeFile(root, join(`dir-${d}`, "notes.md"), `note ${i}/${d}\n`);
+      for (let d = 0; d < 20; d++) writeFile(root, join(`dir-${d}`, "notes.md"), `note ${i}/${d}\n`);
       registry.ensureWatched(root);
-      opened.push({ root, mode: registry.modeFor(root) });
+      modes.push(registry.modeFor(root));
     }
 
-    // Evaluated in full before anything is asserted: an expect() inside the loop stops at the
-    // first mismatch, and then every later workspace is asserted by reading the source instead of
-    // by observation. That defect shipped in this repository's own pipeline once already.
-    expect(registry.watchedEntryTotal()).toBeLessThanOrEqual(12);
-    expect(registry.watchedWorkspaceCount()).toBeLessThanOrEqual(64);
-    // The point of the whole test: workspaces were admitted, and the total still held.
-    expect(opened.some((entry) => entry.mode !== null && entry.mode !== "disabled")).toBe(true);
-    // And the old pair of ceilings alone would have permitted every one of the 40.
-    expect(40).toBeGreaterThan(12);
-  });
-
-  test("a single workspace under the total is still watched in full — the bound refuses sums, not workspaces", () => {
-    const registry = track(
-      new ArtifactWatcherRegistry({ maxWatchEntries: 4_096, maxWatchedWorkspaces: 64, maxTotalWatchEntries: 12 }),
-    );
-    const root = workspace();
-    for (let d = 0; d < 4; d++) writeFile(root, join(`dir-${d}`, "notes.md"), `note ${d}\n`);
-    registry.ensureWatched(root);
-
-    expect(registry.modeFor(root)).not.toBeNull();
-    expect(registry.modeFor(root)).not.toBe("disabled");
-    expect(registry.watchedEntryTotal()).toBeLessThanOrEqual(12);
-    expect(registry.watchedEntryTotal()).toBeGreaterThan(0);
+    // Evaluated in full before anything is asserted: an expect() inside the loop stops at the first
+    // mismatch, and then every later workspace is asserted by reading the source instead.
+    expect(modes).toEqual(Array.from({ length: 12 }, () => "tree"));
+    expect(registry.watchedWorkspaceCount()).toBe(12);
+    expect(warnings).toEqual([]);
   });
 });
 
