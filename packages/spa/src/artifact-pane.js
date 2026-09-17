@@ -1486,8 +1486,28 @@ export function createArtifactPane(host, deps) {
     editorKitPromise ??= import("./rich-editor.js").then(async (editor) => ({
       ...editor,
       renderMarkdown: (await import("./markdown-parser.js")).renderMarkdown,
+      // SPIKE (#277 evaluation): `?editor=cm` swaps the surface a clicked block opens for one
+      // whose document IS the block's markdown bytes, leaving everything else — the rendered page,
+      // the splice, the save, the margin — exactly as it is. The two are compared by using them,
+      // which is the only way a question about how editing FEELS can honestly be settled.
+      // `blockLayout` and `renderMarkdown` still come from the module above, because this swaps
+      // the editor, not the architecture; a real migration would also move those off ProseMirror.
+      mountRichEditor: useCodeMirrorBlocks()
+        ? (await import("./block-editor-cm.js")).mountBlockEditor
+        : editor.mountRichEditor,
     }));
     return editorKitPromise;
+  }
+
+  /** Whether this visit asked for the CodeMirror block editor. Read once per kit load, from the
+   * URL rather than from storage, so a spike is something you opt into by opening a link and
+   * leave by closing the tab — never a setting that outlives the evaluation it was made for. */
+  function useCodeMirrorBlocks() {
+    try {
+      return new URL(window.location.href).searchParams.get("editor") === "cm";
+    } catch {
+      return false;
+    }
   }
 
   /** The source every run measures against: local edits when there are any, the file otherwise. */

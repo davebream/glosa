@@ -136,6 +136,11 @@ const SPA_ASSETS: Record<string, string> = {
   "markdown-parser.js": "text/javascript; charset=utf-8",
   "markdown-non-manuscript.js": "text/javascript; charset=utf-8",
   "vendor/prosemirror.js": "text/javascript; charset=utf-8",
+  // SPIKE (#277 evaluation) — the CodeMirror block editor and its vendored bundle, reached only
+  // from `loadEditorKit()` under `?editor=cm`. Served because an unserved module a page imports
+  // takes the importing module down with it, and unit tests import from disk and cannot see that.
+  "block-editor-cm.js": "text/javascript; charset=utf-8",
+  "vendor/codemirror.js": "text/javascript; charset=utf-8",
   // Shared confirm dialog (discard-edits and restore guards).
   "dialog.js": "text/javascript; charset=utf-8",
   // Multi-artifact workbench (design brief docs/design/2026-09-04-multi-artifact-workbench-brief.md):
