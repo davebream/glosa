@@ -127,6 +127,35 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     cleanupWorkspace(outside);
   }, 20_000);
 
+  test("abandonAll retires every state without closing its watch, and stops delivering events", async () => {
+    writeFile(root, "docs/note.md", "one");
+    const second = freshWorkspace();
+    writeFile(second, "note.md", "one");
+    const fakes: FakeWatcher[] = [];
+    const events: ArtifactWatcherEvent[] = [];
+    const registry = new ArtifactWatcherRegistry({
+      watchFactory: () => {
+        const fake = new FakeWatcher();
+        fakes.push(fake);
+        return fake as unknown as FSWatcher;
+      },
+    });
+    registries.push(registry);
+    registry.subscribe(root, (event) => events.push(event));
+    registry.ensureWatched(second);
+    expect(fakes).toHaveLength(2);
+
+    registry.abandonAll();
+
+    expect(fakes.map((fake) => fake.closeCalls)).toEqual([0, 0]);
+    expect(registry.watchedWorkspaceCount()).toBe(0);
+    expect(registry.modeFor(root)).toBeNull();
+    fakes[0]!.emit("change", join(root, "docs", "note.md"));
+    await Bun.sleep(150);
+    expect(events).toEqual([]);
+    cleanupWorkspace(second);
+  });
+
   test("tracked changes, atomic replacement, new nested artifacts, deletion, and oversize crossings reconcile", async () => {
     const note = writeFile(root, "docs/note.md", "one");
     const events: ArtifactWatcherEvent[] = [];
