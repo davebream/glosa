@@ -3232,6 +3232,55 @@ input,
   font-style: italic;
 }
 
+/* ---------- the run editor (#271) ----------
+
+   One run of the manuscript, writable in place. The rule that governs every declaration here is
+   that the block must not MOVE when it becomes editable: the reader clicked a word, and the word
+   has to still be under their finger. So this is almost entirely geometry cancellation — the rich
+   surface was built to be a full page and has to stop being one inside the manuscript.
+
+   No card, no fill, no shadow, no left edge. DESIGN.md's Flat-Until-Floating rule earns a shadow
+   only for something temporarily ABOVE the work; a block being edited is not above the work, it is
+   the work. What marks it is the caret and the focus ring, which is the vocabulary every other
+   control on the page already uses. */
+.glosa-run-editor {
+  margin: 0;
+  padding: 0;
+}
+
+/* The surface carries `.glosa-content` so the manuscript's own typography reaches the text being
+   edited — that is why the words do not change shape when the caret arrives. What it must NOT
+   inherit is the page frame: the measure, the centring, and the 4rem/6rem opening `.glosa-content`
+   gives a whole document would indent this block and push it down the page. */
+.glosa-run-editor .glosa-rich-surface.glosa-content {
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: none;
+}
+
+/* `prose-gap` is the space BETWEEN blocks, applied by the manuscript to its own children. Inside a
+   single run the editor owns the spacing between the nodes it holds, so the first node must not
+   open with a gap the surrounding page already provided. */
+.glosa-run-editor .ProseMirror > :first-child {
+  margin-block-start: 0;
+}
+
+.glosa-run-editor .ProseMirror > :last-child {
+  margin-block-end: 0;
+}
+
+/* The one ring, unchanged: 2px hand, 2px offset, 2px radius — the same ring a button, a tab and a
+   field get. `mountRichEditor` sets `outline: none` on `.ProseMirror` for the full-page face, where
+   the frame around it carries the focus; here there is no frame, so the ring comes back. */
+.glosa-run-editor .ProseMirror:focus,
+.glosa-run-editor .ProseMirror:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-focus);
+}
+
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding
    (the edit-wrap already provides the frame). The top padding is what remains of the manuscript's
    4rem opening once the toolbar above has taken its share, so switching modes moves the first

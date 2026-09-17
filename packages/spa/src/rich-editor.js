@@ -43,6 +43,7 @@ import {
   liftListItem,
   sinkListItem,
   tableNodes,
+  TextSelection,
 } from "./vendor/prosemirror.js";
 import {
   NON_MANUSCRIPT_BLOCK_TOKEN,
@@ -1484,7 +1485,7 @@ function toolbarActions(schema) {
  * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
  * caller falls back to source mode.
  */
-export function mountRichEditor(container, { markdown, onDirty } = {}) {
+export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToolbar = true, label } = {}) {
   const schema = editorSchema;
   const source = markdown ?? "";
   const doc = parseMarkdown(source);
@@ -1492,13 +1493,20 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
   let dirty = false;
 
   container.textContent = "";
-  const toolbar = document.createElement("div");
-  toolbar.className = "glosa-rich-toolbar";
-  toolbar.setAttribute("role", "toolbar");
-  toolbar.setAttribute("aria-label", "Formatting");
+  // `toolbar: false` is per-block editing (#271): one run of the manuscript becomes writable in
+  // place, and a row of buttons above it would be the page gaining chrome exactly where it should
+  // be gaining only a caret. Nothing is lost by dropping it — Mod-b, Mod-i and the markdown input
+  // rules below carry every action the buttons did.
+  const toolbar = wantToolbar ? document.createElement("div") : null;
+  if (toolbar) {
+    toolbar.className = "glosa-rich-toolbar";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "Formatting");
+  }
   const mountEl = document.createElement("div");
   mountEl.className = "glosa-rich-surface glosa-content";
-  container.append(toolbar, mountEl);
+  if (toolbar) container.append(toolbar, mountEl);
+  else container.append(mountEl);
 
   const state = EditorState.create({
     doc,
@@ -1509,7 +1517,9 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
     state,
     attributes: {
       role: "textbox",
-      "aria-label": "Artifact editor",
+      // A block editor names the passage it opened on ("Editing §2.1"), because a screen reader
+      // leaving a labelled region for an unnamed textbox is the moment the reader loses their place.
+      "aria-label": label ?? "Artifact editor",
       "aria-multiline": "true",
     },
     dispatchTransaction(tr) {
@@ -1522,7 +1532,7 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
     },
   });
 
-  const actions = toolbarActions(schema);
+  const actions = toolbar ? toolbarActions(schema) : [];
   const buttons = actions.map((action) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1536,7 +1546,7 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
       action.command()(view.state, view.dispatch, view);
       view.focus();
     });
-    toolbar.append(btn);
+    toolbar?.append(btn);
     return { btn, action };
   });
 
@@ -1553,6 +1563,21 @@ export function mountRichEditor(container, { markdown, onDirty } = {}) {
     getDoc: () => view.state.doc,
     isDirty: () => dirty,
     focus: () => view.focus(),
+    /** Put the caret where the reader clicked, rather than at the start of the run.
+     *
+     * Per-block editing opens on a click INSIDE the words, so landing the caret at offset 0 would
+     * move it away from the place the reader just pointed at — the small dishonesty that makes an
+     * editor feel like a different surface. `posAtCoords` returns null when the point is outside
+     * any text (the run's padding, say), and the fallback is an ordinary focus rather than a guess.
+     * @param {{left: number, top: number}} [coords] */
+    focusAt: (coords) => {
+      view.focus();
+      if (!coords) return;
+      const at = view.posAtCoords(coords);
+      if (!at) return;
+      const { tr } = view.state;
+      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, at.pos)));
+    },
     destroy: () => {
       view.destroy();
       container.textContent = "";

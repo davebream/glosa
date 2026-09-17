@@ -266,6 +266,8 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./face.js",
     // Passage addresses: pure DOM arithmetic over the rendered blocks, no daemon reach.
     "./address.js",
+    // Which bytes a run of top-level blocks owns: pure arithmetic over spans, imports nothing.
+    "./run-spans.js",
     "./attention-tray.js",
     "./agent-feedback.js",
     "./viewer-shell.js",
