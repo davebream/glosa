@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — the workspace surface (R6). Since the multi-artifact workbench (design brief
 // docs/design/2026-09-04-multi-artifact-workbench-brief.md) this module owns everything that is
-// true of a WORKSPACE — the navigator, the workspace switcher, the SSE stream, the attention
+// true of a WORKSPACE — the navigator and its Starred folders, the SSE stream, the attention
 // tray, agent feedback, Conversation, Appearance, the keyboard sheet, and the connection banner —
 // and hands every artifact to a pane of its own (artifact-pane.js) inside the dock (dock.js).
 //
@@ -33,6 +33,48 @@ import { createViewerShell, createElement as el } from "./viewer-shell.js";
 const REVEAL_TYPING_IDLE_MS = 900;
 /** ...and how long it will wait at most, so steady typing cannot suppress a question forever. */
 const REVEAL_MAX_WAIT_MS = 15_000;
+/** The workspace this browser last had selected, so a reload with several live lands back on it. */
+export const LAST_WORKSPACE_STORAGE_KEY = "glosa_last_workspace";
+
+function defaultStorage() {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readStored(storage, key) {
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(storage, key, value) {
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    // Remembering is a convenience; the selection itself already happened.
+  }
+}
+
+/** Where a workspace's folder sits, short enough to tell two of the same name apart: the last two
+ * folders above it. */
+function parentFolder(path) {
+  if (typeof path !== "string" || !path.includes("/")) return undefined;
+  const parts = path.replace(/\/+$/, "").split("/").slice(0, -1).filter(Boolean);
+  if (parts.length === 0) return "/";
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : `/${parts.join("/")}`;
+}
+
+/** A folder's own name, which is what the writer calls a workspace. */
+function folderName(path, fallback) {
+  const trimmed = typeof path === "string" ? path.replace(/\/+$/, "") : "";
+  const name = trimmed.slice(trimmed.lastIndexOf("/") + 1);
+  return name || fallback;
+}
 
 let historyPaneLoader;
 let conversationPaneLoader;
@@ -144,9 +186,11 @@ export function mountApp(
     toolsTrigger,
     toolsMenu,
     tools,
-    workspacesToggle,
-    workspacesSection,
-    sidebarList,
+    starToggle,
+    starredToggle,
+    starredCount,
+    starredSection,
+    starredList,
     artifactList,
     artifactListEmpty,
     conversationEl,
@@ -289,7 +333,7 @@ export function mountApp(
   // Not `navigator` — that name is the browser's own global, which a pane's copy-source reads.
   const sidebarNav = createNavigatorController({
     root,
-    elements: { navToggle, sidebarEl, sidebarList, artifactList, workspacesToggle, workspacesSection },
+    elements: { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList },
     enabled: surface !== "document",
   });
 
@@ -318,6 +362,21 @@ export function mountApp(
     },
     onOpenFile: (path) => void openArtifact(path),
     getCommands: () => paletteCommands(),
+    // Every workspace glosa is serving, once there is more than one to choose between.
+    getWorkspaces: () =>
+      workspaces.length > 1
+        ? workspaces.map((w) => ({
+            slug: w.slug,
+            name: folderName(w.path, w.slug),
+            detail: parentFolder(w.path),
+            current: w.slug === currentSlug,
+            starred: stars.some((star) => star.slug === w.slug),
+          }))
+        : [],
+    onOpenWorkspace: (slug) => {
+      if (slug !== currentSlug) void selectWorkspace(slug).catch(showWorkspaceError);
+    },
+    starIcon: shell.starIcon,
   });
   goToTrigger.addEventListener("click", () => palette.open());
   goToTrigger.setAttribute("aria-label", "Go to");
@@ -340,6 +399,13 @@ export function mountApp(
         if (pane.canEdit?.())
           commands.push({ id: "edit", label: "Edit", detail: "⌘E", run: () => pane.toggleEdit?.() });
       }
+    }
+    if (canStarCurrent()) {
+      commands.push({
+        id: "star",
+        label: currentStar() ? "Unstar this workspace" : "Star this workspace",
+        run: () => void toggleCurrentStar(),
+      });
     }
     return commands;
   }
@@ -663,12 +729,6 @@ export function mountApp(
   });
   const { renderConversation } = contextSurfaces;
 
-  function markCurrent(listEl, key) {
-    for (const btn of listEl.querySelectorAll("button")) {
-      btn.setAttribute("aria-current", String(btn.getAttribute("data-key") === key));
-    }
-  }
-
   // ---------- workspace data ----------
 
   async function refreshArtifactList() {
@@ -781,10 +841,14 @@ export function mountApp(
     refreshTopbarTitle();
     attentionTray.setWorkspace(slug);
     artifactNavigator.setWorkspace(slug);
-    markCurrent(sidebarList, slug);
+    writeStored(layoutStorage ?? defaultStorage(), LAST_WORKSPACE_STORAGE_KEY, slug);
+    renderStars();
+    renderStarToggle();
     feedbackController.selectWorkspace();
     await refreshArtifactList();
     mountDock();
+    // The dock was just emptied, so the bar must stop naming the previous workspace's document.
+    refreshTopbarTitle();
     startStream();
     void renderConversation(); // the open pane, if any, should follow the newly selected workspace
 
@@ -824,48 +888,236 @@ export function mountApp(
     );
   }
 
-  async function refreshWorkspaces() {
-    const workspaces = await dataAccess.getWorkspaces();
-    sidebarList.textContent = "";
-    for (const w of workspaces) {
-      sidebarList.append(
-        el("li", {}, [
-          el("button", {
-            type: "button",
-            textContent: w.slug,
-            "data-key": w.slug,
-            onClick: () => void selectWorkspace(w.slug).catch(showWorkspaceError),
-          }),
-        ]),
+  // ---------- workspaces and stars ----------
+
+  /** Every workspace glosa is serving, as last read. The navigator no longer lists them: the
+   * palette does, and the Starred section keeps the writer's own few at hand. */
+  let workspaces = [];
+  /** The starred folders (A1 §5.21), as last read. */
+  let stars = [];
+  /** False when the daemon predates stars (contract < 1.11): every star control stands down. */
+  let starsSupported = false;
+  /** Per-star progress the list shows while a reopen runs or after one fails. */
+  const starProgress = new Map();
+
+  function currentWorkspace() {
+    return workspaces.find((w) => w.slug === currentSlug) ?? null;
+  }
+
+  function currentStar() {
+    return currentSlug ? (stars.find((star) => star.state === "open" && star.slug === currentSlug) ?? null) : null;
+  }
+
+  function canStarCurrent() {
+    return starsSupported && !singlePane && currentWorkspace()?.kind === "directory";
+  }
+
+  function renderStarToggle() {
+    const workspace = currentWorkspace();
+    starToggle.hidden = !canStarCurrent();
+    if (starToggle.hidden || !workspace) return;
+    const starred = Boolean(currentStar());
+    const name = folderName(workspace.path, workspace.slug);
+    starToggle.setAttribute("aria-pressed", String(starred));
+    starToggle.setAttribute("aria-label", starred ? "Unstar this workspace" : "Star this workspace");
+    starToggle.title = starred ? `Unstar ${name}` : `Star ${name}`;
+  }
+
+  function starRow(star) {
+    const progress = starProgress.get(star.id);
+    const state = progress?.state ?? star.state;
+    const current = star.state === "open" && star.slug === currentSlug;
+    const open = el("button", {
+      type: "button",
+      className: "glosa-starred-open",
+      title: star.path,
+      "aria-current": String(current),
+    });
+    open.append(el("span", { className: "glosa-starred-name", textContent: star.name }));
+    if (star.state === "open" && star.has_attention) {
+      open.append(
+        el("span", { className: "glosa-starred-dot", "aria-hidden": "true" }),
+        el("span", { className: "glosa-visually-hidden", textContent: ", a session is asking" }),
       );
     }
-    // A lone workspace auto-selects below, so the switcher only earns its space once a SECOND
-    // workspace is live (the machine-wide singleton daemon can serve several at once).
-    sidebarNav.setWorkspacesAvailable(workspaces.length > 1);
-    if (workspaces.length === 0) {
-      dockHost.textContent = "";
-      dockHost.append(
-        el("div", { className: "glosa-empty" }, [
-          el("p", { className: "glosa-empty-title", textContent: "No workspaces yet." }),
-          el("p", { className: "glosa-empty-hint" }, [
-            "In a terminal, run ",
-            el("code", { textContent: "glosa open <directory>" }),
-            " to start reviewing its artifacts here.",
-          ]),
-        ]),
-      );
-      return;
-    }
-    if (currentSlug) {
-      markCurrent(sidebarList, currentSlug);
-      return;
-    }
-    if (initialSlug) {
-      await selectWorkspace(initialSlug);
-    } else if (workspaces.length === 1) {
-      await selectWorkspace(workspaces[0].slug);
+    const meta =
+      state === "missing"
+        ? "Folder not found"
+        : state === "opening"
+          ? "Opening…"
+          : state === "error"
+            ? "Couldn't open"
+            : state === "closed"
+              ? "Not open"
+              : null;
+    if (meta) open.append(el("span", { className: "glosa-starred-meta", textContent: meta }));
+    if (state === "error" && progress?.message) open.title = `${star.path}\n${progress.message}`;
+    if (state === "missing" || state === "opening") open.setAttribute("aria-disabled", "true");
+    if (state === "opening") open.setAttribute("aria-busy", "true");
+    open.addEventListener("click", () => void chooseStar(star));
+
+    const unstar = el("button", {
+      type: "button",
+      className: "glosa-tree-tool glosa-starred-unstar",
+      title: "Unstar",
+      "aria-label": `Unstar ${star.name}`,
+    });
+    unstar.innerHTML = shell.starIcon;
+    unstar.addEventListener("click", () => void unstarById(star.id, star.name));
+
+    return el("li", { className: "glosa-starred-row", "data-state": state, "data-star": star.id }, [open, unstar]);
+  }
+
+  function renderStars() {
+    const focusedStar = document.activeElement?.closest?.(".glosa-starred-row")?.getAttribute("data-star") ?? null;
+    const focusedUnstar = Boolean(document.activeElement?.classList?.contains("glosa-starred-unstar"));
+    starredList.textContent = "";
+    for (const star of stars) starredList.append(starRow(star));
+    starredCount.textContent = String(stars.length);
+    sidebarNav.setStarredAvailable(starsSupported && stars.length > 0);
+    // A re-render must not drop the keyboard out of the list it was in.
+    if (focusedStar) {
+      const row = starredList.querySelector(`[data-star="${focusedStar}"]`);
+      row
+        ?.querySelector(focusedUnstar ? ".glosa-starred-unstar" : ".glosa-starred-open")
+        ?.focus({ preventScroll: true });
     }
   }
+
+  async function loadWorkspaces() {
+    workspaces = await dataAccess.getWorkspaces();
+    return workspaces;
+  }
+
+  async function refreshStars() {
+    try {
+      stars = await dataAccess.getStars();
+      starsSupported = Array.isArray(stars);
+      if (!starsSupported) stars = [];
+    } catch {
+      // An older daemon has no star routes; the navigator simply has no Starred section.
+      stars = [];
+      starsSupported = false;
+    }
+    renderStars();
+    renderStarToggle();
+  }
+
+  async function chooseStar(star) {
+    const progress = starProgress.get(star.id)?.state;
+    if (star.state === "missing" || progress === "opening") return;
+    if (star.state === "open" && star.slug) {
+      if (star.slug !== currentSlug) await selectWorkspace(star.slug).catch(showWorkspaceError);
+      return;
+    }
+    starProgress.set(star.id, { state: "opening" });
+    renderStars();
+    try {
+      const opened = await dataAccess.openStar(star.id);
+      starProgress.delete(star.id);
+      await loadWorkspaces();
+      await refreshStars();
+      await selectWorkspace(opened.slug);
+      announce(`Opened ${star.name}.`);
+    } catch (error) {
+      starProgress.set(star.id, {
+        state: "error",
+        message: error instanceof Error ? error.message : "Try again, or run glosa open in a terminal.",
+      });
+      // The folder may have gone while the list was showing; say so rather than "couldn't open".
+      await refreshStars();
+      if (stars.find((s) => s.id === star.id)?.state === "missing") {
+        starProgress.delete(star.id);
+        renderStars();
+        announce(`${star.name} could not be opened: its folder is gone.`);
+      } else {
+        announce(`${star.name} could not be opened. ${starProgress.get(star.id)?.message ?? ""}`.trim());
+      }
+    }
+  }
+
+  async function unstarById(id, name) {
+    try {
+      await dataAccess.unstarWorkspace(id);
+      starProgress.delete(id);
+      announce(`Unstarred ${name}.`);
+    } finally {
+      await refreshStars();
+    }
+  }
+
+  async function toggleCurrentStar() {
+    const workspace = currentWorkspace();
+    if (!workspace || !canStarCurrent()) return;
+    const existing = currentStar();
+    const name = folderName(workspace.path, workspace.slug);
+    if (existing) {
+      await unstarById(existing.id, name);
+      return;
+    }
+    try {
+      await dataAccess.starWorkspace(workspace.slug);
+      announce(`Starred ${name}.`);
+    } finally {
+      await refreshStars();
+    }
+  }
+
+  starToggle.addEventListener("click", () => void toggleCurrentStar().catch(() => {}));
+
+  function showNoWorkspaces() {
+    dockHost.textContent = "";
+    dockHost.append(
+      el("div", { className: "glosa-empty" }, [
+        el("p", { className: "glosa-empty-title", textContent: "No workspaces yet." }),
+        el(
+          "p",
+          { className: "glosa-empty-hint" },
+          starsSupported && stars.length > 0
+            ? [
+                "Reopen a starred folder from the navigator, or run ",
+                el("code", { textContent: "glosa open <directory>" }),
+                " in a terminal.",
+              ]
+            : [
+                "In a terminal, run ",
+                el("code", { textContent: "glosa open <directory>" }),
+                " to start reviewing its artifacts here.",
+              ],
+        ),
+      ]),
+    );
+  }
+
+  async function refreshWorkspaces() {
+    const [live] = await Promise.all([loadWorkspaces(), refreshStars()]);
+    renderStarToggle();
+    if (live.length === 0) {
+      showNoWorkspaces();
+      return;
+    }
+    if (currentSlug) return;
+    if (initialSlug) {
+      await selectWorkspace(initialSlug);
+      return;
+    }
+    // With the switcher gone from the navigator, a page with several live workspaces opens on the
+    // one this browser last had, then on the most recently active; Go to (⌘K, @) switches.
+    const remembered = readStored(layoutStorage ?? defaultStorage(), LAST_WORKSPACE_STORAGE_KEY);
+    const pick =
+      live.find((w) => w.slug === remembered) ??
+      [...live].sort((a, b) => String(b.last_seen ?? "").localeCompare(String(a.last_seen ?? "")))[0];
+    await selectWorkspace(pick.slug);
+  }
+
+  // Coming back to the tab is when another workspace may have been opened or closed in a terminal.
+  const onWindowFocus = () => {
+    if (singlePane || unmounted) return;
+    void loadWorkspaces()
+      .then(() => refreshStars())
+      .catch(() => {});
+  };
+  window.addEventListener("focus", onWindowFocus);
 
   void refreshWorkspaces().catch(showWorkspaceError);
 
@@ -875,6 +1127,7 @@ export function mountApp(
     document.removeEventListener("keydown", onShortcut);
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onDocumentKeydown, true);
+    window.removeEventListener("focus", onWindowFocus);
     sidebarNav.destroy();
     feedbackController.destroy();
     stopStream?.();

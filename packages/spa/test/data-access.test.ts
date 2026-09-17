@@ -47,6 +47,30 @@ describe("createDataAccess — request shape", () => {
     expect(calls).toEqual(["/api/status"]);
   });
 
+  test("star routes: list, star by slug (never a path), unstar and reopen by id", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit) => {
+      calls.push([path, init]);
+      if (path.endsWith("/unstar")) return new Response(null, { status: 204 });
+      return jsonResponse(200, path === "/api/stars" && !init.method ? [] : { slug: "ws" });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage() });
+
+    expect(await da.getStars()).toEqual([]);
+    await da.starWorkspace("ws-1");
+    expect(await da.unstarWorkspace("abc123")).toBeUndefined();
+    expect(await da.openStar("abc123")).toEqual({ slug: "ws" });
+
+    expect(calls.map(([path, init]) => [path, init.method ?? "GET"])).toEqual([
+      ["/api/stars", "GET"],
+      ["/api/stars", "POST"],
+      ["/api/stars/abc123/unstar", "POST"],
+      ["/api/stars/abc123/open", "POST"],
+    ]);
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ slug: "ws-1" });
+    expect(calls[3]![1].body).toBeUndefined();
+  });
+
   test("getArtifact with render:'html' appends ?render=html and URL-encodes the path", async () => {
     const calls: string[] = [];
     const fetchFn = async (path: string) => {
