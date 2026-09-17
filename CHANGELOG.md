@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The first `glosa` command after an upgrade could fail with "stale glosa daemon did not release
+  its lock within 5000ms". The old daemon was closing every file watch one at a time before it
+  released its lock, and with many watched workspaces that took 30 seconds or more, with the daemon
+  frozen for the whole time. A daemon that is exiting now leaves its file watches for the system
+  to release, and stops starting new ones, so it hands over in well under a second.
+
 ## [0.1.0-alpha.24] — 2026-09-16
 
 ### Changed

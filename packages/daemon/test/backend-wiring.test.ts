@@ -5,9 +5,11 @@
 // Constructs the backend directly (no port binds, no subprocess) — see http.test.ts/http-routes.
 // test.ts for the routes that consume this wiring end-to-end.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FSWatcher } from "chokidar";
 import { buildBackend } from "../src/lifecycle/daemon.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 
@@ -112,6 +114,94 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
       expect(backend.busRegistry.has(secondEntry)).toBe(false);
     } finally {
       rmSync(secondRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("daemon exit does not wait on closing filesystem watches", () => {
+  // The regression this pins: a daemon near the watch-entry budget spent 30 s+ inside chokidar's
+  // close() on shutdown (Bun's per-file fs.watch closes synchronously, and slower the more there
+  // are), holding daemon.lock with a frozen event loop, so the upgrading client gave up after 5 s.
+  // A watch whose close never settles stands in for that; the exit path must not reach it.
+  let home: string;
+  let root: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "glosa-exit-home-"));
+    root = canonicalize(mkdtempSync(join(tmpdir(), "glosa-exit-ws-")));
+    writeFileSync(join(root, "note.md"), "# note\n");
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  class HangingWatcher extends EventEmitter {
+    closeCalls = 0;
+    add(): this {
+      return this;
+    }
+    async unwatch(): Promise<this> {
+      return this;
+    }
+    close(): Promise<void> {
+      this.closeCalls += 1;
+      return new Promise<void>(() => {});
+    }
+  }
+
+  test("releaseWorkspaceResourcesForExit retires watchers and closes buses without closing any watch", async () => {
+    const watchers: HangingWatcher[] = [];
+    const backend = buildBackend(home, {
+      artifactWatchFactory: () => {
+        const watcher = new HangingWatcher();
+        watchers.push(watcher);
+        return watcher as unknown as FSWatcher;
+      },
+    });
+    const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    backend.busRegistry.get(entry);
+    expect(watchers).toHaveLength(1);
+    expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(1);
+
+    const released = await Promise.race([
+      backend.releaseWorkspaceResourcesForExit().then(() => true),
+      Bun.sleep(2000).then(() => false),
+    ]);
+
+    expect(released).toBe(true);
+    expect(watchers[0]!.closeCalls).toBe(0);
+    expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBeNull();
+    expect(backend.busRegistry.has(entry)).toBe(false);
+  });
+
+  test("warm-up stops opening watches once exit has begun", async () => {
+    const extraRoots = [0, 1].map(() => canonicalize(mkdtempSync(join(tmpdir(), "glosa-exit-ws-"))));
+    try {
+      const seeding = buildBackend(home, { artifactWatchFactory: () => new HangingWatcher() as unknown as FSWatcher });
+      for (const r of [root, ...extraRoots]) {
+        writeFileSync(join(r, "note.md"), "# note\n");
+        await seeding.workspaceIndex.upsertWorkspace(r, "glosa-open");
+      }
+      seeding.artifactWatcherRegistry.abandonAll();
+
+      let opened = 0;
+      const backend = buildBackend(home, {
+        artifactWatchFactory: () => {
+          opened += 1;
+          return new HangingWatcher() as unknown as FSWatcher;
+        },
+      });
+      // Warm-up watches the first workspace synchronously, then yields; exit lands in that yield.
+      const warming = backend.warmArtifactWatchers();
+      await backend.releaseWorkspaceResourcesForExit();
+      await warming;
+
+      expect(opened).toBe(1);
+      expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
+    } finally {
+      for (const r of extraRoots) rmSync(r, { recursive: true, force: true });
     }
   });
 });
