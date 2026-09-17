@@ -32,6 +32,7 @@ import { forgetWorkspace } from "../registry/forget-workspace.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
 import { canonicalize } from "../registry/slug.ts";
+import { starName, type WorkspaceStar, WorkspaceStars } from "../registry/workspace-stars.ts";
 import {
   AdoptionError,
   type WorkspaceEntry,
@@ -215,6 +216,9 @@ export interface ApiContext {
    * defaulted to `glosaHome()` at the use site so every hand-built test context keeps compiling;
    * production wires the boot-time home (lifecycle.ts) so a custom `GLOSA_HOME` is honored. */
   home?: string;
+  /** Starred workspaces (`<home>/stars.json`). Optional: defaulted per context from `home`, so
+   * production and every hand-built test context get a store without extra wiring. */
+  workspaceStars?: WorkspaceStars;
 }
 
 const contextCompositeRegistries = new WeakMap<ApiContext, CompositeDeliveryRegistry>();
@@ -479,10 +483,104 @@ function handleListWorkspaces(ctx: ApiContext): Response {
   const body = entries.map((e) => ({
     slug: e.slug,
     path: e.worktree_path,
+    // Contract 1.11: lets the SPA offer a star only where one can be taken.
+    kind: e.kind,
     last_seen: e.last_seen,
     has_attention: hasOpenAttention(peekJournal(e).state),
   }));
   return Response.json(body);
+}
+
+// ---------- starred workspaces (contract 1.11, A1 §5.21) ----------
+
+const contextStars = new WeakMap<ApiContext, WorkspaceStars>();
+
+function workspaceStars(ctx: ApiContext): WorkspaceStars {
+  if (ctx.workspaceStars) return ctx.workspaceStars;
+  let stars = contextStars.get(ctx);
+  if (!stars) {
+    stars = new WorkspaceStars({ home: ctx.home ?? glosaHome() });
+    contextStars.set(ctx, stars);
+  }
+  return stars;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** One star as the navigator draws it. `open` means a present directory registration serves this
+ * exact path right now; `closed` means the folder is there but glosa is not serving it; `missing`
+ * means the folder is gone. */
+function starRow(ctx: ApiContext, star: WorkspaceStar) {
+  const entry = ctx.workspaceIndex
+    .list({ presentOnly: true })
+    .find((e) => e.kind === "directory" && e.worktree_path === star.path && !isBeingForgotten(e));
+  const base = { id: star.id, name: starName(star), path: star.path, starred_at: star.starred_at };
+  if (entry) {
+    return {
+      ...base,
+      state: "open" as const,
+      slug: entry.slug,
+      has_attention: hasOpenAttention(peekJournal(entry).state),
+    };
+  }
+  return { ...base, state: isDirectory(star.path) ? ("closed" as const) : ("missing" as const) };
+}
+
+/** `GET /api/stars` */
+function handleListStars(ctx: ApiContext): Response {
+  return Response.json(
+    workspaceStars(ctx)
+      .list()
+      .map((star) => starRow(ctx, star)),
+  );
+}
+
+/** `POST /api/stars` `{slug}` — stars a workspace glosa is already serving. The request names a
+ * registration, never a path: the path written down is the one the index already holds. */
+async function handleStarWorkspace(ctx: ApiContext, req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, url.pathname);
+  }
+  const slug = (body as { slug?: unknown } | null)?.slug;
+  if (typeof slug !== "string" || slug.length === 0) {
+    return problem(400, "validation-failed", "slug is required", undefined, url.pathname);
+  }
+  const entry = ctx.workspaceIndex.getBySlug(slug);
+  if (!entry || !entry.present) return problem(404, "not-found", "unknown workspace", undefined, url.pathname);
+  if (entry.kind !== "directory") {
+    return problem(422, "star-not-directory", "only a directory workspace can be starred", undefined, url.pathname);
+  }
+  const star = await workspaceStars(ctx).add(entry.worktree_path);
+  return Response.json(starRow(ctx, star));
+}
+
+/** `POST /api/stars/:id/unstar` */
+async function handleUnstar(ctx: ApiContext, id: string, pathname: string): Promise<Response> {
+  const removed = await workspaceStars(ctx).remove(id);
+  if (!removed) return problem(404, "not-found", "unknown star", undefined, pathname);
+  return new Response(null, { status: 204 });
+}
+
+/** `POST /api/stars/:id/open` — reopens a star's folder exactly as `glosa open <dir>` would. The
+ * path comes from the star store, which only ever recorded paths of existing directory
+ * registrations (A3 §4 "Starred workspaces"). */
+async function handleOpenStar(ctx: ApiContext, id: string, pathname: string): Promise<Response> {
+  const star = workspaceStars(ctx).get(id);
+  if (!star) return problem(404, "not-found", "unknown star", undefined, pathname);
+  if (!isDirectory(star.path)) {
+    return problem(422, "star-folder-missing", "the starred folder no longer exists", undefined, pathname);
+  }
+  return openWorkspaceAt(ctx, star.path, {}, pathname);
 }
 
 // peekJournal / hasOpenAttention / pendingCount moved to bus/peek.ts (issue #79) so the
@@ -1696,7 +1794,27 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
     return problem(400, "validation-failed", "path is required", undefined, url.pathname);
   }
   const focus = typeof parsed?.focus === "string" && parsed.focus.length > 0 ? parsed.focus : undefined;
+  return openWorkspaceAt(
+    ctx,
+    rawPath,
+    {
+      externalState: parsed?.external_state === true,
+      ...(focus ? { focus } : {}),
+      ...(parsed?.focus_first === true ? { focusFirst: true } : {}),
+      ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
+    },
+    url.pathname,
+  );
+}
 
+/** The shared body of `glosa open` and reopening a star: register (or refresh) the target, adopt
+ * loose lineages into a directory, and reconcile its bus once. */
+async function openWorkspaceAt(
+  ctx: ApiContext,
+  rawPath: string,
+  options: Parameters<WorkspaceIndex["resolveOpenTarget"]>[1],
+  pathname: string,
+): Promise<Response> {
   // Held-review finding (final pass): the PRIOR fix here — a pre-check against
   // `activeForgetOperationForCanonicalPath` run before `resolveOpenTarget`, even wrapped in the
   // per-target ownership lock — was itself a check-then-act race: `resolveOpenTarget` runs under
@@ -1708,12 +1826,7 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
   // an outer pre-check here can never be. `resolveOpenTarget` throws the same `AdoptionError`
   // (`"workspace-forgetting"`) the catch block below already maps to `409`.
   try {
-    const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, {
-      externalState: parsed?.external_state === true,
-      ...(focus ? { focus } : {}),
-      ...(parsed?.focus_first === true ? { focusFirst: true } : {}),
-      ...(parsed?.require_focus === true ? { requireFocus: true } : {}),
-    });
+    const opened = await ctx.workspaceIndex.resolveOpenTarget(rawPath, options);
     if (opened.entry.kind === "directory") {
       await adoptLooseLineages(
         ctx.workspaceIndex,
@@ -1736,13 +1849,13 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
   } catch (error) {
     if (error instanceof WorkspaceOpenError) {
       const status = error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact" ? 422 : 400;
-      return problem(status, error.code, error.message, undefined, url.pathname);
+      return problem(status, error.code, error.message, undefined, pathname);
     }
     if (error instanceof AdoptionError) {
-      return problem(409, error.code, error.message, undefined, url.pathname);
+      return problem(409, error.code, error.message, undefined, pathname);
     }
     if (error instanceof WorkspaceAdoptedError) {
-      return problem(409, "workspace-adopted", error.message, undefined, url.pathname);
+      return problem(409, "workspace-adopted", error.message, undefined, pathname);
     }
     throw error;
   }
@@ -2547,6 +2660,21 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   }
   if (method === "POST" && pathname === "/api/workspaces/apply-begin") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceApplyBegin(ctx, req) };
+  }
+  if (method === "GET" && pathname === "/api/stars") {
+    return { routeClass: "authed-read", handle: () => handleListStars(ctx) };
+  }
+  if (method === "POST" && pathname === "/api/stars") {
+    return { routeClass: "state-changing", handle: (req) => handleStarWorkspace(ctx, req) };
+  }
+  {
+    const starRoute = pathname.match(/^\/api\/stars\/([0-9a-f]{16})\/(open|unstar)$/);
+    if (method === "POST" && starRoute) {
+      const id = starRoute[1] as string;
+      return starRoute[2] === "open"
+        ? { routeClass: "state-changing", handle: () => handleOpenStar(ctx, id, pathname) }
+        : { routeClass: "state-changing", handle: () => handleUnstar(ctx, id, pathname) };
+    }
   }
   if (method === "POST" && pathname === "/api/workspaces/forget") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceForget(ctx, req) };

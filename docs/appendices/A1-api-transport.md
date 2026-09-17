@@ -109,7 +109,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
 400 for Host, 403 for Origin, per §1).
 ```json
-{ "contract_version": "1.10", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.11", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -117,12 +117,13 @@ Bearer required. Lists the live registry (R1 sources: live-session cwds, `.glosa
 dirs, manually opened dirs).
 - **200**
 ```json
-[{ "slug": "workspace-a1b2c3", "path": "/Users/example/Documents/workspace",
+[{ "slug": "workspace-a1b2c3", "path": "/Users/example/Documents/workspace", "kind": "directory",
    "last_seen": "2026-07-20T10:00:00Z", "has_attention": false }]
 ```
-No POST route to create workspaces in v1 — workspace creation is CLI-only (`glosa open <dir>`,
-R8); the registry is read-only from the SPA's perspective. (If a future need arises to open a
-new workspace from the SPA, that's an additive route — not required for v1.)
+`kind` (`"directory"` or `"loose-file"`) was added in contract 1.11. There is no route that creates a
+workspace from a path the SPA supplies: a new directory is opened from the terminal (`glosa open
+<dir>`, R8). The SPA can reopen a directory only through a star (§5.21), whose path the daemon
+recorded from a registration it already held.
 
 ### 5.2b `GET /api/status`
 Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
@@ -821,6 +822,35 @@ resume command (`glosa forget <slug> --yes`) remains discoverable even with no l
 left to anchor a path-keyed lookup on. `path` is always the target's durable WORKTREE path (held-
 review addition, final pass) — for a `loose-file` target that is the containing directory `doctor
 <dir>` is invoked against, never the raw file path, matching every other row's own `path` field.
+
+### 5.21 Starred workspaces (contract 1.11)
+
+A star is the writer's bookmark for a directory they come back to. Stars live in
+`~/.glosa/stars.json` (atomic temp → fsync → rename, 0600), apart from the workspace index, so a
+star outlives the index's GC removing the directory's registration. A star's `id` is 16 hex
+characters derived from its canonical path, so starring the same directory twice is one star.
+Stars list alphabetically by folder name.
+
+**No star route accepts a path.** Starring names a present registration by slug and records that
+registration's own canonical path; reopening names the star by id. See A3 §4 "Starred workspaces".
+
+- `GET /api/stars` — Bearer required (authed read). **200**:
+```json
+[{ "id": "3f9c0a1b2c3d4e5f", "name": "workspace", "path": "/Users/example/Documents/workspace",
+   "starred_at": "2026-09-17T10:00:00.000Z", "state": "open", "slug": "workspace-a1b2c3",
+   "has_attention": false }]
+```
+  `state` is `open` (a present directory registration serves exactly this path; `slug` and
+  `has_attention` are present only then), `closed` (the folder exists but glosa is not serving it),
+  or `missing` (the folder is gone or is no longer a directory).
+- `POST /api/stars` `{ "slug": "workspace-a1b2c3" }` — Bearer + Origin (state-changing). Idempotent.
+  **200** with the star row. **400** `validation-failed` (no slug), **404** `not-found` (no present
+  registration with that slug), **422** `star-not-directory` (a loose-file registration).
+- `POST /api/stars/:id/unstar` — Bearer + Origin. **204**; **404** `not-found`.
+- `POST /api/stars/:id/open` — Bearer + Origin. Reopens the star's path through the same code path
+  as `POST /api/workspaces/open` and answers with its body (`{slug, path, kind}`) and its errors.
+  **404** `not-found` (unknown id), **422** `star-folder-missing` (checked before the index is
+  touched; the star is kept until the writer unstars it).
 
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 

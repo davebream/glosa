@@ -94,6 +94,22 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   | Navigation (top GET: `/` SPA shell, `/doc/<cap>/...` class-F) | No (nav can't carry headers) | Origin checks inapplicable; SPA shell is static+non-sensitive, self-auths via fragment post-load; class-F gated by PATH CAPABILITY not headers. |
 - Resolves the doc contradiction: "every request validated" = the Host check unconditionally; Origin check is route-class-scoped.
 
+### Starred workspaces (contract 1.11)
+The star routes (A1 §5.21) are the one place the SPA can make the daemon open a directory, so they
+are shaped so that no request can name one.
+- **No path in, ever.** `POST /api/stars` takes a slug and records the path of that present registration,
+  which already came from `glosa open`, a live session's cwd or a `.glosa/` marker (R1).
+  `POST /api/stars/:id/open` takes only the star id; the path is read from `~/.glosa/stars.json`.
+  A page holding the Bearer token therefore gains no way to register an arbitrary directory, only to
+  reopen one the writer already worked in and starred.
+- **Loose files cannot be starred** (`star-not-directory`): a star reopens a directory, and a loose file's
+  containing directory was never itself a registration.
+- **Missing folders are refused before the index** (`star-folder-missing`). Otherwise reopening runs the
+  same `resolveOpenTarget` path as `glosa open`, including the home-directory boundary (#146) and the
+  forget/adoption refusals, so a star is never a way around them.
+- `stars.json` is written 0600 in `GLOSA_HOME`, like the token. A corrupt file is moved aside, not overwritten.
+- State-changing star routes use the strict Origin rule in the table above; `GET /api/stars` is an authed read.
+
 ## 5. §5.5 attacks → defense → test
 1. Open class-F in new tab → origin split + CSP sandbox → test: direct-nav minted URL, assert storage empty + fetch throws.
 2. Remote img/fetch/WS/form in doc → connect-src/form-action none → test: fixture with each, assert 0 outbound + CSP violation.
@@ -104,6 +120,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 7. Local site navigates/frames class-F/handshake → Host literal + Origin table + frame-ancestors → test: foreign origin (a) top-nav handshake non-sensitive + state routes reject, (b) no-Bearer GET → 401, (c) iframe class-F → blocked by frame-ancestors, (d) iframe SPA → blocked.
 8. Fragment token in history/localStorage → replaceState + sessionStorage + rotate/revoke → test: hash empty, no history `t=`, token in sessionStorage not localStorage, revoke → old Bearer 401.
 9. DNS rebinding against the second SPA hostname (#159) → literal two-name allowlist + Origin bound to Host + class-F IP-only → test: near-miss Hosts (`GLOSA.localhost`, `glosa.localhost.`, `evil.glosa.localhost`, `localhost`, missing port, class-F port) → 400 no body; `glosa.localhost` Host with a `127.0.0.1` Origin (and the reverse) → 403; `glosa.localhost` Host on class-F → 400; class-F `frame-ancestors` names the SPA under both hostnames and nothing else.
+10. Page with the Bearer token tries to open an arbitrary directory through stars → no star route accepts a path; open is by daemon-recorded id → test (`workspace-stars.test.ts`): `POST /api/stars` with a `path` body and no slug → 400 and nothing recorded; an id that was never recorded → 404; a star to a loose-file registration → 422; reopening a star whose folder is gone → 422 and the index unchanged.
 
 ### Explicit shadow repair (#226)
 

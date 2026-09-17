@@ -117,27 +117,46 @@ export function createViewerShell(
   );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
-  const workspacesToggle = el("button", {
-    id: "glosa-workspaces-toggle",
-    className: "glosa-sidebar-section-toggle",
+  // One star shape for every star control, drawn rather than typed: outlined until pressed, filled
+  // once starred (the CSS fills it), so the state reads without colour.
+  const STAR_SVG =
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.9l2.13 4.32 4.77.69-3.45 3.36.81 4.75L10 13.78l-4.26 2.24.81-4.75L3.1 7.91l4.77-.69L10 2.9z"/></svg>';
+  const starToggle = el("button", {
+    className: "glosa-tree-tool glosa-star-toggle",
     type: "button",
-    "aria-expanded": "true",
-    "aria-controls": "glosa-workspace-list",
+    hidden: true,
+    "aria-pressed": "false",
+    "aria-label": "Star this workspace",
   });
-  workspacesToggle.innerHTML =
-    '<span class="glosa-sidebar-section-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span><span>Workspaces</span>';
-  const sidebarList = el("ul", { id: "glosa-workspace-list", className: "glosa-workspace-list" });
-  const workspacesSection = el("div", { className: "glosa-sidebar-section", hidden: true }, [
-    el("h2", {}, [workspacesToggle]),
-    sidebarList,
-  ]);
+  starToggle.innerHTML = STAR_SVG;
   const artifactList = el("ul", { className: "glosa-artifact-list" });
-  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [el("h2", { textContent: "Artifacts" })]);
+  const artifactHeading = el("div", { className: "glosa-sidebar-heading" }, [
+    el("h2", { textContent: "Artifacts" }),
+    starToggle,
+  ]);
   const artifactListEmpty = el("p", {
     className: "glosa-sidebar-empty",
     textContent: "Markdown, HTML, and text files in this workspace appear here.",
     hidden: true,
   });
+  // The writer's starred folders sit at the navigator's foot, collapsible, out of the tree's way:
+  // the tree is what the navigator is for, and a list you come back to is not what you read.
+  const starredToggle = el("button", {
+    id: "glosa-starred-toggle",
+    className: "glosa-sidebar-section-toggle",
+    type: "button",
+    "aria-expanded": "true",
+    "aria-controls": "glosa-starred-list",
+  });
+  const starredCount = el("span", { className: "glosa-starred-count" });
+  starredToggle.innerHTML =
+    '<span class="glosa-sidebar-section-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span><span>Starred</span>';
+  starredToggle.append(starredCount);
+  const starredList = el("ul", { id: "glosa-starred-list", className: "glosa-starred-list" });
+  const starredSection = el("section", { className: "glosa-sidebar-section glosa-starred", hidden: true }, [
+    el("h2", {}, [starredToggle]),
+    starredList,
+  ]);
   // One banner for the whole workspace, above the dock — never one per pane (§11). The connection
   // either holds or it does not; saying so six times would not make it truer.
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
@@ -158,7 +177,10 @@ export function createViewerShell(
   const sidebarEl = el(
     "nav",
     { id: "glosa-sidebar", className: "glosa-sidebar", "aria-label": "Workspace navigation" },
-    [workspacesSection, artifactHeading, artifactList, artifactListEmpty],
+    [
+      el("div", { className: "glosa-sidebar-scroll" }, [artifactHeading, artifactList, artifactListEmpty]),
+      starredSection,
+    ],
   );
   const agentFeedbackHost = el("div", { className: "glosa-agent-feedback" });
   const agentFeedback = mountAgentFeedback(agentFeedbackHost, { overlayHost: topbarOverlays });
@@ -190,6 +212,7 @@ export function createViewerShell(
   const artifactNavigator = createArtifactTreeNavigator(artifactList, { onOpen: onOpenArtifact });
 
   return {
+    starIcon: STAR_SVG,
     elements: {
       navToggle,
       titleEl,
@@ -202,9 +225,11 @@ export function createViewerShell(
       toolsTrigger,
       toolsMenu,
       tools,
-      workspacesToggle,
-      workspacesSection,
-      sidebarList,
+      starToggle,
+      starredToggle,
+      starredCount,
+      starredSection,
+      starredList,
       artifactList,
       artifactListEmpty,
       conversationEl,

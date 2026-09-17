@@ -119,7 +119,9 @@ describe("A1 §5 route catalog", () => {
     const res = await fetchFn(req("/api/workspaces"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual([{ slug, path: root, last_seen: expect.any(String), has_attention: false }]);
+    expect(body).toEqual([
+      { slug, path: root, kind: "directory", last_seen: expect.any(String), has_attention: false },
+    ]);
   });
 
   test("GET /api/workspaces omits a soft-deleted (present:false) workspace", async () => {

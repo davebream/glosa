@@ -278,12 +278,12 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
   tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
   path. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.10: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.11: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
   acknowledgement routes (issue #153 Part 2), presentation-token mint/redeem, whole-bus
-  deletion (`glosa forget`, issue #156)) — schemas, status codes, 1 MiB body cap,
+  deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id)) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
