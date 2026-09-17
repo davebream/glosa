@@ -4,7 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0-alpha.25] — 2026-09-17
+
+### Added
+
+- Starred workspaces. The star beside **Artifacts** stars the current folder, and starred folders
+  sit in a **Starred** section at the foot of the navigator, where a folder glosa is not serving
+  can be reopened with one click. Go to (⌘K) lists every open workspace; `@` narrows it to them.
+  The Workspaces switcher above the artifact tree is gone, and with several workspaces open the page
+  lands on the one this browser used last.
 
 ### Fixed
 
@@ -877,7 +885,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.24...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.25...HEAD
+[0.1.0-alpha.25]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.24...v0.1.0-alpha.25
 [0.1.0-alpha.24]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.23...v0.1.0-alpha.24
 [0.1.0-alpha.23]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.22...v0.1.0-alpha.23
 [0.1.0-alpha.18]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.17...v0.1.0-alpha.18
