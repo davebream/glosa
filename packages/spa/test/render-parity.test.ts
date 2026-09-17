@@ -58,6 +58,24 @@ describe("#271 — the browser renderer matches the daemon's", () => {
     expect(html).toContain('data-line="2"');
   });
 
+  test("parity holds for the content a manuscript actually carries", () => {
+    // The nine documents above are English, LF, and mostly ASCII. A manuscript is whatever the
+    // writer writes. Each of these has its own way of breaking a renderer — CRLF changes token
+    // maps, a ZWJ emoji sequence is several code units, RTL and CJK exercise different text
+    // handling, and the empty document is the one nobody tries.
+    const cases = {
+      crlf: "# T\r\n\r\n| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n\r\nAfter.\r\n",
+      emoji: "Para with 👩‍👩‍👧‍👦 family and ~~struck~~.\n",
+      rtl: "# عنوان\n\nفقرة عربية.\n",
+      cjk: "# 標題\n\n| 甲 | 乙 |\n|---|---|\n| 一 | 二 |\n",
+      empty: "",
+    };
+    for (const [name, source] of Object.entries(cases)) {
+      // The label is in the assertion so a failure names which case broke, not just "a string".
+      expect({ [name]: browserRender(source) }).toEqual({ [name]: daemonRender(source) });
+    }
+  });
+
   test("non-manuscript regions stay hidden on the browser side too", () => {
     // Front matter and `%%` comments are not manuscript. If the browser renderer had been built
     // without `installNonManuscriptRules`, repainting an edited run would have exposed a document's
