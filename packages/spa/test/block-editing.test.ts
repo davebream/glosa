@@ -86,13 +86,28 @@ describe("per-block editing (#271)", () => {
     return { host, pane };
   }
 
+  /** Settle until `predicate` holds, or give up.
+   *
+   * A fixed number of ticks is not enough here and the reason is worth stating: opening a run awaits
+   * a DYNAMIC import of the editor module, so the very first click in a process pays a real module
+   * load while every later one is served from cache. Counting microtasks passes alone and fails in
+   * a shard, which is exactly the flake CI caught and a local single-file run could not. */
+  const settleUntil = async (predicate: () => boolean, attempts = 50) => {
+    for (let i = 0; i < attempts && !predicate(); i++) await paint();
+    return predicate();
+  };
+
   /** A plain click on a rendered block, with the collapsed selection a click actually leaves. */
-  const clickBlock = async (host: any, line: number) => {
+  const clickBlock = async (host: any, line: number, { expectEditor = true } = {}) => {
     const block = q(host, `.glosa-content [data-line="${line}"]`);
     expect(block).toBeTruthy();
     const event = new dom.window.MouseEvent("click", { bubbles: true, clientX: 10, clientY: 10 });
     block.dispatchEvent(event);
-    await paint();
+    // When an editor is expected, wait for it rather than for a tick count. When one is NOT — the
+    // guard tests — settle a fixed amount instead, so "nothing opened" is a real observation rather
+    // than a poll that gave up early.
+    if (expectEditor) await settleUntil(() => Boolean(q(host, ".glosa-run-editor")));
+    else await paint();
     return block;
   };
 
@@ -131,7 +146,7 @@ describe("per-block editing (#271)", () => {
 
   test("a read-locked visit cannot open a run", async () => {
     const { host } = await mountPane(fakeDataAccess(), { readLock: true });
-    await clickBlock(host, 2);
+    await clickBlock(host, 2, { expectEditor: false });
     expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(0);
   });
 
@@ -139,7 +154,7 @@ describe("per-block editing (#271)", () => {
     const { host, pane } = await mountPane(fakeDataAccess());
     pane.setApplyPause({ id: "lease-1" });
     await paint();
-    await clickBlock(host, 2);
+    await clickBlock(host, 2, { expectEditor: false });
     expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(0);
   });
 
