@@ -807,3 +807,45 @@ appended to it as a string, and it is dropped. A deletion in the sibling cannot 
 way and costs one rescan that finds nothing.
 
 chokidar remains a dependency for transcript tailing, which watches a handful of files.
+
+## The reader's renderer and the editor's parser construct from one configuration
+
+Read and Edit built their DOM from two markdown-it instances configured with different presets. The
+daemon used the default preset (`new MarkdownIt({ html: false, linkify: false })`), the browser named
+`commonmark`, and the commonmark preset omits the `table` block rule and the `strikethrough` inline
+rule. The same file was therefore a different document depending on which side was looking at it: a
+pipe table was a `<table>` for a reader and a paragraph of literal pipe characters for the editor.
+Sharing `installNonManuscriptRules` did not help, because the presets underneath it disagreed.
+
+This was not only a presentation mismatch. Editing one block at a time — the direction the workbench
+is moving in — parses that block through the editor's schema, so a construct the schema cannot hold
+is a block that cannot be opened at all. The divergence had to close before granularity was worth
+attempting.
+
+**Decision.** `MARKDOWN_PRESET` and `MARKDOWN_OPTIONS` in the already-shared
+`markdown-non-manuscript.js` are the one configuration both consumers construct from, and whatever
+that configuration enables `editorSchema` must be able to represent.
+
+The configuration is a named preset plus options rather than a constructed instance, because
+markdown-it's `.use()` mutates the instance it is called on and the two sides install different
+plugins afterwards — the daemon stamps `data-line`, the browser does not. Sharing the configuration
+keeps the part that must not drift identical while leaving each side its own instance.
+
+The two sides had to meet somewhere, and they meet at the reader's spelling rather than the editor's:
+tables stay. `docs/` alone carries 458 table rows across 26 files, and glosa's stated audience writes
+specifications. Turning the daemon's table rule off would have been one line and would have degraded
+every document the product exists to work on. So `prosemirror-tables` is vendored through the recipe
+the bundle already documents, and strikethrough — which nothing in the repository uses, and which
+costs a mark definition — is aligned upward for the same reason rather than down.
+
+Two consequences worth stating plainly:
+
+- **The vendored bundle now re-exports `Plugin`, `PluginKey`, `Decoration`, `DecorationSet` and
+  `TextSelection`.** They were always bundled and never exported, because nothing needed them. They
+  are what per-block editing decorates a focused block with, and adding them while the bundle was
+  being rebuilt for tables avoids a second minified-bundle diff later.
+- **The table serializer writes `|---|---|`, not `| --- | --- |`.** Both parse identically, so it is
+  a spelling choice, and it is the one every table in the nine-document corpus already uses. That is
+  what keeps the REQ-8 fidelity metric at 42 rather than 47: a table now costs zero bytes to
+  round-trip instead of five per column. The spaced spelling is still read back correctly, and where
+  a source exists `restoreSourceSpelling` restores it verbatim.

@@ -49,20 +49,38 @@ describe("non-manuscript structural boundaries (#175)", () => {
     });
   }
 
-  test("table types diverge at equal top-level ranges, without allowing arbitrary boundary mismatches", () => {
+  test("table types AGREE, structurally and at every nesting level (#270)", () => {
+    // THIS TEST USED TO PIN THE OPPOSITE. It was called "table types diverge at equal top-level
+    // ranges" and asserted that the editor saw a table as a single `paragraph` while the renderer
+    // saw a `table` with its rows — the two sides were built from different markdown-it presets
+    // (default vs `commonmark`), and the divergence was recorded here as expected behaviour.
+    //
+    // #270 made both construct from one shared configuration, so the layouts are now identical.
+    // Asserted as EQUALITY between the two rather than as two separate expected arrays: that is the
+    // property worth holding, and writing it this way means a future change which re-narrows either
+    // side fails here whichever side it narrows.
     const source = "| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter.\n";
-    expect(renderMarkdownLayout(source)).toEqual([
+    const expected = [
       { type: "table", startLine: 0, endLine: 3, level: 0 },
       { type: "thead", startLine: 0, endLine: 1, level: 1 },
       { type: "tr", startLine: 0, endLine: 1, level: 2 },
       { type: "tbody", startLine: 2, endLine: 3, level: 1 },
       { type: "tr", startLine: 2, endLine: 3, level: 2 },
       { type: "paragraph", startLine: 4, endLine: 5, level: 0 },
-    ]);
-    expect(editorMarkdownLayout(source)).toEqual([
-      { type: "paragraph", startLine: 0, endLine: 3, level: 0 },
-      { type: "paragraph", startLine: 4, endLine: 5, level: 0 },
-    ]);
+    ];
+    expect(renderMarkdownLayout(source)).toEqual(expected);
+    expect(editorMarkdownLayout(source)).toEqual(expected);
+    // Stated again as a direct comparison, so that a future edit which updates one expected array
+    // and forgets the other cannot leave the two sides disagreeing while both assertions pass.
+    expect(editorMarkdownLayout(source)).toEqual(renderMarkdownLayout(source));
+  });
+
+  test("strikethrough agrees between the renderer and the editor (#270)", () => {
+    // The other construct the `commonmark` preset dropped. Cheaper than tables and just as capable
+    // of reintroducing the split, so it gets its own row here.
+    const source = "Some ~~struck~~ text.\n";
+    expect(editorMarkdownLayout(source)).toEqual(renderMarkdownLayout(source));
+    expect(renderMarkdown(source)).toContain("<s>");
   });
 
   test("an unclosed nested comment cannot capture a delimiter outside its container", () => {

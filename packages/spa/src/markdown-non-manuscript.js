@@ -1,6 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // @ts-check
 // Portable syntax shared by the daemon renderer and the browser's CommonMark tokenizer.
+/**
+ * The ONE markdown-it configuration both renderers construct from.
+ *
+ * Before this existed the daemon built `new MarkdownIt({ html: false, linkify: false })` — the
+ * DEFAULT preset — while the browser built the `commonmark` preset, which omits the `table` block
+ * rule and the `strikethrough` inline rule. The same file was therefore a different document in
+ * each: a pipe table rendered as `<table>` for a reader and as a paragraph of literal pipe
+ * characters for the editor, and `~~struck~~` likewise. Sharing `installNonManuscriptRules` did
+ * not help, because the presets underneath it disagreed.
+ *
+ * Named preset plus options rather than a constructed instance: markdown-it's `.use()` mutates the
+ * instance it is called on, and the two consumers install different plugins afterwards (the daemon
+ * adds `data-line` stamping, the browser does not). Sharing the CONFIGURATION keeps the one thing
+ * that must not drift identical while leaving each side its own instance.
+ *
+ * Whatever this enables, `editorSchema` in rich-editor.js must be able to represent — a construct
+ * the reader is shown but the editor cannot hold is exactly the divergence this removes.
+ */
+export const MARKDOWN_PRESET = "default";
+export const MARKDOWN_OPTIONS = Object.freeze({ html: false, linkify: false });
+
 export const HEADER_FENCE = "---";
 export const COMMENT_FENCE = "%%";
 export const RAW_KIND = Object.freeze({ METADATA: "metadata", COMMENT: "comment" });

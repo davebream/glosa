@@ -42,6 +42,7 @@ import {
   splitListItem,
   liftListItem,
   sinkListItem,
+  tableNodes,
 } from "./vendor/prosemirror.js";
 import {
   NON_MANUSCRIPT_BLOCK_TOKEN,
@@ -50,6 +51,11 @@ import {
   tokenLayout,
 } from "./markdown-non-manuscript.js";
 import { commonMarkTokenizer } from "./markdown-parser.js";
+
+/** `~~struck~~`. markdown-it's default preset emits `s_open`/`s_close`, so the mark is named for
+ * what the reader's renderer already produces rather than for the token. Declared here rather than
+ * beside the schema because the serializer below keys on it. */
+const STRIKETHROUGH_MARK = "strikethrough";
 
 /** The default serializer bullets with `*`; nearly every hand-authored file here uses `-`.
  * Overriding just bullet_list keeps saved diffs from churning list markers document-wide. */
@@ -66,13 +72,75 @@ const mdSerializer = new MarkdownSerializer(
       state.text(node.textContent, false);
       state.closeBlock(node);
     },
+    table: serializeTable,
+    // Reached only through `table` above, which walks its own rows and cells because GFM pipe
+    // syntax is row-oriented and a per-node serializer cannot see the column count it needs. They
+    // exist because MarkdownSerializer requires an entry for every node type in the schema, and a
+    // missing one throws at serialize time rather than at construction.
+    table_row: unreachableTablePart,
+    table_cell: unreachableTablePart,
+    table_header: unreachableTablePart,
   },
   {
     ...defaultMarkdownSerializer.marks,
     // The mark carries its complete source spelling, including empty-note delimiters.
     glosa_comment: { open: "", close: "", escape: false },
+    [STRIKETHROUGH_MARK]: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
   },
 );
+
+function unreachableTablePart(_state, node) {
+  throw new Error(`${node.type.name} serialized outside a table`);
+}
+
+/** One cell's inline content as markdown.
+ *
+ * Runs the cell's children through a throwaway paragraph in a fresh serialize pass, because
+ * `MarkdownSerializerState` accumulates into one output buffer and offers no "render this subtree
+ * to a string" entry point. `|` is escaped afterwards: inside a GFM pipe row it is the column
+ * delimiter, and prosemirror-markdown's own escaper has no reason to know that. */
+function cellToMarkdown(cell) {
+  const paragraph = editorSchema.nodes.paragraph.create(null, cell.content);
+  const doc = editorSchema.nodes.doc.create(null, [paragraph]);
+  return mdSerializer.serialize(doc, { tightLists: true }).replace(/\n+$/, "").replace(/\|/g, "\\|");
+}
+
+/** A table as a GFM pipe block.
+ *
+ * Column count is the widest row, not the first: a malformed source table can have a short row,
+ * and padding it is what keeps the result parseable rather than silently dropping a cell. The
+ * delimiter row is written from the schema's own header row rather than remembered from the source
+ * — an untouched table never reaches this function at all, because the splice contract copies its
+ * bytes through verbatim, so the only tables serialized here are ones the writer just changed. */
+function serializeTable(state, node) {
+  const rows = [];
+  node.forEach((row) => {
+    const cells = [];
+    row.forEach((cell) => {
+      cells.push(cellToMarkdown(cell));
+    });
+    rows.push(cells);
+  });
+  if (rows.length === 0) {
+    state.closeBlock(node);
+    return;
+  }
+  const width = Math.max(...rows.map((row) => row.length));
+  const line = (cells) => `| ${Array.from({ length: width }, (_, i) => cells[i] ?? "").join(" | ")} |`;
+  // `|---|---|`, not `| --- | --- |`. Both parse identically, so this is a spelling choice, and it
+  // is the tighter one on purpose: it is what every table in the nine-document corpus already
+  // writes, so a table that round-trips costs zero bytes rather than five per column. The spaced
+  // spelling is still read back correctly and, where a source exists, restored verbatim by
+  // `restoreSourceSpelling` — this only decides what gets written when there is nothing to restore.
+  const delimiter = `|${Array.from({ length: width }, () => "---").join("|")}|`;
+  // `state.text(…, false)` rather than a run of `state.write()`: it splits on `\n` and writes each
+  // line through the current block delimiter, so a table nested in a list item keeps its indent —
+  // and, unlike writing each row with its own trailing newline, it leaves the block terminator to
+  // `closeBlock`, which is what stops the table gaining one blank line per save. Escaping is off
+  // because every cell came back from `cellToMarkdown` already escaped.
+  state.text([line(rows[0]), delimiter, ...rows.slice(1).map(line)].join("\n"), false);
+  state.closeBlock(node);
+}
 
 /**
  * A single newline inside a paragraph stays a newline.
@@ -209,45 +277,66 @@ const PARAGRAPH_SPEC = {
  *  keeps building the same node it always did. It carries no dialect knowledge either — the two
  *  values name what the rich face is telling the writer ("this is the document's own metadata" /
  *  "this is a note you left yourself"), not a syntax family. */
+/** GFM tables, from prosemirror-tables' own node specs.
+ *
+ * `cellContent: "inline*"` makes a cell a textblock rather than a block container. markdown-it
+ * emits an `inline` token straight inside `th`/`td` with no paragraph around it, so a textblock
+ * cell is what the token stream actually describes; `"block+"` would need a paragraph synthesised
+ * on the way in and stripped on the way out, and would let a cell hold a list or a fence that GFM
+ * pipe syntax cannot write back.
+ *
+ * `tableGroup: "block"` puts a table where every other top-level construct lives, so `blockLayout`
+ * sees it as one top-level block with one source span — which is what lets an untouched table be
+ * copied through verbatim. */
+const TABLE_NODES = tableNodes({ tableGroup: "block", cellContent: "inline*", cellAttributes: {} });
+
 export const editorSchema = new Schema({
-  nodes: markdownSchema.spec.nodes.update("paragraph", PARAGRAPH_SPEC).addToEnd(RAW_NODE, {
-    content: "text*",
-    group: "block",
-    marks: "",
-    code: true,
-    defining: true,
-    isolating: true,
-    attrs: { kind: { default: RAW_KIND.METADATA } },
-    // A LABEL, WHERE THERE WAS DELIBERATELY NONE BEFORE (app.css's own comment on `.glosa-raw`
-    // explains why: naming a syntax family — "YAML front matter" — would put back the enumeration
-    // the rule exists to avoid). Two flavors now share this node, and only #175 changes what Read/
-    // Review does with them (hides both) — so the rich face, which already showed the metadata
-    // header verbatim, has to tell the writer WHICH non-manuscript region they are looking at
-    // before they can trust that Read/Review will not show it. `data-glosa-kind` names the
-    // FUNCTION ("metadata" / "comment"), never a dialect; app.css reads it for the `::before` text.
-    toDOM: (node) => ["pre", { class: "glosa-raw", "data-glosa-kind": node.attrs.kind }, ["code", 0]],
-    parseDOM: [
-      {
-        tag: "pre.glosa-raw",
-        preserveWhitespace: "full",
-        getAttrs: (dom) => ({ kind: dom.getAttribute("data-glosa-kind") || RAW_KIND.METADATA }),
-      },
-    ],
-  }),
+  nodes: markdownSchema.spec.nodes
+    .update("paragraph", PARAGRAPH_SPEC)
+    .append(TABLE_NODES)
+    .addToEnd(RAW_NODE, {
+      content: "text*",
+      group: "block",
+      marks: "",
+      code: true,
+      defining: true,
+      isolating: true,
+      attrs: { kind: { default: RAW_KIND.METADATA } },
+      // A LABEL, WHERE THERE WAS DELIBERATELY NONE BEFORE (app.css's own comment on `.glosa-raw`
+      // explains why: naming a syntax family — "YAML front matter" — would put back the enumeration
+      // the rule exists to avoid). Two flavors now share this node, and only #175 changes what Read/
+      // Review does with them (hides both) — so the rich face, which already showed the metadata
+      // header verbatim, has to tell the writer WHICH non-manuscript region they are looking at
+      // before they can trust that Read/Review will not show it. `data-glosa-kind` names the
+      // FUNCTION ("metadata" / "comment"), never a dialect; app.css reads it for the `::before` text.
+      toDOM: (node) => ["pre", { class: "glosa-raw", "data-glosa-kind": node.attrs.kind }, ["code", 0]],
+      parseDOM: [
+        {
+          tag: "pre.glosa-raw",
+          preserveWhitespace: "full",
+          getAttrs: (dom) => ({ kind: dom.getAttribute("data-glosa-kind") || RAW_KIND.METADATA }),
+        },
+      ],
+    }),
   // Notes remain editable inline text, with literal source spelling and a visible label.
-  marks: markdownSchema.spec.marks.addToEnd(COMMENT_MARK, {
-    inclusive: false,
-    toDOM: () => [
-      "span",
-      {
-        class: "glosa-comment-inline",
-        "data-glosa-kind": RAW_KIND.COMMENT,
-        title: "Private note — hidden from Read/Review",
-      },
-      0,
-    ],
-    parseDOM: [{ tag: "span.glosa-comment-inline" }],
-  }),
+  marks: markdownSchema.spec.marks
+    .addToEnd(STRIKETHROUGH_MARK, {
+      parseDOM: [{ tag: "s" }, { tag: "del" }, { tag: "strike" }],
+      toDOM: () => ["s", 0],
+    })
+    .addToEnd(COMMENT_MARK, {
+      inclusive: false,
+      toDOM: () => [
+        "span",
+        {
+          class: "glosa-comment-inline",
+          "data-glosa-kind": RAW_KIND.COMMENT,
+          title: "Private note — hidden from Read/Review",
+        },
+        0,
+      ],
+      parseDOM: [{ tag: "span.glosa-comment-inline" }],
+    }),
 });
 
 /** `MarkdownParser` is not on the vendored export list; its constructor is. Same tokenizer instance
@@ -265,6 +354,16 @@ const editorParser = new defaultMarkdownParser.constructor(editorSchema, commonM
   },
   // Including delimiters leaves an empty note representable as marked text.
   [NON_MANUSCRIPT_INLINE_TOKEN]: { mark: COMMENT_MARK, noCloseToken: true },
+  // GFM tables. `thead`/`tbody` are ignored rather than mapped: prosemirror-tables has no node for
+  // either — a table's children are rows — and the header/body distinction survives as the cell
+  // TYPE (`table_header` vs `table_cell`), which is what the serializer reads back.
+  table: { block: "table" },
+  thead: { ignore: true },
+  tbody: { ignore: true },
+  tr: { block: "table_row" },
+  th: { block: "table_header" },
+  td: { block: "table_cell" },
+  s: { mark: STRIKETHROUGH_MARK },
 });
 
 /** #173's soft break, moved onto the parser `parseMarkdown` actually resolves through.
@@ -350,8 +449,12 @@ export const MODELLED_NODE_TYPES = Object.freeze([
   "text",
   "image",
   "hard_break",
+  "table",
+  "table_row",
+  "table_cell",
+  "table_header",
 ]);
-export const MODELLED_MARK_TYPES = Object.freeze(["em", "strong", "link", "code"]);
+export const MODELLED_MARK_TYPES = Object.freeze(["em", "strong", "link", "code", "strikethrough"]);
 
 /** Whether `node`'s own type, and every mark it carries, is one this file models. */
 function nodeIsModelled(node) {
