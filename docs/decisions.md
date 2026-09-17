@@ -849,3 +849,55 @@ Two consequences worth stating plainly:
   what keeps the REQ-8 fidelity metric at 42 rather than 47: a table now costs zero bytes to
   round-trip instead of five per column. The spaced spelling is still read back correctly, and where
   a source exists `restoreSourceSpelling` restores it verbatim.
+
+## A block is editable by clicking it, and Edit stops being a state of the page
+
+Entering Edit replaced the rendered manuscript with a separate editor. The two were sibling elements
+and the mode toggled `hidden` on each, so everything painted on the rendered tree left with it:
+annotation underlines, passage addresses, the margin, the provenance line. The editor mounted behind
+a dynamic import, so a raw-markdown textarea painted first; the scroll position was restored as a
+pixel offset against a tree of a different height; and nothing placed the caret, so pressing Edit
+put focus on the button that stops editing.
+
+The stylesheet had already stated the intention — "Edit is the same page with a caret in it" — three
+lines above the code that contradicted it.
+
+**Decision.** Clicking a block mounts a ProseMirror view over that block's own source span. The page
+is never replaced. Closing the run splices its markdown back, repaints from the browser renderer,
+and morphs the result in, so only the blocks whose bytes changed are touched.
+
+Edit survives only as the byte-exact source view, moved out of the mode control and into the pane's
+More menu. It is no longer how a word gets changed; it is what CommonMark cannot hold — front
+matter, a table, a block that will not parse.
+
+The alternative was making the rendered view itself a ProseMirror document with `editable` flipped,
+which is the more literal reading of "read and edit are the same thing". It was rejected because the
+rendered view carries the `data-line` attributes class-R anchoring resolves against, and rebuilding
+that ladder from ProseMirror positions would put two renderers in the trust path for the same bytes.
+Editing one run in place keeps a single renderer for the page and admits a second only for the span
+the writer is actually in.
+
+Four consequences worth stating plainly:
+
+- **The unit is a run, not a block.** A contiguous sequence of top-level blocks, usually one. That
+  is what keeps the boundary cases ordinary: Enter at the end of a paragraph yields two blocks, a
+  multi-block paste yields several, Backspace at the head widens the run upward. The serializer was
+  already written in these terms.
+- **Writes are debounced rather than per blur.** Every write captures a checkpoint pair, so nothing
+  is unrecoverable — but every write also creates one inbox entry the agent sees. Writing on each
+  blur would send a session of edits as one entry per paragraph.
+- **Undo needs a second stack.** A run's ProseMirror history dies with its view, so the document
+  keeps run-level `{span, before, after}` entries. Without it Cmd-Z would stop working at a boundary
+  the writer cannot see, which is worse than no undo because the reflex is trained and then broken.
+- **The margin freezes while a run is open.** Cards are positioned by measuring each anchor's rect
+  and stacking them apart; re-running that per keystroke would cost a `getBoundingClientRect` per
+  card and visibly jitter the rail. Reserving the run's height instead would move the manuscript,
+  which "the margin is painted, never reserved" forbids. The cards re-settle when the run closes.
+
+One defect this work exposed is worth recording separately, because the class matters more than the
+instance. `artifact-pane.js` gained a static import of `run-spans.js`, and the daemon serves SPA
+modules from an explicit allowlist that did not include it. Every unit test passed while the
+workbench was broken in a real browser, because a 404 on an imported module takes the importing
+module down with it. Unit tests import from disk and structurally cannot see it. The allowlist is
+now held against the source directory by a test, so a module that is added and not served fails at
+the moment it is added rather than whenever someone next runs a browser suite.

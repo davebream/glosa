@@ -41,6 +41,8 @@ describe("Review mode — the agent's half of the margin", () => {
     await flush();
   };
   const q = (root: any, selector: string): any => root.querySelector(selector);
+  /** Since #271 the byte-exact editor is a tool in More, not a segment of the mode control. */
+  const editSource = (host: any): any => q(host, ".glosa-tools-edit-source");
   const qa = (root: any, selector: string): any[] => [...root.querySelectorAll(selector)];
 
   const SOURCE = "# Konspekt\n\nThe argument rests on the premise that readers accept the frame.\n";
@@ -108,10 +110,14 @@ describe("Review mode — the agent's half of the margin", () => {
       expect(pane.getMode()).toBe("read");
       expect(control(host, "notes").getAttribute("aria-label")).toBe("Show notes");
 
-      control(host, "edit").click();
+      // The mode control offers the notes toggle and nothing else — there is no Edit segment to
+      // press, because editing is something you do to a block.
+      expect(control(host, "edit")).toBeNull();
+      editSource(host).click();
       await paint();
       expect(pane.getMode()).toBe("edit");
-      // Editing shows only Done: the notes toggle is not a thing to do to a page being edited.
+      // Editing the source shows only Done: the notes toggle is not a thing to do to a page whose
+      // bytes are being typed at.
       expect(control(host, "notes")).toBeNull();
       control(host, "done").click();
       await paint();
@@ -122,13 +128,14 @@ describe("Review mode — the agent's half of the margin", () => {
       const { host, pane } = await mountPane(fakeDataAccess([]));
       pane.setApplyPause({ lease_id: "L1", expires_at: null });
       await paint();
-      expect(control(host, "edit").disabled).toBe(true);
+      expect(editSource(host).disabled).toBe(true);
+      expect(editSource(host).getAttribute("aria-label")).toContain("paused");
       pane.setMode("edit");
       expect(pane.getMode()).toBe("review");
 
       pane.setApplyPause(null);
       await paint();
-      expect(control(host, "edit").disabled).toBe(false);
+      expect(editSource(host).disabled).toBe(false);
       pane.setMode("edit");
       expect(pane.getMode()).toBe("edit");
 
@@ -348,7 +355,11 @@ describe("Review mode — the agent's half of the margin", () => {
       // No dialog: parking removed the only reason to ask.
       expect(q(dom.document.body, "dialog[open]")).toBeNull();
       // The Edit segment says the work is still held, since the editor holding it is off screen.
-      expect(q(host, '.glosa-modebar [data-mode="edit"]').getAttribute("data-parked")).toBe("true");
+      // The parked-draft dot moved with the affordance that carries it (#271): the mode control no
+      // longer has an Edit segment, so "your unsaved work is still here" is said by the notes
+      // toggle that remains and by the source-editor row in More.
+      expect(q(host, '.glosa-modebar [data-control="notes"]').getAttribute("data-parked")).toBe("true");
+      expect(editSource(host).getAttribute("aria-label")).toContain("unsaved draft kept");
 
       pane.setMode("edit");
       await paint();
@@ -369,7 +380,7 @@ describe("Review mode — the agent's half of the margin", () => {
 
       pane.setMode("review");
       await paint();
-      expect(q(host, '.glosa-modebar [data-mode="edit"]').getAttribute("data-parked")).toBeNull();
+      expect(q(host, '.glosa-modebar [data-control="notes"]').getAttribute("data-parked")).toBeNull();
     });
 
     test("a half-written margin note comes back when Review is re-entered", async () => {

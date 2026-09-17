@@ -34,6 +34,7 @@ import { addressBlocks, addressForRange } from "./address.js";
 import { faceKey, mountFaceControl } from "./face.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
+import { runAtLine, runsFrom, spliceRun } from "./run-spans.js";
 
 /**
  * What `saveCurrentArtifact` returns when the writer was asked about a save that would change
@@ -317,6 +318,33 @@ export function createArtifactPane(host, deps) {
   /** The page's scroll position when Edit was entered or left, restored once the new face mounts,
    * so switching states keeps the reader's place instead of jumping to the top. */
   let pendingScrollTop = null;
+  /** ---- per-block editing (#271) ----
+   *
+   * One run of the manuscript is writable at a time. `openRun` holds it while it is open:
+   * `{ run, host, block, editor, address }` — the source span, the element the editor mounted into,
+   * the rendered block it replaced, the editor itself, and the passage address for its accessible
+   * name. Null whenever the page is simply being read, which is most of the time. */
+  let openRun = null;
+  /** The pane's source INCLUDING run edits that have not reached disk yet.
+   *
+   * Null means "no local edits" and the artifact's own `content` is the truth. Once a run commits,
+   * this holds the spliced document and every later run measures against it, so two edits in a row
+   * do not both splice against the stale original. */
+  let workingSource = null;
+  /** Committed runs, newest last: `{ start, end, before, after }`.
+   *
+   * A run's ProseMirror history dies with its view on blur, so without this Cmd-Z would stop
+   * working the moment the writer clicks away — a reflex trained and then broken, which is worse
+   * than no undo. With the caret inside a run, Cmd-Z is ProseMirror's; outside one, it reverts the
+   * last committed run from here. */
+  let runUndo = [];
+  /** The pending debounced write, so a second edit inside the window replaces it rather than
+   * queueing a second save. */
+  let saveTimer = null;
+  /** Lazily fetched editor module namespace: `mountRichEditor`, `blockLayout`, `renderMarkdown`.
+   * A dynamic import, so the Read/Review static graph still cannot reach the ProseMirror bundle
+   * (import-boundary.test.ts pins exactly that). */
+  let editorKitPromise = null;
   let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
   let richEditor = null; // {getSave, getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   let richMountRequest = 0;
@@ -436,6 +464,17 @@ export function createArtifactPane(host, deps) {
     setToolsOpen(false, { restoreFocus: true });
     void compareWithLastSaved();
   });
+  /** The byte-exact editor, as a document-level view rather than a mode of the page (#271).
+   *
+   * Since a block is editable by clicking it, a full-page editor is no longer how you change a
+   * word — it is what you reach for when CommonMark cannot hold what the file says: front matter,
+   * a table you would rather type by hand, a block that will not parse. That is a tool, so it lives
+   * among the artifact's other tools instead of taking half the mode control. */
+  const editSourceButton = menuItem("glosa-tools-edit-source", MODE_ICONS.edit, "Edit source", () => {
+    setToolsOpen(false, { restoreFocus: true });
+    if (modeState.mode === "edit") setMode(lastViewMode);
+    else setMode("edit");
+  });
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
 
   const moveGroup = el("div", { className: "glosa-pane-menu-group", role: "group", "aria-label": "Move tab to" });
@@ -472,6 +511,7 @@ export function createArtifactPane(host, deps) {
   const faceGroup = el("div", { className: "glosa-face-group" });
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
+    editSourceButton,
     copySourceButton,
     printArtifactButton,
     compareButton,
@@ -879,6 +919,27 @@ export function createArtifactPane(host, deps) {
     copySourceButton.hidden = !available;
     printArtifactButton.hidden = !available;
     compareButton.hidden = !available || !openDiffTab;
+    // The source editor, and the reason it is unavailable when it is. The apply-lease pause used to
+    // live on the mode control's Edit button; with that button gone (#271) it has to be stated
+    // here, or a writer whose editing has been paused by a session would simply find a row that
+    // quietly did nothing.
+    const editable = available && canEdit(currentArtifact) && !readLock;
+    editSourceButton.hidden = !editable;
+    editSourceButton.disabled = Boolean(applyPause) && modeState.mode !== "edit";
+    editSourceButton.title = editSourceButton.disabled ? "A session is applying a change. Edit when it finishes." : "";
+    const leaving = modeState.mode === "edit";
+    editSourceButton.querySelector("span").textContent = leaving ? "Done editing source" : "Edit source";
+    editSourceButton.setAttribute(
+      "aria-label",
+      editSourceButton.disabled
+        ? "Edit source, paused while a session applies a change"
+        : isParked(modeState)
+          ? "Edit source, unsaved draft kept"
+          : leaving
+            ? "Done editing source"
+            : "Edit source",
+    );
+    editSourceButton.toggleAttribute("data-parked", isParked(modeState));
     if (toolsStatusArtifactPath !== artifactPath) {
       toolsStatusArtifactPath = artifactPath;
       setToolsStatus("");
@@ -1134,27 +1195,14 @@ export function createArtifactPane(host, deps) {
         notes.setAttribute("aria-pressed", String(showing));
         notes.setAttribute("data-control", "notes");
         modeBar.append(notes);
-        // Opaque class F gets no Edit affordance at all rather than a permanently disabled one —
-        // but only once an artifact is open; before that the control stays whole.
-        if (!(currentArtifact && !canEdit(currentArtifact))) {
-          const edit = modeButton("edit", "edit", "Edit");
-          edit.setAttribute("data-control", "edit");
-          // Parked work is invisible by nature — the editor holding it is not on screen. The Edit
-          // button carries a dot and says so in its accessible name, so "my draft is still there"
-          // is something the reviewer can read rather than something they have to trust.
-          const parked = isParked(modeState);
-          if (parked) edit.setAttribute("data-parked", "true");
-          edit.setAttribute("aria-pressed", "false");
-          if (applyPause) {
-            // A session is applying a change under a lease. Editing now would race the session's
-            // write to the same files, so the page waits rather than letting a save be refused.
-            edit.disabled = true;
-            edit.setAttribute("aria-label", "Edit, paused while a session applies a change");
-            edit.title = "A session is applying a change. Edit when it finishes.";
-          } else {
-            edit.setAttribute("aria-label", parked ? "Edit, unsaved draft kept" : "Edit");
-          }
-          modeBar.append(edit);
+        // NO EDIT BUTTON (#271). A block is editable by clicking it, so a control that puts the
+        // whole page into an editing state is no longer how a word gets changed. The byte-exact
+        // editor is still one row away in More, where a tool belongs. What the control still owes
+        // the reader is the state they cannot see: an unsaved draft parked off screen says so on
+        // the toggle that remains, rather than disappearing with the button that used to carry it.
+        if (isParked(modeState)) {
+          notes.setAttribute("data-parked", "true");
+          notes.setAttribute("aria-label", `${showing ? "Hide notes" : "Show notes"}, unsaved draft kept`);
         }
       }
     }
@@ -1416,6 +1464,222 @@ export function createArtifactPane(host, deps) {
     editArea.style.height = `${editArea.scrollHeight + 2}px`;
   }
   editArea.addEventListener("input", fitSourceArea);
+
+  // ---------- per-block editing (#271) ----------
+
+  /** How long the page stays quiet before an edited run reaches disk.
+   *
+   * Every write captures a `checkpoint_before`/`checkpoint_after` pair, so nothing here is
+   * unrecoverable — but every write ALSO creates one inbox entry the agent sees. Writing on each
+   * blur would send a session of edits as one entry per paragraph; coalescing sends one per burst
+   * of work. Long enough to gather a train of thought, short enough that leaving the desk does not
+   * leave the file behind. */
+  const RUN_SAVE_DELAY = 1200;
+
+  /** The editor module, fetched once and remembered.
+   *
+   * A dynamic import on purpose: `import-boundary.test.ts` pins that the Read/Review static graph
+   * cannot reach `vendor/prosemirror.js`, and a static import here would drag 400 KB into the first
+   * paint of a document nobody may ever edit. Warmed when an editable artifact opens rather than on
+   * the first click, so the reader does not wait for a fetch at the moment they meant to type. */
+  function loadEditorKit() {
+    editorKitPromise ??= import("./rich-editor.js").then(async (editor) => ({
+      ...editor,
+      renderMarkdown: (await import("./markdown-parser.js")).renderMarkdown,
+    }));
+    return editorKitPromise;
+  }
+
+  /** The source every run measures against: local edits when there are any, the file otherwise. */
+  function currentSource() {
+    return workingSource ?? currentArtifact?.content ?? "";
+  }
+
+  /** Whether this artifact can be written to at all, right now. */
+  function runEditingAvailable() {
+    if (readLock || applyPause || loading) return false;
+    return Boolean(currentArtifact) && currentArtifact.class === "R" && canEdit(currentArtifact);
+  }
+
+  /** The run a rendered block stands for, or null when the click did not land on one.
+   *
+   * Matched on `data-line` rather than on the block's position among its siblings, because the
+   * renderer hides front matter and `%%` comments: those produce a source span but no element, so
+   * the first rendered block is not always the first run. */
+  async function runForBlock(blockEl) {
+    const line = Number(blockEl?.getAttribute?.("data-line"));
+    if (!Number.isInteger(line)) return null;
+    const kit = await loadEditorKit();
+    const source = currentSource();
+    const runs = runsFrom(source, kit.blockLayout(source).blocks);
+    return runAtLine(runs, line);
+  }
+
+  /** Opens `blockEl` for editing, with the caret where the reader clicked. */
+  async function openRunEditor(blockEl, coords) {
+    if (!runEditingAvailable() || openRun) return;
+    const run = await runForBlock(blockEl);
+    // Re-checked after the await: a session can take the apply lease, or the pane can change
+    // artifact, while the editor module is still being fetched.
+    if (!run || !runEditingAvailable() || openRun || !contentEl.contains(blockEl)) return;
+    const kit = await loadEditorKit();
+    if (!runEditingAvailable() || openRun || !contentEl.contains(blockEl)) return;
+
+    const address = blockEl.getAttribute("data-address");
+    const host = el("div", { className: "glosa-run-editor" });
+    if (address) host.setAttribute("data-address", address);
+    blockEl.replaceWith(host);
+    let editor;
+    try {
+      editor = kit.mountRichEditor(host, {
+        markdown: currentSource().slice(run.start, run.end),
+        toolbar: false,
+        label: address ? `Editing ${address}` : "Editing this passage",
+        onDirty: () => {
+          host.setAttribute("data-dirty", "true");
+          onStateChange();
+        },
+      });
+    } catch {
+      // A DOM that cannot host a ProseMirror view. Put the block back and leave the page as it was
+      // rather than stranding the reader on an empty host.
+      host.replaceWith(blockEl);
+      return;
+    }
+    openRun = { run, host, block: blockEl, editor, address };
+    editor.focusAt(coords);
+    onStateChange();
+  }
+
+  /** Commits the open run and puts the rendered page back.
+   *
+   * The whole point of the design lives here: the page is never replaced, so closing a run repaints
+   * exactly the blocks whose bytes changed and leaves every other element — and the reader's scroll
+   * position with it — untouched. */
+  async function closeRunEditor({ save = true } = {}) {
+    if (!openRun) return;
+    const { run, host, block, editor } = openRun;
+    openRun = null;
+    const before = currentSource().slice(run.start, run.end);
+    const after = save ? editor.getMarkdown() : before;
+    editor.destroy();
+
+    if (after === before) {
+      // Nothing changed: restore the element that was there rather than re-rendering the document,
+      // so an accidental click costs no repaint and no journal entry.
+      host.replaceWith(block);
+      onStateChange();
+      return;
+    }
+
+    workingSource = spliceRun(currentSource(), run, after);
+    runUndo.push({ start: run.start, end: run.start + after.length, before, after });
+    host.remove();
+    await repaintFromWorkingSource();
+    scheduleRunSave();
+  }
+
+  /** Repaints the manuscript from the local source and re-applies everything painted on top of it.
+   *
+   * Idiomorph rather than `innerHTML`, so unchanged blocks keep their identity — which is what
+   * keeps the reader's scroll position, and what stops the annotation highlights from being
+   * rebuilt against nodes that were thrown away. */
+  async function repaintFromWorkingSource() {
+    const kit = await loadEditorKit();
+    morphArtifactContent(contentEl, kit.renderMarkdown(currentSource()));
+    contentEl.setAttribute("data-path", currentArtifact?.source_path ?? "");
+    updateAnnotatableBlocks();
+    renderMargin();
+    refreshOutline();
+    onStateChange();
+  }
+
+  /** Reverts the last committed run. Cmd-Z outside an open editor. */
+  async function undoLastRun() {
+    const entry = runUndo.pop();
+    if (!entry) return false;
+    workingSource = `${currentSource().slice(0, entry.start)}${entry.before}${currentSource().slice(entry.end)}`;
+    await repaintFromWorkingSource();
+    scheduleRunSave();
+    return true;
+  }
+
+  /** Writes the working source after the page has been quiet for `RUN_SAVE_DELAY`. */
+  function scheduleRunSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void saveCurrentArtifact({ onlyIfDirty: true });
+    }, RUN_SAVE_DELAY);
+  }
+
+  /** Writes now rather than on the timer — for leaving the tab, or closing the pane. */
+  async function flushRunSave() {
+    if (!saveTimer) return;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    await saveCurrentArtifact({ onlyIfDirty: true });
+  }
+
+  /** A click in the manuscript opens the block it landed on.
+   *
+   * A click that produced a SELECTION is left alone: dragging across words means annotate, and it
+   * is the one gesture that would otherwise be stolen by opening an editor under the reader's
+   * hand. Modified clicks are left alone too, so a link stays a link.
+   */
+  function onManuscriptClick(event) {
+    if (openRun || event.defaultPrevented) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (event.target?.closest?.("a, button, input, textarea, summary")) return;
+    // A selection that exists and spans characters means the reader dragged across words, which is
+    // the annotate gesture. No selection object at all is a plain click, not a drag.
+    const selection = window.getSelection?.();
+    if (selection && selection.isCollapsed === false) return;
+    if (!runEditingAvailable()) return;
+    const block = blockAncestor(event.target);
+    if (!block) return;
+    void openRunEditor(block, { left: event.clientX, top: event.clientY });
+  }
+
+  /** The top-level rendered block containing `node`, or null. */
+  function blockAncestor(node) {
+    let current = node instanceof Element ? node : node?.parentElement;
+    while (current && current.parentElement !== contentEl) current = current.parentElement;
+    return current?.hasAttribute?.("data-line") ? current : null;
+  }
+
+  contentEl.addEventListener("click", onManuscriptClick);
+  contentEl.addEventListener("focusout", (event) => {
+    // Only when focus actually left the open run — moving between nodes inside the editor fires
+    // focusout too, and closing on that would end the edit on the first keystroke that moves the
+    // caret across a node boundary.
+    if (!openRun) return;
+    if (openRun.host.contains(event.relatedTarget)) return;
+    void closeRunEditor();
+  });
+  contentEl.addEventListener("keydown", (event) => {
+    if (!openRun) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "z" && runUndo.length) {
+        event.preventDefault();
+        void undoLastRun();
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      const block = openRun.block;
+      void closeRunEditor().then(() => {
+        // Focus goes back to the block, not to nowhere: a keyboard reader who pressed Escape has
+        // to land somewhere, and the passage they were editing is the only honest place.
+        const target = contentEl.querySelector(`[data-line="${block.getAttribute("data-line")}"]`);
+        if (!(target instanceof HTMLElement)) return;
+        const borrowed = !target.hasAttribute("tabindex");
+        if (borrowed) target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: true });
+        if (borrowed) target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
+      });
+    }
+  });
 
   function renderContent() {
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(fitSourceArea);
@@ -2057,6 +2321,14 @@ export function createArtifactPane(host, deps) {
    * the shared scroll space → absolute top, collision-stacked downward so cards never overlap.
    * No-op in compact, where CSS lays the margin out in flow. */
   function layoutMargin() {
+    // FROZEN WHILE A RUN IS OPEN, deliberately. Cards are positioned by measuring each anchor's
+    // rect in the pane's scroll space and stacking them out of each other's way; an editor changes
+    // its block's height on every keystroke, so re-running this per keypress would cost a
+    // `getBoundingClientRect` per card AND visibly jitter the whole rail while the writer types.
+    // Reserving the run's height instead would move the manuscript, which "the margin is painted,
+    // never reserved" forbids. So the cards hold their places and re-settle when the run closes —
+    // `closeRunEditor` repaints, which calls back through here.
+    if (openRun) return;
     const side = isSideMargin();
     marginEl.classList.toggle("glosa-margin-side", side);
     // Compact: the margin is not a block under the manuscript any more, it is the coordinate
@@ -2837,6 +3109,12 @@ export function createArtifactPane(host, deps) {
    */
   function pendingSave() {
     if (!currentArtifact) return { content: "", report: null };
+    // Per-block edits come first: they are the whole document with committed runs spliced in, and
+    // they exist in Read and Review where no full-page editor is mounted at all. The rich face's
+    // own report still wins when Edit is open, because there the writer is holding the document.
+    if (workingSource !== null && !richEditor && !sourceFace) {
+      return { content: workingSource, report: null };
+    }
     const live = !sourceFace && richEditor ? richEditor.getSave() : null;
     const content = live ? live.markdown : editArea.value;
     if (live && (live.collateral.length || live.degraded)) return { content, report: live };
@@ -2897,6 +3175,12 @@ export function createArtifactPane(host, deps) {
       const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
       currentArtifact = { ...artifact, content, ...saved };
       modeState = modeReducer(modeState, { type: "saved" });
+      // The working source IS what was just written, so it stops being a local edit; keeping it
+      // would make `isDirty()` lie and schedule a second save of bytes already on disk. The undo
+      // stack goes with it: the checkpoint pair the write captured is what reverts a saved run now,
+      // through History, and a stack that outlived its source would splice against moved offsets.
+      workingSource = null;
+      runUndo = [];
       clearParkedSource(); // the parked copy is now behind the file it was parked against
       pendingReport = null;
       clearDiskChange(); // the write that just landed is exactly what the banner was warning about
@@ -3304,6 +3588,11 @@ export function createArtifactPane(host, deps) {
   async function loadArtifact(artifactPath) {
     loading = true;
     classFInteractive = false;
+    // A different file is a different document: an open run belongs to the one being left, and its
+    // working source and undo stack are spans into bytes that are about to stop being on screen.
+    void closeRunEditor({ save: false });
+    workingSource = null;
+    runUndo = [];
     composer = null;
     focusedRequestId = null;
     annotations = [];
@@ -3314,6 +3603,10 @@ export function createArtifactPane(host, deps) {
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
+      // Warm the editor while the reader is still reading. Fetching it on the first click would put
+      // a 400 KB download between the click and the caret — the delay this redesign exists to
+      // remove, moved rather than fixed. `loadMergeModule` warms itself on the same reasoning.
+      if (runEditingAvailable()) void loadEditorKit();
       setBaseline(currentArtifact.source_sha256, currentArtifact.content ?? ""); // a newly loaded artifact fills the face
       faceControl?.refresh();
     } catch (err) {
@@ -3564,7 +3857,7 @@ export function createArtifactPane(host, deps) {
   }
 
   function isDirty() {
-    return modeState.dirty || Boolean(richEditor?.isDirty());
+    return modeState.dirty || Boolean(richEditor?.isDirty()) || workingSource !== null;
   }
 
   function focusPreview() {
@@ -3602,6 +3895,7 @@ export function createArtifactPane(host, deps) {
       }
       applyPause = next;
       renderModeBar();
+      renderArtifactTools();
       if (modeState.mode === "edit") {
         editStatus.textContent = next
           ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes."

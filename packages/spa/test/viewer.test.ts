@@ -835,7 +835,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
 
     const main = inPane(root, ".glosa-pane-main");
     main.scrollTop = 600;
-    inPane(root, '.glosa-modebar [data-mode="edit"]').click();
+    inPane(root, ".glosa-tools-edit-source").click();
     // Edit is the same page with a caret in it: the reader keeps their place instead of being
     // sent back to the top.
     expect(main.scrollTop).toBe(600);
@@ -980,7 +980,8 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     for (let i = 0; i < 8; i++) await Promise.resolve();
     (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
     for (let i = 0; i < 8; i++) await Promise.resolve();
-    (root.querySelector('[data-mode="edit"]') as any).click();
+    // #271: the byte-exact editor moved from the mode control into More.
+    (root.querySelector(".glosa-tools-edit-source") as any).click();
     (root.querySelector(".glosa-face-source") as any).click();
     const editor = root.querySelector(".glosa-edit-area") as any;
     editor.value = "# Revised\n";
@@ -1228,7 +1229,10 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
 
-    const edit = () => inPane(root, '.glosa-modebar [data-control="edit"]');
+    // #271 moved the byte-exact editor out of the mode control and into More, so the apply-lease
+    // pause is stated on that row now. The behaviour under test — a lease pauses editing and lifts
+    // when it ends — is unchanged; only the element carrying it moved.
+    const edit = () => inPane(root, ".glosa-tools-edit-source");
     expect(edit().disabled).toBe(false);
     da.stream.handlers?.onEvent?.({
       event: "journal",

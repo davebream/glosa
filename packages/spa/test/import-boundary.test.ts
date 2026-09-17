@@ -266,6 +266,8 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     "./face.js",
     // Passage addresses: pure DOM arithmetic over the rendered blocks, no daemon reach.
     "./address.js",
+    // Which bytes a run of top-level blocks owns: pure arithmetic over spans, imports nothing.
+    "./run-spans.js",
     "./attention-tray.js",
     "./agent-feedback.js",
     "./viewer-shell.js",
@@ -405,5 +407,26 @@ describe("viewer.js and its UI modules import only from data-access.js, their sa
     const specifiers = [...read("../src/markdown-parser.js").matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]!);
     expect(specifiers.sort()).toEqual(["./markdown-non-manuscript.js", "./vendor/prosemirror.js"]);
     expect(read("../src/markdown-non-manuscript.js").match(/\bimport\s+(?:["']|[^;]*\bfrom\s+["'])/g)).toBeNull();
+  });
+  test("every hand-written SPA module the browser can reach is one the daemon will serve", () => {
+    // THE GAP THIS CLOSES, because it cost a full browser-suite run to find: `artifact-pane.js`
+    // gained a static import of `run-spans.js`, every unit test passed, and the SPA was broken in a
+    // real browser — the daemon serves SPA modules from an explicit allowlist, and a module missing
+    // from it 404s, which takes the whole importing module down with it.
+    //
+    // Nothing in the unit suite can see that, because unit tests import from disk. So the list is
+    // held against the source directory here, where a new module is noticed the moment it is added
+    // rather than whenever someone next runs a browser test.
+    const httpSource = readFileSync(resolve(SPA_SRC_DIR, "../../daemon/src/transport/http.ts"), "utf8");
+    const assetBlock = httpSource.slice(httpSource.indexOf("const SPA_ASSETS"));
+    const served = new Set(
+      [...assetBlock.slice(0, assetBlock.indexOf("};")).matchAll(/"([^"]+\.[jt]s)":/g)].map((m) => m[1]!),
+    );
+
+    // `.ts` sources are built/served differently and `index.ts` is the package entry, not a browser
+    // module; everything else in the directory is something a browser can be asked to fetch.
+    const browserModules = HAND_WRITTEN_SPA_MODULES.filter((name) => name.endsWith(".js"));
+    const missing = browserModules.filter((name) => !served.has(name));
+    expect(missing).toEqual([]);
   });
 });
