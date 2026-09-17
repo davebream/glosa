@@ -40,6 +40,8 @@ const WATCHDOG_SETTLE_MS = 1_500;
  * window with a positive proof — the daemon answers a handshake afterwards. */
 const SIGNAL_SETTLE_MS = 300;
 
+const EXITING_DAEMON_FIXTURE = fileURLToPath(new URL("./fixtures/exiting-daemon.ts", import.meta.url));
+
 function sampleLock(overrides: Partial<DaemonLock> = {}): DaemonLock {
   return {
     instance_id: "gl-fake",
@@ -1098,6 +1100,102 @@ describe("ensureDaemon — client", () => {
       cleanupHome(home);
     }
   }, 12000);
+
+  test("a free port with a live daemon PID is waited for, never reclaimed while that daemon lives", async () => {
+    // A daemon on its way out closes its listeners first and removes its lock last. In between, the
+    // port is free and the PID is alive — the shape the stale-lock path used to reclaim, starting a
+    // second daemon beside one still closing its workspaces.
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    ensureHomeDir(home);
+    const port = randomPort();
+    const exiting = Bun.spawn({
+      cmd: [process.execPath, EXITING_DAEMON_FIXTURE, "__daemon", "2500"],
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const spawnedAt = Date.now();
+    writeLockExclusive(lockPath(home), sampleLock({ pid: exiting.pid, port }));
+    process.env.GLOSA_HOME = home;
+    process.env.GLOSA_PORT = String(port);
+
+    try {
+      const result = await ensureDaemonWithDependencies({}, acceleratedFirstPoll());
+      try {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.instanceId).not.toBe("gl-fake");
+          // The replacement started only after the exiting daemon was gone (it lingers 2.5 s; the
+          // margin absorbs clock granularity, not a race — reclaiming early starts it within ~0.5 s).
+          expect(Date.parse(result.startedAt)).toBeGreaterThanOrEqual(spawnedAt + 2400);
+          expect(exiting.exitCode).not.toBeNull();
+        }
+      } finally {
+        if (result.ok) {
+          try {
+            process.kill(result.pid, "SIGTERM");
+          } catch {
+            // already dead
+          }
+          await waitUntil(() => lockOf(home) === null);
+        }
+      }
+    } finally {
+      exiting.kill("SIGKILL");
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 20000);
+
+  test("a daemon PID that outlives the wait fails closed, naming it, without spawning or unlinking", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    ensureHomeDir(home);
+    const port = randomPort();
+    const exiting = Bun.spawn({
+      cmd: [process.execPath, EXITING_DAEMON_FIXTURE, "__daemon", "60000"],
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    writeLockExclusive(lockPath(home), sampleLock({ pid: exiting.pid, port }));
+    process.env.GLOSA_HOME = home;
+    process.env.GLOSA_PORT = String(port);
+
+    let spawned: number | null = null;
+    try {
+      const result = await ensureDaemonWithDependencies({ timeoutMs: 8000 }, acceleratedFirstPoll());
+      if (result.ok) spawned = result.pid;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain(`the previous glosa daemon (PID ${exiting.pid}) is still shutting down`);
+      }
+      expect(lockOf(home)?.instance_id).toBe("gl-fake");
+      expect(exiting.exitCode).toBeNull();
+    } finally {
+      // Only reached with a regression, but a daemon started against a home this test deletes would
+      // otherwise outlive the run.
+      if (spawned !== null) {
+        try {
+          process.kill(spawned, "SIGTERM");
+        } catch {
+          // already dead
+        }
+      }
+      exiting.kill("SIGKILL");
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  }, 20000);
 
   test("fail-closed: alive pid + port bound by a non-glosa squatter refuses to spawn a duplicate", async () => {
     const home = freshHome();

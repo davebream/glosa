@@ -52,7 +52,10 @@ import { startStallWatchdog } from "./stall-watchdog.ts";
 
 const HANDSHAKE_TIMEOUT_MS = 1000;
 const HANDSHAKE_POLL_MS = 5000;
-const RESTART_LOCK_WAIT_MS = 5000;
+/** How long a client waits for a daemon it has signalled, or found exiting, to give up its lock.
+ * Longer than the daemon's own hard-exit ceiling (`SHUTDOWN_HARD_EXIT_MS`) so a daemon that uses all
+ * of it is still waited for; the overall discovery deadline bounds it in practice. */
+const EXITING_DAEMON_WAIT_MS = 10_000;
 const ENSURE_MAX_PASSES = 8;
 const DEFAULT_ENSURE_TIMEOUT_MS = 12_000;
 const LOCK_REPAIR_INTERVAL_MS = 250;
@@ -895,19 +898,42 @@ function toConnection(port: number, hs: HandshakeResponse): DaemonConnection {
   };
 }
 
-async function waitForLockOwnershipChange(
+/** Waits for a lock's owner to let go: the lock is removed or replaced, or the owning process
+ * exits (a daemon killed mid-shutdown leaves its lock behind, which the next pass reclaims through
+ * the dead-PID path). */
+async function waitForExitingOwner(
   lockFile: string,
-  instanceId: string,
+  lock: DaemonLock,
   timeoutMs: number,
   deps: DiscoveryDependencies,
-): Promise<boolean> {
+): Promise<"released" | "exited" | "timeout"> {
   const deadline = deps.now() + timeoutMs;
-  while (deps.now() < deadline) {
-    const current = readLock(lockFile);
-    if (!current || current.instance_id !== instanceId) return true;
-    await deps.sleep(Math.min(50, remainingMs(deadline, deps.now)));
+  while (true) {
+    if (!sameLockInstance(readLock(lockFile), lock)) return "released";
+    if (!deps.pidAlive(lock.pid)) return "exited";
+    if (deps.now() >= deadline) return "timeout";
+    await deps.sleep(Math.min(50, Math.max(1, remainingMs(deadline, deps.now))));
   }
-  return false;
+}
+
+/** Deliberately specific rather than the generic deadline failure: what this client learned is that
+ * a named process is still shutting down, and waiting a little longer is usually all it takes. */
+function stillExitingFailure(
+  home: string,
+  lock: DaemonLock,
+  waitedMs: number,
+): Extract<EnsureDaemonResult, { ok: false }> {
+  log(
+    home,
+    `lock pid ${lock.pid} is a glosa daemon still shutting down after ${Math.round(waitedMs)}ms; not spawning a replacement beside it`,
+  );
+  return {
+    ok: false,
+    reason:
+      `the previous glosa daemon (PID ${lock.pid}) is still shutting down and has not released its lock ` +
+      `after ${Math.round(waitedMs)}ms; retry in a few seconds. If it keeps holding it: ${unresponsiveStopHint(lock.port, lock.pid)}`,
+    logPath: logPath(home),
+  };
 }
 
 function malformedLockBuildIdentity(lockFile: string): string | null {
@@ -933,6 +959,9 @@ export interface DiscoveryDependencies {
   pollHandshake: typeof pollHandshake;
   probe: typeof probePortBound;
   bindable: typeof probePortBindable;
+  pidAlive: (pid: number) => boolean;
+  /** Whether a live PID is still a glosa daemon rather than a reused PID. */
+  isDaemonProcess: (pid: number) => boolean;
 }
 const discoveryDefaults: DiscoveryDependencies = {
   now: () => performance.now(),
@@ -941,7 +970,22 @@ const discoveryDefaults: DiscoveryDependencies = {
   pollHandshake,
   probe: probePortBound,
   bindable: probePortBindable,
+  pidAlive: isPidAlive,
+  isDaemonProcess: isGlosaDaemonProcess,
 };
+
+/** Every daemon is spawned as `<bun> <main> __daemon` (see `spawnAndWait`), so the argument is the
+ * marker. Reading it through `ps` is macOS/POSIX, which is the v1 platform. An unreadable process
+ * counts as not a daemon, which keeps today's behaviour for it. */
+export function isGlosaDaemonProcess(pid: number): boolean {
+  try {
+    const result = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
+    if (result.exitCode !== 0) return false;
+    return /(^|\s)__daemon(\s|$)/.test(result.stdout.toString().trim());
+  } catch {
+    return false;
+  }
+}
 
 export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<EnsureDaemonResult> {
   return ensureDaemonWithDependencies(options);
@@ -1033,7 +1077,7 @@ export async function ensureDaemonWithDependencies(
     }
 
     preferredPort = lock.port;
-    const pidAlive = isPidAlive(lock.pid);
+    const pidAlive = deps.pidAlive(lock.pid);
     if (pidAlive) {
       const pollBudget = Math.min(HANDSHAKE_POLL_MS, remainingMs(deadline, deps.now));
       const hs = pollBudget > 0 ? await deps.pollHandshake(lock.port, pollBudget) : null;
@@ -1073,15 +1117,10 @@ export async function ensureDaemonWithDependencies(
             return { ok: false, reason: `could not stop stale glosa daemon: ${(err as Error).message}` };
           }
         }
-        const restartBudget = Math.min(RESTART_LOCK_WAIT_MS, remainingMs(deadline, deps.now));
+        const restartBudget = Math.min(EXITING_DAEMON_WAIT_MS, remainingMs(deadline, deps.now));
         if (restartBudget <= 0) return deadlineFailure(home, timeoutMs);
-        if (!(await waitForLockOwnershipChange(lockFile, lock.instance_id, restartBudget, deps))) {
-          if (remainingMs(deadline, deps.now) <= 0) return deadlineFailure(home, timeoutMs);
-          return {
-            ok: false,
-            reason: `stale glosa daemon did not release its lock within ${restartBudget}ms`,
-            logPath: logPath(home),
-          };
+        if ((await waitForExitingOwner(lockFile, lock, restartBudget, deps)) === "timeout") {
+          return stillExitingFailure(home, lock, restartBudget);
         }
         continue;
       }
@@ -1107,7 +1146,22 @@ export async function ensureDaemonWithDependencies(
           logPath: logPath(home),
         };
       }
-      log(home, `lock pid ${lock.pid} alive but port ${lock.port} is free — treating lock as stale`);
+      // A free port with a live PID is also exactly what a daemon looks like between closing its
+      // listeners and removing its lock on the way out, which can take seconds. Reclaiming that
+      // lock started a second daemon beside one that was still closing its workspaces. So a PID
+      // that is still a glosa daemon is waited for; only a PID the OS has since handed to some
+      // other program is reclaimed at once.
+      if (deps.isDaemonProcess(lock.pid)) {
+        const budget = Math.min(EXITING_DAEMON_WAIT_MS, remainingMs(deadline, deps.now));
+        if ((await waitForExitingOwner(lockFile, lock, budget, deps)) === "timeout") {
+          return stillExitingFailure(home, lock, budget);
+        }
+        continue;
+      }
+      log(
+        home,
+        `lock pid ${lock.pid} alive but not a glosa daemon, and port ${lock.port} is free — treating lock as stale`,
+      );
     } else {
       // A dead PID does not prove the recorded port is free: the PID may have exited while a
       // replacement is binding, or another process may now own the port. Use the same stable,

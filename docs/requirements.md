@@ -100,8 +100,11 @@ generic.**
   releases its own ownership record and ends its process rather than holding the port
   indefinitely, and every client message about an unresponsive owner names the recovery a user can
   actually perform on one.
-  Replacement waits up to five seconds for that lock ownership to change, then re-enters the normal
-  `bind → O_EXCL lock create` CAS loop so simultaneous refreshes converge on one daemon.
+  Replacement waits up to ten seconds, within the discovery budget, for that lock ownership to
+  change or the signalled process to exit, then re-enters the normal `bind → O_EXCL lock create`
+  CAS loop so simultaneous refreshes converge on one daemon. A lock whose process is still a glosa
+  daemon is never reclaimed while that process lives, even with its port free: that is a daemon on
+  its way out, and the client waits for it the same way or fails closed naming its PID.
 - **Workspace registration** separates an immutable registration ID, kind (`directory` or
   `loose-file`), canonical identity path, work-tree, absolute bus path, and tracked-file policy.
   Sources: session registration, `glosa open <path>`, first-touch `.glosa/`. The daemon-only,
