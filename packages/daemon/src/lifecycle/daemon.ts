@@ -146,7 +146,7 @@ export interface BuildBackendOptions {
    * `homedir()` that could diverge under test. */
   userHomeDir?: string;
   /** Test-only: how the artifact watcher registry opens a filesystem watch. Production uses
-   * chokidar. */
+   * `nativeWorkspaceWatch`. */
   artifactWatchFactory?: ArtifactWatcherRegistryOptions["watchFactory"];
 }
 
