@@ -271,6 +271,22 @@ export class ArtifactWatcherRegistry {
     await Promise.all([...this.states.values()].map((state) => this.closeState(state)));
   }
 
+  /** Retires every watch state for a process that is about to exit, WITHOUT closing the
+   * filesystem watches themselves: timers, listeners and pending paths are dropped and every
+   * state stops reacting, but no `watcher.close()` runs. The kernel releases the handles when the
+   * process ends.
+   *
+   * Closing them is what made a daemon restart fail. Bun's per-file `fs.watch` on macOS closes
+   * synchronously and its cost grows faster than the watch count (1,600 watches took 10.7 s to
+   * close in one blocking stretch; Node took 3 ms). chokidar holds one per watched file, so a
+   * daemon near the watch-entry budget sat in `closeAll()` for 30 s or more, holding its lock
+   * with its event loop frozen: neither the drain deadline nor the hard-exit timer could fire,
+   * and the client replacing it gave up after 5 s. Only for exit: a live daemon that stops
+   * watching one workspace still closes it, or it would leak the handles. */
+  abandonAll(): void {
+    for (const state of [...this.states.values()]) this.detachState(state);
+  }
+
   private findState(workspace: WorkspaceTarget): WatchState | undefined {
     return this.states.get(workspaceRegistrationId(workspace));
   }
@@ -533,7 +549,14 @@ export class ArtifactWatcherRegistry {
   }
 
   private async closeState(state: WatchState): Promise<void> {
-    if (this.states.get(state.id) !== state) return;
+    const watcher = this.detachState(state);
+    if (watcher) await watcher.close().catch(() => {});
+  }
+
+  /** Everything `closeState` does except closing the watch: returns the watcher so the caller
+   * decides whether to close it (see `abandonAll`). Null when the state was already retired. */
+  private detachState(state: WatchState): FSWatcher | null {
+    if (this.states.get(state.id) !== state) return null;
     this.states.delete(state.id);
     if (state.reconcileTimer) clearTimeout(state.reconcileTimer);
     state.reconcileTimer = null;
@@ -550,6 +573,6 @@ export class ArtifactWatcherRegistry {
     const watcher = state.watcher;
     state.watcher = null;
     state.mode = "disabled";
-    if (watcher) await watcher.close().catch(() => {});
+    return watcher;
   }
 }

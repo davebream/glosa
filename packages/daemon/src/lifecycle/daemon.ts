@@ -14,7 +14,7 @@ import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
-import { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
+import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
 import { SessionRegistry } from "../registry/session-registry.ts";
@@ -118,6 +118,10 @@ export interface DaemonBackend {
     targetRegistrationId: string,
   ): Promise<void>;
   closeWorkspaceResources(): Promise<void>;
+  /** `closeWorkspaceResources` for a process that is about to exit: closes every bus, but retires
+   * the artifact watchers without closing their filesystem watches (see
+   * `ArtifactWatcherRegistry.abandonAll`). Daemon shutdown uses this one. */
+  releaseWorkspaceResourcesForExit(): Promise<void>;
 }
 
 export interface ProviderFactoryDeps {
@@ -138,6 +142,9 @@ export interface BuildBackendOptions {
    * watcher warm-up applies are answering from the same value rather than two calls to
    * `homedir()` that could diverge under test. */
   userHomeDir?: string;
+  /** Test-only: how the artifact watcher registry opens a filesystem watch. Production uses
+   * chokidar. */
+  artifactWatchFactory?: ArtifactWatcherRegistryOptions["watchFactory"];
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
@@ -161,6 +168,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const pushRegistry = new SessionPushRegistry();
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
+    watchFactory: opts.artifactWatchFactory,
     warn: (message) => log(home, message),
     // The watcher→bus edge (#153), assembled HERE rather than imported inside the watcher: that
     // module stays a chokidar fan-out that knows nothing about journals or shadow git, and the one
@@ -183,6 +191,14 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   };
   const closeWorkspaceResources = () =>
     Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]).then(() => {});
+  let exiting = false;
+  const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
+    // Watchers first and synchronously, so no quiet-window capture can start against a bus that
+    // is closing, and no warm-up step opens a new watch that nothing will ever use.
+    exiting = true;
+    artifactWatcherRegistry.abandonAll();
+    await busRegistry.closeAll();
+  };
   adapterRegistry.register(metadataRegistry.adapter());
   for (const factory of opts.providerFactories ?? []) {
     providerRegistry.register(factory({ sessionRegistry, pushRegistry }));
@@ -216,6 +232,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
    * and `present` does not currently catch that on its own. */
   const warmArtifactWatchers = async (): Promise<void> => {
     for (const entry of workspaceIndex.list({ presentOnly: true })) {
+      if (exiting) return;
       if ((entry.lifecycle?.state ?? "active") !== "active") continue;
       const root = workspaceWorktree(entry);
       if (!existsSync(root)) continue;
@@ -246,6 +263,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     adoptionCoordinator,
     sealAdoptionSources,
     closeWorkspaceResources,
+    releaseWorkspaceResourcesForExit,
   };
 }
 
@@ -460,7 +478,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
         shutdownController.abort();
         tokenAuthority.close();
       },
-      backend.closeWorkspaceResources,
+      backend.releaseWorkspaceResourcesForExit,
     );
     if (!drained) {
       log(home, `${instanceId} graceful drain exceeded ${SHUTDOWN_DRAIN_MS}ms; force-closing listeners`);
