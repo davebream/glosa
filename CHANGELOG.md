@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Read and Edit now describe the same document. The daemon's renderer and the editor's parser were
+  built from two different markdown-it presets, so a pipe table rendered as a table while reading
+  and as literal pipe characters the moment you pressed **Edit**, and `~~struck~~` likewise. Both
+  sides now construct from one shared configuration, and the editor has gained table nodes and a
+  strikethrough mark so it can hold everything the reader is shown. An untouched table still saves
+  byte-for-byte; an edited one writes back as `|---|---|`.
+
+### Changed
+
+- The vendored ProseMirror bundle re-exports `Plugin`, `PluginKey`, `Decoration`, `DecorationSet`
+  and `TextSelection`, and now carries `prosemirror-tables`. No new runtime behaviour on its own —
+  these are what a future per-block editing surface decorates a focused block with.
+
 ## [0.1.0-alpha.25] — 2026-09-17
 
 ### Added

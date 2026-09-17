@@ -1,9 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // @ts-check
-// The browser's shared CommonMark tokenizer. ProseMirror is already loaded by the rich editor.
+// The browser's shared markdown tokenizer. ProseMirror is already loaded by the rich editor.
+//
+// Constructed from the SAME preset and options the daemon renders with (MARKDOWN_PRESET /
+// MARKDOWN_OPTIONS in markdown-non-manuscript.js), so the reader and the editor see one document.
+// This used to name the `commonmark` preset independently, which is how tables and strikethrough
+// came to exist on one side only.
 import { defaultMarkdownParser } from "./vendor/prosemirror.js";
-import { installNonManuscriptRules, NON_MANUSCRIPT_INLINE_TOKEN } from "./markdown-non-manuscript.js";
-export const commonMarkTokenizer = new defaultMarkdownParser.tokenizer.constructor("commonmark", { html: false });
+import {
+  installNonManuscriptRules,
+  MARKDOWN_OPTIONS,
+  MARKDOWN_PRESET,
+  NON_MANUSCRIPT_INLINE_TOKEN,
+} from "./markdown-non-manuscript.js";
+export const commonMarkTokenizer = new defaultMarkdownParser.tokenizer.constructor(MARKDOWN_PRESET, {
+  ...MARKDOWN_OPTIONS,
+});
 installNonManuscriptRules(commonMarkTokenizer);
 /** @param {string} source */
 export function markdownTokens(source) {

@@ -7,7 +7,12 @@ import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
-import { installNonManuscriptRules, tokenLayout } from "../../spa/src/markdown-non-manuscript.js";
+import {
+  installNonManuscriptRules,
+  MARKDOWN_OPTIONS,
+  MARKDOWN_PRESET,
+  tokenLayout,
+} from "../../spa/src/markdown-non-manuscript.js";
 import { fsyncContainingDir, writeAllSync } from "./bus/io.ts";
 
 /** A5 §F10's fixed identity formula — shared here (artifact content responses) and by the later
@@ -35,7 +40,7 @@ function dataLineStamp(md: MarkdownIt): void {
 // One shared renderer instance — markdown-it's `.use()` mutates the instance, not per-call state,
 // so building it once at module load and reusing it across requests is both correct and avoids
 // re-registering the plugin on every render.
-const renderer = new MarkdownIt({ html: false, linkify: false });
+const renderer = new MarkdownIt(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
 renderer.use(dataLineStamp);
 // #175 — issue title: "consistent non-manuscript markdown regions". Read/Review must not show a
 // document's own metadata header or a `%%`-fenced authoring comment (block OR inline) as
