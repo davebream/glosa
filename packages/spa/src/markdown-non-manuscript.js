@@ -22,6 +22,28 @@
 export const MARKDOWN_PRESET = "default";
 export const MARKDOWN_OPTIONS = Object.freeze({ html: false, linkify: false });
 
+/** Stamps `data-line="<0-based source line>"` on every block-level token that carries a source map
+ * (markdown-it's `token.map[0]`) — headings, paragraphs, list items, code fences, tables, and so on.
+ * Registered as a core rule rather than as per-renderer-rule overrides so it applies uniformly
+ * across every block type without enumerating them.
+ *
+ * Lives here, beside `installNonManuscriptRules` and the shared preset, because BOTH sides render
+ * now. The daemon is still the authority for an artifact's HTML, but the SPA re-renders a single
+ * edited run locally so the page can come back without waiting for a round trip, and a stamp that
+ * existed on one side only would give that run no `data-line` — which is what class-R anchoring
+ * resolves a passage against.
+ *
+ * @param {any} md */
+export function installDataLineStamp(md) {
+  md.core.ruler.push("glosa_data_line", (/** @type {any} */ state) => {
+    for (const token of state.tokens) {
+      if (token.map && token.type.endsWith("_open")) {
+        token.attrSet("data-line", String(token.map[0]));
+      }
+    }
+  });
+}
+
 export const HEADER_FENCE = "---";
 export const COMMENT_FENCE = "%%";
 export const RAW_KIND = Object.freeze({ METADATA: "metadata", COMMENT: "comment" });

@@ -8,6 +8,7 @@
 // came to exist on one side only.
 import { defaultMarkdownParser } from "./vendor/prosemirror.js";
 import {
+  installDataLineStamp,
   installNonManuscriptRules,
   MARKDOWN_OPTIONS,
   MARKDOWN_PRESET,
@@ -17,6 +18,24 @@ export const commonMarkTokenizer = new defaultMarkdownParser.tokenizer.construct
   ...MARKDOWN_OPTIONS,
 });
 installNonManuscriptRules(commonMarkTokenizer);
+/** The browser's renderer, built from the same three pieces the daemon's is: the shared preset and
+ * options, the `data-line` stamp, and the non-manuscript recognisers. A SEPARATE instance from
+ * `commonMarkTokenizer` above because markdown-it's `.use()` mutates the instance, and the tokenizer
+ * is handed to prosemirror-markdown, which must not start emitting stamped attributes.
+ *
+ * The daemon remains the authority for an artifact's HTML. This exists so that a single run the
+ * writer just edited can come back on the page immediately, rather than after a save round trip;
+ * the daemon's own render replaces it on the next refresh. `render-parity.test.ts` holds the two
+ * outputs to exact string equality, which is what makes the optimistic paint safe to trust.
+ * @param {string} source */
+export function renderMarkdown(source) {
+  return browserRenderer.render(source);
+}
+
+const browserRenderer = new defaultMarkdownParser.tokenizer.constructor(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
+browserRenderer.use(installDataLineStamp);
+browserRenderer.use(installNonManuscriptRules);
+
 /** @param {string} source */
 export function markdownTokens(source) {
   return commonMarkTokenizer.parse(source, {});

@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import {
+  installDataLineStamp,
   installNonManuscriptRules,
   MARKDOWN_OPTIONS,
   MARKDOWN_PRESET,
@@ -23,25 +24,11 @@ export function sourceSha256(raw: Buffer): string {
   return createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
-/** Stamps `data-line="<0-based source line>"` on every block-level token that carries a source
- * map (markdown-it's `token.map[0]`) — headings, paragraphs, list items, code fences, tables, etc.
- * Registered as a core rule (not per-renderer-rule overrides) so it applies uniformly across every
- * block type without this module having to enumerate them one by one. */
-function dataLineStamp(md: MarkdownIt): void {
-  md.core.ruler.push("glosa_data_line", (state) => {
-    for (const token of state.tokens) {
-      if (token.map && token.type.endsWith("_open")) {
-        token.attrSet("data-line", String(token.map[0]));
-      }
-    }
-  });
-}
-
 // One shared renderer instance — markdown-it's `.use()` mutates the instance, not per-call state,
 // so building it once at module load and reusing it across requests is both correct and avoids
 // re-registering the plugin on every render.
 const renderer = new MarkdownIt(MARKDOWN_PRESET, { ...MARKDOWN_OPTIONS });
-renderer.use(dataLineStamp);
+renderer.use(installDataLineStamp);
 // #175 — issue title: "consistent non-manuscript markdown regions". Read/Review must not show a
 // document's own metadata header or a `%%`-fenced authoring comment (block OR inline) as
 // manuscript; both stay recoverable in source editing, and the rich editor's Edit face carries
