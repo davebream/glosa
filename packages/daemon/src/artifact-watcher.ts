@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shared, bounded artifact watching. Chokidar never receives a recursive workspace root: the
-// canonical matcher performs the only tree walk, then each approved directory is watched at depth
-// zero. One registry instance belongs to the daemon and fans events out to every SSE subscriber.
+// Shared, bounded artifact watching. A directory workspace is watched with ONE native recursive
+// `fs.watch` on its root (FSEvents on macOS), and every event is filtered through the canonical
+// matcher before it can cost anything; a loose-file workspace watches only its files' directories.
+// The canonical matcher still performs the only tree walk. One registry instance belongs to the
+// daemon and fans events out to every SSE subscriber.
+//
+// WHY NOT CHOKIDAR (#91, and the restart failure fixed alongside this). chokidar opens one
+// `fs.watch` per watched FILE, even at depth zero, and Bun's per-file `fs.watch` on macOS gets
+// slower faster than the watch count grows: 1,600 watches took 26.5 s to open and 10.7 s to close,
+// with the event loop blocked throughout (Node: 31 ms / 3 ms). A daemon warming up 8 workspaces of
+// 300 files did not answer its handshake for about 80 s. A recursive watch is one kernel stream per
+// root however large the tree: 70 roots over 21,000 files opened in 59 ms and closed in 45 ms, and
+// 20,000 writes churning `node_modules` under one cost 16 MB and at most 84 ms of loop time. What
+// #91 forbade was chokidar walking a recursive root and opening a watch per file inside it; this
+// opens none, and excluded subtrees are dropped by path before any work is scheduled.
 //
 // DAEMON-LIFETIME, NOT SUBSCRIPTION-SCOPED (#153). A watcher used to exist only while
 // `GET /w/:slug/stream` had a listener, which was right when its only job was pushing live
@@ -17,9 +29,8 @@
 // open; daemon-lifetime watching makes the WATCHER COUNT scale with how many workspaces are
 // registered. `DEFAULT_MAX_WATCHED_WORKSPACES` below bounds that axis, with its own constant, its
 // own warning, and its own downgrade.
-import { readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
-import { watch, type ChokidarOptions, type FSWatcher } from "chokidar";
+import { existsSync, type FSWatcher, lstatSync, readFileSync, type Stats, watch } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { classifyArtifactPath, sourceSha256 } from "./artifact-render.ts";
 import {
   buildWatchIgnored,
@@ -37,21 +48,18 @@ import {
   type WorkspaceTarget,
 } from "./workspace.ts";
 
-/** Per-workspace path budget: how many entries ONE `WatchState` may hand chokidar. Says nothing
- * about how many workspaces are watched — see `DEFAULT_MAX_WATCHED_WORKSPACES`. */
-export const DEFAULT_MAX_ARTIFACT_WATCH_ENTRIES = 4_096;
-/** The bound that actually protects the machine: watch entries summed across EVERY workspace.
+/** Per-workspace budget on TRACKED ARTIFACTS: how many files the matcher walk may resolve for one
+ * live watcher. Every relevant change re-runs that walk, so this bounds the work a change costs,
+ * not a number of filesystem watches — a recursive watch is one handle however many files it
+ * covers. Past it, the workspace gets no live updates and its changes are captured by offline
+ * catch-up. Says nothing about how many workspaces are watched — see
+ * `DEFAULT_MAX_WATCHED_WORKSPACES`.
  *
- * The per-workspace cap above and the workspace-count cap below are each real, and between them
- * they bounded nothing: 64 workspaces x 4096 entries is 262,144 filesystem watches, which is what
- * alpha.19 could open on a machine with an accumulated registry. It exhausted memory. Two ceilings
- * that never multiply are one ceiling missing, and the axis that runs out is entries, not
- * workspaces — a thousand tiny workspaces are cheap and two huge ones are not.
- *
- * Deliberately larger than one workspace's cap so a single big workspace still watches fully, and
- * far below the old product. A workspace that does not fit degrades exactly as one over the
- * per-workspace cap already does: no live updates, changes still captured by offline catch-up. */
-export const DEFAULT_MAX_TOTAL_WATCH_ENTRIES = 8_192;
+ * There used to be a third bound, 8,192 watch entries summed across every workspace, because each
+ * chokidar entry was a real per-file watch and 64 workspaces x 4,096 of them exhausted a machine's
+ * memory in alpha.19. With one watch per workspace that sum no longer measures anything a machine
+ * runs out of, and it was refusing live updates to small workspaces by warm-up order (#219). */
+export const DEFAULT_MAX_TRACKED_ARTIFACTS = 4_096;
 
 /** Cross-workspace budget: how many live watchers may exist at once, across every workspace.
  *
@@ -81,12 +89,85 @@ const RECONCILE_DEBOUNCE_MS = 50;
  * enough to stop re-walking the matcher once per filesystem event, i.e. "which files match now".
  * This one answers "has the person stopped saving", and has to absorb two things at once — an
  * atomic save's own churn (write a temp file, rename over the target, milliseconds apart, which
- * chokidar reports as several events for one logical save) and an editor's autosave cadence, where
+ * the filesystem reports as several events for one logical save) and an editor's autosave cadence, where
  * a typing burst produces a save every second or so. Two seconds of quiet covers both; one entry
  * per burst is what "a Typora save produces ONE coalesced external_edit" means. */
 export const EXTERNAL_EDIT_QUIET_WINDOW_MS = 2_000;
 
-type WatchMode = "directories" | "files" | "disabled";
+/** `tree`: one recursive watch on a directory workspace's root. `files`: a bounded (loose-file)
+ * workspace, watched through its files' parent directories. */
+type WatchMode = "tree" | "files" | "disabled";
+
+/** One live filesystem watch for one workspace, as the registry sees it. */
+export interface WorkspaceWatch {
+  close(): void;
+}
+
+export interface WorkspaceWatchRequest {
+  mode: "tree" | "files";
+  /** The workspace work-tree root. `tree` watches it recursively. */
+  root: string;
+  /** `files` only: the exact files to report; their parent directories are what is watched. */
+  files: string[];
+  /** An absolute path that may have changed. Advisory: the registry re-resolves from disk. */
+  onChange(absPath: string): void;
+  onError(error: unknown): void;
+}
+
+export type WorkspaceWatchFactory = (request: WorkspaceWatchRequest) => WorkspaceWatch;
+
+/** The production watch: Bun's native `fs.watch`.
+ *
+ * Bun delivers a recursive watcher the events of any OTHER watched root whose path merely starts
+ * with the same characters — the watcher on `…/notes` also receives `…/notes2/a.md` as `2/a.md`
+ * (Bun 1.4.2; a trailing slash does not help). Such an event is recognisable: the path does not
+ * exist under this root but does exist when appended to it as a string. It is dropped. A deleted
+ * file in the sibling cannot be told apart that way and passes through, which costs one rescan
+ * that finds nothing. */
+export function nativeWorkspaceWatch(request: WorkspaceWatchRequest): WorkspaceWatch {
+  const watchers: FSWatcher[] = [];
+  const close = () => {
+    for (const watcher of watchers.splice(0)) {
+      try {
+        watcher.close();
+      } catch {
+        // already closed
+      }
+    }
+  };
+  try {
+    if (request.mode === "tree") {
+      const root = request.root;
+      const watcher = watch(root, { recursive: true }, (_event, filename) => {
+        if (filename === null || filename === undefined) return request.onChange(root);
+        const rel = String(filename);
+        const absPath = join(root, rel);
+        if (!existsSync(absPath) && existsSync(root + rel)) return;
+        request.onChange(absPath);
+      });
+      watcher.on("error", (error) => request.onError(error));
+      watchers.push(watcher);
+    } else {
+      const targets = new Set(request.files);
+      for (const directory of new Set(request.files.map((file) => dirname(file)))) {
+        const watcher = watch(directory, (_event, filename) => {
+          if (filename === null || filename === undefined) {
+            for (const file of targets) if (dirname(file) === directory) request.onChange(file);
+            return;
+          }
+          const absPath = join(directory, String(filename));
+          if (targets.has(absPath)) request.onChange(absPath);
+        });
+        watcher.on("error", (error) => request.onError(error));
+        watchers.push(watcher);
+      }
+    }
+  } catch (error) {
+    close();
+    throw error;
+  }
+  return { close };
+}
 
 export type ArtifactWatcherEvent =
   | {
@@ -99,15 +180,14 @@ export type ArtifactWatcherEvent =
     };
 
 export interface ArtifactWatcherRegistryOptions {
-  maxWatchEntries?: number;
+  maxTrackedArtifacts?: number;
   maxWatchedWorkspaces?: number;
-  maxTotalWatchEntries?: number;
   warn?: (message: string) => void;
-  watchFactory?: (paths: string[], options: ChokidarOptions) => FSWatcher;
+  watchFactory?: WorkspaceWatchFactory;
   /** The quiet-window capture (#153). Injected rather than imported so this module keeps knowing
    * nothing about `WorkspaceBus` or shadow git — it reports that a workspace went quiet after a
    * change and lets the composition root decide what that means. Absent (its default) leaves the
-   * watcher a pure chokidar→SSE fan-out, which is what every pre-#153 test expects. */
+   * watcher a pure filesystem→SSE fan-out, which is what every pre-#153 test expects. */
   captureExternalEdit?: (workspace: WorkspaceTarget) => Promise<unknown>;
   quietWindowMs?: number;
 }
@@ -120,9 +200,11 @@ interface WatchState {
    * the last listener leaving must NOT tear it down — that is the whole point of #153's amendment. */
   daemonLifetime: boolean;
   snapshot: ResolveMatchedFilesResult;
-  watcher: FSWatcher | null;
-  watchedTargets: Set<string>;
+  watcher: WorkspaceWatch | null;
   mode: WatchMode;
+  /** Path-only matcher filter for `tree` events: excluded subtrees and files the matcher would
+   * never track are dropped before they schedule a walk. */
+  ignored: ((absPath: string) => boolean) | null;
   generation: number;
   pendingPaths: Set<string>;
   reconcileTimer: ReturnType<typeof setTimeout> | null;
@@ -133,6 +215,8 @@ interface WatchState {
   quietWindowTimer: ReturnType<typeof setTimeout> | null;
   capturing: boolean;
   transitioning: boolean;
+  /** Matcher walks run for filesystem events; see `reconcileCount`. */
+  reconciles: number;
   warned: Set<string>;
 }
 
@@ -149,21 +233,19 @@ function boundedTargets(workspace: WorkspaceTarget): string[] {
 
 export class ArtifactWatcherRegistry {
   private readonly states = new Map<string, WatchState>();
-  private readonly maxWatchEntries: number;
+  private readonly maxTrackedArtifacts: number;
   private readonly maxWatchedWorkspaces: number;
-  private readonly maxTotalWatchEntries: number;
   private readonly warn: (message: string) => void;
-  private readonly watchFactory: (paths: string[], options: ChokidarOptions) => FSWatcher;
+  private readonly watchFactory: WorkspaceWatchFactory;
   private readonly captureExternalEdit?: (workspace: WorkspaceTarget) => Promise<unknown>;
   private readonly quietWindowMs: number;
   private budgetWarned = false;
 
   constructor(options: ArtifactWatcherRegistryOptions = {}) {
-    this.maxWatchEntries = options.maxWatchEntries ?? DEFAULT_MAX_ARTIFACT_WATCH_ENTRIES;
+    this.maxTrackedArtifacts = options.maxTrackedArtifacts ?? DEFAULT_MAX_TRACKED_ARTIFACTS;
     this.maxWatchedWorkspaces = options.maxWatchedWorkspaces ?? DEFAULT_MAX_WATCHED_WORKSPACES;
-    this.maxTotalWatchEntries = options.maxTotalWatchEntries ?? DEFAULT_MAX_TOTAL_WATCH_ENTRIES;
     this.warn = options.warn ?? (() => {});
-    this.watchFactory = options.watchFactory ?? ((paths, watchOptions) => watch(paths, watchOptions));
+    this.watchFactory = options.watchFactory ?? nativeWorkspaceWatch;
     this.captureExternalEdit = options.captureExternalEdit;
     this.quietWindowMs = options.quietWindowMs ?? EXTERNAL_EDIT_QUIET_WINDOW_MS;
   }
@@ -180,7 +262,7 @@ export class ArtifactWatcherRegistry {
       return;
     }
     const state = this.openState(workspace, id, true);
-    if (state) this.startWatcher(state, false);
+    if (state) this.startWatcher(state);
   }
 
   subscribe(workspace: WorkspaceTarget, listener: (event: ArtifactWatcherEvent) => void): () => void {
@@ -195,7 +277,7 @@ export class ArtifactWatcherRegistry {
       if (!opened) return () => {};
       state = opened;
       state.listeners.add(listener);
-      this.startWatcher(state, false);
+      this.startWatcher(state);
     } else {
       state.listeners.add(listener);
     }
@@ -228,16 +310,17 @@ export class ArtifactWatcherRegistry {
       id,
       listeners: new Set(),
       daemonLifetime,
-      snapshot: resolveTrackedFiles(workspace, { limit: this.maxWatchEntries }),
+      snapshot: resolveTrackedFiles(workspace, { limit: this.maxTrackedArtifacts }),
       watcher: null,
-      watchedTargets: new Set(),
       mode: "disabled",
+      ignored: null,
       generation: 0,
       pendingPaths: new Set(),
       reconcileTimer: null,
       quietWindowTimer: null,
       capturing: false,
       transitioning: false,
+      reconciles: 0,
       warned: new Set(),
     };
     this.states.set(id, state);
@@ -249,17 +332,17 @@ export class ArtifactWatcherRegistry {
     return this.states.get(workspaceRegistrationId(workspace))?.mode ?? null;
   }
 
+  /** Test/diagnostic surface: how many matcher walks filesystem events have cost this workspace.
+   * The filter in front of them is otherwise unobservable — an excluded change that did reach a
+   * walk would still produce no artifact event, only the walk. */
+  reconcileCount(workspace: WorkspaceTarget): number {
+    return this.states.get(workspaceRegistrationId(workspace))?.reconciles ?? 0;
+  }
+
   /** Live watchers across every workspace — the quantity `DEFAULT_MAX_WATCHED_WORKSPACES` bounds.
    * Deliberately NOT watch entries within one workspace, which is the other cap's business. */
   watchedWorkspaceCount(): number {
     return this.states.size;
-  }
-
-  /** Watch entries live across EVERY workspace — the axis that exhausts a machine, and the one
-   * `DEFAULT_MAX_TOTAL_WATCH_ENTRIES` bounds. `watchedWorkspaceCount` counts workspaces, which is
-   * a different number and was the one alpha.19 measured while memory ran out. */
-  watchedEntryTotal(): number {
-    return this.entriesElsewhere(undefined);
   }
 
   async evict(workspace: WorkspaceTarget): Promise<void> {
@@ -297,101 +380,63 @@ export class ArtifactWatcherRegistry {
     this.warn(`artifact watcher ${state.id}: ${message}`);
   }
 
-  /** Entries currently registered across every OTHER workspace. `exclude` is the state being
-   * (re)started, whose own targets are about to be replaced and must not count against itself. */
-  private entriesElsewhere(exclude?: WatchState): number {
-    let total = 0;
-    for (const state of this.states.values()) {
-      if (state === exclude) continue;
-      total += state.watchedTargets.size;
-    }
-    return total;
-  }
-
-  private chooseMode(state: WatchState, forceFiles: boolean): { mode: WatchMode; targets: string[] } {
+  private chooseMode(state: WatchState): WatchMode {
     const tracking = workspaceTracking(state.workspace);
-    // Whichever ceiling is lower decides. The per-workspace cap keeps one workspace from being
-    // pathological on its own; this one keeps the SUM from being pathological no matter how the
-    // workspaces are shaped. Only the second can be exhausted by workspaces that are each fine.
-    const budget = Math.min(
-      this.maxWatchEntries,
-      Math.max(0, this.maxTotalWatchEntries - this.entriesElsewhere(state)),
-    );
-
     if (tracking.mode === "bounded") {
-      const targets = boundedTargets(state.workspace);
-      if (targets.length > budget) return { mode: "disabled", targets: [] };
-      return { mode: "files", targets };
+      return boundedTargets(state.workspace).length > this.maxTrackedArtifacts ? "disabled" : "files";
     }
-
     // A truncated snapshot is a prefix, not a tree: the walk stopped because the workspace is
     // already past the per-workspace ceiling. That is exactly the answer `disabled` encodes, and
     // deciding it here is what keeps the walk from having to finish to find out.
-    if (state.snapshot.truncated) return { mode: "disabled", targets: [] };
-
-    const fileTargets = state.snapshot.tracked.map((file) => file.rawPath);
-    const estimatedEntries = state.snapshot.directories.length + fileTargets.length;
-    if (!forceFiles && estimatedEntries <= budget) {
-      return { mode: "directories", targets: state.snapshot.directories.map((directory) => directory.rawPath) };
-    }
-    if (fileTargets.length <= budget) return { mode: "files", targets: fileTargets };
-    return { mode: "disabled", targets: [] };
+    return state.snapshot.truncated ? "disabled" : "tree";
   }
 
-  private startWatcher(state: WatchState, forceFiles: boolean): void {
-    const selected = this.chooseMode(state, forceFiles);
-    state.mode = selected.mode;
-    state.watchedTargets = new Set(selected.targets);
-
-    if (selected.mode === "disabled") {
+  private startWatcher(state: WatchState): void {
+    const mode = this.chooseMode(state);
+    state.mode = mode;
+    if (mode === "disabled") {
       this.warnOnce(
         state,
         "disabled",
-        `live updates disabled because ${state.snapshot.tracked.length} tracked artifacts exceed the ${this.maxWatchEntries}-entry safety budget`,
+        `live updates disabled because the workspace has more than ${this.maxTrackedArtifacts} tracked artifacts, the per-workspace safety budget`,
       );
       return;
     }
 
-    if (
-      selected.mode === "files" &&
-      workspaceTracking(state.workspace).mode === "matcher" &&
-      state.snapshot.directories.length + state.snapshot.tracked.length > this.maxWatchEntries
-    ) {
-      this.warnOnce(
-        state,
-        "file-fallback",
-        `new-artifact discovery disabled because the safe directory scope exceeds the ${this.maxWatchEntries}-entry safety budget`,
-      );
-    }
-
     const root = workspaceWorktree(state.workspace);
     const generation = ++state.generation;
-    const watcher = this.watchFactory(selected.targets, {
-      ignoreInitial: true,
-      followSymlinks: false,
-      ...(selected.mode === "directories"
-        ? {
-            depth: 0,
-            ignored: buildWatchIgnored(root, loadMatcherConfig(root, workspaceBusPath(state.workspace))),
-          }
-        : {}),
-    });
-    state.watcher = watcher;
+    if (mode === "tree") {
+      const matches = buildWatchIgnored(root, loadMatcherConfig(root, workspaceBusPath(state.workspace)), {
+        ignoreOversize: false,
+      });
+      state.ignored = (absPath) => {
+        let stats: Stats | undefined;
+        try {
+          stats = lstatSync(absPath);
+        } catch {
+          // Gone: a deletion, or a directory removed with its contents. Only the path can decide.
+        }
+        return matches(absPath, stats);
+      };
+    } else {
+      state.ignored = null;
+    }
 
-    const onFsEvent = (absPath: string) => {
+    const onChange = (absPath: string) => {
       if (state.generation !== generation || state.mode === "disabled") return;
+      if (state.ignored?.(absPath)) return;
       state.pendingPaths.add(toRelPosixPath(root, absPath));
       this.scheduleReconcile(state);
     };
-    watcher
-      .on("add", onFsEvent)
-      .on("change", onFsEvent)
-      .on("unlink", onFsEvent)
-      .on("addDir", onFsEvent)
-      .on("unlinkDir", onFsEvent)
-      .on("error", () => {
-        if (state.generation === generation) void this.handleWatcherError(state);
-      });
+    const onError = () => {
+      if (state.generation === generation) this.handleWatcherError(state);
+    };
+    try {
+      state.watcher = this.watchFactory({ mode, root, files: boundedTargets(state.workspace), onChange, onError });
+    } catch {
+      state.watcher = null;
+      this.handleWatcherError(state);
+    }
   }
 
   private scheduleReconcile(state: WatchState): void {
@@ -442,41 +487,16 @@ export class ArtifactWatcherRegistry {
     if (!this.states.has(state.id) || state.transitioning) return;
     const changedPaths = new Set(state.pendingPaths);
     state.pendingPaths.clear();
+    state.reconciles += 1;
 
     const previous = state.snapshot;
-    const next = resolveTrackedFiles(state.workspace, { limit: this.maxWatchEntries });
+    const next = resolveTrackedFiles(state.workspace, { limit: this.maxTrackedArtifacts });
     const crossings = diffSnapshots(previous, next);
     state.snapshot = next;
 
-    if (state.mode === "directories") {
-      const estimatedEntries = next.directories.length + next.tracked.length;
-      // Growth is bounded by the same pair of ceilings a fresh start is. Without the second term a
-      // watcher that started inside the global budget could grow past it one reconcile at a time,
-      // which is the same unbounded total arriving slowly instead of all at once.
-      const growthBudget = Math.min(
-        this.maxWatchEntries,
-        Math.max(0, this.maxTotalWatchEntries - this.entriesElsewhere(state)),
-      );
-      if (estimatedEntries > growthBudget) {
-        await this.replaceWatcher(state, true);
-      } else {
-        const nextTargets = new Set(next.directories.map((directory) => directory.rawPath));
-        const additions = [...nextTargets].filter((path) => !state.watchedTargets.has(path));
-        const removals = [...state.watchedTargets].filter((path) => !nextTargets.has(path));
-        if (additions.length > 0) state.watcher?.add(additions);
-        if (removals.length > 0) await state.watcher?.unwatch(removals);
-        state.watchedTargets = nextTargets;
-      }
-    }
-
-    const pathsLeavingScope = crossings
-      .filter((crossing) => crossing.type === "file_untracked")
-      .map((crossing) => previous.tracked.find((file) => file.path === crossing.path)?.rawPath)
-      .filter((path): path is string => path !== undefined);
-    if (pathsLeavingScope.length > 0) {
-      await state.watcher?.unwatch(pathsLeavingScope);
-      for (const path of pathsLeavingScope) state.watchedTargets.delete(path);
-    }
+    // Grown past the per-workspace budget since the watch started: stop paying a truncated walk for
+    // every change. The crossings this reconcile found are still delivered below.
+    if (state.mode === "tree" && next.truncated) this.retireWatcher(state, "disabled");
 
     if (crossings.length > 0) {
       this.notify(state, { type: "artifact_index", data: { changes: crossings } });
@@ -512,30 +532,33 @@ export class ArtifactWatcherRegistry {
     if (trackedChanged || crossings.length > 0) this.scheduleQuietWindow(state);
   }
 
-  private async handleWatcherError(state: WatchState): Promise<void> {
-    if (state.transitioning || !this.states.has(state.id)) return;
-    this.warnOnce(state, "watch-error", "filesystem watch failed; downgrading live-update scope");
-    if (state.mode === "directories") await this.replaceWatcher(state, true);
-    else await this.replaceWatcher(state, false, true);
+  /** A watch that reports an error is closed and restarted once; a second error leaves the
+   * workspace without live updates (offline catch-up still captures its changes). */
+  private handleWatcherError(state: WatchState): void {
+    if (!this.states.has(state.id) || state.transitioning) return;
+    const firstError = !state.warned.has("watch-error");
+    this.warnOnce(state, "watch-error", "filesystem watch failed; restarting it once");
+    this.retireWatcher(state, "disabled");
+    if (!firstError) return;
+    // A daemon-lifetime state legitimately has no listeners and must still be rebuilt — otherwise
+    // the first watcher error would silently retire live external-edit capture for every workspace
+    // with no browser attached, which is most of them.
+    if (state.listeners.size === 0 && !state.daemonLifetime) return;
+    this.startWatcher(state);
   }
 
-  private async replaceWatcher(state: WatchState, forceFiles: boolean, forceDisabled = false): Promise<void> {
-    if (state.transitioning) return;
+  private retireWatcher(state: WatchState, mode: WatchMode): void {
     state.transitioning = true;
     const previous = state.watcher;
     state.watcher = null;
     state.generation += 1;
-    if (previous) await previous.close().catch(() => {});
-    state.watchedTargets.clear();
-    state.mode = "disabled";
-    state.transitioning = false;
-    // A daemon-lifetime state legitimately has no listeners and must still be rebuilt after a
-    // downgrade — otherwise the first watcher error would silently retire live external-edit
-    // capture for every workspace with no browser attached, which is most of them.
-    if (!this.states.has(state.id) || (state.listeners.size === 0 && !state.daemonLifetime) || forceDisabled) {
-      return;
+    state.mode = mode;
+    try {
+      previous?.close();
+    } catch {
+      // already closed
     }
-    this.startWatcher(state, forceFiles);
+    state.transitioning = false;
   }
 
   private notify(state: WatchState, event: ArtifactWatcherEvent): void {
@@ -549,13 +572,16 @@ export class ArtifactWatcherRegistry {
   }
 
   private async closeState(state: WatchState): Promise<void> {
-    const watcher = this.detachState(state);
-    if (watcher) await watcher.close().catch(() => {});
+    try {
+      this.detachState(state)?.close();
+    } catch {
+      // already closed
+    }
   }
 
   /** Everything `closeState` does except closing the watch: returns the watcher so the caller
    * decides whether to close it (see `abandonAll`). Null when the state was already retired. */
-  private detachState(state: WatchState): FSWatcher | null {
+  private detachState(state: WatchState): WorkspaceWatch | null {
     if (this.states.get(state.id) !== state) return null;
     this.states.delete(state.id);
     if (state.reconcileTimer) clearTimeout(state.reconcileTimer);

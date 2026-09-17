@@ -224,7 +224,7 @@ export function resolveMatchedFiles(
   return { tracked, oversize, directories, skippedSymlinks, truncated };
 }
 
-/** Builds the chokidar `ignored` predicate for the shared artifact watcher FROM the same
+/** Builds the `ignored` predicate for the shared artifact watcher FROM the same
  * canonical include/exclude config the walk uses — so the watcher's scope can't drift from
  * `resolveMatchedFiles`' scope (the whole reason A4 §F20 forbids each consumer holding its own
  * glob). Returns `true` for "don't watch / don't descend". Without this the watcher would crawl and
@@ -238,12 +238,18 @@ export function resolveMatchedFiles(
  *   - a surviving regular file is watched only when it matches an include glob (a glosa artifact
  *     extension); everything else is ignored.
  *   - symlinks are ignored exactly as they are by the canonical walk.
- * chokidar passes `stats` for entries it has already stat'd; when it hasn't yet (`stats` undefined),
- * we DON'T ignore, so an unstat'd directory is still descended into and re-decided once stat'd. */
+ * The caller passes `stats` for entries it has stat'd; without them (`stats` undefined, e.g. a path
+ * that no longer exists) we DON'T ignore, so a deletion or an unstat'd directory is still re-decided.
+ *
+ * `ignoreOversize` (default true) also ignores an included file over `maxFileBytes`. A watcher that
+ * filters CHANGE events passes false: a tracked file growing past the limit is exactly the change
+ * that must reach reconcile, which reports it leaving scope as `oversize`. */
 export function buildWatchIgnored(
   root: string,
   config: MatcherConfig = loadMatcherConfig(root),
+  options: { ignoreOversize?: boolean } = {},
 ): (absPath: string, stats?: Stats) => boolean {
+  const ignoreOversize = options.ignoreOversize ?? true;
   const isIncluded = picomatch(config.artifacts.include, { nocase: false });
   const isExcluded = picomatch(config.artifacts.exclude, { nocase: false });
   const dirPrunePatterns = config.artifacts.exclude
@@ -263,9 +269,9 @@ export function buildWatchIgnored(
     if (stats?.isSymbolicLink()) return true;
     if (stats?.isDirectory()) return false; // surviving dir: descend (include globs match files, not dirs)
     if (stats?.isFile()) {
-      return !isIncluded(rel) || stats.size > config.artifacts.maxFileBytes;
+      return !isIncluded(rel) || (ignoreOversize && stats.size > config.artifacts.maxFileBytes);
     }
-    return false; // not yet stat'd — let chokidar descend/stat and re-decide
+    return false; // not stat'd — cannot decide from the path alone, so do not ignore
   };
 }
 

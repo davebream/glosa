@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// The chokidar `ignored` predicate the shared artifact watcher uses must share the walk's
+// The `ignored` predicate the shared artifact watcher filters events with must share the walk's
 // canonical include/exclude scope: excluded subtrees (`.glosa`, `node_modules`, `.git`, dotdirs)
 // are never watched or descended into, surviving directories ARE descended into, and only
 // glosa-supported artifact files are watched. Proven with real on-disk paths + real lstat so the
-// dir-vs-file branches match what chokidar actually passes.
+// dir-vs-file branches match what the watcher actually passes.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +18,7 @@ afterEach(() => {
   cleanupWorkspace(root);
 });
 
-/** Mirrors how artifact-watcher.ts calls it: absolute path + the real lstat chokidar would have. */
+/** Mirrors how artifact-watcher.ts calls it: absolute path + the real lstat of that path. */
 function ignored(rel: string): boolean {
   const abs = join(root, rel);
   return buildWatchIgnored(root)(abs, lstatSync(abs));
@@ -81,9 +81,9 @@ test("symlinks are ignored even when their names look like artifacts", () => {
   expect(ignored("linked.md")).toBe(true);
 });
 
-test("not-yet-stat'd entries (stats undefined) are not ignored — chokidar descends and re-decides", () => {
+test("not-yet-stat'd entries (stats undefined) are not ignored — the path alone cannot decide", () => {
   const pred = buildWatchIgnored(root);
-  // A directory chokidar hasn't stat'd yet must still be descended into.
+  // A path that could not be stat'd (e.g. just deleted) must not be dropped on its name alone.
   expect(pred(join(root, "docs"), undefined)).toBe(false);
   // But an excluded subtree is pruned by path alone, even without stats.
   expect(pred(join(root, "node_modules"), undefined)).toBe(true);

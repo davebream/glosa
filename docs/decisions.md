@@ -770,3 +770,40 @@ refuses a stale save in that case.
 **Why Go to became visible.** The palette was reachable only through ⌘K. Its trigger now sits in the
 top bar where the document's path already was, shaped like a field, and it lists commands (notes,
 Edit or Done) beside sections and files, since the page control carries fewer buttons than before.
+
+## Artifact watching uses one native recursive watch per workspace, not chokidar
+
+chokidar was chosen as the directory watcher and, after #91, handed only the matcher's approved
+directories at depth zero. It still opened one `fs.watch` per watched file. On macOS, Bun's per-file
+`fs.watch` gets slower faster than the number of watches grows, and both opening and closing block
+the event loop: on Bun 1.4.2, 1,600 watches took 26.5 s to open and 10.7 s to close, where Node
+took 31 ms and 3 ms. In practice a daemon warming up 8 workspaces of 300 files did not answer its
+handshake for about 80 seconds, and a daemon shutting down near the watch budget held its lock for
+30 seconds or more, which broke the first command after every upgrade.
+
+A directory workspace is now watched with one native `fs.watch(root, { recursive: true })`, which
+on macOS is a single FSEvents stream however large the tree. 70 roots over 21,000 files opened in
+59 ms and closed in 45 ms, and 20,000 writes churning a `node_modules` tree cost 16 MB and at most
+84 ms of event-loop time. Every event goes through the canonical matcher's path filter before it can
+schedule work, so excluded subtrees (`node_modules`, `.git`, `.glosa`, dotdirs) and files the matcher
+would never track cost nothing beyond the event itself. A loose-file workspace watches only its
+files' parent directories, filtered to the registered paths, which also follows editors that save by
+replacing the file.
+
+**Why this does not reopen #91.** #91 was chokidar walking a recursive root and opening a watch per
+file inside it, including under `node_modules`, until memory ran out. A native recursive watch opens
+none: it is one kernel stream, and the filtering happens on paths the stream reports.
+
+**Why the summed watch-entry budget is gone.** The 8,192 entries summed across workspaces existed
+because each entry was a real per-file watch. With one watch per workspace it no longer measures
+anything a machine runs out of, and it was refusing live updates to small workspaces by warm-up
+order (#219). The per-workspace cap stays, renamed to tracked artifacts: every relevant change
+re-runs the matcher walk, so it bounds the cost of a change. The 64-workspace cap stays.
+
+**A Bun defect this works around.** Bun delivers a recursive watcher the events of another watched
+root whose path merely starts with the same characters (`…/notes` receives `…/notes2/a.md` as
+`2/a.md`). Such an event names a path that does not exist under this root but does exist when
+appended to it as a string, and it is dropped. A deletion in the sibling cannot be told apart that
+way and costs one rescan that finds nothing.
+
+chokidar remains a dependency for transcript tailing, which watches a handful of files.

@@ -5,11 +5,10 @@
 // Constructs the backend directly (no port binds, no subprocess) — see http.test.ts/http-routes.
 // test.ts for the routes that consume this wiring end-to-end.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FSWatcher } from "chokidar";
+import type { WorkspaceWatch } from "../src/artifact-watcher.ts";
 import { buildBackend } from "../src/lifecycle/daemon.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 
@@ -58,7 +57,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     expect(backend.busRegistry.has(root)).toBe(true);
     await bus.reconcile();
     backend.artifactWatcherRegistry.subscribe(entry, () => {});
-    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("directories");
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("tree");
 
     rmSync(root, { recursive: true, force: true }); // path missing, AND no live session this time
     await backend.workspaceIndex.gc({ force: true }); // pass 1: soften
@@ -95,7 +94,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     const backend = buildBackend(home);
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
     backend.artifactWatcherRegistry.subscribe(entry, () => {});
-    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("directories");
+    expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("tree");
 
     await backend.sealAdoptionSources([entry], "adopt-test", "target-registration");
     expect(backend.artifactWatcherRegistry.modeFor(entry)).toBeNull();
@@ -106,7 +105,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
       const secondEntry = await backend.workspaceIndex.upsertWorkspace(secondRoot, "glosa-open");
       backend.artifactWatcherRegistry.subscribe(secondEntry, () => {});
       backend.busRegistry.get(secondEntry);
-      expect(backend.artifactWatcherRegistry.modeFor(secondEntry)).toBe("directories");
+      expect(backend.artifactWatcherRegistry.modeFor(secondEntry)).toBe("tree");
       expect(backend.busRegistry.has(secondEntry)).toBe(true);
 
       await backend.closeWorkspaceResources();
@@ -122,7 +121,7 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
   // The regression this pins: a daemon near the watch-entry budget spent 30 s+ inside chokidar's
   // close() on shutdown (Bun's per-file fs.watch closes synchronously, and slower the more there
   // are), holding daemon.lock with a frozen event loop, so the upgrading client gave up after 5 s.
-  // A watch whose close never settles stands in for that; the exit path must not reach it.
+  // A watch that counts its close calls stands in for that; the exit path must not reach it.
   let home: string;
   let root: string;
 
@@ -136,17 +135,11 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  class HangingWatcher extends EventEmitter {
+  /** Stands in for a watch whose close is expensive: the exit path must never call it. */
+  class HangingWatcher implements WorkspaceWatch {
     closeCalls = 0;
-    add(): this {
-      return this;
-    }
-    async unwatch(): Promise<this> {
-      return this;
-    }
-    close(): Promise<void> {
+    close(): void {
       this.closeCalls += 1;
-      return new Promise<void>(() => {});
     }
   }
 
@@ -156,7 +149,7 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
       artifactWatchFactory: () => {
         const watcher = new HangingWatcher();
         watchers.push(watcher);
-        return watcher as unknown as FSWatcher;
+        return watcher;
       },
     });
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
@@ -179,7 +172,7 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
   test("warm-up stops opening watches once exit has begun", async () => {
     const extraRoots = [0, 1].map(() => canonicalize(mkdtempSync(join(tmpdir(), "glosa-exit-ws-"))));
     try {
-      const seeding = buildBackend(home, { artifactWatchFactory: () => new HangingWatcher() as unknown as FSWatcher });
+      const seeding = buildBackend(home, { artifactWatchFactory: () => new HangingWatcher() });
       for (const r of [root, ...extraRoots]) {
         writeFileSync(join(r, "note.md"), "# note\n");
         await seeding.workspaceIndex.upsertWorkspace(r, "glosa-open");
@@ -190,7 +183,7 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
       const backend = buildBackend(home, {
         artifactWatchFactory: () => {
           opened += 1;
-          return new HangingWatcher() as unknown as FSWatcher;
+          return new HangingWatcher();
         },
       });
       // Warm-up watches the first workspace synchronously, then yields; exit lands in that yield.

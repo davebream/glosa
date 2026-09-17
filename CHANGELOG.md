@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the old daemon's port already closed but its lock still held, the lock looked abandoned. A command
   now waits for a daemon that is still exiting, and if it takes too long, stops with a message that
   names the process instead of starting another daemon beside it.
+- A daemon could stop answering for a minute or more after it started, and `glosa open` took seconds
+  per workspace, while it set up live updates for registered workspaces. It watched every tracked
+  file separately, which gets very slow on Bun once there are a few thousand. Each workspace is now
+  watched with a single recursive watch, which starts in milliseconds however many files it holds.
+  Workspaces are also no longer refused live updates because other workspaces used up a shared
+  watch budget; only the limits of 4,096 tracked files per workspace and 64 watched workspaces
+  remain.
 
 ## [0.1.0-alpha.24] — 2026-09-16
 
