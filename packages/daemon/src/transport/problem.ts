@@ -97,7 +97,13 @@ export type ProblemSlug =
   // (`captureHumanEdit`, bus.ts): an active apply-lease plus pending drift on this exact path.
   // Distinct from `lease-conflict` (that one's about a SECOND apply-begin); this route's own
   // refusal is about a SAVE arriving while a lease already holds the workspace.
-  | "drift-under-lease";
+  | "drift-under-lease"
+  // Starred workspaces (contract 1.11). `star-not-directory`: only a directory registration can be
+  // starred, because reopening a star is `glosa open <dir>` and a loose file has no directory of
+  // its own to reopen. `star-folder-missing`: the starred folder is gone or no longer a directory,
+  // so reopening is refused before the index is touched; the star itself stays until unstarred.
+  | "star-not-directory"
+  | "star-folder-missing";
 
 export function problem(
   status: number,

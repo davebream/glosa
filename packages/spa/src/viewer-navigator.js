@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Navigator visibility and the collapsible workspace switcher. Transport-free — mountApp injects
+// Navigator visibility and the collapsible Starred section at its foot. Transport-free — mountApp injects
 // the elements and storage this needs.
 //
 // The navigator has ONE control and ONE behaviour: the corner toggle shows or hides a column,
@@ -17,7 +17,7 @@
 // now means the same thing at every width.
 
 export const NAV_OPEN_STORAGE_KEY = "glosa_nav_open";
-export const NAV_WORKSPACES_STORAGE_KEY = "glosa_nav_workspaces";
+export const NAV_STARRED_STORAGE_KEY = "glosa_nav_starred";
 
 function defaultStorage() {
   try {
@@ -55,10 +55,10 @@ function writeFlag(storage, key, value) {
  * }} options
  */
 export function createNavigatorController({ root, elements, storage = defaultStorage(), enabled = true } = {}) {
-  const { navToggle, sidebarEl, sidebarList, artifactList, workspacesToggle, workspacesSection } = elements;
+  const { navToggle, sidebarEl, artifactList, starredToggle, starredSection, starredList } = elements;
 
-  let workspacesExpanded = readFlag(storage, NAV_WORKSPACES_STORAGE_KEY, true);
-  let workspacesAvailable = false;
+  let starredExpanded = readFlag(storage, NAV_STARRED_STORAGE_KEY, true);
+  let starredAvailable = false;
   // A presented single document has no workspace to navigate, so there is nothing to show and no
   // preference to honour.
   let open = enabled && readFlag(storage, NAV_OPEN_STORAGE_KEY, true);
@@ -88,19 +88,18 @@ export function createNavigatorController({ root, elements, storage = defaultSto
     if (!open && restoreFocus) queueMicrotask(() => navToggle.focus({ preventScroll: true }));
   }
 
-  function applyWorkspaces() {
-    // MCP/CLI single-workspace mode: a "list of one" is noise — you're already scoped. The whole
-    // section (its disclosure included) stands down until a SECOND workspace is live. Buttons stay
-    // in the DOM for markCurrent.
-    workspacesSection.hidden = !workspacesAvailable;
-    workspacesToggle.setAttribute("aria-expanded", String(workspacesExpanded));
-    sidebarList.hidden = !workspacesExpanded;
+  function applyStarred() {
+    // Nothing starred, nothing shown: the star beside the Artifacts heading is how a first star is
+    // taken, so an empty section would only be a label with nothing under it.
+    starredSection.hidden = !starredAvailable;
+    starredToggle.setAttribute("aria-expanded", String(starredExpanded));
+    starredList.hidden = !starredExpanded;
   }
 
-  function toggleWorkspaces() {
-    workspacesExpanded = !workspacesExpanded;
-    writeFlag(storage, NAV_WORKSPACES_STORAGE_KEY, workspacesExpanded);
-    applyWorkspaces();
+  function toggleStarred() {
+    starredExpanded = !starredExpanded;
+    writeFlag(storage, NAV_STARRED_STORAGE_KEY, starredExpanded);
+    applyStarred();
   }
 
   function onNavToggle() {
@@ -108,9 +107,9 @@ export function createNavigatorController({ root, elements, storage = defaultSto
   }
 
   navToggle.addEventListener("click", onNavToggle);
-  workspacesToggle.addEventListener("click", toggleWorkspaces);
+  starredToggle.addEventListener("click", toggleStarred);
 
-  applyWorkspaces();
+  applyStarred();
   setOpen(open);
 
   return {
@@ -123,20 +122,22 @@ export function createNavigatorController({ root, elements, storage = defaultSto
       const target =
         artifactList.querySelector('[role="treeitem"][aria-current="page"]') ??
         artifactList.querySelector('[role="treeitem"][tabindex="0"]') ??
-        sidebarList.querySelector('button[aria-current="true"]') ??
-        sidebarList.querySelector("button");
+        starredList.querySelector('button[aria-current="true"]') ??
+        starredList.querySelector("button");
       target?.focus();
     },
 
     /** @param {boolean} available */
-    setWorkspacesAvailable(available) {
-      workspacesAvailable = Boolean(available);
-      applyWorkspaces();
+    setStarredAvailable(available) {
+      starredAvailable = Boolean(available);
+      applyStarred();
     },
+
+    isStarredExpanded: () => starredExpanded,
 
     destroy() {
       navToggle.removeEventListener("click", onNavToggle);
-      workspacesToggle.removeEventListener("click", toggleWorkspaces);
+      starredToggle.removeEventListener("click", toggleStarred);
     },
   };
 }

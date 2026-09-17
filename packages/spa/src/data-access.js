@@ -411,6 +411,29 @@ export function createDataAccess(deps = {}) {
     getWorkspaces() {
       return requestJson("/api/workspaces");
     },
+    /** `GET /api/stars` (A1 §5.21) — the writer's starred folders, each `open`, `closed` or
+     * `missing`. */
+    getStars() {
+      return requestJson("/api/stars");
+    },
+    /** `POST /api/stars` — stars a workspace glosa is serving, named by slug. There is
+     * deliberately no way to star a path (A3 §4 "Starred workspaces"). @param {string} slug */
+    starWorkspace(slug) {
+      return requestJson("/api/stars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+      });
+    },
+    /** @param {string} id */
+    async unstarWorkspace(id) {
+      await request(`/api/stars/${encodeURIComponent(id)}/unstar`, { method: "POST" });
+    },
+    /** `POST /api/stars/:id/open` — reopens a starred folder the way `glosa open` would; answers
+     * `{slug, path, kind}`. @param {string} id */
+    openStar(id) {
+      return requestJson(`/api/stars/${encodeURIComponent(id)}/open`, { method: "POST" });
+    },
     /** `GET /api/status` — machine-wide session/workspace data. The viewer derives explicit
      * connected/stale/unbound state from `workspace_binding` + `liveness`; it never infers a
      * binding from cwd fallback. */

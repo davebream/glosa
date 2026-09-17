@@ -303,16 +303,59 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.title).toBe("ws-1 — notes.md");
   });
 
-  test("workspace switcher hides at <=1 workspace (MCP/CLI scope), appears and lists all at >=2", async () => {
-    const solo = dom.document.createElement("div");
-    dom.document.body.append(solo);
-    mountApp(solo, { dataAccess: fakeDataAccess() }); // the sole ws-1
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect((solo.querySelector(".glosa-sidebar-section") as any).hidden).toBe(true);
+  const settle = async () => {
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  };
 
-    const many = dom.document.createElement("div");
-    dom.document.body.append(many);
-    mountApp(many, {
+  /** A fake with the star routes (A1 §5.21) over an in-memory store, and live workspaces that a
+   * reopened star joins. */
+  function starringDataAccess({
+    live = [{ slug: "ws-1", path: "/tmp/ws-1", kind: "directory" }],
+    starred = [] as any[],
+  }: {
+    live?: any[];
+    starred?: any[];
+  } = {}) {
+    const workspaces = [...live];
+    const stars = [...starred];
+    const calls = { star: [] as string[], unstar: [] as string[], open: [] as string[] };
+    const rowFor = (star: any) => {
+      const w = workspaces.find((x) => x.path === star.path);
+      return w ? { ...star, state: "open", slug: w.slug, has_attention: false } : { ...star };
+    };
+    const da = fakeDataAccess({
+      getWorkspaces: async () => workspaces.map((w) => ({ ...w })),
+      getStars: async () => stars.map(rowFor),
+      starWorkspace: async (slug: string) => {
+        calls.star.push(slug);
+        const w = workspaces.find((x) => x.slug === slug)!;
+        const star = { id: `star-${slug}`, name: w.path.split("/").pop(), path: w.path, state: "closed" };
+        stars.push(star);
+        return rowFor(star);
+      },
+      unstarWorkspace: async (id: string) => {
+        calls.unstar.push(id);
+        stars.splice(
+          stars.findIndex((x) => x.id === id),
+          1,
+        );
+      },
+      openStar: async (id: string) => {
+        calls.open.push(id);
+        const star = stars.find((x) => x.id === id)!;
+        const slug = `${star.name}-reopened`;
+        workspaces.push({ slug, path: star.path, kind: "directory" });
+        return { slug, path: star.path, kind: "directory" };
+      },
+    });
+    return { da, calls, workspaces, stars };
+  }
+
+  test("the navigator has no workspace switcher at the top; stars wait at its foot", async () => {
+    // An older daemon without star routes: no Starred section and no star to take.
+    const legacy = dom.document.createElement("div");
+    dom.document.body.append(legacy);
+    mountApp(legacy, {
       dataAccess: fakeDataAccess({
         getWorkspaces: async () => [
           { slug: "ws-1", path: "/tmp/ws-1" },
@@ -320,12 +363,190 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
         ],
       }),
     });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect((many.querySelector(".glosa-sidebar-section") as any).hidden).toBe(false);
-    const manyList = many.querySelector(".glosa-workspace-list") as any;
-    expect(manyList.hidden).toBe(false);
-    const keys = Array.from(manyList.querySelectorAll("button[data-key]")).map((b: any) => b.getAttribute("data-key"));
-    expect(keys).toEqual(["ws-1", "ws-2"]);
+    await settle();
+    expect(legacy.querySelector(".glosa-workspace-list")).toBeNull();
+    expect(legacy.querySelector("#glosa-workspaces-toggle")).toBeNull();
+    expect((legacy.querySelector(".glosa-starred") as any).hidden).toBe(true);
+    expect((legacy.querySelector(".glosa-star-toggle") as any).hidden).toBe(true);
+
+    // Nothing starred yet: the section stays hidden, and the heading offers the first star.
+    const fresh = dom.document.createElement("div");
+    dom.document.body.append(fresh);
+    mountApp(fresh, { dataAccess: starringDataAccess().da });
+    await settle();
+    const sidebar = fresh.querySelector(".glosa-sidebar") as any;
+    expect(sidebar.firstElementChild.classList.contains("glosa-sidebar-scroll")).toBe(true);
+    expect(sidebar.lastElementChild.classList.contains("glosa-starred")).toBe(true);
+    expect(sidebar.lastElementChild.hidden).toBe(true);
+    const toggle = fresh.querySelector(".glosa-sidebar-heading .glosa-star-toggle") as any;
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle.getAttribute("aria-label")).toBe("Star this workspace");
+  });
+
+  test("starring the current workspace lists it under Starred; unstarring removes it; collapse persists", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const { da, calls } = starringDataAccess();
+    mountApp(root, { dataAccess: da });
+    await settle();
+
+    const toggle = root.querySelector(".glosa-star-toggle") as any;
+    toggle.click();
+    await settle();
+    expect(calls.star).toEqual(["ws-1"]);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.getAttribute("aria-label")).toBe("Unstar this workspace");
+    const section = root.querySelector(".glosa-starred") as any;
+    expect(section.hidden).toBe(false);
+    const row = root.querySelector(".glosa-starred-row") as any;
+    expect(row.getAttribute("data-state")).toBe("open");
+    expect(row.querySelector(".glosa-starred-name").textContent).toBe("ws-1");
+    expect(row.querySelector(".glosa-starred-open").getAttribute("aria-current")).toBe("true");
+    expect(row.querySelector(".glosa-starred-unstar").getAttribute("aria-label")).toBe("Unstar ws-1");
+
+    const sectionToggle = root.querySelector("#glosa-starred-toggle") as any;
+    const list = root.querySelector("#glosa-starred-list") as any;
+    expect(sectionToggle.getAttribute("aria-controls")).toBe(list.id);
+    sectionToggle.click();
+    expect(sectionToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(list.hidden).toBe(true);
+    expect(globalThis.localStorage.getItem("glosa_nav_starred")).toBe("false");
+    sectionToggle.click();
+
+    row.querySelector(".glosa-starred-unstar").click();
+    await settle();
+    expect(calls.unstar).toEqual(["star-ws-1"]);
+    expect(section.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("a closed star reopens by id and becomes the current workspace; a missing one does not try", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const { da, calls } = starringDataAccess({
+      starred: [
+        { id: "star-drafts", name: "drafts", path: "/tmp/drafts", state: "closed" },
+        { id: "star-gone", name: "gone", path: "/tmp/gone", state: "missing" },
+      ],
+    });
+    mountApp(root, { dataAccess: da, initialSlug: "ws-1", initialArtifact: "notes.md" });
+    await settle();
+    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("notes.md");
+
+    const rows = Array.from(root.querySelectorAll(".glosa-starred-row")) as any[];
+    expect(
+      rows.map((r) => [r.getAttribute("data-state"), r.querySelector(".glosa-starred-meta")?.textContent]),
+    ).toEqual([
+      ["closed", "Not open"],
+      ["missing", "Folder not found"],
+    ]);
+
+    const gone = rows[1].querySelector(".glosa-starred-open");
+    expect(gone.getAttribute("aria-disabled")).toBe("true");
+    gone.click();
+    await settle();
+    expect(calls.open).toEqual([]);
+
+    rows[0].querySelector(".glosa-starred-open").click();
+    await settle();
+    expect(calls.open).toEqual(["star-drafts"]);
+    const reopened = root.querySelector('.glosa-starred-row[data-star="star-drafts"]') as any;
+    expect(reopened.getAttribute("data-state")).toBe("open");
+    expect(reopened.querySelector(".glosa-starred-open").getAttribute("aria-current")).toBe("true");
+    expect(globalThis.localStorage.getItem("glosa_last_workspace")).toBe("drafts-reopened");
+    // The bar no longer names the document of the workspace that was left.
+    expect((root.querySelector(".glosa-topbar-name") as any).textContent).toBe("drafts-reopened");
+  });
+
+  test("a reopen that fails says so on its row and leaves the current workspace alone", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const { da } = starringDataAccess({
+      starred: [{ id: "star-drafts", name: "drafts", path: "/tmp/drafts", state: "closed" }],
+    });
+    (da as any).openStar = async () => {
+      throw new Error("workspace is being forgotten");
+    };
+    mountApp(root, { dataAccess: da });
+    await settle();
+    (root.querySelector(".glosa-starred-open") as any).click();
+    await settle();
+    const row = root.querySelector(".glosa-starred-row") as any;
+    expect(row.getAttribute("data-state")).toBe("error");
+    expect(row.querySelector(".glosa-starred-meta").textContent).toBe("Couldn't open");
+    expect(row.querySelector(".glosa-starred-open").title).toContain("workspace is being forgotten");
+    // The reason reaches people who never see a tooltip.
+    expect((root.querySelector('.glosa-visually-hidden[role="status"]') as any).textContent).toBe(
+      "drafts could not be opened. workspace is being forgotten",
+    );
+    expect(globalThis.localStorage.getItem("glosa_last_workspace")).toBe("ws-1");
+  });
+
+  test("with several live workspaces and no deep link, the page opens on the one this browser last had", async () => {
+    globalThis.localStorage.setItem("glosa_last_workspace", "ws-2");
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const opened: string[] = [];
+    const { da } = starringDataAccess({
+      live: [
+        { slug: "ws-1", path: "/tmp/ws-1", kind: "directory", last_seen: "2026-09-17T10:00:00Z" },
+        { slug: "ws-2", path: "/tmp/ws-2", kind: "directory", last_seen: "2026-09-01T10:00:00Z" },
+      ],
+    });
+    const getArtifacts = (da as any).getArtifacts;
+    (da as any).getArtifacts = async (slug: string) => {
+      opened.push(slug);
+      return getArtifacts(slug);
+    };
+    mountApp(root, { dataAccess: da });
+    await settle();
+    expect(opened).toEqual(["ws-2"]);
+
+    // Forgetting that, it opens on the most recently active one instead.
+    globalThis.localStorage.removeItem("glosa_last_workspace");
+    const next = dom.document.createElement("div");
+    dom.document.body.append(next);
+    opened.length = 0;
+    mountApp(next, { dataAccess: da });
+    await settle();
+    expect(opened).toEqual(["ws-1"]);
+  });
+
+  test("Go to lists every live workspace under @, marks stars, and switches on Enter", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const opened: string[] = [];
+    const { da } = starringDataAccess({
+      live: [
+        { slug: "ws-1", path: "/tmp/ws-1", kind: "directory" },
+        { slug: "notes-9f", path: "/Users/example/notes", kind: "directory" },
+      ],
+      starred: [{ id: "star-notes", name: "notes", path: "/Users/example/notes", state: "closed" }],
+    });
+    const getArtifacts = (da as any).getArtifacts;
+    (da as any).getArtifacts = async (slug: string) => {
+      opened.push(slug);
+      return getArtifacts(slug);
+    };
+    mountApp(root, { dataAccess: da, initialSlug: "ws-1" });
+    await settle();
+
+    (root.querySelector(".glosa-goto-trigger") as any).click();
+    const input = root.querySelector(".glosa-palette-input") as any;
+    input.value = "@";
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    const items = Array.from(root.querySelectorAll('.glosa-palette-item[data-kind="workspace"]')) as any[];
+    expect(items.map((item) => item.querySelector(".glosa-palette-label").textContent)).toEqual(["ws-1", "notes"]);
+    expect(items[0].getAttribute("aria-current")).toBe("location");
+    expect(items[0].querySelector(".glosa-palette-star").innerHTML).toBe("");
+    expect(items[1].querySelector(".glosa-palette-star svg")).not.toBeNull();
+    expect(items[1].querySelector(".glosa-palette-meta").textContent).toBe("/Users/example");
+
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(opened).toEqual(["ws-1", "notes-9f"]);
   });
 
   test("compact tools collapse secondary actions behind one keyboard-accessible trigger", async () => {
@@ -575,39 +796,6 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     (root.querySelector(".glosa-nav-toggle") as any).click();
     expect(root.getAttribute("data-nav-open")).toBe("false");
     expect(globalThis.localStorage.getItem("glosa_nav_open")).toBe("false");
-  });
-
-  test("the workspace switcher collapses independently of the tree, and the choice persists", async () => {
-    const twoWorkspaces = () =>
-      fakeDataAccess({
-        getWorkspaces: async () => [
-          { slug: "ws-1", path: "/tmp/ws-1" },
-          { slug: "ws-2", path: "/tmp/ws-2" },
-        ],
-      });
-    const root = dom.document.createElement("div");
-    dom.document.body.append(root);
-    mountApp(root, { dataAccess: twoWorkspaces() });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-
-    const toggle = root.querySelector(".glosa-sidebar-section-toggle") as unknown as HTMLButtonElement;
-    const list = root.querySelector(".glosa-workspace-list") as unknown as HTMLElement;
-    expect(toggle.getAttribute("aria-controls")).toBe(list.id);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(list.hidden).toBe(false);
-
-    toggle.click();
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(list.hidden).toBe(true);
-    // Collapsing the switcher must not touch the artifact tree beneath it.
-    expect((root.querySelector(".glosa-artifact-list") as unknown as HTMLElement).hidden).toBe(false);
-
-    const next = dom.document.createElement("div");
-    dom.document.body.append(next);
-    mountApp(next, { dataAccess: twoWorkspaces() });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    expect((next.querySelector(".glosa-sidebar-section-toggle") as any).getAttribute("aria-expanded")).toBe("false");
-    expect((next.querySelector(".glosa-workspace-list") as unknown as HTMLElement).hidden).toBe(true);
   });
 
   test("a hidden navigator is inert and returns to the focus order only while shown", async () => {
