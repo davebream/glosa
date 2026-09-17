@@ -127,7 +127,11 @@ const SPA_ASSETS: Record<string, string> = {
   // P4.2 addition — the read-only conversation mirror + out-of-band composer (R6/F32).
   "conversation.js": "text/javascript; charset=utf-8",
   "attention-tray.js": "text/javascript; charset=utf-8",
-  // Rich markdown editor (Edit mode's default face) + its vendored ProseMirror bundle.
+  // Which bytes a run of top-level blocks owns (#271). Statically imported by artifact-pane.js —
+  // it is pure arithmetic with no imports of its own, so it stays outside the lazy editor bundle
+  // and has to be served with the Read/Review modules rather than beside the editor below.
+  "run-spans.js": "text/javascript; charset=utf-8",
+  // Rich markdown editor (the byte-exact source view) + its vendored ProseMirror bundle.
   "rich-editor.js": "text/javascript; charset=utf-8",
   "markdown-parser.js": "text/javascript; charset=utf-8",
   "markdown-non-manuscript.js": "text/javascript; charset=utf-8",

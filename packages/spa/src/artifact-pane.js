@@ -464,6 +464,17 @@ export function createArtifactPane(host, deps) {
     setToolsOpen(false, { restoreFocus: true });
     void compareWithLastSaved();
   });
+  /** The byte-exact editor, as a document-level view rather than a mode of the page (#271).
+   *
+   * Since a block is editable by clicking it, a full-page editor is no longer how you change a
+   * word — it is what you reach for when CommonMark cannot hold what the file says: front matter,
+   * a table you would rather type by hand, a block that will not parse. That is a tool, so it lives
+   * among the artifact's other tools instead of taking half the mode control. */
+  const editSourceButton = menuItem("glosa-tools-edit-source", MODE_ICONS.edit, "Edit source", () => {
+    setToolsOpen(false, { restoreFocus: true });
+    if (modeState.mode === "edit") setMode(lastViewMode);
+    else setMode("edit");
+  });
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
 
   const moveGroup = el("div", { className: "glosa-pane-menu-group", role: "group", "aria-label": "Move tab to" });
@@ -500,6 +511,7 @@ export function createArtifactPane(host, deps) {
   const faceGroup = el("div", { className: "glosa-face-group" });
   const toolsMenu = el("div", { className: "glosa-pane-menu", role: "group", "aria-label": "Artifact tools" }, [
     historyMenuItem,
+    editSourceButton,
     copySourceButton,
     printArtifactButton,
     compareButton,
@@ -907,6 +919,27 @@ export function createArtifactPane(host, deps) {
     copySourceButton.hidden = !available;
     printArtifactButton.hidden = !available;
     compareButton.hidden = !available || !openDiffTab;
+    // The source editor, and the reason it is unavailable when it is. The apply-lease pause used to
+    // live on the mode control's Edit button; with that button gone (#271) it has to be stated
+    // here, or a writer whose editing has been paused by a session would simply find a row that
+    // quietly did nothing.
+    const editable = available && canEdit(currentArtifact) && !readLock;
+    editSourceButton.hidden = !editable;
+    editSourceButton.disabled = Boolean(applyPause) && modeState.mode !== "edit";
+    editSourceButton.title = editSourceButton.disabled ? "A session is applying a change. Edit when it finishes." : "";
+    const leaving = modeState.mode === "edit";
+    editSourceButton.querySelector("span").textContent = leaving ? "Done editing source" : "Edit source";
+    editSourceButton.setAttribute(
+      "aria-label",
+      editSourceButton.disabled
+        ? "Edit source, paused while a session applies a change"
+        : isParked(modeState)
+          ? "Edit source, unsaved draft kept"
+          : leaving
+            ? "Done editing source"
+            : "Edit source",
+    );
+    editSourceButton.toggleAttribute("data-parked", isParked(modeState));
     if (toolsStatusArtifactPath !== artifactPath) {
       toolsStatusArtifactPath = artifactPath;
       setToolsStatus("");
@@ -1162,27 +1195,14 @@ export function createArtifactPane(host, deps) {
         notes.setAttribute("aria-pressed", String(showing));
         notes.setAttribute("data-control", "notes");
         modeBar.append(notes);
-        // Opaque class F gets no Edit affordance at all rather than a permanently disabled one —
-        // but only once an artifact is open; before that the control stays whole.
-        if (!(currentArtifact && !canEdit(currentArtifact))) {
-          const edit = modeButton("edit", "edit", "Edit");
-          edit.setAttribute("data-control", "edit");
-          // Parked work is invisible by nature — the editor holding it is not on screen. The Edit
-          // button carries a dot and says so in its accessible name, so "my draft is still there"
-          // is something the reviewer can read rather than something they have to trust.
-          const parked = isParked(modeState);
-          if (parked) edit.setAttribute("data-parked", "true");
-          edit.setAttribute("aria-pressed", "false");
-          if (applyPause) {
-            // A session is applying a change under a lease. Editing now would race the session's
-            // write to the same files, so the page waits rather than letting a save be refused.
-            edit.disabled = true;
-            edit.setAttribute("aria-label", "Edit, paused while a session applies a change");
-            edit.title = "A session is applying a change. Edit when it finishes.";
-          } else {
-            edit.setAttribute("aria-label", parked ? "Edit, unsaved draft kept" : "Edit");
-          }
-          modeBar.append(edit);
+        // NO EDIT BUTTON (#271). A block is editable by clicking it, so a control that puts the
+        // whole page into an editing state is no longer how a word gets changed. The byte-exact
+        // editor is still one row away in More, where a tool belongs. What the control still owes
+        // the reader is the state they cannot see: an unsaved draft parked off screen says so on
+        // the toggle that remains, rather than disappearing with the button that used to carry it.
+        if (isParked(modeState)) {
+          notes.setAttribute("data-parked", "true");
+          notes.setAttribute("aria-label", `${showing ? "Hide notes" : "Show notes"}, unsaved draft kept`);
         }
       }
     }
@@ -3875,6 +3895,7 @@ export function createArtifactPane(host, deps) {
       }
       applyPause = next;
       renderModeBar();
+      renderArtifactTools();
       if (modeState.mode === "edit") {
         editStatus.textContent = next
           ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes."

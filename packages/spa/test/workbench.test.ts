@@ -376,7 +376,7 @@ describe("the multi-artifact workbench", () => {
   test("§9: ⌘W closes the active tab, and an unsaved edit is prompted before it goes", async () => {
     const { root } = await mountWithTwoTabs();
     const pane = activePane(root);
-    pane.querySelector('.glosa-modebar [data-mode="edit"]').click();
+    pane.querySelector(".glosa-tools-edit-source").click();
     await flush();
     pane.querySelector(".glosa-face-source").click();
     const textarea = pane.querySelector(".glosa-edit-area");
@@ -446,7 +446,7 @@ describe("the multi-artifact workbench", () => {
   test("§8: the editor measure follows the face, not the mode", async () => {
     const { root } = await mountWithTwoTabs();
     const pane = activePane(root);
-    pane.querySelector('.glosa-modebar [data-mode="edit"]').click();
+    pane.querySelector(".glosa-tools-edit-source").click();
     await flush();
     expect(pane.getAttribute("data-editor-face")).toBe("rich");
     pane.querySelector(".glosa-face-source").click();
