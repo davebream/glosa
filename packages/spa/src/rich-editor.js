@@ -1458,6 +1458,13 @@ function toolbarActions(schema) {
       className: "glosa-rich-i",
     },
     {
+      label: "S",
+      aria: "Strikethrough",
+      command: () => toggleMark(schema.marks[STRIKETHROUGH_MARK]),
+      active: markActive(schema.marks[STRIKETHROUGH_MARK]),
+      className: "glosa-rich-s",
+    },
+    {
       label: "Code",
       aria: "Inline code",
       command: () => toggleMark(schema.marks.code),
@@ -1473,6 +1480,162 @@ function toolbarActions(schema) {
   ];
 }
 
+/** What a floating toolbar over a selection may carry.
+ *
+ * The full-page editor's fixed bar can afford eleven actions; a popover cannot. Measured at eleven it
+ * ran 395px — the width of the paragraph it floats over, which is a bar whatever it is called. These
+ * are the ones a writer reaches for with words already selected: the four inline marks, and the block
+ * turns that are awkward to reach any other way once a paragraph exists.
+ *
+ * H1 is left out because a document has one title and it is rarely retyped mid-selection, `¶` because
+ * undo already answers "not that", and the numbered list because `1. ` typed at a line start is the
+ * same keystroke count and already works. */
+const SELECTION_ACTIONS = new Set([
+  "Bold",
+  "Italic",
+  "Strikethrough",
+  "Inline code",
+  "Heading 2",
+  "Heading 3",
+  "Bullet list",
+  "Blockquote",
+]);
+
+/** Keys that would carry the caret out of this editor, handed back to the caller instead.
+ *
+ * A block editor holds one run of a document the reader can still see the rest of, so the four
+ * keystrokes that mean "keep going past the end" have to mean it across the seam too. Without this
+ * the caret is trapped: ArrowDown at the last line does nothing, and Backspace at the head of a
+ * paragraph cannot reach the one above — which is how a page made of independently editable blocks
+ * stops being a document and becomes a grid of boxes.
+ *
+ * Returning true consumes the key, which is what the caller wants when it is about to move the
+ * caret itself. A handler returning false lets the editor keep its default behaviour.
+ * @param {(edge: "up" | "down" | "backspace" | "delete") => boolean} onBoundary */
+function boundaryKeymap(onBoundary) {
+  // HORIZONTAL keys are decided by POSITION: `pos <= 1` is the first text position of the run, and
+  // `size - 1` the last. Both are false in the middle of a run holding several blocks, so those
+  // still move between themselves normally and only hand the caret back at the run's real edges.
+  const atStart = (state) => state.selection.empty && state.selection.$from.pos <= 1;
+  const atEnd = (state) => state.selection.empty && state.selection.$to.pos >= state.doc.content.size - 1;
+
+  // VERTICAL keys cannot be, and this is the distinction the first version of this got wrong: in a
+  // paragraph that wraps over four lines, ArrowDown on line two belongs to the paragraph and only
+  // on line four belongs to the document. Position cannot tell those apart — only the layout can,
+  // which is what `endOfTextblock` asks the browser. It is also why the block below is reached from
+  // the START of a one-line paragraph: there, the first visual line is also the last.
+  const inFirstBlock = (state) => state.selection.$from.index(0) === 0;
+  const inLastBlock = (state) => state.selection.$from.index(0) === state.doc.childCount - 1;
+  const onEdgeLine = (view, dir) => {
+    // Without a view, or without layout to measure (a DOM implementation that performs none, as in
+    // the unit tests), every line is both the first and the last — which is the reading that lets
+    // the caret keep moving rather than the one that traps it.
+    if (!view) return true;
+    try {
+      if (view.dom.getBoundingClientRect?.().height === 0) return true;
+      return view.endOfTextblock(dir);
+    } catch {
+      return true;
+    }
+  };
+
+  const edge = (test, name) => (state) => test(state) && onBoundary(name) !== false;
+  const vertical = (inBlock, dir, name) => (state, _dispatch, view) =>
+    state.selection.empty && inBlock(state) && onEdgeLine(view, dir) && onBoundary(name) !== false;
+  return {
+    ArrowUp: vertical(inFirstBlock, "up", "up"),
+    ArrowLeft: edge(atStart, "up"),
+    ArrowDown: vertical(inLastBlock, "down", "down"),
+    ArrowRight: edge(atEnd, "down"),
+    Backspace: edge(atStart, "backspace"),
+    Delete: edge(atEnd, "delete"),
+  };
+}
+
+/** Whether the formatting actions belong on screen right now.
+ *
+ * Exported because it is the whole rule and the only part of this toolbar that can be judged without
+ * a browser: everything else is placement, which needs layout. Two conditions, and both matter — a
+ * collapsed caret is a writer typing, and an unfocused editor is a writer who has gone somewhere
+ * else and should not be followed by a floating bar.
+ *
+ * @param {{ empty: boolean }} selection @param {boolean} hasFocus */
+export function selectionToolbarShows(selection, hasFocus) {
+  return Boolean(hasFocus) && !selection.empty;
+}
+
+/** A toolbar that appears over a selection, and only over a selection.
+ *
+ * A block editor cannot wear a row of buttons: the whole point is that the page gains a caret and
+ * nothing else, and a bar above the paragraph is the page gaining chrome exactly where it should be
+ * gaining none. But "no chrome" left the writer with no way to make a word bold that did not involve
+ * typing asterisks, and no visible answer to "what can I do here".
+ *
+ * So it is bound to the gesture that asks for it. Select words and the actions for those words
+ * appear over them; collapse the selection and they are gone. Nothing is painted while the writer is
+ * typing, which is almost always.
+ *
+ * @param {import("./vendor/prosemirror.js").EditorView} view
+ * @param {HTMLElement} container the run editor's own host, which is the positioning context
+ * @param {ReturnType<typeof toolbarActions>} actions */
+function mountSelectionToolbar(view, container, actions) {
+  const bar = document.createElement("div");
+  bar.className = "glosa-selection-toolbar";
+  bar.setAttribute("role", "toolbar");
+  bar.setAttribute("aria-label", "Formatting");
+  bar.hidden = true;
+
+  const buttons = actions.map((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    if (action.className) button.classList.add(action.className);
+    button.setAttribute("aria-label", action.aria);
+    button.title = action.aria;
+    // mousedown, not click, and the default prevented: a click would blur the editor first, which
+    // both drops the selection the action is ABOUT and closes the run the writer is still in.
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      action.command()(view.state, view.dispatch, view);
+      view.focus();
+    });
+    bar.append(button);
+    return { button, action };
+  });
+  container.append(bar);
+
+  return function refresh() {
+    const { selection } = view.state;
+    if (!selectionToolbarShows(selection, view.hasFocus())) {
+      bar.hidden = true;
+      return;
+    }
+    for (const { button, action } of buttons) {
+      if (action.active) button.setAttribute("aria-pressed", String(action.active(view.state)));
+    }
+    bar.hidden = false;
+    // Positioned against the container rather than the viewport, so it travels with the block when
+    // the page scrolls instead of being re-measured on every frame.
+    let head;
+    let box;
+    try {
+      head = view.coordsAtPos(selection.from);
+      box = container.getBoundingClientRect();
+    } catch {
+      // A DOM that performs no layout. The toolbar is still IN the page and still operable by a
+      // screen reader and by keyboard; it simply cannot be placed.
+      return;
+    }
+    bar.style.left = `${Math.max(0, head.left - box.left)}px`;
+    bar.style.top = `${head.top - box.top}px`;
+    // Above the line by default, below it when above would be off the top of the window — the first
+    // paragraph of a document is exactly where a writer is most likely to be, and a toolbar they
+    // cannot see is worse than one in the second-best place.
+    const above = head.top - bar.getBoundingClientRect().height - 8;
+    bar.toggleAttribute("data-below", above < 0);
+  };
+}
+
 /**
  * Mounts the rich editor into `container` (a toolbar + a ProseMirror contenteditable styled by
  * app.css). Returns {getSave, getMarkdown, getDoc, isDirty, focus, destroy}, where `getSave()` is
@@ -1484,8 +1647,23 @@ function toolbarActions(schema) {
  * through `splice()`, so a loss between the DOM and the model would be invisible to either.
  * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
  * caller falls back to source mode.
+ *
+ * @param {HTMLElement} container
+ * @param {{
+ *   markdown?: string,
+ *   onDirty?: () => void,
+ *   toolbar?: boolean,
+ *   label?: string,
+ *   onBoundary?: (edge: "up" | "down" | "backspace" | "delete") => boolean,
+ *   selectionToolbar?: boolean,
+ * }} [options] `toolbar` is the full-page editor's fixed row; `selectionToolbar` is the block
+ * editor's floating one, which appears only over a selection. They are separate on purpose — a
+ * block editor must not wear a fixed bar, and the full-page editor does not need a floating one.
  */
-export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToolbar = true, label } = {}) {
+export function mountRichEditor(
+  container,
+  { markdown, onDirty, toolbar: wantToolbar = true, label, onBoundary, selectionToolbar = false } = {},
+) {
   const schema = editorSchema;
   const source = markdown ?? "";
   const doc = parseMarkdown(source);
@@ -1510,7 +1688,15 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
 
   const state = EditorState.create({
     doc,
-    plugins: [markdownInputRules(schema), keymap(editorKeymap(schema)), keymap(baseKeymap), history()],
+    plugins: [
+      markdownInputRules(schema),
+      // Before the editor's own keymap and before baseKeymap: the boundary cases have to be
+      // answered before `splitListItem` or `joinBackward` answer them with the block's own edges.
+      ...(onBoundary ? [keymap(boundaryKeymap(onBoundary))] : []),
+      keymap(editorKeymap(schema)),
+      keymap(baseKeymap),
+      history(),
+    ],
   });
 
   const view = new EditorView(mountEl, {
@@ -1550,10 +1736,19 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
     return { btn, action };
   });
 
+  const refreshSelectionToolbar = selectionToolbar
+    ? mountSelectionToolbar(
+        view,
+        container,
+        toolbarActions(schema).filter((action) => SELECTION_ACTIONS.has(action.aria)),
+      )
+    : null;
+
   function refreshToolbar() {
     for (const { btn, action } of buttons) {
       if (action.active) btn.setAttribute("aria-pressed", String(action.active(view.state)));
     }
+    refreshSelectionToolbar?.();
   }
   refreshToolbar();
 
@@ -1577,6 +1772,21 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
       if (!at) return;
       const { tr } = view.state;
       view.dispatch(tr.setSelection(TextSelection.create(tr.doc, at.pos)));
+    },
+    /** Put the caret `characters` into the text, counting the way the SOURCE counts.
+     *
+     * For landing on a join after two blocks merge: the caller knows the merge happened at a
+     * character offset and has no coordinates to point at. Approximate by construction — a
+     * ProseMirror position is not a character offset once several blocks or a mark boundary are in
+     * play — so it is clamped into the document rather than trusted, and used only where being a
+     * character or two out is a smaller lie than dropping the caret at the start.
+     * @param {number} characters */
+    focusAtOffset: (characters) => {
+      view.focus();
+      const limit = Math.max(1, view.state.doc.content.size - 1);
+      const pos = Math.min(Math.max(1, characters + 1), limit);
+      const { tr } = view.state;
+      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, pos)));
     },
     destroy: () => {
       view.destroy();

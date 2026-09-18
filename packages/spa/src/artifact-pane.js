@@ -34,7 +34,7 @@ import { addressBlocks, addressForRange } from "./address.js";
 import { faceKey, mountFaceControl } from "./face.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
-import { runAtLine, runsFrom, spliceRun } from "./run-spans.js";
+import { runAtLine, runsFrom, spliceRun, widenToNext, widenToPrevious } from "./run-spans.js";
 
 /**
  * What `saveCurrentArtifact` returns when the writer was asked about a save that would change
@@ -351,7 +351,13 @@ export function createArtifactPane(host, deps) {
    * A dynamic import, so the Read/Review static graph still cannot reach the ProseMirror bundle
    * (import-boundary.test.ts pins exactly that). */
   let editorKitPromise = null;
-  let sourceFace = false; // Edit's face: rich (default) or byte-exact source; sticky per pane
+  let sourceFace = false; // within the full-page editor: rich (default) or byte-exact source
+  /** Whether the full-page editor is showing instead of the manuscript.
+   *
+   * False is the ordinary state of Edit: the page you were reading, with a caret available in any
+   * block you click. True is the tool — front matter, a table you would rather type by hand, a block
+   * that will not parse — and it is reached deliberately from More, never by entering Edit. */
+  let fullPageEditor = false;
   let richEditor = null; // {getSave, getMarkdown, isDirty, focus, destroy} while the rich face is mounted
   let richMountRequest = 0;
   /** Unsaved source, kept across mode switches. `{path, text}` — see `parkDrafts`. */
@@ -478,8 +484,21 @@ export function createArtifactPane(host, deps) {
    * among the artifact's other tools instead of taking half the mode control. */
   const editSourceButton = menuItem("glosa-tools-edit-source", MODE_ICONS.edit, "Edit source", () => {
     setToolsOpen(false, { restoreFocus: true });
-    if (modeState.mode === "edit") setMode(lastViewMode);
-    else setMode("edit");
+    if (fullPageEditor) {
+      fullPageEditor = false;
+      renderArtifactTools();
+      renderContent();
+      return;
+    }
+    fullPageEditor = true;
+    // Edit mode is what the full-page editor is a face OF, so asking for the source from Read or
+    // Note enters Edit as well rather than opening a writable surface the mode control denies.
+    if (modeState.mode === "edit") {
+      renderArtifactTools();
+      renderContent();
+      return;
+    }
+    setMode("edit");
   });
   const toolsStatus = el("p", { className: "glosa-tools-status", role: "status", "aria-live": "polite", hidden: true });
 
@@ -931,9 +950,9 @@ export function createArtifactPane(host, deps) {
     // quietly did nothing.
     const editable = available && canEdit(currentArtifact) && !readLock;
     editSourceButton.hidden = !editable;
-    editSourceButton.disabled = Boolean(applyPause) && modeState.mode !== "edit";
+    editSourceButton.disabled = Boolean(applyPause) && !fullPageEditor;
     editSourceButton.title = editSourceButton.disabled ? "A session is applying a change. Edit when it finishes." : "";
-    const leaving = modeState.mode === "edit";
+    const leaving = fullPageEditor;
     editSourceButton.querySelector("span").textContent = leaving ? "Done editing source" : "Edit source";
     editSourceButton.setAttribute(
       "aria-label",
@@ -1187,29 +1206,43 @@ export function createArtifactPane(host, deps) {
     // A read lock is a UI affordance expressing intent ("not for review"), not authorization — the
     // Notes and Edit controls and their shortcuts are omitted for this visit; the annotation API
     // still accepts authenticated POSTs.
+    // TWO STATES, EITHER OR NEITHER. Note and Edit are the two things a reader can turn on, and
+    // they turn each other off, because they claim the same gesture and mean opposite things by it:
+    // in Note a click reaches a passage to comment on, in Edit it puts a caret in one. Neither
+    // pressed is the manuscript and nothing else — the state a reader who only wants to read should
+    // be able to get back to, and the reason this is two buttons rather than a three-way control
+    // that would cost a third more width in a bar that already collapses to icons.
+    //
+    // It is also the only thing on the page that says editing exists. Click-to-edit shipped with no
+    // affordance at all: a paragraph looked exactly as it had before, and nothing invited the click.
     if (!readLock) {
-      if (modeState.mode === "edit") {
-        const done = modeButton(lastViewMode, "done", "Done");
-        done.setAttribute("aria-label", "Done editing");
-        done.setAttribute("aria-pressed", "true");
-        done.setAttribute("data-control", "done");
-        modeBar.append(done);
-      } else {
-        const showing = modeState.mode === "review";
-        const notes = modeButton(showing ? "read" : "review", "review", "Notes");
-        notes.setAttribute("aria-label", showing ? "Hide notes" : "Show notes");
-        notes.setAttribute("aria-pressed", String(showing));
-        notes.setAttribute("data-control", "notes");
-        modeBar.append(notes);
-        // NO EDIT BUTTON (#271). A block is editable by clicking it, so a control that puts the
-        // whole page into an editing state is no longer how a word gets changed. The byte-exact
-        // editor is still one row away in More, where a tool belongs. What the control still owes
-        // the reader is the state they cannot see: an unsaved draft parked off screen says so on
-        // the toggle that remains, rather than disappearing with the button that used to carry it.
-        if (isParked(modeState)) {
-          notes.setAttribute("data-parked", "true");
-          notes.setAttribute("aria-label", `${showing ? "Hide notes" : "Show notes"}, unsaved draft kept`);
+      const noting = modeState.mode === "review";
+      const editing = modeState.mode === "edit";
+      const note = modeButton(noting ? "read" : "review", "review", "Note");
+      note.setAttribute("aria-label", noting ? "Hide notes" : "Show notes");
+      note.setAttribute("aria-pressed", String(noting));
+      note.setAttribute("data-control", "notes");
+      modeBar.append(note);
+      // Absent, not disabled, when this artifact cannot be written to: a control that is there and
+      // does nothing is a worse answer than one that is honestly not offered. `canEdit` covers the
+      // artifact; the apply lease is a moment, not a property, so it disables rather than removes.
+      if (!currentArtifact || canEdit(currentArtifact)) {
+        const edit = modeButton(editing ? "read" : "edit", "edit", "Edit");
+        edit.setAttribute("aria-label", editing ? "Stop editing" : "Edit this document");
+        edit.setAttribute("aria-pressed", String(editing));
+        edit.setAttribute("data-control", "edit");
+        if (applyPause && !editing) {
+          edit.disabled = true;
+          edit.title = "A session is applying a change. Edit when it finishes.";
         }
+        modeBar.append(edit);
+      }
+      // The state the reader cannot see: a draft parked off screen says so on whichever control
+      // would take them back to it.
+      if (isParked(modeState)) {
+        const parkedOn = modeBar.querySelector('[data-control="edit"]') ?? note;
+        parkedOn.setAttribute("data-parked", "true");
+        parkedOn.setAttribute("aria-label", `${parkedOn.getAttribute("aria-label")}, unsaved draft kept`);
       }
     }
     for (const btn of modeBar.querySelectorAll("button")) {
@@ -1503,15 +1536,12 @@ export function createArtifactPane(host, deps) {
 
   /** Whether this artifact can be written to at all, right now.
    *
-   * NOT WHILE THE NOTES ARE SHOWN. Reviewing and writing want the same gesture and mean opposite
-   * things by it: with the margin open a click is how a reader reaches a passage to comment on it,
-   * and opening an editor there takes the annotate gesture out from under their hand. Two live
-   * modes on one surface is not a richer page, it is an ambiguous one — so Notes is the reading and
-   * marking state, and the page without it is the reading and writing state. The toggle that was
-   * already there is what moves between them. */
+   * ONLY IN EDIT. Note and Edit claim the same click and mean opposite things by it — reaching a
+   * passage to comment on, and putting a caret in one — so the page is in exactly one of them, and
+   * in neither it is only words. */
   function runEditingAvailable() {
     if (readLock || applyPause || loading) return false;
-    if (modeState.mode === "review") return false;
+    if (modeState.mode !== "edit") return false;
     return Boolean(currentArtifact) && currentArtifact.class === "R" && canEdit(currentArtifact);
   }
 
@@ -1553,6 +1583,8 @@ export function createArtifactPane(host, deps) {
           host.setAttribute("data-dirty", "true");
           onStateChange();
         },
+        onBoundary: (edge) => onRunBoundary(edge),
+        selectionToolbar: true,
       });
     } catch {
       // A DOM that cannot host a ProseMirror view. Put the block back and leave the page as it was
@@ -1560,9 +1592,140 @@ export function createArtifactPane(host, deps) {
       host.replaceWith(blockEl);
       return;
     }
-    openRun = { run, host, block: blockEl, editor, address };
+    openRun = { run, host, block: blockEl, editor, address, prefix: "" };
     editor.focusAt(coords);
     onStateChange();
+  }
+
+  /** Opens an editor past the end of the document, for writing something that is not there yet.
+   *
+   * The gap the per-block redesign shipped with: every gesture it understood named an existing
+   * block, so a document could be changed word by word and never GROW. Clicking the space under the
+   * last paragraph is how a writer says "more", and on an empty document it is the only thing there
+   * is to click.
+   *
+   * Nothing is written to open it. The run is an empty span at the end of the source, so a click
+   * that turns out to be a misclick closes over an unchanged document and leaves no blank line
+   * behind — which is what lets this be a click rather than a decision.
+   */
+  async function openAppendEditor() {
+    if (!runEditingAvailable() || openRun) return;
+    const kit = await loadEditorKit();
+    if (!runEditingAvailable() || openRun) return;
+    const source = currentSource();
+    const end = source.length;
+    // Exactly enough newlines to make what follows a block of its own, and none when the file
+    // already ends with a blank line or has no bytes at all.
+    const prefix = end === 0 ? "" : source.endsWith("\n\n") ? "" : source.endsWith("\n") ? "\n" : "\n\n";
+    const host = el("div", { className: "glosa-run-editor", "data-appended": "true" });
+    contentEl.append(host);
+    let editor;
+    try {
+      editor = kit.mountRichEditor(host, {
+        markdown: "",
+        toolbar: false,
+        label: "Writing a new passage",
+        onDirty: () => {
+          host.setAttribute("data-dirty", "true");
+          onStateChange();
+        },
+        onBoundary: (edge) => onRunBoundary(edge),
+        selectionToolbar: true,
+      });
+    } catch {
+      host.remove();
+      return;
+    }
+    openRun = { run: { start: end, end, index: -1, line: -1 }, host, block: null, editor, address: null, prefix };
+    editor.focus();
+    onStateChange();
+  }
+
+  /** A keystroke that would carry the caret out of the open run, answered across the seam.
+   *
+   * Returning false leaves the key to the editor, which is what happens at the real edges of the
+   * document — Backspace at the very first character has nothing above it to join, and the honest
+   * answer there is the one every editor gives: nothing.
+   * @param {"up" | "down" | "backspace" | "delete"} edge */
+  function onRunBoundary(edge) {
+    if (!openRun) return false;
+    if (edge === "up" || edge === "down") {
+      void stepToNeighbour(edge === "up" ? -1 : 1);
+      return true;
+    }
+    void mergeAcross(edge === "backspace" ? -1 : 1);
+    return true;
+  }
+
+  /** Closes the open run and opens the one beside it, caret at the edge the reader arrived from.
+   *
+   * Everything here re-measures AFTER the close, and finds the run again by its START OFFSET rather
+   * than by its line or its index. Closing can rewrite the run's own bytes, which moves every line
+   * below it — so a line number read before the close names a different passage after it. A splice
+   * copies everything before the run untouched, so the offset it begins at is the one thing the
+   * close cannot move. */
+  async function stepToNeighbour(direction) {
+    const from = openRun.run.start;
+    await closeRunEditor();
+    const neighbour = await runBeside(from, direction);
+    if (!neighbour) return;
+    const block = contentEl.querySelector(`:scope > [data-line="${neighbour.line}"]`);
+    if (!(block instanceof HTMLElement)) return;
+    await openRunEditor(block, null);
+    // Arriving from below means the caret belongs at the end of what it just entered, and from
+    // above at the start — the caret keeps travelling the way it was already travelling.
+    if (direction < 0) openRun?.editor?.focusAtOffset?.(neighbour.end - neighbour.start);
+  }
+
+  /** Joins the open run with the one beside it and reopens the pair as one passage.
+   *
+   * Backspace at the head of a paragraph means "this belongs to the one above", and until now it
+   * meant nothing at all, because a block editor could not reach past its own bytes. The join is a
+   * splice like every other write here: what goes is the separator between the two blocks. */
+  async function mergeAcross(direction) {
+    const from = openRun.run.start;
+    await closeRunEditor();
+    const source = currentSource();
+    const kit = await loadEditorKit();
+    const runs = runsFrom(source, kit.blockLayout(source).blocks);
+    const current = runs.find((run) => run.start === from);
+    if (!current) return;
+    const other = runs[current.index + direction];
+    if (!other) return; // the top or the foot of the document: nothing to join to, and nothing happens
+    const first = direction < 0 ? other : current;
+    const second = direction < 0 ? current : other;
+    const joined = source.slice(first.start, first.end) + source.slice(second.start, second.end);
+    const span = { start: first.start, end: second.end };
+    workingSource = spliceRun(source, span, joined);
+    runUndo.push({
+      start: first.start,
+      end: first.start + joined.length,
+      before: source.slice(span.start, span.end),
+      after: joined,
+    });
+    await repaintFromWorkingSource();
+    scheduleRunSave();
+    const block = contentEl.querySelector(`:scope > [data-line="${first.line}"]`);
+    if (!(block instanceof HTMLElement)) return;
+    await openRunEditor(block, null);
+    // At the join, which is where the caret was: the two halves met at the end of the first.
+    openRun?.editor?.focusAtOffset?.(first.end - first.start);
+  }
+
+  /** The run before or after the one beginning at `from`, measured against the source as it stands.
+   * Null at the document's edges, which is what makes those keystrokes do nothing there. */
+  async function runBeside(from, direction) {
+    const kit = await loadEditorKit();
+    const source = currentSource();
+    const runs = runsFrom(source, kit.blockLayout(source).blocks);
+    const current = runs.find((run) => run.start === from);
+    if (!current) return null;
+    // Asked through `widenToPrevious`/`widenToNext` rather than by indexing, so "is there one
+    // beside it" is answered by the same pure function the splice contract already uses, in one
+    // place, rather than by two off-by-one-prone comparisons here.
+    const widened = direction < 0 ? widenToPrevious(runs, current) : widenToNext(runs, current);
+    if (widened.start === current.start && widened.end === current.end) return null;
+    return runs[current.index + direction] ?? null;
   }
 
   /** Commits the open run and puts the rendered page back.
@@ -1572,7 +1735,7 @@ export function createArtifactPane(host, deps) {
    * position with it — untouched. */
   async function closeRunEditor({ save = true } = {}) {
     if (!openRun) return;
-    const { run, host, block, editor } = openRun;
+    const { run, host, block, editor, prefix } = openRun;
     openRun = null;
     const before = currentSource().slice(run.start, run.end);
     const after = save ? editor.getMarkdown() : before;
@@ -1580,15 +1743,21 @@ export function createArtifactPane(host, deps) {
 
     if (after === before) {
       // Nothing changed: restore the element that was there rather than re-rendering the document,
-      // so an accidental click costs no repaint and no journal entry.
-      host.replaceWith(block);
+      // so an accidental click costs no repaint and no journal entry. An appended run has no
+      // element to restore — it stood for bytes that were never written — so it simply goes.
+      if (block) host.replaceWith(block);
+      else host.remove();
       onStateChange();
       await settleHeldRefresh();
       return;
     }
 
-    workingSource = spliceRun(currentSource(), run, after);
-    runUndo.push({ start: run.start, end: run.start + after.length, before, after });
+    // `prefix` is the blank line an appended passage needs to be a block of its own rather than
+    // more of the last one. Nothing when the run replaces existing bytes, and nothing when the
+    // writer typed nothing, so an abandoned append leaves no trailing whitespace behind.
+    const written = after && prefix ? prefix + after : after;
+    workingSource = spliceRun(currentSource(), run, written);
+    runUndo.push({ start: run.start, end: run.start + written.length, before, after: written });
     host.remove();
     await repaintFromWorkingSource();
     scheduleRunSave();
@@ -1668,8 +1837,22 @@ export function createArtifactPane(host, deps) {
     if (selection && selection.isCollapsed === false) return;
     if (!runEditingAvailable()) return;
     const block = blockAncestor(event.target);
-    if (!block) return;
-    void openRunEditor(block, { left: event.clientX, top: event.clientY });
+    if (block) {
+      void openRunEditor(block, { left: event.clientX, top: event.clientY });
+      return;
+    }
+    // Not on a block: the page itself. Below the last one that means "keep writing", and on a
+    // document with no blocks at all it is the only place there is to click. Above the first block
+    // it means nothing — a click in the manuscript's top margin is not a request to write.
+    if (event.target === contentEl && belowLastBlock(event.clientY)) void openAppendEditor();
+  }
+
+  /** Whether `clientY` falls under the last rendered block, in the page's own trailing space. */
+  function belowLastBlock(clientY) {
+    const blocks = contentEl.querySelectorAll(":scope > [data-line]");
+    const last = blocks[blocks.length - 1];
+    if (!last) return true; // nothing rendered: the whole page is the place to start
+    return clientY > last.getBoundingClientRect().bottom;
   }
 
   /** The top-level rendered block containing `node`, or null. */
@@ -1719,10 +1902,17 @@ export function createArtifactPane(host, deps) {
     paneEl.setAttribute("data-class", currentArtifact?.class ?? "");
     renderArtifactTools();
     const isEdit = modeState.mode === "edit" && !isClassF;
+    // EDIT IS THE PAGE NOW. Its default face is the manuscript itself, writable a block at a time —
+    // so entering Edit changes what a click DOES, not what the reader is looking at. The full-page
+    // editor is a tool reached from More, for the things CommonMark cannot hold, and `fullPage` is
+    // the one flag that says it is showing. Everything else keyed on Edit — the held baseline, the
+    // disk-change notice, parking, the save and its conflict — stays keyed on the MODE, because
+    // those describe a writing session on this artifact and a block edit is one.
+    const fullPage = isEdit && fullPageEditor;
     // Entering Edit is where a stale save becomes possible, so start fetching the merge now
     // rather than when the conflict dialog needs it.
     if (isEdit) void loadMergeModule();
-    if (isEdit && !sourceFace && !richEditor && !loading) {
+    if (fullPage && !sourceFace && !richEditor && !loading) {
       // #182 R1: a late/first mount fills from the held baseline pair, never from
       // `currentArtifact.content` — an SSE refresh between Edit entry and this mount landing must
       // not hand the rich face bytes newer than the `baselineSha` a Keep-mine merge will verify
@@ -1733,16 +1923,16 @@ export function createArtifactPane(host, deps) {
       // face came up empty over a file with content. `loadArtifact` renders again once it is in.
       void mountRichFace(parkedSourceFor(currentArtifact) ?? baselineContent ?? "");
     }
-    if (!isEdit) teardownRichFace();
-    const richShown = isEdit && !sourceFace && Boolean(richEditor);
+    if (!fullPage) teardownRichFace();
+    const richShown = fullPage && !sourceFace && Boolean(richEditor);
     richEl.hidden = !richShown;
-    editArea.hidden = !isEdit || richShown;
-    editWrap.hidden = !isEdit;
+    editArea.hidden = !fullPage || richShown;
+    editWrap.hidden = !fullPage;
     saveButton.hidden = !isEdit;
     renderFaceToggle();
     skeletonEl.hidden = !loading;
     emptyEl.hidden = Boolean(currentArtifact) || loading;
-    contentEl.hidden = isEdit || isClassF || !currentArtifact || loading;
+    contentEl.hidden = fullPage || isClassF || !currentArtifact || loading;
     classFEl.hidden = !isClassF;
     renderTitle();
     renderApprovalStrip();
@@ -1769,7 +1959,7 @@ export function createArtifactPane(host, deps) {
       stopClassFViewer = null;
       classFEl.removeAttribute("data-path");
     }
-    if (isEdit) {
+    if (fullPage) {
       // A parked draft outranks the file: re-entering Edit after the agent pulled the pane into
       // Review must find the sentence the reviewer was halfway through, not the saved version.
       const parked = parkedSourceFor(currentArtifact);
@@ -3774,18 +3964,19 @@ export function createArtifactPane(host, deps) {
    * fact survives a mode switch even though the banner does not render outside Edit — hence this
    * runs from every mode transition, not only from a fresh disk change. */
   function renderDiskChange() {
-    // Outside Edit it shows whenever there IS unsaved work — which since #271 is the ordinary way
-    // to write, so gating on the mode alone meant the one notice that says "the file moved under
-    // you" was unreachable for every writer who never enters Edit. Not shown to a plain reader: a
-    // session writing a document nobody is editing is the system working, not an event.
+    // WHENEVER THERE IS UNSAVED WORK, and whenever the full-page editor is open holding a document.
+    // Not "whenever the pane is in Edit": since Edit became the page being writable rather than a
+    // textarea full of a draft, that would put a banner in front of every reader who pressed Edit
+    // and then typed nothing. A session writing a document nobody has changed is the system
+    // working, not an event.
     const unsaved = isDirty();
-    const visible = Boolean(diskChange) && !diskChange.acknowledged && (modeState.mode === "edit" || unsaved);
+    const visible = Boolean(diskChange) && !diskChange.acknowledged && (fullPageEditor || unsaved);
     diskChangeEl.hidden = !visible;
     // In Edit the notice is a row in the flex column above the source face. Outside Edit,
     // `.glosa-pane-main` is itself the scroller, so a row here would push the manuscript down
     // under an unchanged `scrollTop` and move the reader's place — which is the move this whole
     // redesign exists to stop. So it floats clear of the flow instead.
-    diskChangeEl.toggleAttribute("data-floating", visible && modeState.mode !== "edit");
+    diskChangeEl.toggleAttribute("data-floating", visible && !fullPageEditor);
     if (!visible) return;
     diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
   }
@@ -3895,13 +4086,17 @@ export function createArtifactPane(host, deps) {
         if (!diskChange || diskChange.sha !== fresh.source_sha256) noteDiskChange(fresh.source_sha256);
       }
     }
-    if (modeState.mode !== "edit") {
+    // WHETHER THE MANUSCRIPT IS ON SCREEN, not whether the pane is in Edit. Those were the same
+    // question while Edit meant a textarea in front of the page; now Edit IS the page, and asking
+    // the old one left the manuscript showing a document the file no longer contained for as long
+    // as the writer stayed in Edit.
+    if (!fullPageEditor) {
       morphArtifactContent(contentEl, fresh.rendered_html ?? "");
-      // Stamp ONLY after actually morphing — stamping while Edit skips the morph would make the
-      // next renderContent believe the stale DOM is current and never repaint it.
+      // Stamp ONLY after actually morphing — stamping while the full-page editor skips the morph
+      // would make the next renderContent believe the stale DOM is current and never repaint it.
       contentEl.setAttribute("data-path", currentArtifact.source_path);
     } else {
-      contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when Edit closes
+      contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when it closes
     }
     layoutMargin(); // anchors may have moved with the new content
     paintAnnotationMarks();
@@ -3985,10 +4180,11 @@ export function createArtifactPane(host, deps) {
       if (readLock || modeState.mode === "edit") return;
       setMode(modeState.mode === "review" ? "read" : "review");
     },
-    /** ⌘E: into Edit from the page, or back to the view the reader left. */
+    /** ⌘E: into Edit, or back out of it. Reaches the page's writable state, not the source view —
+     * the shortcut follows the button beside it rather than the tool in the menu. */
     toggleEdit() {
       if (readLock) return;
-      if (modeState.mode === "edit") setMode(lastViewMode);
+      if (modeState.mode === "edit") setMode("read");
       else if (!currentArtifact || canEdit(currentArtifact)) setMode("edit");
     },
     canEdit: () => !readLock && Boolean(currentArtifact) && canEdit(currentArtifact) && !applyPause,

@@ -3317,6 +3317,64 @@ input,
   outline: none;
 }
 
+/* The formatting actions, bound to the gesture that asks for them. Out of flow and translated clear
+   of the line above the selection, so showing it never moves a word — the same rule the sideline and
+   the margin follow. It is chrome, so it is the one thing on this page that wears the interface's
+   sans face rather than the manuscript's serif: these are controls, not text. */
+.glosa-selection-toolbar {
+  position: absolute;
+  z-index: var(--z-sticky);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  transform: translateY(calc(-100% - var(--space-2)));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-menu);
+  font-family: var(--font-sans);
+}
+
+/* Flipped under the line when there is no room above it — the first paragraph of a document is
+   exactly where a writer is most likely to be. `1lh` is the line it must clear. */
+.glosa-selection-toolbar[data-below] {
+  transform: translateY(calc(1lh + var(--space-1)));
+}
+
+.glosa-selection-toolbar button {
+  height: 24px;
+  min-width: 26px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.glosa-selection-toolbar button:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.glosa-selection-toolbar button[aria-pressed="true"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.glosa-selection-toolbar .glosa-rich-b {
+  font-weight: 700;
+}
+
+.glosa-selection-toolbar .glosa-rich-i {
+  font-style: italic;
+}
+
+.glosa-selection-toolbar .glosa-rich-s {
+  text-decoration: line-through;
+}
+
 /* Drawn the way `.glosa-sideline` is drawn — out of flow, so the words do not move by a pixel when
    it appears. It sits in the gutter the manuscript's measure already leaves, never over the text. */
 .glosa-run-editor:has(.ProseMirror:focus)::before {

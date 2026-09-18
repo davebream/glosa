@@ -591,6 +591,10 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       cdp = client;
       // Read-mode content is hidden in Edit; wait for the actual editable source face instead.
       await client.evaluate(`(async () => {
+      // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
+      for (let i = 0; i < 120 && !document.querySelector('.glosa-tools-edit-source'); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      document.querySelector('.glosa-tools-edit-source').click();
       for (let i = 0; i < 120 && !document.querySelector('.glosa-face-source'); i++)
         await new Promise(resolve => setTimeout(resolve, 25));
       document.querySelector('.glosa-face-source').click();
@@ -747,6 +751,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       const initial: any = await client.evaluate(`(async () => {
       const { pane, host } = window.__outlineTest;
       pane.setMode("edit");
+      // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
+      host.querySelector(".glosa-tools-edit-source").click();
       host.querySelector(".glosa-face-source").click();
       await import("/app/markdown-parser.js");
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -793,6 +799,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       const result: any = await client.evaluate(`(async () => {
       const { pane, host } = window.__outlineTest;
       pane.setMode("edit");
+      // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
+      host.querySelector(".glosa-tools-edit-source").click();
       host.querySelector(".glosa-face-source").click();
       const area = host.querySelector("textarea.glosa-edit-area");
       area.value = "# Unsaved source heading\\n\\n## Another source heading";
@@ -850,6 +858,8 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           },
         });
         await pane.ready;
+        // Edit opens on the manuscript; the full-page rich face is a tool, asked for by name.
+        host.querySelector(".glosa-tools-edit-source")?.click();
         let editable = null;
         for (let i = 0; i < 200; i++) {
           editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");
@@ -912,6 +922,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
       const placed: any = await client.evaluate(`(async () => {
         const { host } = window.__keepMineTest;
+        host.querySelector(".glosa-tools-edit-source")?.click();
         for (let i = 0; i < 200 && !host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]"); i++)
           await new Promise(resolve => setTimeout(resolve, 25));
         const editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");

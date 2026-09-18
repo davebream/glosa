@@ -1245,11 +1245,14 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     });
     expect(edit().disabled).toBe(false);
 
-    // ⌘E is Edit, and again is Done.
+    // ⌘E turns Edit on, and again turns it off. OFF IS THE PLAIN PAGE, not whichever view Edit was
+    // entered from: Note and Edit are two controls that turn each other off, so pressing Edit a
+    // second time cannot restore a Note state the reader watched switch off when they pressed it
+    // the first time. This test used to assert the opposite, under the one-toggle-plus-Done model.
     dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true }));
     expect(activePane(root).getAttribute("data-mode")).toBe("edit");
     dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true }));
-    expect(activePane(root).getAttribute("data-mode")).toBe("review");
+    expect(activePane(root).getAttribute("data-mode")).toBe("read");
   });
 
   test("read lock shows no Notes or Edit controls and stays on the read page", async () => {

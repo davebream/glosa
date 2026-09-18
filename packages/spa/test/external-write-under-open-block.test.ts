@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// A session writes the file while a block is open.
+// A session writes the file while a block is open. Mounted in Edit, which is where a page is
+// writable since Note and Edit became two states that turn each other off.
 //
 // This is the case per-block editing created and did not cover. Before #271 an external change
 // could only reach a writer who was in Edit mode, where the whole conflict apparatus lives — the
@@ -91,14 +92,14 @@ describe("an external write while a block is open", () => {
     };
   }
 
-  async function mountPane(da: any) {
+  async function mountPane(da: any, initialMode = "edit") {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
     const pane = createArtifactPane(host, {
       dataAccess: da,
       slug: "ws-1",
       path: "notes.md",
-      initialMode: "read",
+      initialMode,
       getAttentionEntries: () => [],
       refreshAttention: async () => {},
       getProviderName: () => "Claude Code",
@@ -142,7 +143,7 @@ describe("an external write while a block is open", () => {
     expect(host.textContent).not.toContain("rewritten by a session");
   });
 
-  test("the notice says the file moved, without the writer having to be in Edit", async () => {
+  test("the notice says the file moved, without the full-page editor being open", async () => {
     const da = fakeDataAccess();
     const { host, pane } = await mountPane(da);
     await openBlock(host, 2);
@@ -155,7 +156,10 @@ describe("an external write while a block is open", () => {
 
     const notice = q(host, ".glosa-disk-change");
     expect(notice?.hidden).toBe(false);
-    expect(pane.getMode()).not.toBe("edit");
+    // The point this has always held: the notice is reachable without the full-page source editor,
+    // which is where every part of the conflict apparatus used to live. Stated against that editor
+    // rather than against the mode, since Edit is now simply the page being writable.
+    expect(q(host, ".glosa-edit-wrap")?.hidden).toBe(true);
     // Floating rather than in the flow, because outside Edit the manuscript is the scroller and a
     // row above it would move the reader's place — the thing this redesign exists to stop.
     expect(notice?.hasAttribute("data-floating")).toBe(true);
@@ -163,7 +167,7 @@ describe("an external write while a block is open", () => {
 
   test("a plain reader is not told: a session writing a document nobody is editing is not an event", async () => {
     const da = fakeDataAccess();
-    const { host, pane } = await mountPane(da);
+    const { host, pane } = await mountPane(da, "read");
 
     da.moved = true;
     await pane.refreshArtifact();
@@ -172,6 +176,21 @@ describe("an external write while a block is open", () => {
     expect(q(host, ".glosa-disk-change")?.hidden).toBe(true);
     // And the page DOES take the session's version, because there is nothing of the reader's to lose.
     expect(host.textContent).toContain("rewritten by a session");
+  });
+
+  test("pressing Edit and typing nothing is not a reason to be warned about the file", async () => {
+    // The case that separates "the full-page editor is open" from "the pane is in Edit". Since Edit
+    // became the page being writable rather than a textarea holding a draft, keying the notice on
+    // the mode would put a banner in front of every reader who pressed Edit and then read.
+    const da = fakeDataAccess();
+    const { host, pane } = await mountPane(da);
+    expect(pane.getMode()).toBe("edit");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(q(host, ".glosa-disk-change")?.hidden).toBe(true);
   });
 
   test("closing the block keeps the writer's words rather than taking the session's version", async () => {

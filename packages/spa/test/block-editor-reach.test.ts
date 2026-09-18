@@ -101,7 +101,7 @@ describe("Notes and writing are different states of the page", () => {
     };
   }
 
-  async function mountPane(initialMode = "read") {
+  async function mountPane(initialMode = "edit") {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);
     const pane = createArtifactPane(host, {
@@ -159,15 +159,18 @@ describe("Notes and writing are different states of the page", () => {
 
   test("opening the source editor closes the block, so one set of bytes has one writable face", async () => {
     // The two-faces bug: the source view came up in front while a block editor stayed mounted behind
-    // it, still holding a span of a document the source view was about to rewrite.
-    const { host, pane } = await mountPane();
+    // it, still holding a span of a document the source view was about to rewrite. Reached through
+    // the real More item, since a `setMode("edit")` from Edit is a no-op and would make this pass
+    // whether or not anything closed the block.
+    const { host } = await mountPane();
     await clickBlock(host, 2);
     expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(1);
 
-    pane.setMode("edit");
+    q(host, ".glosa-tools-edit-source").click();
     await settleUntil(() => host.querySelectorAll(".glosa-run-editor").length === 0);
 
     expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(0);
-    expect(pane.getMode()).toBe("edit");
+    // And the full-page editor really is the thing now showing.
+    expect(q(host, ".glosa-edit-wrap")?.hidden).toBe(false);
   });
 });
