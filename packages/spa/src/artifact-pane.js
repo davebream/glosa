@@ -1495,9 +1495,17 @@ export function createArtifactPane(host, deps) {
     return workingSource ?? currentArtifact?.content ?? "";
   }
 
-  /** Whether this artifact can be written to at all, right now. */
+  /** Whether this artifact can be written to at all, right now.
+   *
+   * NOT WHILE THE NOTES ARE SHOWN. Reviewing and writing want the same gesture and mean opposite
+   * things by it: with the margin open a click is how a reader reaches a passage to comment on it,
+   * and opening an editor there takes the annotate gesture out from under their hand. Two live
+   * modes on one surface is not a richer page, it is an ambiguous one — so Notes is the reading and
+   * marking state, and the page without it is the reading and writing state. The toggle that was
+   * already there is what moves between them. */
   function runEditingAvailable() {
     if (readLock || applyPause || loading) return false;
+    if (modeState.mode === "review") return false;
     return Boolean(currentArtifact) && currentArtifact.class === "R" && canEdit(currentArtifact);
   }
 
@@ -2995,6 +3003,13 @@ export function createArtifactPane(host, deps) {
       if (currentArtifact.derived_from) void openArtifactInThisPane(currentArtifact.derived_from);
       return;
     }
+
+    // An open block belongs to the state being left. Leaving it mounted was how the page ended up
+    // with two writable faces over the same bytes at once — the source editor in front, a live
+    // block editor still holding a stale span behind it — and how showing the notes left a caret
+    // sitting in the middle of the passage a reader was trying to annotate. Committed, not
+    // discarded: switching state is not a reason to lose a sentence.
+    void closeRunEditor();
 
     const previousMode = modeState.mode;
     if (mode === "edit" && previousMode !== "edit" && applyPause) return;

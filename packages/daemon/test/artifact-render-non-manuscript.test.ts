@@ -28,8 +28,15 @@ describe("renderMarkdown hides a document metadata header (#175)", () => {
     // recognised only before any block content, so a mid-document `---` stays a thematic break.
     const source = "Body.\n\n---\ntitle: T\n---\n\nMore.\n";
     const html = renderMarkdown(source);
-    expect(html).toContain("<hr>");
+    // Matched as a TAG rather than as the exact string `<hr>`: every block that owns a span of the
+    // source now carries `data-line`, a thematic break included, and the literal spelling was
+    // holding the attribute list still rather than holding this rule. The rule is that a mid-document
+    // `---` is a break and not a metadata header.
+    expect(html).toMatch(/<hr\b/);
     expect(html).toContain("title: T");
+    // The same assertion against the case it must tell apart, so it cannot pass by accident: at the
+    // START of a document the identical bytes ARE the metadata header, which renders nothing at all.
+    expect(renderMarkdown("---\ntitle: T\n---\n\nMore.\n")).not.toMatch(/<hr\b/);
   });
 });
 

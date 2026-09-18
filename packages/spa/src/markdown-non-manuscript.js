@@ -37,11 +37,55 @@ export const MARKDOWN_OPTIONS = Object.freeze({ html: false, linkify: false });
 export function installDataLineStamp(md) {
   md.core.ruler.push("glosa_data_line", (/** @type {any} */ state) => {
     for (const token of state.tokens) {
-      if (token.map && token.type.endsWith("_open")) {
-        token.attrSet("data-line", String(token.map[0]));
-      }
+      if (!isStampable(token)) continue;
+      token.attrSet("data-line", String(token.map[0]));
     }
   });
+  installFenceStamp(md);
+}
+
+/** Whether `token` is a block that owns a span of the source and renders one element.
+ *
+ * `_open` alone was the old test, and it silently excluded every block markdown-it emits as a
+ * SINGLE token: a fenced code block, an indented code block, a thematic break, a raw HTML block.
+ * Those have `nesting: 0` and a real `map`, so they own source lines exactly as a paragraph does —
+ * they simply have no closing partner. Unstamped, they were invisible to everything that resolves a
+ * passage from the rendered page: a reader could not annotate a code block and, since #271, could
+ * not click one to edit it either.
+ *
+ * `inline` is the one token that passes every other part of this test and must not be stamped: it
+ * is a paragraph's or heading's own children, carrying its parent's map, not a block of its own.
+ * @param {any} token */
+function isStampable(token) {
+  if (!token.map || !token.block) return false;
+  if (token.nesting < 0) return false;
+  if (token.type === "inline") return false;
+  // Handled by the renderer rule below instead, so the attribute lands on the outer element.
+  return token.type !== "fence";
+}
+
+/** Puts the fence's `data-line` on its `<pre>` rather than on the `<code>` inside it.
+ *
+ * markdown-it's default fence renderer writes the token's attributes onto the INNER `<code>`, which
+ * is the one place the uniform core rule above cannot serve: everything that reads the page walks
+ * up to the manuscript's own child and asks that element for its line, and for a fence that element
+ * is the `<pre>`. (`code_block` needs none of this — its renderer already writes attributes onto
+ * the `<pre>`.)
+ * @param {any} md */
+function installFenceStamp(md) {
+  const renderFence = md.renderer.rules.fence;
+  md.renderer.rules.fence = (
+    /** @type {any[]} */ tokens,
+    /** @type {number} */ index,
+    /** @type {any[]} */ ...rest
+  ) => {
+    const html = renderFence(tokens, index, ...rest);
+    const map = tokens[index]?.map;
+    if (!map) return html;
+    // Anchored to the opening tag, so a `<pre>` appearing inside the highlighted body cannot be the
+    // one that gets stamped.
+    return html.startsWith("<pre") ? `<pre data-line="${map[0]}"${html.slice(4)}` : html;
+  };
 }
 
 export const HEADER_FENCE = "---";

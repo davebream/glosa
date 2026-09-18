@@ -3260,6 +3260,18 @@ input,
   flex: none;
 }
 
+/* The 14rem floor belongs to the full-page editor, where an empty document still needs something
+   to click into. Inherited by a block editor it made every open passage at least 224px tall, so a
+   one-line paragraph opened as a tall empty rectangle — the single loudest thing on the page, and
+   the opposite of "the same page with a caret in it". A block is exactly as tall as its words. */
+/* Three classes deep on purpose: the 14rem floor is set by `.glosa-rich-surface .ProseMirror`,
+   which carries the same weight as a two-class rule here and appears later in the file, so an
+   evenly-matched override would lose the cascade silently — measured at 224px in a browser after
+   the "fix" was already written. */
+.glosa-run-editor .glosa-rich-surface .ProseMirror {
+  min-height: 0;
+}
+
 /* `prose-gap` is the space BETWEEN blocks, applied by the manuscript to its own children. Inside a
    single run the editor owns the spacing between the nodes it holds, so the first node must not
    open with a gap the surrounding page already provided. */
@@ -3271,14 +3283,36 @@ input,
   margin-block-end: 0;
 }
 
-/* The one ring, unchanged: 2px hand, 2px offset, 2px radius — the same ring a button, a tab and a
-   field get. `mountRichEditor` sets `outline: none` on `.ProseMirror` for the full-page face, where
-   the frame around it carries the focus; here there is no frame, so the ring comes back. */
+/* NOT a ring. A button or a field is an object with edges, and a box around it says where it ends;
+   a passage of a manuscript has no edges of its own, and drawing some made the open block read as a
+   card dropped onto the page — heavy on a short paragraph, and heaviest exactly where the writer is
+   trying to read their own sentence.
+
+   So the mark goes BESIDE the words, in the vocabulary the page already speaks: `.glosa-sideline`
+   puts a session's attention on a passage with a 2px rule down its left, graphite at rest and the
+   hand when it is the one being answered. An open block is the passage the writer's own hand is on,
+   so it takes the hand. Position carries it, which means it survives greyscale and costs the page
+   no enclosed area at all. */
+.glosa-run-editor {
+  position: relative;
+}
+
 .glosa-run-editor .ProseMirror:focus,
 .glosa-run-editor .ProseMirror:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline: none;
+}
+
+/* Drawn the way `.glosa-sideline` is drawn — out of flow, so the words do not move by a pixel when
+   it appears. It sits in the gutter the manuscript's measure already leaves, never over the text. */
+.glosa-run-editor:has(.ProseMirror:focus)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--space-4));
+  width: 3px;
   border-radius: var(--radius-focus);
+  background: var(--primary);
 }
 
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding
