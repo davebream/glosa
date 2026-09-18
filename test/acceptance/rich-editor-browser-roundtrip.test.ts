@@ -524,6 +524,84 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     throw new Error(`route did not render ${surface}: ${JSON.stringify(state)}`);
   }
 
+  // R6's morph invariant, in the engine it is for. An external write reaches the open page over
+  // SSE and is morphed into it (vendor/idiomorph.js) rather than replacing it. viewer.test.ts pins
+  // node identity under happy-dom, which performs no layout and has no real focus or scroll; this
+  // is the check a vendored-idiomorph bump has to pass in a real browser.
+  test(
+    "R6: an external write morphs the open page in place, keeping what did not change",
+    async () => {
+      const path = "morph.md";
+      const filler = Array.from(
+        { length: 40 },
+        (_, i) => `Filler paragraph ${i + 1}, long enough to make the page scroll.`,
+      );
+      const before = [
+        "# Morph",
+        "",
+        "Kept paragraph with [a link](https://example.invalid/) in it.",
+        "",
+        ...filler.flatMap((line) => [line, ""]),
+        "Changed paragraph, before.",
+        "",
+      ].join("\n");
+      writeFileSync(join(workspaceRoot, path), before);
+
+      const { client } = await launchBrowser({ initialUrl: documentUrl("document", path) });
+      cdp = client;
+      await waitForRoute(client, "document", "Changed paragraph, before.");
+
+      const setup: any = await client.evaluate(`(async () => {
+        window.__morphLogs = [];
+        for (const level of ["warn", "error"]) {
+          const original = console[level];
+          console[level] = (...args) => {
+            window.__morphLogs.push(level + ": " + args.map(String).join(" "));
+            original.apply(console, args);
+          };
+        }
+        const content = document.querySelector('.glosa-pane[data-active="true"] .glosa-content');
+        const kept = [...content.querySelectorAll("p")].find((p) => p.textContent.startsWith("Kept paragraph"));
+        const link = kept.querySelector("a");
+        let scroller = content;
+        while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+        if (!scroller) return { ok: false, reason: "nothing on the page scrolls" };
+        scroller.scrollTop = 200;
+        link.focus();
+        window.__morph = { kept, link, scroller, scrollTop: scroller.scrollTop };
+        return { ok: true, scrollTop: scroller.scrollTop, focused: document.activeElement === link };
+      })()`);
+      if (!setup.ok) throw new Error(setup.reason);
+      expect(setup.scrollTop).toBeGreaterThan(0);
+      expect(setup.focused).toBe(true);
+
+      writeFileSync(
+        join(workspaceRoot, path),
+        before.replace("Changed paragraph, before.", "Changed paragraph, after."),
+      );
+
+      const after: any = await client.evaluate(`(async () => {
+        const content = () => document.querySelector('.glosa-pane[data-active="true"] .glosa-content');
+        for (let i = 0; i < 200 && !content()?.textContent.includes("Changed paragraph, after."); i++)
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        const { kept, link, scroller, scrollTop } = window.__morph;
+        return {
+          updated: content().textContent.includes("Changed paragraph, after."),
+          keptIsSameNode: content().contains(kept),
+          focusKept: document.activeElement === link,
+          scrollKept: scroller.scrollTop === scrollTop,
+          logs: window.__morphLogs,
+        };
+      })()`);
+      expect(after.updated).toBe(true);
+      expect(after.keptIsSameNode).toBe(true);
+      expect(after.focusKept).toBe(true);
+      expect(after.scrollKept).toBe(true);
+      expect(after.logs).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   test(
     "#145: a document fragment reaches one rendered pane without navigator",
     async () => {
