@@ -3964,18 +3964,19 @@ export function createArtifactPane(host, deps) {
    * fact survives a mode switch even though the banner does not render outside Edit — hence this
    * runs from every mode transition, not only from a fresh disk change. */
   function renderDiskChange() {
-    // Outside Edit it shows whenever there IS unsaved work — which since #271 is the ordinary way
-    // to write, so gating on the mode alone meant the one notice that says "the file moved under
-    // you" was unreachable for every writer who never enters Edit. Not shown to a plain reader: a
-    // session writing a document nobody is editing is the system working, not an event.
+    // WHENEVER THERE IS UNSAVED WORK, and whenever the full-page editor is open holding a document.
+    // Not "whenever the pane is in Edit": since Edit became the page being writable rather than a
+    // textarea full of a draft, that would put a banner in front of every reader who pressed Edit
+    // and then typed nothing. A session writing a document nobody has changed is the system
+    // working, not an event.
     const unsaved = isDirty();
-    const visible = Boolean(diskChange) && !diskChange.acknowledged && (modeState.mode === "edit" || unsaved);
+    const visible = Boolean(diskChange) && !diskChange.acknowledged && (fullPageEditor || unsaved);
     diskChangeEl.hidden = !visible;
     // In Edit the notice is a row in the flex column above the source face. Outside Edit,
     // `.glosa-pane-main` is itself the scroller, so a row here would push the manuscript down
     // under an unchanged `scrollTop` and move the reader's place — which is the move this whole
     // redesign exists to stop. So it floats clear of the flow instead.
-    diskChangeEl.toggleAttribute("data-floating", visible && modeState.mode !== "edit");
+    diskChangeEl.toggleAttribute("data-floating", visible && !fullPageEditor);
     if (!visible) return;
     diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
   }
@@ -4085,13 +4086,17 @@ export function createArtifactPane(host, deps) {
         if (!diskChange || diskChange.sha !== fresh.source_sha256) noteDiskChange(fresh.source_sha256);
       }
     }
-    if (modeState.mode !== "edit") {
+    // WHETHER THE MANUSCRIPT IS ON SCREEN, not whether the pane is in Edit. Those were the same
+    // question while Edit meant a textarea in front of the page; now Edit IS the page, and asking
+    // the old one left the manuscript showing a document the file no longer contained for as long
+    // as the writer stayed in Edit.
+    if (!fullPageEditor) {
       morphArtifactContent(contentEl, fresh.rendered_html ?? "");
-      // Stamp ONLY after actually morphing — stamping while Edit skips the morph would make the
-      // next renderContent believe the stale DOM is current and never repaint it.
+      // Stamp ONLY after actually morphing — stamping while the full-page editor skips the morph
+      // would make the next renderContent believe the stale DOM is current and never repaint it.
       contentEl.setAttribute("data-path", currentArtifact.source_path);
     } else {
-      contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when Edit closes
+      contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when it closes
     }
     layoutMargin(); // anchors may have moved with the new content
     paintAnnotationMarks();
