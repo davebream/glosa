@@ -4,8 +4,7 @@
 // revalidation before any reuse. Every test here drives the REAL `WorkspaceIndex` and (except the
 // two deterministic failure-reply cases) the REAL production `hardlink-alias-worker.ts` — no scan
 // logic is faked, only its outcome is forced via a tiny deadline or a canned-reply fixture.
-import { linkSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { linkSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";

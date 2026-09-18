@@ -10,7 +10,7 @@
 // This is also the ablation target for contract criterion 5 (#281): temporarily reverting any of
 // the point-membership call sites back to `resolveTrackedFiles(...).tracked.find(...)` /
 // `resolveMatchedFiles(...).tracked.some(...)` must turn the matching test here red.
-import { linkSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 import * as matcher from "../../src/matcher.ts";

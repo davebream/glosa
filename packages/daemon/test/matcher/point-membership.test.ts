@@ -6,7 +6,7 @@
 // (making it build its own independent picomatch instances) or its confinement/prune walk would
 // make these tests fail without touching `resolveMatchedFiles` at all — the point this suite exists
 // to pin.
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type MatcherConfig, matchTrackedFile, resolveMatchedFiles, resolveTrackedFiles } from "../../src/matcher.ts";
