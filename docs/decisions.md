@@ -901,3 +901,45 @@ workbench was broken in a real browser, because a 404 on an imported module take
 module down with it. Unit tests import from disk and structurally cannot see it. The allowlist is
 now held against the source directory by a test, so a module that is added and not served fails at
 the moment it is added rather than whenever someone next runs a browser suite.
+
+## Note and Edit, two states that turn each other off
+
+The decision above retired Edit from the mode control: a block was editable by clicking it, so a
+control that put the whole page into an editing state was no longer how a word got changed. That was
+right about the byte-exact editor and wrong about the state.
+
+Using it showed why. Note and Edit claim the same gesture and mean opposite things by it — with the
+margin open a click reaches a passage to comment on, and in a writable page it puts a caret in one —
+and both were live at once, on the same words, with nothing on the page saying which. Click-to-edit
+also shipped with no affordance at all: a paragraph looked exactly as it had before, and the only
+thing that ever announced editing was the paragraph becoming an editor under the pointer.
+
+**Decision.** The mode control is two buttons that turn each other off, and neither pressed is the
+manuscript and nothing else. Note opens the margin and a drag annotates. Edit makes the page
+writable, a block at a time. The three state names stay on the wire, so links, `glosa open` and
+`glosa_present` are unaffected; what changed is what `edit` paints.
+
+Edit paints the page. The full-page editor — rich or byte-exact source — is what CommonMark cannot
+hold, so it is a tool in More, sticky per pane. Everything else keyed on Edit stays keyed on the MODE
+rather than on that tool: the held baseline, the disk-change notice, parked drafts, the save and its
+conflict all describe a writing session on the artifact, and a block edit is one.
+
+**Why not three positions.** A Read / Note / Edit segmented control says where you are without
+leaving the neutral state implicit in two unpressed buttons, and it costs about a third more width in
+a bar that already collapses to icons in a split pane. Two buttons with a reachable neutral was the
+trade taken.
+
+**Why neither-pressed had to exist.** Someone who opened a document to read it should be able to get
+a page that is only words. Always being in one state or the other would hand them a margin or a caret
+they did not ask for, and would collapse the `read` name that links already use.
+
+The two states are also what made the rest reachable. A document could be changed word by word and
+never gain a line, because every gesture per-block editing understood named an existing block: no
+append point under the last paragraph, nothing to click on an empty file, and a caret that stopped at
+a block's edge. Clicking under the last paragraph now opens an empty run at the end of the source —
+written only if something is typed into it, so a misclick leaves no blank line behind — and the four
+keystrokes that mean "keep going past the end" are answered across the seam.
+
+Vertical movement asks the layout, not the position. In a paragraph that wraps over four lines,
+ArrowDown on line two belongs to the paragraph and only on line four belongs to the document; the
+first implementation used position alone and walked out of a wrapped paragraph from its first line.

@@ -75,7 +75,7 @@ describe("per-block editing (#271)", () => {
       dataAccess: da,
       slug: "ws-1",
       path: "notes.md",
-      initialMode: "read",
+      initialMode: "edit",
       getAttentionEntries: () => [],
       refreshAttention: async () => {},
       getProviderName: () => "Claude Code",

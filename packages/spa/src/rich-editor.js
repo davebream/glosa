@@ -1485,7 +1485,58 @@ function toolbarActions(schema) {
  * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
  * caller falls back to source mode.
  */
-export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToolbar = true, label } = {}) {
+/** Keys that would carry the caret out of this editor, handed back to the caller instead.
+ *
+ * A block editor holds one run of a document the reader can still see the rest of, so the four
+ * keystrokes that mean "keep going past the end" have to mean it across the seam too. Without this
+ * the caret is trapped: ArrowDown at the last line does nothing, and Backspace at the head of a
+ * paragraph cannot reach the one above — which is how a page made of independently editable blocks
+ * stops being a document and becomes a grid of boxes.
+ *
+ * Returning true consumes the key, which is what the caller wants when it is about to move the
+ * caret itself. A handler returning false lets the editor keep its default behaviour.
+ * @param {(edge: "up" | "down" | "backspace" | "delete") => boolean} onBoundary */
+function boundaryKeymap(onBoundary) {
+  // HORIZONTAL keys are decided by POSITION: `pos <= 1` is the first text position of the run, and
+  // `size - 1` the last. Both are false in the middle of a run holding several blocks, so those
+  // still move between themselves normally and only hand the caret back at the run's real edges.
+  const atStart = (state) => state.selection.empty && state.selection.$from.pos <= 1;
+  const atEnd = (state) => state.selection.empty && state.selection.$to.pos >= state.doc.content.size - 1;
+
+  // VERTICAL keys cannot be, and this is the distinction the first version of this got wrong: in a
+  // paragraph that wraps over four lines, ArrowDown on line two belongs to the paragraph and only
+  // on line four belongs to the document. Position cannot tell those apart — only the layout can,
+  // which is what `endOfTextblock` asks the browser. It is also why the block below is reached from
+  // the START of a one-line paragraph: there, the first visual line is also the last.
+  const inFirstBlock = (state) => state.selection.$from.index(0) === 0;
+  const inLastBlock = (state) => state.selection.$from.index(0) === state.doc.childCount - 1;
+  const onEdgeLine = (view, dir) => {
+    // Without a view, or without layout to measure (a DOM implementation that performs none, as in
+    // the unit tests), every line is both the first and the last — which is the reading that lets
+    // the caret keep moving rather than the one that traps it.
+    if (!view) return true;
+    try {
+      if (view.dom.getBoundingClientRect?.().height === 0) return true;
+      return view.endOfTextblock(dir);
+    } catch {
+      return true;
+    }
+  };
+
+  const edge = (test, name) => (state) => test(state) && onBoundary(name) !== false;
+  const vertical = (inBlock, dir, name) => (state, _dispatch, view) =>
+    state.selection.empty && inBlock(state) && onEdgeLine(view, dir) && onBoundary(name) !== false;
+  return {
+    ArrowUp: vertical(inFirstBlock, "up", "up"),
+    ArrowLeft: edge(atStart, "up"),
+    ArrowDown: vertical(inLastBlock, "down", "down"),
+    ArrowRight: edge(atEnd, "down"),
+    Backspace: edge(atStart, "backspace"),
+    Delete: edge(atEnd, "delete"),
+  };
+}
+
+export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToolbar = true, label, onBoundary } = {}) {
   const schema = editorSchema;
   const source = markdown ?? "";
   const doc = parseMarkdown(source);
@@ -1510,7 +1561,15 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
 
   const state = EditorState.create({
     doc,
-    plugins: [markdownInputRules(schema), keymap(editorKeymap(schema)), keymap(baseKeymap), history()],
+    plugins: [
+      markdownInputRules(schema),
+      // Before the editor's own keymap and before baseKeymap: the boundary cases have to be
+      // answered before `splitListItem` or `joinBackward` answer them with the block's own edges.
+      ...(onBoundary ? [keymap(boundaryKeymap(onBoundary))] : []),
+      keymap(editorKeymap(schema)),
+      keymap(baseKeymap),
+      history(),
+    ],
   });
 
   const view = new EditorView(mountEl, {
@@ -1577,6 +1636,21 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
       if (!at) return;
       const { tr } = view.state;
       view.dispatch(tr.setSelection(TextSelection.create(tr.doc, at.pos)));
+    },
+    /** Put the caret `characters` into the text, counting the way the SOURCE counts.
+     *
+     * For landing on a join after two blocks merge: the caller knows the merge happened at a
+     * character offset and has no coordinates to point at. Approximate by construction — a
+     * ProseMirror position is not a character offset once several blocks or a mark boundary are in
+     * play — so it is clamped into the document rather than trusted, and used only where being a
+     * character or two out is a smaller lie than dropping the caret at the start.
+     * @param {number} characters */
+    focusAtOffset: (characters) => {
+      view.focus();
+      const limit = Math.max(1, view.state.doc.content.size - 1);
+      const pos = Math.min(Math.max(1, characters + 1), limit);
+      const { tr } = view.state;
+      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, pos)));
     },
     destroy: () => {
       view.destroy();

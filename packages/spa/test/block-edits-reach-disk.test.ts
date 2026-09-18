@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// A block edit is written to the file.
+// A block edit is written to the file. Mounted in Edit, which is where a page is writable since
+// Note and Edit became two states that turn each other off.
 //
 // It was not. Since #271 made a block editable by clicking it, every such edit repainted the page,
 // marked the pane dirty, and was never written by anything: `closeRunEditor` scheduled the debounced
@@ -84,7 +85,7 @@ describe("a block edit reaches the file", () => {
       dataAccess: da,
       slug: "ws-1",
       path: "notes.md",
-      initialMode: "read",
+      initialMode: "edit",
       getAttentionEntries: () => [],
       refreshAttention: async () => {},
       getProviderName: () => "Claude Code",

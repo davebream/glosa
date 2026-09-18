@@ -177,6 +177,11 @@ describe("Edit mode — a save never invents an edit", () => {
     });
     await pane.ready;
     await paint();
+    // This suite is about the FULL-PAGE editor and its save, which since the two-mode control is a
+    // tool reached from More rather than the face Edit opens on. Opened through the real menu item
+    // rather than a test-only hook, so the path these tests exercise is the one a writer takes.
+    (host.querySelector(".glosa-tools-edit-source") as any)?.click();
+    await paint();
     return { host, pane, da };
   }
 

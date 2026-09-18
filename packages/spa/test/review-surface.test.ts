@@ -102,26 +102,36 @@ describe("Review mode — the agent's half of the margin", () => {
   describe("one page: a notes toggle, Edit as a state of it, and a pause while a session applies", () => {
     const control = (host: any, name: string) => q(host, `.glosa-modebar [data-control="${name}"]`);
 
-    test("the notes toggle moves between the notes-shown and notes-hidden page, and Done returns to whichever was left", async () => {
+    test("Note and Edit turn each other off, and neither pressed is the plain page", async () => {
+      // REWRITTEN for the two-mode control. This test used to assert the opposite of every line
+      // below — that there was no Edit segment at all, and that editing the source replaced the
+      // whole control with Done. Both were true of the one-toggle model and are the thing the two
+      // states replace: the two gestures claimed the same click and nothing on the page said so.
       const { host, pane } = await mountPane(fakeDataAccess([]));
-      expect(control(host, "notes").getAttribute("aria-label")).toBe("Hide notes");
-      control(host, "notes").click();
+      expect(control(host, "notes").getAttribute("aria-pressed")).toBe("true");
+      expect(control(host, "edit").getAttribute("aria-pressed")).toBe("false");
+
+      // Pressing Edit while Note is on moves between them rather than stacking them.
+      control(host, "edit").click();
+      await paint();
+      expect(pane.getMode()).toBe("edit");
+      expect(control(host, "notes").getAttribute("aria-pressed")).toBe("false");
+      expect(control(host, "edit").getAttribute("aria-pressed")).toBe("true");
+
+      // Pressing the one that is on leaves the reader with the manuscript and nothing else.
+      control(host, "edit").click();
       await paint();
       expect(pane.getMode()).toBe("read");
       expect(control(host, "notes").getAttribute("aria-label")).toBe("Show notes");
+      expect(control(host, "edit").getAttribute("aria-pressed")).toBe("false");
 
-      // The mode control offers the notes toggle and nothing else — there is no Edit segment to
-      // press, because editing is something you do to a block.
-      expect(control(host, "edit")).toBeNull();
+      // And both controls survive the source view, which is a tool inside Edit rather than a state
+      // that takes the page over.
       editSource(host).click();
       await paint();
       expect(pane.getMode()).toBe("edit");
-      // Editing the source shows only Done: the notes toggle is not a thing to do to a page whose
-      // bytes are being typed at.
-      expect(control(host, "notes")).toBeNull();
-      control(host, "done").click();
-      await paint();
-      expect(pane.getMode()).toBe("read");
+      expect(control(host, "notes")).not.toBeNull();
+      expect(control(host, "edit")).not.toBeNull();
     });
 
     test("a session's apply lease pauses Edit, keeps an open draft, and lifts when the lease ends", async () => {
@@ -130,6 +140,8 @@ describe("Review mode — the agent's half of the margin", () => {
       await paint();
       expect(editSource(host).disabled).toBe(true);
       expect(editSource(host).getAttribute("aria-label")).toContain("paused");
+      // The mode control's own Edit button says why it will not go, rather than quietly doing nothing.
+      expect(control(host, "edit").disabled).toBe(true);
       pane.setMode("edit");
       expect(pane.getMode()).toBe("review");
 
@@ -343,6 +355,10 @@ describe("Review mode — the agent's half of the margin", () => {
     test("an Edit draft is still there after Review and back — nothing is discarded, nothing is asked", async () => {
       const da = fakeDataAccess([]);
       const { host, pane } = await mountPane(da, { initialMode: "edit" });
+      // The draft lives in the full-page source editor, which Edit no longer opens on — it is a
+      // tool in More now, and the writer asks for it.
+      editSource(host).click();
+      await paint();
 
       const editor = q(host, ".glosa-edit-area");
       editor.value = "# Konspekt\n\nA paragraph I was halfway through writing.";
@@ -354,11 +370,10 @@ describe("Review mode — the agent's half of the margin", () => {
       await paint();
       // No dialog: parking removed the only reason to ask.
       expect(q(dom.document.body, "dialog[open]")).toBeNull();
-      // The Edit segment says the work is still held, since the editor holding it is off screen.
-      // The parked-draft dot moved with the affordance that carries it (#271): the mode control no
-      // longer has an Edit segment, so "your unsaved work is still here" is said by the notes
-      // toggle that remains and by the source-editor row in More.
-      expect(q(host, '.glosa-modebar [data-control="notes"]').getAttribute("data-parked")).toBe("true");
+      // "Your unsaved work is still here" is said by the control that takes the reader back to it,
+      // which with the two-mode control is Edit again rather than the notes toggle that carried it
+      // while there was no Edit button to carry it.
+      expect(q(host, '.glosa-modebar [data-control="edit"]').getAttribute("data-parked")).toBe("true");
       expect(editSource(host).getAttribute("aria-label")).toContain("unsaved draft kept");
 
       pane.setMode("edit");
