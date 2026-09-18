@@ -26,6 +26,13 @@ export type ProblemSlug =
   // every file underneath it. Surfaced with the registration's slug and remediation rather than
   // migrated or deleted.
   | "home-workspace-registered"
+  // issue #281 — `POST /api/workspaces/open`'s rare `nlink > 1` hardlink-alias Worker scan
+  // (`WorkspaceIndex.resolveOpenTarget`) timed out, its Worker failed, or the target/candidate's
+  // identity changed too many times to revalidate cleanly. 503, not 400/409: nothing the caller
+  // sent is wrong, and no CURRENT conflict is being asserted — the daemon simply could not verify
+  // aliasing within its bounded deadline and refuses to risk creating a duplicate registration for
+  // an inode another registration may already own. Expected to clear on retry.
+  | "alias-discovery-unavailable"
   | "not-found"
   | "payload-too-large"
   | "validation-failed"

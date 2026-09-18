@@ -29,7 +29,8 @@ import { fsyncContainingDir, type WriteSync, writeAllSync } from "../bus/io.ts";
 import { AsyncMutex } from "../bus/mutex.ts";
 import { peekJournalAt, retentionPendingCount } from "../bus/peek.ts";
 import { glosaHome } from "../lifecycle/home.ts";
-import { resolveMatchedFiles, resolveTrackedFiles } from "../matcher.ts";
+import { matchTrackedFile, resolveTrackedFiles } from "../matcher.ts";
+import type { AliasScanRequest, AliasScanResponse, AliasScanTask } from "./hardlink-alias-worker.ts";
 // Aliased so every call site below reads unchanged: this file is the reference caller of the
 // registration-id derivation, but it no longer OWNS it. `workspace.ts` holds the single copy so
 // the bare-string target form (`workspaceRegistrationId`) cannot drift away from the sha256 that
@@ -215,7 +216,8 @@ export class WorkspaceOpenError extends Error {
       | "artifact-not-tracked"
       | "no-tracked-artifact"
       | "unsupported-file"
-      | "home-workspace-registered",
+      | "home-workspace-registered"
+      | "alias-discovery-unavailable",
     message: string,
   ) {
     super(message);
@@ -581,6 +583,15 @@ function sameIdentity(a: { dev: string; ino: string }, b: { dev: string; ino: st
 const DEFAULT_GC_GRACE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_GC_THROTTLE_MS = 60_000; // 60s
 
+// See `WorkspaceIndexDeps.aliasScanDeadlineMs`'s own docstring for why 8s.
+const DEFAULT_ALIAS_SCAN_DEADLINE_MS = 8_000;
+// A stale-identity revalidation failure retries the whole scan this many times before failing
+// closed (issue #281 criterion 3's "retry only within a bounded policy") — bounded so a target
+// under constant churn cannot wedge a request retrying forever, but generous enough that one
+// ordinary concurrent mutation (another alias being created, a save replacing the target) resolves
+// on the next attempt rather than surfacing to the user.
+const MAX_ALIAS_SCAN_ATTEMPTS = 3;
+
 export interface WorkspaceIndexDeps {
   home?: string;
   /** The OS user's home directory (issue #146) — separately named and canonicalized from `home`
@@ -630,6 +641,24 @@ export interface WorkspaceIndexDeps {
    * exercise "a durable write failed" without a real full or read-only `~/.glosa`. */
   write?: WriteSync;
   slug?: SlugDeps;
+  /** Bounded deadline for the rare `nlink > 1` hardlink-alias Worker scan (issue #281 criterion
+   * 3): a directory-alias search that cannot finish in this window terminates the Worker and fails
+   * the open closed rather than let a huge live tree hold the global index mutex indefinitely.
+   * Chosen well inside the CLI's own ~12s daemon-discovery budget (`daemon.ts`'s
+   * `DEFAULT_ENSURE_TIMEOUT_MS`) and the daemon's 30s stall-watchdog default, leaving headroom for
+   * request/response overhead either side of the scan. Injectable so tests can force a fast,
+   * deterministic timeout without a slow real scan. */
+  aliasScanDeadlineMs?: number;
+  /** Overrides the Worker script the scan above runs. Test-only: a fixture worker can delay,
+   * throw, or answer a fabricated `dev`/`ino` deterministically, which is the only way to exercise
+   * timeout/failure/staleness without racing a real filesystem walk. Defaults to the production
+   * `hardlink-alias-worker.ts`. */
+  aliasScanWorkerUrl?: string | URL;
+  /** Complete-list resolver seam used to prove which open paths genuinely require a full
+   * traversal. Production uses the canonical matcher resolver; tests may poison it so a point
+   * consumer cannot stay green merely because an ES-module export spy missed this module's lexical
+   * binding. */
+  resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
 export interface GcResult {
@@ -651,6 +680,9 @@ export class WorkspaceIndex {
   private hasLiveSession: (canonicalPath: string) => boolean;
   private readonly hasPendingWork: (entry: WorkspaceEntry) => boolean;
   private readonly write: WriteSync;
+  private readonly aliasScanDeadlineMs: number;
+  private readonly aliasScanWorkerUrl: string;
+  private readonly resolveTrackedFiles: typeof resolveTrackedFiles;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
   // default `() => false` predicate is indistinguishable from "genuinely wired to say never" once
@@ -698,6 +730,14 @@ export class WorkspaceIndex {
       });
     this.write = deps.write ?? writeSync;
     this.slugDeps = deps.slug ?? {};
+    this.aliasScanDeadlineMs = deps.aliasScanDeadlineMs ?? DEFAULT_ALIAS_SCAN_DEADLINE_MS;
+    this.aliasScanWorkerUrl =
+      deps.aliasScanWorkerUrl !== undefined
+        ? deps.aliasScanWorkerUrl instanceof URL
+          ? deps.aliasScanWorkerUrl.href
+          : deps.aliasScanWorkerUrl
+        : new URL("./hardlink-alias-worker.ts", import.meta.url).href;
+    this.resolveTrackedFiles = deps.resolveTrackedFiles ?? resolveTrackedFiles;
   }
 
   /** Wires in the predicate GC uses to never hard-remove a workspace under a live session.
@@ -979,7 +1019,7 @@ export class WorkspaceIndex {
     rawPath: string,
     opts: { externalState?: boolean; focus?: string; focusFirst?: boolean; requireFocus?: boolean } = {},
   ): Promise<WorkspaceOpenResult> {
-    return this.mutex.runExclusive(() => {
+    return this.mutex.runExclusive(async () => {
       let leafStat: ReturnType<typeof lstatSync>;
       try {
         leafStat = lstatSync(rawPath);
@@ -1007,7 +1047,7 @@ export class WorkspaceIndex {
           return { entry, focus: this.resolveFocusInEntry(entry, opts.focus) };
         }
         if (opts.focusFirst) {
-          const first = resolveTrackedFiles(entry).tracked[0];
+          const first = this.resolveTrackedFiles(entry).tracked[0];
           if (first) return { entry, focus: first.path };
           if (opts.requireFocus) {
             throw new WorkspaceOpenError(
@@ -1051,9 +1091,9 @@ export class WorkspaceIndex {
             `${owning.worktree_path} is registered as workspace "${owning.slug}", but it is your home directory (or an ancestor of it) — refusing to automatically reuse it for ${canonical}. Run \`glosa forget ${owning.slug}\` to remove the registration, or \`glosa open ${owning.worktree_path}\` directly if you really mean to keep using it as a workspace.`,
           );
         }
-        const matched = resolveTrackedFiles(owning).tracked.find(
-          (file) => file.path === relativeNfc(owning.worktree_path, canonical),
-        );
+        // Point membership (issue #281): does the owning directory's tracked LIST contain this
+        // exact path? Answered without enumerating the rest of its tree — see `matchTrackedFile`.
+        const matched = matchTrackedFile(owning, canonical);
         if (matched) {
           owning.last_seen = now;
           owning.present = true;
@@ -1064,28 +1104,83 @@ export class WorkspaceIndex {
         }
       }
 
-      const identity = bigintIdentity(canonical);
-      for (const entry of Object.values(index.workspaces)) {
-        if (!entry.present || entry.lifecycle?.state === "forgetting") continue;
-        // The deepest directory remains authoritative for normal workspace membership. When it
-        // explicitly excludes the named file, only an existing bounded registration may claim
-        // the inode; a shallower directory or unrelated matcher registration must not override
-        // that exclusion merely because the file is hardlinked elsewhere.
-        if (owning && entry.kind !== "loose-file") continue;
-        for (const file of resolveTrackedFiles(entry).tracked) {
-          try {
-            if (sameIdentity(identity, bigintIdentity(file.rawPath))) {
-              entry.last_seen = now;
-              entry.present = true;
-              delete entry.absent_since;
-              index.updated_at = now;
-              this.persist(index);
-              return { entry, focus: file.path };
-            }
-          } catch {
-            // A raced-away registered file cannot prove inode ownership; continue searching.
-          }
+      // Existing exact-path reuse (issue #281): an earlier `glosa open` of THIS SAME canonical
+      // path may already have created a loose-file registration for it — its id is a pure
+      // function of (kind, canonical_path), so this is a direct map lookup, never a scan. Checked
+      // before the link-count branch below: that branch's `nlink === 1` shortcut would otherwise
+      // skip straight past the one mechanism that reopens an existing loose file, and recreating
+      // the registration instead would discard its durable `first_seen`/lifecycle history. Only a
+      // reuse whose CURRENT bounded member still resolves (regular, non-symlink, present) is
+      // trusted — never the persisted `file_identity` alone (it is never refreshed after an
+      // atomic-save inode replacement).
+      const looseId = registrationId("loose-file", canonical);
+      const looseEntry = index.workspaces[looseId];
+      if (
+        looseEntry &&
+        looseEntry.present &&
+        looseEntry.kind === "loose-file" &&
+        looseEntry.lifecycle?.state !== "forgetting"
+      ) {
+        const matched = matchTrackedFile(looseEntry, canonical);
+        if (matched) {
+          looseEntry.last_seen = now;
+          looseEntry.present = true;
+          delete looseEntry.absent_since;
+          // Refreshed from a LIVE stat, never trusted from the prior persisted value — an
+          // atomic-save can replace the inode at this same path between opens.
+          looseEntry.file_identity = bigintIdentity(canonical);
+          index.updated_at = now;
+          this.persist(index);
+          return { entry: looseEntry, focus: matched.path };
         }
+      }
+
+      // Hardlink-alias discovery (A4 "Workspace ownership and aliases"): does any OTHER
+      // registration already track a different path to this same inode? `nlink === 1` proves no
+      // second hardlink can exist anywhere, so the search below is skipped entirely — issue #281's
+      // fix for the common case, which used to pay for a complete cross-registration tree scan on
+      // every open regardless of link count. `nlink > 1` is rare; its search runs off the main
+      // thread (`scanForHardlinkAlias`) precisely so it can never wedge the event loop the way the
+      // old synchronous scan did, and its answer is revalidated live before ever being trusted.
+      let identity = bigintIdentity(canonical);
+      let aliasMatch: { registrationId: string; focus: string } | null = null;
+      for (let attempt = 1; attempt <= MAX_ALIAS_SCAN_ATTEMPTS; attempt += 1) {
+        const nlink = statSync(canonical, { bigint: true }).nlink;
+        identity = bigintIdentity(canonical);
+        if (nlink === 1n) break; // no second hardlink can exist anywhere — nothing to find
+
+        const scan = await this.scanForHardlinkAlias(index, identity, owning);
+        if (scan.status === "not_found") break;
+        if (scan.status !== "found") {
+          const detail = scan.status === "error" ? `: ${scan.message}` : "";
+          throw new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias discovery ${scan.status === "timeout" ? "timed out" : "failed"} for ${canonical}${detail}; refusing to open without verifying existing aliases`,
+          );
+        }
+
+        if (this.revalidateAliasCandidate(index, canonical, identity, scan.registrationId, scan.focus)) {
+          aliasMatch = scan;
+          break;
+        }
+        if (attempt === MAX_ALIAS_SCAN_ATTEMPTS) {
+          throw new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias identity changed while resolving ${canonical}; refusing to reuse a possibly stale registration`,
+          );
+        }
+      }
+      if (aliasMatch) {
+        const entry = index.workspaces[aliasMatch.registrationId]!;
+        entry.last_seen = now;
+        entry.present = true;
+        delete entry.absent_since;
+        // Only a loose-file entry carries `file_identity`; refreshed from the live revalidated
+        // stat, matching the exact-path reuse branch above.
+        if (entry.kind === "loose-file") entry.file_identity = identity;
+        index.updated_at = now;
+        this.persist(index);
+        return { entry, focus: aliasMatch.focus };
       }
 
       // No registration owns this file yet. Before falling back to a loose-file registration —
@@ -1110,10 +1205,10 @@ export class WorkspaceIndex {
       if (!owning) {
         const repoRoot = enclosingGitRootWithin(dirname(canonical), this.userHomeDir);
         if (repoRoot !== null) {
-          const repoFocus = relativeNfc(repoRoot, canonical);
-          if (resolveMatchedFiles(repoRoot).tracked.some((file) => file.path === repoFocus)) {
+          const matched = matchTrackedFile(repoRoot, canonical);
+          if (matched) {
             const entry = this.upsertDirectoryForOpen(index, repoRoot, now, opts.externalState === true);
-            return { entry, focus: repoFocus };
+            return { entry, focus: matched.path };
           }
         }
       }
@@ -1124,19 +1219,110 @@ export class WorkspaceIndex {
 
       const worktree = canonicalPath(dirname(canonical));
       const focus = relativeNfc(worktree, canonical);
-      const id = registrationId("loose-file", canonical);
       const entry = this.createEntry(index, {
-        registration_id: id,
+        registration_id: looseId,
         kind: "loose-file",
         canonical_path: canonical,
         worktree_path: worktree,
-        bus_path: redirectedBusPath(this.home, id),
+        bus_path: redirectedBusPath(this.home, looseId),
         tracking: { mode: "bounded", paths: [focus] },
         file_identity: identity,
         source: "glosa-open",
       });
       return { entry, focus };
     });
+  }
+
+  /** Runs the rare `nlink > 1` hardlink-alias scan off the main thread (issue #281 criterion 3).
+   * Called from inside `resolveOpenTarget`'s `mutex.runExclusive` callback — `AsyncMutex` keeps a
+   * callback's ownership across an `await` (`bus/mutex.ts`), so this awaited Worker round-trip
+   * cannot interleave with any other registry mutation even though the event loop itself stays free
+   * to serve unrelated requests and the stall watchdog's heartbeat the whole time. Read-only,
+   * time-bounded, and always cleaned up: the Worker is terminated on every exit — a found answer, a
+   * clean "nothing tracks this inode", a timeout, or a Worker-thread error — so no exit leaves a
+   * thread running or the deadline timer armed. Tasks are built from THIS caller's own already-
+   * mutex-held `index` snapshot, in the object's insertion order, with the exact same deepest-owner
+   * exclusion (`owning && kind !== "loose-file"`) the old synchronous loop applied — so an ordered
+   * first match here is the identical answer that loop would have returned, just computed off-thread. */
+  private scanForHardlinkAlias(
+    index: WorkspaceIndexFile,
+    identity: { dev: string; ino: string },
+    owning: WorkspaceEntry | undefined,
+  ): Promise<AliasScanResponse | { status: "timeout" }> {
+    const tasks: AliasScanTask[] = Object.values(index.workspaces)
+      .filter(
+        (entry) => entry.present && entry.lifecycle?.state !== "forgetting" && (!owning || entry.kind === "loose-file"),
+      )
+      .map((entry) => ({
+        registration_id: entry.registration_id,
+        kind: entry.kind,
+        canonical_path: entry.canonical_path,
+        worktree_path: entry.worktree_path,
+        bus_path: entry.bus_path,
+        tracking: entry.tracking,
+      }));
+    if (tasks.length === 0) return Promise.resolve({ status: "not_found" });
+
+    const request: AliasScanRequest = { tasks, identity };
+    return new Promise((resolve) => {
+      let settled = false;
+      let worker: Worker;
+      try {
+        worker = new Worker(this.aliasScanWorkerUrl);
+      } catch (err) {
+        resolve({ status: "error", message: (err as Error).message });
+        return;
+      }
+      const finish = (result: AliasScanResponse | { status: "timeout" }): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish({ status: "timeout" }), this.aliasScanDeadlineMs);
+      worker.onmessage = (event: MessageEvent<AliasScanResponse>) => finish(event.data);
+      worker.onerror = (event: ErrorEvent) => finish({ status: "error", message: event.message || "worker error" });
+      worker.postMessage(request);
+    });
+  }
+
+  /** Before trusting the Worker's answer, re-derives both identities live on the main thread — the
+   * target or the winning candidate may have been replaced, unlinked, or relinked WHILE the scan
+   * ran, and only a fresh `lstat`/`statSync` can prove otherwise (never a persisted `file_identity`,
+   * which is never refreshed after an atomic-save inode replacement). Re-resolves the candidate's
+   * `focus` through `matchTrackedFile` rather than trusting the Worker's own read of it, so a
+   * registration change mid-scan (forgotten, adopted, or the file replaced by something no longer
+   * tracked) is caught the same way. Returns false for "stale — caller must retry or fail closed". */
+  private revalidateAliasCandidate(
+    index: WorkspaceIndexFile,
+    canonical: string,
+    scannedIdentity: { dev: string; ino: string },
+    candidateRegistrationId: string,
+    focus: string,
+  ): boolean {
+    let freshTarget: { dev: string; ino: string };
+    try {
+      freshTarget = bigintIdentity(canonical);
+    } catch {
+      return false; // target vanished between the scan starting and now
+    }
+    if (!sameIdentity(freshTarget, scannedIdentity)) return false; // target replaced/relinked mid-scan
+
+    const candidate = index.workspaces[candidateRegistrationId];
+    if (!candidate || !candidate.present || candidate.lifecycle?.state === "forgetting") return false;
+
+    const candidateRawPath = join(candidate.worktree_path, ...focus.split("/"));
+    const matched = matchTrackedFile(candidate, candidateRawPath);
+    if (!matched || matched.path !== focus) return false;
+
+    let candidateIdentity: { dev: string; ino: string };
+    try {
+      candidateIdentity = bigintIdentity(matched.rawPath);
+    } catch {
+      return false;
+    }
+    return sameIdentity(freshTarget, candidateIdentity);
   }
 
   /** Register-or-refresh `canonical` as a `directory` workspace, sourced `glosa-open`. Extracted
@@ -1228,8 +1414,9 @@ export class WorkspaceIndex {
       throw new WorkspaceOpenError("invalid-path", "focus path escapes the workspace");
     }
 
-    const rel = relativeNfc(entry.worktree_path, focusCanonical);
-    const matched = resolveTrackedFiles(entry).tracked.find((file) => file.path === rel);
+    // Point membership (issue #281): the two-argument `glosa open <dir> <focus>` entry point asks
+    // only whether ONE path is tracked, so it must never enumerate the rest of the tree either.
+    const matched = matchTrackedFile(entry, focusCanonical);
     if (!matched) {
       throw new WorkspaceOpenError("artifact-not-tracked", "focus file is not in the workspace tracked artifact list");
     }
@@ -1296,22 +1483,31 @@ export class WorkspaceIndex {
       const localBus = join(target.worktree_path, ".glosa");
       if (target.kind !== "directory" || target.bus_path !== localBus) return null;
 
-      const tracked = new Set(resolveTrackedFiles(target).tracked.map((file) => file.path));
-      const sources: AdoptionSource[] = Object.values(index.workspaces)
-        .filter(
-          (entry) =>
-            entry.kind === "loose-file" &&
-            entry.present &&
-            (entry.lifecycle?.state ?? "active") === "active" &&
-            existsSync(entry.bus_path) &&
-            isInside(target.worktree_path, entry.canonical_path),
-        )
+      // Cheap structural filter first (issue #281): kind/present/lifecycle/bus-existence/
+      // containment never touch the target's matcher, so a directory with no contained loose-file
+      // registration at all returns here WITHOUT ever resolving the target's tracked list — the
+      // old code built that complete tracked set unconditionally, so even a plain `glosa open
+      // <bigdir>` with nothing to adopt paid for a full tree walk on every single open.
+      const candidates = Object.values(index.workspaces).filter(
+        (entry) =>
+          entry.kind === "loose-file" &&
+          entry.present &&
+          (entry.lifecycle?.state ?? "active") === "active" &&
+          existsSync(entry.bus_path) &&
+          isInside(target.worktree_path, entry.canonical_path),
+      );
+      if (candidates.length === 0) return null;
+
+      // Only the already-filtered (typically tiny) candidate set is point-tested against the
+      // target's tracked LIST — `matchTrackedFile` answers "is this one path tracked?" without
+      // enumerating the rest of the target's tree.
+      const sources: AdoptionSource[] = candidates
+        .filter((entry) => matchTrackedFile(target, entry.canonical_path) !== null)
         .map((entry) => {
           const targetPath = relativeNfc(target.worktree_path, entry.canonical_path);
           const sourcePath = entry.tracking.mode === "bounded" ? (entry.tracking.paths[0] ?? targetPath) : targetPath;
           return { registration_id: entry.registration_id, source_path: sourcePath, target_path: targetPath };
         })
-        .filter((source) => tracked.has(source.target_path))
         // This order is persisted in the adoption plan and drives source processing after a
         // restart, so it must not vary with the host's ICU locale. Compare the UTF-8 bytes
         // directly, matching A4's deterministic byte-order convention.

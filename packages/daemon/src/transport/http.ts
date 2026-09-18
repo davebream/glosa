@@ -1852,7 +1852,12 @@ async function openWorkspaceAt(
     });
   } catch (error) {
     if (error instanceof WorkspaceOpenError) {
-      const status = error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact" ? 422 : 400;
+      const status =
+        error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact"
+          ? 422
+          : error.code === "alias-discovery-unavailable"
+            ? 503
+            : 400;
       return problem(status, error.code, error.message, undefined, pathname);
     }
     if (error instanceof AdoptionError) {
