@@ -39,6 +39,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   annotated. They were never stamped with their source line, so nothing could address them.
 - In Edit, a session's write repaints the page, and the changed-on-disk notice is kept for unsaved
   work rather than shown to anyone who pressed Edit and only read.
+- `glosa open <file>` no longer wedges the daemon once the workspace registry has accumulated many
+  large workspaces. Opening a file used to answer "does any registration already track this inode?"
+  by walking every registered tree's complete file list synchronously — with a few workspaces of
+  20,000 files each, that alone could stall the event loop long enough for the daemon's own stall
+  watchdog to SIGKILL it. Whether a file belongs to its owning directory, an enclosing repository, or
+  an adoption candidate is now answered by checking that one path against the registration's matcher,
+  never by listing the whole tree. The one remaining full-registry case — finding a second hardlink to
+  the same file elsewhere in the registry, needed only when the file's link count is above one — now
+  runs off the main thread with a bounded deadline, so it can no longer block the daemon; if it can't
+  finish or verify its answer in time, the open fails with a retryable error instead of guessing.
 
 ## [0.1.0-alpha.27] — 2026-09-17
 

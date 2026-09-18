@@ -84,8 +84,38 @@ two writes to the SAME workspace never interleave. There is no pre-daemon lockfi
   registration before a new one is created. The parent directory's tracked LIST is unchanged.
   Symlinks remain unsupported, and an explicit directory focus outside its tracked LIST still
   fails with `artifact-not-tracked`.
-- With no owning root, compare BigInt `dev`/`ino` identities against registered tracked files.
-  Hardlink aliases reuse the first registration and its durable representative focus path.
+- **Point membership, not a list walk (issue #281).** "Is this ONE path tracked by this
+  registration?" — asked for owning-directory reuse, explicit focus, adoption candidate filtering,
+  and enclosing-repository promotion — is answered by `matchTrackedFile`, the same canonical
+  classifier `resolveMatchedFiles`/`resolveTrackedFiles` compile their include/exclude/prune
+  predicates from (§F20). It walks only the queried path's own segments from the registration
+  root — confined, symlink-checked at every intermediate, NFC-keyed, size/extension-gated for a
+  matcher registration and exact-path/regular/non-symlink-gated for a bounded one — never the rest
+  of the tree, so its answer can never disagree with the complete LIST for that same path.
+  `focusFirst` (first tracked document in a directory) is the one deliberate exception: it is
+  answered from the complete LIST, because "first" has no meaning without one.
+- **Exact-path reuse before hardlink discovery.** Reopening a path that already has its own
+  `loose-file` registration (`registration_id` is a pure function of `(kind, canonical_path)`, so
+  this is a direct lookup, never a scan) refreshes that entry — `last_seen`, `present`, and a
+  freshly-`lstat`ed `file_identity` — rather than recreating it, as long as its current bounded
+  member still resolves. `file_identity` is never trusted from what was last persisted; only a
+  live re-check of the current bounded path proves the registration and the file still agree.
+- **`nlink === 1` skips hardlink discovery entirely.** No second hardlink can exist for such a
+  file, so there is nothing left to search once point membership and exact-path reuse have both
+  missed — this is the common case, and issue #281's fix for it: no per-registration tree walk runs
+  at all.
+- **`nlink > 1` hardlink discovery runs off the main thread, inside the index mutex.** One ordered,
+  read-only Worker scan — insertion order, the same deepest-owner exclusion the point/list
+  resolvers apply — is awaited from inside the global index mutex's critical section (the mutex's
+  ownership spans an `await`, so no concurrent registration mutation can interleave with the
+  decision), bounded by a deadline well inside the CLI's own discovery budget. The Worker is always
+  terminated on exit — a match, a clean miss, a timeout, or a Worker-thread failure — and nothing is
+  persisted while it runs. A found candidate is trusted only after the target's AND the candidate's
+  live identity are both re-derived on the main thread and still agree; a mismatch retries the scan
+  a bounded number of times before failing closed. Timeout, Worker failure, or an unresolved
+  identity mismatch all fail the open with a retryable `alias-discovery-unavailable` error rather
+  than silently creating a second registration for an inode another one may already own.
+- Hardlink aliases reuse the first registration found and its durable representative focus path.
 - Resolution, the final alias recheck, and new registration persist under the global index writer.
   Concurrent aliases therefore cannot create parallel buses, baselines, journals, or mutexes.
 
