@@ -1,14 +1,15 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "@davebream/glosa",
       "dependencies": {
-        "@gunshi/plugin-completion": "0.37.1",
+        "@gunshi/plugin-completion": "0.37.2",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "chokidar": "^5",
         "diff2html": "^3.4.56",
-        "gunshi": "0.37.1",
+        "gunshi": "0.37.2",
         "idiomorph": "^0.7.4",
         "markdown-it": "^14.3.1",
         "picomatch": "^4.0.7",
@@ -34,9 +35,9 @@
       },
       "dependencies": {
         "@glosa/daemon": "workspace:*",
-        "@gunshi/plugin-completion": "0.37.1",
+        "@gunshi/plugin-completion": "0.37.2",
         "@modelcontextprotocol/sdk": "^1.29.0",
-        "gunshi": "0.37.1",
+        "gunshi": "0.37.2",
         "zod": "^4.4.3",
       },
     },
@@ -70,13 +71,13 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
-    "undici": "6.28.0",
-    "tar": "7.5.22",
-    "hono": "4.13.5",
-    "qs": "6.16.0",
     "brace-expansion": "5.0.9",
     "fast-uri": "3.1.6",
+    "hono": "4.13.5",
     "ip-address": "10.3.1",
+    "qs": "6.16.0",
+    "tar": "7.5.22",
+    "undici": "6.28.0",
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@2.5.12", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "2.5.12", "@biomejs/cli-darwin-x64": "2.5.12", "@biomejs/cli-linux-arm64": "2.5.12", "@biomejs/cli-linux-arm64-musl": "2.5.12", "@biomejs/cli-linux-x64": "2.5.12", "@biomejs/cli-linux-x64-musl": "2.5.12", "@biomejs/cli-win32-arm64": "2.5.12", "@biomejs/cli-win32-x64": "2.5.12" }, "bin": { "biome": "bin/biome" } }, "sha512-Lw4VHZRebrReBBnlHa12JQjnIBm3JJAA55PDB9LbBVBF0q4RYphm6KfmIjqtPhf61MxZ5Q9KoK8R8x+7per5Aw=="],
@@ -97,7 +98,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.12", "", { "os": "win32", "cpu": "x64" }, "sha512-B1R/l+CwEpKFSuqiwePzPNRk1EiJN8kc0UhdafNz6MZN9v5OFP9HYP1irptvWzHrwVI4blVNGMbxc5zt70m3IA=="],
 
-    "@bomb.sh/tab": ["@bomb.sh/tab@0.0.19", "", { "peerDependencies": { "cac": "^6.7.14", "citty": "^0.1.6 || ^0.2.0", "commander": "^13.1.0 || ^14.0.0 || ^15.0.0" }, "optionalPeers": ["cac", "citty", "commander"], "bin": { "tab": "dist/bin/cli.mjs" } }, "sha512-dTRfo9Q9B+lbLG3JCu8a/AGQSfD2XXcFcnakQzVjSOX+VvR/s9zpsH8TlqV3iHqazniRn1Ypwd1hcRlXcu/4BA=="],
+    "@bomb.sh/tab": ["@bomb.sh/tab@0.0.22", "", { "peerDependencies": { "cac": "^6.7.14 || ^7.0.0", "citty": "^0.1.6 || ^0.2.0", "commander": "^13.1.0 || ^14.0.0 || ^15.0.0" }, "optionalPeers": ["cac", "citty", "commander"], "bin": { "tab": "dist/bin/cli.mjs" } }, "sha512-l5IuWpV7szqG4MM6A7I+qPMmP2qPMq2TD4veIXaOH0sD53dV0Tv8WZPARp5O5Kp4+y4fnVCl3VL1HZKNghO1yg=="],
 
     "@gar/promise-retry": ["@gar/promise-retry@1.0.3", "", {}, "sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA=="],
 
@@ -111,9 +112,9 @@
 
     "@glosa/spa": ["@glosa/spa@workspace:packages/spa"],
 
-    "@gunshi/plugin": ["@gunshi/plugin@0.37.1", "", {}, "sha512-ljjBaL15jCwX6tEtWRdmAQ/y/svGcMZa5mVhMPgXFeQFQ++srK/x5dx8uchQFrE2MTqaFhMMjNK9AQowCyRv9A=="],
+    "@gunshi/plugin": ["@gunshi/plugin@0.37.2", "", {}, "sha512-6fSWvSJ9mn104kJB2ej8OqKqK4ZZSuw51Y7Xpe79lyrvW7v5SkuIUc61Bdsen/gvixcNnkf4K7WUBOnA2MIfzQ=="],
 
-    "@gunshi/plugin-completion": ["@gunshi/plugin-completion@0.37.1", "", { "dependencies": { "@bomb.sh/tab": "^0.0.19", "@gunshi/plugin": "0.37.1" }, "peerDependencies": { "@gunshi/plugin-i18n": "0.37.1" } }, "sha512-6FHJiLvFYB1/bOr8waRIpwvyzdL/51vrGJL0klAFOk5CbfWogsOrv3kR+wX9WTgJHYVZJeMafg7tsZCHftZm2w=="],
+    "@gunshi/plugin-completion": ["@gunshi/plugin-completion@0.37.2", "", { "dependencies": { "@bomb.sh/tab": "^0.0.22", "@gunshi/plugin": "0.37.2" }, "peerDependencies": { "@gunshi/plugin-i18n": "0.37.2" } }, "sha512-Tqmqer8pQQQmKX+NN9mQmOyC7UzrOjICETCFG2352t5uMJa7E6qRSxOYHwb30/zHGLoOP5lGfwYCZ28AyAOYhw=="],
 
     "@gunshi/plugin-i18n": ["@gunshi/plugin-i18n@0.37.1", "", { "dependencies": { "@gunshi/plugin": "0.37.1" }, "peerDependencies": { "@gunshi/plugin-global": "0.37.1" }, "optionalPeers": ["@gunshi/plugin-global"] }, "sha512-K5L5IDeaD5JIGEPn4Wcl0cXyPggmmtj4sSQwCsqzAYc30VfJu+BQscoEt7wIoJ3UR6gnjY7BJh5dxGcmBcUvaA=="],
 
@@ -173,7 +174,7 @@
 
     "@tufjs/models": ["@tufjs/models@4.1.0", "", { "dependencies": { "@tufjs/canonical-json": "2.0.0", "minimatch": "^10.1.1" } }, "sha512-Y8cK9aggNRsqJVaKUlEYs4s7CvQ1b1ta2DVPyAimb0I2qhzjNk+A+mxvll/klL0RlfuIUei8BF7YWiua4kQqww=="],
 
-    "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@types/linkify-it": ["@types/linkify-it@5.0.0", "", {}, "sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q=="],
 
@@ -257,7 +258,7 @@
 
     "buffer-image-size": ["buffer-image-size@0.6.4", "", { "dependencies": { "@types/node": "*" } }, "sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ=="],
 
-    "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
 
@@ -363,7 +364,7 @@
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
-    "gunshi": ["gunshi@0.37.1", "", {}, "sha512-C3t35z65PQpAHay/gzEu4J/7SNWXn2NhfC4RfZQPxyOqkPfDTizthxCPoSU48OazoVherCuCpFDKI1qcY425Gw=="],
+    "gunshi": ["gunshi@0.37.2", "", {}, "sha512-pHsYEDSOxaNxSGIYiIYF11Lvc6OiEKw+IkfrLXRWj6bKzqI3noLX8QXOLqGTwPsM8amkpNoZG9tlpg8/4QG7MQ=="],
 
     "happy-dom": ["happy-dom@20.13.2", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-VC9HoEaT3Jf3K/1g/GjMYGAZCCg+ULgGVcXJlAeSzdTj8mIoPJRp14KVclP5gpUcF/kauuaVB2ri2/WxXbl4vg=="],
 
@@ -668,6 +669,8 @@
     "zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
+
+    "@gunshi/plugin-i18n/@gunshi/plugin": ["@gunshi/plugin@0.37.1", "", {}, "sha512-ljjBaL15jCwX6tEtWRdmAQ/y/svGcMZa5mVhMPgXFeQFQ++srK/x5dx8uchQFrE2MTqaFhMMjNK9AQowCyRv9A=="],
 
     "@npmcli/arborist/nopt": ["nopt@9.0.0", "", { "dependencies": { "abbrev": "^4.0.0" }, "bin": { "nopt": "bin/nopt.js" } }, "sha512-Zhq3a+yFKrYwSBluL4H9XP3m3y5uvQkB/09CwDruCiRmR/UJYnn9W4R48ry0uGC70aeTPKLynBtscP9efFFcPw=="],
 
