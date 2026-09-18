@@ -341,6 +341,12 @@ export function createArtifactPane(host, deps) {
   /** The pending debounced write, so a second edit inside the window replaces it rather than
    * queueing a second save. */
   let saveTimer = null;
+  /** An external change that arrived while a run was open and was held rather than painted.
+   *
+   * `refreshArtifact` refuses to morph the manuscript out from under an open editor, so the frame
+   * it declined has to be taken once the run closes — otherwise the page would keep showing the
+   * document as it was before the session wrote, indefinitely and silently. */
+  let heldExternalRefresh = false;
   /** Lazily fetched editor module namespace: `mountRichEditor`, `blockLayout`, `renderMarkdown`.
    * A dynamic import, so the Read/Review static graph still cannot reach the ProseMirror bundle
    * (import-boundary.test.ts pins exactly that). */
@@ -1577,6 +1583,7 @@ export function createArtifactPane(host, deps) {
       // so an accidental click costs no repaint and no journal entry.
       host.replaceWith(block);
       onStateChange();
+      await settleHeldRefresh();
       return;
     }
 
@@ -1585,6 +1592,22 @@ export function createArtifactPane(host, deps) {
     host.remove();
     await repaintFromWorkingSource();
     scheduleRunSave();
+    await settleHeldRefresh();
+  }
+
+  /** Takes an external frame that arrived while a run was open — but only when the writer has
+   * nothing unsaved.
+   *
+   * With local edits pending, the page keeps showing THEIR document: painting the session's version
+   * over it would be the same silent loss this whole change removes, moved a second later. The two
+   * versions meet where they were always meant to, at the save, where `If-Match` refuses a stale
+   * write and the conflict dialog asks whose version of each block to keep. Until then the
+   * disk-change notice is what says the file moved. */
+  async function settleHeldRefresh() {
+    if (!heldExternalRefresh) return;
+    heldExternalRefresh = false;
+    if (isDirty()) return;
+    await refreshArtifact();
   }
 
   /** Repaints the manuscript from the local source and re-applies everything painted on top of it.
@@ -3751,8 +3774,18 @@ export function createArtifactPane(host, deps) {
    * fact survives a mode switch even though the banner does not render outside Edit — hence this
    * runs from every mode transition, not only from a fresh disk change. */
   function renderDiskChange() {
-    const visible = Boolean(diskChange) && !diskChange.acknowledged && modeState.mode === "edit";
+    // Outside Edit it shows whenever there IS unsaved work — which since #271 is the ordinary way
+    // to write, so gating on the mode alone meant the one notice that says "the file moved under
+    // you" was unreachable for every writer who never enters Edit. Not shown to a plain reader: a
+    // session writing a document nobody is editing is the system working, not an event.
+    const unsaved = isDirty();
+    const visible = Boolean(diskChange) && !diskChange.acknowledged && (modeState.mode === "edit" || unsaved);
     diskChangeEl.hidden = !visible;
+    // In Edit the notice is a row in the flex column above the source face. Outside Edit,
+    // `.glosa-pane-main` is itself the scroller, so a row here would push the manuscript down
+    // under an unchanged `scrollTop` and move the reader's place — which is the move this whole
+    // redesign exists to stop. So it floats clear of the flow instead.
+    diskChangeEl.toggleAttribute("data-floating", visible && modeState.mode !== "edit");
     if (!visible) return;
     diskChangeCopyEl.textContent = diskChangeCopy(diskChange);
   }
@@ -3828,6 +3861,20 @@ export function createArtifactPane(host, deps) {
   async function refreshArtifact() {
     if (!currentArtifact) return;
     const fresh = await dataAccess.getArtifact(slug, currentArtifact.source_path, { render: "html" });
+    // NOTHING LANDS UNDER AN OPEN BLOCK. A session writing the file used to take the editor with
+    // it: the morph below replaced the manuscript, the open run's host went with it, and whatever
+    // had been typed was gone with no notice — while `openRun` kept holding byte offsets into a
+    // document that had moved. So an external change arriving mid-edit is RECORDED and HELD. The
+    // writer keeps their words and their caret; the notice says the file moved; the write is
+    // already protected, because the save carries `If-Match` against the sha this pane opened and
+    // the daemon refuses a stale one into the conflict path that exists for exactly this.
+    if (openRun) {
+      if (fresh.source_sha256 !== baselineSha && (!diskChange || diskChange.sha !== fresh.source_sha256)) {
+        noteDiskChange(fresh.source_sha256);
+      }
+      heldExternalRefresh = true;
+      return;
+    }
     currentArtifact = fresh;
     if (fresh.class === "F") {
       // A1 §7: "fresh mint per iframe open/reload" — an SSE-driven re-render discards the old
@@ -3882,7 +3929,13 @@ export function createArtifactPane(host, deps) {
   }
 
   function isDirty() {
-    return modeState.dirty || Boolean(richEditor?.isDirty()) || workingSource !== null;
+    // An open run whose text has been touched is unsaved work exactly as much as a parked draft is.
+    // Leaving it out is what let a disk change arrive unannounced while someone was mid-sentence:
+    // `refreshArtifact` only records one when the pane is dirty, and a block editor with a word
+    // typed into it did not count.
+    return (
+      modeState.dirty || Boolean(richEditor?.isDirty()) || Boolean(openRun?.editor?.isDirty()) || workingSource !== null
+    );
   }
 
   function focusPreview() {

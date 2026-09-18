@@ -2485,6 +2485,21 @@ input,
   border-bottom: 1px solid var(--border);
 }
 
+/* Outside Edit the notice floats: `.glosa-pane-main` is the scroller there, so a row in the flow
+   would push the manuscript down under an unchanged scrollTop and move the reader's place. Pinned
+   to the top of the pane, over the paper, narrow enough to read as a notice rather than a band. */
+.glosa-disk-change[data-floating] {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: calc(var(--z-sticky) + 1);
+  width: min(calc(100% - 2 * var(--space-4)), var(--measure));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-menu);
+}
+
 .glosa-disk-change-copy {
   flex: 1;
   min-width: 0;
