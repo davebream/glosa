@@ -1458,6 +1458,13 @@ function toolbarActions(schema) {
       className: "glosa-rich-i",
     },
     {
+      label: "S",
+      aria: "Strikethrough",
+      command: () => toggleMark(schema.marks[STRIKETHROUGH_MARK]),
+      active: markActive(schema.marks[STRIKETHROUGH_MARK]),
+      className: "glosa-rich-s",
+    },
+    {
       label: "Code",
       aria: "Inline code",
       command: () => toggleMark(schema.marks.code),
@@ -1473,18 +1480,27 @@ function toolbarActions(schema) {
   ];
 }
 
-/**
- * Mounts the rich editor into `container` (a toolbar + a ProseMirror contenteditable styled by
- * app.css). Returns {getSave, getMarkdown, getDoc, isDirty, focus, destroy}, where `getSave()` is
- * the splice report the caller must consult before writing and `getMarkdown()` is its text alone,
- * for callers that only need to carry the document somewhere (the source face, a parked draft).
- * `getDoc()` is the ProseMirror document itself, straight off `view.state` with no serialization
- * in between — the one honest way to ask "what did the keypress that just landed actually do to
- * the model", which `getSave()`/`getMarkdown()` cannot answer on their own: both already round
- * through `splice()`, so a loss between the DOM and the model would be invisible to either.
- * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
- * caller falls back to source mode.
- */
+/** What a floating toolbar over a selection may carry.
+ *
+ * The full-page editor's fixed bar can afford eleven actions; a popover cannot. Measured at eleven it
+ * ran 395px — the width of the paragraph it floats over, which is a bar whatever it is called. These
+ * are the ones a writer reaches for with words already selected: the four inline marks, and the block
+ * turns that are awkward to reach any other way once a paragraph exists.
+ *
+ * H1 is left out because a document has one title and it is rarely retyped mid-selection, `¶` because
+ * undo already answers "not that", and the numbered list because `1. ` typed at a line start is the
+ * same keystroke count and already works. */
+const SELECTION_ACTIONS = new Set([
+  "Bold",
+  "Italic",
+  "Strikethrough",
+  "Inline code",
+  "Heading 2",
+  "Heading 3",
+  "Bullet list",
+  "Blockquote",
+]);
+
 /** Keys that would carry the caret out of this editor, handed back to the caller instead.
  *
  * A block editor holds one run of a document the reader can still see the rest of, so the four
@@ -1536,7 +1552,118 @@ function boundaryKeymap(onBoundary) {
   };
 }
 
-export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToolbar = true, label, onBoundary } = {}) {
+/** Whether the formatting actions belong on screen right now.
+ *
+ * Exported because it is the whole rule and the only part of this toolbar that can be judged without
+ * a browser: everything else is placement, which needs layout. Two conditions, and both matter — a
+ * collapsed caret is a writer typing, and an unfocused editor is a writer who has gone somewhere
+ * else and should not be followed by a floating bar.
+ *
+ * @param {{ empty: boolean }} selection @param {boolean} hasFocus */
+export function selectionToolbarShows(selection, hasFocus) {
+  return Boolean(hasFocus) && !selection.empty;
+}
+
+/** A toolbar that appears over a selection, and only over a selection.
+ *
+ * A block editor cannot wear a row of buttons: the whole point is that the page gains a caret and
+ * nothing else, and a bar above the paragraph is the page gaining chrome exactly where it should be
+ * gaining none. But "no chrome" left the writer with no way to make a word bold that did not involve
+ * typing asterisks, and no visible answer to "what can I do here".
+ *
+ * So it is bound to the gesture that asks for it. Select words and the actions for those words
+ * appear over them; collapse the selection and they are gone. Nothing is painted while the writer is
+ * typing, which is almost always.
+ *
+ * @param {import("./vendor/prosemirror.js").EditorView} view
+ * @param {HTMLElement} container the run editor's own host, which is the positioning context
+ * @param {ReturnType<typeof toolbarActions>} actions */
+function mountSelectionToolbar(view, container, actions) {
+  const bar = document.createElement("div");
+  bar.className = "glosa-selection-toolbar";
+  bar.setAttribute("role", "toolbar");
+  bar.setAttribute("aria-label", "Formatting");
+  bar.hidden = true;
+
+  const buttons = actions.map((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    if (action.className) button.classList.add(action.className);
+    button.setAttribute("aria-label", action.aria);
+    button.title = action.aria;
+    // mousedown, not click, and the default prevented: a click would blur the editor first, which
+    // both drops the selection the action is ABOUT and closes the run the writer is still in.
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      action.command()(view.state, view.dispatch, view);
+      view.focus();
+    });
+    bar.append(button);
+    return { button, action };
+  });
+  container.append(bar);
+
+  return function refresh() {
+    const { selection } = view.state;
+    if (!selectionToolbarShows(selection, view.hasFocus())) {
+      bar.hidden = true;
+      return;
+    }
+    for (const { button, action } of buttons) {
+      if (action.active) button.setAttribute("aria-pressed", String(action.active(view.state)));
+    }
+    bar.hidden = false;
+    // Positioned against the container rather than the viewport, so it travels with the block when
+    // the page scrolls instead of being re-measured on every frame.
+    let head;
+    let box;
+    try {
+      head = view.coordsAtPos(selection.from);
+      box = container.getBoundingClientRect();
+    } catch {
+      // A DOM that performs no layout. The toolbar is still IN the page and still operable by a
+      // screen reader and by keyboard; it simply cannot be placed.
+      return;
+    }
+    bar.style.left = `${Math.max(0, head.left - box.left)}px`;
+    bar.style.top = `${head.top - box.top}px`;
+    // Above the line by default, below it when above would be off the top of the window — the first
+    // paragraph of a document is exactly where a writer is most likely to be, and a toolbar they
+    // cannot see is worse than one in the second-best place.
+    const above = head.top - bar.getBoundingClientRect().height - 8;
+    bar.toggleAttribute("data-below", above < 0);
+  };
+}
+
+/**
+ * Mounts the rich editor into `container` (a toolbar + a ProseMirror contenteditable styled by
+ * app.css). Returns {getSave, getMarkdown, getDoc, isDirty, focus, destroy}, where `getSave()` is
+ * the splice report the caller must consult before writing and `getMarkdown()` is its text alone,
+ * for callers that only need to carry the document somewhere (the source face, a parked draft).
+ * `getDoc()` is the ProseMirror document itself, straight off `view.state` with no serialization
+ * in between — the one honest way to ask "what did the keypress that just landed actually do to
+ * the model", which `getSave()`/`getMarkdown()` cannot answer on their own: both already round
+ * through `splice()`, so a loss between the DOM and the model would be invisible to either.
+ * Throws if the environment can't host a ProseMirror view (e.g. a DOM without layout APIs) — the
+ * caller falls back to source mode.
+ *
+ * @param {HTMLElement} container
+ * @param {{
+ *   markdown?: string,
+ *   onDirty?: () => void,
+ *   toolbar?: boolean,
+ *   label?: string,
+ *   onBoundary?: (edge: "up" | "down" | "backspace" | "delete") => boolean,
+ *   selectionToolbar?: boolean,
+ * }} [options] `toolbar` is the full-page editor's fixed row; `selectionToolbar` is the block
+ * editor's floating one, which appears only over a selection. They are separate on purpose — a
+ * block editor must not wear a fixed bar, and the full-page editor does not need a floating one.
+ */
+export function mountRichEditor(
+  container,
+  { markdown, onDirty, toolbar: wantToolbar = true, label, onBoundary, selectionToolbar = false } = {},
+) {
   const schema = editorSchema;
   const source = markdown ?? "";
   const doc = parseMarkdown(source);
@@ -1609,10 +1736,19 @@ export function mountRichEditor(container, { markdown, onDirty, toolbar: wantToo
     return { btn, action };
   });
 
+  const refreshSelectionToolbar = selectionToolbar
+    ? mountSelectionToolbar(
+        view,
+        container,
+        toolbarActions(schema).filter((action) => SELECTION_ACTIONS.has(action.aria)),
+      )
+    : null;
+
   function refreshToolbar() {
     for (const { btn, action } of buttons) {
       if (action.active) btn.setAttribute("aria-pressed", String(action.active(view.state)));
     }
+    refreshSelectionToolbar?.();
   }
   refreshToolbar();
 

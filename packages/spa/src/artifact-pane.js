@@ -1584,6 +1584,7 @@ export function createArtifactPane(host, deps) {
           onStateChange();
         },
         onBoundary: (edge) => onRunBoundary(edge),
+        selectionToolbar: true,
       });
     } catch {
       // A DOM that cannot host a ProseMirror view. Put the block back and leave the page as it was
@@ -1629,6 +1630,7 @@ export function createArtifactPane(host, deps) {
           onStateChange();
         },
         onBoundary: (edge) => onRunBoundary(edge),
+        selectionToolbar: true,
       });
     } catch {
       host.remove();

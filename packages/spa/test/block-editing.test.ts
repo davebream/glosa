@@ -183,6 +183,15 @@ describe("per-block editing (#271)", () => {
     expect(surface?.getAttribute("aria-label")).toMatch(/^Editing /);
   });
 
+  test("a block opened by clicking carries the formatting actions with it", async () => {
+    // The wiring, which the toolbar's own suite cannot see: that file mounts an editor directly and
+    // would pass whether or not the PANE ever asks for one. Without this, removing
+    // `selectionToolbar: true` from both mount sites reddens nothing.
+    const { host } = await mountPane(fakeDataAccess());
+    await clickBlock(host, 2);
+    expect(q(host, ".glosa-run-editor .glosa-selection-toolbar")).toBeTruthy();
+  });
+
   test("the editor module is not in the Read path until an editable artifact opens", async () => {
     // Guards the lazy boundary from the runtime side; import-boundary.test.ts guards it statically.
     // A static import would put 400 KB in front of the first paint of a document nobody may edit.
