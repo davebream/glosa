@@ -1,6 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: npm
+  # `bun`, not `npm`: the npm updater edits package.json but never bun.lock, so every PR it opened
+  # failed CI's `bun install --frozen-lockfile`.
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
@@ -11,6 +13,17 @@ updates:
     labels: [dependencies]
     commit-message:
       prefix: chore(deps)
+    groups:
+      # gunshi and its plugins release in lockstep and pin each other's exact versions.
+      gunshi:
+        patterns: ["gunshi", "@gunshi/*"]
+        update-types: ["major", "minor", "patch"]
+    ignore:
+      # The editor parses with the markdown-it bundled in the vendored ProseMirror build
+      # (packages/spa/src/vendor/prosemirror.js), which stays on 14. A major bump here moves only
+      # the daemon's renderer, so the two would render the same document differently.
+      - dependency-name: markdown-it
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
