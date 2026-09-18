@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(638);
+    ).toBe(643);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1886,11 +1886,15 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // move with the denominator — metric 1's per-cause map still totals 42, metric 2 still reports 1
   // shipped dishonest write, metric 3 still 0 missed and 0 false alarms — so the corpus grew and
   // nothing about the serializer changed.
+  // Cutting alpha.28: a dated `## [0.1.0-alpha.28]` heading with `### Changed` and `### Fixed`
+  // headings and lists, 638 → 643 blocks / 576 → 580 edits. The release case again: the new heading
+  // has its definition at the foot of the file, so `link reference definition inlined` 23 → 24 and
+  // `ablated` 39 → 40 are its only numerator moves, and `shipped` held at 1.
   // moved 37 → 38 and metric 1's ONLY per-cause move is `link reference definition inlined`, which
   // is the release shape the comment below describes — `## [Unreleased]` already has its definition
   // at the foot of the file, so the new heading is a reference link the ablated path re-serializes
   // and the shipped path restores.
-  const BLOCKS = 638;
+  const BLOCKS = 643;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1926,7 +1930,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 44 of 638 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 45 of 643 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -1948,11 +1952,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(44);
+    expect(misses).toBeLessThanOrEqual(45);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
     // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
-    // (39 → 40), plus `## [0.1.0-alpha.23]`, which alpha.23 gave a link definition (40 → 41), plus `## [0.1.0-alpha.24]`, which alpha.24 gave a link definition (41 → 42), plus #270's own `## [Unreleased]` heading, whose definition was already at the foot of the file (42 → 43), plus #271's, for the same reason (43 → 44). A genuine
+    // (39 → 40), plus `## [0.1.0-alpha.23]`, which alpha.23 gave a link definition (40 → 41), plus `## [0.1.0-alpha.24]`, which alpha.24 gave a link definition (41 → 42), plus #270's own `## [Unreleased]` heading, whose definition was already at the foot of the file (42 → 43), plus #271's, for the same reason (43 → 44), plus `## [0.1.0-alpha.28]`, which alpha.28 gave a link definition (44 → 45). A genuine
     // improvement turns this red; lower the numbers deliberately rather than loosening the shape.
     //
     // THE RELEASE CASE MOVES A NUMERATOR BY CONSTRUCTION, and that is worth stating plainly because
@@ -1969,7 +1973,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
         "the per-cause record, a NUMERATOR totalling 42. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 23,
+      "link reference definition inlined": 24,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -1983,7 +1987,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 576; the guard fires on it and, ablated, on 39", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 580; the guard fires on it and, ablated, on 40", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2065,13 +2069,13 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above).
     ).toEqual({
-      edits: 576,
+      edits: 580,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 39, fired: 39 },
+      ablated: { dishonest: 40, fired: 40 },
     });
   }, 15_000);
 

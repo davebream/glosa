@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-alpha.28] — 2026-09-18
+
+### Changed
+
+- **Two states, Note and Edit, that turn each other off.** The control is two buttons now. **Note**
+  opens the annotation margin, where a click reaches a passage to comment on. **Edit** makes the page
+  writable, where a click puts a caret in a paragraph. With neither pressed you are just reading.
+  alpha.27 had both gestures live at once with nothing on the page saying so. The full-page
+  editor, rich or byte-exact source, stays in the pane's **More** menu for what a single block cannot
+  hold. `mode=` links, `glosa open` and `glosa_present` are unchanged.
+- **The document can grow.** Clicking below the last paragraph opens somewhere to write, and an empty
+  document has somewhere to start. Nothing is written until you type, so a misclick leaves no blank
+  line behind. The arrow keys move the caret out of a block instead of stopping at its edge, and
+  Backspace at the start of a block or Delete at its end joins it with its neighbour.
+- **Formatting controls appear over a selection.** Select words and eight actions float above them:
+  bold, italic, strikethrough, inline code, H2, H3, bullet list and blockquote. Collapse the caret and
+  they are gone, so nothing is painted while you type. `# `, `> `, `- ` and `1. ` typed at a line
+  start still work.
+- An open block is marked with a graphite rule down its left, as annotated passages already are,
+  instead of a 2px accent focus ring, and it is as tall as its contents rather than 224px.
+
+### Fixed
+
+- A block edit is written to the file. Since alpha.27 none was: the sentence appeared on the page and
+  the tab showed unsaved work, but the save saw nothing dirty and a reload lost it. Opening another
+  artifact straight after typing also discarded the edit, and closing the pane now writes a pending
+  one first.
+- A session writing the artifact no longer destroys an open block editor. The update is held until
+  the block closes, and painted then only if nothing is unsaved; with edits pending, the two versions
+  meet at the save's conflict dialog. The changed-on-disk notice now shows whenever you have unsaved
+  work, not only in the full-page editor.
+- Code blocks, indented code, horizontal rules and raw HTML blocks can be opened for editing and
+  annotated. They were never stamped with their source line, so nothing could address them.
+- In Edit, a session's write repaints the page, and the changed-on-disk notice is kept for unsaved
+  work rather than shown to anyone who pressed Edit and only read.
+
 ## [0.1.0-alpha.27] — 2026-09-17
 
 ### Changed
@@ -926,7 +962,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...HEAD
+[0.1.0-alpha.28]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...v0.1.0-alpha.28
 [0.1.0-alpha.27]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.26...v0.1.0-alpha.27
 [0.1.0-alpha.26]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.25...v0.1.0-alpha.26
 [0.1.0-alpha.25]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.24...v0.1.0-alpha.25
