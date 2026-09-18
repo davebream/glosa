@@ -132,7 +132,9 @@ describe("per-block editing (#271)", () => {
   });
 
   test("a drag-selection does not open an editor, because that gesture means annotate", async () => {
-    const { host } = await mountPane(fakeDataAccess(), { initialMode: "review" });
+    // Deliberately NOT in Notes: since editing is unavailable there at all, a Notes mount would make
+    // this pass without the drag rule existing — the assertion has to be able to fail.
+    const { host } = await mountPane(fakeDataAccess());
     const block = q(host, '.glosa-content [data-line="2"]');
     const selection = dom.window.getSelection();
     const range = dom.document.createRange();
@@ -175,7 +177,7 @@ describe("per-block editing (#271)", () => {
   test("the editor names the passage it opened on", async () => {
     // A screen reader leaving a labelled region for an unnamed textbox is the moment the reader
     // loses their place.
-    const { host } = await mountPane(fakeDataAccess(), { initialMode: "review" });
+    const { host } = await mountPane(fakeDataAccess());
     await clickBlock(host, 2);
     const surface = q(host, ".glosa-run-editor .ProseMirror");
     expect(surface?.getAttribute("aria-label")).toMatch(/^Editing /);
