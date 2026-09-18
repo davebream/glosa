@@ -363,6 +363,13 @@ describe("internal protocol compatibility", () => {
   // held port with nothing answering on it is a proven diagnosis and outranks the budget that
   // expired while proving it — "discovery exceeded its budget" left a user with nothing to act on
   // while a wedged daemon sat on the port.
+  //
+  // This pins the client half: the daemon's diagnosis reaches the caller as DAEMON_UNREACHABLE with
+  // its text intact. The ordering itself is pinned on a controlled clock in the daemon's
+  // lifecycle.test.ts. The budget here is 1000ms rather than 100ms (#283): a slow CI runner spent
+  // 100ms before the port was ever probed, and the budget error it then returned was correct. The
+  // squatter never answers a handshake, so the poll still runs the budget out before the diagnosis
+  // is returned, and one call costs about the budget.
   test("an explicit daemon client keeps the actionable discovery error", async () => {
     const port = randomPort();
     const squatter = Bun.serve({
@@ -372,12 +379,9 @@ describe("internal protocol compatibility", () => {
     });
     Bun.env.GLOSA_PORT = String(port);
     try {
-      await expect(createHttpDaemonClient({ ensureTimeoutMs: 100 })).rejects.toMatchObject({
+      await expect(createHttpDaemonClient({ ensureTimeoutMs: 1000 })).rejects.toMatchObject({
         code: "DAEMON_UNREACHABLE",
-        message: expect.stringContaining(`a process is bound to port ${port}`),
-      });
-      await expect(createHttpDaemonClient({ ensureTimeoutMs: 100 })).rejects.toMatchObject({
-        message: expect.stringContaining("lsof"),
+        message: expect.stringMatching(new RegExp(`a process is bound to port ${port}\\b.*lsof`)),
       });
     } finally {
       squatter.stop();

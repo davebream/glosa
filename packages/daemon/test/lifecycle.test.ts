@@ -1101,6 +1101,55 @@ describe("ensureDaemon — client", () => {
     }
   }, 12000);
 
+  // Issue #139's ordering, on a clock the test owns (#283). A port that is held while nothing on it
+  // speaks glosa is a PROVEN diagnosis, and it must reach the user even when proving it used up the
+  // rest of the budget. Pinned through real time with a 100ms budget, a slow runner could spend the
+  // budget before the port was ever probed, and then the budget error is the honest answer, so the
+  // outcome depended on the machine. Here time moves only when the handshake poll spends it.
+  test("a held port that answers nothing is named even when proving it spent the budget", async () => {
+    const home = freshHome();
+    const savedHome = process.env.GLOSA_HOME;
+    const savedPort = process.env.GLOSA_PORT;
+    const port = randomPort();
+    let clock = 0;
+    let polls = 0;
+    process.env.GLOSA_HOME = home;
+    process.env.GLOSA_PORT = String(port);
+
+    try {
+      const result = await ensureDaemonWithDependencies(
+        { timeoutMs: 100 },
+        {
+          now: () => clock,
+          sleep: async () => {},
+          fetchHandshake: async () => null,
+          probe: async () => true,
+          // Against a squatter the poll never gets a handshake, so it runs its whole budget.
+          pollHandshake: async (_port, budgetMs) => {
+            polls += 1;
+            clock += budgetMs;
+            return null;
+          },
+        },
+      );
+
+      // The case under test was reached: the port was proven held, and the budget is gone.
+      expect(polls).toBe(1);
+      expect(clock).toBeGreaterThanOrEqual(100);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain(`a process is bound to port ${port}`);
+        expect(result.reason).toContain(`lsof -nP -iTCP:${port} -sTCP:LISTEN`);
+      }
+    } finally {
+      if (savedHome === undefined) delete process.env.GLOSA_HOME;
+      else process.env.GLOSA_HOME = savedHome;
+      if (savedPort === undefined) delete process.env.GLOSA_PORT;
+      else process.env.GLOSA_PORT = savedPort;
+      cleanupHome(home);
+    }
+  });
+
   test("a free port with a live daemon PID is waited for, never reclaimed while that daemon lives", async () => {
     // A daemon on its way out closes its listeners first and removes its lock last. In between, the
     // port is free and the PID is alive — the shape the stale-lock path used to reclaim, starting a
