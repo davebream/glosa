@@ -3216,7 +3216,13 @@ export function createArtifactPane(host, deps) {
    */
   async function saveCurrentArtifact({ onlyIfDirty = false } = {}) {
     if (!slug || !currentArtifact || currentArtifact.class !== "R") return currentArtifact;
-    const dirty = modeState.dirty || Boolean(richEditor?.isDirty());
+    // `workingSource` is the third way this pane can be holding unwritten bytes, and leaving it out
+    // is why the debounced write after a block edit did nothing at all: `scheduleRunSave` fired,
+    // `saveCurrentArtifact` asked whether anything was dirty, and the one kind of edit it was
+    // scheduled BY was the one kind this line could not see. `isDirty()` has counted it since the
+    // day it was added; this did not, and the two have to agree or the save is a no-op that looks
+    // like a save.
+    const dirty = modeState.dirty || Boolean(richEditor?.isDirty()) || workingSource !== null;
     if (onlyIfDirty && !dirty) return currentArtifact;
 
     // Everything the write needs, captured before any await: asking about collateral suspends
@@ -3590,7 +3596,11 @@ export function createArtifactPane(host, deps) {
     classFInteractive = false;
     // A different file is a different document: an open run belongs to the one being left, and its
     // working source and undo stack are spans into bytes that are about to stop being on screen.
-    void closeRunEditor({ save: false });
+    // Committed and WRITTEN before they are forgotten — this used to close with `save: false` and
+    // then null the working source, so opening another artifact inside the debounce window threw
+    // away whatever had just been typed, with nothing said.
+    await closeRunEditor();
+    await flushRunSave();
     workingSource = null;
     runUndo = [];
     composer = null;
@@ -3956,6 +3966,9 @@ export function createArtifactPane(host, deps) {
     confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
+      // Best effort, and the last chance this pane gets: a pending write outlives the element it
+      // was typed into or it does not survive at all.
+      void flushRunSave();
       if (modeState.mode === "review") releaseWidth();
       document.removeEventListener("click", onDocumentClick);
       paneEl.removeEventListener("scroll", onPaneScroll, { capture: true });
