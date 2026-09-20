@@ -224,8 +224,9 @@ describe("createDataAccess — request shape", () => {
   // A 401 alone does not say the credential is bad — it says THIS daemon rejected it. Which of the
   // three things that can mean is settled by the tokenless handshake, and only one of them is
   // "your credential is gone". Getting this wrong is what let a daemon restart permanently unpair
-  // a tab: any 401 wiped sessionStorage and reloaded, and the fragment holding the token was long
-  // since stripped, so nothing could put it back.
+  // a tab: any 401 wiped the stored credential and reloaded, and the fragment holding the token
+  // was long since stripped, so nothing could put it back. The store is origin-scoped since #229,
+  // so a wrong verdict now unpairs every tab on the origin, not just the one that got the 401.
   /** @param {(path: string) => Response | null} handshakeFn */
   function rejectingFetch(handshake: Record<string, unknown> | null, status = 401) {
     return async (path: string) => {

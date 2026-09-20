@@ -104,6 +104,7 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/presentation-token.test.ts",
     "packages/daemon/test/token-lifecycle.test.ts",
     "test/acceptance/browser-security-real-engine.test.ts",
+    "test/acceptance/pairing-durability-real-engine.test.ts",
   ],
   anchor: [
     "packages/daemon/test/anchoring/class-f.test.ts",

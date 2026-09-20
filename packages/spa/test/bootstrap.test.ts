@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // P1.4 — scrubSecrets/selectScreen are the security-load-bearing pure functions in bootstrap.js
-// (A3 §3/F24, A1 §5.1). Fakes over location/sessionStorage/history stand in for the
-// real browser objects — bootstrap.js takes them as parameters for exactly this reason.
+// (A3 §3/F24, A1 §5.1). Fakes over location/storage/history stand in for the real browser
+// objects — bootstrap.js takes them as parameters for exactly this reason. Which real store
+// `main()` passes (origin-scoped localStorage since #229) is pinned on the source itself, in
+// test/acceptance/security-attack-matrix.test.ts's attack #8.
 import { describe, expect, test } from "bun:test";
 import {
   CONTRACT_VERSION,
@@ -331,15 +333,15 @@ describe("scrubSecrets — preserves non-secret route state", () => {
     expect(url).toContain("mode=edit");
   });
 
-  test("#t=<token> present: stashed in sessionStorage under glosa_token", () => {
+  test("#t=<token> present: stashed in the browser store under glosa_token", () => {
     const loc = { hash: "#t=SECRET", pathname: "/", search: "" };
-    const session = fakeStorage();
+    const store = fakeStorage();
     const history = fakeHistory();
 
-    const result = scrubSecrets(loc, session, history as unknown as History);
+    const result = scrubSecrets(loc, store, history as unknown as History);
 
     expect(result).toBe("SECRET");
-    expect(session.getItem("glosa_token")).toBe("SECRET");
+    expect(store.getItem("glosa_token")).toBe("SECRET");
   });
 
   test("#t=<token> present: history.replaceState strips t= from the URL", () => {

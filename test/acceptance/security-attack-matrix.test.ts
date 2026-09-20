@@ -38,6 +38,10 @@ const BOOTSTRAP_SOURCE = readFileSync(
   fileURLToPath(new URL("../../packages/spa/src/bootstrap.js", import.meta.url)),
   "utf8",
 );
+const DATA_ACCESS_SOURCE = readFileSync(
+  fileURLToPath(new URL("../../packages/spa/src/data-access.js", import.meta.url)),
+  "utf8",
+);
 
 function freshDir(): string {
   return mkdtempSync(join(tmpdir(), "glosa-attack-matrix-"));
@@ -343,7 +347,7 @@ describe("A3 §5 attack #9 — DNS rebinding with glosa.localhost in the Host al
 });
 
 // ---------------------------------------------------------------------------------------------
-// #8 — fragment token in history/localStorage -> replaceState + sessionStorage + rotate/revoke
+// #8 — fragment token in history/URL -> replaceState + origin-scoped localStorage + rotate/revoke
 // ---------------------------------------------------------------------------------------------
 describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
   function fakeStorage(): Storage {
@@ -360,7 +364,7 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
     } as Storage;
   }
 
-  test("the fragment token flows through the injected tab store, is stripped from history, and is cleared on 401", async () => {
+  test("the fragment token flows through the injected origin store, is stripped from history, and is cleared on 401", async () => {
     const loc = { hash: "#t=SUPERSECRET", pathname: "/", search: "" };
     const session = fakeStorage();
     const calls: Array<[unknown, string, string]> = [];
@@ -445,20 +449,38 @@ describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
     expect(authorizations.filter(([, auth]) => auth !== null)).toHaveLength(1);
   });
 
-  test("production main wires scrubSecrets to window.sessionStorage and contains no executable localStorage reference", () => {
+  test("production wires the pairing credential to the origin-scoped store, with no sessionStorage reference left", () => {
+    // Inverted since #229: the credential used to be pinned to sessionStorage so it could not
+    // outlive a tab. It now lives in origin-scoped localStorage on purpose — a reload, a second
+    // tab or a rebuilt web view stays paired — and what bounds its life is the token file
+    // (`glosa token rotate|revoke` → 401 → removal). These pins keep the swap from silently
+    // regressing in either direction.
     expect(BOOTSTRAP_SOURCE).toMatch(
-      /scrubSecrets\(\s*window\.location,\s*window\.sessionStorage,\s*window\.history,\s*route,\s*redeemed\s*\)/,
+      /scrubSecrets\(\s*window\.location,\s*window\.localStorage,\s*window\.history,\s*route,\s*redeemed\s*\)/,
+    );
+    // `glosa_install` has to travel with the token: split them and a second tab boots holding a
+    // credential with no paired install, so a foreign daemon's 401 classifies as `revoked` and
+    // wipes the credential every other tab is using.
+    expect(BOOTSTRAP_SOURCE).toContain("rememberDaemonIdentity(window.localStorage, handshake, token)");
+    expect(BOOTSTRAP_SOURCE).toContain("window.localStorage.getItem(INSTALL_KEY)");
+    // The one data-access module defaults to the same store, so every authenticated request reads
+    // the credential the browser actually holds.
+    expect(DATA_ACCESS_SOURCE).toMatch(
+      /deps\.storage \?\? \(typeof localStorage !== "undefined" \? localStorage : undefined\)/,
     );
 
     // Pin every raw mention instead of stripping comments: a comment scanner with a string/regex
-    // edge case could hide later executable code. The sole allowed occurrence is existing prose.
-    const localStorageLines = BOOTSTRAP_SOURCE.split(/\r?\n/).filter((line) => /\blocalStorage\b/.test(line));
-    expect(localStorageLines).toEqual([
-      " * localStorage — and rewrite the address bar to keep only non-secret route state before anything",
-    ]);
+    // edge case could hide later executable code. Prose included — neither file may so much as
+    // describe the credential as tab-scoped now that it isn't.
+    const bootstrapSessionLines = BOOTSTRAP_SOURCE.split(/\r?\n/).filter((line) => /\bsessionStorage\b/.test(line));
+    expect(bootstrapSessionLines).toEqual([]);
+    const dataAccessSessionLines = DATA_ACCESS_SOURCE.split(/\r?\n/).filter((line) => /\bsessionStorage\b/.test(line));
+    expect(dataAccessSessionLines).toEqual([]);
   });
 
   // Token rotation/revocation is implemented. packages/daemon/test/token-lifecycle.test.ts proves
   // over real HTTP transport that each transition makes the previous Bearer return 401; this block
-  // owns the complementary SPA behavior that clears that rejected credential from tab-scoped storage.
+  // owns the complementary SPA behavior that clears that rejected credential from the origin-scoped
+  // store — which unpairs every tab on the origin, each on its own next 401 or reload. The
+  // end-to-end proof in a real browser is test/acceptance/pairing-durability-real-engine.test.ts.
 });

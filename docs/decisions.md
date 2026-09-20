@@ -943,3 +943,58 @@ keystrokes that mean "keep going past the end" are answered across the seam.
 Vertical movement asks the layout, not the position. In a paragraph that wraps over four lines,
 ArrowDown on line two belongs to the paragraph and only on line four belongs to the document; the
 first implementation used position alone and walked out of a wrapped paragraph from its first line.
+
+## Pairing outlives the tab: the credential moves from sessionStorage to localStorage (#229)
+
+`glosa open --url` opens a link whose fragment carries the pairing token. Bootstrap strips it from
+the address bar immediately, so the URL cannot be re-followed. #229 reports that reloading such a tab
+then lands on "not paired".
+
+The report's premise — that the token was never persisted — was not true even when it was filed:
+bootstrap already wrote it to `sessionStorage` before the scrub, and a standalone Chromium and a
+fresh terminal-multiplexer profile both survived a reload. What the report does show is the limit of
+tab-scoped storage. A host that rebuilds its web view drops session storage and keeps local storage,
+which is exactly the asymmetry the reporter's host exhibited: their appearance and layout keys
+survived and only the credential did not. A second tab on the same origin was never paired either,
+for the same reason.
+
+**Decision.** The credential lives in origin-scoped `localStorage`, beside `glosa_install`. A reload,
+a second tab, and a rebuilt web view all stay paired on that origin. No cookie is introduced (R5's
+"No cookies" is untouched), the token still never enters the URL or browser history (A3 §3/F24), and
+`glosa.localhost` and `127.0.0.1` remain separate pairings because the scope is the origin.
+
+**Why sessionStorage was right at the time, and is not now.** The adversarial review that set this
+rule (`docs/research/codex-review.md:212`, and attack #8 at `:363`) objected to "permanent
+localStorage" on the ground that a compromise would hold machine-wide access "until manual file
+deletion". That clause was the whole argument, and it described a product with no way to invalidate a
+credential: rotation and revocation did not exist yet, so the tab's own lifetime was the only bound
+available. Both shipped since. `glosa token rotate` and `glosa token revoke` change the credential on
+disk, the running daemon observes the transition without a restart, aborts credential-bound streams,
+and accepts only the current token with no grace period; the SPA classifies the resulting 401 and
+drops the credential. "Until manual file deletion" is now a command, and the bound the storage choice
+was standing in for is enforced where it belongs.
+
+**The threat model did not change.** A3's boundary is other websites, not other users of this
+machine. Against a same-uid attacker neither store defends anything, because `~/.glosa/token` is
+readable directly. Against a website, the defences are unaffected by this change: `script-src 'self'`
+with no inline script, Host and Origin both bound per route class, and the same-origin policy, which
+denies a cross-origin page any read of either store.
+
+**What a hostile page newly gains, stated plainly.** It can `window.open` the glosa origin and get a
+paired tab where before it would have got the unpaired screen. It cannot read anything out of that
+tab — the response is cross-origin and opaque — so what it gains is a rendered window the user may
+see, not data. A browser extension with host permissions could already read `sessionStorage` on this
+origin; that is unchanged.
+
+**Consequences, all of them shared-scope.** Every tab on the origin holds one credential, so every
+tab unpairs together: the 401 that one tab attributes to its own daemon removes the credential for
+all of them, and the ten-minute foreign-daemon give-up does the same (A3's fallback either way). The
+symmetric half is the good one — one `glosa open` after a rotate re-pairs every open tab on the
+origin without a reload, because the Bearer is read from the store on each request. "Clear site data"
+now unpairs where it used to be a no-op; `glosa open` recovers.
+
+**Not done.** No promotion of a legacy `sessionStorage` value: an old tab that is still open re-pairs
+through one `glosa open`, and a promotion branch would put an executable `sessionStorage` reference
+and a second credential-write site back into bootstrap for one transitional load. No `storage` event
+listener — each tab reaches the daemon's verdict on its own and `removeItem` is idempotent. No
+cookies, for the reason R5 gives.

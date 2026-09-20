@@ -40,7 +40,8 @@ those are cross-referenced, not duplicated.
 
 - Pairing token: 128-bit, written once to `~/.glosa/token` (0600). SPA reads it once from the
   `#t=<token>` URL fragment (cleared from the URL bar immediately via `history.replaceState`,
-  per F24), stores it in memory + `sessionStorage`, sends `Authorization: Bearer <token>` on
+  per F24), stores it in memory + origin-scoped `localStorage` (never a cookie, never the URL),
+  sends `Authorization: Bearer <token>` on
   every request thereafter. Presentation URLs from MCP `glosa_present` use `#p=<ephemeral>`
   instead: a short-TTL (60s) single-use token redeemed once via
   `POST /api/presentation-token/redeem` for the current durable pairing token. The durable token
