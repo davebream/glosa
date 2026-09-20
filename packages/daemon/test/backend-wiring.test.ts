@@ -10,7 +10,204 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceWatch } from "../src/artifact-watcher.ts";
 import { buildBackend } from "../src/lifecycle/daemon.ts";
+import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 import { canonicalize } from "../src/registry/slug.ts";
+import { CapabilityStore } from "../src/security/capability.ts";
+import { createApiFetch } from "../src/transport/http.ts";
+
+async function waitForMode(
+  backend: ReturnType<typeof buildBackend>,
+  entry: Parameters<typeof backend.artifactWatcherRegistry.modeFor>[0],
+  mode: "tree" | "files",
+): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (backend.artifactWatcherRegistry.modeFor(entry) === mode) return;
+    await Bun.sleep(5);
+  }
+  expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe(mode);
+}
+
+test("production-wired HTTP open keeps complete matcher scans off the request event loop", async () => {
+  const home = mkdtempSync(join(tmpdir(), "glosa-http-scan-home-"));
+  const userHome = canonicalize(mkdtempSync(join(tmpdir(), "glosa-http-scan-userhome-")));
+  const root = canonicalize(mkdtempSync(join(tmpdir(), "glosa-http-scan-ws-")));
+  const artifact = join(root, "note.md");
+  writeFileSync(artifact, "# note\n");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let scans = 0;
+  let synchronousShadowScans = 0;
+  const backend = buildBackend(home, {
+    userHomeDir: userHome,
+    resolveTrackedFilesAsync: async () => {
+      scans += 1;
+      await gate;
+      return {
+        tracked: [{ path: "note.md", rawPath: artifact, sizeBytes: 7 }],
+        oversize: [],
+        directories: [],
+        skippedSymlinks: [],
+        truncated: false,
+      };
+    },
+    resolveTrackedFilesSync: () => {
+      synchronousShadowScans += 1;
+      throw new Error("POISON: synchronous shadow matcher scan reached the HTTP transaction");
+    },
+  });
+
+  try {
+    // Matcher-mode owning directory: the request below point-resolves this existing registration,
+    // then performs a real first reconcile with a non-empty snapshot and baseline/checkpoint Git.
+    await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const port = 4647;
+    const fetchFn = createApiFetch({
+      port,
+      classFPort: port + 1,
+      token: "matcher-worker-test-token",
+      instanceId: "matcher-worker-test",
+      startedAt: new Date().toISOString(),
+      workspaceIndex: backend.workspaceIndex,
+      sessionRegistry: backend.sessionRegistry,
+      getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
+      sealAdoptionSources: backend.sealAdoptionSources,
+      adoptionCoordinator: backend.adoptionCoordinator,
+      capabilityStore: new CapabilityStore(),
+      adapterRegistry: backend.adapterRegistry,
+      metadataRegistry: backend.metadataRegistry,
+      providerRegistry: backend.providerRegistry,
+      pushRegistry: backend.pushRegistry,
+      artifactWatcherRegistry: backend.artifactWatcherRegistry,
+      home,
+    });
+    let settled = false;
+    const opening = fetchFn(
+      new Request(`http://127.0.0.1:${port}/api/workspaces/open`, {
+        method: "POST",
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Authorization: "Bearer matcher-worker-test-token",
+          Origin: `http://127.0.0.1:${port}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: artifact }),
+      }),
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    for (let attempt = 0; scans < 2 && attempt < 200; attempt += 1) await Bun.sleep(5);
+    expect(scans).toBe(2); // watcher initialization + offline catch-up use the same async boundary
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    release();
+    expect((await opening).status).toBe(200);
+    expect(synchronousShadowScans).toBe(0);
+  } finally {
+    release();
+    await backend.closeWorkspaceResources();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(userHome, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production-wired HTTP adoption keeps the staging bus matcher scan off the request event loop", async () => {
+  const home = mkdtempSync(join(tmpdir(), "glosa-http-adoption-home-"));
+  const userHome = canonicalize(mkdtempSync(join(tmpdir(), "glosa-http-adoption-userhome-")));
+  const root = canonicalize(mkdtempSync(join(tmpdir(), "glosa-http-adoption-ws-")));
+  const artifact = join(root, "note.md");
+  writeFileSync(artifact, "# note\n");
+  let releaseStage!: () => void;
+  const stageGate = new Promise<void>((resolve) => {
+    releaseStage = resolve;
+  });
+  let stageScans = 0;
+  let synchronousScans = 0;
+  const tracked = {
+    tracked: [{ path: "note.md", rawPath: artifact, sizeBytes: 7 }],
+    oversize: [],
+    directories: [],
+    skippedSymlinks: [],
+    truncated: false,
+  };
+  const backend = buildBackend(home, {
+    userHomeDir: userHome,
+    resolveTrackedFilesAsync: async (workspace) => {
+      if (typeof workspace !== "string" && workspace.bus_path.includes(".glosa.adopt-")) {
+        stageScans += 1;
+        await stageGate;
+      }
+      return tracked;
+    },
+    resolveTrackedFilesSync: () => {
+      synchronousScans += 1;
+      throw new Error("POISON: synchronous matcher scan reached adoption staging");
+    },
+  });
+
+  try {
+    const loose = await backend.workspaceIndex.resolveOpenTarget(artifact);
+    expect(loose.entry.kind).toBe("loose-file");
+    await backend.busRegistry.get(loose.entry).reconcileOnce();
+    const port = 4649;
+    const fetchFn = createApiFetch({
+      port,
+      classFPort: port + 1,
+      token: "adoption-worker-test-token",
+      instanceId: "adoption-worker-test",
+      startedAt: new Date().toISOString(),
+      workspaceIndex: backend.workspaceIndex,
+      sessionRegistry: backend.sessionRegistry,
+      getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
+      sealAdoptionSources: backend.sealAdoptionSources,
+      adoptionCoordinator: backend.adoptionCoordinator,
+      createAdoptionStagingBus: backend.createAdoptionStagingBus,
+      capabilityStore: new CapabilityStore(),
+      adapterRegistry: backend.adapterRegistry,
+      metadataRegistry: backend.metadataRegistry,
+      providerRegistry: backend.providerRegistry,
+      pushRegistry: backend.pushRegistry,
+      artifactWatcherRegistry: backend.artifactWatcherRegistry,
+      home,
+    });
+    let settled = false;
+    const opening = fetchFn(
+      new Request(`http://127.0.0.1:${port}/api/workspaces/open`, {
+        method: "POST",
+        headers: {
+          Host: `127.0.0.1:${port}`,
+          Authorization: "Bearer adoption-worker-test-token",
+          Origin: `http://127.0.0.1:${port}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: root }),
+      }),
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    for (let attempt = 0; stageScans === 0 && attempt < 200; attempt += 1) await Bun.sleep(5);
+    expect(stageScans).toBe(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    releaseStage();
+    expect((await opening).status).toBe(200);
+    expect(synchronousScans).toBe(0);
+  } finally {
+    releaseStage();
+    await backend.closeWorkspaceResources();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(userHome, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () => {
   let home: string;
@@ -49,6 +246,35 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     expect(backend.workspaceIndex.get(root)).not.toBeNull(); // still on record — the live session blocked it
   });
 
+  test("reopening a restored soft-absent loose registration starts its daemon-lifetime watcher exactly once", async () => {
+    const artifact = join(root, "loose.pdf");
+    writeFileSync(artifact, "loose\n");
+    const priorProcess = new WorkspaceIndex({ home });
+    const original = await priorProcess.resolveOpenTarget(artifact);
+    const firstSeen = original.entry.first_seen;
+    rmSync(artifact);
+    await priorProcess.gc({ force: true });
+    expect(priorProcess.getWorkspaceByRegistration(original.entry.registration_id)?.present).toBe(false);
+
+    const backend = buildBackend(home);
+    try {
+      await backend.warmArtifactWatchers();
+      expect(backend.artifactWatcherRegistry.modeFor(original.entry)).toBeNull();
+      writeFileSync(artifact, "returned\n");
+
+      const reopened = await backend.workspaceIndex.resolveOpenTarget(artifact);
+      await waitForMode(backend, reopened.entry, "files");
+      expect(reopened.entry.first_seen).toBe(firstSeen);
+      expect(reopened.entry.registration_id).toBe(original.entry.registration_id);
+      expect(backend.artifactWatcherRegistry.modeFor(reopened.entry)).toBe("files");
+
+      await backend.workspaceIndex.resolveOpenTarget(artifact);
+      expect(backend.artifactWatcherRegistry.modeFor(reopened.entry)).toBe("files");
+    } finally {
+      await backend.closeWorkspaceResources();
+    }
+  });
+
   test("onHardRemove is wired: a real GC hard-remove evicts the workspace's open WorkspaceBus", async () => {
     const backend = buildBackend(home, { gcGraceMs: 0, gcThrottleMs: 0 });
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
@@ -57,6 +283,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     expect(backend.busRegistry.has(root)).toBe(true);
     await bus.reconcile();
     backend.artifactWatcherRegistry.subscribe(entry, () => {});
+    await waitForMode(backend, entry, "tree");
     expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("tree");
 
     rmSync(root, { recursive: true, force: true }); // path missing, AND no live session this time
@@ -78,6 +305,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
 
     backend.busRegistry.get(loose.entry);
     backend.artifactWatcherRegistry.subscribe(loose.entry, () => {});
+    await waitForMode(backend, loose.entry, "files");
     expect(backend.busRegistry.has(loose.entry)).toBe(true);
     expect(backend.artifactWatcherRegistry.modeFor(loose.entry)).toBe("files");
 
@@ -94,6 +322,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
     const backend = buildBackend(home);
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
     backend.artifactWatcherRegistry.subscribe(entry, () => {});
+    await waitForMode(backend, entry, "tree");
     expect(backend.artifactWatcherRegistry.modeFor(entry)).toBe("tree");
 
     await backend.sealAdoptionSources([entry], "adopt-test", "target-registration");
@@ -104,6 +333,7 @@ describe("buildBackend — daemon backend wiring (P2.4's deferred notes)", () =>
       writeFileSync(join(secondRoot, "note.md"), "# second\n");
       const secondEntry = await backend.workspaceIndex.upsertWorkspace(secondRoot, "glosa-open");
       backend.artifactWatcherRegistry.subscribe(secondEntry, () => {});
+      await waitForMode(backend, secondEntry, "tree");
       backend.busRegistry.get(secondEntry);
       expect(backend.artifactWatcherRegistry.modeFor(secondEntry)).toBe("tree");
       expect(backend.busRegistry.has(secondEntry)).toBe(true);
@@ -154,6 +384,7 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
     });
     const entry = await backend.workspaceIndex.upsertWorkspace(root, "glosa-open");
     backend.busRegistry.get(entry);
+    await waitForMode(backend, entry, "tree");
     expect(watchers).toHaveLength(1);
     expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(1);
 
@@ -186,12 +417,13 @@ describe("daemon exit does not wait on closing filesystem watches", () => {
           return new HangingWatcher();
         },
       });
-      // Warm-up watches the first workspace synchronously, then yields; exit lands in that yield.
+      // Warm-up schedules the first workspace scan off-thread; exit can retire it before a native
+      // watch opens, and must prevent every later workspace from opening one too.
       const warming = backend.warmArtifactWatchers();
       await backend.releaseWorkspaceResourcesForExit();
       await warming;
 
-      expect(opened).toBe(1);
+      expect(opened).toBeLessThanOrEqual(1);
       expect(backend.artifactWatcherRegistry.watchedWorkspaceCount()).toBe(0);
     } finally {
       for (const r of extraRoots) rmSync(r, { recursive: true, force: true });

@@ -6,7 +6,7 @@
 // (making it build its own independent picomatch instances) or its confinement/prune walk would
 // make these tests fail without touching `resolveMatchedFiles` at all — the point this suite exists
 // to pin.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type MatcherConfig, matchTrackedFile, resolveMatchedFiles, resolveTrackedFiles } from "../../src/matcher.ts";
@@ -193,6 +193,19 @@ describe("matchTrackedFile — point/list differential", () => {
     expect(resolveMatchedFiles(root, cfg).tracked).toEqual([]);
   });
 
+  test("an execute-only unreadable intermediate directory is omitted by both point and list resolution", () => {
+    const hiddenDir = makeDir(root, "searchable");
+    const hiddenFile = writeFile(root, "searchable/note.md", "hidden");
+    const cfg = config();
+    chmodSync(hiddenDir, 0o100);
+    try {
+      expect(resolveMatchedFiles(root, cfg).tracked).toEqual([]);
+      expect(matchTrackedFile(root, hiddenFile, cfg)).toBeNull();
+    } finally {
+      chmodSync(hiddenDir, 0o700);
+    }
+  });
+
   test("bounded (loose-file) registrations bypass extension/exclusion/size policy but require an exact path match", () => {
     const oversizedJson = writeFile(root, "artifact.json", 1000); // wrong extension AND over any small threshold
     const other = writeFile(root, "other.json", 1000);
@@ -218,6 +231,30 @@ describe("matchTrackedFile — point/list differential", () => {
     // A DIFFERENT file, even one that would pass ordinary matcher policy just as poorly, is not
     // this registration's bounded path and must not match.
     expect(matchTrackedFile(workspace, other, cfg)).toBeNull();
+  });
+
+  test("bounded registration ignores invalid and unreadable redirected matcher config, matching its complete list", () => {
+    const artifact = writeFile(root, "artifact.bin", "bounded");
+    const invalidBus = freshWorkspace();
+    writeFileSync(join(invalidBus, "config.json"), "{ definitely not json");
+    const unreadableBus = freshWorkspace();
+    mkdirSync(join(unreadableBus, "config.json")); // readFileSync fails with EISDIR
+
+    for (const busPath of [invalidBus, unreadableBus]) {
+      const workspace = {
+        registration_id: `loose-${busPath}`,
+        kind: "loose-file" as const,
+        canonical_path: artifact,
+        worktree_path: root,
+        bus_path: busPath,
+        tracking: { mode: "bounded" as const, paths: ["artifact.bin"] },
+      };
+      expect(resolveTrackedFiles(workspace).tracked.map((file) => file.path)).toEqual(["artifact.bin"]);
+      expect(matchTrackedFile(workspace, artifact)?.path).toBe("artifact.bin");
+    }
+
+    cleanupWorkspace(invalidBus);
+    cleanupWorkspace(unreadableBus);
   });
 
   test("bounded registration: a symlink at the exact bounded path is still refused", () => {

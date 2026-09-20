@@ -10,7 +10,7 @@
 // This is also the ablation target for contract criterion 5 (#281): temporarily reverting any of
 // the point-membership call sites back to `resolveTrackedFiles(...).tracked.find(...)` /
 // `resolveMatchedFiles(...).tracked.some(...)` must turn the matching test here red.
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 import * as matcher from "../../src/matcher.ts";
@@ -232,14 +232,63 @@ describe("issue #281 — exact-path reopen preserves durable metadata, not only 
     const index = indexWithTraversalPoison({ home, now: deterministicClock() });
 
     const first = await index.resolveOpenTarget(file);
-    const registrationId = first.entry.registration_id;
+    const { registration_id: registrationId, first_seen: firstSeen, slug, bus_path: busPath } = first.entry;
+    unlinkSync(file);
+    await index.gc({ force: true });
+    expect(index.getWorkspaceByRegistration(registrationId)?.present).toBe(false);
+    writeFileSync(file, "returned");
 
     const second = await index.resolveOpenTarget(file);
     expect(second.entry.registration_id).toBe(registrationId);
+    expect(second.entry.first_seen).toBe(firstSeen);
+    expect(second.entry.slug).toBe(slug);
+    expect(second.entry.bus_path).toBe(busPath);
     expect(second.entry.present).toBe(true);
     expect(second.entry.absent_since).toBeUndefined();
 
     cleanup(home);
     cleanup(dir);
+  });
+
+  test("exact reuse fails with a stable open error when the non-following identity snapshot races away", async () => {
+    const home = freshHome();
+    const dir = freshWorkspaceDir();
+    const file = join(dir, "doc.md");
+    writeFileSync(file, "hello");
+    const initial = new WorkspaceIndex({ home });
+    const first = await initial.resolveOpenTarget(file);
+    const persistedIdentity = first.entry.file_identity;
+    const raced = new WorkspaceIndex({ home, regularFileSnapshot: () => null });
+
+    await expect(raced.resolveOpenTarget(file)).rejects.toMatchObject({ code: "unsupported-file" });
+    expect(raced.getWorkspaceByRegistration(first.entry.registration_id)?.file_identity).toEqual(persistedIdentity);
+
+    cleanup(home);
+    cleanup(dir);
+  });
+
+  test("exact-path reopen refuses adopting and sealed adopted loose registrations", async () => {
+    const home = freshHome();
+    const targetDir = freshWorkspaceDir();
+    const file = join(targetDir, "doc.md");
+    writeFileSync(file, "hello");
+    const index = indexWithTraversalPoison({ home, now: deterministicClock() });
+
+    const source = await index.resolveOpenTarget(file);
+    mkdirSync(source.entry.bus_path, { recursive: true });
+    const target = await index.resolveOpenTarget(targetDir);
+    const adoption = await index.beginAdoption(target.entry);
+    expect(adoption).not.toBeNull();
+    // Make the owning directory stop claiming this file so resolution reaches the exact loose
+    // registration whose lifecycle is under test.
+    mkdirSync(join(targetDir, ".glosa"), { recursive: true });
+    writeFileSync(join(targetDir, ".glosa", "config.json"), JSON.stringify({ artifacts: { exclude: ["doc.md"] } }));
+    await expect(index.resolveOpenTarget(file)).rejects.toMatchObject({ code: "workspace-adopting" });
+
+    await index.commitAdoption(adoption!.adoption_id);
+    await expect(index.resolveOpenTarget(file)).rejects.toMatchObject({ code: "workspace-adopted" });
+
+    cleanup(home);
+    cleanup(targetDir);
   });
 });

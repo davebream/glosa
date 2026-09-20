@@ -34,7 +34,7 @@ import { checkpoint, headSha } from "../src/git/shadow.ts";
 import { resolveTrackedFiles } from "../src/matcher.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
-import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
+import { WorkspaceIndex, WorkspaceOpenError } from "../src/registry/workspace-index.ts";
 import { CapabilityStore } from "../src/security/capability.ts";
 import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
@@ -313,6 +313,31 @@ describe("A1 §5 route catalog", () => {
     // says and what this asserts.
     expect(body.title).toContain(seeded.entry.slug);
     expect(body.detail).toBeUndefined();
+  });
+
+  test("POST /api/workspaces/open never exposes alias Worker errors or canonical paths", async () => {
+    const canonicalSecret = "/private/secret/workspace/alias.md";
+    for (const detail of ["construction-secret", "post-secret", "reply-secret"]) {
+      workspaceIndex.resolveOpenTarget = (() =>
+        Promise.reject(
+          new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias discovery failed for ${canonicalSecret}: ${detail}`,
+          ),
+        )) as WorkspaceIndex["resolveOpenTarget"];
+
+      const response = await fetchFn(
+        stateChangingReq("/api/workspaces/open", {
+          method: "POST",
+          body: JSON.stringify({ path: canonicalSecret }),
+        }),
+      );
+      const body = await response.text();
+      expect(response.status).toBe(503);
+      expect(body).toContain("hardlink alias discovery unavailable");
+      expect(body).not.toContain(detail);
+      expect(body).not.toContain(canonicalSecret);
+    }
   });
 
   test("POST /api/workspaces/open registers loose siblings independently and exposes only the focused file", async () => {
