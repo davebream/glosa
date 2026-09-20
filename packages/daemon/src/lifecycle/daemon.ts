@@ -15,7 +15,10 @@ import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/int
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
+import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
+import { resolveTrackedFilesAsync } from "../matcher-async.ts";
+import { resolveTrackedFiles } from "../matcher.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "../bus/write-checkpoint.ts";
 import { SessionRegistry } from "../registry/session-registry.ts";
 import { WorkspaceIndex } from "../registry/workspace-index.ts";
@@ -115,6 +118,7 @@ export interface DaemonBackend {
    * it is warm-up, not readiness, and it yields between workspaces. */
   warmArtifactWatchers(): Promise<void>;
   adoptionCoordinator: AdoptionCoordinator;
+  createAdoptionStagingBus(workspace: WorkspaceTarget): WorkspaceBus;
   sealAdoptionSources(
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -148,10 +152,15 @@ export interface BuildBackendOptions {
   /** Test-only: how the artifact watcher registry opens a filesystem watch. Production uses
    * `nativeWorkspaceWatch`. */
   artifactWatchFactory?: ArtifactWatcherRegistryOptions["watchFactory"];
+  /** Test-only resolver seam. Production uses the matcher Worker implementation below. */
+  resolveTrackedFilesAsync?: typeof resolveTrackedFilesAsync;
+  /** Test-only poison seam for synchronous shadow matcher walks. */
+  resolveTrackedFilesSync?: typeof resolveTrackedFiles;
 }
 
 export function buildBackend(home: string, opts: BuildBackendOptions = {}): DaemonBackend {
   const userHomeDir = opts.userHomeDir ?? homedir();
+  const asyncTrackedFiles = opts.resolveTrackedFilesAsync ?? resolveTrackedFilesAsync;
   const workspaceIndex = new WorkspaceIndex({
     home,
     gcGraceMs: opts.gcGraceMs,
@@ -164,7 +173,11 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   // coordinators would leave the two call paths just as unserialized as having none at all.
   const adoptionCoordinator = new AdoptionCoordinator();
   const sessionRegistry = new SessionRegistry({ index: workspaceIndex, ownershipCoordinator: adoptionCoordinator });
-  const busRegistry = new WorkspaceBusRegistry({ writeCheckpoint: opts.writeCheckpoint });
+  const busRegistry = new WorkspaceBusRegistry({
+    writeCheckpoint: opts.writeCheckpoint,
+    resolveTrackedFilesAsync: asyncTrackedFiles,
+    resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
+  });
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
@@ -173,6 +186,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     watchFactory: opts.artifactWatchFactory,
     warn: (message) => log(home, message),
+    initialResolveTrackedFiles: asyncTrackedFiles,
     // The watcher→bus edge (#153), assembled HERE rather than imported inside the watcher: that
     // module stays a chokidar fan-out that knows nothing about journals or shadow git, and the one
     // place the two layers meet is this composition root. `captureExternalEdit` takes the
@@ -192,6 +206,11 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     await busRegistry.sealForAdoption(sources, adoptionId, targetRegistrationId);
     await Promise.all(sources.map((source) => artifactWatcherRegistry.evict(source)));
   };
+  const createAdoptionStagingBus = (workspace: WorkspaceTarget) =>
+    new WorkspaceBus(workspace, {
+      resolveTrackedFilesAsync: asyncTrackedFiles,
+      resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
+    });
   const closeWorkspaceResources = () =>
     Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]).then(() => {});
   let exiting = false;
@@ -224,15 +243,14 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
 
   /** The second half: workspaces already in the index when this process started.
    *
-   * NOT run here. `ensureWatched` does one matcher walk per workspace on first sight, and this
-   * builder runs before `Bun.serve`, so doing it inline made daemon readiness wait on every
-   * registered workspace in turn — a machine with an accumulated index never answered the
-   * handshake at all. Warm-up is not readiness, so the caller starts serving first and calls this
-   * afterwards.
+   * NOT run here. `ensureWatched` schedules one matcher walk per workspace on first sight, and this
+   * builder runs before `Bun.serve`. Warm-up is not readiness, so the caller starts serving first
+   * and calls this afterwards; production matcher walks run in Workers and cannot freeze the
+   * daemon event loop while the accumulated index is warmed.
    *
-   * Yields between workspaces so a long warm-up cannot hold the event loop, and skips roots that
-   * are no longer on disk: an index entry whose directory was deleted is not worth a tree walk,
-   * and `present` does not currently catch that on its own. */
+   * Yields between workspaces so registration work stays interleavable, and skips roots that are
+   * no longer on disk: an index entry whose directory was deleted is not worth a tree walk, and
+   * `present` does not currently catch that on its own. */
   const warmArtifactWatchers = async (): Promise<void> => {
     for (const entry of workspaceIndex.list({ presentOnly: true })) {
       if (exiting) return;
@@ -264,6 +282,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     watchEmissions,
     artifactWatcherRegistry,
     adoptionCoordinator,
+    createAdoptionStagingBus,
     sealAdoptionSources,
     closeWorkspaceResources,
     releaseWorkspaceResourcesForExit,
@@ -361,6 +380,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     sessionRegistry: backend.sessionRegistry,
     getWorkspaceBus: (workspace) => backend.busRegistry.get(workspace),
     sealAdoptionSources: backend.sealAdoptionSources,
+    createAdoptionStagingBus: backend.createAdoptionStagingBus,
     adoptionCoordinator: backend.adoptionCoordinator,
     capabilityStore,
     presentationTokenStore,
@@ -427,6 +447,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
       (workspace) => backend.busRegistry.get(workspace),
       backend.sealAdoptionSources,
       backend.adoptionCoordinator,
+      backend.createAdoptionStagingBus,
     );
   } catch (error) {
     // A sealed adoption is deliberately fail-closed for its own target, but must not prevent a
