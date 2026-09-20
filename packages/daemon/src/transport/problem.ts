@@ -105,6 +105,11 @@ export type ProblemSlug =
   // Distinct from `lease-conflict` (that one's about a SECOND apply-begin); this route's own
   // refusal is about a SAVE arriving while a lease already holds the workspace.
   | "drift-under-lease"
+  // #250 addition — `PUT /w/:slug/artifacts/:path` against a file whose bytes are not valid UTF-8.
+  // Named separately from `source-changed` because the two demand opposite things of the SPA: a
+  // stale save opens the merge dialog, and this one must never, since every choice there writes a
+  // replacement-character decode back over bytes glosa cannot read.
+  | "not-utf8"
   // Starred workspaces (contract 1.11). `star-not-directory`: only a directory registration can be
   // starred, because reopening a star is `glosa open <dir>` and a loose file has no directory of
   // its own to reopen. `star-folder-missing`: the starred folder is gone or no longer a directory,

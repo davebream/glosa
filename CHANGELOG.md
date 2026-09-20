@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and shadow initialization/checkpointing—including adoption's staging bus—reuse that boundary rather
   than walking the tree again. Restored loose registrations restart their daemon-lifetime watcher,
   and every hardlink/exact-reuse identity decision uses a non-following regular-file snapshot.
+- Opening a document whose bytes are not valid UTF-8 no longer risks losing them. glosa read such a
+  file by replacing every byte it could not decode with `�` and saying nothing, so the editor held
+  a copy that differed from the file and an ordinary save wrote that copy back — no conflict, no
+  warning. These documents are now shown but not edited: the pane says why, offers no Edit, and the
+  daemon refuses the write itself, so nothing writing through the API can do the damage either.
 
 ## [0.1.0-alpha.28] — 2026-09-18
 

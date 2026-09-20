@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { isUtf8 } from "node:buffer";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -47,6 +48,7 @@ export type ArtifactErrorCode =
   | "invalid-path"
   | "not-found"
   | "class-f-not-editable"
+  | "not-utf8"
   | "source-changed"
   | "drift-under-lease"
   | "unknown-checkpoint"
@@ -115,6 +117,28 @@ export function listArtifacts(deps: ArtifactAccessDependencies, slug: string) {
   });
 }
 
+/** One read, two answers: the string to show, and whether that string is the file.
+ *
+ * `raw.toString("utf8")` alone cannot tell the difference — it replaces every byte it cannot
+ * decode with U+FFFD and says nothing, so the editor used to fill from a lossy copy and an
+ * ordinary save wrote the replacement characters back over the original bytes. `fatal: true` is
+ * what turns an undecodable byte into a throw instead of that silent substitution.
+ *
+ * `ignoreBOM: true` is load-bearing, not tidiness: the default decoder DROPS a leading U+FEFF
+ * while `toString("utf8")` keeps it, so without it every BOM-prefixed VALID file would come back
+ * three bytes shorter than it is on disk and lose them on its next save — the same data loss, on
+ * the files this check is supposed to leave alone.
+ *
+ * The lossy string is still returned when the decode fails, because the pane shows a preview of
+ * exactly the artifact it is refusing to edit. */
+function decodeSource(raw: Buffer): { content: string; valid_utf8: boolean } {
+  try {
+    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw), valid_utf8: true };
+  } catch {
+    return { content: raw.toString("utf8"), valid_utf8: false };
+  }
+}
+
 export function getArtifact(deps: ArtifactAccessDependencies, slug: string, path: string, render: boolean) {
   const workspace = findWorkspace(deps, slug);
   const match = trackedArtifact(workspace, path);
@@ -139,8 +163,9 @@ export function getArtifact(deps: ArtifactAccessDependencies, slug: string, path
       ...(manifest?.manifestPath !== undefined ? { manifest_path: manifest.manifestPath } : {}),
     };
   }
-  const content = raw.toString("utf8");
-  if (!render) return { source_path: match.path, source_sha256: sha, class: "R" as const, content };
+  const { content, valid_utf8 } = decodeSource(raw);
+  if (!render) return { source_path: match.path, source_sha256: sha, class: "R" as const, content, valid_utf8 };
+  // Rendered from the lossy string on purpose: a preview of an unreadable file is the point.
   const rendered = renderMarkdown(content);
   return {
     source_path: match.path,
@@ -148,6 +173,7 @@ export function getArtifact(deps: ArtifactAccessDependencies, slug: string, path
     rendered_sha256: createHash("sha256").update(rendered, "utf8").digest("hex"),
     class: "R" as const,
     content,
+    valid_utf8,
     rendered_html: rendered,
   };
 }
@@ -172,7 +198,13 @@ export function prepareArtifactSave(
   ) {
     throw new ArtifactError("class-f-not-editable");
   }
-  if (ifMatch !== undefined && sourceSha256(readFileSync(match.rawPath)) !== ifMatch) {
+  const raw = readFileSync(match.rawPath);
+  // Refuse rather than edit lossily, and refuse BEFORE `If-Match`: the sha is computed over the
+  // same replacement-character decode the editor was filled from, so it matches happily while the
+  // bytes underneath are being destroyed. Ordering also keeps an invalid file out of the SPA's
+  // stale-save dialog, whose "Keep mine" would merge onto that lossy base and write it back.
+  if (!isUtf8(raw)) throw new ArtifactError("not-utf8", { path: match.path });
+  if (ifMatch !== undefined && sourceSha256(raw) !== ifMatch) {
     throw new ArtifactError("source-changed");
   }
   return { workspace, match };
@@ -200,6 +232,9 @@ export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: P
     source_sha256: sourceSha256(Buffer.from(content, "utf8")),
     class: "R" as const,
     content,
+    // It just wrote valid UTF-8 — the pane spreads this response into `currentArtifact`, so
+    // omitting the field would leave a stale `false` sitting on an artifact that is now fine.
+    valid_utf8: true,
     rendered_html: renderMarkdown(content),
     ...(captured ? { inbox_id: inboxId } : {}),
   };

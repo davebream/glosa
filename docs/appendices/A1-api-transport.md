@@ -24,7 +24,7 @@ those are cross-referenced, not duplicated.
   ```
   Common `<slug>` values, not an exhaustive catalogue — each route's own section and the status
   table below are authoritative, and routes added since have their own (`source-changed` §5.4a,
-  `drift-under-lease` §5.4a): `invalid-origin`, `unauthorized`, `contract-mismatch`,
+  `drift-under-lease` §5.4a, `not-utf8` §5.4a): `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
   `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
 
@@ -110,7 +110,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
 400 for Host, 403 for Origin, per §1).
 ```json
-{ "contract_version": "1.11", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.12", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -192,9 +192,17 @@ requests server-rendered HTML with `data-line` stamps for class R; omit for raw 
 Class F artifacts return metadata only — actual HTML is never served through this route (§7).
 - **200** (class R, `?render=html`)
 ```json
-{ "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R",
+{ "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R", "valid_utf8": true,
   "content": "<raw markdown>", "rendered_html": "<div data-line=\"1\">…</div>" }
 ```
+`valid_utf8` (contract 1.12) is always present on a class-R response, raw and rendered alike, and
+never on a class-F one. `false` means the file's bytes are not decodable UTF-8: `content` is then a
+lossy decode with every undecodable byte replaced by U+FFFD, and `rendered_html` is rendered from
+that same lossy string. Both are **preview only** — `source_sha256` hashes the lossy decode too, so
+`If-Match` cannot detect the difference, and a client that writes `content` back destroys the bytes
+it could not read. The daemon refuses such a write itself (§5.4a `not-utf8`); a client that also
+reads this field can say so before the writer types anything, which is what the SPA does by not
+offering Edit at all.
 - **200** (class F)
 ```json
 { "source_path": "output/document/rendered-preview-2026-07-20.html", "source_sha256": "…",
@@ -219,6 +227,11 @@ than applied — this is what the Edit-mode stale-save dialog keys on (R6).
 - **409 source-changed** — `If-Match`'s `source_sha256` no longer matches what is on disk; nothing
   was written. Distinct from the `workspace-adopting` `409` that can also reach this route (§9) —
   a caller must discriminate on `type`, never on a bare `409` status.
+- **409 not-utf8** (#250) — the file on disk is not valid UTF-8, so saving would rewrite bytes
+  glosa cannot read; nothing was written. Checked BEFORE `If-Match`, so such a file never answers
+  `source-changed` — that slug is what routes a client into a stale-save merge, and every outcome
+  of one would write a replacement-character decode back over the original bytes. Refusal is
+  unconditional: there is no header or body form that makes this write proceed.
 - **409 drift-under-lease** (#182) — an apply-lease is active and `:path` has drift on disk this
   save cannot honestly pre-capture (A4 §F05): the interval belongs to that lease's own `resolve`,
   not to this save. Nothing was written. A save against a path with no such drift is unaffected by
@@ -989,7 +1002,7 @@ which needs the identical disable for the identical reason.
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
+| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`); the target file's bytes are not valid UTF-8 (`not-utf8`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
 | 500 | unhandled daemon error | any route |
 

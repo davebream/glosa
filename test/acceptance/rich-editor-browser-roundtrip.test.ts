@@ -323,6 +323,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   // so this is new coverage for the mechanism, not a re-run of an existing one) is driven through
   // a real keypress and a real save, not only through `parseMarkdown`/`spliceMarkdown` directly.
   const COMMENT_SOURCE = ["%%", "A private note about this passage.", "%%", ""].join("\n");
+  // #250: a lone `\xe9` — `é` in Latin-1, an invalid UTF-8 sequence on its own. A real editor
+  // writes this; it is not a synthetic byte no file would carry.
+  const LATIN1_BYTES = Buffer.from("# Caf\xe9\n\nBody of the undecodable file.\n", "latin1");
   const BLOCKQUOTE_SOURCE = [
     "> [!info] A callout",
     "> with a second deliberate line, staying wrapped by the writer's own hand.",
@@ -347,6 +350,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     writeFileSync(join(workspaceRoot, "paragraph.md"), PARAGRAPH_SOURCE);
     writeFileSync(join(workspaceRoot, "blockquote.md"), BLOCKQUOTE_SOURCE);
     writeFileSync(join(workspaceRoot, "comment.md"), COMMENT_SOURCE);
+    writeFileSync(join(workspaceRoot, "latin1.md"), LATIN1_BYTES);
 
     port = randomPort();
     // The same scrubbed, HOME-redirected environment every child of this file gets; `GLOSA_HOME`
@@ -658,6 +662,43 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       expect(state.readLocked).toBe(true);
       expect(state.mode).toBe("read");
       expect(state.navigatorHidden).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "#250: a mode=edit link onto a file that is not valid UTF-8 opens in Read, and the bytes survive",
+    async () => {
+      const before = readFileSync(join(workspaceRoot, "latin1.md"));
+      const { client } = await launchBrowser({ initialUrl: documentUrl("document", "latin1.md", "edit") });
+      cdp = client;
+      // The manuscript renders — refusing to edit is not refusing to show.
+      await waitForRoute(client, "document", "Body of the undecodable file.");
+
+      const state: any = await client.evaluate(`(() => {
+        const pane = document.querySelector('.glosa-app .glosa-pane[data-active="true"]');
+        return {
+          mode: pane?.getAttribute('data-mode'),
+          editButton: Boolean(pane?.querySelector('.glosa-modebar [data-control="edit"]')),
+          writableFaces: pane?.querySelectorAll('[contenteditable="true"], .ProseMirror').length,
+          noticeHidden: pane?.querySelector('.glosa-encoding-notice')?.hidden,
+          notice: pane?.querySelector('.glosa-encoding-notice')?.textContent ?? '',
+          text: pane?.querySelector('.glosa-content')?.textContent ?? '',
+        };
+      })()`);
+      expect(state.mode).toBe("read");
+      expect(state.editButton).toBe(false);
+      expect(state.writableFaces).toBe(0);
+      expect(state.noticeHidden).toBe(false);
+      expect(state.notice).toContain("not valid UTF-8");
+      expect(state.text).toContain("Caf");
+
+      // Leaving through the guarded full reload rather than just asserting in place: that is the
+      // path a real close takes, and it is where an editor that HAD been mounted would flush.
+      const next = new URL(documentUrl("document", "paragraph.md")).hash;
+      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+      await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
+      expect(readFileSync(join(workspaceRoot, "latin1.md")).equals(before)).toBe(true);
     },
     TEST_TIMEOUT_MS,
   );

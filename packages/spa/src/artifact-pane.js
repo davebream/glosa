@@ -292,7 +292,7 @@ export function createArtifactPane(host, deps) {
     faceStore = null,
   } = deps;
 
-  let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?}
+  let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?, valid_utf8?}
   // The sha of the bytes the editor face was FILLED FROM — separate from currentArtifact, which
   // keeps tracking the file for display. A refresh never moves this, so a save can stay honest
   // about what it would overwrite even while the pane's display races ahead of it.
@@ -602,6 +602,21 @@ export function createArtifactPane(host, deps) {
     { className: "glosa-disk-change", hidden: true, role: "status", "aria-live": "polite" },
     [diskChangeCopyEl, diskChangeActionsEl],
   );
+  // Why Edit is not on offer for this artifact (#250). In the flow rather than floating, and the
+  // opposite call from `diskChangeEl` above for the opposite reason: a disk change ARRIVES while
+  // someone is reading, so a row appearing in the flow would move the manuscript under an
+  // unchanged scrollTop; this fact is true from the first paint, so there is no reading position
+  // for it to disturb and a floating card over the paper would be the intrusive choice.
+  const encodingNoticeEl = el(
+    "section",
+    { className: "glosa-encoding-notice", hidden: true, role: "status", "aria-live": "polite" },
+    [
+      el("p", {
+        textContent:
+          "This file is not valid UTF-8. glosa can show it but will not edit it: saving would rewrite the bytes it cannot read.",
+      }),
+    ],
+  );
   const annotateInstructions = el("p", {
     className: "glosa-visually-hidden",
     textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
@@ -673,6 +688,7 @@ export function createArtifactPane(host, deps) {
   const paneMain = el("main", { className: "glosa-pane-main" }, [
     approvalStrip,
     diskChangeEl,
+    encodingNoticeEl,
     annotateInstructions,
     emptyEl,
     skeletonEl,
@@ -976,6 +992,13 @@ export function createArtifactPane(host, deps) {
     }
   }
 
+  /** Shown exactly when the daemon said the bytes are not decodable. `!== false` rather than a
+   * truthiness test for the same reason `canEdit` uses it: an N-1 daemon sends no field, and that
+   * silence is not a claim that the file is broken. */
+  function renderEncodingNotice() {
+    encodingNoticeEl.hidden = loading || currentArtifact?.valid_utf8 !== false;
+  }
+
   async function copyArtifactSource() {
     if (currentArtifact?.class !== "R") return;
     try {
@@ -1196,8 +1219,15 @@ export function createArtifactPane(host, deps) {
   // R6/A5 §F11: class-F Edit follows the generic derived-from edge — enabled only when the
   // artifact metadata carries a `derived_from` path (supplied by a content adapter, P6.1; the
   // core itself never invents one). With no edge, class F is opaque: Preview + Annotate only.
+  //
+  // `valid_utf8: false` (#250) joins the same predicate rather than getting a branch of its own:
+  // the file's bytes cannot be decoded, so the string this pane holds is a replacement-character
+  // copy and an ordinary save would write it back over what it could not read. Refusing to edit is
+  // the honest answer; the preview stays, and `renderEncodingNotice` says why. Compared with
+  // `!== false`, not falsily — an N-1 daemon sends no such field, and an absent field must mean
+  // "no claim made", never "not valid".
   function canEdit(artifact) {
-    return artifact?.class !== "F" || Boolean(artifact.derived_from);
+    return (artifact?.class !== "F" || Boolean(artifact.derived_from)) && artifact?.valid_utf8 !== false;
   }
 
   function renderModeBar() {
@@ -1906,6 +1936,7 @@ export function createArtifactPane(host, deps) {
     const isClassF = currentArtifact?.class === "F";
     paneEl.setAttribute("data-class", currentArtifact?.class ?? "");
     renderArtifactTools();
+    renderEncodingNotice();
     const isEdit = modeState.mode === "edit" && !isClassF;
     // EDIT IS THE PAGE NOW. Its default face is the manuscript itself, writable a block at a time —
     // so entering Edit changes what a click DOES, not what the reader is looking at. The full-page
@@ -3225,6 +3256,10 @@ export function createArtifactPane(host, deps) {
       if (currentArtifact.derived_from) void openArtifactInThisPane(currentArtifact.derived_from);
       return;
     }
+    // The mode control already omits Edit for an artifact that cannot be written to, but a
+    // programmatic call reaches this from elsewhere — `viewer.js`'s `pane.setMode(mode)` on a deep
+    // link into an ALREADY-OPEN pane, and `replacePanel` — neither of which consults the bar.
+    if (mode === "edit" && currentArtifact && !canEdit(currentArtifact)) return;
 
     // An open block belongs to the state being left. Leaving it mounted was how the page ended up
     // with two writable faces over the same bytes at once — the source editor in front, a live
@@ -3663,6 +3698,15 @@ export function createArtifactPane(host, deps) {
   async function staleSave(artifact) {
     editStatus.textContent = "Checking what changed…";
     const fresh = await dataAccess.getArtifact(slug, artifact.source_path, { render: "html" });
+    // Whatever landed on disk is not decodable any more, so there is no version of this dialog
+    // worth opening: every choice in it writes a replacement-character decode back. Take disk
+    // would fill the editor from one, and Keep mine would splice onto it as a merge base.
+    if (fresh.valid_utf8 === false) {
+      editStatus.setAttribute("data-error", "true");
+      editStatus.textContent =
+        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.";
+      return SAVE_DECLINED;
+    }
     const choice = await choiceDialog({
       title: "This file changed while you were editing",
       body: `${artifact.source_path} was written after you started. Saving now replaces that version with yours.`,
@@ -3854,6 +3898,15 @@ export function createArtifactPane(host, deps) {
     renderContent();
     try {
       currentArtifact = await dataAccess.getArtifact(slug, artifactPath, { render: "html" });
+      // A `mode=edit` deep link onto an artifact that cannot be written to lands in Read, here,
+      // BEFORE the first manuscript paint and before `beginEditSession()` below — so no editor is
+      // ever mounted over bytes this pane would refuse to save, and `onStateChange` writes
+      // `mode=read` back to the hash. Scoped to class R: class F's own `mode=edit` handling is the
+      // derived-from hop in `setMode`, which this must not intercept.
+      if (modeState.mode === "edit" && currentArtifact.class === "R" && !canEdit(currentArtifact)) {
+        modeState = modeReducer(modeState, { type: "set_mode", mode: "read" });
+        lastViewMode = "read";
+      }
       // Warm the editor while the reader is still reading. Fetching it on the first click would put
       // a 400 KB download between the click and the caret — the delay this redesign exists to
       // remove, moved rather than fixed. `loadMergeModule` warms itself on the same reasoning.
@@ -4032,6 +4085,13 @@ export function createArtifactPane(host, deps) {
     currentArtifact = fresh;
     contentEl.removeAttribute("data-path");
     teardownRichFace();
+    // The discard above already happened — the writer consented to it. What is left is where to
+    // land, and the disk bytes may be ones no save could reach (#250): leave Edit rather than
+    // remount a face over them. `setMode` does the renders this branch would otherwise do.
+    if (!canEdit(fresh)) {
+      setMode("read");
+      return SAVE_DECLINED;
+    }
     renderModeBar();
     renderContent();
     onStateChange();
@@ -4080,6 +4140,16 @@ export function createArtifactPane(host, deps) {
       return;
     }
     currentArtifact = fresh;
+    renderEncodingNotice();
+    // The file became undecodable under an open pane. With nothing typed, leave Edit — the Edit
+    // button is already gone from the bar and the tools row, and staying would leave the page
+    // writable with no way back to it. With a draft open, STAY: the disk-change banner already
+    // says the file moved, the daemon refuses the save either way, and dropping to Read would park
+    // the draft behind a button that no longer exists.
+    if (fresh.valid_utf8 === false && modeState.mode === "edit" && !isDirty()) {
+      setMode("read");
+      return;
+    }
     if (fresh.class === "F") {
       // A1 §7: "fresh mint per iframe open/reload" — an SSE-driven re-render discards the old
       // iframe and mints a brand new capability rather than trying to reuse the expiring one.
