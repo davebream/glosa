@@ -33,8 +33,9 @@ const MESSAGES = {
   "foreign-daemon": "another glosa is serving this port — waiting for yours to come back.",
 };
 
-/** Which daemon this tab paired with, kept beside the token (A5 §F13's `install_id`). Not a
- * secret: it is a hash the tokenless handshake already publishes to anyone who asks. */
+/** Which daemon the browser paired with on this origin, kept in the same store as the token so
+ * every tab reads the same pair (A5 §F13's `install_id`). Not a secret: it is a hash the tokenless
+ * handshake already publishes to anyone who asks. */
 const INSTALL_KEY = "glosa_install";
 
 /** How long to wait for a tab's own daemon to reclaim the port before giving up and asking the
@@ -123,9 +124,12 @@ export function readRoute(loc) {
 
 /**
  * The FIRST thing bootstrap does (A3 §3/F24): read pairing secrets (`t=` durable or `p=`
- * presentation) out of the URL fragment, stash the durable token in sessionStorage — never
- * localStorage — and rewrite the address bar to keep only non-secret route state before anything
- * else (render, error handling) runs. Takes `location`/`storage`/`history` as params so a test
+ * presentation) out of the URL fragment, stash the durable token in the browser's origin-scoped
+ * localStorage — never a cookie, never the URL — and rewrite the address bar to keep only
+ * non-secret route state before anything else (render, error handling) runs. Origin-scoped means
+ * a reload, a second tab and a rebuilt web view all stay paired, and `glosa.localhost` and
+ * `127.0.0.1` remain separate pairings; the token file, not the tab, bounds the credential's life
+ * (`glosa token rotate|revoke` → 401 → removal). Takes `location`/`storage`/`history` as params so a test
  * can pass fakes instead of touching a real browser.
  *
  * When `p=` is present, the caller must redeem it first and pass the durable token as
@@ -337,14 +341,16 @@ async function enterForeignDaemon(dataAccess, paired) {
   const outcome = await waitForOwnDaemon(dataAccess, paired);
   if (outcome === "recovered") {
     // Recover by reloading rather than resuming: the streams were torn down at the 401, and a
-    // fresh bootstrap re-establishes every one of them from the credential still in sessionStorage.
+    // fresh bootstrap re-establishes every one of them from the credential still in localStorage.
     window.location.reload();
     return;
   }
   // Gave up. Now — and only now — A3 §55's "treat it as invalidated" applies: the tab has waited
-  // out its window and is not going to hold a credential it can no longer place.
-  window.sessionStorage.removeItem("glosa_token");
-  window.sessionStorage.removeItem(INSTALL_KEY);
+  // out its window and is not going to hold a credential it can no longer place. The store is
+  // origin-scoped, so this drops the credential for every tab on the origin — which is what A3
+  // §55 asks for anyway: no tab here can place the daemon answering this port.
+  window.localStorage.removeItem("glosa_token");
+  window.localStorage.removeItem(INSTALL_KEY);
   render("unpaired");
 }
 
@@ -367,8 +373,8 @@ async function main() {
     }
   }
   if (navigation.isNavigating()) return;
-  const token = scrubSecrets(window.location, window.sessionStorage, window.history, route, redeemed);
-  const pairedInstall = window.sessionStorage.getItem(INSTALL_KEY);
+  const token = scrubSecrets(window.location, window.localStorage, window.history, route, redeemed);
+  const pairedInstall = window.localStorage.getItem(INSTALL_KEY);
 
   /** @type {ReturnType<typeof createDataAccess> | null} */
   let dataAccess = null;
@@ -388,7 +394,7 @@ async function main() {
   if (screen === "foreign-daemon" && pairedInstall) {
     void enterForeignDaemon(dataAccess, pairedInstall);
   }
-  if (screen === "ready") rememberDaemonIdentity(window.sessionStorage, handshake, token);
+  if (screen === "ready") rememberDaemonIdentity(window.localStorage, handshake, token);
   if (screen === "mismatch") {
     // R5's third failure screen reloads to fetch the fresh shell + bootstrap the daemon
     // just advertised (A1 §3).

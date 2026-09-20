@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A paired tab stays paired. Reloading it, opening a second tab on the same address, or using a
+  terminal or editor that rebuilds its web view used to land on "not paired", with no way back except
+  another `glosa open` — the browser kept the pairing token only for the lifetime of the one tab that
+  received it. It now keeps it for the address, so all three stay paired. The token is still never put
+  in the URL or in browser history, and glosa still sets no cookies. `glosa token rotate` and
+  `glosa token revoke` remain the way to end a pairing, and either one now drops it from every tab on
+  that address at once.
 - Typing in the full-page source editor within the first moment of opening a file is no longer
   taken back. The pane filled the editor as soon as the file arrived and then filled it again once
   the annotations had loaded, so anything typed between those two moments was replaced by the file

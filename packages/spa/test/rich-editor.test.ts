@@ -1527,7 +1527,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(646);
+    ).toBe(655);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1897,7 +1897,12 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // is the release shape the comment below describes — `## [Unreleased]` already has its definition
   // at the foot of the file, so the new heading is a reference link the ablated path re-serializes
   // and the shipped path restores.
-  const BLOCKS = 646;
+  // #229: its own `docs/decisions.md` entry and a CHANGELOG bullet under the existing
+  // `[Unreleased]` / `### Fixed` list, 646 → 655 blocks / 582 → 591 edits. No release was cut and
+  // no heading gained a reference link, so no numerator moved: metric 1's per-cause map still
+  // totals 46, metric 2 still reports 1 shipped dishonest write of 1 fired, and metric 3 still
+  // 41/41 ablated. The bookkeeping case.
+  const BLOCKS = 655;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2072,11 +2077,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above).
     ).toEqual({
-      edits: 582,
+      edits: 591,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 41, fired: 41 },
     });

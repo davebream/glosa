@@ -513,7 +513,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
             sidebarHidden: root?.querySelector('.glosa-sidebar')?.hidden,
             mode: active?.getAttribute('data-mode'),
             readLocked: root?.getAttribute('data-preview-lock') === 'true',
-            hash: location.hash, paired: sessionStorage.getItem('glosa_token') !== null };
+            hash: location.hash, paired: localStorage.getItem('glosa_token') !== null };
         })()`);
         if (state.surface === surface && state.text.includes(text)) return state;
       } catch {
@@ -738,7 +738,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     (async () => {
       const { createDataAccess } = await import("/app/data-access.js");
       const { mountRichEditor } = await import("/app/rich-editor.js");
-      sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+      localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
       const dataAccess = createDataAccess();
       const artifact = await dataAccess.getArtifact(${JSON.stringify(slug)}, ${JSON.stringify(path)});
 
@@ -808,7 +808,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     await client.evaluate(`(async () => {
       const { createDataAccess } = await import("/app/data-access.js");
       const { createArtifactPane } = await import("/app/artifact-pane.js");
-      sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+      localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
       const host = document.createElement("div");
       document.body.append(host);
       const pane = createArtifactPane(host, {
@@ -914,7 +914,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       const mounted: any = await client.evaluate(`(async () => {
         const { createDataAccess } = await import("/app/data-access.js");
         const { createArtifactPane } = await import("/app/artifact-pane.js");
-        sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+        localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
         const host = document.createElement("div");
         document.body.append(host);
         const dataAccess = createDataAccess();
@@ -974,7 +974,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       await client.evaluate(`(async () => {
         const { createDataAccess } = await import("/app/data-access.js");
         const { createArtifactPane } = await import("/app/artifact-pane.js");
-        sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+        localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
         const host = document.createElement("div");
         document.body.append(host);
         const dataAccess = createDataAccess();
@@ -1363,7 +1363,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         (async () => {
           const { createDataAccess } = await import("/app/data-access.js");
           const { mountRichEditor } = await import("/app/rich-editor.js");
-          sessionStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
+          localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
           const dataAccess = createDataAccess();
           const artifact = await dataAccess.getArtifact(${JSON.stringify(slug)}, "paste.md");
           const container = document.createElement("div");

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // @glosa/spa — appearance preference state. This module owns the durable, non-sensitive
-// localStorage preference; bootstrap owns the pairing token separately in sessionStorage.
+// localStorage preference under its own key; bootstrap owns the pairing token separately, under
+// `glosa_token` in the same origin-scoped store.
 
 export const APPEARANCE_STORAGE_KEY = "glosa_appearance";
 export const APPEARANCES = Object.freeze(["system", "light", "dark"]);

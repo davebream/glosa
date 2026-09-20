@@ -274,13 +274,16 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   `fetch()`-streaming (NOT native EventSource) so the header rides normally**; the class-F iframe loads
   via a **one-time 256-bit capability URL** on port 4647 (no ambient token there). Origin allowlist is
   route-class-scoped (strict on state-changing, foreign-only-reject on reads/handshake, inapplicable to
-  navigation) — the resolved table is A3 §4. No cookies (CSRF structurally dead).
+  navigation) — the resolved table is A3 §4. No cookies (CSRF structurally dead). The browser keeps
+  the pairing token in origin-scoped `localStorage`, so a reload, a second tab, or a host that rebuilds
+  its web view stays paired on that origin (#229); the token never enters the URL or browser history.
 - **Token lifecycle**: `glosa token rotate` atomically replaces the credential with a fresh 128-bit
   mode-0600 token; `glosa token revoke` removes the credential. The running daemon observes either
   transition without restart, aborts credential-bound streams, invalidates every class-F capability,
-  and accepts only the current token with no grace period. Stale SPA requests receive 401, clear their
-  tab-scoped credential, and return to the unpaired screen; `glosa open` is the documented re-pairing
-  path. Mutation failures preserve the prior credential state. Token commands never print token material.
+  and accepts only the current token with no grace period. Stale SPA requests receive 401, clear the
+  origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
+  and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
+  re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
 - Versioned route catalog (contract v1.11: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore

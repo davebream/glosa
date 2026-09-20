@@ -150,6 +150,7 @@ dropping out of it.
 | `security` | `packages/daemon/test/presentation-token.test.ts` |
 | `security` | `packages/daemon/test/token-lifecycle.test.ts` |
 | `security` | `test/acceptance/browser-security-real-engine.test.ts` |
+| `security` | `test/acceptance/pairing-durability-real-engine.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-f.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-basic.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-never-feedback.test.ts` |

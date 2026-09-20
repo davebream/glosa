@@ -5,9 +5,10 @@
 // checks that structurally). This is the L0→L3 swappable-data-layer invariant: a future hosted
 // shell only ever has to change what this one module does, never anything that calls it.
 //
-// Every request carries `Authorization: Bearer <sessionStorage.glosa_token>` (the token
+// Every request carries `Authorization: Bearer <localStorage.glosa_token>` (the token
 // bootstrap.js's `scrubSecrets` already stashed there, P1.4) — same-origin `fetch`, nothing fancier,
-// per R6's "same-origin fetch today" v1 scope.
+// per R6's "same-origin fetch today" v1 scope. The store is origin-scoped, so every tab on the
+// origin shares one credential; the token is read per request, never cached in a closure.
 const TOKEN_KEY = "glosa_token";
 
 /** @typedef {{ title?: string, type?: string, status?: number, [key: string]: unknown }} ProblemDetails */
@@ -312,7 +313,7 @@ export function openTranscriptStream(
 /** @param {DataAccessDeps} [deps] */
 export function createDataAccess(deps = {}) {
   const fetchFn = deps.fetchFn ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : undefined);
-  const storage = deps.storage ?? (typeof sessionStorage !== "undefined" ? sessionStorage : undefined);
+  const storage = deps.storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
   const expectedInstallId = deps.expectedInstallId ?? null;
   let unauthorizedHandled = false;
   const onUnauthorized =
@@ -343,6 +344,11 @@ export function createDataAccess(deps = {}) {
    *   says nothing about our credential's validity with our own daemon, so discarding it here
    *   would destroy the only thing that can still recover.
    * - `revoked` — same daemon, or one that cannot be told apart, said no. A3 §55 applies.
+   *
+   * Only `revoked` removes the token, and removal lands in the origin-scoped store: every tab on
+   * this origin unpairs, each on its own next 401 or reload. The symmetric half is that one
+   * `glosa open` after a `token rotate` re-pairs them all — `authHeaders` reads the store per
+   * request, so a tab picks up the new credential without a reload.
    */
   async function classifyRejection() {
     const handshake = await readHandshake();

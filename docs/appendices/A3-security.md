@@ -4,7 +4,7 @@ Threat model: other local/remote websites reachable by the user's browser (drive
 iframe/tab, DNS rebinding) — NOT another OS-user process.
 
 ## 0. Topology — two fixed listeners, one daemon
-- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Two origins, one listener: `http://glosa.localhost:4646` (what `glosa open` links to) and `http://127.0.0.1:4646` (what the CLI, plugin monitor and `GLOSA_OPEN_HOST=127.0.0.1` use). sessionStorage is per origin, so a tab on one name does not see a pairing made on the other; `glosa open` re-pairs through the fragment either way.
+- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Two origins, one listener: `http://glosa.localhost:4646` (what `glosa open` links to) and `http://127.0.0.1:4646` (what the CLI, plugin monitor and `GLOSA_OPEN_HOST=127.0.0.1` use). `localStorage` is per origin, so a pairing made on one name is not visible on the other; `glosa open` re-pairs through the fragment either way. Within one origin it IS shared: every tab reads the same credential.
 - `GLOSA_CLASSF_PORT` = GLOSA_PORT+1 (default 4647) — class-F foreign HTML only. Origin `http://127.0.0.1:4647`.
 - Two ports ≠ two daemons: one process/lock/lifecycle; two ports = two real origins (scheme+host+port).
 
@@ -36,7 +36,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   maintain its own remote-control task toward `chatgpt.com`; that process and egress are Codex-owned,
   while the Glosa daemon, SPA, and attachment make no outbound network request.
 - Fragment scrub FIRST statement on bootstrap: read `#t=` (durable) or `#p=` (presentation),
-  redeem `p` once for the durable token when present, `sessionStorage.setItem('glosa_token', durable)`,
+  redeem `p` once for the durable token when present, `localStorage.setItem('glosa_token', durable)`,
   `history.replaceState` to pathname+search plus non-secret fragment state
   (`w`/`a`/`surface`/`mode`/`lock`) — before any render/error handler. Secrets never reappear in
   subsequent focus URLs. Preview lock (`lock=preview`) is a UI affordance only — not authorization;
@@ -46,9 +46,16 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   `POST /api/presentation-token/mint`; redeem via same-origin Host-checked
   `POST /api/presentation-token/redeem`. Expired/unknown/replayed collapse to one 401. Token
   rotation/revocation clears outstanding presentation tokens alongside class-F capabilities.
-- Storage: **sessionStorage** (not localStorage) — bounded to tab lifetime. The issuing daemon's
-  `install_id` is recorded beside it as `glosa_install`; it is not a secret (the tokenless
-  handshake publishes it) and exists so a rejection can be attributed.
+- Storage: **origin-scoped `localStorage`** (never a cookie, never the URL). It was `sessionStorage`
+  until alpha.28; #229 moved it because a credential bounded to one tab's lifetime is lost by any host
+  that rebuilds its web view, and is never seen by a second tab on the same origin. What bounds the
+  credential's life is now the token file, not the tab: `glosa token rotate` / `glosa token revoke`
+  produce a 401, and the first 401 the SPA can attribute to its own daemon removes the credential —
+  from the shared store, so every tab on the origin unpairs. One `glosa open` after a rotate re-pairs
+  them all, without a reload, because the Bearer is read from the store per request. The issuing
+  daemon's `install_id` is recorded beside it as `glosa_install`, in the same store and therefore at
+  the same scope; it is not a secret (the tokenless handshake publishes it) and exists so a rejection
+  can be attributed.
 - Token state has two durable forms: **active** = `~/.glosa/token` contains one 128-bit hex token at
   mode 0600; **revoked** = that file is absent. `glosa token rotate` writes a fresh mode-0600 temp,
   fsyncs it, then atomically renames it over the active file. `glosa token revoke` atomically unlinks
@@ -63,7 +70,8 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   rejects the previous Bearer with 401. A generation change aborts existing SSE/transcript streams and
   clears all in-memory class-F capabilities, so revocation is kill-all across API and browser
   credentials. The SPA treats a 401 as credential invalidation **when the rejecting daemon is the one it
-  paired with, or cannot be distinguished from it**: remove `sessionStorage.glosa_token`, stop
+  paired with, or cannot be distinguished from it**: remove `localStorage.glosa_token` — which drops it
+  for every tab on the origin — stop
   reconnecting with it, and render the unpaired state. Re-pair only through `glosa open`. A 401
   from a daemon whose `install_id` differs from the one recorded at pairing is NOT evidence about
   this credential — a second install taking the port produces exactly that — so the tab keeps the
@@ -118,7 +126,7 @@ are shaped so that no request can name one.
 5. Leading-`-`/control-char filename → `--` + argv array + reject control chars → test: artifact `--force` targeted as path; `\n` name → 400.
 6. Injected HTML (name/md/annotation/transcript/tool_result) → contextual escaping + script-src 'self' → test: `<script>` payloads render escaped in class R, class-F overlays, conversation mirror.
 7. Local site navigates/frames class-F/handshake → Host literal + Origin table + frame-ancestors → test: foreign origin (a) top-nav handshake non-sensitive + state routes reject, (b) no-Bearer GET → 401, (c) iframe class-F → blocked by frame-ancestors, (d) iframe SPA → blocked.
-8. Fragment token in history/localStorage → replaceState + sessionStorage + rotate/revoke → test: hash empty, no history `t=`, token in sessionStorage not localStorage, revoke → old Bearer 401.
+8. Fragment token in history/URL → replaceState + origin-scoped `localStorage` + rotate/revoke → test: hash empty, no history `t=`, no cookie; the credential survives a reload, a second tab at a token-free URL and a rebuilt web view on the same origin (`pairing-durability-real-engine.test.ts`); revoke → 401, every tab on the origin drops it, old Bearer 401.
 9. DNS rebinding against the second SPA hostname (#159) → literal two-name allowlist + Origin bound to Host + class-F IP-only → test: near-miss Hosts (`GLOSA.localhost`, `glosa.localhost.`, `evil.glosa.localhost`, `localhost`, missing port, class-F port) → 400 no body; `glosa.localhost` Host with a `127.0.0.1` Origin (and the reverse) → 403; `glosa.localhost` Host on class-F → 400; class-F `frame-ancestors` names the SPA under both hostnames and nothing else.
 10. Page with the Bearer token tries to open an arbitrary directory through stars → no star route accepts a path; open is by daemon-recorded id → test (`workspace-stars.test.ts`): `POST /api/stars` with a `path` body and no slug → 400 and nothing recorded; an id that was never recorded → 404; a star to a loose-file registration → 422; reopening a star whose folder is gone → 422 and the index unchanged.
 
