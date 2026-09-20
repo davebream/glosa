@@ -30,8 +30,12 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * additive, N/N-1 safe per A1 §3; an N-1 client simply never calls the new routes.
  * v1.11 adds starred workspaces: `GET /api/stars`, `POST /api/stars`, `POST /api/stars/:id/open`
  * and `POST /api/stars/:id/unstar`, the `kind` field on `GET /api/workspaces` rows, and the
- * `star-not-directory`/`star-folder-missing` error slugs — additive, N/N-1 safe per A1 §3. */
-export const CONTRACT_VERSION = "1.11";
+ * `star-not-directory`/`star-folder-missing` error slugs — additive, N/N-1 safe per A1 §3.
+ * v1.12 (issue #250) adds the always-present `valid_utf8` field on class-R artifact responses and
+ * the `not-utf8` error slug on `PUT /w/:slug/artifacts/:path` — additive, N/N-1 safe per A1 §3; an
+ * N-1 client that never reads the field simply keeps offering Edit and has its save refused by the
+ * daemon instead of by the pane. */
+export const CONTRACT_VERSION = "1.12";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

@@ -718,6 +718,96 @@ describe("A1 §5 route catalog", () => {
     expect(body.type).toContain("not-found");
   });
 
+  // --- #250: an artifact whose bytes are not valid UTF-8 ---
+
+  /** `\xe9` is `é` in Latin-1 and an invalid UTF-8 sequence on its own — the single byte a file
+   * written by an older editor actually carries, not a synthetic never-occurring one. */
+  const LATIN1 = Buffer.from("# Caf\xe9\n\nBody\n", "latin1");
+
+  test("GET artifact whose bytes are not valid UTF-8 → valid_utf8:false, with the lossy content still served as a preview", async () => {
+    writeFileSync(join(root, "latin1.md"), LATIN1);
+    const res = await fetchFn(req(`/w/${slug}/artifacts/latin1.md`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.valid_utf8).toBe(false);
+    expect(body.content).toContain("\uFFFD");
+  });
+
+  test("GET ?render=html on an invalid-UTF-8 artifact still renders — the pane shows what it refuses to edit", async () => {
+    writeFileSync(join(root, "latin1.md"), LATIN1);
+    const body = await (await fetchFn(req(`/w/${slug}/artifacts/latin1.md?render=html`))).json();
+    expect(body.valid_utf8).toBe(false);
+    expect(body.rendered_html).toContain("data-line");
+    expect(body.rendered_html).toContain("Body");
+  });
+
+  test("GET an ordinary artifact → valid_utf8:true, raw and rendered alike", async () => {
+    writeFileSync(join(root, "notes.md"), "# Title\n\nBody text.\n");
+    expect((await (await fetchFn(req(`/w/${slug}/artifacts/notes.md`))).json()).valid_utf8).toBe(true);
+    expect((await (await fetchFn(req(`/w/${slug}/artifacts/notes.md?render=html`))).json()).valid_utf8).toBe(true);
+  });
+
+  test("GET a BOM-prefixed valid artifact keeps the BOM and stays valid_utf8:true (the fatal decoder's default DROPS it, which would lose three bytes on the next save)", async () => {
+    writeFileSync(
+      join(root, "bom.md"),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("# Title\n", "utf8")]),
+    );
+    const body = await (await fetchFn(req(`/w/${slug}/artifacts/bom.md`))).json();
+    expect(body.valid_utf8).toBe(true);
+    expect(body.content).toBe("\uFEFF# Title\n");
+  });
+
+  test("GET class-F artifact never carries valid_utf8 — the field is a class-R claim only", async () => {
+    writeFileSync(join(root, "page.html"), "<p>hi</p>");
+    const body = await (await fetchFn(req(`/w/${slug}/artifacts/page.html`))).json();
+    expect(body.class).toBe("F");
+    expect("valid_utf8" in body).toBe(false);
+  });
+
+  test("PUT onto an invalid-UTF-8 artifact → 409 not-utf8, bytes on disk untouched", async () => {
+    writeFileSync(join(root, "latin1.md"), LATIN1);
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/latin1.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "# Caf\uFFFD\n\nBody, edited.\n",
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).type).toEndWith("/not-utf8");
+    expect(readFileSync(join(root, "latin1.md")).equals(LATIN1)).toBe(true);
+  });
+
+  test("PUT with an If-Match that MATCHES still → 409 not-utf8: the sha is over the same lossy decode, so it can never notice the corruption", async () => {
+    writeFileSync(join(root, "latin1.md"), LATIN1);
+    const sha = (await (await fetchFn(req(`/w/${slug}/artifacts/latin1.md`))).json()).source_sha256;
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/latin1.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain", "If-Match": sha },
+        body: "# Caf\uFFFD\n\nBody, edited.\n",
+      }),
+    );
+    expect(res.status).toBe(409);
+    // Never `source-changed`: that slug is what routes the SPA into its stale-save merge, whose
+    // every choice would write the replacement-character decode back.
+    expect((await res.json()).type).toEndWith("/not-utf8");
+    expect(readFileSync(join(root, "latin1.md")).equals(LATIN1)).toBe(true);
+  });
+
+  test("PUT onto an ordinary artifact is unaffected, and the response says valid_utf8:true", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body: "updated\n",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).valid_utf8).toBe(true);
+  });
+
   // --- PUT /w/:slug/artifacts/:path (P3.3 addition, NOT in A1 §5) ---
 
   test("PUT artifact writes the file, checkpoints it human-attributed, and the subsequent diff surfaces human (not session/unknown)", async () => {

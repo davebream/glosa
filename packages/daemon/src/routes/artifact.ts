@@ -85,6 +85,14 @@ function mapError(error: unknown, pathname: string, context: ErrorContext = {}):
         undefined,
         pathname,
       );
+    case "not-utf8":
+      return problem(
+        409,
+        "not-utf8",
+        "file on disk is not valid UTF-8 — saving would rewrite bytes glosa cannot read; nothing was written",
+        error.data.path as string,
+        pathname,
+      );
     case "source-changed":
       return problem(
         409,

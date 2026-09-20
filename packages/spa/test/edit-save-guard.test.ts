@@ -111,6 +111,10 @@ describe("Edit mode — a save never invents an edit", () => {
         content: SOURCE,
         rendered_html: "<p>After.</p>",
         source_sha256: "sha-1",
+        // #250. Left `undefined` by default — the key is then absent from the response entirely,
+        // which is both an N-1 daemon's shape and what every pre-existing case in this suite
+        // was written against.
+        valid_utf8: undefined as boolean | undefined,
       },
       // Settable per test; default `{hunks: []}` so no existing case sees a hunk it didn't ask for.
       diff: { hunks: [] as unknown[] },
@@ -131,6 +135,7 @@ describe("Edit mode — a save never invents an edit", () => {
           rendered_html: this.disk.rendered_html,
           source_sha256: this.disk.source_sha256,
           class: "R",
+          ...(this.disk.valid_utf8 === undefined ? {} : { valid_utf8: this.disk.valid_utf8 }),
         };
       },
       async getAnnotations() {
@@ -1324,11 +1329,208 @@ describe("Edit mode — a save never invents an edit", () => {
     }
   });
 
+  test("#250: a save refused because the file on disk became undecodable never opens the merge dialog", async () => {
+    // The daemon refuses this PUT with `not-utf8`, but the SPA re-reads before deciding what to
+    // show, and what it finds is a file it must not offer to merge onto: Take disk would fill the
+    // editor from a replacement-character decode, and Keep mine would splice onto one as a base.
+    const { host, da } = await mountEditPane(stubRichEditor({ markdown: "EDITED\n" }));
+    da.disk.valid_utf8 = false;
+    da.disk.source_sha256 = "sha-2";
+    da.putRejections.push({ status: 409, problem: { type: "https://glosa.local/errors/source-changed" } });
+
+    saveButton(host).click();
+    await paint();
+
+    expect(modal()).toBeNull();
+    expect(da.put).toEqual([]);
+    const status = host.querySelector(".glosa-edit-status") as any;
+    expect(status.textContent).toContain("no longer valid UTF-8 on disk");
+    expect(status.getAttribute("data-error")).toBe("true");
+  });
+
+  test("#250: Reload onto bytes that are no longer decodable takes the file and leaves Edit", async () => {
+    const { host, pane, da } = await mountEditPane(stubRichEditor({ markdown: "EDITED\n" }));
+    // Dirty, so `refreshArtifact` holds the draft and raises the banner instead of dropping out
+    // of Edit on its own — which is what makes Reload the reachable path here.
+    expect(pane.isDirty()).toBe(true);
+    da.disk.valid_utf8 = false;
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+    await paint();
+    expect((host.querySelector(".glosa-disk-change") as any).hidden).toBe(false);
+    expect(pane.getMode()).toBe("edit");
+
+    (host.querySelector(".glosa-disk-change-reload") as any).click();
+    await paint();
+    modalButton("Discard edits")?.click();
+    await paint();
+
+    expect(pane.getMode()).toBe("read");
+    expect(host.querySelector('.glosa-modebar [data-control="edit"]')).toBeNull();
+    expect((host.querySelector(".glosa-encoding-notice") as any).hidden).toBe(false);
+    expect(da.put).toEqual([]);
+  });
+
   test("AC-29: the harness can produce a clean pane, and a dirty one", async () => {
     const clean = await mountEditPane(stubRichEditor(LOSSY, { dirty: false }));
     expect(clean.pane.isDirty()).toBe(false);
 
     const dirty = await mountEditPane(stubRichEditor(LOSSY, { dirty: true }));
     expect(dirty.pane.isDirty()).toBe(true);
+  });
+});
+
+// #250 — an artifact whose bytes the daemon could not decode. The pane holds a
+// replacement-character copy of the file, so every writable face over it is a face that would save
+// something other than what is on disk. Edit is therefore not offered at all, and the reason is on
+// the page rather than left to be discovered in a diff.
+//
+// These mount the pane in READ, unlike the suite above: the whole point is that the path into Edit
+// is gone, so there is no "Edit source" tool to click on the way in.
+describe("Edit mode — an artifact that is not valid UTF-8 is shown, never edited", () => {
+  let dom: DomEnv;
+  let restoreDialogs: () => void;
+
+  beforeEach(() => {
+    dom = installDom();
+    restoreDialogs = installModalDialogs(dom);
+  });
+
+  afterEach(() => {
+    restoreDialogs();
+    dom.teardown();
+  });
+
+  const flush = async (n = 10) => {
+    for (let i = 0; i < n; i++) await Promise.resolve();
+  };
+  const paint = async () => {
+    for (let i = 0; i < 12; i++) {
+      await flush();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await flush();
+  };
+
+  /** What `getArtifact` returns for a file holding a lone `0xe9`: the lossy decode the daemon
+   * still serves for preview, plus the field saying so. */
+  const LOSSY_CONTENT = "# Caf�\n\nBody\n";
+
+  function fake({ validUtf8 = false }: { validUtf8?: boolean | undefined } = {}) {
+    return {
+      disk: { content: LOSSY_CONTENT, rendered_html: "<p>Body</p>", source_sha256: "sha-1", valid_utf8: validUtf8 },
+      put: [] as unknown[],
+      subscribe: () => () => {},
+      async getArtifact() {
+        return {
+          source_path: "latin1.md",
+          class: "R",
+          content: this.disk.content,
+          rendered_html: this.disk.rendered_html,
+          source_sha256: this.disk.source_sha256,
+          // `undefined` is how an N-1 daemon answers: the key is absent from the JSON entirely.
+          ...(this.disk.valid_utf8 === undefined ? {} : { valid_utf8: this.disk.valid_utf8 }),
+        };
+      },
+      async getAnnotations() {
+        return { annotations: [] };
+      },
+      async getCheckpoints() {
+        return [];
+      },
+      async getDiff() {
+        return { hunks: [] };
+      },
+      async putArtifact(_slug: string, path: string, content: string) {
+        this.put.push({ path, content });
+        return { source_sha256: "sha-2" };
+      },
+    };
+  }
+
+  async function mountPane(daOverrides: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+    const da = Object.assign(fake(), daOverrides);
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const pane = createArtifactPane(host, {
+      dataAccess: da,
+      slug: "ws-1",
+      path: "latin1.md",
+      getAttentionEntries: () => [],
+      refreshAttention: async () => {},
+      getProviderName: () => "Claude Code",
+      ...extra,
+    });
+    await pane.ready;
+    await paint();
+    return { host, pane, da };
+  }
+
+  const notice = (host: any) => host.querySelector(".glosa-encoding-notice") as any;
+  const editButton = (host: any) => host.querySelector('.glosa-modebar [data-control="edit"]');
+
+  test("no way into Edit is offered, and the page says why", async () => {
+    const { host, pane } = await mountPane();
+
+    expect(editButton(host)).toBeNull();
+    expect((host.querySelector(".glosa-tools-edit-source") as any).hidden).toBe(true);
+    expect(pane.canEdit()).toBe(false);
+    expect(notice(host).hidden).toBe(false);
+    expect(notice(host).textContent).toContain("not valid UTF-8");
+    expect(notice(host).textContent).toContain("saving would rewrite the bytes it cannot read");
+    // Still a preview: refusing to edit is not refusing to show.
+    expect((host.querySelector(".glosa-content") as any).textContent).toContain("Body");
+  });
+
+  test("⌘E and a programmatic setMode both leave the pane in Read, writing nothing", async () => {
+    const { host, pane, da } = await mountPane();
+
+    pane.toggleEdit();
+    await paint();
+    expect(pane.getMode()).toBe("read");
+
+    pane.setMode("edit");
+    await paint();
+    expect(pane.getMode()).toBe("read");
+    expect(host.querySelector(".glosa-pane")?.getAttribute("data-mode")).toBe("read");
+    expect(da.put).toEqual([]);
+  });
+
+  test("a pane deep-linked straight into Edit lands in Read, with no editable face ever mounted", async () => {
+    const { host, pane, da } = await mountPane({}, { initialMode: "edit" });
+
+    expect(pane.getMode()).toBe("read");
+    expect(host.querySelector(".glosa-pane")?.getAttribute("data-mode")).toBe("read");
+    expect((host.querySelector(".glosa-edit-area") as any).hidden).toBe(true);
+    expect(editButton(host)).toBeNull();
+    expect(notice(host).hidden).toBe(false);
+    expect(da.put).toEqual([]);
+  });
+
+  test("a file that becomes undecodable under an open, clean pane drops out of Edit", async () => {
+    const { host, pane, da } = await mountPane({ disk: { ...fake().disk, content: "# Fine\n", valid_utf8: true } });
+    expect(pane.getMode()).toBe("read");
+    pane.setMode("edit");
+    await paint();
+    expect(pane.getMode()).toBe("edit");
+    expect(pane.isDirty()).toBe(false);
+
+    da.disk.valid_utf8 = false;
+    da.disk.source_sha256 = "sha-2";
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(pane.getMode()).toBe("read");
+    expect(editButton(host)).toBeNull();
+    expect(notice(host).hidden).toBe(false);
+  });
+
+  test("N-1 pin: a daemon that sends no valid_utf8 field still offers Edit, and the notice stays hidden", async () => {
+    const { host, pane } = await mountPane({ disk: { ...fake().disk, content: "# Fine\n", valid_utf8: undefined } });
+
+    expect(editButton(host)).not.toBeNull();
+    expect(pane.canEdit()).toBe(true);
+    expect((host.querySelector(".glosa-tools-edit-source") as any).hidden).toBe(false);
+    expect(notice(host).hidden).toBe(true);
   });
 });

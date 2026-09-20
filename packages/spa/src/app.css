@@ -2516,6 +2516,26 @@ input,
   gap: var(--space-2);
 }
 
+/* Its own class, not a second use of `.glosa-disk-change` above: that component states that the
+   file MOVED and offers two ways out, this one states that the file cannot be decoded and offers
+   nothing — sharing the box would make one component mean two facts. No floating variant, and no
+   `[data-mode="edit"]` gate either: it is true in every mode and from the first paint, so there is
+   no reading position for it to disturb by sitting in the flow. */
+.glosa-encoding-notice {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.glosa-encoding-notice p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .glosa-content {
   font-optical-sizing: auto;
   flex: 1;

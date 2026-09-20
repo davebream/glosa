@@ -998,3 +998,33 @@ through one `glosa open`, and a promotion branch would put an executable `sessio
 and a second credential-write site back into bootstrap for one transitional load. No `storage` event
 listener — each tab reaches the daemon's verdict on its own and `removeItem` is idempotent. No
 cookies, for the reason R5 gives.
+
+## A file glosa cannot read is shown, never edited
+
+Reading a class-R artifact decoded its bytes with a call that replaces anything undecodable with
+U+FFFD and reports nothing. A file written in Latin-1, or one carrying a stray byte from some older
+tool, therefore reached the editor as a copy that differed from what was on disk — and an ordinary
+save wrote that copy back. No merge, no conflict, no warning: opening the document and pressing save
+was enough to lose the bytes. The content hash was computed over the same lossy string, so the
+optimistic-concurrency check could not notice either.
+
+**Decision.** Refuse to edit rather than edit lossily. The daemon states on every class-R response
+whether the content it is serving is the file (`valid_utf8`), and refuses a write to such a path
+outright. The workspace shows the document and says, in the pane, that it will not edit it. Edit is
+absent rather than disabled, the same rule the mode control already follows for a property of the
+artifact rather than a passing condition.
+
+**Why not a byte-exact editor transport.** Carrying the original bytes to the browser and back would
+make these files editable, at the cost of a second content representation on the wire and in the
+editor, for files whose encoding glosa would still be guessing at. The preview is what most of the
+value was: a reader can see the document. And the honest answer to "can glosa edit this" is no —
+saying so is cheaper than building a parallel path to say yes.
+
+**Why the refusal is checked before the freshness check.** A stale save opens a three-way merge, and
+every way out of that dialog — take the disk version, keep mine, compare — is built on the decoded
+string. Letting an undecodable file answer "the source changed" would route the writer into exactly
+the machinery that would write the replacement characters back.
+
+It also keeps the input to per-block attribution honest. A total decomposition of a document into
+runs has to start from the document; a lossy decode is a different document, so the attribution
+computed over it would describe bytes nobody wrote.
