@@ -25,6 +25,7 @@ import { lifecycleReducer } from "./lifecycle.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import { checkpoint, headSha, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
+import type { ResolveTrackedFilesAsync } from "../matcher-async.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
 
 export interface TailTruncateResult {
@@ -207,6 +208,8 @@ export interface OfflineCatchUpDeps {
   ulid: () => string;
   now?: () => Date;
   reducer?: Reducer;
+  resolveTrackedFilesAsync?: ResolveTrackedFilesAsync;
+  resolveTrackedFilesSync?: typeof resolveTrackedFiles;
 }
 export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineCatchUpResult> {
   // A lease still on record here means step 4 (which runs first, in the same reconcile pass)
@@ -221,15 +224,30 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
   // checkpoints that ever touch this window.
   if (deps.state.applyLease) return { occurred: false };
 
-  const hasTrackedFiles = resolveTrackedFiles(deps.workspaceRoot).tracked.length > 0;
+  const tracked = deps.resolveTrackedFilesAsync
+    ? await deps.resolveTrackedFilesAsync(deps.workspaceRoot)
+    : resolveTrackedFiles(deps.workspaceRoot);
+  const hasTrackedFiles = tracked.tracked.length > 0;
+  const trackedPaths = tracked.tracked.map((file) => file.path);
   const shadowExists = existsSync(shadowGitDir(deps.workspaceRoot));
   if (!hasTrackedFiles && !shadowExists) return { occurred: false };
 
   reclaimIndexLock(deps.workspaceRoot, { writer: deps.writer, ulid: deps.ulid, now: deps.now });
-  await initShadowRepo(deps.workspaceRoot, { writer: deps.writer, ulid: deps.ulid, now: deps.now });
+  await initShadowRepo(deps.workspaceRoot, {
+    writer: deps.writer,
+    ulid: deps.ulid,
+    now: deps.now,
+    trackedPaths,
+    resolveTrackedFiles: deps.resolveTrackedFilesSync,
+  });
 
   const preSha = await headSha(deps.workspaceRoot);
-  const postSha = await checkpoint(deps.workspaceRoot, { attribution: "unknown", kind: "auto_checkpoint" });
+  const postSha = await checkpoint(deps.workspaceRoot, {
+    attribution: "unknown",
+    kind: "auto_checkpoint",
+    trackedPaths,
+    resolveTrackedFiles: deps.resolveTrackedFilesSync,
+  });
   if (postSha === preSha) return { occurred: false }; // baseline (just created, or already current) covers it
 
   const now = deps.now?.() ?? new Date();
@@ -326,6 +344,8 @@ export interface ReconcileOptions {
   ulid?: () => string;
   now?: () => Date;
   reducer?: Reducer;
+  resolveTrackedFilesAsync?: ResolveTrackedFilesAsync;
+  resolveTrackedFilesSync?: typeof resolveTrackedFiles;
 }
 
 export interface ReconcileResult {
@@ -430,6 +450,8 @@ export async function reconcileWorkspace(
         ulid: ulidFn,
         now: opts.now,
         reducer,
+        resolveTrackedFilesAsync: opts.resolveTrackedFilesAsync,
+        resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

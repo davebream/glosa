@@ -20,7 +20,6 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  statSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -96,7 +95,12 @@ export class AdoptionError extends Error {
     // transaction refusing ordinary routing until that transaction finishes — and http.ts's two
     // generic `instanceof AdoptionError` catches (the pipeline's own, and `resolveBus`'s callers')
     // already map any code here straight through `problem(409, error.code, error.message, ...)`.
-    readonly code: "adoption-conflict" | "adoption-blocked" | "workspace-adopting" | "workspace-forgetting",
+    readonly code:
+      | "adoption-conflict"
+      | "adoption-blocked"
+      | "workspace-adopting"
+      | "workspace-adopted"
+      | "workspace-forgetting",
     message: string,
   ) {
     super(message);
@@ -568,9 +572,18 @@ function isInside(root: string, path: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-function bigintIdentity(path: string): { dev: string; ino: string } {
-  const stat = statSync(path, { bigint: true });
-  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+type RegularFileSnapshot = { identity: { dev: string; ino: string }; nlink: bigint };
+
+/** One non-following snapshot for hardlink decisions. A symlink may point at the expected inode,
+ * so referent identity alone is never proof that the requested path remains a supported file. */
+function regularFileSnapshot(path: string): RegularFileSnapshot | null {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    return { identity: { dev: stat.dev.toString(), ino: stat.ino.toString() }, nlink: stat.nlink };
+  } catch {
+    return null;
+  }
 }
 
 function sameIdentity(a: { dev: string; ino: string }, b: { dev: string; ino: string }): boolean {
@@ -641,8 +654,8 @@ export interface WorkspaceIndexDeps {
    * exercise "a durable write failed" without a real full or read-only `~/.glosa`. */
   write?: WriteSync;
   slug?: SlugDeps;
-  /** Bounded deadline for the rare `nlink > 1` hardlink-alias Worker scan (issue #281 criterion
-   * 3): a directory-alias search that cannot finish in this window terminates the Worker and fails
+  /** One end-to-end deadline for the rare `nlink > 1` hardlink-alias operation (issue #281 criterion
+   * 3): retries share this same window; a search that cannot finish in it terminates the Worker and fails
    * the open closed rather than let a huge live tree hold the global index mutex indefinitely.
    * Chosen well inside the CLI's own ~12s daemon-discovery budget (`daemon.ts`'s
    * `DEFAULT_ENSURE_TIMEOUT_MS`) and the daemon's 30s stall-watchdog default, leaving headroom for
@@ -654,6 +667,13 @@ export interface WorkspaceIndexDeps {
    * timeout/failure/staleness without racing a real filesystem walk. Defaults to the production
    * `hardlink-alias-worker.ts`. */
   aliasScanWorkerUrl?: string | URL;
+  /** Test-only Worker construction seam for synchronous setup/post failures and controlled
+   * replies that cannot be produced reliably by racing a real thread. */
+  aliasScanWorkerFactory?: (url: string) => Worker;
+  /** Monotonic clock for the one end-to-end alias-discovery deadline. */
+  aliasScanClock?: () => number;
+  /** Test-only race seam for the one non-following snapshot used by exact/hardlink opens. */
+  regularFileSnapshot?: (path: string) => RegularFileSnapshot | null;
   /** Complete-list resolver seam used to prove which open paths genuinely require a full
    * traversal. Production uses the canonical matcher resolver; tests may poison it so a point
    * consumer cannot stay green merely because an ES-module export spy missed this module's lexical
@@ -682,6 +702,9 @@ export class WorkspaceIndex {
   private readonly write: WriteSync;
   private readonly aliasScanDeadlineMs: number;
   private readonly aliasScanWorkerUrl: string;
+  private readonly aliasScanWorkerFactory: (url: string) => Worker;
+  private readonly aliasScanClock: () => number;
+  private readonly regularFileSnapshot: (path: string) => RegularFileSnapshot | null;
   private readonly resolveTrackedFiles: typeof resolveTrackedFiles;
   // Whether SOMEONE (constructor deps or a later `setLiveSessionPredicate` call) ever actually
   // told this index whether live sessions exist. Distinct from `hasLiveSession` itself — a
@@ -737,6 +760,9 @@ export class WorkspaceIndex {
           ? deps.aliasScanWorkerUrl.href
           : deps.aliasScanWorkerUrl
         : new URL("./hardlink-alias-worker.ts", import.meta.url).href;
+    this.aliasScanWorkerFactory = deps.aliasScanWorkerFactory ?? ((url) => new Worker(url));
+    this.aliasScanClock = deps.aliasScanClock ?? (() => performance.now());
+    this.regularFileSnapshot = deps.regularFileSnapshot ?? regularFileSnapshot;
     this.resolveTrackedFiles = deps.resolveTrackedFiles ?? resolveTrackedFiles;
   }
 
@@ -765,9 +791,9 @@ export class WorkspaceIndex {
    * present-and-active — the symmetric counterpart to `setOnHardRemove`, and what makes artifact
    * watching daemon-lifetime rather than scoped to an open browser tab (#153):
    *   index.setOnRegister((entry) => artifactWatcherRegistry.ensureWatched(entry));
-   * Fired INSIDE the index mutex, so it must be cheap and must not write to the index. The
-   * watcher's `ensureWatched` is idempotent and does its one matcher walk only on first sight,
-   * which matters because a session heartbeat re-upserts its workspace continually. */
+   * Fired INSIDE the index mutex, so it must be cheap and must not write to the index. Production
+   * `ensureWatched` only dispatches its initial matcher walk to a Worker and is idempotent, which
+   * matters because a session heartbeat re-upserts its workspace continually. */
   setOnRegister(fn: (entry: WorkspaceEntry) => void): void {
     this.onRegister = fn;
   }
@@ -1115,23 +1141,35 @@ export class WorkspaceIndex {
       // atomic-save inode replacement).
       const looseId = registrationId("loose-file", canonical);
       const looseEntry = index.workspaces[looseId];
-      if (
-        looseEntry &&
-        looseEntry.present &&
-        looseEntry.kind === "loose-file" &&
-        looseEntry.lifecycle?.state !== "forgetting"
-      ) {
+      if (looseEntry?.kind === "loose-file") {
+        const lifecycle = looseEntry.lifecycle?.state ?? "active";
+        if (lifecycle === "forgetting") {
+          throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+        }
+        if (lifecycle === "adopting") {
+          throw new AdoptionError("workspace-adopting", "workspace adoption is in progress");
+        }
+        if (lifecycle === "adopted") {
+          throw new AdoptionError("workspace-adopted", "workspace was adopted into another workspace");
+        }
         const matched = matchTrackedFile(looseEntry, canonical);
         if (matched) {
+          const snapshot = this.regularFileSnapshot(canonical);
+          if (!snapshot) {
+            throw new WorkspaceOpenError(
+              "unsupported-file",
+              "file changed while opening; only regular non-symlink files are supported",
+            );
+          }
           looseEntry.last_seen = now;
           looseEntry.present = true;
           delete looseEntry.absent_since;
           // Refreshed from a LIVE stat, never trusted from the prior persisted value — an
           // atomic-save can replace the inode at this same path between opens.
-          looseEntry.file_identity = bigintIdentity(canonical);
+          looseEntry.file_identity = snapshot.identity;
           index.updated_at = now;
           this.persist(index);
-          return { entry: looseEntry, focus: matched.path };
+          return { entry: this.announceRegistered(looseEntry), focus: matched.path };
         }
       }
 
@@ -1142,15 +1180,57 @@ export class WorkspaceIndex {
       // every open regardless of link count. `nlink > 1` is rare; its search runs off the main
       // thread (`scanForHardlinkAlias`) precisely so it can never wedge the event loop the way the
       // old synchronous scan did, and its answer is revalidated live before ever being trusted.
-      let identity = bigintIdentity(canonical);
+      let identity = { dev: "", ino: "" };
+      let decisionNlink = 0n;
       let aliasMatch: { registrationId: string; focus: string } | null = null;
+      const aliasDeadlineAt = this.aliasScanClock() + this.aliasScanDeadlineMs;
+      let aliasScanRequired = false;
+      const assertAliasDeadline = (): void => {
+        if (aliasScanRequired && this.aliasScanClock() >= aliasDeadlineAt) {
+          throw new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias discovery timed out for ${canonical}; refusing to open without verifying existing aliases`,
+          );
+        }
+      };
       for (let attempt = 1; attempt <= MAX_ALIAS_SCAN_ATTEMPTS; attempt += 1) {
-        const nlink = statSync(canonical, { bigint: true }).nlink;
-        identity = bigintIdentity(canonical);
-        if (nlink === 1n) break; // no second hardlink can exist anywhere — nothing to find
+        // Identity and link count must describe one inode snapshot. Separate stat calls permit an
+        // atomic replacement to pair one inode's nlink with another inode's dev/ino.
+        const snapshot = this.regularFileSnapshot(canonical);
+        if (!snapshot) {
+          throw new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias target changed while resolving ${canonical}; refusing to open a non-regular file`,
+          );
+        }
+        identity = snapshot.identity;
+        decisionNlink = snapshot.nlink;
+        if (decisionNlink === 1n) break; // no second hardlink can exist anywhere — nothing to find
+        aliasScanRequired = true;
 
-        const scan = await this.scanForHardlinkAlias(index, identity, owning);
-        if (scan.status === "not_found") break;
+        const remainingMs = aliasDeadlineAt - this.aliasScanClock();
+        if (remainingMs <= 0) {
+          throw new WorkspaceOpenError(
+            "alias-discovery-unavailable",
+            `hardlink alias discovery timed out for ${canonical}; refusing to open without verifying existing aliases`,
+          );
+        }
+        const scan = await this.scanForHardlinkAlias(index, identity, owning, remainingMs);
+        // The Worker's own timer bounds only its round-trip. Revalidation and persistence are part
+        // of the same end-to-end alias decision, so a reply received near the boundary must not be
+        // accepted after the absolute deadline has elapsed.
+        assertAliasDeadline();
+        if (scan.status === "not_found") {
+          const fresh = this.regularFileSnapshot(canonical);
+          if (fresh && sameIdentity(identity, fresh.identity) && fresh.nlink === decisionNlink) break;
+          if (attempt === MAX_ALIAS_SCAN_ATTEMPTS) {
+            throw new WorkspaceOpenError(
+              "alias-discovery-unavailable",
+              `hardlink alias identity changed while resolving ${canonical}; refusing to create a possibly duplicate registration`,
+            );
+          }
+          continue;
+        }
         if (scan.status !== "found") {
           const detail = scan.status === "error" ? `: ${scan.message}` : "";
           throw new WorkspaceOpenError(
@@ -1171,6 +1251,7 @@ export class WorkspaceIndex {
         }
       }
       if (aliasMatch) {
+        assertAliasDeadline();
         const entry = index.workspaces[aliasMatch.registrationId]!;
         entry.last_seen = now;
         entry.present = true;
@@ -1182,6 +1263,17 @@ export class WorkspaceIndex {
         this.persist(index);
         return { entry, focus: aliasMatch.focus };
       }
+
+      // Revalidate the shortcut/miss immediately before any registration can be created or
+      // promoted. A replacement or a newly-added hardlink invalidates the earlier decision.
+      const beforeCreate = this.regularFileSnapshot(canonical);
+      if (!beforeCreate || !sameIdentity(identity, beforeCreate.identity) || beforeCreate.nlink !== decisionNlink) {
+        throw new WorkspaceOpenError(
+          "alias-discovery-unavailable",
+          `hardlink alias identity changed before registering ${canonical}; refusing to create a possibly duplicate registration`,
+        );
+      }
+      assertAliasDeadline();
 
       // No registration owns this file yet. Before falling back to a loose-file registration —
       // whose worktree is the file's CONTAINING DIRECTORY, and which is therefore what used to
@@ -1248,10 +1340,14 @@ export class WorkspaceIndex {
     index: WorkspaceIndexFile,
     identity: { dev: string; ino: string },
     owning: WorkspaceEntry | undefined,
+    deadlineMs: number,
   ): Promise<AliasScanResponse | { status: "timeout" }> {
     const tasks: AliasScanTask[] = Object.values(index.workspaces)
       .filter(
-        (entry) => entry.present && entry.lifecycle?.state !== "forgetting" && (!owning || entry.kind === "loose-file"),
+        (entry) =>
+          entry.present &&
+          (entry.lifecycle?.state ?? "active") === "active" &&
+          (!owning || entry.kind === "loose-file"),
       )
       .map((entry) => ({
         registration_id: entry.registration_id,
@@ -1268,28 +1364,38 @@ export class WorkspaceIndex {
       let settled = false;
       let worker: Worker;
       try {
-        worker = new Worker(this.aliasScanWorkerUrl);
+        worker = this.aliasScanWorkerFactory(this.aliasScanWorkerUrl);
       } catch (err) {
         resolve({ status: "error", message: (err as Error).message });
         return;
       }
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (result: AliasScanResponse | { status: "timeout" }): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        worker.terminate();
+        if (timer !== undefined) clearTimeout(timer);
+        try {
+          worker.terminate();
+        } catch {
+          // The scan already has a fail-closed result. Cleanup must not replace it with a raw
+          // runtime error or leave the mutex waiting for a timer that can no longer help.
+        }
         resolve(result);
       };
-      const timer = setTimeout(() => finish({ status: "timeout" }), this.aliasScanDeadlineMs);
-      worker.onmessage = (event: MessageEvent<AliasScanResponse>) => finish(event.data);
-      worker.onerror = (event: ErrorEvent) => finish({ status: "error", message: event.message || "worker error" });
-      worker.postMessage(request);
+      try {
+        timer = setTimeout(() => finish({ status: "timeout" }), Math.max(0, deadlineMs));
+        worker.onmessage = (event: MessageEvent<AliasScanResponse>) => finish(event.data);
+        worker.onerror = (event: ErrorEvent) => finish({ status: "error", message: event.message || "worker error" });
+        worker.postMessage(request);
+      } catch (err) {
+        finish({ status: "error", message: err instanceof Error ? err.message : String(err) });
+      }
     });
   }
 
   /** Before trusting the Worker's answer, re-derives both identities live on the main thread — the
    * target or the winning candidate may have been replaced, unlinked, or relinked WHILE the scan
-   * ran, and only a fresh `lstat`/`statSync` can prove otherwise (never a persisted `file_identity`,
+   * ran, and only a fresh non-following `lstat` can prove otherwise (never a persisted `file_identity`,
    * which is never refreshed after an atomic-save inode replacement). Re-resolves the candidate's
    * `focus` through `matchTrackedFile` rather than trusting the Worker's own read of it, so a
    * registration change mid-scan (forgotten, adopted, or the file replaced by something no longer
@@ -1301,28 +1407,18 @@ export class WorkspaceIndex {
     candidateRegistrationId: string,
     focus: string,
   ): boolean {
-    let freshTarget: { dev: string; ino: string };
-    try {
-      freshTarget = bigintIdentity(canonical);
-    } catch {
-      return false; // target vanished between the scan starting and now
-    }
-    if (!sameIdentity(freshTarget, scannedIdentity)) return false; // target replaced/relinked mid-scan
+    const freshTarget = this.regularFileSnapshot(canonical);
+    if (!freshTarget || !sameIdentity(freshTarget.identity, scannedIdentity)) return false;
 
     const candidate = index.workspaces[candidateRegistrationId];
-    if (!candidate || !candidate.present || candidate.lifecycle?.state === "forgetting") return false;
+    if (!candidate?.present || (candidate.lifecycle?.state ?? "active") !== "active") return false;
 
     const candidateRawPath = join(candidate.worktree_path, ...focus.split("/"));
     const matched = matchTrackedFile(candidate, candidateRawPath);
     if (!matched || matched.path !== focus) return false;
 
-    let candidateIdentity: { dev: string; ino: string };
-    try {
-      candidateIdentity = bigintIdentity(matched.rawPath);
-    } catch {
-      return false;
-    }
-    return sameIdentity(freshTarget, candidateIdentity);
+    const candidateSnapshot = this.regularFileSnapshot(matched.rawPath);
+    return candidateSnapshot !== null && sameIdentity(freshTarget.identity, candidateSnapshot.identity);
   }
 
   /** Register-or-refresh `canonical` as a `directory` workspace, sourced `glosa-open`. Extracted

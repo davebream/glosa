@@ -4,7 +4,15 @@
 // is allowed to hold its own glob — they all consume the single normalized LIST this module
 // produces. Built on picomatch (zero-dep, fs-free — A4 §F20 sanctions it by name; pure JS, no
 // native addon).
-import { existsSync, lstatSync, readFileSync, readdirSync, type Stats } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  type Stats,
+} from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import picomatch from "picomatch";
 import { workspaceBusPath, workspaceTracking, workspaceWorktree, type WorkspaceTarget } from "./workspace.ts";
@@ -185,11 +193,12 @@ export function resolveMatchedFiles(
 
   const walk = (absDir: string, relSegments: string[]): void => {
     if (truncated) return;
+    if (!isDirectoryReadable(absDir)) return;
     let names: string[];
     try {
       names = readdirSync(absDir);
     } catch {
-      return; // unreadable dir (permissions, or raced-away) — skip, don't fail the whole walk
+      return; // raced-away or otherwise unreadable — skip, don't fail the whole walk
     }
     directories.push({ path: toNfcPosixPath(relSegments), rawPath: absDir });
     for (const name of names) {
@@ -236,6 +245,18 @@ export function resolveMatchedFiles(
   skippedSymlinks.sort(byteCompare);
 
   return { tracked, oversize, directories, skippedSymlinks, truncated };
+}
+
+/** Shared list/point authority for the walker's directory-readability boundary. Point matching
+ * checks only the directories on its one path, but must not claim a leaf the complete walker
+ * cannot enumerate through (for example an execute-only intermediate directory). */
+function isDirectoryReadable(absDir: string): boolean {
+  try {
+    accessSync(absDir, fsConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Builds the `ignored` predicate for the shared artifact watcher FROM the same
@@ -332,7 +353,7 @@ export function resolveTrackedFiles(
 export function matchTrackedFile(
   workspace: WorkspaceTarget,
   rawPath: string,
-  config: MatcherConfig = loadMatcherConfig(workspaceWorktree(workspace), workspaceBusPath(workspace)),
+  config?: MatcherConfig,
 ): MatchedFile | null {
   const root = workspaceWorktree(workspace);
   const tracking = workspaceTracking(workspace);
@@ -354,11 +375,16 @@ export function matchTrackedFile(
     return { path: nfcKey, rawPath, sizeBytes: stat.size };
   }
 
-  const { isIncluded, isExcluded, isPrunedDir } = buildMatcherPredicates(config);
+  // Bounded registrations bypass matcher policy entirely. Load configuration only after that
+  // branch, matching resolveTrackedFiles: an invalid redirected config must not break a bounded
+  // point lookup whose complete-list counterpart never reads that config.
+  const matcherConfig = config ?? loadMatcherConfig(root, workspaceBusPath(workspace));
+  const { isIncluded, isExcluded, isPrunedDir } = buildMatcherPredicates(matcherConfig);
   let absDir = root;
   const nfcSegments: string[] = [];
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i]!;
+    if (!isDirectoryReadable(absDir)) return null;
     const absSeg = join(absDir, seg);
     let stat: Stats;
     try {
@@ -378,7 +404,7 @@ export function matchTrackedFile(
     if (!stat.isFile()) return null;
     const nfcPath = toNfcPosixPath(nfcSegments);
     if (!isIncluded(nfcPath) || isExcluded(nfcPath)) return null;
-    if (stat.size > config.artifacts.maxFileBytes) return null; // oversize — excluded from `tracked` too
+    if (stat.size > matcherConfig.artifacts.maxFileBytes) return null; // oversize — excluded from `tracked` too
     return { path: nfcPath, rawPath: absSeg, sizeBytes: stat.size };
   }
   return null;

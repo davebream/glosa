@@ -53,7 +53,7 @@ import {
 import { KeyedMutex } from "./mutex.ts";
 import { journalPath, quarantinePath, workspaceBusDir } from "./paths.ts";
 import { peekJournal } from "./peek.ts";
-import { type ReconcileResult, reconcileWorkspace, truncateTornTail } from "./reconcile.ts";
+import { type ReconcileOptions, type ReconcileResult, reconcileWorkspace, truncateTornTail } from "./reconcile.ts";
 import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
@@ -227,6 +227,9 @@ export interface WorkspaceBusDeps {
   reducer?: Reducer;
   /** Explicit composition seam for subprocess durability tests. Production omits it. */
   writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
+  /** Production offloads complete matcher walks; omitted in unit tests for deterministic sync. */
+  resolveTrackedFilesAsync?: ReconcileOptions["resolveTrackedFilesAsync"];
+  resolveTrackedFilesSync?: ReconcileOptions["resolveTrackedFilesSync"];
 }
 
 export class WorkspaceBus {
@@ -240,6 +243,8 @@ export class WorkspaceBus {
   private readonly nowFn: () => Date;
   private readonly reducer: Reducer;
   private readonly writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
+  private readonly resolveTrackedFilesAsync?: ReconcileOptions["resolveTrackedFilesAsync"];
+  private readonly resolveTrackedFilesSync?: ReconcileOptions["resolveTrackedFilesSync"];
   private readonly mutexKey: string;
   // P3.1 review fix: tracks whether THIS INSTANCE has reconciled — deliberately an instance field,
   // not something a caller tracks externally keyed by root string. A root string survives a
@@ -322,6 +327,8 @@ export class WorkspaceBus {
     this.mutexKey = workspaceRegistrationId(workspaceRoot);
     mkdirSync(workspaceBusDir(workspaceRoot), { recursive: true });
     this.writeCheckpoint = deps.writeCheckpoint;
+    this.resolveTrackedFilesAsync = deps.resolveTrackedFilesAsync;
+    this.resolveTrackedFilesSync = deps.resolveTrackedFilesSync;
     this.writer = new JournalWriter(journalPath(workspaceRoot), this.writeCheckpoint);
     this.mutex = deps.mutex ?? new KeyedMutex<string>();
     this.ulidFn = deps.ulid ?? defaultUlid;
@@ -423,6 +430,8 @@ export class WorkspaceBus {
         ulid: this.ulidFn,
         now: this.nowFn,
         reducer: this.reducer,
+        resolveTrackedFilesAsync: this.resolveTrackedFilesAsync,
+        resolveTrackedFilesSync: this.resolveTrackedFilesSync,
       });
       this.state = result.state;
       // Re-derived from the file, not incremented — reconcile's own writer may have just

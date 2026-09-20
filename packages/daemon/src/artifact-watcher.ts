@@ -190,6 +190,12 @@ export interface ArtifactWatcherRegistryOptions {
    * watcher a pure filesystem→SSE fan-out, which is what every pre-#153 test expects. */
   captureExternalEdit?: (workspace: WorkspaceTarget) => Promise<unknown>;
   quietWindowMs?: number;
+  /** Complete initial walks may be asynchronous in production so registration never blocks the
+   * daemon event loop. Tests may omit this to retain immediate deterministic setup. */
+  initialResolveTrackedFiles?: (
+    workspace: WorkspaceTarget,
+    options: { limit: number },
+  ) => ResolveMatchedFilesResult | Promise<ResolveMatchedFilesResult>;
 }
 
 interface WatchState {
@@ -239,6 +245,9 @@ export class ArtifactWatcherRegistry {
   private readonly watchFactory: WorkspaceWatchFactory;
   private readonly captureExternalEdit?: (workspace: WorkspaceTarget) => Promise<unknown>;
   private readonly quietWindowMs: number;
+  private readonly initialResolveTrackedFiles: NonNullable<
+    ArtifactWatcherRegistryOptions["initialResolveTrackedFiles"]
+  >;
   private budgetWarned = false;
 
   constructor(options: ArtifactWatcherRegistryOptions = {}) {
@@ -248,6 +257,7 @@ export class ArtifactWatcherRegistry {
     this.watchFactory = options.watchFactory ?? nativeWorkspaceWatch;
     this.captureExternalEdit = options.captureExternalEdit;
     this.quietWindowMs = options.quietWindowMs ?? EXTERNAL_EDIT_QUIET_WINDOW_MS;
+    this.initialResolveTrackedFiles = options.initialResolveTrackedFiles ?? resolveTrackedFiles;
   }
 
   /** Starts a daemon-lifetime watcher for a registered workspace, with no subscriber and no
@@ -262,7 +272,7 @@ export class ArtifactWatcherRegistry {
       return;
     }
     const state = this.openState(workspace, id, true);
-    if (state) this.startWatcher(state);
+    if (state) this.initializeState(state);
   }
 
   subscribe(workspace: WorkspaceTarget, listener: (event: ArtifactWatcherEvent) => void): () => void {
@@ -277,7 +287,7 @@ export class ArtifactWatcherRegistry {
       if (!opened) return () => {};
       state = opened;
       state.listeners.add(listener);
-      this.startWatcher(state);
+      this.initializeState(state);
     } else {
       state.listeners.add(listener);
     }
@@ -310,7 +320,7 @@ export class ArtifactWatcherRegistry {
       id,
       listeners: new Set(),
       daemonLifetime,
-      snapshot: resolveTrackedFiles(workspace, { limit: this.maxTrackedArtifacts }),
+      snapshot: { tracked: [], oversize: [], directories: [], skippedSymlinks: [], truncated: false },
       watcher: null,
       mode: "disabled",
       ignored: null,
@@ -325,6 +335,34 @@ export class ArtifactWatcherRegistry {
     };
     this.states.set(id, state);
     return state;
+  }
+
+  private initializeState(state: WatchState): void {
+    let result: ResolveMatchedFilesResult | Promise<ResolveMatchedFilesResult>;
+    try {
+      result = this.initialResolveTrackedFiles(state.workspace, { limit: this.maxTrackedArtifacts });
+    } catch (error) {
+      this.warnOnce(state, "initial-scan-failed", `initial matcher scan failed: ${String(error)}`);
+      return;
+    }
+
+    if (!(result instanceof Promise)) {
+      state.snapshot = result;
+      this.startWatcher(state);
+      return;
+    }
+
+    void result.then(
+      (snapshot) => {
+        if (this.states.get(state.id) !== state) return;
+        state.snapshot = snapshot;
+        this.startWatcher(state);
+      },
+      (error) => {
+        if (this.states.get(state.id) !== state) return;
+        this.warnOnce(state, "initial-scan-failed", `initial matcher scan failed: ${String(error)}`);
+      },
+    );
   }
 
   /** Test/diagnostic surface: exposes only the bounded mode, never filesystem paths. */

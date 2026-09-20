@@ -184,6 +184,9 @@ export interface ApiContext {
   /** Serializes the complete loose-file adoption transaction per target. Optional only for
    * hand-built contexts; production shares the backend's daemon-scoped coordinator. */
   adoptionCoordinator?: AdoptionCoordinator;
+  /** Constructs adoption's unpublished staging bus with the same matcher boundary as production
+   * registry buses. Optional only for hand-built tests, which retain the synchronous default. */
+  createAdoptionStagingBus?: (workspace: WorkspaceTarget) => WorkspaceBus;
   /** The ONE class-F capability store shared with `createClassFFetch` (A1 §7) — a token minted
    * here (`POST /w/:slug/capability/:artifactPath`) must be lookup-able by the class-F listener,
    * so both fetch handlers are built from the same `CapabilityStore` instance (lifecycle.ts). */
@@ -1838,6 +1841,7 @@ async function openWorkspaceAt(
         ctx.getWorkspaceBus,
         ctx.sealAdoptionSources,
         ownershipCoordinator(ctx),
+        ctx.createAdoptionStagingBus,
       );
     }
     await resolveBus(ctx, opened.entry);
@@ -1852,12 +1856,11 @@ async function openWorkspaceAt(
     });
   } catch (error) {
     if (error instanceof WorkspaceOpenError) {
-      const status =
-        error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact"
-          ? 422
-          : error.code === "alias-discovery-unavailable"
-            ? 503
-            : 400;
+      if (error.code === "alias-discovery-unavailable") {
+        console.error(`[glosa] ${error.message}`);
+        return problem(503, error.code, "hardlink alias discovery unavailable", undefined, pathname);
+      }
+      const status = error.code === "artifact-not-tracked" || error.code === "no-tracked-artifact" ? 422 : 400;
       return problem(status, error.code, error.message, undefined, pathname);
     }
     if (error instanceof AdoptionError) {

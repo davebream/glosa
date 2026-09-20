@@ -320,7 +320,7 @@ export async function isAncestorOrEqual(
  * real path — poisoning the union so the next `git add -- <union>` fatals on a pathspec that
  * doesn't exist, wedging every future checkpoint for this workspace. `-z` output is raw bytes,
  * never quoted, so this holds for ANY filename git can track. */
-async function trackedUnion(root: WorkspaceTarget, currentTracked: string[]): Promise<string[]> {
+async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];
   return [...new Set([...currentTracked, ...headTracked])].sort();
@@ -330,6 +330,11 @@ export interface InitShadowRepoDeps {
   writer: JournalWriter;
   ulid: () => string;
   now?: () => Date;
+  /** A caller that already resolved the complete matcher snapshot may pass its paths so shadow
+   * initialization does not repeat the same recursive walk on the daemon thread. */
+  trackedPaths?: readonly string[];
+  /** Test seam proving `trackedPaths` is actually consumed. */
+  resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
 export interface ShadowHealth {
@@ -562,7 +567,8 @@ export async function initShadowRepo(root: WorkspaceTarget, deps: InitShadowRepo
   // unrelated real workspaces. The shadow repo is local-only storage under `.glosa/`, deliberately
   // independent of the work-tree's own git (decisions.md: "`.gitignore` protects only git-mediated"
   // paths), so tracking what glosa matched is the consistent behaviour.
-  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
+  const tracked =
+    deps.trackedPaths ?? (deps.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
   if (tracked.length > 0) await runGit(root, ["add", "-A", "-f", "--", ...tracked.map(safePathspec)]);
   await commit(root, {
     message: "checkpoint",
@@ -611,6 +617,11 @@ export interface CheckpointOptions {
    * (Before that reset it was not: the index was cumulative, so a scoped checkpoint could commit
    * whatever an earlier failed one had left staged.) Omitted keeps the all-tracked behavior. */
   paths?: string[];
+  /** Complete matcher snapshot already resolved by the caller; distinct from `paths`, which
+   * deliberately scopes a human checkpoint to only the edited artifacts. */
+  trackedPaths?: readonly string[];
+  /** Test seam proving `trackedPaths` prevents a repeated synchronous matcher walk. */
+  resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
 /** Resets the index to HEAD, stages the tracked∪HEAD union (or just `opts.paths`), and commits iff
@@ -637,7 +648,8 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
   // to, and nothing can have staged into it yet — same house pattern as `isPathDirty`.
   await runGit(root, ["read-tree", "HEAD"], { allowExitCodes: [0, 128] });
 
-  const tracked = resolveTrackedFiles(root).tracked.map((f) => f.path);
+  const tracked =
+    opts.trackedPaths ?? (opts.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
   const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire

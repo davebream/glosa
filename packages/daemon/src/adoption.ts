@@ -19,6 +19,7 @@ import {
 import type { WorkspaceTarget } from "./workspace.ts";
 
 type GetBus = (workspace: WorkspaceTarget) => WorkspaceBus;
+type CreateStagingBus = (workspace: WorkspaceTarget) => WorkspaceBus;
 type SealSources = (
   sources: readonly WorkspaceTarget[],
   adoptionId: string,
@@ -64,8 +65,11 @@ export async function adoptLooseLineages(
   getBus: GetBus,
   sealSources: SealSources | undefined,
   coordinator: AdoptionCoordinator,
+  createStagingBus: CreateStagingBus = (workspace) => new WorkspaceBus(workspace),
 ): Promise<void> {
-  return coordinator.run(target.registration_id, () => adoptLooseLineagesExclusive(index, target, getBus, sealSources));
+  return coordinator.run(target.registration_id, () =>
+    adoptLooseLineagesExclusive(index, target, getBus, sealSources, createStagingBus),
+  );
 }
 
 async function adoptLooseLineagesExclusive(
@@ -73,6 +77,7 @@ async function adoptLooseLineagesExclusive(
   target: WorkspaceEntry,
   getBus: GetBus,
   sealSources?: SealSources,
+  createStagingBus: CreateStagingBus = (workspace) => new WorkspaceBus(workspace),
 ): Promise<void> {
   const record = await index.beginAdoption(target);
   if (!record || record.phase === "committed") return;
@@ -142,7 +147,7 @@ async function adoptLooseLineagesExclusive(
     // adopting target, so this unpublished staging bus is mechanically the only target writer.
     // Publishing is one same-filesystem rename, so an orphaned inbox payload is never visible to
     // normal reconcile/self-heal.
-    stageBus = new WorkspaceBus(stage);
+    stageBus = createStagingBus(stage);
     await stageBus.reconcileOnce();
 
     const lineageSources: Record<string, unknown>[] = [];
@@ -217,10 +222,11 @@ export async function resumePendingAdoptions(
   getBus: GetBus,
   sealSources: SealSources | undefined,
   coordinator: AdoptionCoordinator,
+  createStagingBus?: CreateStagingBus,
 ): Promise<void> {
   for (const record of index.pendingAdoptions()) {
     const target = index.getWorkspaceByRegistration(record.target_registration_id);
     if (!target) continue;
-    await adoptLooseLineages(index, target, getBus, sealSources, coordinator);
+    await adoptLooseLineages(index, target, getBus, sealSources, coordinator, createStagingBus);
   }
 }
