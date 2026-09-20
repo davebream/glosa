@@ -362,6 +362,11 @@ export function createArtifactPane(host, deps) {
   let richMountRequest = 0;
   /** Unsaved source, kept across mode switches. `{path, text}` — see `parkDrafts`. */
   let parkedSource = null;
+  /** The artifact path whose full-page source face holds text the writer typed and has not saved.
+   * Path-scoped rather than a bare flag because `modeState.dirty` survives opening a different
+   * artifact (see the note above `setBaseline`), and a face filled for another file must still
+   * follow the file it is showing. */
+  let unsavedFacePath = null;
   /**
    * A splice report that outlived the editor that produced it, `{text, report}`.
    *
@@ -1963,7 +1968,11 @@ export function createArtifactPane(host, deps) {
       // A parked draft outranks the file: re-entering Edit after the agent pulled the pane into
       // Review must find the sentence the reviewer was halfway through, not the saved version.
       const parked = parkedSourceFor(currentArtifact);
-      editArea.value = parked ?? currentArtifact.content ?? "";
+      // Unsaved typing outranks both. `loadArtifact` fills this face as soon as the artifact
+      // arrives and then renders AGAIN once annotations hydrate, so re-reading the file here took
+      // back every keystroke made in between — a window that is invisible when the daemon answers
+      // fast and wide open when it does not.
+      if (unsavedFacePath !== currentArtifact?.source_path) editArea.value = parked ?? currentArtifact.content ?? "";
     } else {
       // First paint sets innerHTML directly (nothing to morph FROM yet); every later re-render
       // goes through morphArtifactContent instead.
@@ -3279,6 +3288,7 @@ export function createArtifactPane(host, deps) {
 
   editArea.addEventListener("input", () => {
     if (pendingReport && editArea.value !== pendingReport.text) pendingReport = null;
+    unsavedFacePath = currentArtifact?.source_path ?? null;
     modeState = modeReducer(modeState, { type: "edited" });
     editStatus.textContent = "";
     editStatus.removeAttribute("data-error");
@@ -3305,6 +3315,7 @@ export function createArtifactPane(host, deps) {
     sourceFace = true;
     renderContent();
     editArea.value = carried; // after renderContent, so the artifact snapshot doesn't clobber it
+    if (carried !== (baselineContent ?? "")) unsavedFacePath = currentArtifact?.source_path ?? null;
     refreshOutline(); // programmatic text assignment emits no input event
     // The report rides along: this text is still the rich face's splice until the writer edits it.
     pendingReport = reportToCarry(save, carried);
@@ -3402,6 +3413,7 @@ export function createArtifactPane(host, deps) {
     try {
       const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
       currentArtifact = { ...artifact, content, ...saved };
+      unsavedFacePath = null; // on disk now: the face follows the file again
       modeState = modeReducer(modeState, { type: "saved" });
       // The working source IS what was just written, so it stops being a local edit; keeping it
       // would make `isDirty()` lie and schedule a second save of bytes already on disk. The undo
@@ -3471,6 +3483,7 @@ export function createArtifactPane(host, deps) {
         sourceFace = true;
         renderContent();
         editArea.value = content;
+        unsavedFacePath = currentArtifact?.source_path ?? null; // unsaved bytes the writer now owns
         pendingReport = null; // they were shown the cost and chose to own these bytes
         modeState = modeReducer(modeState, { type: "edited" });
         editArea.focus();
