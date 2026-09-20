@@ -34,7 +34,7 @@ SOFTWARE.
 
 ## Zero-Clause BSD component
 
-- idiomorph 0.7.4
+- idiomorph 0.8.0
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted.
