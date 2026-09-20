@@ -89,17 +89,25 @@ two writes to the SAME workspace never interleave. There is no pre-daemon lockfi
   and enclosing-repository promotion — is answered by `matchTrackedFile`, the same canonical
   classifier `resolveMatchedFiles`/`resolveTrackedFiles` compile their include/exclude/prune
   predicates from (§F20). It walks only the queried path's own segments from the registration
-  root — confined, symlink-checked at every intermediate, NFC-keyed, size/extension-gated for a
+  root — confined, readability- and symlink-checked at every intermediate, NFC-keyed, size/extension-gated for a
   matcher registration and exact-path/regular/non-symlink-gated for a bounded one — never the rest
   of the tree, so its answer can never disagree with the complete LIST for that same path.
   `focusFirst` (first tracked document in a directory) is the one deliberate exception: it is
   answered from the complete LIST, because "first" has no meaning without one.
+- **Request-time complete lists stay off the daemon event loop.** Watcher initialization and first
+  reconciliation resolve one complete matcher snapshot in a Worker. Offline catch-up passes that
+  same snapshot through shadow-repository initialization and checkpointing; those steps never
+  repeat the recursive matcher walk synchronously inside the HTTP transaction. Adoption's
+  unpublished staging bus uses this same asynchronous matcher boundary rather than constructing a
+  synchronous exception to the production bus registry.
 - **Exact-path reuse before hardlink discovery.** Reopening a path that already has its own
   `loose-file` registration (`registration_id` is a pure function of `(kind, canonical_path)`, so
   this is a direct lookup, never a scan) refreshes that entry — `last_seen`, `present`, and a
   freshly-`lstat`ed `file_identity` — rather than recreating it, as long as its current bounded
-  member still resolves. `file_identity` is never trusted from what was last persisted; only a
-  live re-check of the current bounded path proves the registration and the file still agree.
+  member still resolves. The same refresh re-announces the active registration so a soft-absent
+  row restored after daemon startup immediately reacquires its daemon-lifetime watcher.
+  `file_identity` is never trusted from what was last persisted; only one live, non-following
+  regular-file snapshot of the current bounded path proves the registration and file still agree.
 - **`nlink === 1` skips hardlink discovery entirely.** No second hardlink can exist for such a
   file, so there is nothing left to search once point membership and exact-path reuse have both
   missed — this is the common case, and issue #281's fix for it: no per-registration tree walk runs
@@ -108,10 +116,12 @@ two writes to the SAME workspace never interleave. There is no pre-daemon lockfi
   read-only Worker scan — insertion order, the same deepest-owner exclusion the point/list
   resolvers apply — is awaited from inside the global index mutex's critical section (the mutex's
   ownership spans an `await`, so no concurrent registration mutation can interleave with the
-  decision), bounded by a deadline well inside the CLI's own discovery budget. The Worker is always
+  decision), bounded by one end-to-end deadline well inside the CLI's own discovery budget. Every
+  stale-identity retry receives only the time remaining on that original deadline. The Worker is always
   terminated on exit — a match, a clean miss, a timeout, or a Worker-thread failure — and nothing is
   persisted while it runs. A found candidate is trusted only after the target's AND the candidate's
-  live identity are both re-derived on the main thread and still agree; a mismatch retries the scan
+  live type, identity, and link count are both re-derived from non-following snapshots on the main
+  thread and still agree; a mismatch retries the scan
   a bounded number of times before failing closed. Timeout, Worker failure, or an unresolved
   identity mismatch all fail the open with a retryable `alias-discovery-unavailable` error rather
   than silently creating a second registration for an inode another one may already own.

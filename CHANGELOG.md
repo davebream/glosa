@@ -47,8 +47,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   an adoption candidate is now answered by checking that one path against the registration's matcher,
   never by listing the whole tree. The one remaining full-registry case — finding a second hardlink to
   the same file elsewhere in the registry, needed only when the file's link count is above one — now
-  runs off the main thread with a bounded deadline, so it can no longer block the daemon; if it can't
-  finish or verify its answer in time, the open fails with a retryable error instead of guessing.
+  runs off the main thread with one overall bounded deadline across retries, so it can no longer
+  block the daemon; if it can't finish or verify its answer in time, the open fails with a retryable
+  error instead of guessing. Complete watcher and first-reconciliation snapshots also run off-thread,
+  and shadow initialization/checkpointing—including adoption's staging bus—reuse that boundary rather
+  than walking the tree again. Restored loose registrations restart their daemon-lifetime watcher,
+  and every hardlink/exact-reuse identity decision uses a non-following regular-file snapshot.
 
 ## [0.1.0-alpha.27] — 2026-09-17
 
