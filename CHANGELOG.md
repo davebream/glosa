@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Typing in the full-page source editor within the first moment of opening a file is no longer
+  taken back. The pane filled the editor as soon as the file arrived and then filled it again once
+  the annotations had loaded, so anything typed between those two moments was replaced by the file
+  as saved, with nothing said. Whichever answer was slow decided whether a writer saw it.
+- `glosa open <file>` no longer wedges the daemon once the workspace registry has accumulated many
+  large workspaces. Opening a file used to answer "does any registration already track this inode?"
+  by walking every registered tree's complete file list synchronously — with a few workspaces of
+  20,000 files each, that alone could stall the event loop long enough for the daemon's own stall
+  watchdog to SIGKILL it. Whether a file belongs to its owning directory, an enclosing repository, or
+  an adoption candidate is now answered by checking that one path against the registration's matcher,
+  never by listing the whole tree. The one remaining full-registry case — finding a second hardlink to
+  the same file elsewhere in the registry, needed only when the file's link count is above one — now
+  runs off the main thread with one overall bounded deadline across retries, so it can no longer
+  block the daemon; if it can't finish or verify its answer in time, the open fails with a retryable
+  error instead of guessing. Complete watcher and first-reconciliation snapshots also run off-thread,
+  and shadow initialization/checkpointing—including adoption's staging bus—reuse that boundary rather
+  than walking the tree again. Restored loose registrations restart their daemon-lifetime watcher,
+  and every hardlink/exact-reuse identity decision uses a non-following regular-file snapshot.
+
 ## [0.1.0-alpha.28] — 2026-09-18
 
 ### Changed
@@ -39,20 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   annotated. They were never stamped with their source line, so nothing could address them.
 - In Edit, a session's write repaints the page, and the changed-on-disk notice is kept for unsaved
   work rather than shown to anyone who pressed Edit and only read.
-- `glosa open <file>` no longer wedges the daemon once the workspace registry has accumulated many
-  large workspaces. Opening a file used to answer "does any registration already track this inode?"
-  by walking every registered tree's complete file list synchronously — with a few workspaces of
-  20,000 files each, that alone could stall the event loop long enough for the daemon's own stall
-  watchdog to SIGKILL it. Whether a file belongs to its owning directory, an enclosing repository, or
-  an adoption candidate is now answered by checking that one path against the registration's matcher,
-  never by listing the whole tree. The one remaining full-registry case — finding a second hardlink to
-  the same file elsewhere in the registry, needed only when the file's link count is above one — now
-  runs off the main thread with one overall bounded deadline across retries, so it can no longer
-  block the daemon; if it can't finish or verify its answer in time, the open fails with a retryable
-  error instead of guessing. Complete watcher and first-reconciliation snapshots also run off-thread,
-  and shadow initialization/checkpointing—including adoption's staging bus—reuse that boundary rather
-  than walking the tree again. Restored loose registrations restart their daemon-lifetime watcher,
-  and every hardlink/exact-reuse identity decision uses a non-following regular-file snapshot.
+
 
 ## [0.1.0-alpha.27] — 2026-09-17
 
