@@ -174,6 +174,7 @@ dropping out of it.
 | `editor-roundtrip` | `packages/spa/test/rich-editor.test.ts` |
 | `editor-roundtrip` | `packages/spa/test/edit-save-guard.test.ts` |
 | `editor-roundtrip` | `test/acceptance/rich-editor-browser-roundtrip.test.ts` |
+| `editor-roundtrip` | `test/acceptance/workbench-real-engine.test.ts` |
 
 ### 1.3 Fidelity layers and residual manual boundaries
 
@@ -183,6 +184,16 @@ back/forward navigation, read lock, workspace-layout preservation, and cancellat
 unsaved editor discard. The bootstrap tests also pin duplicate events, pending consent, secret
 scrubbing, internal focus reflection and confirmation failure. Removing the initial surface
 handoff, route listeners or discard guard must produce a named browser failure.
+
+**Multi-artifact workbench (#162).** The same suite drives the same real engine with MORE THAN ONE
+artifact open, which is where the workbench's release claims live. It checks that a reload restores
+the arrangement and every pane's own state (not only the pane the address bar names), that exactly
+one laid-out mode control exists and the mode shortcuts move that pane alone, and that a class-F
+pane keeps the same iframe element, the same `contentWindow`, one capability mint and one document
+fetch across a tab switch and a tab move. That last one is a security-adjacent claim, not a
+performance one: a second `load` on one iframe is what the class-F viewer treats as the document
+navigating itself. Removing `defaultRenderer: "always"`, the per-pane mode write, the layout save,
+the layout restore, or the active-pane marking must each produce a named browser failure here.
 
 **Session recovery (#141).** The delivery suite keeps one production MCP stdio process alive while
 its isolated daemon is killed/restarted, for both Claude and Codex environment identities. The next

@@ -143,6 +143,68 @@ describe("moving a tab never destroys the layout it was moved within", () => {
   });
 });
 
+describe("§11: a pane's own element is never taken out of the page by a layout move", () => {
+  /** A class-F pane holds a sandboxed iframe on a one-shot-looking capability URL. Taking that
+   * iframe out of the document and putting it back re-runs the load, and `classf-viewer.js`
+   * reads a SECOND load on the same element as the frame navigating itself — it tears the frame
+   * down and shows "document attempted to navigate". So "the element is never removed" is the
+   * whole of §11's reparenting contract, and `defaultRenderer: "always"` is what buys it.
+   *
+   * The two moves a reader can reach from the pane menu are covered end to end in
+   * test/acceptance/workbench-real-engine.test.ts. This covers the third, which needs a pointer
+   * drag of a tab strip's void area to reach in a browser: dropping a WHOLE GROUP onto another
+   * group. The drop handler calls exactly this API. */
+  test("merging a whole group into another never removes the moved panel's element", async () => {
+    const { installDom } = await import("./dom-env.ts");
+    const dom = installDom();
+    try {
+      const { createDockview } = await import("../src/vendor/dockview.js");
+      const host = dom.document.createElement("div");
+      dom.document.body.append(host);
+      const api = createDockview(host, {
+        disableFloatingGroups: true,
+        // The line under test. Flip it to "onlyWhenVisible" and this test must name itself.
+        defaultRenderer: "always",
+        createComponent: ({ id }: { id: string }) => {
+          const element = dom.document.createElement("div");
+          element.setAttribute("data-panel", id);
+          return { element, init() {} };
+        },
+      });
+      api.addPanel({ id: "a.md", component: "pane" });
+      api.addPanel({ id: "b.md", component: "pane", position: { direction: "right" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const moved = dom.document.querySelector('[data-panel="b.md"]') as any;
+      expect(moved.isConnected).toBe(true);
+
+      // Identity alone proves nothing: the same element removed and re-appended is still the
+      // same object, and an iframe inside it would have reloaded either way. So watch both ways
+      // it could leave the page — taken out (`.remove()`, which is what the other renderer does)
+      // and moved under a different parent (which `appendChild` does silently).
+      const parentBefore = moved.parentElement;
+      let removed = false;
+      const realRemove = moved.remove.bind(moved);
+      moved.remove = () => {
+        removed = true;
+        realRemove();
+      };
+
+      const [from, to] = api.groups;
+      from.api.moveTo({ group: to, position: "center" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(api.groups.length).toBe(1);
+      expect(api.panels.map((panel: any) => panel.id).sort()).toEqual(["a.md", "b.md"]);
+      expect(removed).toBe(false);
+      expect(moved.parentElement).toBe(parentBefore);
+      expect(moved.isConnected).toBe(true);
+    } finally {
+      dom.teardown();
+    }
+  });
+});
+
 describe("nesting is bounded by usable width, not by an arbitrary depth cap (§9)", () => {
   test("the minimum pane width is where the compact annotation tray bottoms out", () => {
     expect(MIN_PANE_WIDTH).toBe(360);
