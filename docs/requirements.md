@@ -303,17 +303,22 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
   consents. Cancellation preserves the mounted editor and restores its secret-free focus URL.
   Workspace, artifact, surface, mode and read lock follow the requested fragment.
-- **One page per artifact in three states**, named for what the HUMAN is doing rather than for who the
-  counterparty is. **Review** is the default page: the anchored two-way margin, where the reviewer's
-  own comments AND a session's questions and pointers about a passage are answered where the words
-  are, and selecting text opens a comment. **Read** is the same page with notes hidden (rendered,
+- **One page per artifact in three states, per pane**, named for what the HUMAN is doing rather than
+  for who the counterparty is. **Review** is the default page: the anchored two-way margin, where
+  the reviewer's own comments AND a session's questions and pointers about a passage are answered
+  where the words are, and selecting text opens a comment. **Read** is the same page with notes hidden (rendered,
   reading-only canvas; annotation, restore, and agent composition need notes shown), reached through
   one Notes toggle. **Edit** is a deliberate state of that same page (modify source, save →
   re-render), entered with one Edit action and left with Done, which returns to whichever view was
   left; the page itself scrolls, so the reader's place survives entering and leaving it. Edit is
   paused while the workspace's apply lease is held by a session, and a draft already open is kept.
   The three state names stay on the wire (`mode=` links, `glosa open`, `glosa_present`); a link or
-  command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control. Edit has two faces: a rich editor is the default and the byte-exact source
+  command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control.
+  With several artifacts open, the state belongs to the PANE: only the focused pane exposes a mode
+  control and the mode shortcuts address that pane (`docs/accessibility.md` §Keyboard interaction
+  matrix), the others state where they stand without offering to change it, and the saved layout
+  brings every pane back in the state it was left in — not only the one the address bar names.
+  Edit has two faces: a rich editor is the default and the byte-exact source
   textarea stays one toggle away. Saves are **source-preserving** — only the blocks the writer
   edited are re-serialized and everything else is byte-identical; a block the rich editor models is
   written back in the spelling it was read in, and a top-level construct it does not model — a
@@ -484,7 +489,9 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
-  reconnect loses no events; a concurrent writer's change on disk is never silently overwritten by
+  reconnect loses no events; the arrangement AND every pane's state survive a reload in a real
+  engine, and a class-F pane keeps the same frame — no second load, no fresh mint — across a tab
+  switch and a tab move; a concurrent writer's change on disk is never silently overwritten by
   a stale save — a merge is written only on the writer's explicit Keep mine, never automatically, and
   what it cannot carry (a conflicting block, or a conflicting source region between or around blocks)
   is named in the preview rather than dropped silently.
