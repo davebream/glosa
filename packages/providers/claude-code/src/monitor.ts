@@ -440,12 +440,24 @@ export async function runClaudeMonitor(
   const indexPath = workspaceIndexPath(deps.home());
   let attempt = 0;
   while (!signal.aborted) {
-    const workspace = registeredWorkspaceForProject(indexPath, options.projectDir);
+    let workspace = registeredWorkspaceForProject(indexPath, options.projectDir);
     if (!workspace) {
       attempt = 0;
-      await deps.waitForWorkspaceChange(indexPath, signal);
-      continue;
+      const waiting = new AbortController();
+      const changed = deps.waitForWorkspaceChange(indexPath, AbortSignal.any([signal, waiting.signal]));
+      try {
+        // Subscribe before rechecking: an atomic index replacement between the first
+        // read and watch installation otherwise leaves us asleep until the fallback timer.
+        workspace = registeredWorkspaceForProject(indexPath, options.projectDir);
+        if (!workspace) {
+          await changed;
+          continue;
+        }
+      } finally {
+        waiting.abort();
+      }
     }
+    if (signal.aborted) return;
     let superseded = false;
     try {
       const connection = await existingDaemon(deps.home());

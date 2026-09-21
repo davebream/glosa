@@ -210,6 +210,61 @@ describe("Claude plugin monitor", () => {
     expect(parkProbeDelay(() => 0.5)).toBeLessThan(PARK_PROBE_BASE_MS + PARK_PROBE_JITTER_MS);
   });
 
+  test("a workspace registered between discovery and watcher installation is not missed", async () => {
+    const home = mkdtempSync(join(tmpdir(), "glosa-monitor-registration-race-"));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-registration-project-")));
+    withFakeGlobalFetch(seedFakeDaemon(home));
+    const abort = new AbortController();
+    let registered = false;
+    let watcherClosed = false;
+    let closedBeforeRegistration = false;
+    const deadline = setTimeout(() => abort.abort(), 1_000);
+    try {
+      await runClaudeMonitor(
+        { sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" },
+        {
+          home: () => home,
+          fetch: (async (input: RequestInfo | URL) => {
+            if (input.toString().endsWith("/api/sessions/register")) {
+              registered = true;
+              closedBeforeRegistration = watcherClosed;
+            }
+            abort.abort();
+            return new Response(null, { status: 503 });
+          }) as typeof fetch,
+          stdout: { write: (_chunk, callback) => callback() },
+          random: () => 0,
+          sleep: async () => {},
+          now: Date.now,
+          waitForWorkspaceChange: (_path, signal) => {
+            // The index write happened before the watcher was installed: no event will follow.
+            seedWorkspace(home, project);
+            return new Promise<void>((resolve) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  watcherClosed = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+          },
+        },
+        abort.signal,
+      );
+      expect(registered, "discover the already-written workspace without waiting for another event").toBe(true);
+      expect(closedBeforeRegistration, "the unused watcher is released before connecting, not only on shutdown").toBe(
+        true,
+      );
+    } finally {
+      clearTimeout(deadline);
+      abort.abort();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test("a plain EOF (no superseded frame) retries as today — no ownership probe is ever consulted", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-eof-"));
     const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-eof-project-")));
