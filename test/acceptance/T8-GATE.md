@@ -145,10 +145,16 @@ dropping out of it.
 | `security` | `test/acceptance/security-attack-matrix.test.ts` |
 | `security` | `packages/daemon/test/auth.test.ts` |
 | `security` | `packages/daemon/test/csp.test.ts` |
+| `security` | `packages/daemon/test/dictation.test.ts` |
 | `security` | `packages/daemon/test/confine-path.test.ts` |
 | `security` | `packages/daemon/test/matcher/symlinks.test.ts` |
 | `security` | `packages/daemon/test/presentation-token.test.ts` |
 | `security` | `packages/daemon/test/token-lifecycle.test.ts` |
+| `security` | `packages/cli/test/dictation.test.ts` |
+| `security` | `packages/providers/wispr-flow/test/provider.test.ts` |
+| `security` | `packages/providers/wispr-flow/test/browser.test.ts` |
+| `security` | `packages/spa/test/dictation.test.ts` |
+| `security` | `packages/spa/test/dictation-e2e.test.ts` |
 | `security` | `test/acceptance/browser-security-real-engine.test.ts` |
 | `security` | `test/acceptance/pairing-durability-real-engine.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-f.test.ts` |
