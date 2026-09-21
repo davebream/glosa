@@ -605,9 +605,10 @@ describe("issue #281 — hardlink-alias scan ignores non-active registrations", 
     const source = join(sourceDir, "source.md");
     const alias = join(aliasDir, "alias.md");
     writeFileSync(source, "shared");
-    linkSync(source, alias);
     const index = new WorkspaceIndex({ home });
 
+    // Register the source while it is still an ordinary single-link file. The behavior under test
+    // starts only after that registration becomes inactive and a new hardlink needs discovery.
     const loose = await index.resolveOpenTarget(source);
     mkdirSync(loose.entry.bus_path, { recursive: true });
     const target = await index.resolveOpenTarget(sourceDir);
@@ -619,6 +620,7 @@ describe("issue #281 — hardlink-alias scan ignores non-active registrations", 
     writeFileSync(join(sourceDir, ".glosa", "config.json"), JSON.stringify({ artifacts: { exclude: ["source.md"] } }));
     if (commit) await index.commitAdoption(adoption!.adoption_id);
 
+    linkSync(source, alias);
     const opened = await index.resolveOpenTarget(alias);
     expect(opened.entry.kind).toBe("loose-file");
     expect(opened.entry.registration_id).not.toBe(loose.entry.registration_id);
