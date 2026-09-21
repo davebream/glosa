@@ -27,8 +27,30 @@ consume this contract. Codex's transport uses its documented local control-plane
 
 ## Runtime trust boundary
 
-glosa remains local-first and makes no telemetry or external runtime calls. Plugin monitor and Codex
-app-server connections are optional delivery optimizations. MCP pull is the supported fallback.
+glosa remains local-first and makes no telemetry, background checks, warm-ups, or unconfigured
+external runtime calls. Plugin monitor and Codex app-server connections are optional local delivery
+optimizations. MCP pull is the supported fallback. A configured provider may receive only the data
+named in current versioned consent, and only after the user starts its foreground action. Class-F
+content remains network-locked regardless of configuration.
+
+## Dictation is a consented input provider, not desktop automation
+
+Decided 2026-09-21. Wispr Flow's installed desktop application has no documented SDK or supported
+control API. Its cloud Voice Interface API does, but access and billing are separate from installing
+the desktop app. Glosa therefore does not detect a running app, synthesize its hotkey, use a private
+URL scheme, or automate accessibility. “Available” means current versioned consent, a configured
+organization credential, and browser microphone/streaming APIs.
+
+The generic daemon has a `DictationProvider` registry separate from `AgentProvider`; the core works
+with an empty registry and imports no Wispr package. The CLI entrypoint composes Wispr, Keychain owns
+the organization key, and a foreground session request exchanges it for a ten-minute client JWT.
+Audio and capped visible plaintext then travel directly from the browser to the provider over its
+allowlisted WSS origin. There is no daemon audio proxy, REST fallback, warm-up, or retry.
+
+Dictation changes an editable draft only. It locks one eligible prose field, preserves the original
+selection and value, and inserts only a final transcript. It never submits, writes a journal event,
+or claims human/session provenance on its own; later submission follows the existing action and
+provenance contracts. Document editors, search, command syntax, and read-only prompts are excluded.
 
 ## Token lifecycle is a local filesystem authority
 

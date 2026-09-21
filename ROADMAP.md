@@ -1,6 +1,6 @@
 # Glosa roadmap
 
-Last reviewed: 2026-09-16
+Last reviewed: 2026-09-21
 
 Glosa's maintainers own this roadmap. It describes accepted product direction, not a promise that
 every item will ship. The public [Glosa Roadmap project](https://github.com/users/davebream/projects/5)
@@ -12,6 +12,10 @@ the exit criteria that close it.
 
 ## Now
 
+- **Opt-in Wispr Flow dictation.** A configured user can dictate into Glosa's four prose composers;
+  audio and bounded visible plaintext leave the machine only after the user clicks Dictate. Dictation
+  inserts a reviewable draft and never submits it. A paid attended live-provider smoke test is the
+  support gate; CI and the core workflow stay offline.
 - **Phase 3: several agents on one workspace.** Visible per-artifact and per-entry claims and a
   signals channel between sessions, in place of today's single apply lease (the lock one agent holds
   while it applies a change). Track: [#166](https://github.com/davebream/glosa/issues/166).
@@ -69,7 +73,6 @@ the exit criteria that close it.
 - Whether glosa should ever launch an agent session itself, which it deliberately does not do today
   ([#157](https://github.com/davebream/glosa/issues/157)).
 - Support beyond macOS after the local-first security and lifecycle contracts are portable.
-- Dictation capture when a clear workflow remains after evaluating provider-native voice support.
 - Stable public extension contracts beyond workspace metadata v1 and the current provider interface.
 
 Later items remain exploratory. Some have an issue that records their reasoning

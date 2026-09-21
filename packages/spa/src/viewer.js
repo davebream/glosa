@@ -21,6 +21,7 @@ import { createArtifactTreeNavigator } from "./artifact-tree.js";
 import { mountAttentionTray } from "./attention-tray.js";
 import { createDataAccess } from "./data-access.js";
 import { createDiffPane } from "./diff-pane.js";
+import { createDictationController } from "./dictation.js";
 import { createDock, describeVersion, diffPanelId, disambiguateLabels, MIN_PANE_WIDTH } from "./dock.js";
 import { confirmDialog, noticeDialog } from "./dialog.js";
 import { createCommandPalette } from "./palette.js";
@@ -116,6 +117,7 @@ export { MODES, INTENTS, initialModeState, isParked, modeReducer, morphArtifactC
  *   onFocusChange?: (focus: any) => void,
  *   layoutStorage?: any,
  *   faceStore?: any,
+ *   dictationController?: any,
  * }} [options]
  */
 export function mountApp(
@@ -132,6 +134,7 @@ export function mountApp(
     layoutStorage,
     // The writer's per-artifact face (face.js). One store for every pane; a test passes its own.
     faceStore = createFaceStore({ storage: layoutStorage ?? undefined }),
+    dictationController: injectedDictationController,
   } = {},
 ) {
   root.textContent = "";
@@ -160,6 +163,8 @@ export function mountApp(
 
   // A single presented document is one document: no tab strip, no dock (brief §4).
   const singlePane = surface === "document";
+  const dictationController = injectedDictationController ?? createDictationController({ dataAccess });
+  const ownsDictationController = !injectedDictationController;
 
   const shell = createViewerShell(root, {
     dataAccess,
@@ -172,6 +177,7 @@ export function mountApp(
     onAttentionEntriesChange: setAttentionEntries,
     onOpenArtifact: (path) => void openArtifact(path),
     getCurrentArtifact: () => activePane()?.path ?? null,
+    dictationController,
   });
   const { attentionTray, agentFeedback, artifactNavigator } = shell;
   const {
@@ -574,6 +580,7 @@ export function mountApp(
       // A presented single document has no tab strip, so its pane carries the whole identity.
       getTabLabel: () => (singlePane ? null : (tabLabels().get(id) ?? id.split("/").pop())),
       faceStore,
+      dictationController,
       openDiffTab: openDiff,
       claimWidth: (target) => dock?.claimWidth(id, target),
       releaseWidth: () => dock?.releaseWidth(id),
@@ -756,6 +763,7 @@ export function mountApp(
     loadConversationPane,
     createElement: el,
     returnFocus: () => toolsTrigger.focus({ preventScroll: true }),
+    dictationController,
   });
   const { renderConversation } = contextSurfaces;
 
@@ -1167,6 +1175,7 @@ export function mountApp(
     contextSurfaces.destroy();
     palette.destroy();
     shell.destroy();
+    if (ownsDictationController) dictationController.destroy();
   };
   // Keep the callable cleanup contract for existing hosts. URL navigation closes the whole
   // view, so every pane must consent before bootstrap reloads it with another surface/layout.

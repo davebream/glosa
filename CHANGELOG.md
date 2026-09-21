@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Wispr Flow dictation is available in the annotation request, agent answer, attention
+  response, and conversation composers. Configuration records versioned consent, keeps the
+  organization key in macOS Keychain, and makes no provider request until the user clicks Dictate.
+  Audio and bounded visible plaintext stream directly from the browser; only a final transcript is
+  inserted into the draft, and it is never submitted automatically.
+
 ### Fixed
 
 - The Claude Code plugin loads. `monitors/monitors.json` wrapped its entry in an object, and Claude

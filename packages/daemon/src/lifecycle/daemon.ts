@@ -14,6 +14,7 @@ import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -111,6 +112,7 @@ export interface DaemonBackend {
   adapterRegistry: AdapterRegistry;
   metadataRegistry: WorkspaceMetadataRegistry;
   providerRegistry: AgentProviderRegistry;
+  dictationRegistry: DictationProviderRegistry;
   pushRegistry: SessionPushRegistry;
   watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
@@ -136,12 +138,17 @@ export interface ProviderFactoryDeps {
   pushRegistry: SessionPushRegistry;
 }
 
+export interface DictationProviderFactoryDeps {
+  home: string;
+}
+
 export interface BuildBackendOptions {
   /** Test-only overrides for WorkspaceIndex's GC timers — production always uses the real
    * defaults (A5 §F19: grace ~24h, throttle ~60s). */
   gcGraceMs?: number;
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
+  dictationProviderFactories?: Array<(deps: DictationProviderFactoryDeps) => DictationProvider>;
   /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
   writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
   /** Test-only override for what counts as the user's home directory. Production reads the real
@@ -181,6 +188,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
+  const dictationRegistry = new DictationProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
@@ -224,6 +232,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   adapterRegistry.register(metadataRegistry.adapter());
   for (const factory of opts.providerFactories ?? []) {
     providerRegistry.register(factory({ sessionRegistry, pushRegistry }));
+  }
+  for (const factory of opts.dictationProviderFactories ?? []) {
+    dictationRegistry.register(factory({ home }));
   }
 
   // Live-session predicate: a workspace under a live session is never GC-hard-removed no matter
@@ -278,6 +289,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     adapterRegistry,
     metadataRegistry,
     providerRegistry,
+    dictationRegistry,
     pushRegistry,
     watchEmissions,
     artifactWatcherRegistry,
@@ -387,6 +399,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,
+    dictationRegistry: backend.dictationRegistry,
     pushRegistry: backend.pushRegistry,
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
@@ -409,7 +422,12 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     if (new URL(request.url).pathname === "/api/handshake") await startupReady;
     return apiFetch(request, server);
   };
-  const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
+  const server = await bindMainOrExit(
+    home,
+    port,
+    readyApiFetch,
+    spaCspHeaders(classFPort, backend.dictationRegistry.enabledConnectOrigins()),
+  );
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
   // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-

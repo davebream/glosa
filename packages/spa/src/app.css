@@ -4293,6 +4293,58 @@ input,
   gap: var(--space-2);
 }
 
+/* Dictation is an input tool, not a primary action. It sits directly under the field it owns and
+   gains a filled state only while the microphone is active; errors stay plain text beside it. */
+.glosa-dictation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: 1.75rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.glosa-dictation[hidden] {
+  display: none;
+}
+
+.glosa-dictation-toggle {
+  min-height: 1.75rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.glosa-dictation-toggle[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-primary);
+}
+
+.glosa-dictation-toggle:disabled {
+  color: var(--faint);
+  cursor: wait;
+}
+
+.glosa-dictation-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.glosa-dictation-status:empty {
+  display: none;
+}
+
+.glosa-dictation-status {
+  color: var(--muted);
+}
+
 /* The provenance line (direction contract): written, changed, outside glosa, approval — one quiet
    row of facts at the foot of the manuscript, in the chrome face, on the manuscript's measure. It
    reports whether the workbench's promises hold for this document; it is never a badge. */
@@ -5780,6 +5832,7 @@ input,
   .glosa-composer-send,
   .glosa-approval-button,
   .glosa-conv-composer,
+  .glosa-dictation-toggle,
   .glosa-agent-feedback-trigger,
   .glosa-dock-theme .dv-tab {
     transition: none;

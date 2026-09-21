@@ -115,7 +115,14 @@ export type ProblemSlug =
   // its own to reopen. `star-folder-missing`: the starred folder is gone or no longer a directory,
   // so reopening is refused before the index is touched; the star itself stays until unstarred.
   | "star-not-directory"
-  | "star-folder-missing";
+  | "star-folder-missing"
+  | "dictation-unconfigured"
+  | "dictation-credential-unavailable"
+  | "dictation-authentication-failed"
+  | "dictation-rate-limited"
+  | "dictation-timeout"
+  | "dictation-invalid-response"
+  | "dictation-provider-unavailable";
 
 export function problem(
   status: number,

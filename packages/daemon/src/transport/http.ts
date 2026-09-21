@@ -16,6 +16,7 @@ import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
 import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
@@ -42,6 +43,7 @@ import {
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
 import { composerRoutes } from "../routes/composer.ts";
+import { dictationRoutes } from "../routes/dictation.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
 import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
@@ -107,6 +109,7 @@ const SPA_ASSETS: Record<string, string> = {
   // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
   // bare-specifier import).
   "data-access.js": "text/javascript; charset=utf-8",
+  "dictation.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
   "viewer-shell.js": "text/javascript; charset=utf-8",
   "viewer-context-surfaces.js": "text/javascript; charset=utf-8",
@@ -204,6 +207,8 @@ export interface ApiContext {
   /** Provider implementations are injected by the outer composition root. An absent registry is
    * the supported zero-provider core and yields an honest delivery-unavailable response. */
   providerRegistry?: AgentProviderRegistry;
+  /** Optional external dictation providers, injected by the CLI composition root. */
+  dictationRegistry?: DictationProviderRegistry;
   pushRegistry?: SessionPushRegistry;
   /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
    * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
@@ -402,17 +407,19 @@ function serveShell(): Response {
 
 /** `GET /app/<file>` — the SPA's static ES modules (P1.4). `name` is checked against the fixed
  * allowlist, not just sanitized, so a request can never read anything else under SPA_SRC_DIR. */
-function serveSpaAsset(req: Request, pathname: string): Response {
+function serveSpaAsset(ctx: ApiContext, req: Request, pathname: string): Response {
   const name = pathname.slice("/app/".length);
   // Object.hasOwn, not a bare `SPA_ASSETS[name]` lookup: a prototype key like `__proto__` or
   // `constructor` would otherwise resolve to a truthy inherited value, slip past the `undefined`
   // guard, and fall through to readFileSync (→ 500 instead of a clean 404). Own-keys only.
-  const contentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
+  const builtInContentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
+  const providerAsset = builtInContentType === undefined ? ctx.dictationRegistry?.browserAsset(pathname) : undefined;
+  const contentType = builtInContentType ?? providerAsset?.contentType;
   if (contentType === undefined) {
     return problem(404, "not-found", "no such static asset", undefined, pathname);
   }
   // Read bytes, not text: a font decoded as UTF-8 and re-encoded would reach the browser corrupt.
-  const body = readFileSync(join(SPA_SRC_DIR, name));
+  const body = readFileSync(providerAsset?.filePath ?? join(SPA_SRC_DIR, name));
   const etag = `"${contentType.startsWith("font/") ? createHash("sha256").update(body).digest("hex") : sourceSha256(body)}"`;
   const headers = {
     "Content-Type": contentType,
@@ -2640,7 +2647,7 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     return { routeClass: "navigation", handle: () => serveShell() };
   }
   if (method === "GET" && pathname.startsWith("/app/")) {
-    return { routeClass: "navigation", handle: () => serveSpaAsset(req, pathname) };
+    return { routeClass: "navigation", handle: () => serveSpaAsset(ctx, req, pathname) };
   }
   if (method === "GET" && pathname === "/api/workspaces") {
     return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
@@ -2704,6 +2711,8 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "GET" && pathname === "/api/status") {
     return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
+  const dictationRoute = dictationRoutes({ registry: ctx.dictationRegistry }, method, pathname);
+  if (dictationRoute) return dictationRoute;
 
   let m: RegExpMatchArray | null;
 
@@ -2853,9 +2862,11 @@ function logUnhandledRequestError(req: Request, error: unknown): void {
 }
 
 export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServer) => Promise<Response> {
-  const csp = spaCspHeaders(ctx.classFPort);
-
   return async (req, server) => {
+    // Read the local consent flag for every response. `glosa dictation configure|disable` can run
+    // beside a live daemon; the next page reload must receive the corresponding CSP without a
+    // daemon restart. This check is filesystem-only and never probes the provider.
+    const csp = spaCspHeaders(ctx.classFPort, ctx.dictationRegistry?.enabledConnectOrigins() ?? []);
     try {
       const url = new URL(req.url);
 

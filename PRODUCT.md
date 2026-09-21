@@ -18,7 +18,7 @@ Users are in a focused review workflow: reading rendered artifacts, marking prec
 
 glosa eliminates four failure modes of agent-assisted writing: unreadable terminal rendering for long-form dialogue, no artifact preview or annotation beside the agent, manual edits that are invisible to the agent, and rendered-output annotation that requires copy-paste. It is a local-first singleton daemon plus browser SPA that turns a directory of artifacts into a reviewable, annotatable workspace while preserving provenance.
 
-Success means the user can review a real writing artifact, annotate rendered output, edit source, see history, and get feedback delivered to the correct live or parked agent session without relying on cloud services, telemetry, cmux, or false attribution.
+Success means the user can review a real writing artifact, annotate rendered output, edit source, see history, and get feedback delivered to the correct live or parked agent session without requiring cloud services, telemetry, cmux, or false attribution. Optional provider-backed input such as dictation is explicit, consented, and never required for the core workflow.
 
 ## Positioning
 

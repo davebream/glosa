@@ -110,7 +110,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
 400 for Host, 403 for Origin, per §1).
 ```json
-{ "contract_version": "1.13", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -889,6 +889,39 @@ registration's own canonical path; reopening names the star by id. See A3 §4 "S
   **404** `not-found` (unknown id), **422** `star-folder-missing` (checked before the index is
   touched; the star is kept until the writer unstars it).
 
+### 5.22 Opt-in dictation (contract 1.14)
+
+These routes expose a provider-neutral input capability. They never accept audio, context, transcript,
+workspace, artifact, path, session, or participant data. Provider-specific token exchange and browser
+wire formats remain in provider packages.
+
+- `GET /api/dictation/status` — Bearer required (authed read), always `Cache-Control: no-store`.
+  It checks only local versioned consent and credential presence; it never contacts a provider.
+  **200** with exactly one state:
+```json
+{ "state": "unconfigured" }
+{ "state": "ready", "provider": "wispr-flow", "display_name": "Wispr Flow",
+  "client_module": "/app/providers/wispr-flow/browser.js" }
+{ "state": "error", "provider": "wispr-flow", "display_name": "Wispr Flow",
+  "code": "credential-unavailable", "message": "the Wispr Flow organization key is unavailable" }
+```
+- `POST /api/dictation/session` — Bearer + Origin (state-changing), no request body, always
+  `Cache-Control: no-store`. It is the only daemon route that may contact the configured provider:
+  for Wispr Flow, it reads the organization key from Keychain and requests a 600-second client JWT
+  with only the persisted random client UUID and lifetime. No user, workspace, artifact, document,
+  path, filesystem, session, or participant metadata is included. **200**:
+```json
+{ "provider": "wispr-flow",
+  "websocket_url": "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws",
+  "access_token": "<short-lived JWT>", "expires_at": "2026-09-21T10:10:00.000Z" }
+```
+  The response is renderer-memory-only. API keys, JWTs, token-bearing URLs, audio, context, and
+  transcripts are never logged. The provider request has a ten-second timeout and no retry.
+  Typed failures are `409 dictation-unconfigured`, `429 dictation-rate-limited`,
+  `502 dictation-authentication-failed|dictation-invalid-response|dictation-provider-unavailable`,
+  `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
+  response bodies or credentials. Retry is a new foreground user action.
+
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 
 1. Reject any path containing a literal `..` segment, a NUL byte, or a leading `/` (must be
@@ -1027,6 +1060,10 @@ which needs the identical disable for the identical reason.
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
 | 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`); the target file's bytes are not valid UTF-8 (`not-utf8`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
+| 429 | configured dictation provider rate-limited a foreground token request | `POST /api/dictation/session` |
+| 502 | configured dictation provider rejected credentials or returned an invalid/failing response | `POST /api/dictation/session` |
+| 503 | configured dictation credential unavailable locally | `POST /api/dictation/session` |
+| 504 | configured dictation provider token request timed out | `POST /api/dictation/session` |
 | 500 | unhandled daemon error | any route |
 
 ---

@@ -14,6 +14,7 @@
     "packages/daemon/src",
     "packages/providers/claude-code/src",
     "packages/providers/codex/src",
+    "packages/providers/wispr-flow/src",
     "packages/spa/src",
     ".claude-plugin/marketplace.json",
     "glosa-plugin",

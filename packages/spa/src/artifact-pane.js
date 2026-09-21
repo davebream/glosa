@@ -290,6 +290,7 @@ export function createArtifactPane(host, deps) {
     // The writer's per-artifact face (face.js). Optional: a pane without a store reads in the
     // default serif and offers no control.
     faceStore = null,
+    dictationController = null,
   } = deps;
 
   let currentArtifact = null; // {source_path, content, rendered_html, source_sha256, class, derived_from?, valid_utf8?}
@@ -2232,6 +2233,12 @@ export function createArtifactPane(host, deps) {
     if (composer.error) status.setAttribute("data-error", "true");
     form.addEventListener("submit", (e) => e.preventDefault());
     form.append(intents, input, status, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
+    dictationController?.attachField(input, {
+      controls: () => [cancel, send, ...intents.querySelectorAll("button")],
+      getContext: () => ({
+        surfaceBlocks: [record.target?.quote?.exact, contentEl.innerText],
+      }),
+    });
     // The journal never rewrites an entry, so say what "Replace" actually does — and say the
     // extra part out loud when the session has already been handed the note being replaced.
     if (replacing) {
@@ -2944,6 +2951,12 @@ export function createArtifactPane(host, deps) {
         }),
     });
     card.append(group, el("div", { className: "glosa-agent-actions" }, [decline, send]), status);
+    dictationController?.attachField(input, {
+      controls: () => [decline, send, ...group.querySelectorAll("input")],
+      getContext: () => ({
+        surfaceBlocks: [request.message, request.target?.quote?.exact, contentEl.innerText],
+      }),
+    });
     return card;
   }
 
