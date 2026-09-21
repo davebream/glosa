@@ -977,10 +977,136 @@ describe("official TypeScript MCP SDK contract", () => {
           if (calls.length < answerAfterCalls || detail === null) return open as EntryStatus;
           return { id: "inb-1", kind: "attention", status: "done", detail } as unknown as EntryStatus;
         },
+        withdrawAttention: async (path, entry, session) => {
+          withdrawn.push([path, entry, session]);
+          return { id: entry, status: "expired", withdrawn: true };
+        },
       };
       const created: Array<Record<string, unknown>> = [];
-      return { api, calls, created };
+      const withdrawn: Array<[string, string, string]> = [];
+      return { api, calls, created, withdrawn };
     }
+
+    /** A `glosa_ask` double whose held read settles ONLY when the signal it was handed aborts.
+     * With no signal it never settles at all, which is what makes the wiring ablatable: take
+     * `extra.signal` out of the handler's request scope and this hangs to a named timeout rather
+     * than quietly passing. */
+    function heldAskApi() {
+      const withdrawn: Array<[string, string, string]> = [];
+      const api: Partial<GlosaApiClient> = {
+        createAttentionRequest: async () => ({ id: "inb-1", slug: "ws-1", status: "open" }),
+        getEntryStatus: (_path, _entry, _waitMs, signal) =>
+          new Promise((_resolve, reject) => {
+            if (!signal) return; // ablated: request cancellation never reaches the held read
+            const end = () => reject(new Error("entry-status aborted"));
+            if (signal.aborted) return end();
+            signal.addEventListener("abort", end, { once: true });
+          }),
+        withdrawAttention: async (path, entry, session) => {
+          withdrawn.push([path, entry, session]);
+          return { id: entry, status: "expired", withdrawn: true };
+        },
+      };
+      return { api, withdrawn };
+    }
+
+    test("#310 cancelling the call ends the held read and withdraws the question", async () => {
+      const { api, withdrawn } = heldAskApi();
+      const connected = await connect({
+        ...deps(new FakeDaemonClient(), api),
+        sessionId: () => "host-session",
+      });
+      try {
+        const cancel = new AbortController();
+        const held = connected.client
+          .callTool(
+            { name: "glosa_ask", arguments: { path: "notes.md", question: "Ready?", wait_seconds: 900 } },
+            undefined,
+            { signal: cancel.signal },
+          )
+          .catch(() => "cancelled");
+        await Bun.sleep(50);
+        // Genuinely still held: nothing is withdrawn while the agent is still listening.
+        expect(withdrawn).toHaveLength(0);
+
+        cancel.abort();
+        await held;
+        await waitFor(() => withdrawn.length > 0, "the cancelled question to be withdrawn");
+        // The session it is attributed to is the one `ensureSession` registered for this call.
+        expect(withdrawn[0]).toEqual(["/workspace", "inb-1", "host-session"]);
+      } finally {
+        // And the call left `activeCalls`, so shutdown is not stuck draining it.
+        await connected.close();
+      }
+    }, 10_000);
+
+    test("#310 shutdown does NOT withdraw — the question survives the shim going away", async () => {
+      const { api, withdrawn } = heldAskApi();
+      const connected = await connect({
+        ...deps(new FakeDaemonClient(), api),
+        sessionId: () => "host-session",
+      });
+      const held = connected.client
+        .callTool({ name: "glosa_ask", arguments: { path: "notes.md", question: "Ready?", wait_seconds: 900 } })
+        .catch(() => "rejected");
+      await Bun.sleep(50);
+
+      await connected.runtime.close();
+      await held;
+      await Bun.sleep(50);
+
+      // Withdrawing here would put this shim's bearer on the wire to an endpoint resolved earlier
+      // in the session — the exact hazard `close()`'s deregistration comment explains. The
+      // question stays open instead; that gap is documented, not fixed.
+      expect(withdrawn).toEqual([]);
+      await connected.client.close();
+    }, 10_000);
+
+    test("#310 a cancel that lands together with shutdown still does not withdraw", async () => {
+      // The test above cannot see the shutdown guard at all: a plain `close()` never aborts the
+      // request's own signal, so the withdraw branch is not even reached. This one drives the race
+      // the guard exists for — the client cancels AND the shim is shutting down — by holding the
+      // read until both have happened, then asserting nothing went on the wire.
+      const withdrawn: Array<[string, string, string]> = [];
+      let shuttingDown = false;
+      const api: Partial<GlosaApiClient> = {
+        createAttentionRequest: async () => ({ id: "inb-1", slug: "ws-1", status: "open" }),
+        getEntryStatus: async (_path, _entry, _waitMs, signal) => {
+          await waitFor(() => signal?.aborted === true && shuttingDown, "cancel and shutdown to both land", 2000);
+          return { id: "inb-1", kind: "attention", status: "open", detail: null } as EntryStatus;
+        },
+        withdrawAttention: async (path, entry, session) => {
+          withdrawn.push([path, entry, session]);
+          return { id: entry, status: "expired", withdrawn: true };
+        },
+      };
+      const connected = await connect({
+        ...deps(new FakeDaemonClient(), api),
+        sessionId: () => "host-session",
+      });
+      const cancel = new AbortController();
+      const held = connected.client
+        .callTool(
+          { name: "glosa_ask", arguments: { path: "notes.md", question: "Ready?", wait_seconds: 900 } },
+          undefined,
+          { signal: cancel.signal },
+        )
+        .catch(() => "cancelled");
+      await Bun.sleep(50);
+      cancel.abort();
+      await Bun.sleep(50); // let the cancellation notification reach the handler's `extra.signal`
+
+      // `close()` aborts `shutdownAbort` in its own synchronous prefix, so by the time this
+      // returns a promise the shim is provably shutting down — no timing guess in the flag.
+      const closing = connected.runtime.close();
+      shuttingDown = true;
+      await closing;
+      await held;
+      await Bun.sleep(50);
+
+      expect(withdrawn).toEqual([]);
+      await connected.client.close();
+    }, 10_000);
 
     test("an answered question returns the human's words and their chosen option", async () => {
       const { api, calls, created } = askApi(1, { outcome: "done", response: "Thin — say why.", chose: "thin" });
@@ -1034,7 +1160,7 @@ describe("official TypeScript MCP SDK contract", () => {
 
     test("a wait that elapses is 'unanswered' — distinct from declined, because nobody saw it", async () => {
       // Never goes terminal, and the deadline is immediate.
-      const { api } = askApi(1, null);
+      const { api, withdrawn } = askApi(1, null);
       const connected = await connect(deps(new FakeDaemonClient(), api));
       try {
         const result = await callTool(connected.client, {
@@ -1045,6 +1171,9 @@ describe("official TypeScript MCP SDK contract", () => {
         // Collapsing this into "declined" would have the agent report a refusal from a human who
         // was never there.
         expect(structured(result)).toMatchObject({ id: "inb-1", outcome: "unanswered" });
+        // #310: the agent gave up on its own, so the question stays where the human can still
+        // answer it — that is what `wait_seconds` promises. Only a CANCEL takes it back.
+        expect(withdrawn).toHaveLength(0);
       } finally {
         await connected.close();
       }

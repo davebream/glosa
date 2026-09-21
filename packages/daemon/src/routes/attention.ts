@@ -10,6 +10,7 @@ import {
   MAX_ENTRY_WAIT_MS,
   markAttentionSeen,
   waitForEntryTerminal,
+  withdrawAttention,
 } from "../services/attention.ts";
 import { findWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { problem } from "../transport/problem.ts";
@@ -264,9 +265,40 @@ async function entryStatus(deps: AttentionDependencies, req: Request, server?: B
   }
 }
 
+async function withdraw(deps: AttentionDependencies, req: Request) {
+  const pathname = new URL(req.url).pathname;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, pathname);
+  }
+  const parsed = body as Record<string, unknown> | null;
+  const path = parsed?.path;
+  const entry = parsed?.entry;
+  const session = parsed?.session;
+  for (const [name, value] of [
+    ["path", path],
+    ["entry", entry],
+    ["session", session],
+  ] as const) {
+    if (typeof value !== "string" || value.length === 0) {
+      return problem(400, "validation-failed", `${name} is required`, undefined, pathname);
+    }
+  }
+  try {
+    return Response.json(await withdrawAttention(deps, path as string, entry as string, session as string));
+  } catch (error) {
+    return mapError(error, pathname);
+  }
+}
+
 export function attentionRoutes(deps: AttentionDependencies, method: string, pathname: string): RouteMatch | null {
   if (method === "POST" && pathname === "/api/workspaces/attention-request") {
     return { routeClass: "state-changing", handle: (req) => create(deps, req) };
+  }
+  if (method === "POST" && pathname === "/api/workspaces/attention-withdraw") {
+    return { routeClass: "state-changing", handle: (req) => withdraw(deps, req) };
   }
   if (method === "GET" && pathname === "/api/workspaces/entry-status") {
     return { routeClass: "authed-read", handle: (req, server) => entryStatus(deps, req, server) };
