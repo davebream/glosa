@@ -48,18 +48,6 @@ function trackLines(stream: ReadableStream<Uint8Array>): {
   return { lines, stamped, done };
 }
 
-/** Drains a pipe with nobody caring about its content, only that it never fills and blocks the
- * child (issue #206 review lesson: "own the processes you spawn"). */
-function drainDiscard(stream: ReadableStream<Uint8Array>): void {
-  void (async () => {
-    const reader = stream.getReader();
-    for (;;) {
-      const { done } = await reader.read();
-      if (done) return;
-    }
-  })();
-}
-
 describe("Claude monitor integration", () => {
   test("real glosa monitor idles until glosa open, streams parked entries, reconnects after restart, and never replaces the daemon", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-real-home-"));
@@ -237,9 +225,10 @@ describe("Claude monitor integration", () => {
 
     const monitorA = spawnMonitor();
     const trackA = trackLines(monitorA.stdout);
-    drainDiscard(monitorA.stderr);
+    const errorsA = trackLines(monitorA.stderr);
     let monitorB: ReturnType<typeof spawnMonitor> | undefined;
     let trackB: ReturnType<typeof trackLines> | undefined;
+    let errorsB: ReturnType<typeof trackLines> | undefined;
 
     try {
       const opened = Bun.spawnSync({
@@ -286,7 +275,7 @@ describe("Claude monitor integration", () => {
       // 2. Monitor B joins with the SAME session id — the daemon displaces A's push connection.
       monitorB = spawnMonitor();
       trackB = trackLines(monitorB.stdout);
-      drainDiscard(monitorB.stderr);
+      errorsB = trackLines(monitorB.stderr);
 
       // `id1` is only `transport_accepted`, never MCP-`presented` (out of scope: re-emission to a
       // fresh connection's empty `sent` set, #206's "amplifier"), so B's own pump necessarily
@@ -342,13 +331,38 @@ describe("Claude monitor integration", () => {
       expect(restarted!.pid).not.toBe(daemonPid);
       const id5 = await createEntry("thought");
       expect(await waitUntil(() => trackA.lines.some((l) => l.includes(`[glosa ${id5}] `)), 10_000)).toBe(true);
+    } catch (error) {
+      throw new Error(
+        `${error}\n${JSON.stringify(
+          {
+            a: {
+              pid: monitorA.pid,
+              exitCode: monitorA.exitCode,
+              signal: monitorA.signalCode,
+              stdout: trackA.stamped,
+              stderr: errorsA.stamped,
+            },
+            b: monitorB
+              ? {
+                  pid: monitorB.pid,
+                  exitCode: monitorB.exitCode,
+                  signal: monitorB.signalCode,
+                  stdout: trackB?.stamped,
+                  stderr: errorsB?.stamped,
+                }
+              : null,
+          },
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
     } finally {
       if (monitorA.exitCode === null) monitorA.kill("SIGTERM");
       await monitorA.exited;
       if (monitorB && monitorB.exitCode === null) monitorB.kill("SIGTERM");
       if (monitorB) await monitorB.exited;
-      await trackA.done;
-      if (trackB) await trackB.done;
+      await Promise.all([trackA.done, errorsA.done, trackB?.done, errorsB?.done]);
       await stopDaemon(home, daemon);
       rmSync(home, { recursive: true, force: true });
       rmSync(project, { recursive: true, force: true });
