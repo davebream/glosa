@@ -136,6 +136,28 @@ export function requestsForArtifact(entries, artifactPath) {
 }
 
 /**
+ * Names the request entries the margin actually holds. A non-empty message is the same boundary
+ * the card and arrival logic use for a question; an entry without one is a pointer. Session
+ * identity is deliberately absent: the request payload carries no verified requester id, and a
+ * claimed label is not evidence that two entries came from the same session.
+ */
+export function agentRequestSummary(requests) {
+  let questions = 0;
+  let pointers = 0;
+  for (const request of requests ?? []) {
+    if (typeof request?.message === "string" && request.message.length > 0) questions += 1;
+    else pointers += 1;
+  }
+
+  return [
+    questions > 0 ? `${questions} ${questions === 1 ? "question" : "questions"}` : null,
+    pointers > 0 ? `${pointers} ${pointers === 1 ? "pointer" : "pointers"}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
  * Which request, if any, should pull the workbench to it.
  *
  * Pure, and deliberately conservative — this is the one thing in the feature that moves the
