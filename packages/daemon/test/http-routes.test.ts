@@ -23,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry } from "../src/adapters/interface.ts";
+import { sourceSha256 } from "../src/artifact-render.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider/interface.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
@@ -888,6 +889,50 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(409);
     expect((await res.json()).type).toContain("source-changed");
     expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("original\n");
+  });
+
+  // #251 — the two halves of "normalized for identity, never for content", at the route that
+  // actually decides a write. A4 §F05 and the decisions entry state both; these pin them.
+  test("#251 PUT artifact — a CRLF-only disk change is NOT a stale save, and the body is written verbatim", async () => {
+    writeFileSync(join(root, "notes.md"), "# Title\n\nAlpha.\n");
+    const getRes = await fetchFn(req(`/w/${slug}/artifacts/notes.md`));
+    const sha = (await getRes.json()).source_sha256;
+
+    // Another writer rewrites the file's line endings and nothing else, after the editor was
+    // filled. The identity hash is blind to this on purpose — that is the accepted cost.
+    writeFileSync(join(root, "notes.md"), "# Title\r\n\r\nAlpha.\r\n");
+
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain", "If-Match": sha },
+        body: "# Title\n\nAlphaX.\n",
+      }),
+    );
+    expect(res.status).toBe(200);
+    // And the save overwrites the other writer's endings — stated in the decision, pinned here
+    // as bytes rather than left to be discovered.
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("# Title\n\nAlphaX.\n");
+  });
+
+  test("#251 PUT artifact — mixed line endings round-trip through the API byte-for-byte", async () => {
+    writeFileSync(join(root, "notes.md"), "original\n");
+    const body = "# Title\r\n\r\nAlpha one\nbeta two.\r\n\r\nGamma.\n";
+    const res = await fetchFn(
+      stateChangingReq(`/w/${slug}/artifacts/notes.md`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain" },
+        body,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe(body);
+
+    const getRes = await fetchFn(req(`/w/${slug}/artifacts/notes.md`));
+    const got = await getRes.json();
+    expect(got.content).toBe(body);
+    // Identity folds what the content kept: the hash of the all-LF spelling of the same text.
+    expect(got.source_sha256).toBe(sourceSha256(Buffer.from(body.replace(/\r\n/g, "\n"), "utf8")));
   });
 
   test("PUT artifact with an empty body → 400 validation-failed", async () => {

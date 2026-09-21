@@ -1028,3 +1028,56 @@ the machinery that would write the replacement characters back.
 It also keeps the input to per-block attribution honest. A total decomposition of a document into
 runs has to start from the document; a lossy decode is a different document, so the attribution
 computed over it would describe bytes nobody wrote.
+
+## Line endings are normalized for identity, never for content (#251)
+
+One formula answers "is this still the same source": SHA256 of the UTF-8 bytes after `\r\n`→`\n`,
+defined once in A5 §F10 and computed by the daemon's `sourceSha256`. Six things read it — the
+editor's `If-Match` precondition, the SPA's merge base for Keep mine, an approval's `revision_id`,
+class-F chunk freshness, the `artifact` SSE event, and the artifact listing — and none of them was
+ever told whether that `\r\n`→`\n` was a deliberate equivalence or an accident nobody had looked at.
+"Keep mine merges disk's own change instead of discarding it" was built on top of it with no
+authority to cite. The question has two halves, and the second is the one that matters.
+
+**Decision.** A change that only swaps LF for CRLF is the same source. Keep the single formula; add
+no second, byte-exact identity. And normalization is scoped to identity and nowhere else: a read
+serves the bytes as decoded, a save writes the submitted body verbatim, and a splice or a three-way
+merge copies each line ending from the source it came from — the property "An edited block is
+written back in its own spelling, not the serializer's" already states for mixed CRLF/LF. A document
+with mixed endings goes through GET, PUT, splice and merge byte-for-byte.
+
+**Why not a byte-exact token.** A second identity would have to be either private to the editor —
+splitting "is this still the same source" in two, so the banner, the merge base, the approval and
+the freshness check could disagree about one file — or adopted by all six consumers plus the
+client-side mirror, which is a change to every one of them for a case nobody has reported. Neither
+buys anything the pre-save boundary does not already provide.
+
+**Consequences, stated rather than hidden.** A concurrent writer who rewrites a file's line endings
+and nothing else gets no stale-save dialog and no "file changed" banner: the SSE frame arrives, the
+pane compares hashes, finds them equal, and stays quiet. The next save overwrites those endings, and
+the resulting `human_edit` diff shows the reversion as the writer's bytes — which is what happened.
+Provenance is unaffected: `captureHumanEdit`'s pre-save boundary is a shadow-git checkpoint under
+`core.autocrlf false` (A4 §F21), so it is byte-level and commits the CRLF-only drift as its own
+`unknown`-attributed `external_edit` before the human write. The identity hash never gates that
+capture. The listing's `stale` flag is mtime-based and does notice such a change; that difference is
+deliberate.
+
+**Every copy of the formula that must agree.** The daemon's `sourceSha256` (`artifact-render.ts`);
+the anchoring resolver's own `normalizeSource`, which normalizes a match-time copy and never writes
+it back; and the SPA's `sha256Hex` in `artifact-pane.js`, which is what lets a pane hold
+`baselineSha` to its word before trusting a merge base. Static-asset ETags reuse `sourceSha256` in
+`transport/http.ts`; that is incidental and carries no concurrency meaning. A lone `\r` is
+consistent across the boundary in the other direction: identity leaves it alone, and `createSplicer`
+refuses to scan a source containing one at all, falling back rather than guessing at its blocks.
+
+**Not done.** No byte-exact token, per above. Two known gaps are recorded here rather than fixed,
+because neither is this decision's to make:
+
+- The source face is a `<textarea>`, and the HTML specification normalizes a textarea's API value to
+  LF. A save from the source face therefore rewrites a CRLF document to LF in a real browser. That
+  is the platform's normalization, not glosa's, and no happy-dom test can see it — happy-dom does
+  not normalize. Fixing it needs its own change to how the source face reads its value.
+- Editing the first or last word of a soft-broken line inside a modelled block of a CRLF document
+  reports collateral and asks for consent on a write that is byte-honest. The bytes are right; the
+  guard's `faithful` candidate is built without source for a modelled run, and the overlap join
+  counts the adjacent line ending. A false consent prompt, not a data-loss bug.

@@ -206,6 +206,7 @@ describe("a save the writer did not make is byte-identical", () => {
     ["runs of blank lines between blocks", "# T\n\n\n\nAlpha.\n\n\nBeta.\n"],
     ["leading blank lines", "\n\n# T\n\nAlpha.\n"],
     ["CRLF line endings", "# A\r\n\r\nBeta.\r\n"],
+    ["mixed line endings (#251)", "# T\r\n\r\nAlpha.\n\nBeta.\r\n"],
     ["a link reference definition between blocks", "See [r].\n\n[r]: https://example.com\n\nAfter.\n"],
     ["an empty file", ""],
     ["a file of nothing but blank lines", "\n\n\n"],
@@ -291,6 +292,30 @@ describe("a CRLF metadata header (AC-8)", () => {
   test("edited, the header retains CRLF without invented collateral", () => {
     const edited = CRLF.replace("status: draft", "status: review");
     expect(save(CRLF, edited)).toEqual({ markdown: edited, collateral: [], degraded: false });
+  });
+});
+
+/** #251 — content is never normalized, so a document with MIXED line endings survives an edit.
+ *
+ *  The concurrency identity folds `\r\n`→`\n` before hashing (A5 §F10); the splice does not, and
+ *  A4 §F05 says so in as many words. These are the byte assertions behind that sentence. The
+ *  no-op row in the table above is a weak witness — a splice that changed nothing would pass it —
+ *  so each case here edits one word and checks what the OTHER bytes did. */
+describe("mixed line endings survive an edit (#251)", () => {
+  test("editing one block leaves every other block's endings alone", () => {
+    const source = "# T\r\n\r\nAlpha.\n\nBeta.\r\n";
+    const edited = source.replace("Alpha.", "AlphaX.");
+    expect(save(source, edited)).toEqual({ markdown: edited, collateral: [], degraded: false });
+  });
+
+  test("a soft line break inside a CRLF paragraph keeps its own `\\r\\n` through the edit", () => {
+    // THE CASE THAT EARNS ITS PLACE. The edit is in the FIRST line of a two-line paragraph, so
+    // the `\r\n` that has to survive is INSIDE the block being rewritten, not merely beside it.
+    // Re-serializing the block instead of restoring its source spelling reparses to an identical
+    // tree — CRLF and LF parse the same — so nothing but a byte comparison can see the loss.
+    const source = "# T\r\n\r\nAlpha one\r\nbeta two.\r\n\r\nGamma.\n";
+    const edited = source.replace("Alpha one", "AlphaX one");
+    expect(save(source, edited)).toEqual({ markdown: edited, collateral: [], degraded: false });
   });
 });
 
@@ -1527,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(661);
+    ).toBe(669);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1908,7 +1933,12 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // #250's own `docs/decisions.md` entry and a CHANGELOG bullet under the same list, 655 → 661
   // blocks / 591 → 597 edits. Prose only — no heading, so no reference link either, and every
   // numerator held again. Bookkeeping, denominator only.
-  const BLOCKS = 661;
+  // #251's own `docs/decisions.md` entry — eight blocks, and no CHANGELOG bullet at all, because
+  // it records a decision and changes no behaviour: 661 → 669 blocks / 597 → 605 edits. Its
+  // `docs/requirements.md` clause went INSIDE an existing paragraph rather than beside it, so the
+  // corpus grew in one document instead of two. Prose and one bullet list, no heading, so again
+  // no reference link, and every numerator held. Bookkeeping, denominator only.
+  const BLOCKS = 669;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1944,7 +1974,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 45 of 661 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 45 of 669 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2001,7 +2031,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 597; the guard fires on it and, ablated, on 41", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 605; the guard fires on it and, ablated, on 41", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2083,11 +2113,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
       // comment above).
     ).toEqual({
-      edits: 597,
+      edits: 605,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 41, fired: 41 },
     });
