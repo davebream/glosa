@@ -7,11 +7,11 @@ import type { DeliverableEntry } from "../../../daemon/src/agent-provider/interf
 import { BUILD_ID } from "../../../daemon/src/lifecycle/build-id.ts";
 import { daemonPeerMismatchReason } from "../../../daemon/src/lifecycle/daemon.ts";
 import { fetchHandshake } from "../../../daemon/src/lifecycle/handshake.ts";
-import { glosaHome, lockPath } from "../../../daemon/src/lifecycle/home.ts";
+import { apiSocketPath, glosaHome, lockPath } from "../../../daemon/src/lifecycle/home.ts";
 import { INSTALL_ID } from "../../../daemon/src/lifecycle/install.ts";
 import { readLock } from "../../../daemon/src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION, protocolCompatible } from "../../../daemon/src/lifecycle/protocol.ts";
-import { loadToken } from "../../../daemon/src/security/token.ts";
+import { authedRequest } from "../../../daemon/src/security/authed-request.ts";
 import { claudeConfigRoots, confineTranscriptPath } from "../../../daemon/src/transcript/root.ts";
 import { workspaceIndexPath, type WorkspaceIndexFile } from "../../../daemon/src/registry/workspace-index.ts";
 
@@ -75,9 +75,14 @@ export interface MonitorDeps {
   now: () => number;
 }
 
+/** What `resolveDaemon` hands to the stream loop. Note what is NOT here: the pairing token.
+ * It used to be, captured once and reused for the whole stream, which meant a `glosa token
+ * rotate` mid-stream turned every later transport-ack into a silent 401 — the defect
+ * `daemon-client.ts` had already fixed on its side. `authedRequest` reads the credential per
+ * request instead, so the monitor picks up a rotation the same way every other client does. */
 interface ExistingDaemon {
   port: number;
-  token: string;
+  socketPath: string;
 }
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -178,6 +183,11 @@ export function deriveMonitorTranscriptPath(sessionId: string, projectDir: strin
   return candidates.size === 1 ? [...candidates][0] : undefined;
 }
 
+/** FIRST resolution only, and read-only by contract: A3 §3 requires the monitor's daemon
+ * discovery to "never start, repair, replace, or stop a process", which is why this cannot use
+ * `ensureDaemon` — that spawns. The acceptance policy lives here because it answers "SHOULD I use
+ * this daemon", which is settled once. Where the credential goes is not settled here at all: it
+ * goes to this home's socket, and the kernel decides who may open that. */
 async function existingDaemon(home: string): Promise<ExistingDaemon | null> {
   const lock = readLock(lockPath(home));
   if (!lock) return null;
@@ -185,22 +195,11 @@ async function existingDaemon(home: string): Promise<ExistingDaemon | null> {
   if (!handshake || daemonPeerMismatchReason(lock, handshake) !== null) return null;
   if (!protocolCompatible(PROTOCOL_VERSION, handshake.protocol_version)) return null;
   if (handshake.install_id !== INSTALL_ID || handshake.build_id !== BUILD_ID) return null;
-  try {
-    const token = loadToken(home);
-    return token ? { port: lock.port, token } : null;
-  } catch {
-    return null;
-  }
-}
-
-function headers(connection: ExistingDaemon): HeadersInit {
-  const base = `http://127.0.0.1:${connection.port}`;
-  return {
-    Host: `127.0.0.1:${connection.port}`,
-    Origin: base,
-    Authorization: `Bearer ${connection.token}`,
-    "X-Contract-Version": PROTOCOL_VERSION,
-  };
+  // A daemon that serves no socket cannot be reached by this monitor at all, and there is
+  // deliberately no fall back to its port (A3 §3.2). Refusing is the whole point: a fallback
+  // would mean anything that makes the socket look absent gets the credential over TCP.
+  if (handshake.serves_socket !== true) return null;
+  return { port: lock.port, socketPath: apiSocketPath(home) };
 }
 
 async function writeLine(output: MonitorDeps["stdout"], line: string): Promise<void> {
@@ -220,26 +219,40 @@ async function registerAndStream(
   deps: MonitorDeps,
   signal: AbortSignal,
 ): Promise<SessionStreamEnd> {
-  const base = `http://127.0.0.1:${connection.port}`;
+  const home = deps.home();
   const transcriptPath = deriveMonitorTranscriptPath(options.sessionId, options.projectDir);
-  const registered = await deps.fetch(`${base}/api/sessions/register`, {
-    method: "POST",
-    headers: { ...headers(connection), "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: options.sessionId,
-      provider: "claude-code",
-      cwd: options.projectDir,
-      workspace_binding: workspace,
-      source: "monitor",
-      ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
-    }),
-    signal,
-  });
+  const registered = await authedRequest(
+    connection,
+    {
+      path: "/api/sessions/register",
+      method: "POST",
+      contentType: "application/json",
+      extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+      body: JSON.stringify({
+        session_id: options.sessionId,
+        provider: "claude-code",
+        cwd: options.projectDir,
+        workspace_binding: workspace,
+        source: "monitor",
+        ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
+      }),
+      signal,
+    },
+    home,
+    deps.fetch,
+  );
   if (!registered.ok) throw new Error(`session registration failed (${registered.status})`);
-  const response = await deps.fetch(`${base}/api/sessions/${encodeURIComponent(options.sessionId)}/stream`, {
-    headers: headers(connection),
-    signal,
-  });
+  const response = await authedRequest(
+    connection,
+    {
+      path: `/api/sessions/${encodeURIComponent(options.sessionId)}/stream`,
+      method: "GET",
+      extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+      signal,
+    },
+    home,
+    deps.fetch,
+  );
   if (!response.ok) throw new Error(`session stream failed (${response.status})`);
   if (!response.body) throw new Error("session stream has no body");
 
@@ -292,9 +305,19 @@ async function registerAndStream(
       const entry = JSON.parse(data) as DeliverableEntry;
       try {
         await writeLine(deps.stdout, `[glosa ${entry.id}] ${JSON.stringify(entry)}`);
-        const ack = await deps.fetch(
-          `${base}/api/sessions/${encodeURIComponent(options.sessionId)}/stream/${encodeURIComponent(entry.id)}/transport-ack`,
-          { method: "POST", headers: headers(connection), body: "{}", signal },
+        // A separate authenticated request, minutes or hours after the stream opened — it does
+        // NOT inherit the open-time credential, it resolves one of its own.
+        const ack = await authedRequest(
+          connection,
+          {
+            path: `/api/sessions/${encodeURIComponent(options.sessionId)}/stream/${encodeURIComponent(entry.id)}/transport-ack`,
+            method: "POST",
+            extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+            body: "{}",
+            signal,
+          },
+          home,
+          deps.fetch,
         );
         if (!ack.ok) throw new Error(`stream acknowledgement failed (${ack.status})`);
       } catch (error) {
@@ -327,13 +350,19 @@ async function probeStreamConnected(
   const attempt = (async (): Promise<boolean | null> => {
     const connection = await existingDaemon(deps.home());
     if (!connection) return null;
-    const base = `http://127.0.0.1:${connection.port}`;
     let res: Response;
     try {
-      res = await deps.fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/stream/status`, {
-        headers: headers(connection),
-        signal: combined,
-      });
+      res = await authedRequest(
+        connection,
+        {
+          path: `/api/sessions/${encodeURIComponent(sessionId)}/stream/status`,
+          method: "GET",
+          extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+          signal: combined,
+        },
+        deps.home(),
+        deps.fetch,
+      );
     } catch {
       return null;
     }

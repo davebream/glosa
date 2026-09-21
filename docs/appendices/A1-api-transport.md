@@ -10,7 +10,12 @@ those are cross-referenced, not duplicated.
 
 ## 1. Transport baseline
 
-- Bind `127.0.0.1` only. Every request (including `GET /api/handshake`) is Origin- and
+- Two TCP listeners bind `127.0.0.1` only. A THIRD listener serves the same API over
+  `<GLOSA_HOME>/run/api.sock` (A3 §3.2): CLI, MCP and provider clients use it exclusively, the
+  browser cannot, and no other uid can open it. Host and Origin rules below are inapplicable
+  there — both defeat browser attacks, and there is no browser — while the Bearer is still
+  required, so token rotation and revocation reach socket clients unchanged.
+- On the TCP listeners, every request (including `GET /api/handshake`) is Origin- and
   Host-allowlisted first, before any other processing. The Host allowlist is exactly
   `127.0.0.1:<port>` and `glosa.localhost:<port>` on this port (A3 §4 Rule 1, #159); a rejected
   Host returns `400` with no body, and a foreign Origin returns `403`, regardless of route or auth
@@ -80,10 +85,13 @@ those are cross-referenced, not duplicated.
   - Missing `X-Contract-Version` header (any client that isn't the bundled SPA, e.g. a future
     CLI caller) is treated as "unknown minor, same major assumed" — not rejected — since major
     mismatches are the only breaking case and those are caught by the handshake response itself.
-- `GET /api/handshake` returns `{contract_version, daemon_version, paired: boolean}` and is the
-  first call the SPA makes on load, before it has a token, so it can render the right one of the
-  three failure screens (daemon unreachable / unpaired / contract mismatch) instead of a generic
-  error.
+- `GET /api/handshake` is the first call the SPA makes on load, before it has a token, so it can
+  render the right one of the three failure screens (daemon unreachable / unpaired / contract
+  mismatch) instead of a generic error. It carries the SPA's three fields
+  (`contract_version`, `daemon_version`, `paired`) plus the daemon-lifecycle identity
+  `ensureDaemon` matches against the lock (`build_id`, `install_id`, `protocol_version`,
+  `instance_id`, `pid`, `started_at`) and `serves_socket`. Two compatibility checks share one
+  route — see §5.1 for the full body and A3 §4 for why publishing all of it is safe.
 
 ## 4. Body size limits
 
@@ -107,11 +115,23 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 `:artifactPath` param is validated per §6 before use.
 
 ### 5.1 `GET /api/handshake`
-No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
-400 for Host, 403 for Origin, per §1).
+No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
+only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.12", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true,
+  "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
+  "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
+  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
 ```
+The first three fields are the SPA's; the rest are the daemon-lifecycle identity `ensureDaemon`
+matches against `daemon.lock`, which publishes the same values to any local reader (A5 §F13).
+Every one is deliberately non-secret — A3 §3.2's guarantee assumes they are public rather than
+resting on their being private. `install_id` is a hash and `serves_socket` a boolean for the same
+reason: no filesystem path may appear on a tokenless endpoint.
+
+`serves_socket` reports whether this daemon serves `<GLOSA_HOME>/run/api.sock`. A client that
+needs it treats an absent field as `false` and fails closed naming the recovery, rather than
+falling back to the port — see A3 §3.2 on why a fallback would forfeit the whole defense.
 
 ### 5.2 `GET /api/workspaces`
 Bearer required. Lists the live registry (R1 sources: live-session cwds, `.glosa/`-marked
@@ -529,6 +549,27 @@ ids — never merely after the daemon built one. Refuses any id this session's w
   session is no longer bound to this workspace (same generation check as §5.11c, read inside the
   append's own mutex).
 
+### 5.11e `POST /api/workspaces/attention-withdraw` (contract 1.13, issue #310)
+Bearer required, Origin-gated (state-changing). A session takes back its own open question, because
+whoever was waiting on the answer has stopped listening — the MCP `glosa_ask` call was cancelled.
+Path-addressed like §5.11a, since the caller holds a workspace directory rather than a slug.
+```json
+{ "path": "<workspace>", "entry": "inb-…", "session": "<session id>" }
+```
+- **200** `{ "id", "status", "withdrawn" }` — `withdrawn:true` wrote the terminal `expired` with
+  `by: "session:<id>"` and `detail.withdrawn:true`. That `by` is the session's own CLAIM, not a
+  lease-proven fact, exactly as `POST /api/workspaces/resolve`'s `deferred` already records one;
+  the flag is the same key the annotation withdraw path writes, so a reader has one vocabulary for
+  "taken back".
+- **200** `{ "withdrawn": false }` on an entry that is already terminal — first-terminal-wins, so a
+  human answer that raced the cancellation keeps the answer and nothing is appended. Idempotent on
+  retry for the same reason.
+- **404 not-found** — no such entry in this workspace, or it is not an attention request.
+- **400 validation-failed** — `path`, `entry` or `session` missing or not a non-empty string.
+
+A wait that merely ELAPSES does not call this: the question stays in the margin, which is what
+`wait_seconds` promises. Shim shutdown and a crash also leave it open (A6 §F26).
+
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
 is the authoritative routing path for CLI, MCP, and SPA callers; cwd ancestry remains a fallback.
@@ -868,6 +909,39 @@ registration's own canonical path; reopening names the star by id. See A3 §4 "S
   **404** `not-found` (unknown id), **422** `star-folder-missing` (checked before the index is
   touched; the star is kept until the writer unstars it).
 
+### 5.22 Opt-in dictation (contract 1.14)
+
+These routes expose a provider-neutral input capability. They never accept audio, context, transcript,
+workspace, artifact, path, session, or participant data. Provider-specific token exchange and browser
+wire formats remain in provider packages.
+
+- `GET /api/dictation/status` — Bearer required (authed read), always `Cache-Control: no-store`.
+  It checks only local versioned consent and credential presence; it never contacts a provider.
+  **200** with exactly one state:
+```json
+{ "state": "unconfigured" }
+{ "state": "ready", "provider": "wispr-flow", "display_name": "Wispr Flow",
+  "client_module": "/app/providers/wispr-flow/browser.js" }
+{ "state": "error", "provider": "wispr-flow", "display_name": "Wispr Flow",
+  "code": "credential-unavailable", "message": "the Wispr Flow organization key is unavailable" }
+```
+- `POST /api/dictation/session` — Bearer + Origin (state-changing), no request body, always
+  `Cache-Control: no-store`. It is the only daemon route that may contact the configured provider:
+  for Wispr Flow, it reads the organization key from Keychain and requests a 600-second client JWT
+  with only the persisted random client UUID and lifetime. No user, workspace, artifact, document,
+  path, filesystem, session, or participant metadata is included. **200**:
+```json
+{ "provider": "wispr-flow",
+  "websocket_url": "wss://platform-api.wisprflow.ai/api/v1/dash/client_ws",
+  "access_token": "<short-lived JWT>", "expires_at": "2026-09-21T10:10:00.000Z" }
+```
+  The response is renderer-memory-only. API keys, JWTs, token-bearing URLs, audio, context, and
+  transcripts are never logged. The provider request has a ten-second timeout and no retry.
+  Typed failures are `409 dictation-unconfigured`, `429 dictation-rate-limited`,
+  `502 dictation-authentication-failed|dictation-invalid-response|dictation-provider-unavailable`,
+  `503 dictation-credential-unavailable`, and `504 dictation-timeout`; details never forward provider
+  response bodies or credentials. Retry is a new foreground user action.
+
 ## 6. Path confinement (canonical rule, applies to every `:path`/`:artifactPath`)
 
 1. Reject any path containing a literal `..` segment, a NUL byte, or a leading `/` (must be
@@ -1006,6 +1080,10 @@ which needs the identical disable for the identical reason.
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
 | 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`); the target file's bytes are not valid UTF-8 (`not-utf8`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
+| 429 | configured dictation provider rate-limited a foreground token request | `POST /api/dictation/session` |
+| 502 | configured dictation provider rejected credentials or returned an invalid/failing response | `POST /api/dictation/session` |
+| 503 | configured dictation credential unavailable locally | `POST /api/dictation/session` |
+| 504 | configured dictation provider token request timed out | `POST /api/dictation/session` |
 | 500 | unhandled daemon error | any route |
 
 ---

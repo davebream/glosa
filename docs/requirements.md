@@ -32,18 +32,21 @@ normative product contract.
   package or workflow logic.
 - **Multi-agent**: Claude Code deep + Codex built to the same provider interface; provider interface is a first-class deliverable.
 - **History = full** (compare + restore). **Platform = macOS-only, pinned versions.**
+- **Dictation is an optional input method.** It is hidden until a user configures a provider and
+  accepts versioned disclosure; it inserts drafts into prose fields and never submits them.
 - Durability, auth, daemon lifecycle, anchoring, security, CLI all hardened per appendices A1–A6.
 
 ## 1. Goal & release gate
-**Goal**: eliminate four failure modes of agent-assisted writing — (A) unreadable terminal rendering
+**Goal**: eliminate five failure modes of agent-assisted writing — (A) unreadable terminal rendering
 of long-form dialogue, (B) no artifact preview/annotation beside the agent, (C) manual edits invisible
-to the agent, (D) annotation of rendered output requiring copy-paste.
+to the agent, (D) annotation of rendered output requiring copy-paste, and (E) no explicit,
+review-before-submit dictation path in the writing workspace.
 
 **Hard release gate**: the deterministic acceptance suites pass, AND a maintainer-reviewed manual
 rehearsal (T8) against an ignored copy of real past artifacts passes. The maintainer selects the
 private input and signs the sanitized report; an agent never signs on the maintainer's behalf.
 
-**Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser); dictation capture;
+**Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
 plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
@@ -53,10 +56,10 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
  user's terminal: interactive `claude` (or `codex`) session(s)      browser (any: Safari-dock / tab / later Electron)
    plugin monitor / app-server attach → register + push stream ·        glosa SPA (served by daemon over http://127.0.0.1)
    MCP shim (`glosa mcp`) pull/ack/bind · `glosa resolve`/`apply-begin`  Read/Review/Edit · 4 viewers · workspace switcher
-                    │ push stream (SSE), MCP(stdio), CLI                            │ fetch + streaming-SSE, Bearer (SPA origin)
+                    │ push stream (SSE), MCP(stdio), CLI — over run/api.sock        │ fetch + streaming-SSE, Bearer (SPA origin)
              ┌──────▼──────────────────────────────────────────────────────────────▼──────┐
-             │ glosa daemon — singleton per machine, TWO fixed ports (4646 SPA/API, 4647    │
-             │ class-F content). file bus: per-workspace inbox + journal(=truth) + shadow-  │
+             │ glosa daemon — singleton per machine: 2 ports (4646 SPA/API, 4647 class-F)   │
+             │ + run/api.sock. file bus: per-workspace inbox + journal(=truth) + shadow-    │
              │ git · picomatch matcher · session registry · global workspace index ·        │
              │ provider-based delivery · auth (Host+Origin allowlist + Bearer + capabilities)│
              └──────────────────────────────────────────────────────────────────────────────┘
@@ -66,7 +69,7 @@ Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy fron
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
-providers/codex, cli}`. Three invariant boundaries (review-blockers if violated):
+providers/codex, providers/wispr-flow, cli}`. Three invariant boundaries (review-blockers if violated):
 (1) daemon API is versioned + client-agnostic; (2) agent providers and content adapters only enter
 via their interfaces — no special-casing; (3) the SPA talks to the daemon only through the public
 authenticated API. **Adapters/providers carry ALL domain- and agent-specific knowledge; the core is
@@ -84,7 +87,10 @@ generic.**
   class-F port = `GLOSA_PORT+1` = 4647). No entry point *becomes* the daemon in-process: a client with
   no live daemon **spawns a detached `glosa __daemon`** (unref + ignores SIGHUP/SIGINT) and acts as a
   client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = a lock plus a
-  passing `/api/handshake`. A daemon that already established ownership recreates its own missing
+  passing `/api/handshake` that reports it serves the local socket; a daemon that does not is
+  refused rather than reached over TCP. That pair proves the daemon at the instant it is read and
+  no longer, which is why it governs discovery and ownership only — where an authenticated request
+  goes is decided by the filesystem, not by it (R5, A3 §3.2). A daemon that already established ownership recreates its own missing
   lock through a 250 ms watchdog and also during handshake, using the same O_EXCL+fsync path;
   clients proceed only after re-reading a matching lock/handshake pair. Corrupt or mismatched locks
   are never overwritten, lockless older daemons remain fail-closed with manual recovery guidance,
@@ -267,7 +273,19 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   eligible, and later attempts append `reason:re_nudge` without mutating the inbox payload.
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
-- Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins.
+- Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins —
+  plus a third listener on `<GLOSA_HOME>/run/api.sock` serving the same authenticated API.
+- **A resolved endpoint is not an identity.** Every authenticated request from a CLI, MCP or
+  provider client goes over that socket — 0600, inside a directory created 0700, derived from the
+  client's own `GLOSA_HOME` and never from a value a peer supplied — and there is **no fallback to
+  the port**: a socket that is missing, refusing or unreadable is `DAEMON_UNREACHABLE` and nothing
+  is sent. Host and Origin rules are inapplicable on that transport (both defeat browser attacks,
+  and no browser can open it); the Bearer is still required, so token rotation and revocation
+  reach these clients unchanged. The browser keeps the loopback port, and the one credential that
+  must still cross it — the pairing fragment `glosa open` hands a browser — is a single-use 60s
+  presentation token, never the durable one. Identity comparison against the lock remains what it
+  was, a readiness and ownership check; it is explicitly NOT what decides where a credential goes
+  (A3 §3.2).
 - **Auth**: `Host` must literally equal an allowlisted name + port on every request — `127.0.0.1:<port>`
   or, on the SPA/API port only, `glosa.localhost:<port>` (resolved on-device, never by a DNS query → anti-rebinding; #159);
   Bearer token (128-bit, `~/.glosa/token` 0600) on API requests via `Authorization` header; **SSE uses
@@ -284,12 +302,13 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.12: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.14: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
   acknowledgement routes (issue #153 Part 2), presentation-token mint/redeem, whole-bus
-  deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id)) — schemas, status codes, 1 MiB body cap,
+  deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id), and
+  provider-neutral dictation status/session grants) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
@@ -303,17 +322,22 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   fragment changes and history traversal re-enter bootstrap after every open pane's discard guard
   consents. Cancellation preserves the mounted editor and restores its secret-free focus URL.
   Workspace, artifact, surface, mode and read lock follow the requested fragment.
-- **One page per artifact in three states**, named for what the HUMAN is doing rather than for who the
-  counterparty is. **Review** is the default page: the anchored two-way margin, where the reviewer's
-  own comments AND a session's questions and pointers about a passage are answered where the words
-  are, and selecting text opens a comment. **Read** is the same page with notes hidden (rendered,
+- **One page per artifact in three states, per pane**, named for what the HUMAN is doing rather than
+  for who the counterparty is. **Review** is the default page: the anchored two-way margin, where
+  the reviewer's own comments AND a session's questions and pointers about a passage are answered
+  where the words are, and selecting text opens a comment. **Read** is the same page with notes hidden (rendered,
   reading-only canvas; annotation, restore, and agent composition need notes shown), reached through
   one Notes toggle. **Edit** is a deliberate state of that same page (modify source, save →
   re-render), entered with one Edit action and left with Done, which returns to whichever view was
   left; the page itself scrolls, so the reader's place survives entering and leaving it. Edit is
   paused while the workspace's apply lease is held by a session, and a draft already open is kept.
   The three state names stay on the wire (`mode=` links, `glosa open`, `glosa_present`); a link or
-  command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control. Edit has two faces: a rich editor is the default and the byte-exact source
+  command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control.
+  With several artifacts open, the state belongs to the PANE: only the focused pane exposes a mode
+  control and the mode shortcuts address that pane (`docs/accessibility.md` §Keyboard interaction
+  matrix), the others state where they stand without offering to change it, and the saved layout
+  brings every pane back in the state it was left in — not only the one the address bar names.
+  Edit has two faces: a rich editor is the default and the byte-exact source
   textarea stays one toggle away. Saves are **source-preserving** — only the blocks the writer
   edited are re-serialized and everything else is byte-identical; a block the rich editor models is
   written back in the spelling it was read in, and a top-level construct it does not model — a
@@ -363,6 +387,18 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   replacement in the plugin monitor's or MCP server's environment. The composer keeps
   one tab-scoped in-flight submission, clears only after `presented`, preserves newer edits, and shows
   an inline native session picker when multiple live explicit bindings are eligible.
+- **Opt-in dictation** is an input method, not a submission or provenance event. One shared controller
+  may record for one eligible field at a time: annotation request, agent answer, attention response,
+  or conversation composer. Document source/rich editing, search, command syntax, and read-only
+  prompts never expose it. A configured browser captures mono 16-bit PCM WAV at 16 kHz, sends exact
+  one-second packets directly to the provider, and inserts only a final transcript by replacing the
+  original selection and dispatching one bubbling `input` event. The field and submit controls are
+  locked while active. Escape, permission denial, disconnect, timeout, empty speech, field removal,
+  or concurrent value drift restores value, selection, focus, and controls unchanged. Context is
+  plaintext-only and capped at 262,144 UTF-8 bytes: selection first, nearest field text second, then
+  only visible artifact/question, loaded conversation, or visible attention prose. Screenshots,
+  HTML, hidden frontmatter/comments, raw events, tool payloads, paths, session IDs, and participant
+  identities are excluded. Recording auto-stops at 5m45s and never submits the resulting draft.
 - **Anchoring resolution contract** (A5 §F10/§F11): total `resolve(annotation, artifact, ctx) →
   source_range | pipeline_feedback | orphaned`. Fixed normalization (NFC, whitespace-fold, UTF-16
   offsets, uniqueness required). Class R = quote-in-stamped-line-range, else `block_range` guidance,
@@ -388,6 +424,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   tools; transcript mirror) and a **Codex provider** (`push` = an app-server attachment is live for
   this exact thread). Both always have `mcpPull`; neither has `gate` or `boundaryDrain` any more (#152).
   Adding a CLI = a new provider, never a core change.
+- **Dictation-provider interface** is separate from `AgentProvider`. The generic daemon knows only
+  local availability, fixed browser assets, exact connect origins, and short-lived session grants.
+  Provider packages own credentials, token exchange, and browser wire format. The core runs with an
+  empty dictation registry and imports no provider package; the CLI entrypoint composes Wispr Flow.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
   **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
   staleness, and class-F source resolution without knowing the workflow that produced either file.
@@ -411,7 +451,9 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`,
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
+  `token rotate|revoke`, `dictation configure --provider wispr-flow|status|disable`, `doctor`
+  (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned
+  journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
@@ -449,8 +491,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
   Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. Non-Darwin →
   exit 5.
-- **Privacy**: loopback-only; zero telemetry/external runtime calls; class-F network egress blocked by
-  CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
+- **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
+  unconfigured external runtime calls. After versioned consent, a configured provider may receive
+  only its disclosed data following a foreground user action. Class-F network egress remains blocked
+  by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE
   reconnect replays from cursor; watcher catch-up on restart). Any face (push/MCP/CLI) failing changes
   which mechanism delivers, never whether the entry survives.
@@ -484,10 +528,16 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   sidebar/tabs/follow-mode; markdown Read/Review/Edit; streaming-SSE (fetch) with reconnect replay;
   idiomorph; diff2html with full compare + restore. Gate: E2E — annotate a live-updating md file (anchors
   correct, morph preserves scroll); edit-in-glosa attributed `human`; restore with dirty-guard; SSE
-  reconnect loses no events; a concurrent writer's change on disk is never silently overwritten by
+  reconnect loses no events; the arrangement AND every pane's state survive a reload in a real
+  engine, and a class-F pane keeps the same frame — no second load, no fresh mint — across a tab
+  switch and a tab move; a concurrent writer's change on disk is never silently overwritten by
   a stale save — a merge is written only on the writer's explicit Keep mine, never automatically, and
   what it cannot carry (a conflicting block, or a conflicting source region between or around blocks)
-  is named in the preview rather than dropped silently.
+  is named in the preview rather than dropped silently. Optional dictation is hidden until locally
+  configured, preserves drafts on every failure path, and is accepted only after offline transport,
+  context-boundary, DOM opt-in, security, and ablation tests plus one attended paid Wispr smoke test.
+  The paid smoke gates only the claim that this optional provider is supported; it is not a general
+  v1 or T8 release gate, and CI/T8 never contact Wispr.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
   the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
@@ -540,8 +590,8 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   now so these are later deploys, but no shell/hosted mode ships in v1.
 - **"Make it a git repo" promotion**: one-click promote a workspace to a real repo (seeded from the shadow
   history) + optional GitHub remote. Future; needs an explicit privacy-consent moment.
-- **Publishing an artifact externally** is an integration concern, not a glosa responsibility. glosa
-  itself makes no external runtime calls.
+- **Publishing an artifact externally** is an integration concern, not a glosa responsibility.
+  Consent-gated dictation does not create a general publishing or background-egress capability.
 - **Reference implementations for T5** (transcript viewer): `d-kimuson/claude-code-viewer` (MIT, live
   file-watching viewer) and `claude-code-parser` for protocol knowledge are steal-from references; the
   deliberate decision is **vanilla, not assistant-ui/React** (v2 §2 stack).

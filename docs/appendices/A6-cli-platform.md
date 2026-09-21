@@ -61,10 +61,32 @@
   durable token state was preserved. The command does not emit `3`: it is a local credential-state
   operation and does not require a live daemon.
 
+## F34 — opt-in dictation configuration
+
+- `glosa dictation configure --provider wispr-flow` is macOS- and TTY-gated. Before changing state it
+  discloses that microphone audio and up to 256 KiB of visible Glosa plaintext may be sent to Wispr,
+  API approval/billing is separate, recording begins only after clicking Dictate, and the result is a
+  draft that is never submitted automatically. Declining or using a noninteractive terminal/`--json`
+  fails before a credential prompt or write.
+- The organization key is entered through the inherited macOS Keychain prompt, never as a command
+  argument. Service is `ai.glosa.dictation.wispr-flow`; account and provider client ID are independent
+  random UUIDs. Packaged Glosa uses Keychain exclusively. A source checkout may use
+  `WISPR_FLOW_API_KEY` only when `GLOSA_WISPR_FLOW_ALLOW_ENV_KEY=1` explicitly enables the development
+  override; tests inject a credential reader.
+- Durable state is one atomic mode-0600 file in `GLOSA_HOME` containing only schema version, enabled
+  state, provider ID, consent version/time, `visible-prose` context policy and 262,144-byte cap,
+  client UUID, Keychain account UUID, configuration time, and optional disabled time. A new consent
+  version invalidates old configuration rather than silently widening it.
+- `glosa dictation status [--json]` reads configuration and Keychain item presence only. It never
+  contacts Wispr. `glosa dictation disable [--json]` commits inactive state before attempting to
+  remove the Keychain item; removal failure is a warning because egress is already disabled.
+- The future Electron shell reuses the daemon-served SPA and browser-direct adapter. It must provide
+  macOS microphone usage metadata and surface permission failures, but owns no alternate dictation
+  transport.
+
 ## F33 — `glosa update` self-update
 
-- **The one documented exception to invariant 5's "zero external runtime calls".** The daemon and SPA
-  runtime still make no outbound requests at all. `glosa update` is **explicitly invoked only** —
+- **One explicit external action under invariant 5.** `glosa update` is **explicitly invoked only** —
   never a background or passive check, never a startup probe — and sends no identifying data: a
   static `User-Agent` of `glosa-update`, no version beacon, and no cache file that could become a
   heartbeat. **`glosa update` never prompts**; the absence of a confirmation is a CI-safety contract.
@@ -193,6 +215,7 @@
 | `metadata` | `set <descriptor.json>\|show\|clear [--workspace <path>]` | register/read/clear durable workspace metadata v1 | 0;2;3;4;8 |
 | `session` | `bind <session-id> [--workspace <path>] [--provider <id>]` | register or refresh a session and explicitly bind it to the artifact workspace; provider-owned environment discovery supplies identity, with generic MCP fallback when unavailable | 0;2;3;4;8 |
 | `token` | `rotate\|revoke` | atomically rotate or revoke the local pairing credential; never prints token material | 0;2;70 |
+| `dictation` | `configure --provider wispr-flow\|status\|disable` | disclose and configure a Keychain-backed provider, report local availability without a provider call, or disable egress before credential removal | 0;2;5;70 |
 | `forget` | `<workspace> [--yes]` | issue #156: the one supported whole-bus deletion primitive, addressed by slug (see `status --json`), never a path — a workspace's on-disk path may already be gone. Naming a historical loose-file source sealed into a directory workspace resolves to the owning target and forgets the complete unit, never just the source. Removes the registration, journal, inbox, and shadow-git history, including any historical loose-file source sealed into it by adoption; never touches work-tree files. Refuses before any deletion when a live bound session, an unexpired apply lease, or an in-progress adoption exists, naming each blocker (adoption AND new session register/bind on the same target refuse symmetrically while a forget is committing — one shared per-workspace lock). Interactive use previews the exact paths first and asks once; `--yes` skips the prompt; a non-interactive caller (no TTY, or `--json`) without `--yes` is a usage error. Confinement is proven for every member of the deletion set before a durable marker is written or a single file is touched. `glosa doctor`/`glosa status` name an interrupted run explicitly with its exact resume command, even once the workspace's own directory is gone; re-running `forget` on the same slug (or a since-forgotten source's own slug) finishes it and still reports the complete original set of removed paths | 0;2;3;4;12;70 |
 | `doctor` | `[dir] --json [--workspace <registered-slug>] [--repair-baseline]` | 16 enumerated checks, incl. the resolved workspace root (issue #146) and leftover `glosa init` config (#152) | 0(warns ok);9 any FAIL;5 |
 | `status` | `[dir] --json` | daemon+workspaces+sessions+pending; workspace rows may include additive provider-owned connect prompts; never fails on daemon-down (state in data) | 0;70 |
@@ -248,7 +271,11 @@
   `mode:"preview"` is preview-locked; `annotate`/`edit` select an unlocked initial mode.
 - `glosa_ask {workspace?, path, question?, quote?, options?, label?, wait_seconds?}` marks a passage
   and, when `question` is given, BLOCKS (default 600s, cap 900s) until the human answers or the wait
-  elapses; omitting `question` posts the pointer and returns immediately. Mutating, non-idempotent
+  elapses; omitting `question` posts the pointer and returns immediately. Cancelling the MCP request
+  ends the wait at once and withdraws the question (terminal `expired`, by that session — A1 §5.11e);
+  a wait that merely elapses leaves the question open, as before. Shim shutdown or a crash also
+  leaves it open: withdrawing there would put the current bearer on the wire to an endpoint resolved
+  earlier in the session, the hazard `close()` refuses for deregistration. Mutating, non-idempotent
   (each call marks a new passage), closed-world.
 - `glosa_watch {workspace?, path?, since?, wait_ms?, session_id?}` (issue #153 Part 2) is the opt-in
   held read over `external_edit` — detail A1 §5.11b, A5 §F23. BLOCKS up to `wait_ms` (cap 900000ms)

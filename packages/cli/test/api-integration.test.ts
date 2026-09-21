@@ -37,10 +37,18 @@ test("session HTTP errors remain distinct from unreachable daemon failures (#141
       throw new Error("fixture connection refused");
     }) as unknown as typeof fetch,
   });
-  await expect(offline.heartbeat("unknown-recovery-fixture")).rejects.toMatchObject({
-    code: "DAEMON_UNREACHABLE",
-    message: "glosa daemon unreachable: fixture connection refused",
-  });
+  // The distinction this test guards is the CODE — an HTTP error from a reachable daemon must not
+  // read as an unreachable one (#141). The message now also names the socket it failed to reach
+  // (#207), which is the destination a user has to act on, so it is asserted by substring rather
+  // than pinned whole.
+  const unreachable = await offline.heartbeat("unknown-recovery-fixture").then(
+    () => null,
+    (error: unknown) => error as { code?: string; message?: string },
+  );
+  expect(unreachable?.code).toBe("DAEMON_UNREACHABLE");
+  expect(unreachable?.message).toContain("glosa daemon unreachable:");
+  expect(unreachable?.message).toContain("fixture connection refused");
+  expect(unreachable?.message).toContain("run/api.sock");
 });
 import { type OpenDeps, runOpen } from "../src/open.ts";
 import { runRequestReview } from "../src/request-review.ts";
@@ -226,6 +234,35 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
 
     const unknown = await client.getEntryStatus(workspaceDir, "nope-does-not-exist");
     expect(unknown).toBeNull();
+  }, 20000);
+
+  test("#310 a cancelled held read returns at once, and the withdraw is idempotent on the terminal it wrote", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    await client.openWorkspace(workspaceDir);
+    const asked = await client.createAttentionRequest(workspaceDir, { message: "Ready?", action: "ask" });
+
+    // The real `fetch` has to observe the per-call signal — a held read the caller walked away
+    // from must not sit on the daemon's socket for the rest of its own cap.
+    const ctrl = new AbortController();
+    const started = Date.now();
+    const held = client.getEntryStatus(workspaceDir, asked.id, 60_000, ctrl.signal);
+    setTimeout(() => ctrl.abort(), 50);
+    await expect(held).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+
+    expect(await client.withdrawAttention?.(workspaceDir, asked.id, "sess-1")).toEqual({
+      id: asked.id,
+      status: "expired",
+      withdrawn: true,
+    });
+    // Idempotent on what it already wrote: a retried withdrawal reports the terminal, not a
+    // second one.
+    expect(await client.withdrawAttention?.(workspaceDir, asked.id, "sess-1")).toEqual({
+      id: asked.id,
+      status: "expired",
+      withdrawn: false,
+    });
+    expect((await client.getEntryStatus(workspaceDir, asked.id))?.status).toBe("expired");
   }, 20000);
 
   test("request-review approval mode creates, approves, and returns the typed verdict through --wait", async () => {

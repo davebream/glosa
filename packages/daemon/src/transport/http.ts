@@ -16,6 +16,7 @@ import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
 import { sourceSha256 } from "../artifact-render.ts";
 import type { ArtifactWatcherRegistry } from "../artifact-watcher.ts";
@@ -42,9 +43,10 @@ import {
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
 import { composerRoutes } from "../routes/composer.ts";
+import { dictationRoutes } from "../routes/dictation.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
-import { authorizeRequest, isForeignOrigin } from "../security/auth.ts";
+import { authorizeRequest, isForeignOrigin, type Transport } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
@@ -107,6 +109,7 @@ const SPA_ASSETS: Record<string, string> = {
   // vendored under src/vendor/ (see that file's own header for why it's vendored rather than a
   // bare-specifier import).
   "data-access.js": "text/javascript; charset=utf-8",
+  "dictation.js": "text/javascript; charset=utf-8",
   "viewer.js": "text/javascript; charset=utf-8",
   "viewer-shell.js": "text/javascript; charset=utf-8",
   "viewer-context-surfaces.js": "text/javascript; charset=utf-8",
@@ -162,6 +165,10 @@ export interface ApiContext {
   token: string | null | TokenSource;
   instanceId: string;
   startedAt: string;
+  /** Set by `bootDaemon` once the Unix listener is bound, and published by the tokenless
+   * handshake so a client can tell a socket-serving daemon from one that predates it. Hand-built
+   * test contexts leave it undefined, which reports `false` — truthfully, since they have none. */
+  servesSocket?: boolean;
   /** Daemon-owned reconciliation hook for a lock file that disappeared after initial ownership
    * was established. The tokenless handshake may trigger the repair, but clients never write the
    * lock themselves. Optional for hand-built test contexts. */
@@ -204,6 +211,8 @@ export interface ApiContext {
   /** Provider implementations are injected by the outer composition root. An absent registry is
    * the supported zero-provider core and yields an honest delivery-unavailable response. */
   providerRegistry?: AgentProviderRegistry;
+  /** Optional external dictation providers, injected by the CLI composition root. */
+  dictationRegistry?: DictationProviderRegistry;
   pushRegistry?: SessionPushRegistry;
   /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
    * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
@@ -275,6 +284,13 @@ export interface HandshakeBody {
   instance_id: string;
   pid: number;
   started_at: string;
+  /** Whether this daemon also serves `<GLOSA_HOME>/run/api.sock` (A3 §3.2). A BOOLEAN, never the
+   * path, for the same reason `install_id` is a hash: this endpoint is tokenless, and a home
+   * directory path on an unauthenticated endpoint is a privacy regression for a tool holding
+   * manuscripts. A client already knows where its own home's socket would be; what it cannot know
+   * is whether the daemon answering predates it. Absent in a legacy response means "no", so an
+   * older daemon is refused rather than silently talked to over TCP. */
+  serves_socket: boolean;
 }
 
 function checkHost(req: Request, port: number, hostnames: readonly string[]): boolean {
@@ -387,6 +403,7 @@ function handleHandshake(ctx: ApiContext): () => Response {
       instance_id: ctx.instanceId,
       pid: process.pid,
       started_at: ctx.startedAt,
+      serves_socket: ctx.servesSocket === true,
     };
     return Response.json(body);
   };
@@ -402,17 +419,19 @@ function serveShell(): Response {
 
 /** `GET /app/<file>` — the SPA's static ES modules (P1.4). `name` is checked against the fixed
  * allowlist, not just sanitized, so a request can never read anything else under SPA_SRC_DIR. */
-function serveSpaAsset(req: Request, pathname: string): Response {
+function serveSpaAsset(ctx: ApiContext, req: Request, pathname: string): Response {
   const name = pathname.slice("/app/".length);
   // Object.hasOwn, not a bare `SPA_ASSETS[name]` lookup: a prototype key like `__proto__` or
   // `constructor` would otherwise resolve to a truthy inherited value, slip past the `undefined`
   // guard, and fall through to readFileSync (→ 500 instead of a clean 404). Own-keys only.
-  const contentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
+  const builtInContentType = Object.hasOwn(SPA_ASSETS, name) ? SPA_ASSETS[name] : undefined;
+  const providerAsset = builtInContentType === undefined ? ctx.dictationRegistry?.browserAsset(pathname) : undefined;
+  const contentType = builtInContentType ?? providerAsset?.contentType;
   if (contentType === undefined) {
     return problem(404, "not-found", "no such static asset", undefined, pathname);
   }
   // Read bytes, not text: a font decoded as UTF-8 and re-encoded would reach the browser corrupt.
-  const body = readFileSync(join(SPA_SRC_DIR, name));
+  const body = readFileSync(providerAsset?.filePath ?? join(SPA_SRC_DIR, name));
   const etag = `"${contentType.startsWith("font/") ? createHash("sha256").update(body).digest("hex") : sourceSha256(body)}"`;
   const headers = {
     "Content-Type": contentType,
@@ -2640,7 +2659,7 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
     return { routeClass: "navigation", handle: () => serveShell() };
   }
   if (method === "GET" && pathname.startsWith("/app/")) {
-    return { routeClass: "navigation", handle: () => serveSpaAsset(req, pathname) };
+    return { routeClass: "navigation", handle: () => serveSpaAsset(ctx, req, pathname) };
   }
   if (method === "GET" && pathname === "/api/workspaces") {
     return { routeClass: "authed-read", handle: () => handleListWorkspaces(ctx) };
@@ -2704,6 +2723,8 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "GET" && pathname === "/api/status") {
     return { routeClass: "authed-read", handle: () => handleStatusAggregate(ctx) };
   }
+  const dictationRoute = dictationRoutes({ registry: ctx.dictationRegistry }, method, pathname);
+  if (dictationRoute) return dictationRoute;
 
   let m: RegExpMatchArray | null;
 
@@ -2852,23 +2873,43 @@ function logUnhandledRequestError(req: Request, error: unknown): void {
   );
 }
 
-export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServer) => Promise<Response> {
-  const csp = spaCspHeaders(ctx.classFPort);
+/**
+ * `transport` is a PARAMETER, not an `ApiContext` field, and that is load-bearing. The daemon
+ * builds two pipelines — one per listener — and `compositeRegistry`/`adoptionCoordinator` above
+ * key their per-daemon singletons on the context's OBJECT IDENTITY via a `WeakMap`. A second
+ * context, even a spread copy sharing every reference, would therefore get its own composite
+ * delivery registry and its own adoption coordinator: a drain begun on one listener would be
+ * invisible to the other. One context, two closures.
+ */
+export function createApiFetch(
+  ctx: ApiContext,
+  transport: Transport = "loopback",
+): (req: Request, server?: BunServer) => Promise<Response> {
+  const overSocket = transport === "socket";
 
   return async (req, server) => {
+    // Read the local consent flag for every response. `glosa dictation configure|disable` can run
+    // beside a live daemon; the next page reload must receive the corresponding CSP without a
+    // daemon restart. This check is filesystem-only and never probes the provider.
+    const csp = spaCspHeaders(ctx.classFPort, ctx.dictationRegistry?.enabledConnectOrigins() ?? []);
     try {
       const url = new URL(req.url);
 
       // Host check runs first, unconditionally, before route lookup even knows a route class
       // exists (A3 §4 Rule 1). Not one of the allowlisted literals → 400, closed, no body — never 403.
-      if (!checkHost(req, ctx.port, SPA_HOSTNAMES)) return new Response(null, { status: 400 });
+      //
+      // Skipped on the socket: the allowlist's job is to make a rebound DNS name arrive with its
+      // own name in `Host` and be refused (A3 §4's rebinding note), and there is no name, no
+      // resolver and no browser on this transport. Enforcing it here would only require every
+      // local client to send a `Host` naming a TCP port it does not use.
+      if (!overSocket && !checkHost(req, ctx.port, SPA_HOSTNAMES)) return new Response(null, { status: 400 });
 
       const route = matchApiRoute(ctx, req, url.pathname);
       if (!route) {
         // A foreign Origin is rejected even on a route that doesn't exist (A1 §1 "Origin
         // allowlisted first, regardless of route") — otherwise 403-on-real-route vs
         // 404-on-fake-route is a route-enumeration side channel for a hostile page (A3 §4).
-        if (isForeignOrigin(req, ctx.port)) {
+        if (!overSocket && isForeignOrigin(req, ctx.port)) {
           return withHeaders(problem(403, "invalid-origin", "origin not allowed", undefined, url.pathname), csp);
         }
         return withHeaders(problem(404, "not-found", "no such route", undefined, url.pathname), csp);
@@ -2879,6 +2920,7 @@ export function createApiFetch(ctx: ApiContext): (req: Request, server?: BunServ
         routeClass: route.routeClass,
         port: ctx.port,
         token: authSnapshot.token,
+        transport,
       });
       if (!authResult.ok) {
         if (authResult.status === 401) {

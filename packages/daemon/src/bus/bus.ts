@@ -836,6 +836,43 @@ export class WorkspaceBus {
     });
   }
 
+  /** A session takes back its own open question (issue #310): the human cancelled the call, so
+   * nobody is listening for the answer any more and the card would otherwise sit in the margin
+   * offering "Send answer" to no one. Terminal `expired`, attributed to the session that asked —
+   * a session's own claim, not a lease-proven fact, exactly as `resolve … deferred`'s `by`.
+   *
+   * First-terminal-wins: on an already-terminal entry this appends NOTHING and reports
+   * `withdrawn:false`, so a human answer that raced the cancellation keeps the answer. */
+  withdrawAttention(
+    entryId: string,
+    session: string,
+  ): Promise<{ status: string; detail: Record<string, unknown> | null; withdrawn: boolean }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      const state = this.state.entries[entryId];
+      if (!state || state.kind !== "attention") throw new Error("unknown attention request");
+      if (isTerminal("attention", state.status)) {
+        return {
+          status: state.status,
+          detail: (state.detail as Record<string, unknown> | undefined) ?? null,
+          withdrawn: false,
+        };
+      }
+      // `withdrawn` is the key `withdrawAnnotation` already writes on its own terminal, so a later
+      // reader has one vocabulary for "taken back" rather than one per entry kind.
+      this.appendAttentionTransitionLocked(entryId, "expired", {
+        by: `session:${session}`,
+        detail: { withdrawn: true },
+      });
+      const final = this.state.entries[entryId] as typeof state;
+      return {
+        status: final.status,
+        detail: (final.detail as Record<string, unknown> | undefined) ?? null,
+        withdrawn: true,
+      };
+    });
+  }
+
   private appendAttentionTransitionLocked(
     entryId: string,
     to: string,

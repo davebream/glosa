@@ -8,7 +8,16 @@ const SRC = join(import.meta.dir, "../src");
 
 const MODULE_LAYOUT = {
   transport: ["classf-serve", "contract", "http", "problem", "sse", "stream"],
-  security: ["auth", "capability", "classf-bridge", "confine-path", "csp", "presentation-token", "token"],
+  security: [
+    "auth",
+    "authed-request",
+    "capability",
+    "classf-bridge",
+    "confine-path",
+    "csp",
+    "presentation-token",
+    "token",
+  ],
   lifecycle: ["build-id", "daemon", "daemon-identity", "handshake", "home", "lock", "protocol"],
 } as const;
 

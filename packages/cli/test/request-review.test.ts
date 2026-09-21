@@ -128,6 +128,33 @@ describe("glosa request-review", () => {
     expect(result.error?.kind).toBe("review_timeout");
   });
 
+  test("#310 an aborted signal ends the wait after ONE read, and that read carried the signal", async () => {
+    const client = new FakeGlosaApiClient();
+    client.attentionRequestResult = { id: "inb-3", slug: "ws-1", status: "open" };
+    const give_up = new AbortController();
+    give_up.abort();
+    // What the real client does once its fetch is bound to an aborted signal.
+    client.getEntryStatusImpl = async () => {
+      throw new Error("The operation was aborted.");
+    };
+    const deps: RequestReviewDeps = {
+      createClient: async () => client as unknown as GlosaApiClient,
+      now: () => 0,
+      sleep: async () => {
+        throw new Error("a cancelled wait must not sleep and poll again");
+      },
+      pollIntervalMs: 1000,
+      signal: give_up.signal,
+    };
+    const result = await runRequestReview({ dir: "/repo", path: "notes.md", waitMs: 600_000 }, deps);
+    expect(result.error?.kind).toBe("review_timeout");
+    const reads = client.calls.filter((call) => call.method === "getEntryStatus");
+    expect(reads).toHaveLength(1);
+    // The signal has to reach the HELD read itself, not only the give-up check below it —
+    // otherwise the daemon keeps holding the connection for its own cap after the caller left.
+    expect(reads[0]?.args[3]).toBe(give_up.signal);
+  });
+
   test("workspace lookup returns 404 -> exit 4 (not_a_workspace)", async () => {
     const client = new FakeGlosaApiClient();
     client.createAttentionRequest = async () => {

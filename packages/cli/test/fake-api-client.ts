@@ -89,9 +89,30 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     return this.attentionRequestResult;
   }
 
-  async getEntryStatus(path: string, entry: string): Promise<EntryStatus | null> {
-    this.calls.push({ method: "getEntryStatus", args: [path, entry] });
+  async getEntryStatus(
+    path: string,
+    entry: string,
+    waitMs?: number,
+    signal?: AbortSignal,
+  ): Promise<EntryStatus | null> {
+    this.calls.push({ method: "getEntryStatus", args: [path, entry, waitMs, signal] });
+    if (this.getEntryStatusImpl) return this.getEntryStatusImpl(path, entry, waitMs, signal);
     return this.entryStatusResult;
+  }
+
+  getEntryStatusImpl:
+    | ((path: string, entry: string, waitMs?: number, signal?: AbortSignal) => Promise<EntryStatus | null>)
+    | null = null;
+
+  withdrawAttentionResult = { status: "expired", withdrawn: true };
+
+  async withdrawAttention(
+    path: string,
+    entry: string,
+    session: string,
+  ): Promise<{ id: string; status: string; withdrawn: boolean }> {
+    this.calls.push({ method: "withdrawAttention", args: [path, entry, session] });
+    return { id: entry, ...this.withdrawAttentionResult };
   }
 
   async listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult> {

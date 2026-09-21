@@ -13,14 +13,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { EditorState, Schema, markdownSchema } from "../src/vendor/prosemirror.js";
 import {
-  MODELLED_MARK_TYPES,
-  editorSchema,
-  MODELLED_NODE_TYPES,
   blockLayout,
   collateralFor,
   createSplicer,
+  editorSchema,
+  MODELLED_MARK_TYPES,
+  MODELLED_NODE_TYPES,
   parseMarkdown,
   runIsModelled,
   runsOverlap,
@@ -28,6 +27,7 @@ import {
   serializeNodesFaithfully,
   spliceMarkdown,
 } from "../src/rich-editor.js";
+import { EditorState, markdownSchema, Schema } from "../src/vendor/prosemirror.js";
 
 const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 
@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(669);
+    ).toBe(712);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1938,7 +1938,35 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // `docs/requirements.md` clause went INSIDE an existing paragraph rather than beside it, so the
   // corpus grew in one document instead of two. Prose and one bullet list, no heading, so again
   // no reference link, and every numerator held. Bookkeeping, denominator only.
-  const BLOCKS = 669;
+  // #305/#311's own CHANGELOG bullets — three blocks, no heading, so no reference link either:
+  // 669 → 672 blocks / 605 → 608 edits, and every numerator held. Bookkeeping, denominator only.
+  // #310: its own `docs/decisions.md` entry — seven blocks — plus a CHANGELOG bullet under the
+  // existing `[Unreleased]` / `### Fixed` list and a contract-version edit inside an existing
+  // `docs/requirements.md` line, neither of which adds a block: 669 → 676 blocks / 605 → 612 edits
+  // measured on its own branch.
+  // The draft first moved `soft break inside a code span collapsed` 5 → 6, which is NOT the release
+  // shape this file permits, so it was investigated rather than re-baselined: a code span in the new
+  // entry straddled a line break. Rewrapping it put every numerator back — metric 1's per-cause map
+  // unchanged at 46, 1/1 shipped, 41/41 ablated, 0 missed and 0 false alarms. Denominator only.
+  // MERGING #305/#311 AND #310: both branches re-baselined from the same 669/605 base, so neither
+  // side's total describes the merged corpus — it carries BOTH sets of documentation. Re-measured on
+  // the merge rather than added up: 669 → 679 blocks / 605 → 615 edits. Numerators
+  // re-checked after the merge and unmoved, which is what makes this bookkeeping and not drift.
+  // Opt-in Wispr Flow dictation adds an `### Added` changelog block and a decision entry. On top of
+  // the merged #305/#311 + #310 corpus this measures 679 → 685 blocks / 615 → 620 edits. The
+  // per-cause map is 46, shipped remains 1/1, ablated remains 41/41, and missed/false alarms remain
+  // zero. Bookkeeping, denominator only.
+  // REBASING #207 ONTO THAT: #207 adds a `docs/decisions.md` entry plus two amended paragraphs and
+  // two `### Security` changelog bullets. Its own branch measured 679 → 690 from the pre-dictation
+  // base, which does not describe a tree carrying both, so this is re-measured on the rebase rather
+  // than added up: 685 → 696 blocks / 620 → 631 edits. The per-cause map stays 46 — #207 touches no
+  // serializer and adds no unrestored block — shipped stays 1/1, ablated 41/41, missed and false
+  // alarms zero. Denominator only.
+  // MERGING #207 AND #308: #308 measured 685 → 701 from the pre-#207 base, which does not describe
+  // a tree carrying both — re-measured on the merge rather than summed: 696 → 712 blocks / 631 → 647
+  // edits. Per-cause map stays 46, shipped 1/1, ablated 41/41, missed and false alarms zero.
+  // Denominator only.
+  const BLOCKS = 712;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1974,7 +2002,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 45 of 669 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 46 of 712 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2014,7 +2042,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       byCause,
       countNote(
-        "the per-cause record, a NUMERATOR totalling 42. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+        "the per-cause record, a NUMERATOR totalling 46. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
       "link reference definition inlined": 25,
@@ -2031,7 +2059,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 605; the guard fires on it and, ablated, on 41", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 647; the guard fires on it and, ablated, on 41", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2103,7 +2131,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 36/36 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 41/41 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
       ),
       // A MOVED NUMERATOR IS THE REAL SIGNAL, and here it moved twice, both legitimately: `shipped`
       // fell 3 → 2 when #143 made front matter a verbatim node (no longer re-serialized, so it can
@@ -2113,11 +2141,13 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // moved 34 → 35 for a different reason — the alpha.18 release added one more reference-link
       // heading to CHANGELOG.md, which the ablated path re-serializes and the shipped path
       // restores. `edits` moved with BLOCKS each time documentation grew the corpus
-      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605) — bookkeeping, not drift, since `shipped` held steady across every
+      // (385 → 394 → 399 → 402 → 411 → 416 → 417 → 418 → 419 → 420 → 421 → 422 → 423 → 439 → 442 → 453 → 484 → 488 → 500 → 508 → 511 → 512 → 521 → 532 → 534 → 541 → 542 → 567 → 576 → 580 → 582 → 591 → 597 → 605 → 615) — bookkeeping, not drift, since `shipped` held steady across every
       // one of those moves. 488 → 500 is this PR's own CHANGELOG/README entries (see the BLOCKS
-      // comment above).
+      // comment above). The last step is the #305/#311 + #310 merge, measured on the merged corpus
+      // rather than summing the two branches' separate re-baselines (608 and 612), neither of which
+      // describes a tree containing both sets of documentation.
     ).toEqual({
-      edits: 605,
+      edits: 647,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 41, fired: 41 },
     });

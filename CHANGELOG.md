@@ -6,8 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **The daemon's API for glosa's own commands moved off the network onto a local socket only you can
+  open.** The CLI, the MCP server, the Claude Code monitor and the Codex attachment now reach the
+  daemon through `~/.glosa/run/api.sock` instead of `127.0.0.1:4646`. Before, each of them worked
+  out the port once and then sent your pairing token there for as long as it ran — minutes for a
+  question waiting on an answer, the whole session for a live agent connection. A port is not an
+  identity: once the daemon stops, anything else on the machine can take it, and because the file
+  the daemon leaves behind is readable by everyone while the token beside it is not, a program
+  running as a different user could have learned enough to look like the daemon and been handed a
+  credential it could never have read from disk. File permissions now answer the question instead —
+  the socket is owner-only inside an owner-only directory, and the operating system refuses anyone
+  else before anything is sent. There is deliberately no falling back to the port, so a daemon too
+  old to serve the socket is reported as unreachable rather than quietly reached the old way.
+  Nothing changes for the browser, which cannot use a socket and keeps the same address as before.
+- **The link `glosa open` hands your browser no longer carries your durable credential.** It now
+  carries a single-use one that expires in a minute, the same kind `glosa_present` has always used.
+  The browser has to use the port, so this is the one place the socket cannot protect; a single-use
+  token means anything that intercepts it gets something that expires and redeems to nothing.
+
+### Added
+
+- Opt-in Wispr Flow dictation is available in the annotation request, agent answer, attention
+  response, and conversation composers. Configuration records versioned consent, keeps the
+  organization key in macOS Keychain, and makes no provider request until the user clicks Dictate.
+  Audio and bounded visible plaintext stream directly from the browser; only a final transcript is
+  inserted into the draft, and it is never submitted automatically.
+
+### Changed
+
+- An agent's question now shows you where it is, and glosa no longer moves you to it. The passage a
+  session asks about is outlined in the document with a band around the exact words, a printed
+  "… asks" label and a "?" tab in the gutter, in a blue-black ink that belongs to sessions. A
+  pointer without a question gets the outline and an arrow tab. When a question's passage is off
+  screen, a notice under the artifact bar says so and offers **Go to it**; afterwards **Back to where
+  you were** returns you to your place. Below the width where the margin rail fits, the question and
+  its answer controls open at the passage instead of only in the tray. Before this, the mark was a
+  2px grey rule that was easy to miss, glosa scrolled to a new question by itself once you paused
+  typing, and questions already open when the page loaded got no help at all.
+
 ### Fixed
 
+- The Claude Code plugin loads. `monitors/monitors.json` wrapped its entry in an object, and Claude
+  Code requires a bare array, so the plugin installed and then failed to load: its session monitor
+  never started, and a note written in glosa's margin was never pushed into the session. Nothing said
+  so, because the MCP tools still registered and binding a session still succeeded. This had been
+  true since the monitor was added. Because Claude Code caches a plugin by version, anyone who
+  installed the earlier copy keeps it until they update the plugin.
+- The plugin manifest no longer drifts from the release it ships in. It had stayed at
+  `0.1.0-alpha.21` for seven releases while the CLI moved on, so `/plugin install` advertised a
+  version that was never published. Every place the version appears is now derived from one source
+  and checked when you commit, when a release is tagged, and against the bytes in the published
+  tarball.
+- Interrupting a `glosa_ask` call now ends the wait immediately and withdraws the question from the
+  margin. Before, an agent whose question was interrupted kept waiting out its own clock — up to
+  fifteen minutes — while the reader was still offered "Send answer" on a question nobody was
+  listening to, and the only way to clear it was to answer it. A wait that simply runs out still
+  leaves the question in place, so a later answer reaches the agent through the inbox as before.
+- Every open pane now comes back in the state it was left in. After a reload only the pane named in
+  the address bar kept its state; the others reopened in whatever state they were first opened with,
+  so a companion document left with its notes hidden came back showing them again.
 - A paired tab stays paired. Reloading it, opening a second tab on the same address, or using a
   terminal or editor that rebuilds its web view used to land on "not paired", with no way back except
   another `glosa open` — the browser kept the pairing token only for the lifetime of the one tab that

@@ -251,6 +251,19 @@ export async function completeAttention(
   }
 }
 
+/** A session withdraws its own open question (issue #310) — path-addressed like
+ * `attentionEntryStatus`, because the caller is the CLI/MCP side holding a workspace directory,
+ * not a slug. The entry must exist AND be an attention request: an annotation id reaching here is
+ * a caller bug, never a silent no-op. */
+export async function withdrawAttention(deps: AttentionDependencies, rawPath: string, id: string, session: string) {
+  const root = canonicalWorkspace(rawPath);
+  const bus = await workspaceBus(deps, deps.workspaceRegistration.get(root) ?? root);
+  const state = bus.state.entries[id];
+  if (!state || state.kind !== "attention") throw new AttentionError("unknown-attention");
+  const { status, withdrawn } = await bus.withdrawAttention(id, session);
+  return { id, status, withdrawn };
+}
+
 export interface CreateAttentionInput {
   path: string;
   message?: string;
