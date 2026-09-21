@@ -19,9 +19,21 @@
 // Talks to the daemon ONLY through the injected data-access instance (R6's ONE data-access
 // module) — never `fetch` directly (see test/import-boundary.test.ts).
 
-import { agentIdentity, agentRequestSummary, locateQuote, requestsForArtifact } from "./agent-request.js";
+import { addressBlocks, addressForRange } from "./address.js";
+import {
+  agentIdentity,
+  agentRequestSummary,
+  bandPath,
+  isQuestion,
+  lineBoxes,
+  locateQuote,
+  openQuestions,
+  requestsForArtifact,
+} from "./agent-request.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
+import { choiceDialog, confirmDialog } from "./dialog.js";
+import { faceKey, mountFaceControl } from "./face.js";
 import {
   collectRenderedHeadings,
   currentHeadingIndex,
@@ -29,12 +41,9 @@ import {
   outlineDepths,
   scrollToOffset,
 } from "./outline.js";
-import { choiceDialog, confirmDialog } from "./dialog.js";
-import { addressBlocks, addressForRange } from "./address.js";
-import { faceKey, mountFaceControl } from "./face.js";
+import { runAtLine, runsFrom, spliceRun, widenToNext, widenToPrevious } from "./run-spans.js";
 import { Idiomorph } from "./vendor/idiomorph.js";
 import { createElement as el } from "./viewer-shell.js";
-import { runAtLine, runsFrom, spliceRun, widenToNext, widenToPrevious } from "./run-spans.js";
 
 /**
  * What `saveCurrentArtifact` returns when the writer was asked about a save that would change
@@ -132,9 +141,16 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
 
-/** How far a session's sideline sits from the text column. Close enough to read as a mark on
- * those lines rather than as chrome beside them; far enough not to crowd the measure. */
-const SIDELINE_GUTTER = 14;
+/** How far into the gutter a session's tab sits from the text column: the tab's own 20px plus a
+ * gap that keeps it clear of the band's left edge. Inside the manuscript's 2rem gutter, so it never
+ * leaves the painted page. */
+const BAND_TAB_OFFSET = 30;
+/** How long a newly arrived mark plays its one draw-in (app.css `glosa-band-arrive`). */
+const BAND_ARRIVE_MS = 1300;
+/** A passage counts as on screen only when this much of the pane shows past its edge — a band whose
+ * last pixel peeks over the top is not something the reader can be said to be looking at. */
+const PASSAGE_VISIBLE_INSET = 24;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 export function initialModeState(mode = "read") {
   return { mode: MODES.includes(mode) ? mode : "read", dirty: false };
@@ -274,6 +290,12 @@ export function createArtifactPane(host, deps) {
      * provider record — never guessed here, and never taken from the request payload. */
     getProviderName = () => "An agent session",
     refreshAttention = () => Promise.resolve(),
+    /** Whether some pane already shows this artifact. A question about a document nobody has open
+     * has no pane of its own to raise a notice in, so the active pane raises it (#308). */
+    isArtifactOpen = () => true,
+    /** Opens another artifact in Review and takes the reader to a request in it. Only ever called
+     * from the reader's own "Go to it". */
+    goToRequestElsewhere = () => Promise.resolve(false),
     openArtifactInThisPane = () => Promise.resolve(false),
     openDiffTab = null,
     // How a pane asks the dock for room. Entering Annotate in a pane too narrow for the rail
@@ -383,8 +405,22 @@ export function createArtifactPane(host, deps) {
   let pendingReport = null;
   /** A half-written margin note, kept the same way. `{path, state}`. */
   let parkedComposer = null;
-  /** The session request the reader is currently on, if any — drives the active sideline. */
+  /** The session request the reader is currently on, if any — drives the focused band and, where
+   * the rail has no room, which question's card floats at its passage. */
   let focusedRequestId = null;
+  /** Notices the reader waved away. Per pane and per visit: a dismissed notice is not an answered
+   * question, so the band, the card and the tray row all stay. */
+  const dismissedNotices = new Set();
+  /** Where the reader was before "Go to it" took them to a passage: `{top, focus}`. glosa never
+   * moves the reader on its own, and when THEY ask to be moved it owes them the way back. */
+  let returnPlace = null;
+  /** True between an answer being sent and the reader going back or waving the notice away. */
+  let answerJustSent = false;
+  /** Marks that arrived since the last look and still owe their one draw-in. */
+  const arrivedRequestIds = new Set();
+  /** What the notice currently shows, as a string. Scrolling re-evaluates the notice every frame;
+   * rebuilding its DOM each time would take the focus ring off a button mid-Tab. */
+  let noticeKey = "";
   /** Half-written answers, by entry id. The rail is rebuilt on every journal event, so an
    * answer held only in the card's DOM would be erased by an unrelated session's activity. */
   const answerDrafts = new Map();
@@ -408,7 +444,7 @@ export function createArtifactPane(host, deps) {
   // Filled from two places, which must agree: `hydrateAnnotations` reads the points the journal
   // already holds when the artifact opens, and the live `apply_end` frame adds the one that was
   // just proven. Cleared with the cards whenever the pane loads a different artifact.
-  let rollbackPoints = new Map();
+  const rollbackPoints = new Map();
   let previewItem = null; // the annotation whose passage the pointer is currently over
   let previewCloseTimer = null;
   let annotatableFocusIndex = 0;
@@ -652,10 +688,22 @@ export function createArtifactPane(host, deps) {
   });
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
   const markersEl = el("div", { className: "glosa-markers", "aria-hidden": "true" });
-  // The agent's marks live on the opposite edge from the annotation dots, and beside the words
-  // rather than on them — an editor's sideline. That separation is the whole distinction: what
-  // the human wrote sits ON the manuscript, what a session pointed at stands NEXT to it.
-  const sidelinesEl = el("div", { className: "glosa-sidelines", "aria-hidden": "true" });
+  // A session's mark is a band drawn AROUND the words, in session ink, in its own layer (#308).
+  // The human's marks stay on the words themselves — wash and underline — so the two never share a
+  // channel: one colours the text, the other outlines it, and a sentence carrying both still reads.
+  // The layer is not aria-hidden: each band's gutter tab is a real button.
+  const bandsEl = el("div", { className: "glosa-bands" });
+  // At widths with no rail, the question the reader is on floats at its passage, the way an open
+  // draft does. The tray keeps the list; this keeps the question beside the words it is about.
+  const askLayerEl = el("div", { className: "glosa-ask-layer" });
+  // The one thing that tells the reader a session is waiting on a passage they cannot see. Outside
+  // the scroll container, so it holds still while the manuscript moves under it.
+  const noticeEl = el("div", {
+    className: "glosa-ask-notice",
+    hidden: true,
+    role: "region",
+    "aria-label": "A session's question",
+  });
   const previewEl = el("div", { className: "glosa-annotation-preview", hidden: true });
   // The open draft floats at its passage at every width. A draft stacked into the rail beside the
   // saved notes opened hundreds of pixels from the words just selected and was easy to miss; the
@@ -699,12 +747,14 @@ export function createArtifactPane(host, deps) {
     editWrap,
     marginEl,
     markersEl,
-    sidelinesEl,
+    bandsEl,
     previewEl,
     composerLayerEl,
+    askLayerEl,
   ]);
   const paneEl = el("section", { className: "glosa-pane", "aria-label": "Artifact" }, [
     artifactBar,
+    noticeEl,
     paneMain,
     trayEl,
     historyEl,
@@ -888,6 +938,8 @@ export function createArtifactPane(host, deps) {
     outlineFrame = requestAnimationFrame(() => {
       outlineFrame = 0;
       syncOutlineCurrent();
+      // Whether a question needs its notice depends on whether its passage is on screen.
+      renderNotice();
     });
   }
   paneEl.addEventListener("scroll", onPaneScroll, { capture: true, passive: true });
@@ -2611,6 +2663,12 @@ export function createArtifactPane(host, deps) {
     const positioned = [...marginEl.querySelectorAll(".glosa-annotation")];
     const form = composerLayerEl.querySelector(".glosa-composer");
     if (form && composer) placeAtAnchor(form, composer.record?.target, { alignToSelection: true });
+    const floatingAsk = askLayerEl.querySelector(".glosa-agent-card");
+    if (floatingAsk) {
+      const asked = agentRequests().find((r) => r.id === floatingAsk.getAttribute("data-entry"));
+      const range = asked ? rangeForPassage(asked.passage) : null;
+      if (range) placeAskCard(floatingAsk, range);
+    }
     if (!side) {
       for (const cardEl of positioned) cardEl.style.top = "";
       return;
@@ -2761,48 +2819,409 @@ export function createArtifactPane(host, deps) {
     return found ? offsetsToRange(found.start, found.end) : null;
   }
 
-  /** Draws one rule per anchored request, spanning the passage's full height at the left edge of
-   * the measure. Rules, not washes: the human's marks already own the words, and two backgrounds
-   * on the same sentence would fight. Position carries the meaning, so it survives greyscale. */
-  function paintAgentSidelines() {
-    sidelinesEl.textContent = "";
-    if (!currentArtifact || modeState.mode === "edit") return;
-    const main = paneMain.getBoundingClientRect();
-    for (const request of agentRequests()) {
-      const range = rangeForPassage(request.passage);
-      if (!range) continue;
-      // The union box, not per-line rects: a sideline spans the passage from the top of its first
-      // line to the bottom of its last, which is exactly what a bounding rect already is.
-      const box = range.getBoundingClientRect();
-      // Measured from the TEXT's own left edge, not from a CSS offset against the content box.
-      // The manuscript keeps a 2rem inner gutter, so a rule placed against the box sat 45px out
-      // and read as detached furniture rather than as a mark on those particular lines. A block
-      // the quote starts inside is the honest reference: the rule tracks the text column even
-      // when the measure, the padding or the pane width change.
-      const startNode = range.startContainer;
-      const startEl = startNode.nodeType === 1 ? startNode : startNode.parentElement;
-      const block = startEl?.closest("p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th") ?? contentEl;
-      const blockLeft = block.getBoundingClientRect().left;
-      const rule = el("div", { className: "glosa-sideline", "data-entry": request.id });
-      rule.style.top = `${box.top - main.top + paneMain.scrollTop}px`;
-      rule.style.height = `${Math.max(box.bottom - box.top, 12)}px`;
-      rule.style.left = `${Math.max(0, blockLeft - main.left + paneMain.scrollLeft - SIDELINE_GUTTER)}px`;
-      if (focusedRequestId === request.id) rule.setAttribute("data-focused", "true");
-      sidelinesEl.append(rule);
+  function rangesOverlap(a, b) {
+    try {
+      return a.compareBoundaryPoints(Range.START_TO_END, b) > 0 && a.compareBoundaryPoints(Range.END_TO_START, b) < 0;
+    } catch {
+      return false;
     }
   }
 
-  /** Scrolls a session's passage into the reading band and marks its rule as the focused one. */
-  function revealRequest(request) {
-    focusedRequestId = request.id;
-    const range = rangeForPassage(request.passage);
-    if (range) {
-      const rect = range.getBoundingClientRect();
-      const mainTop = paneMain.getBoundingClientRect().top;
-      const top = rect.top - mainTop + paneMain.scrollTop;
-      paneMain.scrollTop = Math.max(0, top - paneMain.clientHeight / 3);
+  /** Is this passage where the reader can see it? Measured against the pane's own scroll viewport,
+   * never the window: with two artifacts open, "on screen" means on THIS pane's screen. */
+  function passageVisible(range) {
+    if (!range) return false;
+    const rect = range.getBoundingClientRect();
+    const main = paneMain.getBoundingClientRect();
+    return rect.bottom > main.top + PASSAGE_VISIBLE_INSET && rect.top < main.bottom - PASSAGE_VISIBLE_INSET;
+  }
+
+  /**
+   * Draws one band per located request: an outline around the exact words, shaped the way a text
+   * selection is shaped, with a tab in the gutter. A question is filled and labelled; a pointer is
+   * the outline alone. `bandPath` owns the geometry; this owns measuring and the DOM.
+   *
+   * Nothing is drawn for a passage that cannot be proven unique — `rangeForPassage` returns null
+   * and the card says so. A band around a guess would be a confident lie in session ink.
+   */
+  function paintAgentBands() {
+    bandsEl.textContent = "";
+    for (const block of contentEl.querySelectorAll("[data-session-mark]")) block.removeAttribute("data-session-mark");
+    if (!currentArtifact || modeState.mode === "edit") {
+      renderNotice();
+      return;
     }
-    paintAgentSidelines();
+    const main = paneMain.getBoundingClientRect();
+    const dx = paneMain.scrollLeft - main.left;
+    const dy = paneMain.scrollTop - main.top;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "glosa-band-svg");
+    svg.setAttribute("aria-hidden", "true");
+    bandsEl.append(svg);
+    const provider = providerDisplayName();
+    const filledRanges = [];
+    // Oldest first (`requestsForArtifact` sorts), which is what lets an older question keep its
+    // fill when a newer one lands on the same words.
+    for (const request of agentRequests()) {
+      const range = rangeForPassage(request.passage);
+      if (!range) continue;
+      const question = isQuestion(request);
+      let lines = lineBoxes([...(range.getClientRects?.() ?? [])]);
+      if (lines.length === 0) {
+        // No per-line rects (a collapsed layout, or an engine that reports none): fall back to the
+        // union box, which is still the passage, only without its steps.
+        const box = range.getBoundingClientRect();
+        lines = [{ left: box.left, right: box.right, top: box.top, bottom: Math.max(box.bottom, box.top + 12) }];
+      }
+      lines = lines.map((l) => ({ left: l.left + dx, right: l.right + dx, top: l.top + dy, bottom: l.bottom + dy }));
+      const startNode = range.startContainer;
+      const startEl = startNode.nodeType === 1 ? startNode : startNode.parentElement;
+      const block = startEl?.closest("p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, pre") ?? contentEl;
+      const blockRect = block.getBoundingClientRect();
+      const column = { left: blockRect.left + dx, right: blockRect.right + dx };
+      // 3px, not more: a band that starts mid-line opens in the word space after the previous
+      // sentence, and a wider pad puts its edge through that sentence's full stop.
+      const d = bandPath(lines, column, { padX: 3 });
+      if (!d) continue;
+      const overlapped = question && filledRanges.some((other) => rangesOverlap(range, other));
+      if (question && !overlapped) filledRanges.push(range);
+
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("class", "glosa-band");
+      path.setAttribute("d", d);
+      path.setAttribute("data-entry", request.id);
+      path.setAttribute("data-kind", question ? "question" : "pointer");
+      if (overlapped) path.setAttribute("data-overlapped", "true");
+      if (focusedRequestId === request.id) path.setAttribute("data-focused", "true");
+      if (arrivedRequestIds.has(request.id)) path.setAttribute("data-arrived", "true");
+      svg.append(path);
+
+      // The gutter shows a hovered block's address where the tab now sits; the tab says the same
+      // thing in its accessible name, so the label gives way. An attribute, never a node.
+      if (block !== contentEl) block.setAttribute("data-session-mark", "true");
+      const address = addressForRange(contentEl, range) ?? "";
+      const first = lines[0];
+      const tab = el("button", {
+        className: "glosa-band-tab",
+        type: "button",
+        "data-entry": request.id,
+        "data-kind": question ? "question" : "pointer",
+        "aria-label": `${address ? `${address} · ` : ""}${question ? "Question" : "Pointer"} from ${provider}. Go to its card.`,
+        onClick: () => goToRequest(request),
+      });
+      if (arrivedRequestIds.has(request.id)) tab.setAttribute("data-arrived", "true");
+      tab.append(question ? el("span", { textContent: "?", "aria-hidden": "true" }) : pointerGlyph());
+      tab.style.left = `${Math.max(0, Math.round(column.left - BAND_TAB_OFFSET))}px`;
+      tab.style.top = `${Math.round(first.top + 3)}px`;
+      bandsEl.append(tab);
+
+      if (question) {
+        // Printed on the band's top edge, so the mark names its author before the card is read.
+        const label = el("span", {
+          className: "glosa-band-label",
+          "aria-hidden": "true",
+          textContent: `${provider} asks`,
+        });
+        const multi = lines.length > 1;
+        label.style.top = `${Math.round(first.top - 1)}px`;
+        label.style.left = `${Math.round(multi ? Math.max(column.right, ...lines.map((l) => l.right)) : first.left)}px`;
+        if (multi) label.setAttribute("data-align", "end");
+        bandsEl.append(label);
+      }
+    }
+    renderNotice();
+  }
+
+  /** The pointer's tab glyph, drawn rather than typed: an arrow character takes its weight and
+   * baseline from whatever face the platform substitutes, a path does not. */
+  function pointerGlyph() {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 12 12");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", "M2 6h7.5M6.5 2.5 10 6l-3.5 3.5");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.6");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    return svg;
+  }
+
+  /** Marks that arrived since the last look draw themselves in once, then are ordinary marks. */
+  function markArrived(ids) {
+    for (const id of ids ?? []) arrivedRequestIds.add(id);
+    if (arrivedRequestIds.size === 0) return;
+    setTimeout(() => {
+      for (const id of ids ?? []) arrivedRequestIds.delete(id);
+      for (const node of bandsEl.querySelectorAll("[data-arrived]")) node.removeAttribute("data-arrived");
+    }, BAND_ARRIVE_MS);
+  }
+
+  function prefersReducedMotion() {
+    return typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  function scrollPaneTo(top) {
+    const target = Math.max(0, Math.round(top));
+    if (typeof paneMain.scrollTo === "function") {
+      paneMain.scrollTo({ top: target, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    } else {
+      paneMain.scrollTop = target;
+    }
+  }
+
+  /** The card for a request, wherever it currently lives: floating at its passage, in the rail, or
+   * in the tray. */
+  function cardForRequest(id) {
+    const match = (root) =>
+      [...root.querySelectorAll(".glosa-agent-card")].find((c) => c.getAttribute("data-entry") === id);
+    return match(askLayerEl) ?? match(marginEl) ?? match(trayListEl) ?? null;
+  }
+
+  /**
+   * Takes the reader to a session's request — because they asked to be taken.
+   *
+   * This is the only path that moves the page for a request, and every caller is a control the
+   * reader pressed: the notice's "Go to it", a band's tab, a tray row, a card's quote. Nothing
+   * calls it on arrival (#308). It remembers where they were first, so the way back exists before
+   * the move happens, and it parks unsaved work by way of `setMode`, which always parks.
+   */
+  function goToRequest(request, { focusCard = true } = {}) {
+    if (!returnPlace) {
+      const active = typeof document !== "undefined" ? document.activeElement : null;
+      returnPlace = { top: paneMain.scrollTop, focus: active && paneEl.contains(active) ? active : null };
+    }
+    if (modeState.mode !== "review") {
+      setMode("review");
+      // Leaving Edit restores the scroll position it was entered from, over the next two frames.
+      // The reader just asked to go somewhere else; that restore must not drag them back.
+      pendingScrollTop = null;
+    }
+    focusedRequestId = request.id;
+    dismissedNotices.delete(request.id);
+    renderMargin();
+    const arrive = () => {
+      const range = rangeForPassage(request.passage);
+      if (range) {
+        const rect = range.getBoundingClientRect();
+        const top = rect.top - paneMain.getBoundingClientRect().top + paneMain.scrollTop;
+        // With a rail the passage lands in the reading band, a third of the way down. Without one
+        // its card opens underneath it, so it lands higher and leaves the card the room.
+        scrollPaneTo(top - paneMain.clientHeight / (isSideMargin() ? 3 : 8));
+      } else if (!isSideMargin()) {
+        // No passage to go to, so the question itself is the destination, and at this width it
+        // lives in the tray.
+        setTrayOpen(true);
+      }
+      paintAgentBands();
+      if (!focusCard) return;
+      const card = cardForRequest(request.id);
+      if (!range) card?.scrollIntoView?.({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      // The reader pressed a control to get here, so focus follows them to the thing they came
+      // for. `preventScroll`: the scroll above is the one they should see, not a second jump.
+      (card?.querySelector(".glosa-agent-options input, .glosa-agent-input") ?? card)?.focus?.({ preventScroll: true });
+    };
+    if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(arrive);
+    else arrive();
+  }
+
+  /** Steps off the question the reader was on without answering it: the floating card closes, the
+   * band and the tray row stay, and focus goes back to the band's tab so the keyboard is not
+   * stranded on a node that no longer exists. */
+  function leaveRequest() {
+    const id = focusedRequestId;
+    if (!id) return;
+    focusedRequestId = null;
+    renderMargin();
+    const back = () => {
+      paintAgentBands();
+      [...bandsEl.querySelectorAll(".glosa-band-tab")].find((t) => t.getAttribute("data-entry") === id)?.focus?.();
+    };
+    if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(back);
+    else back();
+  }
+
+  function goBack() {
+    const place = returnPlace;
+    returnPlace = null;
+    answerJustSent = false;
+    if (place) {
+      scrollPaneTo(place.top);
+      if (place.focus?.isConnected) place.focus.focus?.({ preventScroll: true });
+    }
+    renderNotice();
+  }
+
+  /**
+   * Which question, if any, the notice should offer.
+   *
+   * A question earns the notice when the reader cannot currently see it beside its words: the
+   * passage is off screen, or the pane is not in Review (so no card is shown), or the pane has no
+   * rail and the question's card is not the one floating. It is derived from what is open and
+   * where the reader is — not from "what just arrived" — which is why questions already waiting on
+   * the first load get one too. That was the case that silently got nothing before.
+   *
+   * Questions about artifacts no pane has open are offered by the ACTIVE pane only; otherwise every
+   * pane in a split would raise the same notice.
+   */
+  function noticeCandidate() {
+    const all = openQuestions(getAttentionEntries());
+    const mine = currentArtifact?.source_path ?? null;
+    const active = paneEl.getAttribute("data-active") !== "false";
+    for (const request of all) {
+      if (dismissedNotices.has(request.id)) continue;
+      const target = request.target_path ?? request.target;
+      if (target === mine) {
+        const range = rangeForPassage(request.passage);
+        const beside =
+          modeState.mode === "review" &&
+          (range ? passageVisible(range) : focusedRequestId === request.id) &&
+          (isSideMargin() || focusedRequestId === request.id || !range);
+        if (beside && range) continue;
+        if (beside && !range && focusedRequestId === request.id) continue;
+        return { request, range, foreign: false, index: all.indexOf(request) + 1, total: all.length };
+      }
+      if (active && typeof target === "string" && !isArtifactOpen(target)) {
+        return { request, range: null, foreign: true, index: all.indexOf(request) + 1, total: all.length };
+      }
+    }
+    return null;
+  }
+
+  function renderNotice() {
+    const candidate = currentArtifact ? noticeCandidate() : null;
+    const showBack = Boolean(returnPlace);
+    const lost = candidate && !candidate.foreign && candidate.request.passage && !candidate.range;
+    const key = candidate
+      ? `q:${candidate.request.id}:${candidate.index}/${candidate.total}:${lost ? "lost" : "ok"}:${showBack}`
+      : showBack
+        ? `back:${answerJustSent}`
+        : "";
+    if (key === noticeKey) return;
+    noticeKey = key;
+    noticeEl.textContent = "";
+    noticeEl.hidden = key === "";
+    if (key === "") return;
+
+    const back = showBack
+      ? el("button", {
+          className: "glosa-secondary-button glosa-ask-notice-back",
+          type: "button",
+          textContent: "Back to where you were",
+          onClick: goBack,
+        })
+      : null;
+
+    if (!candidate) {
+      noticeEl.removeAttribute("data-kind");
+      noticeEl.append(
+        el("p", {
+          className: "glosa-ask-notice-text",
+          textContent: answerJustSent ? "Answer sent." : "You are at the passage a session asked about.",
+        }),
+        el("span", { className: "glosa-ask-notice-gap" }),
+        back,
+        dismissButton(() => {
+          returnPlace = null;
+          answerJustSent = false;
+          renderNotice();
+        }),
+      );
+      return;
+    }
+
+    const { request, range, foreign } = candidate;
+    noticeEl.setAttribute("data-kind", "question");
+    const file = String(request.target_path ?? request.target ?? "")
+      .split("/")
+      .pop();
+    const text = el("p", { className: "glosa-ask-notice-text" }, [
+      el("span", { className: "glosa-ask-notice-provider", textContent: providerDisplayName() }),
+      // Says what is true and no more. A passage that cannot be located is not "a passage" the
+      // reader can be taken to, and the notice must not promise one.
+      document.createTextNode(
+        lost
+          ? " is asking about a passage that could not be located in the current text"
+          : foreign
+            ? ` is asking about a passage in ${file}`
+            : " is asking about a passage",
+      ),
+    ]);
+    const address = range ? (addressForRange(contentEl, range) ?? "") : "";
+    noticeEl.append(
+      el("span", { className: "glosa-ask-notice-glyph", "aria-hidden": "true", textContent: "?" }),
+      text,
+      ...(address ? [el("span", { className: "glosa-address glosa-ask-notice-address", textContent: address })] : []),
+      el("span", { className: "glosa-ask-notice-gap" }),
+      ...(candidate.total > 1
+        ? [el("span", { className: "glosa-ask-notice-count", textContent: `${candidate.index} of ${candidate.total}` })]
+        : []),
+      ...(back ? [back] : []),
+      el("button", {
+        className: "glosa-primary-button glosa-ask-notice-go",
+        type: "button",
+        textContent: lost ? "Show the question" : "Go to it",
+        onClick: () => {
+          if (foreign) void goToRequestElsewhere(request);
+          else goToRequest(request);
+        },
+      }),
+      dismissButton(() => {
+        dismissedNotices.add(request.id);
+        renderNotice();
+      }),
+    );
+  }
+
+  function dismissButton(onClick) {
+    const button = el("button", {
+      className: "glosa-ask-notice-dismiss",
+      type: "button",
+      "aria-label": "Dismiss this notice",
+      onClick,
+    });
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 12 12");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", "M2.5 2.5l7 7M9.5 2.5l-7 7");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    svg.append(path);
+    button.append(svg);
+    return button;
+  }
+
+  /** Places the floating question card at its passage: under it, aligned to its first word and
+   * held inside the manuscript column, above it when there is no room below. Unlike the composer
+   * it is NOT clamped into the visible band — a draft follows its writer, but a question belongs
+   * to its words, and the notice is what reaches a reader who has scrolled away. */
+  function placeAskCard(node, range, { gap = 12 } = {}) {
+    const main = paneMain.getBoundingClientRect();
+    const column = contentEl.getBoundingClientRect();
+    const rects = lineBoxes([...(range.getClientRects?.() ?? [])]);
+    const first = rects[0] ?? range.getBoundingClientRect();
+    const box = range.getBoundingClientRect();
+    const width = node.offsetWidth;
+    const minLeft = Math.max(16, column.left - main.left);
+    const maxLeft = Math.min(paneMain.clientWidth - 16, column.right - main.left) - width;
+    // Under a one-line passage, align to its first word, as a draft does. A passage that wraps runs
+    // on from the column's left edge, so that edge is where the eye returns to and the card starts.
+    const wanted = rects.length > 1 ? minLeft : first.left - main.left - 16;
+    node.style.left = `${Math.round(Math.max(minLeft, Math.min(wanted, Math.max(minLeft, maxLeft))))}px`;
+    const below = box.bottom - main.top + paneMain.scrollTop + gap;
+    const above = box.top - main.top + paneMain.scrollTop - gap - node.offsetHeight;
+    // The tray lies over the pane's foot at this width; room under it is not room.
+    const viewBottom = paneMain.scrollTop + paneMain.clientHeight - (trayEl.hidden ? 0 : trayEl.offsetHeight);
+    const fitsBelow = below + node.offsetHeight <= viewBottom - gap;
+    node.style.top = `${Math.round(!fitsBelow && above >= paneMain.scrollTop + gap ? above : below)}px`;
   }
 
   async function submitAnswer(request, card, { outcome, response, chose }) {
@@ -2814,15 +3233,60 @@ export function createArtifactPane(host, deps) {
     try {
       await dataAccess.respondToAttention(slug, request.id, { outcome, response, chose });
       answerDrafts.delete(request.id);
+      if (focusedRequestId === request.id) focusedRequestId = null;
+      answerJustSent = true;
       // The entry is terminal now, so the next inbox refresh drops the card. Ask for that refresh
       // rather than removing the card here: the journal decides what is open, not this view.
       await refreshAttention();
+      renderNotice();
+      // The card the reader was typing in is gone. Focus goes to the notice when it has something
+      // to offer (the next question, or the way back) rather than falling to the document body.
+      if (!noticeEl.hidden) noticeEl.querySelector(".glosa-ask-notice-go, .glosa-ask-notice-back")?.focus?.();
     } catch (error) {
       for (const control of controls) control.disabled = false;
       status.textContent = error instanceof Error ? error.message : "The answer could not be sent.";
       status.setAttribute("role", "alert");
       card.querySelector(".glosa-agent-input")?.focus();
     }
+  }
+
+  /** A located question as the tray lists it: who, which words, what is asked, and one button that
+   * does what the notice's "Go to it" does. The answer form lives at the passage. */
+  function buildAgentRow(request) {
+    const identity = agentIdentity(request, { providerName: providerDisplayName() });
+    const row = el("div", {
+      className: "glosa-agent-card glosa-agent-row",
+      "data-entry": request.id,
+      "data-anchored": "true",
+    });
+    row.append(
+      el("p", { className: "glosa-agent-who" }, [
+        el("span", { className: "glosa-agent-provider", textContent: identity.provider }),
+        ...(identity.claimed
+          ? [
+              el("span", {
+                className: "glosa-agent-claimed",
+                textContent: identity.claimed,
+                title: "Name this session gave itself",
+              }),
+            ]
+          : []),
+      ]),
+      el("p", { className: "glosa-agent-quote" }, [el("span", { textContent: request.passage.quote.exact })]),
+      el("p", { className: "glosa-agent-message", textContent: request.message }),
+      el("div", { className: "glosa-agent-actions" }, [
+        el("button", {
+          className: "glosa-secondary-button",
+          type: "button",
+          textContent: "Answer at the passage",
+          onClick: () => {
+            setTrayOpen(false);
+            goToRequest(request);
+          },
+        }),
+      ]),
+    );
+    return row;
   }
 
   /**
@@ -2833,14 +3297,33 @@ export function createArtifactPane(host, deps) {
    * is a string the session sent about itself (invariant 3). A card that ran them together would
    * be presenting a claim as a fact.
    */
-  function buildAgentCard(request) {
+  function buildAgentCard(request, { floating = false } = {}) {
     const identity = agentIdentity(request, { providerName: providerDisplayName() });
     const anchored = Boolean(request.passage) && Boolean(rangeForPassage(request.passage));
     const card = el("div", {
       className: "glosa-agent-card",
       "data-entry": request.id,
       "data-anchored": String(anchored),
+      ...(floating ? { "data-floating": "true", role: "group", "aria-label": "Question at its passage" } : {}),
     });
+    // The thread between a card and its band, both ways: the card deepens its band on hover and
+    // focus, the way a note lights its passage.
+    const thread = (on) => () => {
+      for (const node of bandsEl.querySelectorAll(".glosa-band")) {
+        if (node.getAttribute("data-entry") === request.id) node.toggleAttribute("data-hover", on);
+      }
+    };
+    card.addEventListener("mouseenter", thread(true));
+    card.addEventListener("mouseleave", thread(false));
+    card.addEventListener("focusin", thread(true));
+    card.addEventListener("focusout", thread(false));
+    if (floating) {
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        leaveRequest();
+      });
+    }
 
     const who = el("p", { className: "glosa-agent-who" }, [
       el("span", { className: "glosa-agent-provider", textContent: identity.provider }),
@@ -2854,9 +3337,18 @@ export function createArtifactPane(host, deps) {
           ]
         : []),
     ]);
+    if (floating) {
+      // The one card over the manuscript needs a way out that is not "answer it".
+      const close = dismissButton(leaveRequest);
+      close.className = "glosa-ask-notice-dismiss glosa-agent-close";
+      close.setAttribute("aria-label", "Close this question; it stays open in the list");
+      who.append(el("span", { className: "glosa-ask-notice-gap" }), close);
+    }
     card.append(who);
 
-    if (request.passage?.quote?.exact) {
+    // Floating, the card sits directly under the banded words: quoting them again would push the
+    // question further from the passage it is about.
+    if (request.passage?.quote?.exact && !floating) {
       const quote = el("p", { className: "glosa-agent-quote" }, [
         el("span", { textContent: request.passage.quote.exact }),
       ]);
@@ -2864,11 +3356,11 @@ export function createArtifactPane(host, deps) {
         quote.tabIndex = 0;
         quote.setAttribute("role", "button");
         quote.setAttribute("aria-label", "Go to this passage");
-        quote.addEventListener("click", () => revealRequest(request));
+        quote.addEventListener("click", () => goToRequest(request));
         quote.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            revealRequest(request);
+            goToRequest(request);
           }
         });
       }
@@ -2895,7 +3387,7 @@ export function createArtifactPane(host, deps) {
     const draft = answerDrafts.get(request.id) ?? { text: "", chose: null };
     answerDrafts.set(request.id, draft);
     if (options.length > 0) {
-      const name = `glosa-agent-choice-${request.id}`;
+      const name = `glosa-agent-choice-${request.id}${floating ? "-at-passage" : ""}`;
       const list = el("div", { className: "glosa-agent-options", role: "radiogroup", "aria-label": "Answer" });
       for (const option of options) {
         const id = `${name}-${list.childElementCount}`;
@@ -3215,7 +3707,21 @@ export function createArtifactPane(host, deps) {
           textContent: agentRequestSummary(requests),
         }),
       );
-      for (const request of requests) cardHost.append(buildAgentCard(request));
+      for (const request of requests) {
+        // With no rail, a question whose passage is located is answered AT the passage, in the
+        // floating card; the tray lists it. Two live copies of one answer form would let a reader
+        // type in one and send the other. A pointer, and a question with nowhere to float, keep
+        // their whole card here.
+        const atPassage = cardHost === trayListEl && isQuestion(request) && Boolean(rangeForPassage(request.passage));
+        cardHost.append(atPassage ? buildAgentRow(request) : buildAgentCard(request));
+      }
+    }
+    askLayerEl.textContent = "";
+    if (!isSideMargin() && focusedRequestId) {
+      const focused = requests.find((r) => r.id === focusedRequestId);
+      if (focused && isQuestion(focused) && rangeForPassage(focused.passage)) {
+        askLayerEl.append(buildAgentCard(focused, { floating: true }));
+      }
     }
     const open = annotations.filter((item) => !isTerminalState(item.state));
     const resolved = annotations.filter((item) => isTerminalState(item.state));
@@ -3263,7 +3769,7 @@ export function createArtifactPane(host, deps) {
     stampAddresses();
     paintAnchorUnderlines();
     renderMarkers();
-    paintAgentSidelines();
+    paintAgentBands();
   }
 
   function setMode(mode) {
@@ -3909,6 +4415,9 @@ export function createArtifactPane(host, deps) {
     runUndo = [];
     composer = null;
     focusedRequestId = null;
+    returnPlace = null;
+    answerJustSent = false;
+    noticeKey = "\u0000"; // force the next renderNotice to rebuild for the new artifact
     annotations = [];
     rollbackPoints.clear();
     approvalResult = null;
@@ -4303,17 +4812,23 @@ export function createArtifactPane(host, deps) {
      * pane (a new request arrives, another pane approves one). The workspace calls this. */
     refreshApproval: renderApprovalStrip,
     /** Same reason, for the rail: the session's asks arrive workspace-scoped and become cards in
-     * THIS pane's margin, so a changed inbox has to repaint the cards and their sidelines. */
-    refreshAgentRequests: () => {
+     * THIS pane's margin, so a changed inbox has to repaint the cards and their bands. */
+    refreshAgentRequests: ({ arrived } = {}) => {
+      markArrived(arrived);
+      // A question that was answered or withdrawn elsewhere must not leave this pane "on" it.
+      if (focusedRequestId && !agentRequests().some((r) => r.id === focusedRequestId)) focusedRequestId = null;
       renderMargin();
-      paintAgentSidelines();
+      paintAgentBands();
     },
-    /** Brings one session request's passage into view and marks its rule as the focused one. The
-     * workspace calls this after it has switched the pane to Review for an arriving question. */
+    /** Takes the reader to one request. Only the reader's own "Go to it" reaches this — for a
+     * question about an artifact that was not open, the workspace opens it and then calls here.
+     * Nothing calls it on arrival: glosa does not move the reader (#308). */
     revealRequest: (entryId) => {
       const request = agentRequests().find((candidate) => candidate.id === entryId);
-      if (request) revealRequest(request);
+      if (request) goToRequest(request);
     },
+    /** The active pane is the one that offers questions about artifacts nobody has open. */
+    refreshNotice: renderNotice,
     applyJournalEvent,
     markMissing,
     refreshHistory: () => void refreshHistory?.(),

@@ -13,14 +13,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { EditorState, Schema, markdownSchema } from "../src/vendor/prosemirror.js";
 import {
-  MODELLED_MARK_TYPES,
-  editorSchema,
-  MODELLED_NODE_TYPES,
   blockLayout,
   collateralFor,
   createSplicer,
+  editorSchema,
+  MODELLED_MARK_TYPES,
+  MODELLED_NODE_TYPES,
   parseMarkdown,
   runIsModelled,
   runsOverlap,
@@ -28,6 +27,7 @@ import {
   serializeNodesFaithfully,
   spliceMarkdown,
 } from "../src/rich-editor.js";
+import { EditorState, markdownSchema, Schema } from "../src/vendor/prosemirror.js";
 
 const roundtrip = (md: string) => serializeMarkdown(parseMarkdown(md));
 
@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(685);
+    ).toBe(701);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1956,7 +1956,11 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // the merged #305/#311 + #310 corpus this measures 679 → 685 blocks / 615 → 620 edits. The
   // per-cause map is 46, shipped remains 1/1, ablated remains 41/41, and missed/false alarms remain
   // zero. Bookkeeping, denominator only.
-  const BLOCKS = 685;
+  // #308 (an agent's question shown at its passage) adds a decision entry and rewrites the session
+  // mark's sections of DESIGN.md, plus a `### Changed` changelog block: 685 → 701 blocks / 620 → 636
+  // edits. Per-cause map still 46, shipped
+  // 1/1, ablated 41/41, missed and false alarms zero. Denominator only.
+  const BLOCKS = 701;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -1992,7 +1996,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 46 of 685 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 46 of 701 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2049,7 +2053,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 620; the guard fires on it and, ablated, on 41", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 636; the guard fires on it and, ablated, on 41", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2137,7 +2141,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // rather than summing the two branches' separate re-baselines (608 and 612), neither of which
       // describes a tree containing both sets of documentation.
     ).toEqual({
-      edits: 620,
+      edits: 636,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 41, fired: 41 },
     });
