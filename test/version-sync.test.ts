@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { gitEnvironment } from "../scripts/git-env.ts";
+import { ROOT } from "../scripts/test-plan.ts";
 import {
   describeFailures,
   FORBIDDEN_VERSION_SITES,
@@ -122,7 +124,10 @@ describe("readers", () => {
         Bun.spawnSync({
           cmd: ["git", ...args],
           cwd: temp,
-          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+          // #316: `cwd` alone does not pick the repository. Under a git hook — which exports
+          // GIT_DIR — inheriting the ambient environment sent this `git init` at the REAL
+          // repository and flipped its `core.bare` to true, breaking every worktree.
+          env: gitEnvironment(),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -137,6 +142,44 @@ describe("readers", () => {
       expect(readSite(indexReader(temp)(PLUGIN)!, VERSION_SITES[1]!)).toEqual(["1.2.3"]);
       expect(readSite(worktreeReader(temp)(PLUGIN)!, VERSION_SITES[1]!)).toEqual(["9.9.9"]);
     } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  test("#316 an ambient GIT_DIR cannot redirect a reader away from the root it was given", () => {
+    // Git EXPORTS GIT_DIR into every hook's environment, so under `lefthook`'s pre-push the whole
+    // test suite ran with it set to this repository. A reader that inherited it answered about
+    // this repository no matter which root it was handed — the test above passed only because
+    // nothing had set GIT_DIR when it ran directly. This one sets it on purpose.
+    //
+    // Only a READ happens while the hostile value is set. That is deliberate: the same hijack on a
+    // `git init` is what reinitialized the real repository and flipped its `core.bare` to true.
+    const temp = mkdtempSync(join(tmpdir(), "glosa-version-sync-hijack-"));
+    const saved = process.env.GIT_DIR;
+    try {
+      const git = (...args: string[]) =>
+        Bun.spawnSync({ cmd: ["git", ...args], cwd: temp, env: gitEnvironment(), stdout: "pipe", stderr: "pipe" });
+      git("init", "-q");
+      const file = join(temp, PLUGIN);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `{\n  "version": "1.2.3"\n}\n`);
+      git("add", "-A");
+
+      // Exactly what a hook hands its children, resolved the way git itself reports it.
+      const realGitDir = Bun.spawnSync({
+        cmd: ["git", "rev-parse", "--absolute-git-dir"],
+        cwd: ROOT,
+        env: gitEnvironment(),
+        stdout: "pipe",
+      });
+      expect(realGitDir.exitCode, "the fixture needs this repository's real git dir").toBe(0);
+      process.env.GIT_DIR = realGitDir.stdout.toString().trim();
+
+      // Without the fix this reads THIS repository's staged package version instead.
+      expect(readSite(indexReader(temp)(PLUGIN)!, VERSION_SITES[1]!)).toEqual(["1.2.3"]);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
       rmSync(temp, { recursive: true, force: true });
     }
   });
