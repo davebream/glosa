@@ -27,8 +27,30 @@ consume this contract. Codex's transport uses its documented local control-plane
 
 ## Runtime trust boundary
 
-glosa remains local-first and makes no telemetry or external runtime calls. Plugin monitor and Codex
-app-server connections are optional delivery optimizations. MCP pull is the supported fallback.
+glosa remains local-first and makes no telemetry, background checks, warm-ups, or unconfigured
+external runtime calls. Plugin monitor and Codex app-server connections are optional local delivery
+optimizations. MCP pull is the supported fallback. A configured provider may receive only the data
+named in current versioned consent, and only after the user starts its foreground action. Class-F
+content remains network-locked regardless of configuration.
+
+## Dictation is a consented input provider, not desktop automation
+
+Decided 2026-09-21. Wispr Flow's installed desktop application has no documented SDK or supported
+control API. Its cloud Voice Interface API does, but access and billing are separate from installing
+the desktop app. Glosa therefore does not detect a running app, synthesize its hotkey, use a private
+URL scheme, or automate accessibility. “Available” means current versioned consent, a configured
+organization credential, and browser microphone/streaming APIs.
+
+The generic daemon has a `DictationProvider` registry separate from `AgentProvider`; the core works
+with an empty registry and imports no Wispr package. The CLI entrypoint composes Wispr, Keychain owns
+the organization key, and a foreground session request exchanges it for a ten-minute client JWT.
+Audio and capped visible plaintext then travel directly from the browser to the provider over its
+allowlisted WSS origin. There is no daemon audio proxy, REST fallback, warm-up, or retry.
+
+Dictation changes an editable draft only. It locks one eligible prose field, preserves the original
+selection and value, and inserts only a final transcript. It never submits, writes a journal event,
+or claims human/session provenance on its own; later submission follows the existing action and
+provenance contracts. Document editors, search, command syntax, and read-only prompts are excluded.
 
 ## Token lifecycle is a local filesystem authority
 
@@ -170,7 +192,9 @@ Three deliberate consequences:
 - **The id is a hash, not the path.** `/api/handshake` is tokenless, and a filesystem path on an
   unauthenticated endpoint is a privacy regression for a tool holding manuscripts. The hash is not
   a secrecy boundary either — its input is guessable, and A3's threat model is hostile web content,
-  not a same-uid process, which can read `<home>/token` directly regardless.
+  not a process at the user's own uid, which can read `<home>/token` directly regardless. The rule
+  outlived the reasoning and is worth keeping on its own terms: it is why the handshake reports
+  `serves_socket` as a boolean rather than publishing the socket's path.
 
 ## A source checkout gets its own home and port
 
@@ -222,10 +246,71 @@ tokenless handshake, so a process that seizes the port receives strictly less th
 where every stream reconnect re-offers the Bearer to whatever is listening. The wait is bounded at
 ten minutes, after which the tab falls back to discarding the credential.
 
-`install_id` is not a proof of possession and is not treated as one. Anything that can bind
-127.0.0.1 as this user can also read `<home>/token` directly, so it defends against a coexisting
-install, which is an accident, and not against a same-uid attacker, who is outside A3's threat
-model either way.
+`install_id` is not a proof of possession and is not treated as one. For the user's own uid the
+inference holds: anything running as this user can read `<home>/token` directly, so `install_id`
+defends against a coexisting install, which is an accident, and not against that process, which
+is outside A3's threat model either way.
+
+That reasoning was originally written as "anything that can bind 127.0.0.1 as this user", and the
+qualifier does not follow: binding a loopback port above 1024 needs no privilege and no particular
+uid. A process at a DIFFERENT uid can bind the port and read the world-readable lock, but cannot
+read the 0600 token — so handing it one is a real loss, and `install_id` does not prevent that.
+See "A resolved daemon endpoint is not an identity" below for what does.
+
+## A resolved daemon endpoint is not an identity
+
+A client called `ensureDaemon()` once, kept the port, and sent the pairing token there for the
+rest of its life. For a CLI command that window is milliseconds. For the MCP shim's `glosa_ask` it
+is ten minutes, for `glosa_watch` fifteen, for the Codex attachment and the Claude monitor's
+stream the whole session. The monitor also captured the token itself, so a `token rotate` turned
+its every later acknowledgement into a silent 401.
+
+A port held that long is not an identity. Once the daemon exits, any local process can take it,
+and the lock it leaves behind is world-readable (0644) where the token beside it is 0600 — so a
+process at a DIFFERENT uid can read the identity the daemon published, echo it back through the
+tokenless handshake, and be handed a credential it could never have read from disk. #140 met this
+in the shim's shutdown path and answered it by removing the send. That was right for one path and
+not a general rule.
+
+**Re-verifying the endpoint before each use was the obvious general rule, and it does not work.**
+Every value a client could compare — `instance_id`, `pid`, `protocol_version`, `build_id`,
+`install_id` — is published by the lock and republished by the handshake, so an impostor satisfies
+all of them. The one locally checkable fact that is not published is whether the process the lock
+NAMES is still alive, and that is a fact about the wrong process: `drainDaemonServers` calls
+`server.stop(false)` up to eight seconds before `removeLockIfOwned` runs, so on every ordinary
+shutdown the port is free while the PID is alive, `ps` still shows `__daemon`, and the lock is
+untouched. A squatter that binds the freed port in that window passes a fresh lock read, a
+live-PID check, a command-line check and full lock↔handshake agreement. A5 §F13 already described
+that state for a different reason. A nonce challenge fails for the same structural reason in a
+narrower window: the challenge and the request that carries the credential are two connections,
+and only putting the proof inside the request would close that — a different protocol, not a
+different check.
+
+So the endpoint is not chosen by comparison. Programmatic clients — CLI, MCP shim, Claude monitor,
+Codex attachment — use `<GLOSA_HOME>/run/api.sock`, 0600 inside a directory created 0700, derived
+from the client's own home and never from anything a peer said. Filesystem permissions become the
+authentication: the kernel refuses `connect(2)` from another uid before a byte is written, which
+is not a check that can be satisfied by replay. It also deletes the machinery the rejected design
+needed — no `ps` subprocess on a request path, no freshness TTL to argue about, no window between
+proving and sending.
+
+Three consequences worth stating:
+
+- **No fallback to the port.** A socket that is missing or refusing is `DAEMON_UNREACHABLE`. A
+  fallback would hand an attacker the whole defense, since making the socket look absent is free.
+  A daemon that does not report `serves_socket` is refused at resolve time, where the message can
+  name the recovery, rather than at the first request.
+- **The Bearer stays on the socket** even though the kernel has already answered who the peer is.
+  It is what makes `glosa token rotate` and `glosa token revoke` reach programmatic clients;
+  dropping it would have quietly exempted them from revocation.
+- **`glosa open` is the one crossing this cannot protect**, because its destination is a browser
+  and browsers speak TCP. It now carries a single-use 60-second presentation token instead of the
+  durable credential, so an impostor on the port receives something that expires, redeems once,
+  and redeems to nothing.
+
+What this does not do: defend against the user's own uid, which reads `<home>/token` directly and
+against which no transport can help; or move the SPA, which cannot open a Unix socket and keeps
+the weaker reactive rule above. A3 §3.2 states both rather than leaving the asymmetry implied.
 
 ## Claude Code has more than one config root, and glosa has to see all of them
 
@@ -1028,3 +1113,150 @@ the machinery that would write the replacement characters back.
 It also keeps the input to per-block attribution honest. A total decomposition of a document into
 runs has to start from the document; a lossy decode is a different document, so the attribution
 computed over it would describe bytes nobody wrote.
+
+## Line endings are normalized for identity, never for content (#251)
+
+One formula answers "is this still the same source": SHA256 of the UTF-8 bytes after `\r\n`→`\n`,
+defined once in A5 §F10 and computed by the daemon's `sourceSha256`. Six things read it — the
+editor's `If-Match` precondition, the SPA's merge base for Keep mine, an approval's `revision_id`,
+class-F chunk freshness, the `artifact` SSE event, and the artifact listing — and none of them was
+ever told whether that `\r\n`→`\n` was a deliberate equivalence or an accident nobody had looked at.
+"Keep mine merges disk's own change instead of discarding it" was built on top of it with no
+authority to cite. The question has two halves, and the second is the one that matters.
+
+**Decision.** A change that only swaps LF for CRLF is the same source. Keep the single formula; add
+no second, byte-exact identity. And normalization is scoped to identity and nowhere else: a read
+serves the bytes as decoded, a save writes the submitted body verbatim, and a splice or a three-way
+merge copies each line ending from the source it came from — the property "An edited block is
+written back in its own spelling, not the serializer's" already states for mixed CRLF/LF. A document
+with mixed endings goes through GET, PUT, splice and merge byte-for-byte.
+
+**Why not a byte-exact token.** A second identity would have to be either private to the editor —
+splitting "is this still the same source" in two, so the banner, the merge base, the approval and
+the freshness check could disagree about one file — or adopted by all six consumers plus the
+client-side mirror, which is a change to every one of them for a case nobody has reported. Neither
+buys anything the pre-save boundary does not already provide.
+
+**Consequences, stated rather than hidden.** A concurrent writer who rewrites a file's line endings
+and nothing else gets no stale-save dialog and no "file changed" banner: the SSE frame arrives, the
+pane compares hashes, finds them equal, and stays quiet. The next save overwrites those endings, and
+the resulting `human_edit` diff shows the reversion as the writer's bytes — which is what happened.
+Provenance is unaffected: `captureHumanEdit`'s pre-save boundary is a shadow-git checkpoint under
+`core.autocrlf false` (A4 §F21), so it is byte-level and commits the CRLF-only drift as its own
+`unknown`-attributed `external_edit` before the human write. The identity hash never gates that
+capture. The listing's `stale` flag is mtime-based and does notice such a change; that difference is
+deliberate.
+
+**Every copy of the formula that must agree.** The daemon's `sourceSha256` (`artifact-render.ts`);
+the anchoring resolver's own `normalizeSource`, which normalizes a match-time copy and never writes
+it back; and the SPA's `sha256Hex` in `artifact-pane.js`, which is what lets a pane hold
+`baselineSha` to its word before trusting a merge base. Static-asset ETags reuse `sourceSha256` in
+`transport/http.ts`; that is incidental and carries no concurrency meaning. A lone `\r` is
+consistent across the boundary in the other direction: identity leaves it alone, and `createSplicer`
+refuses to scan a source containing one at all, falling back rather than guessing at its blocks.
+
+**Not done.** No byte-exact token, per above. Two known gaps are recorded here rather than fixed,
+because neither is this decision's to make:
+
+- The source face is a `<textarea>`, and the HTML specification normalizes a textarea's API value to
+  LF. A save from the source face therefore rewrites a CRLF document to LF in a real browser. That
+  is the platform's normalization, not glosa's, and no happy-dom test can see it — happy-dom does
+  not normalize. Fixing it needs its own change to how the source face reads its value.
+- Editing the first or last word of a soft-broken line inside a modelled block of a CRLF document
+  reports collateral and asks for consent on a write that is byte-honest. The bytes are right; the
+  guard's `faithful` candidate is built without source for a modelled run, and the overlap join
+  counts the adjacent line ending. A false consent prompt, not a data-loss bug.
+
+## A cancelled `glosa_ask` withdraws its question; a timed-out one leaves it (#310)
+
+Maintainer decision, issue #310. `glosa_ask` blocks on a held read until the human answers or the
+wait runs out. Those are not the only two endings — the human can also interrupt the agent
+mid-question. Until now that ending was invisible: the shim kept waiting out the clock, and the
+question sat in the margin still offering "Send answer" to nobody.
+
+**Decision.** A cancelled call ends its wait immediately and withdraws the question — terminal
+`expired`, attributed to the session that asked. A wait that merely elapses keeps its documented
+behaviour: the question stays where the human can still answer it.
+
+The two endings mean different things. Cancelling is the human telling the agent to stop, so a
+question the agent will never read again is clutter — and today the only way to clear it is to
+answer it, since nothing writes the `expired` terminal for attention entries and attention entries
+have no dismiss. A wait running out is the agent giving up on its own; `wait_seconds` already
+promises the question survives that, and a later answer still reaches the agent through the inbox.
+
+**Why not the alternatives.** Keeping it open silently was the status quo, and it is what the issue
+is about. A new "asker gone" marker — a journal event saying the session stopped listening, leaving
+the entry open — was rejected: it is new journal vocabulary whose truth expires the moment the shim
+crashes, so every reader would have to decide how stale a marker is before trusting it, and a stale
+one reads exactly like a live one.
+
+**Consequences.** `expired` was already a legal attention terminal with no writer; this gives it
+one, so a session may now write a terminal that only the daemon and the human wrote before. The
+attribution is a claim, not a proof: `by: session:<id>` without a lease, exactly as
+`resolve … deferred` already records one. Terminal entries already drop out of the tray, the
+margin cards, `glosa inbox list`, `has_attention` and the badge count, and the `journal` SSE
+frame already refreshes the tray — so no SPA change was needed. The tool reports a fifth outcome, `withdrawn`,
+which in practice only a test observes: the MCP SDK drops the response to a request the client
+cancelled.
+
+**Not done.** Shim shutdown and a crash still leave the question open. Withdrawing at `close()`
+would mean putting the current bearer token on the wire to an endpoint resolved earlier in the
+session — the exact hazard `close()` already refuses to take for deregistration, and the question
+being cleared is not worth reopening it for. `glosa request-review --wait` interrupted with SIGINT
+is unchanged: it passes no signal, and a human at a terminal interrupting their own command is not
+the same act as an agent's call being cancelled out from under it.
+
+## A session's question is shown where it is, and glosa never moves the reader to it (#308)
+
+Maintainer decision, issue #308. A session asked about a paragraph near the top of a long document
+while the reader was near the end, and nothing told them where it was. The code already had both
+halves of an answer, shipped with #134: a 2px grey rule in the gutter beside the passage, and an
+automatic switch to Review with a scroll once typing paused. The rule went unnoticed by a real
+reviewer. The scroll deliberately skipped questions already open on first load, had no fallback,
+and in the reported session did not fire; when it declined to move the reader they got nothing.
+
+**Decision.** Three things change together.
+
+1. *glosa never moves the reader.* The automatic switch and scroll are removed, along with the
+   typing-gap timer and its 15-second cap. Whenever a question is not beside its words, the pane
+   shows a notice under the artifact bar with **Go to it**. The notice is derived from what is open
+   and where the reader is, not from "what just arrived", so questions waiting on first load get one
+   too. After the reader goes, **Back to where you were** restores their place.
+2. *The mark is a band, and it is meant to be seen at once.* An outline around the exact words,
+   shaped the way a text selection is (it can start and stop mid-line), with a printed
+   "… asks" label and a "?" tab in the gutter. A pointer, which does not hold its session, is the
+   outline and an arrow tab with no fill, no label and no notice. It is drawn in an overlay from
+   `Range.getClientRects()`; nothing is inserted into the rendered manuscript and the reader's own
+   wash and underline are untouched. A question blocks its session until answered, so a mark the
+   reader has to hunt for costs more than a plain one.
+3. *Sessions get their own ink for marks.* `--session`, a blue-black. This amends the Two Hands
+   Rule in `DESIGN.md`, which used to end "No third colour for marks". Session ink is a session's
+   mark on the page only: the band, its label and tab, the notice's glyph, the question card's top
+   rule. A session's words stay printed in ordinary ink, and session ink is never a button or a
+   panel fill. Authorship still does not rest on colour: outline, label and tab read in greyscale.
+
+Below the rail floor (a pane under 1205px) the question the reader is on floats at its passage,
+placed like the note composer, and the tray lists it with "Answer at the passage". One live copy of
+an answer form, not two: a form in the tray and another at the passage would let a reader type in
+one and send the other.
+
+**Why not the alternatives.** *Scroll only when idle* was the status quo, more carefully timed; the
+failure was not the timing but that declining to scroll left nothing behind. *An ink-only mark*
+kept the Two Hands Rule intact and was the first proposal; on rendered samples the maintainer found
+it did not separate "a session marked this" from the page's own ink fast enough. *The accent colour
+for session marks* was the most noticeable and made a passage the reader marked and one a session
+marked look alike until the underline was inspected. *A modal* covers the passage the reader needs
+to see to answer.
+
+**Consequences.** With no artifact open there is no pane to raise a notice in; the workspace's
+Attention tray lists the request. Opening the artifact for the reader in that case was built and
+removed in the same change: at boot the inbox can land before the first pane exists, "nothing is
+open" was indistinguishable from "nothing is open yet", and a reader who asked for Read was thrown
+into Review on load. When two open questions overlap, the older keeps the fill and the newer is
+outline only until the older is answered or dismissed. A passage that cannot be located gets no
+band; the card and the notice say so, and the notice offers "Show the question" rather than
+"Go to it".
+
+**Not done.** `docs/assets/screens` has no capture of an agent question yet. `docs/screenshots.md`
+now says how to take one; the existing captures predate the current visual system and the whole set
+is due to be re-recorded from one session, which is the rule that file sets for itself.

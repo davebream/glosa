@@ -13,7 +13,7 @@ import type { ShadowDiagnosis } from "../../daemon/src/git/shadow-health.ts";
 
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
-import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
+import { authedRequest, ensureDaemon, glosaHome } from "../../daemon/src/index.ts";
 
 export interface ApiProblem {
   type?: string;
@@ -272,8 +272,9 @@ export interface GlosaApiClient {
     },
   ): Promise<AttentionRequestResult>;
   /** `waitMs > 0` holds the request open until the entry goes terminal or the wait elapses — one
-   * blocked request rather than a poll loop. Omit it for the immediate read. */
-  getEntryStatus(path: string, entry: string, waitMs?: number): Promise<EntryStatus | null>;
+   * blocked request rather than a poll loop. Omit it for the immediate read. `signal` ends a held
+   * read early; the client-level shutdown signal still applies either way. */
+  getEntryStatus(path: string, entry: string, waitMs?: number, signal?: AbortSignal): Promise<EntryStatus | null>;
   /** `glosa inbox list`'s daemon-side call (issue #142) — journal-derived, so it works on an
    * entry whose inbox payload is gone. `opts.all` includes terminal entries; the default omits
    * them. */
@@ -304,6 +305,15 @@ export interface GlosaApiClient {
     session: string,
     opts?: { path?: string; since?: string; waitMs?: number },
   ): Promise<WatchResult>;
+  /** `POST /api/workspaces/attention-withdraw` — a session takes back its own open question
+   * (terminal `expired`, by that session), because whoever was waiting on the answer has stopped
+   * listening. Idempotent on a terminal entry: returns the status it already has with
+   * `withdrawn:false` and appends nothing. */
+  withdrawAttention?(
+    path: string,
+    entry: string,
+    session: string,
+  ): Promise<{ id: string; status: string; withdrawn: boolean }>;
   /** `POST /api/sessions/:id/watch/transport-ack` — records that the HTTP body of a prior
    * `watch()` call reached this client, for exactly the entry ids it named. */
   watchTransportAck?(session: string, entryIds: string[]): Promise<{ accepted: string[] }>;
@@ -355,28 +365,37 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
       conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
     );
   }
+  // The WHOLE resolved connection, not just its port (issue #207) — see `daemon-client.ts` for
+  // the same note. `port` stays on the returned client because `glosa open` builds the browser
+  // URL from it; nothing authenticated reads it.
+  const { ok: _resolved, ...connection } = conn;
   const port = conn.port;
-  const base = `http://127.0.0.1:${port}`;
+  const home = glosaHome();
   const shutdownSignal = options.signal;
 
-  async function call(method: string, path: string, body?: unknown): Promise<Response> {
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        Host: `127.0.0.1:${port}`,
-        Origin: base,
-        // Resolved per request, not captured when the client was built — the same reason as
-        // `daemon-client.ts`. This client is reused across a whole tool call: `glosa_ask` holds it
-        // through the attention request and every held-status poll, which can span minutes. A
-        // rotation in that window turned the next poll into a 401 that `glosa_ask` treats as
-        // transient and retries until it reports `unanswered`, with a healthy daemon and a real
-        // human answer waiting on the other side.
-        Authorization: `Bearer ${loadToken(glosaHome())}`,
-        "Content-Type": "application/json",
+  async function call(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
+    // A per-call signal never replaces the client-level shutdown one — it is added to it, so a
+    // caller that can cancel its own request (an MCP tool call, #310) still loses the request the
+    // moment shutdown starts, exactly as a caller that cannot.
+    const scope = signal
+      ? AbortSignal.any([shutdownSignal, signal].filter((s): s is AbortSignal => !!s))
+      : shutdownSignal;
+    // `authedRequest` resolves the token per request rather than at construction. This client is
+    // reused across a whole tool call: `glosa_ask` holds it through the attention request and
+    // every held-status poll, which can span minutes. A rotation in that window turned the next
+    // poll into a 401 that `glosa_ask` treats as transient and retries until it reports
+    // `unanswered`, with a healthy daemon and a real human answer waiting on the other side.
+    const res = await authedRequest(
+      connection,
+      {
+        path,
+        method,
+        contentType: "application/json",
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(scope ? { signal: scope } : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      ...(shutdownSignal ? { signal: shutdownSignal } : {}),
-    });
+      home,
+    );
     if (!res.ok) {
       let problem: ApiProblem | null = null;
       try {
@@ -441,16 +460,19 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
         })
       ).json();
     },
-    async getEntryStatus(path, entry, waitMs) {
+    async getEntryStatus(path, entry, waitMs, signal) {
       const params: Record<string, string> = { path, entry };
       if (waitMs !== undefined && waitMs > 0) params.wait_ms = String(Math.floor(waitMs));
       const qs = new URLSearchParams(params).toString();
       try {
-        return await (await call("GET", `/api/workspaces/entry-status?${qs}`)).json();
+        return await (await call("GET", `/api/workspaces/entry-status?${qs}`, undefined, signal)).json();
       } catch (err) {
         if (isApiError(err) && err.status === 404) return null;
         throw err;
       }
+    },
+    async withdrawAttention(path, entry, session) {
+      return (await call("POST", "/api/workspaces/attention-withdraw", { path, entry, session })).json();
     },
     async listInboxEntries(path, opts = {}) {
       const params: Record<string, string> = { path };

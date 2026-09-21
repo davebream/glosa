@@ -34,6 +34,7 @@ exempt from contrast requirements and is not used for active information.
 | Read / Review / Edit | Tab reaches every mode; Command/Ctrl+1–3 switches the active pane's mode; focus remains on the active mode after its DOM refresh. Only the focused pane exposes a mode control, so several open artifacts never present several switchers to the same keyboard. |
 | Tabs and panes | Ctrl+Tab and Ctrl+Shift+Tab step through the active pane's tabs; Command/Ctrl+Option+Left/Right move focus between panes; Command/Ctrl+\\ moves the active tab into a new split; Command/Ctrl+W closes it through the unsaved-edit prompt. Every drag the dock offers has a single-pointer equivalent under the pane's More menu (WCAG 2.2 SC 2.5.7), and a direction that would do nothing is disabled rather than silently inert. |
 | Annotation composition | In Annotate, Tab reaches rendered passages; Enter/Space opens the composer; Escape/Cancel restores the passage; Command/Ctrl+Enter sends. |
+| A session's question or pointer (#308) | glosa never moves the page or the focus when a request arrives. A question is announced once through the workspace's polite live region ("… is asking about a passage in notes.md"); a pointer is not announced. Whenever a question is not beside its words (passage off screen, pane not in Review, or no rail and its card not open) a notice appears under the artifact bar, in the tab order, with **Go to it** and a dismiss button; dismissing the notice leaves the question open. Each marked passage has a gutter tab that is a real button, named with the passage address and "Question from …" or "Pointer from …". **Go to it**, a tab, a tray row and a card's quote are the only things that scroll to a passage, and they move focus to the question's first answer control. Below the rail width the question floats at its passage; Escape closes it and returns focus to the passage's tab. After an answer is sent, focus goes to the notice, which offers the next question and **Back to where you were**; that control restores the previous scroll position and focus. The mark does not rely on colour: it is an outline with a printed "… asks" label and a glyph tab, against the reader's wash and underline. Scrolling is instant and both arrival animations are off under `prefers-reduced-motion`. |
 | History and conversation | Disclosure buttons expose `aria-expanded` and `aria-controls`; comparison checkboxes have complete names; async results and errors are textual live status. |
 | Unsaved-edit dialog | Focus starts on Cancel for a destructive choice, stays trapped by the native modal, and returns to the invoking mode control. |
 | Appearance menu | Arrow keys move through System/Light/Dark; Enter chooses; focus returns to the trigger. |
@@ -51,6 +52,10 @@ establish practical screen-reader usability:
   encounter the unsaved-edit dialog, and verify focus restoration.
 - [ ] Safari + VoiceOver: compare two history versions and inspect the diff reading order; verify
   provenance labels (“You”, “An agent session”, “Unknown change”) are unambiguous.
+- [ ] Safari + VoiceOver: with the passage off screen, have a session ask a question; confirm it is
+  announced without focus moving, reach the notice by Tab, use **Go to it**, answer from the
+  card at the passage, and use **Back to where you were**. Confirm the gutter tab's name reads
+  the address and the author, and that Escape on the floating card returns to that tab.
 - [ ] Chrome + VoiceOver: repeat the conversation mirror/composer and disconnected/error states,
   including newly arriving status announcements.
 - [ ] macOS keyboard-only: run every workflow above with Full Keyboard Access both off and on and

@@ -27,6 +27,7 @@ const PUBLIC_COMMANDS = [
   "metadata",
   "session",
   "token",
+  "dictation",
   "update",
   "forget",
 ] as const;
@@ -118,6 +119,7 @@ describe("Gunshi command surface", () => {
     expect(root.stdout).not.toContain("checkpoints");
     expect(root.stderr).toBe("");
     expect(runCli(["request-review", "--help"]).stdout).toContain("--require-approval");
+    expect(runCli(["dictation", "--help"]).stdout).toContain("--provider");
     // An entry id already names one workspace, so both lease commands must let a caller standing
     // somewhere else say which — `inbox get`, the other entry-id command, always could.
     for (const command of ["resolve", "apply-begin", "inbox"]) {
@@ -166,6 +168,20 @@ describe("Gunshi command surface", () => {
     expect(after.exitCode).toBe(0);
     expect(after.stderr).toBe("");
     expect(Bun.env.GLOSA_PORT).toBe("4712");
+  });
+
+  test("dictation status reaches the local command boundary and emits the stable JSON envelope", async () => {
+    const result = await captureRun(["dictation", "status", "--json"], {
+      dictation: { home: freshDir() },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      glosa_json: 1,
+      ok: true,
+      command: "dictation",
+      data: { state: "unconfigured" },
+    });
   });
 
   test("--json remains explicit and works before or after the command", async () => {

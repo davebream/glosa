@@ -159,6 +159,14 @@ describe("Review mode — the agent's half of the margin", () => {
     });
   });
 
+  /** The mount is narrower than the rail floor, so a located question is answered in the card that
+   * floats at its passage, and the reader gets there the way a reader does: "Go to it". */
+  const goToIt = async (host: any) => {
+    q(host, ".glosa-ask-notice-go").click();
+    await paint();
+  };
+  const atPassage = (host: any): any => q(host, ".glosa-ask-layer .glosa-agent-card");
+
   const askAboutPremise = (over: Record<string, unknown> = {}) => ({
     id: "inb-1",
     created_at: "2026-09-05T10:00:00Z",
@@ -181,12 +189,19 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(q(card, ".glosa-agent-quote").textContent).toContain("the premise that readers accept the frame");
   });
 
-  test("the passage gets a SIDELINE, not a wash — the human's marks own the words", async () => {
+  test("the passage gets a BAND in its own layer, not a wash — the human's marks own the words", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
-    // A rule beside the text, in its own layer. If this ever became a highlight range instead, an
-    // agent mark and an annotation on the same sentence would be indistinguishable.
-    expect(qa(host, ".glosa-sidelines .glosa-sideline").length).toBe(1);
-    expect(q(host, ".glosa-sideline").getAttribute("data-entry")).toBe("inb-1");
+    // An outline around the text, in its own layer (#308 replaced the grey sideline nobody saw).
+    // If this ever became a highlight range instead, an agent mark and an annotation on the same
+    // sentence would fight over one background.
+    expect(qa(host, ".glosa-bands .glosa-band").length).toBe(1);
+    const band = q(host, ".glosa-band");
+    expect(band.getAttribute("data-entry")).toBe("inb-1");
+    expect(band.getAttribute("data-kind")).toBe("question");
+    expect(band.getAttribute("d")).toMatch(/^M.*Z$/);
+    // Not by colour alone: the question's band names its author in words, and has a tab.
+    expect(q(host, ".glosa-band-label").textContent).toBe("Claude Code asks");
+    expect(q(host, ".glosa-band-tab").getAttribute("aria-label")).toContain("Question from Claude Code");
   });
 
   test("proven provider and claimed label are rendered as separate things", async () => {
@@ -207,7 +222,8 @@ describe("Review mode — the agent's half of the margin", () => {
       fakeDataAccess([askAboutPremise({ passage: { quote: { exact: "a sentence deleted last week" } } })]),
     );
     expect(q(host, ".glosa-agent-lost")).toBeTruthy();
-    expect(qa(host, ".glosa-sideline").length).toBe(0);
+    expect(qa(host, ".glosa-band").length).toBe(0);
+    expect(qa(host, ".glosa-band-tab").length).toBe(0);
     // The card stays: the question is still real even when its anchor is not.
     expect(q(host, ".glosa-agent-card")).toBeTruthy();
   });
@@ -216,6 +232,7 @@ describe("Review mode — the agent's half of the margin", () => {
     const { host } = await mountPane(
       fakeDataAccess([askAboutPremise({ answer_options: ["covered", "thin", "missing"] })]),
     );
+    await goToIt(host);
     expect(qa(host, ".glosa-agent-option").length).toBe(3);
     // The escape hatch is glosa's guarantee. A session supplies its own words; it never gets to
     // close the reviewer's.
@@ -225,6 +242,7 @@ describe("Review mode — the agent's half of the margin", () => {
   test("answering sends the typed words and the chosen option together", async () => {
     const da = fakeDataAccess([askAboutPremise({ answer_options: ["covered", "thin"] })]);
     const { host } = await mountPane(da);
+    await goToIt(host);
     qa(host, ".glosa-agent-option input")[1].click();
     const input = q(host, ".glosa-agent-input");
     input.value = "Not really — you never say why the reader would accept it.";
@@ -242,7 +260,8 @@ describe("Review mode — the agent's half of the margin", () => {
   test("'Can't answer' resolves the request without inventing an answer", async () => {
     const da = fakeDataAccess([askAboutPremise()]);
     const { host } = await mountPane(da);
-    q(host, ".glosa-agent-actions .glosa-secondary-button").click();
+    await goToIt(host);
+    q(atPassage(host), ".glosa-agent-actions .glosa-secondary-button").click();
     await paint();
     expect(da.answered).toHaveLength(1);
     expect(da.answered[0]!.response).toBe("");
@@ -255,6 +274,7 @@ describe("Review mode — the agent's half of the margin", () => {
     // the same class of loss parking exists to prevent, one surface over.
     const da = fakeDataAccess([askAboutPremise({ answer_options: ["covered", "thin"] })]);
     const { host, pane } = await mountPane(da);
+    await goToIt(host);
 
     qa(host, ".glosa-agent-option input")[1].click();
     const input = q(host, ".glosa-agent-input");
@@ -273,6 +293,7 @@ describe("Review mode — the agent's half of the margin", () => {
     // answered a question", so an ask completes as `done`.
     const da = fakeDataAccess([askAboutPremise({ action: "ask" })]);
     const { host } = await mountPane(da);
+    await goToIt(host);
     q(host, ".glosa-agent-input").value = "Yes, that reads fine.";
     q(host, ".glosa-agent-actions .glosa-primary-button").click();
     await paint();
@@ -281,21 +302,169 @@ describe("Review mode — the agent's half of the margin", () => {
 
   test("a pointer with no question still marks the passage", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
-    expect(qa(host, ".glosa-sideline").length).toBe(1);
+    expect(qa(host, ".glosa-band").length).toBe(1);
+    // A pointer does not hold its session, so it is quieter on every channel: outline without a
+    // printed label, and never a notice.
+    expect(q(host, ".glosa-band").getAttribute("data-kind")).toBe("pointer");
+    expect(q(host, ".glosa-band-label")).toBeNull();
+    expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
     expect(q(host, ".glosa-agent-message")).toBeNull();
   });
 
-  test("the quoted passage is reachable and activatable by keyboard, not pointer-only", async () => {
+  test("the band's tab is a real button: the keyboard reaches the question from the passage", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+    const tab = q(host, ".glosa-band-tab");
+    expect(tab.tagName).toBe("BUTTON");
+    tab.click();
+    await paint();
+    // Activation puts the reader ON this request: its band is the focused one, and its card is the
+    // one floating at the passage.
+    expect(q(host, ".glosa-band").getAttribute("data-focused")).toBe("true");
+    expect(atPassage(host).getAttribute("data-entry")).toBe("inb-1");
+  });
+
+  test("the pointer's quote is still a keyboard route to its passage", async () => {
+    const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
     const quote = q(host, ".glosa-agent-quote");
     expect(quote.getAttribute("role")).toBe("button");
     expect(quote.tabIndex).toBe(0);
-    expect(quote.getAttribute("aria-label")).toBe("Go to this passage");
-
     quote.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await paint();
-    // Activation marks this request's rule as the focused one — the same thing a click does.
-    expect(q(host, ".glosa-sideline").getAttribute("data-focused")).toBe("true");
+    expect(q(host, ".glosa-band").getAttribute("data-focused")).toBe("true");
+  });
+
+  describe("#308 — the reader is told where, and never moved", () => {
+    /** happy-dom lays nothing out: every rect is zero, so every passage reads as off screen. That
+     * is the right default for most of these tests (it is the reported case). The two that need
+     * the reader to ARRIVE somewhere give the engine a pane 800px tall with the passage inside it.
+     * The real geometry is settled in test/acceptance/agent-question-real-engine.test.ts. */
+    const putPassageOnScreen = () => {
+      const rect = (top: number, bottom: number) => ({
+        top,
+        bottom,
+        left: 0,
+        right: 600,
+        width: 600,
+        height: bottom - top,
+        x: 0,
+        y: top,
+      });
+      dom.window.Element.prototype.getBoundingClientRect = () => rect(0, 800) as any;
+      dom.window.Range.prototype.getBoundingClientRect = () => rect(200, 224) as any;
+    };
+
+    test("questions already waiting on the first load get the notice — the case that used to get nothing", async () => {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+      const notice = q(host, ".glosa-ask-notice");
+      expect(notice.hidden).toBe(false);
+      expect(notice.textContent).toContain("Claude Code is asking about a passage");
+      expect(q(notice, ".glosa-ask-notice-go").textContent).toBe("Go to it");
+    });
+
+    test("an arriving question does not switch the mode or move the page; it raises the notice", async () => {
+      const da = fakeDataAccess([]);
+      const { host, pane } = await mountPane(da, { initialMode: "read" });
+      const main = q(host, ".glosa-pane-main");
+      main.scrollTop = 0;
+      da.attention = [askAboutPremise()];
+      pane.refreshAgentRequests({ arrived: ["inb-1"] });
+      await paint();
+      expect(pane.getMode()).toBe("read");
+      expect(main.scrollTop).toBe(0);
+      expect(q(host, ".glosa-ask-notice").hidden).toBe(false);
+      // The arrival draws its mark in once; that is the whole of what an arrival does to the page.
+      expect(q(host, ".glosa-band").getAttribute("data-arrived")).toBe("true");
+    });
+
+    test("'Go to it' is what opens Review and the card, and it leaves a way back", async () => {
+      putPassageOnScreen();
+      const { host, pane } = await mountPane(fakeDataAccess([askAboutPremise()]), { initialMode: "read" });
+      // On screen, but in Read there is no card anywhere, so the question still is not beside its
+      // words and the notice still stands.
+      expect(atPassage(host)).toBeNull();
+      await goToIt(host);
+      expect(pane.getMode()).toBe("review");
+      expect(atPassage(host)).toBeTruthy();
+      // On the question now, so it no longer needs announcing; what the notice owes is the return.
+      expect(q(host, ".glosa-ask-notice-go")).toBeNull();
+      expect(q(host, ".glosa-ask-notice-back").textContent).toBe("Back to where you were");
+      q(host, ".glosa-ask-notice-back").click();
+      await paint();
+      expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
+    });
+
+    test("with several open the oldest is offered first, and says how many there are", async () => {
+      const older = askAboutPremise({ id: "inb-1", created_at: "2026-09-05T10:00:00Z" });
+      const newer = askAboutPremise({ id: "inb-2", created_at: "2026-09-05T10:00:05Z", message: "And this?" });
+      putPassageOnScreen();
+      const { host } = await mountPane(fakeDataAccess([newer, older]));
+      expect(q(host, ".glosa-ask-notice-count").textContent).toBe("1 of 2");
+      await goToIt(host);
+      expect(atPassage(host).getAttribute("data-entry")).toBe("inb-1");
+      // The second question is still not beside its words, so it is the one now offered.
+      expect(q(host, ".glosa-ask-notice-count").textContent).toBe("2 of 2");
+    });
+
+    test("two questions on the same words: the older keeps the fill, the newer is outline only", async () => {
+      const older = askAboutPremise({ id: "inb-1", created_at: "2026-09-05T10:00:00Z" });
+      const newer = askAboutPremise({ id: "inb-2", created_at: "2026-09-05T10:00:05Z" });
+      const { host } = await mountPane(fakeDataAccess([newer, older]));
+      const bands = qa(host, ".glosa-band");
+      expect(bands.map((b) => [b.getAttribute("data-entry"), b.getAttribute("data-overlapped")])).toEqual([
+        ["inb-1", null],
+        ["inb-2", "true"],
+      ]);
+    });
+
+    test("dismissing the notice waves away the notice, not the question", async () => {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+      q(host, ".glosa-ask-notice-dismiss").click();
+      await paint();
+      expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
+      expect(qa(host, ".glosa-band").length).toBe(1);
+      expect(q(host, ".glosa-tray-count").textContent).toBe("1 question");
+    });
+
+    test("a passage that cannot be located is never offered as somewhere to go", async () => {
+      const { host } = await mountPane(
+        fakeDataAccess([askAboutPremise({ passage: { quote: { exact: "a sentence deleted last week" } } })]),
+      );
+      const notice = q(host, ".glosa-ask-notice");
+      expect(notice.textContent).toContain("could not be located");
+      expect(q(notice, ".glosa-ask-notice-go").textContent).toBe("Show the question");
+    });
+
+    test("a question about an artifact nobody has open is offered by the active pane, by file name", async () => {
+      const elsewhere: unknown[] = [];
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise({ target_path: "drafts/elsewhere.md" })]), {
+        isArtifactOpen: () => false,
+        goToRequestElsewhere: async (request: unknown) => {
+          elsewhere.push(request);
+          return true;
+        },
+      });
+      expect(q(host, ".glosa-ask-notice").textContent).toContain("is asking about a passage in elsewhere.md");
+      q(host, ".glosa-ask-notice-go").click();
+      expect(elsewhere).toHaveLength(1);
+    });
+
+    test("…and is NOT offered when some pane already has that artifact open — that pane says it", async () => {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise({ target_path: "elsewhere.md" })]), {
+        isArtifactOpen: () => true,
+      });
+      expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
+    });
+
+    test("Escape steps off the floating question without answering it", async () => {
+      const da = fakeDataAccess([askAboutPremise()]);
+      const { host } = await mountPane(da);
+      await goToIt(host);
+      atPassage(host).dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await paint();
+      expect(atPassage(host)).toBeNull();
+      expect(da.answered).toHaveLength(0);
+      expect(qa(host, ".glosa-band").length).toBe(1);
+    });
   });
 
   test("an unanchored quote is NOT presented as somewhere you can be taken", async () => {
@@ -321,7 +490,37 @@ describe("Review mode — the agent's half of the margin", () => {
     const toggle = q(host, ".glosa-tray-toggle");
     expect(toggle).not.toBeNull();
     expect(toggle.disabled).toBe(false);
-    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking");
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question");
+  });
+
+  test("one session's question and pointer are counted as requests, not two sessions", async () => {
+    const requests = [
+      askAboutPremise(),
+      askAboutPremise({
+        id: "inb-2",
+        created_at: "2026-09-05T10:00:01Z",
+        message: null,
+        action: "point",
+      }),
+    ];
+    const da = fakeDataAccess(requests, {
+      async getAnnotations() {
+        return {
+          annotations: Array.from({ length: 5 }, (_, index) => ({
+            id: `inb-note-${index}`,
+            artifact_path: "notes.md",
+            body: `note ${index}`,
+            intent: "content",
+            target: { quote: { exact: "readers accept" } },
+            status: "pending",
+          })),
+        };
+      },
+    });
+
+    const { host } = await mountPane(da);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question · 1 pointer · 5 annotations");
+    expect(q(host, ".glosa-tray-list .glosa-margin-subhead").textContent).toBe("1 question · 1 pointer");
   });
 
   test("the tray names both kinds when the margin holds both", async () => {
@@ -342,13 +541,13 @@ describe("Review mode — the agent's half of the margin", () => {
       },
     });
     const { host } = await mountPane(da);
-    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking · 1 annotation");
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question · 1 annotation");
   });
 
   test("a request for another artifact never appears in this pane's rail", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ target_path: "elsewhere.md" })]));
     expect(q(host, ".glosa-agent-card")).toBeNull();
-    expect(qa(host, ".glosa-sideline").length).toBe(0);
+    expect(qa(host, ".glosa-band").length).toBe(0);
   });
 
   describe("unsaved work survives the switch the agent causes", () => {

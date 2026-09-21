@@ -7,12 +7,12 @@ the root [`ROADMAP.md`](../ROADMAP.md); live execution status belongs in the pub
 | File | What it is |
 |---|---|
 | **`requirements.md`** | **The normative v1 technical contract (v2).** Requirements R1-R9, fixed stack, tasks T0-T8, and the release gate. Start here for implementation behavior, not current priority. |
-| `appendices/A1-api-transport.md` | Normative: HTTP v1.1, metadata, attention, streaming-SSE, capability URLs, versioning. |
+| `appendices/A1-api-transport.md` | Normative: HTTP contract 1.14, metadata, attention, dictation grants, streaming-SSE, capability URLs, versioning. |
 | `appendices/A2-claude-code-integration.md` | Normative: optional Channels, fallback delivery, explicit binding, transcript tailer, hook shapes. |
 | `appendices/A3-security.md` | Normative: two-origin split, CSP, MessageChannel bridge, token lifecycle, confinePath, attack→test matrix. |
 | `appendices/A4-filebus-concurrency.md` | Normative: journal-as-truth durability, apply-lease attribution, shadow-git, matcher, slug. |
 | `appendices/A5-daemon-architecture.md` | Normative: daemon lifecycle, workspace index, lifecycle state table, anchoring resolution contract. |
-| `appendices/A6-cli-platform.md` | Normative: command surface, exit codes, `init` merge/uninstall, platform pins, checkpoint/restore. |
+| `appendices/A6-cli-platform.md` | Normative: command surface, exit codes, opt-in dictation configuration, platform pins, checkpoint/restore. |
 | `decisions.md` | Current public boundary decisions. |
 | `options.md` | Concise accepted/rejected integration options. |
 | `accessibility.md` | Repeatable WCAG-oriented browser checks and the remaining manual assistive-technology checklist. |

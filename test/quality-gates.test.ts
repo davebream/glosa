@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MIN_JUNIT_BUN } from "../scripts/test-runner.ts";
 import rootPackage from "../package.json";
@@ -72,6 +72,15 @@ describe("repository quality gates", () => {
         expect(quality).toMatch(new RegExp(`- name: [^\\n]+\\n        run: bun run ${script}`));
     }
   });
+  test("the release tag verification also checks every version site", () => {
+    expect(job(workflows[1]!, "release")).toContain('bun run scripts/version-sync.ts --check --expect "${version}"');
+  });
+  test("pre-commit syncs the version sites into the commit rather than only checking the worktree", () => {
+    const hooks = readFileSync(join(root, "lefthook.yml"), "utf8");
+    expect(hooks).toContain("bun run scripts/version-sync.ts --write --stage");
+    // --stage is the whole point: a write that is not staged leaves the commit drifted.
+    expect(hooks).not.toMatch(/version-sync\.ts --write(?! --stage)/);
+  });
   test("security never depends on the change filter, and publishing requires both validation and security", () => {
     for (const yaml of workflows) {
       const security = job(yaml, "security");
@@ -82,5 +91,39 @@ describe("repository quality gates", () => {
     }
     expect(job(workflows[1]!, "release")).toContain("needs: [ci, security]");
     expect(job(workflows[1]!, "release")).toContain("npm publish");
+  });
+
+  // #316: git exports GIT_DIR into every hook's environment, so a spawned `git` that inherits the
+  // ambient environment talks to whatever repository invoked the hook rather than the one `cwd`
+  // names. That is how a test's throwaway `git init` reinitialized this repository and flipped its
+  // `core.bare`, breaking every worktree. `gitEnvironment()` exists to prevent it; this pins that
+  // the callers actually use it, because the failure is silent — the wrong repository answers
+  // successfully.
+  test("no git subprocess in scripts/ or test/ inherits the ambient repository selectors", () => {
+    const sources: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (path.endsWith(".ts")) sources.push(path);
+      }
+    };
+    walk(join(root, "scripts"));
+    walk(join(root, "test"));
+    expect(sources.length, "the scan found no sources, so it could not have failed").toBeGreaterThan(10);
+
+    const offenders: string[] = [];
+    for (const path of sources) {
+      const lines = readFileSync(path, "utf8").split("\n");
+      lines.forEach((line, index) => {
+        if (!/\["']git["']\s*,|cmd:\s*\[\s*["']git["']/.test(line)) return;
+        // The env for a spawn sits within a few lines of its command.
+        const window = lines.slice(Math.max(0, index - 4), index + 8).join("\n");
+        if (/env:\s*\{[^}]*\.\.\.(process|Bun)\.env/.test(window)) {
+          offenders.push(`${path.slice(root.length + 1)}:${index + 1}`);
+        }
+      });
+    }
+    expect(offenders, "spawn git with gitEnvironment(), never a spread of the ambient env").toEqual([]);
   });
 });

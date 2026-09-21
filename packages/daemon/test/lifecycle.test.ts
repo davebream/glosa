@@ -9,7 +9,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { APP_VERSION, BUILD_ID } from "../src/lifecycle/build-id.ts";
 import { confirmPortFree, ensureDaemonWithDependencies } from "../src/lifecycle/daemon.ts";
-import { ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
+import { apiSocketPath, ensureHomeDir, lockPath, logPath } from "../src/lifecycle/home.ts";
 import { type DaemonLock, reclaimStaleLock, writeLockExclusive } from "../src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION } from "../src/lifecycle/protocol.ts";
 import {
@@ -537,6 +537,42 @@ function acceleratedFirstPoll() {
     },
   };
 }
+
+describe("bootDaemon — the local socket's own lifecycle (#207)", () => {
+  // A daemon that is SIGKILLed cannot run its shutdown, so the socket INODE survives it and
+  // `bind(2)` refuses that path until something removes it. Found by `mcp-lifetime-real-subprocess`
+  // rather than by reading the code: a first pass assumed Bun rebinds over a leftover file, which
+  // is true only when the previous owner exited cleanly and removed it. Without the reclaim below,
+  // one crash leaves every later daemon unable to boot until a human deletes a file they have
+  // never heard of.
+  test("a daemon killed without shutting down does not brick the next one", async () => {
+    const home = freshHome();
+    const port = randomPort();
+    const socket = apiSocketPath(home);
+    let second: Bun.Subprocess<"ignore", "ignore", "ignore"> | null = null;
+    const first = spawnDaemon(home, port);
+    try {
+      expect(await waitForHandshake(port, 20_000, first)).not.toBeNull();
+      expect(await waitUntil(() => existsSync(socket), 5000)).toBe(true);
+
+      first.kill("SIGKILL");
+      await first.exited;
+      // The premise: the file is still there. If a future Bun removed it on exit this test would
+      // pass vacuously, so it is asserted rather than assumed.
+      expect(existsSync(socket)).toBe(true);
+
+      second = spawnDaemon(home, port);
+      expect(await waitForHandshake(port, 20_000, second)).not.toBeNull();
+      expect(await waitUntil(() => existsSync(socket), 5000)).toBe(true);
+      expect(readFileSync(logPath(home), "utf8")).toContain("removing a stale");
+    } finally {
+      if (second) await stopDaemon(home, second);
+      first.kill("SIGKILL");
+      await first.exited;
+      cleanupHome(home);
+    }
+  }, 60_000);
+});
 
 describe("ensureDaemon — client", () => {
   test("a legacy daemon is replaced and the successful connection reports the current build", async () => {

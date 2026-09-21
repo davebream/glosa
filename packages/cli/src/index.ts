@@ -35,6 +35,7 @@ const PUBLIC_COMMANDS = new Set([
   "metadata",
   "session",
   "token",
+  "dictation",
   "update",
   "forget",
 ]);
@@ -78,6 +79,7 @@ export interface CliRunDependencies {
     createClient?: () => Promise<GlosaApiClient>;
     glosaHome?: () => string;
   };
+  dictation?: import("./dictation.ts").DictationCommandDeps;
 }
 
 function withGlobals<T extends DefaultContext>(context: T): T["values"] & GlobalValues {
@@ -583,6 +585,36 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     },
   );
 
+  const dictation = lazyHandler(
+    {
+      name: "dictation",
+      description: "Configure, inspect, or disable opt-in dictation",
+      args: {
+        ...GLOBAL_ARGS,
+        action: { type: "positional", required: true, description: "Dictation action: configure, status, or disable" },
+        provider: { type: "string", description: "Dictation provider (configure requires wispr-flow)" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      if (values.action !== "configure" && values.action !== "status" && values.action !== "disable") {
+        const message = `unsupported dictation action '${String(values.action)}'`;
+        if (values.json) printJsonEnvelope(usageEnvelope("dictation", message));
+        else process.stderr.write(`glosa dictation: ${message}\n`);
+        setExitCode(EXIT_CODES.USAGE);
+        return;
+      }
+      const dictationModule = await import("./dictation.ts");
+      const result = await dictationModule.runDictation(
+        values.action,
+        { provider: values.provider as string | undefined, json: Boolean(values.json) },
+        deps.dictation,
+      );
+      dictationModule.printDictationResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
   const forget = lazyHandler(
     {
       name: "forget",
@@ -783,8 +815,10 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
 
   const daemon = lazyHandler({ name: "__daemon", description: "Detached daemon process", internal: true }, async () => {
     const { bootDaemon } = await import("../../daemon/src/index.ts");
+    const { isSourceCheckout } = await import("../../daemon/src/lifecycle/install.ts");
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
     const { CodexProvider } = await import("../../providers/codex/src/index.ts");
+    const { WisprFlowProvider } = await import("../../providers/wispr-flow/src/index.ts");
     await bootDaemon({
       providerFactories: [
         ({ sessionRegistry, pushRegistry }) =>
@@ -799,6 +833,9 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
             pushAvailable: (session) => pushRegistry.transport(session.session_id) === "codex_app_server",
             sendPush: (session, entry) => pushRegistry.send(session.session_id, entry),
           }),
+      ],
+      dictationProviderFactories: [
+        ({ home }) => new WisprFlowProvider({ home, allowDevelopmentEnv: isSourceCheckout() }),
       ],
     });
   });
@@ -821,6 +858,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     session,
     "codex-attach": codexAttach,
     token,
+    dictation,
     update,
     forget,
     hook,

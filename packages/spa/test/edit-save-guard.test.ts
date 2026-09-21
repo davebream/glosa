@@ -23,8 +23,8 @@ import { createHash } from "node:crypto";
 import { createArtifactPane } from "../src/artifact-pane.js";
 import { type DomEnv, installDom, installModalDialogs } from "./dom-env.ts";
 
-/** A5 §F10's own formula (also `merge-markdown.js`'s `sha256Hex`, computed with Web Crypto in the
- * browser) — used here to build a fixture whose `source_sha256` the pane's own `verifiedBaseline`
+/** A5 §F10's own formula (also `artifact-pane.js`'s own `sha256Hex`, computed with Web Crypto in
+ * the browser) — used here to build a fixture whose `source_sha256` the pane's own `verifiedBaseline`
  * check actually accepts, rather than the placeholder "sha-1"/"sha-2" strings the other cases use
  * for artifacts the merge never needs to trust as a base. */
 function realSha256(text: string): string {

@@ -26,6 +26,14 @@ export type {
 } from "./agent-provider/interface.ts";
 export { AgentProviderRegistry, recordDelivery } from "./agent-provider/interface.ts";
 export { SessionPushRegistry } from "./agent-provider/push-registry.ts";
+export type {
+  DictationAvailability,
+  DictationBrowserAsset,
+  DictationProvider,
+  DictationProviderErrorCode,
+  DictationSessionGrant,
+} from "./dictation/interface.ts";
+export { DictationProviderError, DictationProviderRegistry } from "./dictation/interface.ts";
 export * from "./bus/index.ts";
 export type { ParsedBuildId } from "./lifecycle/build-id.ts";
 export { APP_VERSION, BUILD_ID, computeBuildId, parseBuildId, runtimeSourceFiles } from "./lifecycle/build-id.ts";
@@ -69,8 +77,10 @@ export {
   enclosingGitRootWithin,
   workspaceRootFor,
 } from "./registry/workspace-root.ts";
-export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./security/auth.ts";
+export type { AuthorizeOptions, AuthorizeResult, RouteClass, Transport } from "./security/auth.ts";
 export { authorizeRequest, isForeignOrigin } from "./security/auth.ts";
+export type { AuthedRequestSpec, DaemonUnreachableError } from "./security/authed-request.ts";
+export { authedRequest, daemonUnreachable } from "./security/authed-request.ts";
 export type { ConfineResult } from "./security/confine-path.ts";
 export { confinePath } from "./security/confine-path.ts";
 export { classFCspHeaders, spaCspHeaders } from "./security/csp.ts";

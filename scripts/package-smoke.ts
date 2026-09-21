@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { readSite, VERSION_SITES } from "./version-sync.ts";
 
 interface PackResult {
   filename: string;
@@ -64,6 +65,9 @@ function assertPackContents(files: string[]): void {
     "packages/daemon/src/index.ts",
     "packages/providers/claude-code/src/index.ts",
     "packages/providers/codex/src/index.ts",
+    "packages/providers/wispr-flow/src/index.ts",
+    "packages/providers/wispr-flow/src/browser.js",
+    "packages/providers/wispr-flow/src/wispr-flow-worklet.js",
     "packages/spa/src/index.ts",
     ".claude-plugin/marketplace.json",
     "glosa-plugin/.claude-plugin/plugin.json",
@@ -112,6 +116,16 @@ try {
   const tarball = join(packDir, result.filename);
   if (!existsSync(tarball)) fail(`npm pack did not create ${tarball}`);
 
+  // Assert the PUBLISHED bytes, not the repository: this is the one check the repo-side gates
+  // structurally cannot make. Placed before the isolated global install so it fails in seconds.
+  const declared = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version as string;
+  const pluginManifest =
+    VERSION_SITES.find((site) => site.path === "glosa-plugin/.claude-plugin/plugin.json") ??
+    fail("version-sync no longer tracks the plugin manifest");
+  const shipped = readSite(run("tar", ["-xOf", tarball, `package/${pluginManifest.path}`]), pluginManifest);
+  if (shipped.length !== 1 || shipped[0] !== declared)
+    fail(`npm tarball ships glosa-plugin version ${shipped.join(", ") || "<none>"}; package.json declares ${declared}`);
+
   const isolatedEnv = {
     BUN_INSTALL: bunHome,
     GLOSA_HOME: glosaHome,
@@ -123,7 +137,7 @@ try {
 
   const glosa = join(bunHome, "bin", "glosa");
   if (!existsSync(glosa)) fail("isolated global install did not create the glosa executable");
-  const expectedVersion = `glosa ${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}\n`;
+  const expectedVersion = `glosa ${declared}\n`;
   if (run(glosa, ["--version"], isolatedEnv) !== expectedVersion)
     fail("installed CLI version does not match package.json");
   if (!run(glosa, ["--help"], isolatedEnv).includes("glosa open")) fail("installed CLI help omits the open command");
@@ -135,7 +149,14 @@ try {
 
   const url = run(glosa, ["open", "--url", workspace], isolatedEnv).trim();
   // glosa open links browsers to glosa.localhost; the daemon also accepts 127.0.0.1 (A3 §4 Rule 1, #159).
-  if (!/^http:\/\/glosa\.localhost:\d+\/#t=/.test(url)) fail(`glosa open --url returned an unexpected URL: ${url}`);
+  // `#p=`, never `#t=`: since #207 the fragment carries a single-use 60s presentation token rather
+  // than the durable credential, because its destination is a browser on a TCP port that was
+  // resolved earlier and is not re-verified (A3 §3.2). Asserted on the PACKAGED CLI because this is
+  // the one credential crossing no in-process test exercises end to end.
+  if (!/^http:\/\/glosa\.localhost:\d+\/#p=[0-9a-f]{64}&/.test(url)) {
+    fail(`glosa open --url returned an unexpected URL: ${url}`);
+  }
+  if (url.includes("#t=") || url.includes("&t=")) fail(`glosa open --url leaked the durable token: ${url}`);
   daemonPid = readLock()?.pid;
   if (!daemonPid) fail("glosa open --url did not leave an owned daemon lock");
 

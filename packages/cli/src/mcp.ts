@@ -338,7 +338,9 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
   // Bound into every client an active tool handler creates. It fires immediately when shutdown
   // starts, so ordinary calls are unaffected until then; once it fires, in-flight and future calls
   // on those clients reject instead of hanging — this is what cancels a mid-flight `glosa_ask`
-  // long poll or a stuck tool call.
+  // long poll or a stuck tool call. It is not the only thing that ends a hold: `glosa_ask` and
+  // `glosa_watch` additionally bind their held read to the request's OWN cancellation, which
+  // shutdown does not subsume — a client can give up on one call without the shim going away.
   const shutdownAbort = new AbortController();
   // Every currently-running tool call's whole lifecycle — registration/heartbeat included, not
   // just the handler — keyed by its own promise. `close()` waits for this set to drain (after
@@ -692,7 +694,6 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         },
         {
           launchBrowser: false,
-          usePresentationToken: true,
           readLock,
           mode,
           bindSessionId,
@@ -739,7 +740,9 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         "until they answer — this is a real wait, not a queued notification, so use it when you genuinely " +
         "cannot proceed without the answer. Omit `question` to point at a passage without asking anything; " +
         "that returns immediately. Supply `options` when the answer is one of a few things you can name, and " +
-        "leave them out when it is open-ended; the human always keeps a free-text field either way.",
+        "leave them out when it is open-ended; the human always keeps a free-text field either way. " +
+        "If your call is cancelled before the human answers, the question is withdrawn from their margin — " +
+        "nobody is waiting on it any more. A wait that merely runs out leaves it in place.",
       inputSchema: askInputSchema,
       outputSchema: askOutputSchema,
       annotations: {
@@ -747,8 +750,21 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         title: "Ask the human about a passage",
       },
     },
-    async ({ workspace, path, question, quote, options, label, wait_seconds: waitSeconds }) => {
+    async ({ workspace, path, question, quote, options, label, wait_seconds: waitSeconds }, extra) => {
       const dir = workspace ?? (deps.cwd ?? process.cwd)();
+      // Same shape as glosa_watch below: the request's own cancellation has to reach the HELD
+      // entry-status read, not only shutdown. Without it the shim keeps waiting out the rest of
+      // `wait_seconds` after the client has stopped listening, holding its slot in `activeCalls`.
+      const requestScope = AbortSignal.any(
+        [shutdownAbort.signal, extra.signal].filter((signal): signal is AbortSignal => !!signal),
+      );
+      // One client for the whole call, bound to SHUTDOWN only — deliberately not to `requestScope`.
+      // The withdrawal below runs after that scope has aborted, so a client bound to it could not
+      // make the call at all, and a cancel landing mid-creation would leave no id to withdraw.
+      // Memoised rather than created eagerly so `runRequestReview` keeps owning the
+      // daemon-unreachable envelope its own `createClient()` failure produces.
+      let apiClient: Promise<GlosaApiClient> | undefined;
+      const createClient = () => (apiClient ??= deps.createApiClient(shutdownAbort.signal));
       const result = await runRequestReview(
         {
           dir,
@@ -765,7 +781,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
           // No question, no wait: pointing is a side effect, not a request for something back.
           ...(question === undefined ? {} : { waitMs: (waitSeconds ?? 600) * 1000 }),
         },
-        realRequestReviewDeps(() => deps.createApiClient(shutdownAbort.signal), shutdownAbort.signal),
+        realRequestReviewDeps(createClient, requestScope),
       );
 
       if (!result.ok && result.error?.kind !== "review_timeout") {
@@ -774,6 +790,23 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       const id = result.data.id;
       if (!id) throw new Error("glosa_ask did not create a request");
       if (question === undefined) return toolResult({ id, outcome: "posted", anchored: true });
+
+      // Cancelled, not merely elapsed: the human told the agent to stop, so the question goes with
+      // it — a question nobody will ever read is clutter that today can only be cleared by
+      // answering it. Shutdown deliberately does NOT withdraw: see `close()` below on why this
+      // shim must not put its bearer on the wire to an endpoint resolved earlier in the session.
+      if (result.error?.kind === "review_timeout" && extra.signal?.aborted && !shutdownAbort.signal.aborted) {
+        // The session `ensureSession` registered for this call: host session, explicit binding, or
+        // this shim's own synthetic id.
+        const session = identity().session_id;
+        try {
+          await (await createClient()).withdrawAttention?.(dir, id, session);
+        } catch {
+          // Best effort. A daemon that has gone away leaves the question open — the same gap
+          // shutdown and a crash already leave, documented in A6 §F26 rather than papered over.
+        }
+        return toolResult({ id, outcome: "withdrawn", anchored: quote !== undefined });
+      }
 
       const detail = result.data.detail;
       const answer = detail && "response" in detail && typeof detail.response === "string" ? detail.response : "";

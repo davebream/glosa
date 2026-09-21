@@ -411,6 +411,14 @@ export function createDataAccess(deps = {}) {
   }
 
   return {
+    /** Local-only configuration/credential status. This endpoint never probes a provider. */
+    getDictationStatus() {
+      return requestJson("/api/dictation/status");
+    },
+    /** Foreground-only session grant. The returned JWT stays in renderer memory. */
+    createDictationSession() {
+      return requestJson("/api/dictation/session", { method: "POST" });
+    },
     /** `GET /api/workspaces` — not one of R6's five named functions, but needed by the sidebar
      * to have ANY slug to call the other five with; without it something else would have to call
      * `fetch` directly, breaking the "ONE data-access module" invariant. */

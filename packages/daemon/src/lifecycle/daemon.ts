@@ -5,7 +5,8 @@
 // role (bootDaemon, never imported by the SPA) and by every client role (ensureDaemon).
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { connect } from "node:net";
+import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { AdapterRegistry } from "../adapters/interface.ts";
@@ -14,6 +15,7 @@ import { AdoptionCoordinator, resumePendingAdoptions } from "../adoption.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/interface.ts";
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
+import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -26,7 +28,13 @@ import { CapabilityStore } from "../security/capability.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
 import { PresentationTokenStore } from "../security/presentation-token.ts";
 import { TokenAuthority } from "../security/token.ts";
-import { type BunServer, createApiFetch, createClassFFetch, createRejectionRecorder } from "../transport/http.ts";
+import {
+  type ApiContext,
+  type BunServer,
+  createApiFetch,
+  createClassFFetch,
+  createRejectionRecorder,
+} from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
 import { isHomeOrAncestor } from "../registry/workspace-root.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
@@ -39,7 +47,7 @@ import {
   probePortBindable,
   probePortBound,
 } from "./handshake.ts";
-import { ensureHomeDir, glosaHome, lockPath, logPath } from "./home.ts";
+import { apiSocketPath, ensureHomeDir, ensureRunDir, glosaHome, lockPath, logPath, runDir } from "./home.ts";
 import { INSTALL_ID } from "./install.ts";
 import { glosaClassFPort, glosaPort } from "./port.ts";
 import {
@@ -111,6 +119,7 @@ export interface DaemonBackend {
   adapterRegistry: AdapterRegistry;
   metadataRegistry: WorkspaceMetadataRegistry;
   providerRegistry: AgentProviderRegistry;
+  dictationRegistry: DictationProviderRegistry;
   pushRegistry: SessionPushRegistry;
   watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
@@ -136,12 +145,17 @@ export interface ProviderFactoryDeps {
   pushRegistry: SessionPushRegistry;
 }
 
+export interface DictationProviderFactoryDeps {
+  home: string;
+}
+
 export interface BuildBackendOptions {
   /** Test-only overrides for WorkspaceIndex's GC timers — production always uses the real
    * defaults (A5 §F19: grace ~24h, throttle ~60s). */
   gcGraceMs?: number;
   gcThrottleMs?: number;
   providerFactories?: Array<(deps: ProviderFactoryDeps) => AgentProvider>;
+  dictationProviderFactories?: Array<(deps: DictationProviderFactoryDeps) => DictationProvider>;
   /** Explicit acceptance-test dependency. The packaged CLI never supplies one. */
   writeCheckpoint?: WorkspaceBusWriteCheckpointObserver;
   /** Test-only override for what counts as the user's home directory. Production reads the real
@@ -181,6 +195,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const adapterRegistry = new AdapterRegistry();
   const metadataRegistry = new WorkspaceMetadataRegistry();
   const providerRegistry = new AgentProviderRegistry();
+  const dictationRegistry = new DictationProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
@@ -224,6 +239,9 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   adapterRegistry.register(metadataRegistry.adapter());
   for (const factory of opts.providerFactories ?? []) {
     providerRegistry.register(factory({ sessionRegistry, pushRegistry }));
+  }
+  for (const factory of opts.dictationProviderFactories ?? []) {
+    dictationRegistry.register(factory({ home }));
   }
 
   // Live-session predicate: a workspace under a live session is never GC-hard-removed no matter
@@ -278,6 +296,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     adapterRegistry,
     metadataRegistry,
     providerRegistry,
+    dictationRegistry,
     pushRegistry,
     watchEmissions,
     artifactWatcherRegistry,
@@ -369,7 +388,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     markStartupReady = resolve;
   });
 
-  const apiFetch = createApiFetch({
+  // ONE context object, deliberately: `createApiFetch` keys the daemon's composite-delivery
+  // registry and adoption coordinator on this object's identity, so the two listeners below must
+  // be built from this exact reference rather than from a copy.
+  const apiContext: ApiContext = {
     port,
     classFPort,
     token: tokenAuthority,
@@ -387,13 +409,16 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     adapterRegistry: backend.adapterRegistry,
     metadataRegistry: backend.metadataRegistry,
     providerRegistry: backend.providerRegistry,
+    dictationRegistry: backend.dictationRegistry,
     pushRegistry: backend.pushRegistry,
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,
     home,
     recordRejection: createRejectionRecorder((line) => log(home, `${instanceId} ${line}`)),
-  });
+  };
+  const apiFetch = createApiFetch(apiContext);
+  const socketApiFetch = createApiFetch(apiContext, "socket");
   // Bun.serve starts accepting as soon as it returns, but a successful handshake is the public
   // readiness proof. Hold only that route until lock ownership, both listeners, and shutdown are
   // fully wired so clients never observe a new process beside the previous process's stale lock.
@@ -409,7 +434,12 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     if (new URL(request.url).pathname === "/api/handshake") await startupReady;
     return apiFetch(request, server);
   };
-  const server = await bindMainOrExit(home, port, readyApiFetch, spaCspHeaders(classFPort));
+  const server = await bindMainOrExit(
+    home,
+    port,
+    readyApiFetch,
+    spaCspHeaders(classFPort, backend.dictationRegistry.enabledConnectOrigins()),
+  );
 
   // Lock acquisition happens IMMEDIATELY after the main-port bind — before the class-F bind —
   // deliberately mirroring P1.2's original "bind, then lock" ordering (A5 §F13: "Bind-before-
@@ -471,6 +501,30 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     instanceId,
   );
 
+  // The third listener: the same API surface, same context, served over a Unix socket that only
+  // this uid can open (A3 §3.2). Bound last, for the same reason class-F is bound after the lock
+  // — the TCP bind plus the O_EXCL CAS is what decides which process is the daemon, and nothing
+  // may widen the window between those two. `socketApiFetch` is a second closure over the SAME
+  // `apiContext`, not a second context, so both listeners share one composite-delivery registry
+  // and one adoption coordinator (see `createApiFetch`'s note on why transport is a parameter).
+  const socketPath = apiSocketPath(home);
+  const socketServer = await bindApiSocketOrExit(
+    home,
+    socketPath,
+    async (request: Request, bunServer: BunServer): Promise<Response> => {
+      if (new URL(request.url).pathname === "/api/handshake") await startupReady;
+      return socketApiFetch(request, bunServer);
+    },
+    [server, classFServer],
+    spaCspHeaders(classFPort),
+    lockFile,
+    instanceId,
+  );
+  // Only now, and only because the bind returned: the handshake's `serves_socket` is a claim
+  // about a listener that exists, not about a build that intended one. `markStartupReady` has
+  // not fired yet, so no handshake can have answered `false` for this daemon.
+  apiContext.servesSocket = true;
+
   let shuttingDown = false;
   shutdown = async () => {
     if (shuttingDown) return;
@@ -497,7 +551,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     // fetch handlers to finish. Closing SSE immediately after that prevents those intentionally
     // long-lived responses from holding the drain open forever.
     const drained = await drainDaemonServers(
-      [server, classFServer],
+      [server, classFServer, socketServer],
       () => {
         shutdownController.abort();
         tokenAuthority.close();
@@ -615,6 +669,123 @@ async function bindClassFOrExit(
   }
 }
 
+/**
+ * Is anything actually listening on a Unix socket path? `refused` (a clean ECONNREFUSED) is the
+ * ONLY answer that proves nobody is, and it is the only one any caller may act destructively on —
+ * the same fail-closed shape as `probePortBound` for TCP.
+ *
+ * Uses a raw `connect(2)` rather than `fetch`: Bun pools connections by socket path and will
+ * answer a second `fetch` without reconnecting, which makes a liveness probe written that way
+ * report a peer that is no longer there.
+ */
+function probeUnixSocket(path: string, timeoutMs = 1000): Promise<"listening" | "refused" | "unknown"> {
+  return new Promise((resolve) => {
+    const socket = connect({ path });
+    let settled = false;
+    const finish = (result: "listening" | "refused" | "unknown") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish("unknown"), timeoutMs);
+    socket.once("connect", () => finish("listening"));
+    socket.once("error", (err: NodeJS.ErrnoException) => finish(err.code === "ECONNREFUSED" ? "refused" : "unknown"));
+  });
+}
+
+/**
+ * Binds `<GLOSA_HOME>/run/api.sock`, the listener every CLI, MCP and provider client
+ * authenticates over (A3 §3.2). Called only after this process has won the main-port bind AND the
+ * lock CAS, so — exactly like `bindClassFOrExit` — any failure here is a foreign owner and the
+ * right answer is to give back the port and the lock rather than serve half a daemon.
+ *
+ * Two facts about Unix sockets on Darwin drive the body, both verified with fresh unpooled
+ * `connect(2)` rather than `fetch` (Bun's connection pool answers a second `fetch` without ever
+ * calling `connect`, which makes a permission probe written that way report the opposite):
+ *
+ *   - `Bun.serve({unix})` creates the socket **0755**. The `chmod` to 0600 necessarily lands
+ *     after the bind, so the parent directory — created 0700 by `ensureRunDir` — is what closes
+ *     that window. Both permissions are enforced independently by the kernel.
+ *   - `EADDRINUSE` does NOT distinguish a live owner from a dead one. A second bind on a live
+ *     path throws it, and so does a bind over the inode a SIGKILLed daemon left behind — the path
+ *     stays refused until something unlinks it. That is why the body probes before reclaiming
+ *     rather than either retrying blindly (which would start a second daemon beside a live one)
+ *     or failing (which would let one crash brick every later boot).
+ */
+async function bindApiSocketOrExit(
+  home: string,
+  socketPath: string,
+  fetch: (req: Request, server: BunServer) => Promise<Response>,
+  boundServers: readonly { stop(closeActiveConnections?: boolean): Promise<void> }[],
+  errorCsp: Record<string, string>,
+  lockFile: string,
+  instanceId: string,
+): Promise<ReturnType<typeof Bun.serve>> {
+  const abortBoot = async (line: string): Promise<never> => {
+    log(home, line);
+    removeLockIfOwned(lockFile, instanceId);
+    await Promise.allSettled(boundServers.map((server) => server.stop()));
+    process.exit(3);
+  };
+  try {
+    ensureRunDir(home);
+  } catch (err) {
+    return abortBoot(`cannot create ${runDir(home)} at mode 0700: ${(err as Error).message} — aborting boot`);
+  }
+  const bind = (): ReturnType<typeof Bun.serve> =>
+    Bun.serve({
+      unix: socketPath,
+      fetch,
+      // Same reasoning as bindMainOrExit: Bun's default error page leaks source and stack.
+      error: () => internalErrorResponse(errorCsp),
+    });
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = bind();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") {
+      return abortBoot(`cannot bind ${socketPath}: ${(err as Error).message} — aborting boot`);
+    }
+    // A socket file outlives the process that made it: a daemon killed with SIGKILL, or one the
+    // OS took down, leaves the inode behind and `bind(2)` refuses the path until something
+    // removes it. Without this, a single crash would leave every later daemon unable to boot
+    // until a human deleted a file they have never heard of.
+    //
+    // The same evidence rule as `reclaimStaleLock`: only a clean ECONNREFUSED proves nobody is
+    // listening. A path that still ACCEPTS is a live owner — which, having already won the port
+    // and the lock CAS above, would be a second daemon holding the socket alone, and unlinking it
+    // would start a second daemon beside one still serving. Anything else is ambiguous, and an
+    // ambiguous probe must never be what authorizes a delete.
+    const owner = await probeUnixSocket(socketPath);
+    if (owner !== "refused") {
+      return abortBoot(
+        owner === "listening"
+          ? `${socketPath} is already being served by another process — aborting boot`
+          : `cannot determine whether ${socketPath} is in use — aborting boot`,
+      );
+    }
+    log(home, `removing a stale ${socketPath} left by a daemon that did not shut down`);
+    try {
+      unlinkSync(socketPath);
+      server = bind();
+    } catch (retryErr) {
+      return abortBoot(`cannot reclaim ${socketPath}: ${(retryErr as Error).message} — aborting boot`);
+    }
+  }
+  try {
+    chmodSync(socketPath, 0o600);
+  } catch (err) {
+    // Fail the boot rather than serve a socket whose mode we could not confirm. The run dir alone
+    // would still deny another uid, but a listener whose own permissions are unknown is not
+    // something to leave running and call defended.
+    await server.stop(true);
+    return abortBoot(`cannot set ${socketPath} to mode 0600: ${(err as Error).message} — aborting boot`);
+  }
+  return server;
+}
+
 async function acquireLockOrExit(
   home: string,
   lockFile: string,
@@ -661,6 +832,12 @@ export interface DaemonConnection {
   installId?: string;
   pid: number;
   startedAt: string;
+  /** Where this client sends every authenticated request (A3 §3.2). Derived from this process's
+   * own `GLOSA_HOME`, never from anything the peer said — a peer-supplied path would be one more
+   * value an impostor could choose, and the whole point of this transport is that the destination
+   * is decided by the filesystem rather than by the thing answering it. `port` remains for the
+   * browser URL `glosa open` builds and for diagnostics; nothing authenticated uses it. */
+  socketPath: string;
 }
 
 export type EnsureDaemonResult = ({ ok: true } & DaemonConnection) | { ok: false; reason: string; logPath?: string };
@@ -907,9 +1084,10 @@ export function daemonPeerMismatchReason(lock: DaemonLock, hs: HandshakeResponse
   return null;
 }
 
-function toConnection(port: number, hs: HandshakeResponse): DaemonConnection {
+function toConnection(port: number, hs: HandshakeResponse, home: string): DaemonConnection {
   return {
     port,
+    socketPath: apiSocketPath(home),
     instanceId: hs.instance_id,
     protocolVersion: hs.protocol_version,
     buildId: hs.build_id as string,
@@ -1114,7 +1292,24 @@ export async function ensureDaemonWithDependencies(
         }
 
         const decision = decideForPeer(hs);
-        if (decision.action === "use") return { ok: true, ...toConnection(lock.port, hs) };
+        if (decision.action === "use") {
+          // A daemon that serves no socket cannot be talked to by this client at all: every
+          // authenticated request goes over `<GLOSA_HOME>/run/api.sock`, and there is deliberately
+          // no fall back to the port (A3 §3.2 — a fallback would hand a squatter the entire
+          // defense, since making the socket look absent is free). Refuse here, at resolve time,
+          // where the message can name the recovery, rather than at the first request.
+          if (hs.serves_socket !== true) {
+            log(home, `refusing ${hs.instance_id}: daemon predates the local socket listener`);
+            return {
+              ok: false,
+              reason:
+                `the glosa daemon on port ${lock.port} predates this client's local socket and ` +
+                `cannot be reached securely — ${manualStopHint(lock.port, hs.pid)}`,
+              logPath: logPath(home),
+            };
+          }
+          return { ok: true, ...toConnection(lock.port, hs, home) };
+        }
         if (decision.action === "fail") {
           // A refusal has to be as traceable as a takeover, and as actionable: this is the branch
           // a user meets when a second install owns the port, so it carries the log pointer the

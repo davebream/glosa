@@ -21,6 +21,7 @@ export function mountAttentionTray(
     onEntriesChange = () => {},
     onOpenArtifact = async (_path) => true,
     getCurrentArtifact = () => null,
+    dictationController = null,
   },
 ) {
   let slug = null;
@@ -30,6 +31,7 @@ export function mountAttentionTray(
   let loadError = "";
   let destroyed = false;
   let refreshPromise = null;
+  let dictationCleanups = [];
 
   const trigger = node("button", {
     className: "glosa-attention-trigger",
@@ -62,6 +64,8 @@ export function mountAttentionTray(
   }
 
   function render() {
+    for (const cleanup of dictationCleanups) cleanup();
+    dictationCleanups = [];
     tray.textContent = "";
     tray.hidden = !open;
     updateTrigger();
@@ -206,7 +210,20 @@ export function mountAttentionTray(
         actions,
         status,
       ];
-      list.append(node("li", { className: "glosa-attention-item" }, children));
+      const item = node("li", { className: "glosa-attention-item" }, children);
+      list.append(item);
+      if (!answeredInTheMargin) {
+        const cleanup = dictationController?.attachField(response, {
+          controls: () => actions.querySelectorAll("button"),
+          getContext: () => ({
+            surfaceBlocks: [
+              entry.message,
+              ...entries.filter((candidate) => candidate.id !== entry.id).map((candidate) => candidate.message),
+            ],
+          }),
+        });
+        if (cleanup) dictationCleanups.push(cleanup);
+      }
     }
     tray.append(list);
   }
@@ -290,6 +307,7 @@ export function mountAttentionTray(
     refresh,
     destroy() {
       destroyed = true;
+      for (const cleanup of dictationCleanups) cleanup();
       trigger.remove();
       tray.remove();
     },

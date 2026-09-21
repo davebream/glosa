@@ -7,7 +7,7 @@
 
 import { apiError, type ApiProblem } from "./api-client.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
-import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
+import { authedRequest, ensureDaemon, glosaHome } from "../../daemon/src/index.ts";
 
 export interface RegisterSessionInput {
   session_id: string;
@@ -141,31 +141,37 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
     );
   }
-  const port = conn.port; // captured outside the closure below — narrowing doesn't cross into it
-  const base = `http://127.0.0.1:${port}`;
+  // The WHOLE resolved connection, not just its port (issue #207). `socketPath` is where every
+  // authenticated request below goes; `port` survives only for diagnostics and for the browser
+  // URL `glosa open` builds, neither of which carries a credential.
+  const { ok: _resolved, ...connection } = conn;
+  const home = glosaHome();
   const fetchRequest = options.fetch ?? fetch;
   const shutdownSignal = options.signal;
 
   async function call(path: string, body?: unknown, method: "POST" | "GET" = "POST"): Promise<Response> {
     let res: Response;
     try {
-      res = await fetchRequest(`${base}${path}`, {
-        method,
-        headers: {
-          Host: `127.0.0.1:${port}`,
-          Origin: base,
-          // Resolved per request, not captured when the client was built. A client can outlive a
-          // `glosa token rotate` — the shim's push-stream client is held for the whole session, and
-          // a pending delivery acknowledgement uses the client that was current when its delivery
-          // arrived — and the daemon accepts only the current credential, with no grace period.
-          // Pinning it here turned the next call on any such client into a silent 401.
-          Authorization: `Bearer ${loadToken(glosaHome())}`,
-          ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+      // `authedRequest` owns the credential and the destination — see its header for why a
+      // re-verified TCP port could not have been made safe. The token is still resolved per
+      // request there, not captured here: a client can outlive a `glosa token rotate` (the shim's
+      // push-stream client is held for the whole session, and a pending delivery acknowledgement
+      // uses whichever client was current when its delivery arrived), and the daemon accepts only
+      // the current credential with no grace period.
+      res = await authedRequest(
+        connection,
+        {
+          path,
+          method,
+          contentType: method === "POST" ? "application/json" : null,
+          ...(method === "POST" && body !== undefined ? { body: JSON.stringify(body) } : {}),
+          ...(shutdownSignal ? { signal: shutdownSignal } : {}),
         },
-        body: method === "POST" && body !== undefined ? JSON.stringify(body) : undefined,
-        ...(shutdownSignal ? { signal: shutdownSignal } : {}),
-      });
+        home,
+        fetchRequest,
+      );
     } catch (error) {
+      if ((error as { code?: string }).code === "DAEMON_UNREACHABLE") throw error;
       throw unreachableError((error as Error).message);
     }
     if (!res.ok) {
@@ -215,16 +221,18 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
       );
     },
     async openSessionStream(sessionId, transport, onEntry, signal, onOpen) {
-      const res = await fetchRequest(
-        `${base}/api/sessions/${encodeURIComponent(sessionId)}/stream?transport=${encodeURIComponent(transport)}`,
+      // The Bearer crosses once, here, in the request that opens the stream; the reader loop
+      // below sends no header at all. Every write its handler makes — each per-entry
+      // `transport-ack`, each `ack` — is a separate `call()` and is authenticated separately.
+      const res = await authedRequest(
+        connection,
         {
-          headers: {
-            Host: `127.0.0.1:${port}`,
-            Origin: base,
-            Authorization: `Bearer ${loadToken(glosaHome())}`,
-          },
+          path: `/api/sessions/${encodeURIComponent(sessionId)}/stream?transport=${encodeURIComponent(transport)}`,
+          method: "GET",
           signal,
         },
+        home,
+        fetchRequest,
       );
       if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as ApiProblem | null);
       if (!res.body) throw new Error("session stream response has no body");

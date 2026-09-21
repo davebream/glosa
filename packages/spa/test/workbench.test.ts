@@ -477,6 +477,35 @@ describe("the multi-artifact workbench", () => {
     expect(tabLabels(second)).toEqual(["notes.md"]);
   });
 
+  test("§10: every pane comes back in the state it was left in, not only the focused one", async () => {
+    // The URL carries ONE artifact and one mode — the active pane's — so a reload used to restore
+    // the mode of that pane and reopen every other one in whatever state it was FIRST opened with.
+    // A reader who left a companion in Read came back to it showing notes again.
+    const storage = memoryStorage();
+    const { root, unmount } = await mountWithTwoTabs({ layoutStorage: storage });
+    const paneFor = (host: any, path: string) =>
+      Array.from(host.querySelectorAll(".glosa-pane")).find(
+        (pane: any) => pane.getAttribute("aria-label") === path,
+      ) as any;
+
+    paneFor(root, "drafts/outline.md").querySelector('.glosa-modebar [data-mode="read"]').click();
+    // Asserted before any flush: dockview buffers the layout-change event a parameter update
+    // raises, so a reload in that gap would keep the old state unless the write is synchronous.
+    expect(JSON.parse(storage.map.get("glosa:layout:ws-1")!).panels["drafts/outline.md"].params.mode).toBe("read");
+    await flush();
+    expect(paneFor(root, "drafts/outline.md").getAttribute("data-mode")).toBe("read");
+    expect(paneFor(root, "notes.md").getAttribute("data-mode")).toBe("review");
+    unmount();
+
+    const second = dom.document.createElement("div");
+    dom.document.body.append(second);
+    mountApp(second, { dataAccess: fakeDataAccess(), layoutStorage: storage });
+    await flush(12);
+    expect(tabLabels(second).sort()).toEqual(["notes.md", "outline.md"]);
+    expect(paneFor(second, "drafts/outline.md").getAttribute("data-mode")).toBe("read");
+    expect(paneFor(second, "notes.md").getAttribute("data-mode")).toBe("review");
+  });
+
   test("§10: a saved layout naming a deleted artifact still opens the workspace", async () => {
     const storage = memoryStorage();
     storage.setItem(

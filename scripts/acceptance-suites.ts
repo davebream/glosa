@@ -99,12 +99,22 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "test/acceptance/security-attack-matrix.test.ts",
     "packages/daemon/test/auth.test.ts",
     "packages/daemon/test/csp.test.ts",
+    "packages/daemon/test/dictation.test.ts",
     "packages/daemon/test/confine-path.test.ts",
     "packages/daemon/test/matcher/symlinks.test.ts",
     "packages/daemon/test/presentation-token.test.ts",
     "packages/daemon/test/token-lifecycle.test.ts",
+    "packages/cli/test/dictation.test.ts",
+    "packages/providers/wispr-flow/test/provider.test.ts",
+    "packages/providers/wispr-flow/test/browser.test.ts",
+    "packages/spa/test/dictation.test.ts",
+    "packages/spa/test/dictation-e2e.test.ts",
     "test/acceptance/browser-security-real-engine.test.ts",
     "test/acceptance/pairing-durability-real-engine.test.ts",
+    // #207 — A3 §5 attack #11. Not a browser attack, like #4 (symlink escape) and #5
+    // (leading-dash filename) before it: A3 §5 is the clause this suite discharges, and the
+    // attack is a local process taking the loopback port a resolved client still holds.
+    "test/acceptance/daemon-identity-socket.test.ts",
   ],
   anchor: [
     "packages/daemon/test/anchoring/class-f.test.ts",
@@ -123,6 +133,11 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/artifact-render-non-manuscript.test.ts",
     "packages/spa/test/outline-non-manuscript.test.ts",
     "test/acceptance/markdown-non-manuscript-boundaries.test.ts",
+    // #308 — the other direction of anchoring: a SESSION's quote of source markdown, located in the
+    // rendered text and marked on the page. Whether that mark is drawn around the exact words, is
+    // findable from the far end of a long document, and leaves the reader where they were can only
+    // be settled by a layout engine; happy-dom reports every rect as zero.
+    "test/acceptance/agent-question-real-engine.test.ts",
   ],
   transcript: [
     "packages/daemon/test/transcript/normalize.test.ts",
@@ -140,6 +155,12 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/spa/test/rich-editor.test.ts",
     "packages/spa/test/edit-save-guard.test.ts",
     "test/acceptance/rich-editor-browser-roundtrip.test.ts",
+    // #162 — this suite already owns the real browser shell that composes bootstrap, viewer and
+    // the editor from a URL (#145's coverage lives in the file above). The workbench's own
+    // release claims are about that same shell with MORE THAN ONE artifact in it: a reload that
+    // restores every pane's state, a mode control that addresses one pane, and a class-F frame
+    // that a layout move must not reload.
+    "test/acceptance/workbench-real-engine.test.ts",
   ],
 };
 
