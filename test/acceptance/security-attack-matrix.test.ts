@@ -349,6 +349,63 @@ describe("A3 §5 attack #9 — DNS rebinding with glosa.localhost in the Host al
 // ---------------------------------------------------------------------------------------------
 // #8 — fragment token in history/URL -> replaceState + origin-scoped localStorage + rotate/revoke
 // ---------------------------------------------------------------------------------------------
+describe("A3 §5 attack #11 — a local process takes the loopback port a resolved client still holds", () => {
+  const TOKEN = "b".repeat(32);
+
+  // Breadth only. The depth — real daemons, a real squatter on the freed port, the shutdown
+  // window, the socket's own permissions — lives in `daemon-identity-socket.test.ts`, which is in
+  // this same suite. What is worth pinning HERE is the rule that makes the socket usable at all:
+  // the browser-facing checks stand down on it, and the credential check does not.
+  test("Host and Origin stand down on the socket; the Bearer does not", () => {
+    // A state-changing request with NO Origin — which is every local client, since there is no
+    // browser to supply one. On the loopback port this is a 403 by design (CSRF needs a browser,
+    // and requiring Origin there is cheap); on the socket it is the normal case.
+    const noOrigin = new Request("http://localhost/api/sessions/s-1/heartbeat", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(authorizeRequest(noOrigin, { routeClass: "state-changing", port: SPA_PORT, token: TOKEN })).toEqual({
+      ok: false,
+      status: 403,
+      slug: "invalid-origin",
+    });
+    expect(
+      authorizeRequest(noOrigin, { routeClass: "state-changing", port: SPA_PORT, token: TOKEN, transport: "socket" }),
+    ).toEqual({ ok: true });
+
+    // An Origin a client happens to send is IGNORED rather than trusted: it must not be able to
+    // fail a check that means nothing here, nor to pass one by asserting it.
+    const foreignOrigin = new Request("http://localhost/api/sessions/s-1/heartbeat", {
+      method: "POST",
+      headers: { Origin: "http://evil.example", Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(
+      authorizeRequest(foreignOrigin, {
+        routeClass: "state-changing",
+        port: SPA_PORT,
+        token: TOKEN,
+        transport: "socket",
+      }),
+    ).toEqual({ ok: true });
+
+    // The credential still gates everything. This is what keeps `glosa token rotate` and
+    // `glosa token revoke` reaching programmatic clients; without it the socket would have
+    // quietly exempted them from revocation.
+    const wrongToken = new Request("http://localhost/api/sessions/s-1/heartbeat", {
+      method: "POST",
+      headers: { Authorization: "Bearer not-the-current-token" },
+    });
+    expect(
+      authorizeRequest(wrongToken, { routeClass: "state-changing", port: SPA_PORT, token: TOKEN, transport: "socket" }),
+    ).toEqual({ ok: false, status: 401, slug: "unauthorized" });
+
+    const noToken = new Request("http://localhost/api/sessions/s-1/heartbeat", { method: "POST" });
+    expect(
+      authorizeRequest(noToken, { routeClass: "state-changing", port: SPA_PORT, token: TOKEN, transport: "socket" }),
+    ).toEqual({ ok: false, status: 401, slug: "unauthorized" });
+  });
+});
+
 describe("A3 §5 attack #8 — token persistence/lifecycle", () => {
   function fakeStorage(): Storage {
     const map = new Map<string, string>();

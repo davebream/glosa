@@ -19,14 +19,30 @@ export type RouteClass =
    * no Bearer (the caller does not have one yet). */
   | "presentation-redeem";
 
+/**
+ * Which listener a request arrived on (A3 §3.2). Every Host and Origin rule in this file exists
+ * to stop a BROWSER attack — DNS rebinding, a hostile page's drive-by fetch, a cross-site form.
+ * None of those reaches a Unix socket: no browser can open one, and there is no name to rebind.
+ * So on `"socket"` those rules are inapplicable, in the same sense the `navigation` class already
+ * makes them inapplicable, and the peer's authority comes from the filesystem instead — the
+ * kernel refuses `connect(2)` from any other uid before a byte is written.
+ *
+ * `"loopback"` is the TCP listener the SPA uses and keeps every rule exactly as it was.
+ */
+export type Transport = "loopback" | "socket";
+
 export type AuthorizeResult = { ok: true } | { ok: false; status: number; slug: ProblemSlug };
 
 export interface AuthorizeOptions {
   routeClass: RouteClass;
   /** The port this request arrived on — used with the already-allowlisted `Host` to compute the
-   * expected "self" Origin (`http://<host>:<port>`). */
+   * expected "self" Origin (`http://<host>:<port>`). Unused on the socket transport, which has
+   * no port and no meaningful Host. */
   port: number;
   token: string | null;
+  /** Defaults to `"loopback"` so every existing caller — and every hand-built test context —
+   * keeps the browser-facing rules it has today. Only the socket listener opts out. */
+  transport?: Transport;
 }
 
 function bearerOf(req: Request): string | null {
@@ -46,14 +62,18 @@ export function isForeignOrigin(req: Request, port: number): boolean {
 }
 
 export function authorizeRequest(req: Request, opts: AuthorizeOptions): AuthorizeResult {
-  const { routeClass, port, token } = opts;
+  const { routeClass, port, token, transport = "loopback" } = opts;
 
   // Navigation can't carry custom headers at all — Origin/Bearer checks are inapplicable by
   // construction (A3 §4).
   if (routeClass === "navigation") return { ok: true };
 
   const origin = req.headers.get("Origin");
-  const foreign = isForeignOrigin(req, port);
+  // On the socket, treat Origin as absent rather than trusting whatever a client happened to
+  // send: the rules below exist to distinguish one browser origin from another, and there is no
+  // browser here to distinguish. A client that sets `Origin` must not be able to fail a check
+  // that means nothing on this transport, nor to pass one by asserting it.
+  const foreign = transport === "socket" ? false : isForeignOrigin(req, port);
 
   if (routeClass === "tokenless-handshake") {
     // Reject only a present-and-foreign Origin; absent or self is fine (Bearer is the gate on
@@ -86,9 +106,17 @@ export function authorizeRequest(req: Request, opts: AuthorizeOptions): Authoriz
 
   // state-changing: strict — Origin missing OR foreign is rejected (redundant with Bearer on
   // purpose), plus Sec-Fetch-Site: cross-site as defense-in-depth.
-  if (origin === null || foreign) return { ok: false, status: 403, slug: "invalid-origin" };
-  if (req.headers.get("Sec-Fetch-Site") === "cross-site") {
-    return { ok: false, status: 403, slug: "invalid-origin" };
+  //
+  // Both of those are CSRF defenses, and CSRF needs a browser to be tricked into making the
+  // request. The socket has no browser, so "Origin must be present" would be a ceremony a local
+  // client performs against nobody — which is exactly what it is today: every CLI call sets
+  // `Origin` to the daemon's own base URL purely to satisfy this line. On the socket the Bearer
+  // and the kernel's uid check are the gate.
+  if (transport !== "socket") {
+    if (origin === null || foreign) return { ok: false, status: 403, slug: "invalid-origin" };
+    if (req.headers.get("Sec-Fetch-Site") === "cross-site") {
+      return { ok: false, status: 403, slug: "invalid-origin" };
+    }
   }
   return { ok: true };
 }

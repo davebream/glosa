@@ -13,6 +13,11 @@ export interface HandshakeResponse {
   instance_id: string;
   pid: number;
   started_at: string;
+  /** Whether this daemon serves `<GLOSA_HOME>/run/api.sock` (A3 §3.2). Absent means a daemon that
+   * predates the socket listener — UNREACHABLE to a CLI/provider client, never "use the port
+   * instead". Same rule `install_id` follows: absent is a negative answer, not an unknown one to
+   * be resolved optimistically. */
+  serves_socket?: boolean;
 }
 
 function isHandshakeShape(value: unknown): value is HandshakeResponse {
@@ -25,7 +30,8 @@ function isHandshakeShape(value: unknown): value is HandshakeResponse {
     (v.install_id === undefined || typeof v.install_id === "string") &&
     typeof v.instance_id === "string" &&
     typeof v.pid === "number" &&
-    typeof v.started_at === "string"
+    typeof v.started_at === "string" &&
+    (v.serves_socket === undefined || typeof v.serves_socket === "boolean")
   );
 }
 

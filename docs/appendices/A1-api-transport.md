@@ -10,7 +10,12 @@ those are cross-referenced, not duplicated.
 
 ## 1. Transport baseline
 
-- Bind `127.0.0.1` only. Every request (including `GET /api/handshake`) is Origin- and
+- Two TCP listeners bind `127.0.0.1` only. A THIRD listener serves the same API over
+  `<GLOSA_HOME>/run/api.sock` (A3 §3.2): CLI, MCP and provider clients use it exclusively, the
+  browser cannot, and no other uid can open it. Host and Origin rules below are inapplicable
+  there — both defeat browser attacks, and there is no browser — while the Bearer is still
+  required, so token rotation and revocation reach socket clients unchanged.
+- On the TCP listeners, every request (including `GET /api/handshake`) is Origin- and
   Host-allowlisted first, before any other processing. The Host allowlist is exactly
   `127.0.0.1:<port>` and `glosa.localhost:<port>` on this port (A3 §4 Rule 1, #159); a rejected
   Host returns `400` with no body, and a foreign Origin returns `403`, regardless of route or auth
@@ -80,10 +85,13 @@ those are cross-referenced, not duplicated.
   - Missing `X-Contract-Version` header (any client that isn't the bundled SPA, e.g. a future
     CLI caller) is treated as "unknown minor, same major assumed" — not rejected — since major
     mismatches are the only breaking case and those are caught by the handshake response itself.
-- `GET /api/handshake` returns `{contract_version, daemon_version, paired: boolean}` and is the
-  first call the SPA makes on load, before it has a token, so it can render the right one of the
-  three failure screens (daemon unreachable / unpaired / contract mismatch) instead of a generic
-  error.
+- `GET /api/handshake` is the first call the SPA makes on load, before it has a token, so it can
+  render the right one of the three failure screens (daemon unreachable / unpaired / contract
+  mismatch) instead of a generic error. It carries the SPA's three fields
+  (`contract_version`, `daemon_version`, `paired`) plus the daemon-lifecycle identity
+  `ensureDaemon` matches against the lock (`build_id`, `install_id`, `protocol_version`,
+  `instance_id`, `pid`, `started_at`) and `serves_socket`. Two compatibility checks share one
+  route — see §5.1 for the full body and A3 §4 for why publishing all of it is safe.
 
 ## 4. Body size limits
 
@@ -107,11 +115,23 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 `:artifactPath` param is validated per §6 before use.
 
 ### 5.1 `GET /api/handshake`
-No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
-400 for Host, 403 for Origin, per §1).
+No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
+only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true,
+  "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
+  "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
+  "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
 ```
+The first three fields are the SPA's; the rest are the daemon-lifecycle identity `ensureDaemon`
+matches against `daemon.lock`, which publishes the same values to any local reader (A5 §F13).
+Every one is deliberately non-secret — A3 §3.2's guarantee assumes they are public rather than
+resting on their being private. `install_id` is a hash and `serves_socket` a boolean for the same
+reason: no filesystem path may appear on a tokenless endpoint.
+
+`serves_socket` reports whether this daemon serves `<GLOSA_HOME>/run/api.sock`. A client that
+needs it treats an absent field as `false` and fails closed naming the recovery, rather than
+falling back to the port — see A3 §3.2 on why a fallback would forfeit the whole defense.
 
 ### 5.2 `GET /api/workspaces`
 Bearer required. Lists the live registry (R1 sources: live-session cwds, `.glosa/`-marked

@@ -56,7 +56,7 @@ describe("open-presentation shared contract", () => {
     });
   });
 
-  test("MCP-style presentation mints p=, never launches, and does not leak the durable token", async () => {
+  test("presentation mints p=, never launches, and does not leak the durable token", async () => {
     const client = new FakeGlosaApiClient();
     client.openWorkspaceResult = {
       slug: "review-a1b2c3",
@@ -85,7 +85,6 @@ describe("open-presentation shared contract", () => {
 
     const result = await runOpenPresentation("/work/review/draft.md", undefined, "document", deps, {
       launchBrowser: false,
-      usePresentationToken: true,
       readLock: true,
       mode: "read",
     });
@@ -99,6 +98,49 @@ describe("open-presentation shared contract", () => {
     expect(result.data.url).not.toContain("t=");
     expect(result.data.url).not.toContain("durable-token-must-not-leak");
     expect(result.data).toMatchObject({ surface: "document", mode: "read", preview: true });
+  });
+
+  // Issue #207: this is the path that used to put the DURABLE pairing token in a URL and hand it
+  // to a browser over TCP, addressed to a port resolved earlier and never re-verified. Whatever
+  // holds that port when the browser arrives receives what the fragment carries, and moving the
+  // API onto a Unix socket cannot protect it — browsers cannot open one. So the fragment must
+  // carry a single-use 60-second token instead, on the terminal path as well as the MCP one.
+  test("the browser-launching path carries a single-use token, never the durable credential", async () => {
+    const client = new FakeGlosaApiClient();
+    client.openWorkspaceResult = {
+      slug: "review-a1b2c3",
+      path: "/work/review",
+      focus: "draft.md",
+      kind: "directory",
+    };
+    client.mintPresentationTokenResult = { token: "single-use-token", expires_in_s: 60 };
+    // An array rather than a `string | null`: TypeScript narrows a `let` assigned only inside a
+    // callback back to `null`, and the assertions below are the point of the test.
+    const launched: string[] = [];
+    const deps: OpenPresentationDeps = {
+      createClient: async () => client as unknown as GlosaApiClient,
+      ensureToken: () => "durable-token-must-not-leak",
+      glosaHome: () => "/tmp/glosa-home-fixture",
+      openBrowser: (url) => {
+        launched.push(url);
+      },
+      platform: () => "darwin",
+      dirExists: (path) => path === "/work/review",
+      fileExists: (path) => path === "/work/review/draft.md",
+      isRegularFile: (path) => path === "/work/review/draft.md",
+    };
+
+    const result = await runOpenPresentation("/work/review/draft.md", undefined, "document", deps, {});
+
+    expect(result.ok).toBe(true);
+    expect(client.calls.map((call) => call.method)).toContain("mintPresentationToken");
+    // Asserted on what the BROWSER was actually handed, not only on the envelope: the envelope
+    // and the launched URL are two different strings, and only one of them reaches the port.
+    expect(launched).toHaveLength(1);
+    const launchedUrl = launched[0] as string;
+    expect(launchedUrl).toContain("p=single-use-token");
+    expect(launchedUrl).not.toContain("durable-token-must-not-leak");
+    expect(new URLSearchParams(new URL(launchedUrl).hash.slice(1)).has("t")).toBe(false);
   });
 });
 

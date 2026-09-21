@@ -77,8 +77,10 @@ export {
   enclosingGitRootWithin,
   workspaceRootFor,
 } from "./registry/workspace-root.ts";
-export type { AuthorizeOptions, AuthorizeResult, RouteClass } from "./security/auth.ts";
+export type { AuthorizeOptions, AuthorizeResult, RouteClass, Transport } from "./security/auth.ts";
 export { authorizeRequest, isForeignOrigin } from "./security/auth.ts";
+export type { AuthedRequestSpec, DaemonUnreachableError } from "./security/authed-request.ts";
+export { authedRequest, daemonUnreachable } from "./security/authed-request.ts";
 export type { ConfineResult } from "./security/confine-path.ts";
 export { confinePath } from "./security/confine-path.ts";
 export { classFCspHeaders, spaCspHeaders } from "./security/csp.ts";

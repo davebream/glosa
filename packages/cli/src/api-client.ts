@@ -13,7 +13,7 @@ import type { ShadowDiagnosis } from "../../daemon/src/git/shadow-health.ts";
 
 import type { WorkspaceMetadataDescriptor } from "../../daemon/src/adapters/workspace-metadata.ts";
 import type { DeliverableEntry } from "../../daemon/src/agent-provider/interface.ts";
-import { ensureDaemon, glosaHome, loadToken } from "../../daemon/src/index.ts";
+import { authedRequest, ensureDaemon, glosaHome } from "../../daemon/src/index.ts";
 
 export interface ApiProblem {
   type?: string;
@@ -365,8 +365,12 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
       conn.logPath && !conn.reason.includes(conn.logPath) ? `${conn.reason} — see ${conn.logPath}` : conn.reason,
     );
   }
+  // The WHOLE resolved connection, not just its port (issue #207) — see `daemon-client.ts` for
+  // the same note. `port` stays on the returned client because `glosa open` builds the browser
+  // URL from it; nothing authenticated reads it.
+  const { ok: _resolved, ...connection } = conn;
   const port = conn.port;
-  const base = `http://127.0.0.1:${port}`;
+  const home = glosaHome();
   const shutdownSignal = options.signal;
 
   async function call(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
@@ -376,23 +380,22 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
     const scope = signal
       ? AbortSignal.any([shutdownSignal, signal].filter((s): s is AbortSignal => !!s))
       : shutdownSignal;
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        Host: `127.0.0.1:${port}`,
-        Origin: base,
-        // Resolved per request, not captured when the client was built — the same reason as
-        // `daemon-client.ts`. This client is reused across a whole tool call: `glosa_ask` holds it
-        // through the attention request and every held-status poll, which can span minutes. A
-        // rotation in that window turned the next poll into a 401 that `glosa_ask` treats as
-        // transient and retries until it reports `unanswered`, with a healthy daemon and a real
-        // human answer waiting on the other side.
-        Authorization: `Bearer ${loadToken(glosaHome())}`,
-        "Content-Type": "application/json",
+    // `authedRequest` resolves the token per request rather than at construction. This client is
+    // reused across a whole tool call: `glosa_ask` holds it through the attention request and
+    // every held-status poll, which can span minutes. A rotation in that window turned the next
+    // poll into a 401 that `glosa_ask` treats as transient and retries until it reports
+    // `unanswered`, with a healthy daemon and a real human answer waiting on the other side.
+    const res = await authedRequest(
+      connection,
+      {
+        path,
+        method,
+        contentType: "application/json",
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(scope ? { signal: scope } : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      ...(scope ? { signal: scope } : {}),
-    });
+      home,
+    );
     if (!res.ok) {
       let problem: ApiProblem | null = null;
       try {

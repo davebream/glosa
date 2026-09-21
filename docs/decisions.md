@@ -192,7 +192,9 @@ Three deliberate consequences:
 - **The id is a hash, not the path.** `/api/handshake` is tokenless, and a filesystem path on an
   unauthenticated endpoint is a privacy regression for a tool holding manuscripts. The hash is not
   a secrecy boundary either — its input is guessable, and A3's threat model is hostile web content,
-  not a same-uid process, which can read `<home>/token` directly regardless.
+  not a process at the user's own uid, which can read `<home>/token` directly regardless. The rule
+  outlived the reasoning and is worth keeping on its own terms: it is why the handshake reports
+  `serves_socket` as a boolean rather than publishing the socket's path.
 
 ## A source checkout gets its own home and port
 
@@ -244,10 +246,71 @@ tokenless handshake, so a process that seizes the port receives strictly less th
 where every stream reconnect re-offers the Bearer to whatever is listening. The wait is bounded at
 ten minutes, after which the tab falls back to discarding the credential.
 
-`install_id` is not a proof of possession and is not treated as one. Anything that can bind
-127.0.0.1 as this user can also read `<home>/token` directly, so it defends against a coexisting
-install, which is an accident, and not against a same-uid attacker, who is outside A3's threat
-model either way.
+`install_id` is not a proof of possession and is not treated as one. For the user's own uid the
+inference holds: anything running as this user can read `<home>/token` directly, so `install_id`
+defends against a coexisting install, which is an accident, and not against that process, which
+is outside A3's threat model either way.
+
+That reasoning was originally written as "anything that can bind 127.0.0.1 as this user", and the
+qualifier does not follow: binding a loopback port above 1024 needs no privilege and no particular
+uid. A process at a DIFFERENT uid can bind the port and read the world-readable lock, but cannot
+read the 0600 token — so handing it one is a real loss, and `install_id` does not prevent that.
+See "A resolved daemon endpoint is not an identity" below for what does.
+
+## A resolved daemon endpoint is not an identity
+
+A client called `ensureDaemon()` once, kept the port, and sent the pairing token there for the
+rest of its life. For a CLI command that window is milliseconds. For the MCP shim's `glosa_ask` it
+is ten minutes, for `glosa_watch` fifteen, for the Codex attachment and the Claude monitor's
+stream the whole session. The monitor also captured the token itself, so a `token rotate` turned
+its every later acknowledgement into a silent 401.
+
+A port held that long is not an identity. Once the daemon exits, any local process can take it,
+and the lock it leaves behind is world-readable (0644) where the token beside it is 0600 — so a
+process at a DIFFERENT uid can read the identity the daemon published, echo it back through the
+tokenless handshake, and be handed a credential it could never have read from disk. #140 met this
+in the shim's shutdown path and answered it by removing the send. That was right for one path and
+not a general rule.
+
+**Re-verifying the endpoint before each use was the obvious general rule, and it does not work.**
+Every value a client could compare — `instance_id`, `pid`, `protocol_version`, `build_id`,
+`install_id` — is published by the lock and republished by the handshake, so an impostor satisfies
+all of them. The one locally checkable fact that is not published is whether the process the lock
+NAMES is still alive, and that is a fact about the wrong process: `drainDaemonServers` calls
+`server.stop(false)` up to eight seconds before `removeLockIfOwned` runs, so on every ordinary
+shutdown the port is free while the PID is alive, `ps` still shows `__daemon`, and the lock is
+untouched. A squatter that binds the freed port in that window passes a fresh lock read, a
+live-PID check, a command-line check and full lock↔handshake agreement. A5 §F13 already described
+that state for a different reason. A nonce challenge fails for the same structural reason in a
+narrower window: the challenge and the request that carries the credential are two connections,
+and only putting the proof inside the request would close that — a different protocol, not a
+different check.
+
+So the endpoint is not chosen by comparison. Programmatic clients — CLI, MCP shim, Claude monitor,
+Codex attachment — use `<GLOSA_HOME>/run/api.sock`, 0600 inside a directory created 0700, derived
+from the client's own home and never from anything a peer said. Filesystem permissions become the
+authentication: the kernel refuses `connect(2)` from another uid before a byte is written, which
+is not a check that can be satisfied by replay. It also deletes the machinery the rejected design
+needed — no `ps` subprocess on a request path, no freshness TTL to argue about, no window between
+proving and sending.
+
+Three consequences worth stating:
+
+- **No fallback to the port.** A socket that is missing or refusing is `DAEMON_UNREACHABLE`. A
+  fallback would hand an attacker the whole defense, since making the socket look absent is free.
+  A daemon that does not report `serves_socket` is refused at resolve time, where the message can
+  name the recovery, rather than at the first request.
+- **The Bearer stays on the socket** even though the kernel has already answered who the peer is.
+  It is what makes `glosa token rotate` and `glosa token revoke` reach programmatic clients;
+  dropping it would have quietly exempted them from revocation.
+- **`glosa open` is the one crossing this cannot protect**, because its destination is a browser
+  and browsers speak TCP. It now carries a single-use 60-second presentation token instead of the
+  durable credential, so an impostor on the port receives something that expires, redeems once,
+  and redeems to nothing.
+
+What this does not do: defend against the user's own uid, which reads `<home>/token` directly and
+against which no transport can help; or move the SPA, which cannot open a Unix socket and keeps
+the weaker reactive rule above. A3 §3.2 states both rather than leaving the asymmetry implied.
 
 ## Claude Code has more than one config root, and glosa has to see all of them
 

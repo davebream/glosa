@@ -56,10 +56,10 @@ plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a no
  user's terminal: interactive `claude` (or `codex`) session(s)      browser (any: Safari-dock / tab / later Electron)
    plugin monitor / app-server attach → register + push stream ·        glosa SPA (served by daemon over http://127.0.0.1)
    MCP shim (`glosa mcp`) pull/ack/bind · `glosa resolve`/`apply-begin`  Read/Review/Edit · 4 viewers · workspace switcher
-                    │ push stream (SSE), MCP(stdio), CLI                            │ fetch + streaming-SSE, Bearer (SPA origin)
+                    │ push stream (SSE), MCP(stdio), CLI — over run/api.sock        │ fetch + streaming-SSE, Bearer (SPA origin)
              ┌──────▼──────────────────────────────────────────────────────────────▼──────┐
-             │ glosa daemon — singleton per machine, TWO fixed ports (4646 SPA/API, 4647    │
-             │ class-F content). file bus: per-workspace inbox + journal(=truth) + shadow-  │
+             │ glosa daemon — singleton per machine: 2 ports (4646 SPA/API, 4647 class-F)   │
+             │ + run/api.sock. file bus: per-workspace inbox + journal(=truth) + shadow-    │
              │ git · picomatch matcher · session registry · global workspace index ·        │
              │ provider-based delivery · auth (Host+Origin allowlist + Bearer + capabilities)│
              └──────────────────────────────────────────────────────────────────────────────┘
@@ -87,7 +87,10 @@ generic.**
   class-F port = `GLOSA_PORT+1` = 4647). No entry point *becomes* the daemon in-process: a client with
   no live daemon **spawns a detached `glosa __daemon`** (unref + ignores SIGHUP/SIGINT) and acts as a
   client; the MCP shim (`glosa mcp`) only proxies, never binds/locks. Readiness = a lock plus a
-  passing `/api/handshake`. A daemon that already established ownership recreates its own missing
+  passing `/api/handshake` that reports it serves the local socket; a daemon that does not is
+  refused rather than reached over TCP. That pair proves the daemon at the instant it is read and
+  no longer, which is why it governs discovery and ownership only — where an authenticated request
+  goes is decided by the filesystem, not by it (R5, A3 §3.2). A daemon that already established ownership recreates its own missing
   lock through a 250 ms watchdog and also during handshake, using the same O_EXCL+fsync path;
   clients proceed only after re-reading a matching lock/handshake pair. Corrupt or mismatched locks
   are never overwritten, lockless older daemons remain fail-closed with manual recovery guidance,
@@ -270,7 +273,19 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   eligible, and later attempts append `reason:re_nudge` without mutating the inbox payload.
 
 ### R5 — HTTP API + auth  (detail: A1 full, A3 §4)
-- Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins.
+- Two fixed loopback listeners (SPA/API 4646; class-F content 4647) — one daemon, two origins —
+  plus a third listener on `<GLOSA_HOME>/run/api.sock` serving the same authenticated API.
+- **A resolved endpoint is not an identity.** Every authenticated request from a CLI, MCP or
+  provider client goes over that socket — 0600, inside a directory created 0700, derived from the
+  client's own `GLOSA_HOME` and never from a value a peer supplied — and there is **no fallback to
+  the port**: a socket that is missing, refusing or unreadable is `DAEMON_UNREACHABLE` and nothing
+  is sent. Host and Origin rules are inapplicable on that transport (both defeat browser attacks,
+  and no browser can open it); the Bearer is still required, so token rotation and revocation
+  reach these clients unchanged. The browser keeps the loopback port, and the one credential that
+  must still cross it — the pairing fragment `glosa open` hands a browser — is a single-use 60s
+  presentation token, never the durable one. Identity comparison against the lock remains what it
+  was, a readiness and ownership check; it is explicitly NOT what decides where a credential goes
+  (A3 §3.2).
 - **Auth**: `Host` must literally equal an allowlisted name + port on every request — `127.0.0.1:<port>`
   or, on the SPA/API port only, `glosa.localhost:<port>` (resolved on-device, never by a DNS query → anti-rebinding; #159);
   Bearer token (128-bit, `~/.glosa/token` 0600) on API requests via `Authorization` header; **SSE uses

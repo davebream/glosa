@@ -53,8 +53,6 @@ export interface OpenPresentationOptions {
   readLock?: boolean;
   mode?: PresentationMode;
   bindSessionId?: string;
-  /** When true, mint a short-TTL presentation token and put `p=` in the URL (MCP). */
-  usePresentationToken?: boolean;
 }
 
 export interface OpenPresentationDeps {
@@ -244,8 +242,11 @@ export async function runOpenPresentation(
   }
 
   // Mint/reuse the pairing token BEFORE ensuring the daemon — see open.ts historical comment.
+  // Called for its effect, and the result deliberately discarded: since #207 the durable token
+  // never enters a URL, but it must still EXIST, because the presentation token minted below is
+  // redeemed for it and the browser pairs with it afterwards.
   const home = deps.glosaHome();
-  const durableToken = deps.ensureToken(home);
+  deps.ensureToken(home);
 
   let client: GlosaApiClient;
   try {
@@ -305,26 +306,36 @@ export async function runOpenPresentation(
     }
   }
 
-  let pairing: PresentFragmentOptions["pairing"] = { kind: "durable", token: durableToken };
-  if (options.usePresentationToken) {
-    try {
-      if (!client.mintPresentationToken) throw new Error("presentation tokens are unavailable");
-      const minted = await client.mintPresentationToken();
-      pairing = { kind: "presentation", token: minted.token };
-    } catch (err) {
-      return {
-        ok: false,
-        command: "open",
-        exitCode: EXIT_CODES.ENTRY_ERROR,
-        data: {},
-        warnings,
-        error: {
-          code: "presentation-token-failed",
-          kind: "entry_error",
-          message: err instanceof Error ? err.message : "failed to mint presentation token",
-        },
-      };
-    }
+  // ALWAYS a short-TTL, single-use presentation token — never the durable credential (issue
+  // #207). This is the one credential crossing that moving the API onto a Unix socket cannot
+  // protect: the destination is a browser, browsers speak TCP, and the URL is built from a port
+  // that was resolved earlier and is not re-verified. Whatever holds that port when the browser
+  // arrives receives what the fragment carries.
+  //
+  // With the durable token that was the whole pairing credential, indefinitely. With a
+  // presentation token it is 256 bits that expire in 60 seconds and redeem once, and redeeming
+  // them against the impostor that just received them yields nothing — the durable token they
+  // would exchange for lives on the real daemon. `glosa_present` has minted these for a
+  // human-clicked URL since it shipped; this makes the CLI path do the same rather than being
+  // the one door that still hands over everything.
+  let pairing: PresentFragmentOptions["pairing"];
+  try {
+    if (!client.mintPresentationToken) throw new Error("presentation tokens are unavailable");
+    const minted = await client.mintPresentationToken();
+    pairing = { kind: "presentation", token: minted.token };
+  } catch (err) {
+    return {
+      ok: false,
+      command: "open",
+      exitCode: EXIT_CODES.ENTRY_ERROR,
+      data: {},
+      warnings,
+      error: {
+        code: "presentation-token-failed",
+        kind: "entry_error",
+        message: err instanceof Error ? err.message : "failed to mint presentation token",
+      },
+    };
   }
 
   const focusRel = opened.focus;

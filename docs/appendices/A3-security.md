@@ -3,10 +3,21 @@
 Threat model: other local/remote websites reachable by the user's browser (drive-by fetch, hostile
 iframe/tab, DNS rebinding) — NOT another OS-user process.
 
-## 0. Topology — two fixed listeners, one daemon
-- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Two origins, one listener: `http://glosa.localhost:4646` (what `glosa open` links to) and `http://127.0.0.1:4646` (what the CLI, plugin monitor and `GLOSA_OPEN_HOST=127.0.0.1` use). `localStorage` is per origin, so a pairing made on one name is not visible on the other; `glosa open` re-pairs through the fragment either way. Within one origin it IS shared: every tab reads the same credential.
+That exclusion is about what glosa **defends**, and it was being read as a statement about what
+glosa **exposes**. The two came apart at the daemon's own API: a client resolved a loopback port
+once and then sent the pairing token there for the rest of its life, so once the daemon exited,
+any local process — at any uid — could take the port and be handed a credential it could never
+have read from disk. §3.2 states what daemon identity actually proves, against which uid, and why
+the programmatic API now lives on a Unix socket instead.
+
+## 0. Topology — two ports plus a socket, one daemon
+- `GLOSA_PORT` (default 4646) — SPA + authenticated API. Two origins, one listener: `http://glosa.localhost:4646` (what `glosa open` links to) and `http://127.0.0.1:4646` (what `GLOSA_OPEN_HOST=127.0.0.1` links to; the CLI and the plugin monitor used to use it and now use the socket below — §3.2). `localStorage` is per origin, so a pairing made on one name is not visible on the other; `glosa open` re-pairs through the fragment either way. Within one origin it IS shared: every tab reads the same credential.
 - `GLOSA_CLASSF_PORT` = GLOSA_PORT+1 (default 4647) — class-F foreign HTML only. Origin `http://127.0.0.1:4647`.
+- `<GLOSA_HOME>/run/api.sock` — the SAME authenticated API as the SPA/API port, served to CLI, MCP
+  and provider clients only. No browser can open a Unix socket, so the SPA never uses it; no other
+  uid can open this one, so nothing else does either (§3.2).
 - Two ports ≠ two daemons: one process/lock/lifecycle; two ports = two real origins (scheme+host+port).
+  The socket is a third listener on that same process, not a fourth origin: it has no origin at all.
 
 ## 1. F03 — class-F separate origin + CSP
 - Serve: `GET /doc/:token/<path...>` on class-F origin ONLY (the class-F listener's only route); never accepts Bearer — the capability IS the auth.
@@ -95,7 +106,67 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Log redaction: one `redact()` at logger boundary — strip `Authorization` values; regex-redact token/capability-shaped path segments `[A-Za-z0-9_-]{32,}`. Grep-enforceable single call site.
 - **confinePath(workspaceRoot, relPath)**: reject absolute or `..`-containing; `path.resolve`; realpath the nearest EXISTING ancestor (so not-yet-created files still confined); reject if realAncestor not under realRoot. ONE shared utility at every path entry point (HTTP routes, class-F mint/serve, adapter manifest, git pathspec); grep-enforced in CI. Rejects lexical traversal AND symlink escape. Argv safety: git paths as discrete argv elements + `--` before first path → filename `--force` can't be a flag.
 
+## 3.2 Daemon identity — what it proves, against which uid, and where it stops
+
+**What identity is.** A daemon publishes `instance_id`, `pid`, `port`, `protocol_version`,
+`build_id` and `install_id` in `<GLOSA_HOME>/daemon.lock`, and the tokenless `GET /api/handshake`
+republishes the same values. Agreement between the two is the readiness proof R1 requires. Every
+one of those values is **published**: the lock is world-readable (0644, `openSync(path,"wx")` with
+no mode) inside a `<GLOSA_HOME>` created with no mode either, and the handshake needs no
+credential. The pairing token beside them is 0600.
+
+**That asymmetry is the whole problem.** A process at the user's OWN uid reads `<home>/token`
+directly, so no client-side check can defend against it and none is attempted. A process at a
+DIFFERENT uid can read the lock but not the token — so handing it the token is a real loss, and
+everything it needs to look like the daemon is in a file it may read.
+
+**Re-verifying identity before each use does not fix that, which is why glosa does not do it.**
+Every value a client could compare is one the impostor read out of the lock. The one fact that is
+not published — whether the process the lock NAMES is still alive — is a fact about the wrong
+process: `drainDaemonServers` closes the listeners up to `SHUTDOWN_HARD_EXIT_MS` (8s) before
+`removeLockIfOwned` runs, so on **every ordinary shutdown** there is a window in which the port is
+free, the PID is alive, `ps` still shows `__daemon`, and the lock is untouched and correct. A
+process that binds the freed port in that window satisfies a fresh lock read, a live-PID check, a
+command-line check and full lock↔handshake agreement. A5 §F13 already names that state for a
+different reason: "a free port with a live PID is also exactly what a daemon looks like between
+closing its listeners and removing its lock on the way out, which can take seconds."
+
+**So the destination is not chosen by comparison.** Every authenticated request from a CLI, MCP or
+provider client goes to `<GLOSA_HOME>/run/api.sock`, derived from the client's own `GLOSA_HOME`
+and never from anything a peer said. `run/` is created 0700 and the socket is chmod'd 0600; on
+Darwin the kernel enforces both the socket's mode and the parent's traversal bit on `connect(2)`,
+so another uid is refused before a byte is written. The directory is the load-bearing one:
+`Bun.serve({unix})` creates the socket 0755 and the chmod necessarily lands after, and the
+parent's traversal bit covers that instant. `run/` is a new directory created 0700 from birth, so
+none of this depends on the inherited mode of `<GLOSA_HOME>` itself.
+
+**There is no fallback to the port, deliberately.** A socket that is missing, refusing or
+unreadable is `DAEMON_UNREACHABLE` and the request is not sent. A fallback would hand an attacker
+the entire defense: making the socket look absent is free. For the same reason the handshake
+publishes `serves_socket` as a BOOLEAN and never the path — a home-directory path on a tokenless
+endpoint is the privacy regression `install_id` is a hash to avoid — and a daemon that does not
+report it is refused at resolve time rather than talked to over TCP.
+
+**What this does and does not guarantee.**
+
+| | guarantee |
+|---|---|
+| Programmatic clients (CLI, MCP, Claude monitor, Codex attachment) | The credential is never offered to another uid, in any window, including the shutdown drain. Not a comparison that can be satisfied by replay — a kernel permission check. |
+| The user's own uid | Nothing, by design. It reads `<home>/token` directly; no transport can be stronger than the filesystem. |
+| The SPA | Weaker, and it cannot be otherwise: browsers cannot open a Unix socket, so the SPA stays on the loopback port with the Bearer. Its rule is reactive — on a 401 it classifies the peer against the tokenless handshake and, if the `install_id` differs from the one it paired with, keeps the credential but stops transmitting (§3). A squatter that answers 200 to everything is never classified. |
+| `glosa open`'s browser URL | The one credential crossing the socket cannot protect, because its destination is a browser. It therefore carries a single-use 256-bit presentation token with a 60s TTL, never the durable credential: what an impostor on the port receives expires, redeems once, and redeems to nothing, because the durable token it would exchange for lives on the real daemon. |
+
+**Never transmit the credential to an unverified peer.** §3 already states this for the browser —
+"safety comes from not sending it to an unidentified peer, not from possession". It is now the
+rule for every local client too, and on the socket it is the kernel that decides, not the client.
+
 ## 4. Host/Origin/Auth resolved table
+- Rule 0 (the socket listener): Host and Origin rules are **inapplicable**, in the same sense they
+  are for the `navigation` class. Both exist to defeat a browser — DNS rebinding needs a resolver
+  and a hostile page needs an origin — and neither can reach a Unix socket. An `Origin` header on
+  this transport is neither trusted nor rejected; it is ignored. The Bearer is still required on
+  every route that requires it anywhere else, so `glosa token rotate` / `token revoke` kill socket
+  clients exactly as they kill browser ones. Everything below applies to the two TCP ports.
 - Rule 1 (every request, both ports): `Host` MUST literally equal one allowlisted name + port. SPA/API port: `127.0.0.1:<port>` or `glosa.localhost:<port>`. Class-F port: `127.0.0.1:<port>` only. No case folding, trailing dot, subdomain or other `.localhost` name. Mismatch → 400, close, no body.
   - Why a name is allowed at all (#159): rebinding needs a hostname an attacker can answer for — first with their own server, then with `127.0.0.1`. Nobody can answer for `glosa.localhost`. RFC 6761 reserves `.localhost` for loopback; Chrome and Firefox resolve it internally, and the macOS system resolver (used by Safari) synthesizes the answer without a query. Verified on macOS 26.2: `dns-sd -G v4v6 glosa.localhost` answers `localhost.` → `127.0.0.1` / `::1` with interface `-1` (local-only) and TTL 1, and `/etc/hosts` cannot produce that (it does not support wildcards). A page on any other name, including one rebound to loopback, still arrives with its own name as `Host` and gets the 400.
   - Why not a public domain pointing at `127.0.0.1` (the `*.plex.direct` pattern): that name is resolved by an outside DNS server that can change its answer, which re-opens rebinding; and each resolution is an outbound query, which invariant 5 / A6 §F33 forbid.
@@ -103,7 +174,7 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Given Host passes, on SPA origin:
   | Route class | Bearer | Origin rule |
   |---|---|---|
-  | Tokenless handshake `GET /api/handshake` | No | Reject if Origin present+foreign; allow self/absent. Body non-sensitive `{contract_version,daemon_version,paired}`. |
+  | Tokenless handshake `GET /api/handshake` | No | Reject if Origin present+foreign; allow self/absent. Body non-sensitive: `{contract_version, daemon_version, build_id, install_id, paired, protocol_version, instance_id, pid, started_at, serves_socket}`. All nine identity values are non-secret *by construction* — `daemon.lock` publishes the same ones to any local reader, and §3.2's guarantee is built on the assumption that they ARE public rather than on keeping them quiet. `install_id` is a hash and `serves_socket` a boolean precisely so no filesystem path is among them. |
   | Presentation redeem `POST /api/presentation-token/redeem` | No (redeems for Bearer) | Reject if Origin missing OR foreign; also reject `Sec-Fetch-Site: cross-site`. Returns the durable pairing token once. |
   | Authed reads (GET: artifact, SSE, diff, transcript, inbox, entry-status, watch, dictation status) | Yes (401) | Reject only if Origin present+foreign; absent allowed (Bearer is the gate). |
   | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token, watch/transport-ack, watch/ack, dictation session) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
@@ -141,6 +212,18 @@ are shaped so that no request can name one.
     session route + conditional exact-origin CSP → test: startup/status/configuration cause zero external
     calls; unconfigured SPA CSP excludes the provider; configured CSP allows only its WSS origin;
     class-F CSP remains byte-for-byte network-locked.
+
+11. A local process takes the loopback port a resolved client is still using (#207) → the
+    programmatic API is not on that port: every authenticated CLI/MCP/provider request goes to
+    `<GLOSA_HOME>/run/api.sock`, 0600 inside a 0700 directory, with no fallback to TCP, and
+    `glosa open`'s browser URL carries a single-use 60s presentation token rather than the durable
+    credential → test (`test/acceptance/daemon-identity-socket.test.ts`): boot a real daemon,
+    build a client, then (a) SIGKILL it so its lock survives and bind the freed port with a server
+    echoing the dead daemon's handshake verbatim, and (b) SIGTERM it and bind the port DURING the
+    drain, while its PID is still alive and its lock still correct — in both cases the authed call
+    fails closed and the squatter observes no `Authorization` header; plus the run dir is 0700,
+    the socket 0600, a `connect(2)` through a chmod-000 directory gets EACCES, and removing the
+    socket makes an authed call fail rather than fall back to the port.
 
 ### Explicit shadow repair (#226)
 
