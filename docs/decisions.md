@@ -1081,3 +1081,42 @@ because neither is this decision's to make:
   reports collateral and asks for consent on a write that is byte-honest. The bytes are right; the
   guard's `faithful` candidate is built without source for a modelled run, and the overlap join
   counts the adjacent line ending. A false consent prompt, not a data-loss bug.
+
+## A cancelled `glosa_ask` withdraws its question; a timed-out one leaves it (#310)
+
+Maintainer decision, issue #310. `glosa_ask` blocks on a held read until the human answers or the
+wait runs out. Those are not the only two endings — the human can also interrupt the agent
+mid-question. Until now that ending was invisible: the shim kept waiting out the clock, and the
+question sat in the margin still offering "Send answer" to nobody.
+
+**Decision.** A cancelled call ends its wait immediately and withdraws the question — terminal
+`expired`, attributed to the session that asked. A wait that merely elapses keeps its documented
+behaviour: the question stays where the human can still answer it.
+
+The two endings mean different things. Cancelling is the human telling the agent to stop, so a
+question the agent will never read again is clutter — and today the only way to clear it is to
+answer it, since nothing writes the `expired` terminal for attention entries and attention entries
+have no dismiss. A wait running out is the agent giving up on its own; `wait_seconds` already
+promises the question survives that, and a later answer still reaches the agent through the inbox.
+
+**Why not the alternatives.** Keeping it open silently was the status quo, and it is what the issue
+is about. A new "asker gone" marker — a journal event saying the session stopped listening, leaving
+the entry open — was rejected: it is new journal vocabulary whose truth expires the moment the shim
+crashes, so every reader would have to decide how stale a marker is before trusting it, and a stale
+one reads exactly like a live one.
+
+**Consequences.** `expired` was already a legal attention terminal with no writer; this gives it
+one, so a session may now write a terminal that only the daemon and the human wrote before. The
+attribution is a claim, not a proof: `by: session:<id>` without a lease, exactly as
+`resolve … deferred` already records one. Terminal entries already drop out of the tray, the
+margin cards, `glosa inbox list`, `has_attention` and the badge count, and the `journal` SSE
+frame already refreshes the tray — so no SPA change was needed. The tool reports a fifth outcome, `withdrawn`,
+which in practice only a test observes: the MCP SDK drops the response to a request the client
+cancelled.
+
+**Not done.** Shim shutdown and a crash still leave the question open. Withdrawing at `close()`
+would mean putting the current bearer token on the wire to an endpoint resolved earlier in the
+session — the exact hazard `close()` already refuses to take for deregistration, and the question
+being cleared is not worth reopening it for. `glosa request-review --wait` interrupted with SIGINT
+is unchanged: it passes no signal, and a human at a terminal interrupting their own command is not
+the same act as an agent's call being cancelled out from under it.

@@ -34,8 +34,12 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * v1.12 (issue #250) adds the always-present `valid_utf8` field on class-R artifact responses and
  * the `not-utf8` error slug on `PUT /w/:slug/artifacts/:path` — additive, N/N-1 safe per A1 §3; an
  * N-1 client that never reads the field simply keeps offering Edit and has its save refused by the
- * daemon instead of by the pane. */
-export const CONTRACT_VERSION = "1.12";
+ * daemon instead of by the pane.
+ * v1.13 (issue #310) adds `POST /api/workspaces/attention-withdraw`, through which a session takes
+ * back its own open question once the call waiting on the answer has been cancelled — additive,
+ * N/N-1 safe per A1 §3; an N-1 client simply never calls it, and the question stays open exactly
+ * as it does today. */
+export const CONTRACT_VERSION = "1.13";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

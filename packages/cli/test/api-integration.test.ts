@@ -228,6 +228,35 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     expect(unknown).toBeNull();
   }, 20000);
 
+  test("#310 a cancelled held read returns at once, and the withdraw is idempotent on the terminal it wrote", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    await client.openWorkspace(workspaceDir);
+    const asked = await client.createAttentionRequest(workspaceDir, { message: "Ready?", action: "ask" });
+
+    // The real `fetch` has to observe the per-call signal — a held read the caller walked away
+    // from must not sit on the daemon's socket for the rest of its own cap.
+    const ctrl = new AbortController();
+    const started = Date.now();
+    const held = client.getEntryStatus(workspaceDir, asked.id, 60_000, ctrl.signal);
+    setTimeout(() => ctrl.abort(), 50);
+    await expect(held).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+
+    expect(await client.withdrawAttention?.(workspaceDir, asked.id, "sess-1")).toEqual({
+      id: asked.id,
+      status: "expired",
+      withdrawn: true,
+    });
+    // Idempotent on what it already wrote: a retried withdrawal reports the terminal, not a
+    // second one.
+    expect(await client.withdrawAttention?.(workspaceDir, asked.id, "sess-1")).toEqual({
+      id: asked.id,
+      status: "expired",
+      withdrawn: false,
+    });
+    expect((await client.getEntryStatus(workspaceDir, asked.id))?.status).toBe("expired");
+  }, 20000);
+
   test("request-review approval mode creates, approves, and returns the typed verdict through --wait", async () => {
     const workspaceDir = freshWorkspaceDir();
     const content = "# Ready for approval\n";
