@@ -110,7 +110,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
 400 for Host, 403 for Origin, per §1).
 ```json
-{ "contract_version": "1.12", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.13", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -528,6 +528,27 @@ ids — never merely after the daemon built one. Refuses any id this session's w
 - **409 conflict** — none of the named ids has an accepted watch transport for this session, or the
   session is no longer bound to this workspace (same generation check as §5.11c, read inside the
   append's own mutex).
+
+### 5.11e `POST /api/workspaces/attention-withdraw` (contract 1.13, issue #310)
+Bearer required, Origin-gated (state-changing). A session takes back its own open question, because
+whoever was waiting on the answer has stopped listening — the MCP `glosa_ask` call was cancelled.
+Path-addressed like §5.11a, since the caller holds a workspace directory rather than a slug.
+```json
+{ "path": "<workspace>", "entry": "inb-…", "session": "<session id>" }
+```
+- **200** `{ "id", "status", "withdrawn" }` — `withdrawn:true` wrote the terminal `expired` with
+  `by: "session:<id>"` and `detail.withdrawn:true`. That `by` is the session's own CLAIM, not a
+  lease-proven fact, exactly as `POST /api/workspaces/resolve`'s `deferred` already records one;
+  the flag is the same key the annotation withdraw path writes, so a reader has one vocabulary for
+  "taken back".
+- **200** `{ "withdrawn": false }` on an entry that is already terminal — first-terminal-wins, so a
+  human answer that raced the cancellation keeps the answer and nothing is appended. Idempotent on
+  retry for the same reason.
+- **404 not-found** — no such entry in this workspace, or it is not an attention request.
+- **400 validation-failed** — `path`, `entry` or `session` missing or not a non-empty string.
+
+A wait that merely ELAPSES does not call this: the question stays in the margin, which is what
+`wait_seconds` promises. Shim shutdown and a crash also leave it open (A6 §F26).
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This

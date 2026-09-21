@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Interrupting a `glosa_ask` call now ends the wait immediately and withdraws the question from the
+  margin. Before, an agent whose question was interrupted kept waiting out its own clock — up to
+  fifteen minutes — while the reader was still offered "Send answer" on a question nobody was
+  listening to, and the only way to clear it was to answer it. A wait that simply runs out still
+  leaves the question in place, so a later answer reaches the agent through the inbox as before.
 - Every open pane now comes back in the state it was left in. After a reload only the pane named in
   the address bar kept its state; the others reopened in whatever state they were first opened with,
   so a companion document left with its notes hidden came back showing them again.

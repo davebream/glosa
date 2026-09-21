@@ -43,11 +43,14 @@ export interface RequestReviewDeps {
   sleep: (ms: number) => Promise<void>;
   pollIntervalMs: number;
   /**
-   * Issue #140's shutdown owner. An aborted `getEntryStatus` call is caught below as an ordinary
-   * transient failure (by design — a network blip must not end the wait early), so without this
-   * the poll loop cannot tell "cancelled" apart from "retry" and would keep polling for the rest
-   * of `waitMs` regardless of how long ago shutdown started. Checked only at the give-up point, so
-   * normal (non-shutdown) callers that never supply it are completely unaffected.
+   * The give-up signal — issue #140's shutdown owner, and since #310 also an MCP request's own
+   * cancellation. It does two things. It is passed to each held `getEntryStatus`, so an abort ends
+   * the hold at once rather than after the daemon's own cap; and it is checked at the give-up
+   * point, because an aborted call is caught below as an ordinary transient failure (by design — a
+   * network blip must not end the wait early), so without the check the loop could not tell
+   * "cancelled" apart from "retry". The envelope is the same `review_timeout` either way: the
+   * caller owns the signal, so it already knows which of the two it is. Normal callers that supply
+   * no signal (`glosa request-review --wait`) are completely unaffected.
    */
   signal?: AbortSignal;
 }
@@ -130,7 +133,7 @@ export async function runRequestReview(
     // dropped connection must not end a wait the caller asked to last longer.
     const remaining = Math.max(0, deadline - deps.now());
     try {
-      entryStatus = await client.getEntryStatus(args.dir, created.id, remaining);
+      entryStatus = await client.getEntryStatus(args.dir, created.id, remaining, deps.signal);
     } catch {
       entryStatus = null; // a transient failure isn't fatal — keep waiting until the deadline
     }

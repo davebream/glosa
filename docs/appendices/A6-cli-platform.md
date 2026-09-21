@@ -248,7 +248,11 @@
   `mode:"preview"` is preview-locked; `annotate`/`edit` select an unlocked initial mode.
 - `glosa_ask {workspace?, path, question?, quote?, options?, label?, wait_seconds?}` marks a passage
   and, when `question` is given, BLOCKS (default 600s, cap 900s) until the human answers or the wait
-  elapses; omitting `question` posts the pointer and returns immediately. Mutating, non-idempotent
+  elapses; omitting `question` posts the pointer and returns immediately. Cancelling the MCP request
+  ends the wait at once and withdraws the question (terminal `expired`, by that session — A1 §5.11e);
+  a wait that merely elapses leaves the question open, as before. Shim shutdown or a crash also
+  leaves it open: withdrawing there would put the current bearer on the wire to an endpoint resolved
+  earlier in the session, the hazard `close()` refuses for deregistration. Mutating, non-idempotent
   (each call marks a new passage), closed-world.
 - `glosa_watch {workspace?, path?, since?, wait_ms?, session_id?}` (issue #153 Part 2) is the opt-in
   held read over `external_edit` — detail A1 §5.11b, A5 §F23. BLOCKS up to `wait_ms` (cap 900000ms)

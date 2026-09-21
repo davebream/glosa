@@ -266,7 +266,8 @@ export const askInputSchema = z
       .describe(
         "How long to block waiting for the answer. Defaults to 600. The call returns as soon as the human " +
           "answers. On timeout it returns outcome 'unanswered' and the question STAYS in their margin, so a " +
-          "later answer still reaches you through the inbox.",
+          "later answer still reaches you through the inbox. If the call is CANCELLED instead, the question " +
+          "is withdrawn — cancelling means you stopped listening.",
       ),
   })
   .strict();
@@ -336,11 +337,12 @@ export const askOutputSchema = z
   .object({
     id: inboxId,
     outcome: z
-      .enum(["answered", "declined", "unanswered", "posted"])
+      .enum(["answered", "declined", "unanswered", "posted", "withdrawn"])
       .describe(
         "answered: the human replied. declined: they explicitly could not answer. unanswered: the wait " +
           "elapsed and the question is still open in glosa. posted: no question was asked, so nothing was " +
-          "waited for.",
+          "waited for. withdrawn: the call was cancelled before an answer, so the question was taken out " +
+          "of the margin.",
       ),
     answer: z.string().optional().describe("What the human typed, when they typed anything."),
     chose: z.string().optional().describe("The option they picked, when the question offered options."),
