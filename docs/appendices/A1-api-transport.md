@@ -110,7 +110,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (the Host/Origin allowlist is the only rejection path:
 400 for Host, 403 for Origin, per §1).
 ```json
-{ "contract_version": "1.13", "daemon_version": "0.3.1", "paired": true }
+{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true }
 ```
 
 ### 5.2 `GET /api/workspaces`
@@ -889,7 +889,7 @@ registration's own canonical path; reopening names the star by id. See A3 §4 "S
   **404** `not-found` (unknown id), **422** `star-folder-missing` (checked before the index is
   touched; the star is kept until the writer unstars it).
 
-### 5.22 Opt-in dictation (contract 1.13)
+### 5.22 Opt-in dictation (contract 1.14)
 
 These routes expose a provider-neutral input capability. They never accept audio, context, transcript,
 workspace, artifact, path, session, or participant data. Provider-specific token exchange and browser
