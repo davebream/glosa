@@ -526,6 +526,31 @@ export function mountApp(
     return wrap;
   }
 
+  /** The mode last written into each panel's saved params, so a state change that did not move
+   * the mode never rewrites the arrangement. */
+  const persistedModes = new Map();
+
+  /**
+   * §10: a pane's mode is part of the arrangement, so it rides in that panel's own params.
+   * The address bar cannot carry it — the URL describes ONE artifact, the active pane
+   * (`reflectFocus`), so without this every other pane reopened in the state it was FIRST opened
+   * with.
+   *
+   * The save is explicit because dockview BUFFERS the layout-change event a parameter update
+   * raises: left to that event, the write lands a tick after the reader flipped the mode, and a
+   * reload in that gap keeps the old state. Saving here puts it in the same tick as the click.
+   */
+  function persistPaneMode(id, panelApi) {
+    if (!panelApi?.updateParameters) return;
+    // Read the pane back out of the map rather than closing over it: this runs from a callback
+    // the pane can fire while it is still being constructed.
+    const mode = panes.get(id)?.getMode?.();
+    if (!mode || persistedModes.get(id) === mode) return;
+    persistedModes.set(id, mode);
+    panelApi.updateParameters({ mode });
+    dock?.saveLayout();
+  }
+
   function createPane(id, params, host, panelApi) {
     if (!isArtifactPanel(id)) {
       const [, path, from, to] = splitDiffId(id);
@@ -555,10 +580,14 @@ export function mountApp(
       paneCommands: singlePane ? [] : (dock?.moveCommands() ?? []),
       onStateChange: () => {
         refreshTabs();
+        persistPaneMode(id, panelApi);
         if (id === activePanelId) reflectFocus();
       },
     });
     panes.set(id, pane);
+    // Seeded from what this panel was restored (or opened) with, so restoring a layout does not
+    // immediately write the same arrangement back over itself.
+    persistedModes.set(id, pane.getMode?.() ?? params.mode ?? requestedMode);
     if (applyLease) pane.setApplyPause?.(applyLease);
     pane.element.setAttribute("data-active", String(id === activePanelId));
     void pane.ready.then(() => {
@@ -572,6 +601,7 @@ export function mountApp(
   function destroyPane(id, pane) {
     pane?.destroy?.();
     panes.delete(id);
+    persistedModes.delete(id);
     if (activePanelId === id) activePanelId = null;
     markNavigatorOpenSet();
   }

@@ -2021,9 +2021,14 @@ export function createArtifactPane(host, deps) {
    * minted on every mount, per A1 §7's "fresh mint per iframe open/reload": `force` re-mints even
    * for the SAME path, discarding the old iframe rather than trying to reuse it.
    *
-   * §11: dragging a class-F pane between groups reparents the iframe element, which reloads it and
-   * re-mints. That is expected, not a defect. dockview's `renderer: 'always'` keeps the element
-   * alive across TAB switches, which is the common case. */
+   * §11: a LAYOUT move does not remount. dockview's `renderer: "always"` keeps a panel's content
+   * in a render overlay under the dock root, and with floating groups and popouts disabled
+   * nothing in the dock's move paths detaches it — so a tab switch, a tab move and a whole-group
+   * merge all keep the same iframe, with no second `load` and no fresh mint. That matters beyond
+   * speed: `classf-viewer.js` reads a second `load` on one element as the document navigating
+   * itself and tears the frame down, so reparenting an interactive preview would look like an
+   * attack. Pinned in test/acceptance/workbench-real-engine.test.ts (switch and move) and
+   * packages/spa/test/dock.test.ts (whole-group merge). */
   function mountClassFArtifact(force = false) {
     if (!force && classFEl.getAttribute("data-path") === currentArtifact.source_path && stopClassFViewer) return;
     stopClassFViewer?.();
