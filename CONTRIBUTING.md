@@ -31,6 +31,16 @@ bun run audit:licenses
 bun run package:check
 ```
 
+Two more before cutting a release:
+
+```sh
+bun run version:sync                  # derive every version site from package.json, then review the diff
+bun test test/plugin-load.test.ts     # installs the plugin into a throwaway config and checks it loads
+```
+
+The plugin load test needs the `claude` CLI on your PATH. CI runners do not have it, so that test
+skips there and this is the one gate CI cannot run for you.
+
 Tests that use real subprocesses can take longer than unit tests. A behavior change should include focused coverage and preserve the invariants in `AGENTS.md` and `docs/requirements.md`. See `test/acceptance/T8-GATE.md` for test profiles, automatic discovery, timing reports, baseline refresh and stability reproduction.
 
 ### Running glosa from your checkout

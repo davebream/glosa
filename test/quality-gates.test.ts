@@ -72,6 +72,15 @@ describe("repository quality gates", () => {
         expect(quality).toMatch(new RegExp(`- name: [^\\n]+\\n        run: bun run ${script}`));
     }
   });
+  test("the release tag verification also checks every version site", () => {
+    expect(job(workflows[1]!, "release")).toContain('bun run scripts/version-sync.ts --check --expect "${version}"');
+  });
+  test("pre-commit syncs the version sites into the commit rather than only checking the worktree", () => {
+    const hooks = readFileSync(join(root, "lefthook.yml"), "utf8");
+    expect(hooks).toContain("bun run scripts/version-sync.ts --write --stage");
+    // --stage is the whole point: a write that is not staged leaves the commit drifted.
+    expect(hooks).not.toMatch(/version-sync\.ts --write(?! --stage)/);
+  });
   test("security never depends on the change filter, and publishing requires both validation and security", () => {
     for (const yaml of workflows) {
       const security = job(yaml, "security");

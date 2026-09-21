@@ -3,6 +3,12 @@ pre-commit:
   commands:
     biome:
       run: bun run lint:staged
+    version-sync:
+      # Rewrites every derived version site from package.json and stages only what it changed.
+      # Writing, rather than checking, is what makes this affect the COMMIT: lefthook does not
+      # stash unstaged changes, so a check reading the working tree passes on a commit whose
+      # staged content is drifted.
+      run: bun run scripts/version-sync.ts --write --stage
 
 pre-push:
   parallel: true
