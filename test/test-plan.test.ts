@@ -13,6 +13,32 @@ import {
   validatePartitions,
   validateResults,
 } from "../scripts/test-plan.ts";
+import baseline from "../scripts/test-timings.json";
+
+// #317: the baseline is a REVIEWED artifact — T8-GATE.md requires refreshing it from successful
+// same-runtime CI JUnit durations, comparing several runs, and never updating it automatically. So
+// this does not regenerate anything; it makes the drift visible, because the planner degrades
+// silently. An unmeasured file is scheduled at the documented one-second estimate, which for a file
+// that really costs thirty seconds quietly unbalances the shard it lands in.
+//
+// A RATCHET, not a target. These numbers may only go DOWN, by refreshing the baseline per
+// T8-GATE.md. A rise means the suite grew away from the file again and the partitions are drifting.
+test("#317 the timings baseline still covers the suite it schedules", () => {
+  const inventory = discoverTests();
+  const recorded = new Set(Object.keys(baseline.files));
+  const unmeasured = inventory.filter((file) => !recorded.has(file));
+  const vanished = [...recorded].filter((file) => !inventory.includes(file));
+
+  expect(inventory.length, "an empty inventory would make every count below vacuously fine").toBeGreaterThan(100);
+  expect(
+    unmeasured.length,
+    `files with no recorded duration, scheduled at the 1s estimate: ${unmeasured.join(", ")}`,
+  ).toBeLessThanOrEqual(50);
+  expect(
+    vanished.length,
+    `recorded durations for files that no longer exist: ${vanished.join(", ")}`,
+  ).toBeLessThanOrEqual(11);
+});
 
 test("coverage partitions are a complete disjoint union of the discovered inventory", () => {
   const files = discoverTests();
