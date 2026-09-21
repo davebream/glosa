@@ -149,7 +149,14 @@ try {
 
   const url = run(glosa, ["open", "--url", workspace], isolatedEnv).trim();
   // glosa open links browsers to glosa.localhost; the daemon also accepts 127.0.0.1 (A3 §4 Rule 1, #159).
-  if (!/^http:\/\/glosa\.localhost:\d+\/#t=/.test(url)) fail(`glosa open --url returned an unexpected URL: ${url}`);
+  // `#p=`, never `#t=`: since #207 the fragment carries a single-use 60s presentation token rather
+  // than the durable credential, because its destination is a browser on a TCP port that was
+  // resolved earlier and is not re-verified (A3 §3.2). Asserted on the PACKAGED CLI because this is
+  // the one credential crossing no in-process test exercises end to end.
+  if (!/^http:\/\/glosa\.localhost:\d+\/#p=[0-9a-f]{64}&/.test(url)) {
+    fail(`glosa open --url returned an unexpected URL: ${url}`);
+  }
+  if (url.includes("#t=") || url.includes("&t=")) fail(`glosa open --url leaked the durable token: ${url}`);
   daemonPid = readLock()?.pid;
   if (!daemonPid) fail("glosa open --url did not leave an owned daemon lock");
 

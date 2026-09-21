@@ -694,7 +694,6 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         },
         {
           launchBrowser: false,
-          usePresentationToken: true,
           readLock,
           mode,
           bindSessionId,

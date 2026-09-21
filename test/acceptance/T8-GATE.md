@@ -157,6 +157,7 @@ dropping out of it.
 | `security` | `packages/spa/test/dictation-e2e.test.ts` |
 | `security` | `test/acceptance/browser-security-real-engine.test.ts` |
 | `security` | `test/acceptance/pairing-durability-real-engine.test.ts` |
+| `security` | `test/acceptance/daemon-identity-socket.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-f.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-basic.test.ts` |
 | `anchor` | `packages/daemon/test/anchoring/class-r-never-feedback.test.ts` |

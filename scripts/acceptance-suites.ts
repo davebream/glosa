@@ -111,6 +111,10 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/spa/test/dictation-e2e.test.ts",
     "test/acceptance/browser-security-real-engine.test.ts",
     "test/acceptance/pairing-durability-real-engine.test.ts",
+    // #207 — A3 §5 attack #11. Not a browser attack, like #4 (symlink escape) and #5
+    // (leading-dash filename) before it: A3 §5 is the clause this suite discharges, and the
+    // attack is a local process taking the loopback port a resolved client still holds.
+    "test/acceptance/daemon-identity-socket.test.ts",
   ],
   anchor: [
     "packages/daemon/test/anchoring/class-f.test.ts",

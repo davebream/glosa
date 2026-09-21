@@ -171,7 +171,11 @@ describe("glosa open", () => {
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(1);
     expect(browserCalls[0]).toContain("http://glosa.localhost:4646/#");
-    expect(browserCalls[0]).toContain("t=test-token-abc");
+    // #207: the fragment handed to a browser carries a single-use 60s token, never the durable
+    // pairing credential — the destination is a TCP port that was resolved earlier and is not
+    // re-verified, so whatever holds it when the browser arrives receives what this carries.
+    expect(browserCalls[0]).toContain("p=present-token-abc");
+    expect(browserCalls[0]).not.toContain("test-token-abc");
     expect(browserCalls[0]).toContain("surface=workspace");
     expect(browserCalls[0]).toContain("mode=review");
     expect(browserCalls[0]).toContain("a=01-first.md");
@@ -186,7 +190,8 @@ describe("glosa open", () => {
     const result = await runOpen(dir, deps, { launchBrowser: false });
 
     expect(result.exitCode).toBe(0);
-    expect(result.data.url).toContain("t=test-token-abc");
+    expect(result.data.url).toContain("p=present-token-abc");
+    expect(result.data.url).not.toContain("test-token-abc");
     expect(client.calls[0]).toMatchObject({ method: "openWorkspace", args: [dir, { focusFirst: true }] });
     expect(browserCalls).toHaveLength(0);
   });
@@ -220,7 +225,8 @@ describe("glosa open", () => {
       method: "openWorkspace",
       args: ["/ws/essays/07-manuscript.md"],
     });
-    expect(browserCalls[0]).toContain("t=test-token-abc");
+    expect(browserCalls[0]).toContain("p=present-token-abc");
+    expect(browserCalls[0]).not.toContain("test-token-abc");
     expect(browserCalls[0]).toContain("w=essays-abc");
     expect(browserCalls[0]).toContain("a=07-manuscript.md");
     expect(browserCalls[0]).toContain("surface=document");

@@ -82,6 +82,10 @@ function withFakeGlobalFetch(
           instance_id: daemon.instanceId,
           pid: daemon.pid,
           started_at: daemon.startedAt,
+          // A CURRENT daemon, which is what this fake stands in for. Omitting it would make
+          // `existingDaemon` refuse the peer as one that predates the local socket (A3 §3.2) and
+          // the monitor would retry forever rather than fail a named assertion.
+          serves_socket: true,
         }),
         { status: 200 },
       );

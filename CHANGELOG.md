@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **The daemon's API for glosa's own commands moved off the network onto a local socket only you can
+  open.** The CLI, the MCP server, the Claude Code monitor and the Codex attachment now reach the
+  daemon through `~/.glosa/run/api.sock` instead of `127.0.0.1:4646`. Before, each of them worked
+  out the port once and then sent your pairing token there for as long as it ran — minutes for a
+  question waiting on an answer, the whole session for a live agent connection. A port is not an
+  identity: once the daemon stops, anything else on the machine can take it, and because the file
+  the daemon leaves behind is readable by everyone while the token beside it is not, a program
+  running as a different user could have learned enough to look like the daemon and been handed a
+  credential it could never have read from disk. File permissions now answer the question instead —
+  the socket is owner-only inside an owner-only directory, and the operating system refuses anyone
+  else before anything is sent. There is deliberately no falling back to the port, so a daemon too
+  old to serve the socket is reported as unreachable rather than quietly reached the old way.
+  Nothing changes for the browser, which cannot use a socket and keeps the same address as before.
+- **The link `glosa open` hands your browser no longer carries your durable credential.** It now
+  carries a single-use one that expires in a minute, the same kind `glosa_present` has always used.
+  The browser has to use the port, so this is the one place the socket cannot protect; a single-use
+  token means anything that intercepts it gets something that expires and redeems to nothing.
+
 ### Added
 
 - Opt-in Wispr Flow dictation is available in the annotation request, agent answer, attention
