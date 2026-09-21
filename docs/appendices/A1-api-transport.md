@@ -216,7 +216,9 @@ Bearer required, Origin-gated (state-changing route, per R5). `:path` is workspa
 confinement). Body is bare source text, or JSON `{"content": "<source>"}`; either form is accepted,
 and an empty body is rejected. Optional `If-Match: <source_sha256>` header requests optimistic
 concurrency: when present and it no longer matches what is on disk, the write is refused rather
-than applied — this is what the Edit-mode stale-save dialog keys on (R6).
+than applied — this is what the Edit-mode stale-save dialog keys on (R6). The comparison is over
+`source_sha256`, which normalizes `\r\n`→`\n` before hashing, so a disk change that alters only a
+file's line endings does NOT refuse the write; the body is still written verbatim (A4 §F05, #251).
 - **200**
 ```json
 { "source_path": "07_manuscript.md", "source_sha256": "…", "class": "R",
