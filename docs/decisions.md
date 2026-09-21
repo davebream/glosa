@@ -1107,10 +1107,10 @@ one reads exactly like a live one.
 
 **Consequences.** `expired` was already a legal attention terminal with no writer; this gives it
 one, so a session may now write a terminal that only the daemon and the human wrote before. The
-attribution is a claim, not a proof: `by: session:<id>` without a lease, exactly as `resolve …
-deferred` already records one. Terminal entries already drop out of the tray, the margin cards,
-`glosa inbox list`, `has_attention` and the badge count, and the `journal` SSE frame already
-refreshes the tray — so no SPA change was needed. The tool reports a fifth outcome, `withdrawn`,
+attribution is a claim, not a proof: `by: session:<id>` without a lease, exactly as
+`resolve … deferred` already records one. Terminal entries already drop out of the tray, the
+margin cards, `glosa inbox list`, `has_attention` and the badge count, and the `journal` SSE
+frame already refreshes the tray — so no SPA change was needed. The tool reports a fifth outcome, `withdrawn`,
 which in practice only a test observes: the MCP SDK drops the response to a request the client
 cancelled.
 
