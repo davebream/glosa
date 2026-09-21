@@ -258,6 +258,7 @@ jobs:
         run: |
           version="$(node -p 'require("./package.json").version')"
           test "${GITHUB_REF_NAME}" = "v${version}"
+          bun run scripts/version-sync.ts --check --expect "${version}"
       - name: Publish package with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

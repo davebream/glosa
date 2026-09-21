@@ -4,6 +4,14 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import rootPackage from "../package.json" with { type: "json" };
 import { CLI_VERSION } from "../packages/cli/src/version.ts";
+import {
+  describeFailures,
+  FORBIDDEN_VERSION_SITES,
+  inspect,
+  sourceVersion,
+  VERSION_SITES,
+  worktreeReader,
+} from "../scripts/version-sync.ts";
 
 const root = resolve(import.meta.dir, "..");
 const workspaceManifests = [
@@ -24,6 +32,8 @@ function walk(dir: string): string[] {
 describe("OSS release metadata", () => {
   test("the root package is the sole public macOS artifact", () => {
     expect(rootPackage.name).toBe("@davebream/glosa");
+    // Machine-maintained by `bun run version:sync`; it records the release, it does not gate it.
+    // The gate that a bump cannot bypass is the CHANGELOG heading asserted further down.
     expect(rootPackage.version).toBe("0.1.0-alpha.28");
     expect(rootPackage.private).toBe(false);
     expect(rootPackage.license).toBe("Apache-2.0");
@@ -37,6 +47,27 @@ describe("OSS release metadata", () => {
       expect(value.private, manifest).toBe(true);
       expect(value.license, manifest).toBe("Apache-2.0");
     }
+  });
+
+  test("every shipped version site carries exactly the root package version", () => {
+    // Pinned by path so DELETING a site is a red, not a silent narrowing of the gate.
+    expect(VERSION_SITES.map((site) => site.path)).toEqual([
+      "package.json",
+      "glosa-plugin/.claude-plugin/plugin.json",
+      "README.md",
+      "test/oss-release.test.ts",
+    ]);
+    expect(FORBIDDEN_VERSION_SITES.map((site) => site.path)).toEqual([".claude-plugin/marketplace.json"]);
+
+    const read = worktreeReader(root);
+    expect(sourceVersion(read)).toBe(rootPackage.version);
+    expect(describeFailures(inspect(read, rootPackage.version))).toEqual([]);
+  });
+
+  test("the released version is written up in the changelog", () => {
+    // Replaces the literal above as the deliberate-bump tripwire: version:sync can satisfy a
+    // literal, but it cannot write release notes, so a silent bump still fails here.
+    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toContain(`## [${rootPackage.version}]`);
   });
 
   test("required public release documents exist", () => {

@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The Claude Code plugin loads. `monitors/monitors.json` wrapped its entry in an object, and Claude
+  Code requires a bare array, so the plugin installed and then failed to load: its session monitor
+  never started, and a note written in glosa's margin was never pushed into the session. Nothing said
+  so, because the MCP tools still registered and binding a session still succeeded. This had been
+  true since the monitor was added. Because Claude Code caches a plugin by version, anyone who
+  installed the earlier copy keeps it until they update the plugin.
+- The plugin manifest no longer drifts from the release it ships in. It had stayed at
+  `0.1.0-alpha.21` for seven releases while the CLI moved on, so `/plugin install` advertised a
+  version that was never published. Every place the version appears is now derived from one source
+  and checked when you commit, when a release is tagged, and against the bytes in the published
+  tarball.
 - Interrupting a `glosa_ask` call now ends the wait immediately and withdraws the question from the
   margin. Before, an agent whose question was interrupted kept waiting out its own clock — up to
   fifteen minutes — while the reader was still offered "Send answer" on a question nobody was
