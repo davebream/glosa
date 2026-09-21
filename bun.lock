@@ -5,11 +5,11 @@
     "": {
       "name": "@davebream/glosa",
       "dependencies": {
-        "@gunshi/plugin-completion": "0.37.2",
+        "@gunshi/plugin-completion": "0.37.3",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "chokidar": "^5",
         "diff2html": "^3.4.56",
-        "gunshi": "0.37.2",
+        "gunshi": "0.37.3",
         "idiomorph": "^0.8.0",
         "markdown-it": "^14.3.1",
         "picomatch": "^4.0.7",
@@ -35,9 +35,9 @@
       },
       "dependencies": {
         "@glosa/daemon": "workspace:*",
-        "@gunshi/plugin-completion": "0.37.2",
+        "@gunshi/plugin-completion": "0.37.3",
         "@modelcontextprotocol/sdk": "^1.29.0",
-        "gunshi": "0.37.2",
+        "gunshi": "0.37.3",
         "zod": "^4.4.3",
       },
     },
@@ -112,9 +112,9 @@
 
     "@glosa/spa": ["@glosa/spa@workspace:packages/spa"],
 
-    "@gunshi/plugin": ["@gunshi/plugin@0.37.2", "", {}, "sha512-6fSWvSJ9mn104kJB2ej8OqKqK4ZZSuw51Y7Xpe79lyrvW7v5SkuIUc61Bdsen/gvixcNnkf4K7WUBOnA2MIfzQ=="],
+    "@gunshi/plugin": ["@gunshi/plugin@0.37.3", "", {}, "sha512-f/P3qigd7P9BW/R4siYzR2WPJ1TPNmKvnN4ZuAQc0GFDn+wtfRGk/Osus9QJVUKR+s0qrrPweP91WI2X3Lq8WA=="],
 
-    "@gunshi/plugin-completion": ["@gunshi/plugin-completion@0.37.2", "", { "dependencies": { "@bomb.sh/tab": "^0.0.22", "@gunshi/plugin": "0.37.2" }, "peerDependencies": { "@gunshi/plugin-i18n": "0.37.2" } }, "sha512-Tqmqer8pQQQmKX+NN9mQmOyC7UzrOjICETCFG2352t5uMJa7E6qRSxOYHwb30/zHGLoOP5lGfwYCZ28AyAOYhw=="],
+    "@gunshi/plugin-completion": ["@gunshi/plugin-completion@0.37.3", "", { "dependencies": { "@bomb.sh/tab": "^0.0.22", "@gunshi/plugin": "0.37.3" }, "peerDependencies": { "@gunshi/plugin-i18n": "0.37.3" } }, "sha512-gifbK4T29fJpiOH7+HuWiWfMdRx9dgCC48hT9JVrIJrYCFoeCv26H6DusqJjdUPfsexWL8YIOi/tDnG1tvfZGA=="],
 
     "@gunshi/plugin-i18n": ["@gunshi/plugin-i18n@0.37.1", "", { "dependencies": { "@gunshi/plugin": "0.37.1" }, "peerDependencies": { "@gunshi/plugin-global": "0.37.1" }, "optionalPeers": ["@gunshi/plugin-global"] }, "sha512-K5L5IDeaD5JIGEPn4Wcl0cXyPggmmtj4sSQwCsqzAYc30VfJu+BQscoEt7wIoJ3UR6gnjY7BJh5dxGcmBcUvaA=="],
 
@@ -364,7 +364,7 @@
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
-    "gunshi": ["gunshi@0.37.2", "", {}, "sha512-pHsYEDSOxaNxSGIYiIYF11Lvc6OiEKw+IkfrLXRWj6bKzqI3noLX8QXOLqGTwPsM8amkpNoZG9tlpg8/4QG7MQ=="],
+    "gunshi": ["gunshi@0.37.3", "", {}, "sha512-uwm23bguqDcleEetknuQnF5okLcgmQPM3iv4aWVHTPDbiSs9shh02F079NCY0mWkrIRjHqNhgmzW6k0FCXhy1g=="],
 
     "happy-dom": ["happy-dom@20.13.2", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-VC9HoEaT3Jf3K/1g/GjMYGAZCCg+ULgGVcXJlAeSzdTj8mIoPJRp14KVclP5gpUcF/kauuaVB2ri2/WxXbl4vg=="],
 
