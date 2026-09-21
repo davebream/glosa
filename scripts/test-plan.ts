@@ -2,7 +2,10 @@
 import { appendFileSync, existsSync, realpathSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import { acceptanceFiles } from "./acceptance-suites.ts";
+import { gitEnvironment } from "./git-env.ts";
 import baseline from "./test-timings.json";
+
+export { gitEnvironment };
 
 export const ROOT = resolve(import.meta.dir, "..");
 export const DOC_FILES = [
@@ -15,18 +18,6 @@ export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packa
 export type Profile = "acceptance" | "remaining-1" | "remaining-2" | "docs" | "stability" | "full";
 export type ChangeProfile = "docs" | "full";
 export type Plan = Record<Profile, string[]>;
-
-/** Hooks export repository selectors; cwd alone does not isolate a Git subprocess. */
-export function gitEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    ...Object.fromEntries(
-      Object.entries(base).filter(([key]) => !key.startsWith("GIT_") && key !== "ANTHROPIC_API_KEY"),
-    ),
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-}
 
 function git(args: string[], root: string): string {
   const child = Bun.spawnSync(["git", ...args], { cwd: root, env: gitEnvironment(), stdout: "pipe", stderr: "pipe" });

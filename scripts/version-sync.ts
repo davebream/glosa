@@ -15,6 +15,7 @@
 // is the default failure mode of a regex-driven checker and would leave this gate green forever.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { gitEnvironment } from "./git-env.ts";
 
 export const ROOT = resolve(import.meta.dir, "..");
 
@@ -104,25 +105,37 @@ export function worktreeReader(root = ROOT): Reader {
 }
 
 /**
- * Reads the blob Git is about to COMMIT, not the file on disk.
+ * The environment for a git call this module makes about `root`.
  *
- * `GIT_*` is deliberately NOT stripped here, unlike `scripts/test-plan.ts`'s `gitEnvironment()`.
- * That helper wants ROOT's repository regardless of who invoked it; this one wants the index the
- * caller is committing, and during `git rebase`/`git merge` the hook's `GIT_INDEX_FILE` names a
- * temporary index. Only Git's *configuration* is neutralized, so a user's ~/.gitconfig cannot
- * influence the answer.
+ * For ROOT — the repository the hook is committing — `GIT_*` is deliberately NOT stripped. This
+ * module wants the index the caller is committing, and during `git rebase`/`git merge` the hook's
+ * `GIT_INDEX_FILE` names a temporary index that is the only correct answer. Only git's
+ * *configuration* is neutralized, so a user's ~/.gitconfig cannot influence the result.
+ *
+ * For any OTHER root, those same variables are wrong and must go (#316). A caller naming a
+ * different repository is asking about that one; an inherited `GIT_DIR` would silently answer about
+ * ROOT instead, which makes the `root` parameter a lie. That is not hypothetical — under the
+ * pre-push hook, where git exports `GIT_DIR` itself, `indexReader(tempRepo)` returned THIS
+ * repository's staged version.
  */
+function gitEnvFor(root: string): NodeJS.ProcessEnv {
+  if (root !== ROOT) return gitEnvironment();
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+/** Reads the blob Git is about to COMMIT, not the file on disk. See `gitEnvFor` for which
+ * repository this resolves against and why that depends on `root`. */
 export function indexReader(root = ROOT): Reader {
   return (path) => {
     const child = Bun.spawnSync({
       cmd: ["git", "show", `:${path}`],
       cwd: root,
-      env: {
-        ...process.env,
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-      },
+      env: gitEnvFor(root),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -230,7 +243,7 @@ function stage(paths: readonly string[], root: string): void {
   const child = Bun.spawnSync({
     cmd: ["git", "add", "--", ...paths],
     cwd: root,
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
+    env: gitEnvFor(root),
     stdout: "pipe",
     stderr: "pipe",
   });

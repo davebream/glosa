@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { gitEnvironment } from "../scripts/git-env.ts";
 
 const root = resolve(import.meta.dir, "..");
 const plugin = join(root, "glosa-plugin");
@@ -98,7 +99,8 @@ describe("plugin content cannot change without the version changing (#311)", () 
     const child = Bun.spawnSync({
       cmd: ["git", ...args],
       cwd: root,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_TERMINAL_PROMPT: "0" },
+      // #316: `root` decides the repository, so the ambient selectors a hook exports must not.
+      env: gitEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     });
