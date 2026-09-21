@@ -35,6 +35,7 @@ export function createViewerShell(
     onAttentionEntriesChange,
     onOpenArtifact,
     getCurrentArtifact,
+    dictationController,
   },
 ) {
   const el = createElement;
@@ -87,6 +88,7 @@ export function createViewerShell(
     onEntriesChange: onAttentionEntriesChange,
     onOpenArtifact,
     getCurrentArtifact,
+    dictationController,
   });
   const toolsTrigger = el("button", {
     className: "glosa-tools-trigger",

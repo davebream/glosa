@@ -31,6 +31,7 @@ export function createContextSurfaceController({
   loadConversationPane,
   createElement,
   returnFocus,
+  dictationController = null,
 }) {
   const { conversationEl, shortcutsEl, conversationToggle, shortcutsToggle } = elements;
   let conversationVisible = false;
@@ -70,6 +71,7 @@ export function createContextSurfaceController({
           setConversationVisible(false);
           returnFocus();
         },
+        dictationController,
       });
     } catch {
       if (!conversationVisible || getState().slug !== slug) return;

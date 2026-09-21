@@ -120,7 +120,10 @@ function renderItem(item) {
  * — this module never constructs its own, per R6's ONE-data-access-module invariant. Returns
  * `unmount()`, which tears down the SSE subscription.
  */
-export function mountConversationPane(container, { dataAccess, slug, readOnly = false, onClose = () => {} }) {
+export function mountConversationPane(
+  container,
+  { dataAccess, slug, readOnly = false, onClose = () => {}, dictationController = null },
+) {
   container.textContent = "";
 
   const statusEl = el("p", { className: "glosa-conv-status", hidden: true, role: "status", "aria-live": "polite" });
@@ -190,6 +193,16 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
   container.append(header, feed, ...(readOnly ? [] : [composer]));
 
   let events = [];
+  const stopDictation = readOnly
+    ? null
+    : dictationController?.attachField(composerInput, {
+        controls: () => [composerSend, sessionPicker],
+        getContext: () => ({
+          conversationMessages: events
+            .filter((event) => event.type === "prose" && ["user", "human", "assistant"].includes(event.role))
+            .map((event) => ({ role: event.role, content: event.content })),
+        }),
+      });
   let mirrorAvailable = true;
   let stopStream = null;
   let stopDeliveryStream = null;
@@ -423,6 +436,7 @@ export function mountConversationPane(container, { dataAccess, slug, readOnly = 
   if (pending) void refreshPendingStatus();
 
   return function unmount() {
+    stopDictation?.();
     stopStream?.();
     stopDeliveryStream?.();
   };
