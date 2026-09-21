@@ -19,7 +19,7 @@
 // Talks to the daemon ONLY through the injected data-access instance (R6's ONE data-access
 // module) — never `fetch` directly (see test/import-boundary.test.ts).
 
-import { agentIdentity, locateQuote, requestsForArtifact } from "./agent-request.js";
+import { agentIdentity, agentRequestSummary, locateQuote, requestsForArtifact } from "./agent-request.js";
 import { buildAnnotationRecordFromSelection } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import {
@@ -2468,19 +2468,20 @@ export function createArtifactPane(host, deps) {
     // holds. Counting annotations alone disabled the toggle whenever a session's question was the
     // only thing in the margin, which at compact widths made that question unreachable while a
     // turn sat blocked on the answer.
-    const asking = agentRequests().length;
+    const requests = agentRequests();
+    const requestCount = requests.length;
     const notes = annotations.length;
-    const count = asking + notes;
-    const askingLabel = asking === 1 ? "1 session asking" : `${asking} sessions asking`;
+    const count = requestCount + notes;
+    const requestLabel = agentRequestSummary(requests);
     const notesLabel = notes === 1 ? "1 annotation" : `${notes} annotations`;
     trayCountEl.textContent =
       count === 0
         ? "No annotations yet"
-        : asking === 0
+        : requestCount === 0
           ? notesLabel
           : notes === 0
-            ? askingLabel
-            : `${askingLabel} · ${notesLabel}`;
+            ? requestLabel
+            : `${requestLabel} · ${notesLabel}`;
     trayToggle.setAttribute("aria-expanded", String(trayOpen && count > 0));
     trayToggle.disabled = count === 0;
     trayEl.toggleAttribute("data-open", trayOpen && count > 0);
@@ -3198,7 +3199,7 @@ export function createArtifactPane(host, deps) {
       cardHost.append(
         el("p", {
           className: "glosa-margin-subhead",
-          textContent: requests.length === 1 ? "A session is asking" : `${requests.length} sessions are asking`,
+          textContent: agentRequestSummary(requests),
         }),
       );
       for (const request of requests) cardHost.append(buildAgentCard(request));

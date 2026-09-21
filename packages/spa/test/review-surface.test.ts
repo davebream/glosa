@@ -321,7 +321,37 @@ describe("Review mode — the agent's half of the margin", () => {
     const toggle = q(host, ".glosa-tray-toggle");
     expect(toggle).not.toBeNull();
     expect(toggle.disabled).toBe(false);
-    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking");
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question");
+  });
+
+  test("one session's question and pointer are counted as requests, not two sessions", async () => {
+    const requests = [
+      askAboutPremise(),
+      askAboutPremise({
+        id: "inb-2",
+        created_at: "2026-09-05T10:00:01Z",
+        message: null,
+        action: "point",
+      }),
+    ];
+    const da = fakeDataAccess(requests, {
+      async getAnnotations() {
+        return {
+          annotations: Array.from({ length: 5 }, (_, index) => ({
+            id: `inb-note-${index}`,
+            artifact_path: "notes.md",
+            body: `note ${index}`,
+            intent: "content",
+            target: { quote: { exact: "readers accept" } },
+            status: "pending",
+          })),
+        };
+      },
+    });
+
+    const { host } = await mountPane(da);
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question · 1 pointer · 5 annotations");
+    expect(q(host, ".glosa-tray-list .glosa-margin-subhead").textContent).toBe("1 question · 1 pointer");
   });
 
   test("the tray names both kinds when the margin holds both", async () => {
@@ -342,7 +372,7 @@ describe("Review mode — the agent's half of the margin", () => {
       },
     });
     const { host } = await mountPane(da);
-    expect(q(host, ".glosa-tray-count").textContent).toBe("1 session asking · 1 annotation");
+    expect(q(host, ".glosa-tray-count").textContent).toBe("1 question · 1 annotation");
   });
 
   test("a request for another artifact never appears in this pane's rail", async () => {

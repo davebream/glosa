@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { agentIdentity, locateQuote, requestsForArtifact, selectRequestToReveal } from "../src/agent-request.js";
+import {
+  agentIdentity,
+  agentRequestSummary,
+  locateQuote,
+  requestsForArtifact,
+  selectRequestToReveal,
+} from "../src/agent-request.js";
 
 const RENDERED =
   "The argument rests on the premise that readers already accept the frame. " +
@@ -88,6 +94,26 @@ describe("requestsForArtifact", () => {
 
   test("no open artifact means no cards, not every card", () => {
     expect(requestsForArtifact(entries, null)).toEqual([]);
+  });
+});
+
+describe("agentRequestSummary — count what the margin actually holds", () => {
+  test("uses singular labels for one question or one pointer", () => {
+    expect(agentRequestSummary([{ message: "Is this clear?" }])).toBe("1 question");
+    expect(agentRequestSummary([{ message: null }])).toBe("1 pointer");
+  });
+
+  test("pluralizes each request kind independently", () => {
+    expect(agentRequestSummary([{ message: "First?" }, { message: "Second?" }])).toBe("2 questions");
+    expect(agentRequestSummary([{}, { message: "" }])).toBe("2 pointers");
+  });
+
+  test("puts questions before pointers and omits zero counts", () => {
+    expect(agentRequestSummary([{ message: null }, { message: "Is this clear?" }, {}])).toBe("1 question · 2 pointers");
+  });
+
+  test("an empty request list has no label", () => {
+    expect(agentRequestSummary([])).toBe("");
   });
 });
 
