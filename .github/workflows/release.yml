@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [acceptance, remaining-1, remaining-2]
+        profile: [ci-1, ci-2, ci-3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -113,12 +113,7 @@ jobs:
       - name: Execute coverage partition
         env:
           TEST_PARTITION: ${{ matrix.profile }}
-        run: |
-          if [ "$TEST_PARTITION" = acceptance ]; then
-            bun run test:acceptance
-          else
-            bun run scripts/test-runner.ts "$TEST_PARTITION"
-          fi
+        run: bun run scripts/test-runner.ts "$TEST_PARTITION"
       - name: Preserve test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
