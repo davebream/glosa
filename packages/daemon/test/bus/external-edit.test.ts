@@ -421,6 +421,47 @@ describe("#182 R5 — captureHumanEdit's own honest pre-save boundary", () => {
     await bus.close();
   });
 
+  test("#251 a CRLF-only disk change is invisible to identity and STILL checkpointed `unknown` before the human write", async () => {
+    // The decision in docs/decisions.md accepts that a line-ending-only drift gets no stale-save
+    // refusal, and pays for that with this: provenance is not part of the trade. The pre-capture
+    // is a shadow-git checkpoint under `core.autocrlf false` (A4 §F21), so it works on bytes and
+    // the identity hash never gates it. The accepted cost is pinned too — the writer's save
+    // reverts disk's endings, and the human entry owns that reversion rather than hiding it.
+    const root = workspace();
+    writeFile(root, "doc.md", "Block A original.\n\nBlock B original.\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+
+    // Another writer rewrites every line ending and changes no text. `source_sha256` is identical
+    // across this write; git is not.
+    writeFileSync(join(root, "doc.md"), "Block A original.\r\n\r\nBlock B original.\r\n");
+
+    await bus.captureHumanEdit("edit-a", "doc.md", () => {
+      writeFileSync(join(root, "doc.md"), "Block A EDITED BY WRITER.\n\nBlock B original.\n");
+    });
+
+    const entries = entriesOf(bus);
+    expect(kindsOf(bus)).toEqual([EXTERNAL_EDIT_KIND, "human_edit"].sort());
+
+    // The drift got its own honestly-attributed record even though nothing glosa hashes moved.
+    // Asserted WITH the CR byte: a bare `toContain("+Block A original.")` would pass under a diff
+    // that had lost the line ending entirely, which is the one thing this is watching for.
+    const externalEdit = entries.find((entry) => entry.payload.kind === EXTERNAL_EDIT_KIND)!;
+    expect(externalEdit.payload.path).toBe("doc.md");
+    expect(String(externalEdit.payload.diff)).toContain("+Block A original.\r\n");
+    expect(String(externalEdit.payload.diff)).toContain("-Block A original.\n");
+    expect(await trailer(root, String(externalEdit.payload.until_checkpoint), "Glosa-Attribution")).toBe("unknown");
+
+    // And the accepted cost, in bytes: the save reverts block B's endings, and that reversion is
+    // in the HUMAN entry, because the writer's bytes really are what is on disk now.
+    const humanEdit = entries.find((entry) => entry.payload.kind === "human_edit")!;
+    const files = humanEdit.payload.files as Array<{ path: string; diff: string }>;
+    expect(files[0]!.diff).toContain("-Block B original.\r\n");
+    expect(files[0]!.diff).toContain("+Block B original.\n");
+    expect(await trailer(root, humanEdit.payload.checkpoint_after as string, "Glosa-Attribution")).toBe("human");
+    await bus.close();
+  });
+
   test("no drift under an active apply lease — unchanged behaviour, still human, still no refusal", async () => {
     const root = workspace();
     writeFile(root, "notes.md", "one\n");

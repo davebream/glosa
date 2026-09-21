@@ -327,7 +327,9 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   version — previewed first and written only on that explicit choice; a block only the writer touched
   keeps the writer's bytes, a block only disk touched keeps disk's bytes, and a block both touched is a
   conflict the writer's version wins, listed in the preview so that choice is informed), take the disk
-  version, or compare first. **Non-manuscript regions** — a leading document
+  version, or compare first. "Moved" is measured by the concurrency identity, which normalizes line
+  endings before hashing, so a change that only rewrites them is not a move; the content itself is
+  never normalized, on any path (A4 §F05). **Non-manuscript regions** — a leading document
   metadata header and paired `%%` authoring comments — are hidden in Read/Review and excluded from
   outline headings. Inline pairs stay within one CommonMark inline block; own-line pairs may span
   multiple lines within their container. Escaped/unmatched delimiters and markers in code remain
