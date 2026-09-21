@@ -129,6 +129,11 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/daemon/test/artifact-render-non-manuscript.test.ts",
     "packages/spa/test/outline-non-manuscript.test.ts",
     "test/acceptance/markdown-non-manuscript-boundaries.test.ts",
+    // #308 — the other direction of anchoring: a SESSION's quote of source markdown, located in the
+    // rendered text and marked on the page. Whether that mark is drawn around the exact words, is
+    // findable from the far end of a long document, and leaves the reader where they were can only
+    // be settled by a layout engine; happy-dom reports every rect as zero.
+    "test/acceptance/agent-question-real-engine.test.ts",
   ],
   transcript: [
     "packages/daemon/test/transcript/normalize.test.ts",

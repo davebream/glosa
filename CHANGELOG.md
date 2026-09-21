@@ -14,6 +14,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Audio and bounded visible plaintext stream directly from the browser; only a final transcript is
   inserted into the draft, and it is never submitted automatically.
 
+### Changed
+
+- An agent's question now shows you where it is, and glosa no longer moves you to it. The passage a
+  session asks about is outlined in the document with a band around the exact words, a printed
+  "… asks" label and a "?" tab in the gutter, in a blue-black ink that belongs to sessions. A
+  pointer without a question gets the outline and an arrow tab. When a question's passage is off
+  screen, a notice under the artifact bar says so and offers **Go to it**; afterwards **Back to where
+  you were** returns you to your place. Below the width where the margin rail fits, the question and
+  its answer controls open at the passage instead of only in the tray. Before this, the mark was a
+  2px grey rule that was easy to miss, glosa scrolled to a new question by itself once you paused
+  typing, and questions already open when the page loaded got no help at all.
+
 ### Fixed
 
 - The Claude Code plugin loads. `monitors/monitors.json` wrapped its entry in an object, and Claude

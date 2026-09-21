@@ -3,8 +3,8 @@
 // wrapper (happy-dom), and a mounted-app integration test against a fake data-access object (no
 // real daemon, no real fetch — mountApp never gets to touch either directly).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { initialModeState, isParked, mountApp, modeReducer, morphArtifactContent } from "../src/viewer.js";
-import { installDom, type DomEnv } from "./dom-env.ts";
+import { initialModeState, isParked, modeReducer, morphArtifactContent, mountApp } from "../src/viewer.js";
+import { type DomEnv, installDom } from "./dom-env.ts";
 
 describe("modeReducer — pure Read/Review/Edit state machine", () => {
   test("read -> review -> edit, all legal, none dirty", () => {
@@ -1409,23 +1409,36 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect((da as any).posted).toHaveLength(1);
   });
 
-  describe("an arriving question brings itself to the reader", () => {
-    /** Mounts the workspace, then pushes an inbox that gained one anchored question. The tray
-     * refreshes on a journal frame, which is the real path — nothing here reaches past the
-     * seam the daemon actually drives. */
-    async function arrive(entries: unknown[], da = fakeDataAccess()) {
+  describe("an arriving question is announced, and never moves the reader (#308)", () => {
+    /** Mounts the workspace, optionally opens the artifact as a reader would, then pushes an inbox
+     * that gained one anchored question. The tray refreshes on a journal frame, which is the real
+     * path — nothing here reaches past the seam the daemon actually drives. */
+    async function arrive(entries: unknown[], { open = false } = {}) {
+      const da = fakeDataAccess();
       const root = dom.document.createElement("div");
       dom.document.body.append(root);
       let inbox: unknown[] = [];
       (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
       const unmount = mountApp(root, { dataAccess: da });
-      for (let i = 0; i < 12; i++) await Promise.resolve();
+      const settle = async () => {
+        for (let i = 0; i < 12; i++) await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let i = 0; i < 12; i++) await Promise.resolve();
+      };
+      await settle();
+      if (open) {
+        (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+        await settle();
+        // Reading, notes hidden: the state an arrival used to yank the reader out of.
+        const notes = root.querySelector('.glosa-modebar [data-control="notes"]') as any;
+        if (notes?.getAttribute("aria-pressed") === "true") notes.click();
+        await settle();
+        expect(root.querySelector(".glosa-pane")?.getAttribute("data-mode")).toBe("read");
+      }
 
       inbox = entries;
       (da as any).stream.handlers?.onEvent?.({ event: "journal", data: { entry: "inb-1" } });
-      for (let i = 0; i < 12; i++) await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      for (let i = 0; i < 12; i++) await Promise.resolve();
+      await settle();
       return { root, unmount };
     }
 
@@ -1440,66 +1453,62 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
       approval_mode: false,
     };
 
-    test("opens the artifact it concerns and switches that pane to Review", async () => {
-      const { root, unmount } = await arrive([question]);
-      const pane = root.querySelector(".glosa-pane");
-      expect(pane).not.toBeNull();
-      expect(pane?.getAttribute("data-mode")).toBe("review");
+    test("a reader with the artifact open is NOT switched to Review — they are offered the way there", async () => {
+      // INVERTED, not deleted. This block used to assert the opposite: that an arrival switched the
+      // pane to Review and scrolled to the passage once typing paused. #308 removed the move — and
+      // with it the typing-gap timer, the 15s cap and the deferred reveal that could outlive the
+      // dock, none of which can misfire when nothing is ever moved.
+      const { root, unmount } = await arrive([question], { open: true });
+      expect(root.querySelector(".glosa-pane")?.getAttribute("data-mode")).toBe("read");
+      const notice = root.querySelector(".glosa-ask-notice") as any;
+      expect(notice.hidden).toBe(false);
+      expect(notice.querySelector(".glosa-ask-notice-go").textContent).toBe("Go to it");
       unmount();
     });
 
-    test("says so out loud, because the view moved on its own", async () => {
-      const { root, unmount } = await arrive([question]);
+    test("'Go to it' is what switches the pane to Review", async () => {
+      const { root, unmount } = await arrive([question], { open: true });
+      (root.querySelector(".glosa-ask-notice-go") as any).click();
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      expect(root.querySelector(".glosa-pane")?.getAttribute("data-mode")).toBe("review");
+      unmount();
+    });
+
+    test("it is said out loud, and the announcement does not claim to have moved anyone", async () => {
+      const { root, unmount } = await arrive([question], { open: true });
       const live = root.querySelector('.glosa-visually-hidden[role="status"]');
-      expect(live?.textContent).toContain("notes.md");
-      expect(live?.textContent).toContain("unsaved work is kept");
+      expect(live?.textContent).toContain("is asking about a passage in notes.md");
+      expect(live?.textContent).not.toContain("Switched");
       unmount();
     });
 
-    test("a bare pointer earns a mark, never the reader's place in the document", async () => {
+    test("with nothing open, nothing is opened for the reader either — the Attention tray lists it", async () => {
+      // Opening the artifact here was tried and removed: at boot the inbox can land before the
+      // first pane exists, and that threw a reader who asked for Read into Review on load.
+      const { root, unmount } = await arrive([question]);
+      expect(root.querySelector(".glosa-pane")).toBeNull();
+      expect(root.querySelector('.glosa-visually-hidden[role="status"]')?.textContent).toContain("notes.md");
+      unmount();
+    });
+
+    test("a bare pointer earns a mark, never an announcement, a notice or an opened artifact", async () => {
       const { root, unmount } = await arrive([{ ...question, message: null, action: "point" }]);
-      // Still on the workspace with nothing forced open: a pointer is not an interruption.
-      expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
+      expect(root.querySelector(".glosa-pane")).toBeNull();
+      expect(root.querySelector('.glosa-visually-hidden[role="status"]')?.textContent ?? "").not.toContain("asking");
       unmount();
     });
 
-    /** Arms a reveal while a keystroke is still fresh, so it is parked on its retry timer. */
-    async function arriveMidKeystroke() {
-      const da = fakeDataAccess();
-      const root = dom.document.createElement("div");
-      dom.document.body.append(root);
-      let inbox: unknown[] = [];
-      (da as any).getInbox = async () => ({ pending_count: inbox.length, attention: inbox });
-      const unmount = mountApp(root, { dataAccess: da });
-      for (let i = 0; i < 12; i++) await Promise.resolve();
-
-      dom.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
-      inbox = [question];
-      (da as any).stream.handlers?.onEvent?.({ event: "journal", data: { entry: "inb-1" } });
-      for (let i = 0; i < 12; i++) await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      for (let i = 0; i < 12; i++) await Promise.resolve();
-      return { root, unmount };
-    }
-
-    test("waits for a gap in typing rather than landing mid-sentence", async () => {
-      const { root, unmount } = await arriveMidKeystroke();
-      // Nothing has been yanked out from under the keystroke.
-      expect(root.querySelector('.glosa-pane[data-mode="review"]')).toBeNull();
-      unmount();
-    });
-
-    test("unmounting cancels a deferred reveal — it never reaches into a destroyed dock", async () => {
-      // The retry timer outlived the workspace: it fired after teardown, called openArtifact on a
-      // torn-down dock, and dockview threw on a missing ResizeObserver. Bun attributed that stray
-      // async error to whichever unrelated test file happened to be running, which is how a
-      // leak in the viewer surfaced as a failure in the adoption suite.
-      const { root, unmount } = await arriveMidKeystroke();
+    test("going to a question in an unopened artifact survives the workspace being torn down mid-open", async () => {
+      // The old deferred reveal outlived the workspace: its timer fired after teardown, called
+      // openArtifact on a torn-down dock, and dockview threw on a missing ResizeObserver, which Bun
+      // pinned on whichever unrelated file was running. The timer is gone. What remains async is
+      // "Go to it" for an artifact nobody has open, and it has to respect teardown the same way.
+      const other = { ...question, id: "inb-2", target_path: "other.md" };
+      const { root, unmount } = await arrive([other], { open: true });
+      (root.querySelector(".glosa-ask-notice-go") as any)?.click();
       unmount();
       root.remove();
-
-      // Past the idle window the timer was waiting on. Nothing should still be trying to open.
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(root.querySelector(".glosa-pane")).toBeNull();
     });
   });

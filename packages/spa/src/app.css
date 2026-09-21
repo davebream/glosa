@@ -67,6 +67,13 @@
   --hand: oklch(0.52 0.16 42); /* burnt vermilion, #b03f00 — ~5.8:1 on paper */
   --hand-hover: oklch(0.46 0.15 42);
   --pencil: oklch(0.56 0.01 65); /* warm graphite — ~4.6:1 on paper */
+  /* Session ink: blue-black, a session's MARK on the page (#308) — the band, its tab and label,
+     the notice's glyph, the question card's top rule. Never a button, never a panel fill, and a
+     session's words stay printed in ordinary ink. ~8.9:1 on paper, so the label's paper-on-ink
+     text clears AA with room. */
+  --session: oklch(0.42 0.11 255);
+  --session-wash: color-mix(in oklch, var(--session) 10%, transparent);
+  --session-wash-strong: color-mix(in oklch, var(--session) 17%, transparent);
   --hand-wash: color-mix(in oklch, var(--hand) 14%, transparent); /* on the words, in Review */
   --pencil-wash: color-mix(in oklch, var(--pencil) 16%, transparent);
   --hand-line: color-mix(in oklch, var(--hand) 70%, transparent); /* the quiet underline in Read */
@@ -211,6 +218,9 @@
   --hand: oklch(0.72 0.13 45); /* vermilion under lamplight — ~6.9:1 */
   --hand-hover: oklch(0.78 0.12 45);
   --pencil: oklch(0.64 0.01 70);
+  --session: oklch(0.76 0.1 250); /* the same ink under the lamp — ~8.6:1 on the dark ground */
+  --session-wash: color-mix(in oklch, var(--session) 14%, transparent);
+  --session-wash-strong: color-mix(in oklch, var(--session) 22%, transparent);
   --scrim: oklch(0 0 0 / 0.45);
   --primary-hover: oklch(0.84 0.01 80);
   --danger: oklch(0.7 0.15 22);
@@ -1936,9 +1946,10 @@ input,
   height: 100%;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   grid-template-areas:
     "bar"
+    "notice"
     "body";
   background: var(--bg);
 }
@@ -2765,6 +2776,12 @@ input,
   pointer-events: none;
 }
 
+/* A session's tab stands where a hovered block would show its address, and says the address in its
+   accessible name; two labels on one spot help nobody. */
+.glosa-pane[data-mode="review"] .glosa-content > [data-session-mark]:not(h1, h2, h3, h4, h5, h6)::before {
+  display: none;
+}
+
 .glosa-pane[data-mode="review"] .glosa-content > :is(h1, h2, h3, h4, h5, h6)[data-address]::before,
 .glosa-pane[data-mode="review"] .glosa-content > [data-address]:hover::before,
 .glosa-pane[data-mode="review"] .glosa-content > [data-address]:focus-visible::before {
@@ -3323,9 +3340,9 @@ input,
    card dropped onto the page — heavy on a short paragraph, and heaviest exactly where the writer is
    trying to read their own sentence.
 
-   So the mark goes BESIDE the words, in the vocabulary the page already speaks: `.glosa-sideline`
-   puts a session's attention on a passage with a 2px rule down its left, graphite at rest and the
-   hand when it is the one being answered. An open block is the passage the writer's own hand is on,
+   So the mark goes BESIDE the words, as a 2px rule down the block's left. (A session's attention
+   used to be drawn the same way; since #308 it is a band in session ink, so the rule in the gutter
+   now belongs to the writer alone.) An open block is the passage the writer's own hand is on,
    so it takes the hand. Position carries it, which means it survives greyscale and costs the page
    no enclosed area at all. */
 .glosa-run-editor {
@@ -3338,7 +3355,7 @@ input,
 }
 
 /* The formatting actions, bound to the gesture that asks for them. Out of flow and translated clear
-   of the line above the selection, so showing it never moves a word — the same rule the sideline and
+   of the line above the selection, so showing it never moves a word — the same rule a session's band and
    the margin follow. It is chrome, so it is the one thing on this page that wears the interface's
    sans face rather than the manuscript's serif: these are controls, not text. */
 .glosa-selection-toolbar {
@@ -3395,7 +3412,7 @@ input,
   text-decoration: line-through;
 }
 
-/* Drawn the way `.glosa-sideline` is drawn — out of flow, so the words do not move by a pixel when
+/* Drawn the way a session's band is drawn — out of flow, so the words do not move by a pixel when
    it appears. It sits in the gutter the manuscript's measure already leaves, never over the text. */
 .glosa-run-editor:has(.ProseMirror:focus)::before {
   content: "";
@@ -3656,38 +3673,261 @@ input,
   -webkit-line-clamp: 1;
 }
 
-/* ---------- the agent's marks ----------
-
-   Three highlight vocabularies now share one manuscript: the browser's transient selection, the
-   reviewer's own annotations, and a session pointing at a passage. The first two both live ON the
-   words and already share --anchor-wash, so a third wash would be indistinguishable from either.
-
-   A session's mark therefore goes BESIDE the words — an editor's sideline down the margin. The
-   distinction is carried by POSITION, so it survives greyscale, and an agent mark can sit on the
-   same sentence as a human annotation without the two fighting for the same pixels.
-
-   At rest the rule is graphite: a session pointing at something is not the reviewer's own action,
-   so it spends nothing from the accent budget. It takes the hand only while it is the passage being
-   answered, which is exactly what --primary is for. */
-/* Spans the pane; each rule carries its own measured `left`, because the distance that matters
-   is to the TEXT column, which a CSS offset against the content box cannot see. */
-.glosa-sidelines {
+/* ---------- a session's mark on the page (#308) ----------
+   A band AROUND the words, in session ink, in its own layer. The reader's marks colour the words
+   (wash + underline); a session's mark outlines them, so a sentence carrying both still reads, and
+   the difference survives greyscale: outline + printed label + gutter tab, against wash + rule.
+   It is meant to be seen at once. A question holds its session until it is answered, so a mark
+   the reader has to hunt for costs more than one that is plain. */
+.glosa-bands {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.glosa-sideline {
+.glosa-band-svg {
   position: absolute;
-  width: 2px;
-  border-radius: var(--radius-focus);
-  background: var(--border-strong);
-  transition: background var(--dur-fast) var(--ease-out);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.glosa-sideline[data-focused="true"] {
-  background: var(--primary);
-  width: 3px;
+.glosa-band {
+  fill: none;
+  stroke: var(--session);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  transition:
+    fill var(--dur-fast) var(--ease-out),
+    stroke-width var(--dur-fast) var(--ease-out);
+}
+
+.glosa-band[data-kind="question"]:not([data-overlapped]) {
+  fill: var(--session-wash);
+}
+
+.glosa-band[data-focused="true"],
+.glosa-band[data-hover] {
+  stroke-width: 2;
+}
+
+.glosa-band[data-kind="question"][data-focused="true"]:not([data-overlapped]),
+.glosa-band[data-kind="question"][data-hover]:not([data-overlapped]) {
+  fill: var(--session-wash-strong);
+}
+
+.glosa-band-tab {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-micro);
+  background: var(--session);
+  color: var(--bg);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.glosa-band-tab:hover {
+  transform: scale(1.1);
+}
+
+.glosa-band-label {
+  position: absolute;
+  /* Rides the band's top edge, mostly above it: the line's own leading is only a few pixels, and a
+     label centred on the edge sat on the ascenders of the words it labels. */
+  transform: translateY(-62%);
+  margin-left: var(--space-2);
+  padding: 2px 6px;
+  border-radius: var(--radius-micro);
+  background: var(--session);
+  color: var(--bg);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.glosa-band-label[data-align="end"] {
+  transform: translate(-100%, -62%);
+  margin-left: calc(-1 * var(--space-2));
+}
+
+/* The one draw-in an arrival gets. From an already-visible mark: the band is there from the first
+   frame and thickens once, so a reader who glances late still finds it. */
+@keyframes glosa-band-arrive {
+  0% {
+    stroke-width: 4;
+    fill: var(--session-wash-strong);
+  }
+  100% {
+    stroke-width: 1.5;
+  }
+}
+
+@keyframes glosa-band-tab-arrive {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.4);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.glosa-band[data-arrived] {
+  animation: glosa-band-arrive 1.2s var(--ease-out);
+}
+
+.glosa-band-tab[data-arrived] {
+  animation: glosa-band-tab-arrive 0.6s var(--ease-out);
+}
+
+/* ---------- the notice: a session is waiting on a passage the reader cannot see ---------- */
+.glosa-ask-notice {
+  grid-area: notice;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.glosa-ask-notice[hidden] {
+  display: none;
+}
+
+.glosa-ask-notice-glyph {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-micro);
+  background: var(--session);
+  color: var(--bg);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.glosa-ask-notice-text {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.glosa-ask-notice-provider {
+  font-weight: 600;
+}
+
+.glosa-ask-notice-address {
+  flex: none; /* the address keeps the hand, as it does everywhere: it is the page's own label */
+}
+
+.glosa-ask-notice-gap {
+  flex: 1;
+}
+
+.glosa-ask-notice-count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.glosa-ask-notice .glosa-primary-button,
+.glosa-ask-notice .glosa-secondary-button {
+  flex: none;
+}
+
+.glosa-ask-notice-dismiss {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-tool);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.glosa-ask-notice-dismiss:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+@container pane (max-width: 520px) {
+  .glosa-ask-notice {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+    padding-block: var(--space-2);
+  }
+
+  .glosa-ask-notice-text {
+    flex: 1 1 100%;
+    order: -1;
+    white-space: normal;
+  }
+
+  .glosa-ask-notice-glyph {
+    order: -2;
+  }
+}
+
+/* ---------- the question at its passage (no rail) ---------- */
+.glosa-ask-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* a coordinate space; only the card inside it is interactive */
+}
+
+.glosa-ask-layer:empty {
+  display: none;
+}
+
+.glosa-ask-layer .glosa-agent-card {
+  position: absolute;
+  width: min(26rem, calc(100% - 2 * var(--space-4)));
+  z-index: var(--z-tray);
+  pointer-events: auto;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-top: 2px solid var(--session);
+  border-radius: var(--radius-composer);
+  box-shadow: var(--shadow-menu);
+  animation: glosa-anchor-in var(--dur-base) var(--ease-out);
+}
+
+.glosa-agent-close {
+  margin-block: -4px;
+}
+
+.glosa-agent-who .glosa-ask-notice-gap {
+  flex: 1;
 }
 
 /* The rail card for a session's request. Same paper, same border, same radius as an annotation —
@@ -3696,7 +3936,7 @@ input,
 .glosa-agent-card {
   background: transparent;
   border: 0;
-  border-top: 1px solid var(--ink); /* a session's entry is printed: ink rule, ink words */
+  border-top: 1.5px solid var(--session); /* the same ink as its band: one object, two places */
   border-radius: 0;
   padding: var(--space-2) 0 var(--space-3);
   display: grid;
@@ -3742,17 +3982,25 @@ input,
   overflow: hidden;
 }
 
-/* The quoted words carry the sideline's own shape rather than the annotation wash: a rule to the
-   left of the quote, matching the mark it points at in the manuscript. */
+/* The quoted words carry their band's ink rather than the annotation wash: the same faint
+   session-ink ground the passage has in the manuscript, so the quote reads as "those words". */
 .glosa-agent-quote[role="button"] {
   cursor: pointer;
-  border-left: 2px solid var(--border-strong);
-  padding-left: var(--space-2);
+}
+
+.glosa-agent-quote > span {
+  background: var(--session-wash);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 0 2px;
 }
 
 .glosa-agent-quote[role="button"]:hover {
-  border-left-color: var(--primary);
   color: var(--ink);
+}
+
+.glosa-agent-quote[role="button"]:hover > span {
+  background: var(--session-wash-strong);
 }
 
 .glosa-agent-lost {
@@ -4637,6 +4885,7 @@ input,
 
 /* On a dark ground the draft lifts one surface step off the paper; the shadow token already
    carries the tighter, black-based dark value, so it keeps its lift too. */
+:root[data-theme="dark"] .glosa-ask-layer .glosa-agent-card,
 :root[data-theme="dark"] .glosa-composer {
   background: var(--surface);
 }
@@ -5812,6 +6061,9 @@ input,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .glosa-band,
+  .glosa-band-tab,
+  .glosa-ask-layer .glosa-agent-card,
   .glosa-sidebar li button.glosa-starred-unstar,
   .glosa-starred-row,
   .glosa-app,
@@ -5844,7 +6096,10 @@ input,
     transition: none;
   }
 
-  .glosa-composer {
+  .glosa-composer,
+  .glosa-ask-layer .glosa-agent-card,
+  .glosa-band[data-arrived],
+  .glosa-band-tab[data-arrived] {
     animation: none;
   }
 
