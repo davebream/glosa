@@ -528,6 +528,52 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     throw new Error(`route did not render ${surface}: ${JSON.stringify(state)}`);
   }
 
+  /**
+   * Types into the open full-page source face and confirms the keystrokes actually arrived.
+   *
+   * `Input.insertText` is delivered to whatever is focused AT THE MOMENT THE BROWSER HANDLES IT,
+   * and the `focus()` that precedes it is a SEPARATE CDP round trip. On a loaded machine — the
+   * unpartitioned `full` job, where this file shares one process with the rest of the suite — a
+   * re-render can land between the two, take focus off the textarea, and send the insert nowhere.
+   * The box then still holds the file's own bytes and the draft is simply missing, which reads as
+   * "the editor did not preserve the draft" when nothing about the product misbehaved. That is the
+   * intermittent red this test has been producing.
+   *
+   * So: focus, insert, verify, and retry the pair. Already-present text is never inserted twice.
+   * If it never lands, throw with the state that explains WHICH half failed — whether the textarea
+   * was hidden, whether focus was held — because the bare `toContain` failure this replaces said
+   * only that the draft was absent and sent the next reader hunting in the product.
+   */
+  async function typeIntoSourceFace(client: CdpClient, text: string) {
+    const quoted = JSON.stringify(text);
+    let state: any = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      state = await client.evaluate(`(() => {
+        const source = document.querySelector('.glosa-edit-area');
+        if (!source) return { step: 'focus', hidden: true, held: false, has: false };
+        if (source.value.includes(${quoted})) return { step: 'focus', hidden: false, held: true, has: true };
+        if (source.hidden) return { step: 'focus', hidden: true, held: false, has: false };
+        source.focus();
+        source.setSelectionRange(source.value.length, source.value.length);
+        return { step: 'focus', hidden: false, held: document.activeElement === source, has: false };
+      })()`);
+      if (state.has) return state;
+      if (state.held) {
+        await client.send("Input.insertText", { text });
+        state = await client.evaluate(`(async () => {
+          const source = () => document.querySelector('.glosa-edit-area');
+          for (let i = 0; i < 20 && !source().value.includes(${quoted}); i++)
+            await new Promise(resolve => setTimeout(resolve, 25));
+          return { step: 'insert', hidden: source().hidden, held: document.activeElement === source(),
+            has: source().value.includes(${quoted}), value: source().value.slice(0, 80) };
+        })()`);
+        if (state.has) return state;
+      }
+      await Bun.sleep(100);
+    }
+    throw new Error(`typing never reached the source face after 8 attempts: ${JSON.stringify(state)}`);
+  }
+
   // R6's morph invariant, in the engine it is for. An external write reaches the open page over
   // SSE and is morphed into it (vendor/idiomorph.js) rather than replacing it. viewer.test.ts pins
   // node identity under happy-dom, which performs no layout and has no real focus or scroll; this
@@ -740,18 +786,11 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         await new Promise(resolve => setTimeout(resolve, 25));
       const source = document.querySelector('.glosa-edit-area');
       if (source.value !== ${JSON.stringify(PARAGRAPH_SOURCE)}) throw new Error('source did not finish loading');
-      source.focus(); source.setSelectionRange(source.value.length, source.value.length);
     })()`);
-      await client.send("Input.insertText", { text: "UNSAVED ROUTE DRAFT" });
-      const before: any = await client.evaluate(`(async () => {
-      // The insert is a separate CDP round trip from the focus above, so confirm it actually
-      // landed rather than reading a box something re-rendered in between. A failure here is a
-      // real regression — the draft did not survive — and is reported as one, not as a timeout.
-      const source = () => document.querySelector('.glosa-edit-area');
-      for (let i = 0; i < 40 && !source().value.includes('UNSAVED ROUTE DRAFT'); i++)
-        await new Promise(resolve => setTimeout(resolve, 25));
-      return { hash: location.hash, text: source().value, focused: document.activeElement === source() };
-    })()`);
+      await typeIntoSourceFace(client, "UNSAVED ROUTE DRAFT");
+      const before: any = await client.evaluate(
+        `({ hash: location.hash, text: document.querySelector('.glosa-edit-area').value })`,
+      );
       expect(before.text).toContain("UNSAVED ROUTE DRAFT");
       const next = new URL(documentUrl("document", "blockquote.md")).hash;
       await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
