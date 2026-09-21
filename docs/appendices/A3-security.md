@@ -34,7 +34,8 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - The Codex attachment opens only the configured local `AF_UNIX` control socket and never uses
   `remoteControl/*`, opens a TCP listener, or starts Codex's app-server. The app-server itself may
   maintain its own remote-control task toward `chatgpt.com`; that process and egress are Codex-owned,
-  while the Glosa daemon, SPA, and attachment make no outbound network request.
+  while the Glosa attachment makes no outbound network request. The daemon and SPA make no external
+  request unless current versioned consent enables a provider and the user starts its foreground action.
 - Fragment scrub FIRST statement on bootstrap: read `#t=` (durable) or `#p=` (presentation),
   redeem `p` once for the durable token when present, `localStorage.setItem('glosa_token', durable)`,
   `history.replaceState` to pathname+search plus non-secret fragment state
@@ -83,7 +84,14 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
 - Both token commands use the stable A6 envelope and never include token material in human or JSON
   output. The daemon stats the token file on refresh and warns once per observed permission drift;
   drift is non-fatal so the warning cannot lock the user out of rotation/revocation.
-- SPA-origin CSP (the same string under both SPA hostnames; `'self'` follows whichever the tab loaded): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. (SPA refuses to ever be framed.)
+- SPA-origin CSP (the same string under both SPA hostnames; `'self'` follows whichever the tab loaded):
+  the baseline is `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src
+  'self' data:; font-src 'self'; connect-src 'self'; frame-src
+  http://127.0.0.1:<CLASSF_PORT>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src
+  'none';` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff`. When current versioned
+  Wispr consent is enabled at page load, and only then, append the exact origin
+  `wss://platform-api.wisprflow.ai` to `connect-src`. No wildcard, HTTPS origin, or other provider host
+  is allowed. Configuration changes require a reload. (SPA refuses to ever be framed.)
 - Log redaction: one `redact()` at logger boundary — strip `Authorization` values; regex-redact token/capability-shaped path segments `[A-Za-z0-9_-]{32,}`. Grep-enforceable single call site.
 - **confinePath(workspaceRoot, relPath)**: reject absolute or `..`-containing; `path.resolve`; realpath the nearest EXISTING ancestor (so not-yet-created files still confined); reject if realAncestor not under realRoot. ONE shared utility at every path entry point (HTTP routes, class-F mint/serve, adapter manifest, git pathspec); grep-enforced in CI. Rejects lexical traversal AND symlink escape. Argv safety: git paths as discrete argv elements + `--` before first path → filename `--force` can't be a flag.
 
@@ -97,8 +105,8 @@ iframe/tab, DNS rebinding) — NOT another OS-user process.
   |---|---|---|
   | Tokenless handshake `GET /api/handshake` | No | Reject if Origin present+foreign; allow self/absent. Body non-sensitive `{contract_version,daemon_version,paired}`. |
   | Presentation redeem `POST /api/presentation-token/redeem` | No (redeems for Bearer) | Reject if Origin missing OR foreign; also reject `Sec-Fetch-Site: cross-site`. Returns the durable pairing token once. |
-  | Authed reads (GET: artifact, SSE, diff, transcript, inbox, entry-status, watch) | Yes (401) | Reject only if Origin present+foreign; absent allowed (Bearer is the gate). |
-  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token, watch/transport-ack, watch/ack) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
+  | Authed reads (GET: artifact, SSE, diff, transcript, inbox, entry-status, watch, dictation status) | Yes (401) | Reject only if Origin present+foreign; absent allowed (Bearer is the gate). |
+  | State-changing (POST/PUT/DELETE: annotations, resolve, attention, apply-begin, presentation mint, token, watch/transport-ack, watch/ack, dictation session) | Yes (401) | Reject if Origin missing OR foreign (strict, redundant w/ Bearer on purpose). Also reject `Sec-Fetch-Site: cross-site` (defense-in-depth). |
   | Navigation (top GET: `/` SPA shell, `/doc/<cap>/...` class-F) | No (nav can't carry headers) | Origin checks inapplicable; SPA shell is static+non-sensitive, self-auths via fragment post-load; class-F gated by PATH CAPABILITY not headers. |
 - Resolves the doc contradiction: "every request validated" = the Host check unconditionally; Origin check is route-class-scoped.
 
@@ -129,6 +137,10 @@ are shaped so that no request can name one.
 8. Fragment token in history/URL → replaceState + origin-scoped `localStorage` + rotate/revoke → test: hash empty, no history `t=`, no cookie; the credential survives a reload, a second tab at a token-free URL and a rebuilt web view on the same origin (`pairing-durability-real-engine.test.ts`); revoke → 401, every tab on the origin drops it, old Bearer 401.
 9. DNS rebinding against the second SPA hostname (#159) → literal two-name allowlist + Origin bound to Host + class-F IP-only → test: near-miss Hosts (`GLOSA.localhost`, `glosa.localhost.`, `evil.glosa.localhost`, `localhost`, missing port, class-F port) → 400 no body; `glosa.localhost` Host with a `127.0.0.1` Origin (and the reverse) → 403; `glosa.localhost` Host on class-F → 400; class-F `frame-ancestors` names the SPA under both hostnames and nothing else.
 10. Page with the Bearer token tries to open an arbitrary directory through stars → no star route accepts a path; open is by daemon-recorded id → test (`workspace-stars.test.ts`): `POST /api/stars` with a `path` body and no slug → 400 and nothing recorded; an id that was never recorded → 404; a star to a loose-file registration → 422; reopening a star whose folder is gone → 422 and the index unchanged.
+11. Provider integration becomes passive egress → versioned consent + local-only status + foreground
+    session route + conditional exact-origin CSP → test: startup/status/configuration cause zero external
+    calls; unconfigured SPA CSP excludes the provider; configured CSP allows only its WSS origin;
+    class-F CSP remains byte-for-byte network-locked.
 
 ### Explicit shadow repair (#226)
 

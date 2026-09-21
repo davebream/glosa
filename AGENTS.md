@@ -44,12 +44,13 @@ a live document week.
    UI host. The SPA runs in any browser over loopback (`http://glosa.localhost` or `http://127.0.0.1`).
    Delivery uses each agent's own push transport (Claude: the plugin monitor; Codex: the app-server
    socket) plus MCP pull — no hooks, no Channels, no `glosa init` (R4).
-5. **Local-first, zero telemetry, zero external runtime calls.** Manuscripts may hold special-category
-   personal data; class-F network egress is CSP-blocked (A3). Scrub `ANTHROPIC_API_KEY` from every
-   spawned child env. **The daemon and SPA runtime make no outbound network calls at all.** The single
-   documented exception is `glosa update` (A6 §F33): explicitly invoked only — **never** a background
-   or passive check — and it sends no identifying data (static `User-Agent`, no version beacon, no
-   cache file that could become a heartbeat).
+5. **Local-first, zero telemetry, consent-gated external runtime calls.** Manuscripts may hold
+   special-category personal data; class-F network egress is always CSP-blocked (A3). Scrub
+   `ANTHROPIC_API_KEY` from every spawned child env. Glosa makes no telemetry, background checks,
+   warm-ups, or unconfigured egress. A configured external provider may receive only the data named
+   in current versioned consent, and only after the user starts its foreground action. `glosa update`
+   remains explicitly invoked only (A6 §F33), with a static `User-Agent`, no version beacon, and no
+   cache file that could become a heartbeat.
 6. **The SPA reaches the daemon through ONE data-access module** (so a future hosted shell is a deploy,
    not a refactor) (R6).
 
@@ -60,7 +61,7 @@ a live document week.
   rendered HTML + small vanilla ES modules. markdown-it (+ `data-line` stamping), idiomorph, diff2html,
   picomatch, chokidar v5, system `git` (shadow repo), a vendored transcript-event normalizer.
 - **macOS-only v1** (pinned floors in A6 §F30). Monorepo:
-  `packages/{daemon, spa, providers/claude-code, providers/codex, cli}`.
+  `packages/{daemon, spa, providers/claude-code, providers/codex, providers/wispr-flow, cli}`.
 
 ## Build approach
 

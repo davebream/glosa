@@ -32,18 +32,21 @@ normative product contract.
   package or workflow logic.
 - **Multi-agent**: Claude Code deep + Codex built to the same provider interface; provider interface is a first-class deliverable.
 - **History = full** (compare + restore). **Platform = macOS-only, pinned versions.**
+- **Dictation is an optional input method.** It is hidden until a user configures a provider and
+  accepts versioned disclosure; it inserts drafts into prose fields and never submits them.
 - Durability, auth, daemon lifecycle, anchoring, security, CLI all hardened per appendices A1–A6.
 
 ## 1. Goal & release gate
-**Goal**: eliminate four failure modes of agent-assisted writing — (A) unreadable terminal rendering
+**Goal**: eliminate five failure modes of agent-assisted writing — (A) unreadable terminal rendering
 of long-form dialogue, (B) no artifact preview/annotation beside the agent, (C) manual edits invisible
-to the agent, (D) annotation of rendered output requiring copy-paste.
+to the agent, (D) annotation of rendered output requiring copy-paste, and (E) no explicit,
+review-before-submit dictation path in the writing workspace.
 
 **Hard release gate**: the deterministic acceptance suites pass, AND a maintainer-reviewed manual
 rehearsal (T8) against an ignored copy of real past artifacts passes. The maintainer selects the
 private input and signs the sanitized report; an agent never signs on the maintainer's behalf.
 
-**Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser); dictation capture;
+**Non-goals (v1)**: desktop shell (Electron/Tauri — v1 is daemon + browser);
 mobile/remote access; cloud sync; a second-agent provider *beyond* Claude Code + Codex; a public
 plugin/SDK surface; telemetry; cross-platform (macOS-only); instant-wake of a non-Claude *idle* agent
 (honest limit — see R4).
@@ -66,7 +69,7 @@ Fixed stack: **Bun + TypeScript**; one process serves SPA + API; **no heavy fron
 **idiomorph** (live morph), **diff2html** (diff pane), **picomatch** (the one matcher), Bun's native
 recursive **`fs.watch`** (artifact watch; **chokidar v5** only for transcript tailing), system **git** (shadow repo), a vendored **transcript-event normalizer** (do NOT
 parse raw transcript JSONL directly — A2). Monorepo: `packages/{daemon, spa, providers/claude-code,
-providers/codex, cli}`. Three invariant boundaries (review-blockers if violated):
+providers/codex, providers/wispr-flow, cli}`. Three invariant boundaries (review-blockers if violated):
 (1) daemon API is versioned + client-agnostic; (2) agent providers and content adapters only enter
 via their interfaces — no special-casing; (3) the SPA talks to the daemon only through the public
 authenticated API. **Adapters/providers carry ALL domain- and agent-specific knowledge; the core is
@@ -289,7 +292,8 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
   acknowledgement routes (issue #153 Part 2), presentation-token mint/redeem, whole-bus
-  deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id)) — schemas, status codes, 1 MiB body cap,
+  deletion (`glosa forget`, issue #156), starred workspaces (star, unstar, reopen by star id), and
+  provider-neutral dictation status/session grants) — schemas, status codes, 1 MiB body cap,
   `X-Contract-Version` (major mismatch → 409 + reload; minor tolerated) in A1. All paths pass the single
   `confinePath()` realpath guard (A3 §3).
 
@@ -368,6 +372,18 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   replacement in the plugin monitor's or MCP server's environment. The composer keeps
   one tab-scoped in-flight submission, clears only after `presented`, preserves newer edits, and shows
   an inline native session picker when multiple live explicit bindings are eligible.
+- **Opt-in dictation** is an input method, not a submission or provenance event. One shared controller
+  may record for one eligible field at a time: annotation request, agent answer, attention response,
+  or conversation composer. Document source/rich editing, search, command syntax, and read-only
+  prompts never expose it. A configured browser captures mono 16-bit PCM WAV at 16 kHz, sends exact
+  one-second packets directly to the provider, and inserts only a final transcript by replacing the
+  original selection and dispatching one bubbling `input` event. The field and submit controls are
+  locked while active. Escape, permission denial, disconnect, timeout, empty speech, field removal,
+  or concurrent value drift restores value, selection, focus, and controls unchanged. Context is
+  plaintext-only and capped at 262,144 UTF-8 bytes: selection first, nearest field text second, then
+  only visible artifact/question, loaded conversation, or visible attention prose. Screenshots,
+  HTML, hidden frontmatter/comments, raw events, tool payloads, paths, session IDs, and participant
+  identities are excluded. Recording auto-stops at 5m45s and never submits the resulting draft.
 - **Anchoring resolution contract** (A5 §F10/§F11): total `resolve(annotation, artifact, ctx) →
   source_range | pipeline_feedback | orphaned`. Fixed normalization (NFC, whitespace-fold, UTF-16
   offsets, uniqueness required). Class R = quote-in-stamped-line-range, else `block_range` guidance,
@@ -393,6 +409,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   tools; transcript mirror) and a **Codex provider** (`push` = an app-server attachment is live for
   this exact thread). Both always have `mcpPull`; neither has `gate` or `boundaryDrain` any more (#152).
   Adding a CLI = a new provider, never a core change.
+- **Dictation-provider interface** is separate from `AgentProvider`. The generic daemon knows only
+  local availability, fixed browser assets, exact connect origins, and short-lived session grants.
+  Provider packages own credentials, token exchange, and browser wire format. The core runs with an
+  empty dictation registry and imports no provider package; the CLI entrypoint composes Wispr Flow.
 - **Content-adapter interface**: supplies artifact-class metadata, sidebar ordering, and generic
   **`derived-from(A→B, via process)`** edges. From an edge the core provides Edit-on-A→source-B,
   staleness, and class-F source resolution without knowing the workflow that produced either file.
@@ -416,7 +436,9 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 - Commands (all with `--json` + stable exit codes, A6): `open [--url]`,
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
-  `token rotate|revoke`, `doctor` (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
+  `token rotate|revoke`, `dictation configure --provider wispr-flow|status|disable`, `doctor`
+  (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned
+  journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
@@ -454,8 +476,10 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 - **Platform: macOS-only v1** (Apple Silicon + Intel), pinned floors: macOS 13, Bun 1.2.7, Git 2.30,
   Claude Code 2.1.80 (plugin floor; rec ≥2.1.200), browser Chromium≥111/Safari≥16.4. Non-Darwin →
   exit 5.
-- **Privacy**: loopback-only; zero telemetry/external runtime calls; class-F network egress blocked by
-  CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
+- **Privacy**: loopback-only and zero telemetry. There are no background checks, warm-ups, or
+  unconfigured external runtime calls. After versioned consent, a configured provider may receive
+  only its disclosed data following a foreground user action. Class-F network egress remains blocked
+  by CSP. (Manuscripts may hold special-category personal data — this posture is load-bearing.)
 - **Robustness**: daemon crash loses nothing (journal-as-truth + fsync-before-ACK + replay; SSE
   reconnect replays from cursor; watcher catch-up on restart). Any face (push/MCP/CLI) failing changes
   which mechanism delivers, never whether the entry survives.
@@ -494,7 +518,11 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   switch and a tab move; a concurrent writer's change on disk is never silently overwritten by
   a stale save — a merge is written only on the writer's explicit Keep mine, never automatically, and
   what it cannot carry (a conflicting block, or a conflicting source region between or around blocks)
-  is named in the preview rather than dropped silently.
+  is named in the preview rather than dropped silently. Optional dictation is hidden until locally
+  configured, preserves drafts on every failure path, and is accepted only after offline transport,
+  context-boundary, DOM opt-in, security, and ablation tests plus one attended paid Wispr smoke test.
+  The paid smoke gates only the claim that this optional provider is supported; it is not a general
+  v1 or T8 release gate, and CI/T8 never contact Wispr.
 - **T4 — class F viewer**: separate-origin serving + capability + CSP + MessageChannel bridge (A3);
   source-preserving render; derived-from Edit→source; anchoring resolution (A5 §F11). Gate: E2E annotate
   the real rendered-preview fixture (renders within tolerance, its JS runs, network blocked); the full A3 §5
@@ -547,8 +575,8 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   now so these are later deploys, but no shell/hosted mode ships in v1.
 - **"Make it a git repo" promotion**: one-click promote a workspace to a real repo (seeded from the shadow
   history) + optional GitHub remote. Future; needs an explicit privacy-consent moment.
-- **Publishing an artifact externally** is an integration concern, not a glosa responsibility. glosa
-  itself makes no external runtime calls.
+- **Publishing an artifact externally** is an integration concern, not a glosa responsibility.
+  Consent-gated dictation does not create a general publishing or background-egress capability.
 - **Reference implementations for T5** (transcript viewer): `d-kimuson/claude-code-viewer` (MIT, live
   file-watching viewer) and `claude-code-parser` for protocol knowledge are steal-from references; the
   deliberate decision is **vanilla, not assistant-ui/React** (v2 §2 stack).

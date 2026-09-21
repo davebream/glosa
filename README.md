@@ -191,6 +191,10 @@ A few commands worth knowing:
   files. It refuses while a live session or apply lease is active and previews the exact paths first.
 - `glosa open --document <file>` opens one document with no file navigator. Its link also works in an
   open workspace tab: unsaved edits need a discard confirmation first, and cancelling keeps the draft.
+- `glosa dictation configure --provider wispr-flow` explicitly enables Wispr Flow for the four prose
+  composers after showing its data disclosure and storing the organization key in macOS Keychain.
+  `glosa dictation status` is local-only; `glosa dictation disable` turns egress off before removing
+  the credential.
 
 ### Updating
 
@@ -201,8 +205,9 @@ glosa update --check   # report what would change, install nothing
 
 `glosa update` fetches the release over a plain HTTPS request that reads no npm configuration, checks
 the downloaded tarball against the registry's published sha512, and installs it through whichever
-package manager owns your glosa install. It is the only part of glosa that makes an outbound network
-request. It runs only when you invoke it and sends no identifying data.
+package manager owns your glosa install. It runs only when you invoke it and sends no identifying
+data. The other optional external action is configured dictation, which starts only when you click
+Dictate and sends only the data named in its consent disclosure.
 
 > [!NOTE]
 > The plugin launcher needs a durable global install. `bunx` and `npx` are fine for one-off commands.
@@ -251,7 +256,7 @@ whichever fits the work.
 
 | Project | Reach for it when | How glosa differs |
 |---|---|---|
-| [Plannotator](https://github.com/backnotprop/plannotator) | You want a mature, on-demand review surface for plans, documents, HTML, code diffs or pull requests, with broad agent support and optional sharing. | glosa treats a directory as a long-lived writing workspace. Its journal, waiting notes, shadow history and conservative attribution are built to hold up across files, tools and agent sessions. It has no sharing service and makes no network calls at runtime. |
+| [Plannotator](https://github.com/backnotprop/plannotator) | You want a mature, on-demand review surface for plans, documents, HTML, code diffs or pull requests, with broad agent support and optional sharing. | glosa treats a directory as a long-lived writing workspace. Its journal, waiting notes, shadow history and conservative attribution are built to hold up across files, tools and agent sessions. It has no sharing service; unconfigured core use makes no external runtime calls. |
 | [Agentation](https://github.com/benjitaylor/agentation) | You are reviewing a running React interface and want element, area or text annotations with selectors an agent can act on. | glosa reviews file-backed Markdown, HTML and text, and routes notes through each agent's own push transport and MCP. It does not embed a feedback toolbar in the app under review. |
 
 Plannotator is the closest neighbour and a strong place to start for plan, document or code review
@@ -261,7 +266,11 @@ honestly attributed across many files and agent sessions?
 ## Local by design
 
 - glosa listens only on your Mac. `glosa open` pairs your browser tab with the local API at `http://glosa.localhost:4646`, and requests routed through other websites are rejected ([security model](docs/appendices/A3-security.md)). Browsers and macOS answer `.localhost` names locally without a DNS lookup. Set `GLOSA_OPEN_HOST=127.0.0.1` for `http://127.0.0.1:4646` links instead; the daemon accepts both.
-- glosa has no telemetry, cloud sync or external calls at runtime. The page's fonts ship inside glosa, so opening a document fetches nothing from outside your Mac. Your agent may still send content to its own provider under that tool's terms.
+- glosa has no telemetry, cloud sync, background checks, warm-ups, or unconfigured external calls.
+  The page's fonts ship inside glosa, so opening a document fetches nothing from outside your Mac.
+  Optional Wispr Flow dictation sends microphone audio and up to 256 KiB of visible plaintext only
+  after versioned consent and a Dictate click; it inserts a draft and never submits it. Your agent may
+  still send content to its own provider under that tool's terms.
 - Versions live in a shadow repository glosa keeps for itself: in the workspace's `.glosa/` folder, or under `~/.glosa/state/` when it cannot sit beside your files (a single file opened on its own, a folder you cannot write to, or a folder opened with `glosa open --external-state`). glosa never modifies your real Git repository. History does not expire and single versions cannot be deleted; `glosa forget <slug>` deletes a workspace's whole history and leaves your files alone.
 - Attribution is never guessed. A change is credited to a session only when an apply lease proves it. Everything else is yours or unknown, and a change glosa only finds on disk is reported as an outside edit, never as yours.
 
