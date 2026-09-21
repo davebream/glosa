@@ -140,6 +140,12 @@ export const ACCEPTANCE_SUITES: Record<SuiteName, readonly string[]> = {
     "packages/spa/test/rich-editor.test.ts",
     "packages/spa/test/edit-save-guard.test.ts",
     "test/acceptance/rich-editor-browser-roundtrip.test.ts",
+    // #162 — this suite already owns the real browser shell that composes bootstrap, viewer and
+    // the editor from a URL (#145's coverage lives in the file above). The workbench's own
+    // release claims are about that same shell with MORE THAN ONE artifact in it: a reload that
+    // restores every pane's state, a mode control that addresses one pane, and a class-F frame
+    // that a layout move must not reload.
+    "test/acceptance/workbench-real-engine.test.ts",
   ],
 };
 

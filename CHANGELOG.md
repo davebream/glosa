@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Every open pane now comes back in the state it was left in. After a reload only the pane named in
+  the address bar kept its state; the others reopened in whatever state they were first opened with,
+  so a companion document left with its notes hidden came back showing them again.
 - A paired tab stays paired. Reloading it, opening a second tab on the same address, or using a
   terminal or editor that rebuilds its web view used to land on "not paired", with no way back except
   another `glosa open` — the browser kept the pairing token only for the lifetime of the one tab that

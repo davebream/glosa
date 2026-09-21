@@ -2,7 +2,9 @@
 
 **Date:** 2026-09-04
 **Surface:** `packages/spa` — the workspace review surface
-**Status:** Confirmed direction, not yet implemented
+**Status:** Shipped in 0.1.0-alpha.12 (2026-09-04) and refined since; reconciled against the tree
+2026-09-21 (#162). The sections below are kept as the original design record — read **Reconciliation**
+for what the code actually does now, and for the short list of what is still open.
 **Amends:** [2026-07-21 Workspace Review Surface brief](2026-07-21-workspace-review-surface-brief.md) §7.1, §7.2, §7.4
 **Authority:** `PRODUCT.md`, `DESIGN.md`, `docs/requirements.md` (governs where they disagree with an appendix)
 
@@ -12,14 +14,73 @@ ladder keyed to viewport width (≥1440px, 1024–1439px, <1024px) — §7 below
 width and changes its thresholds. §7.4 required mode switches to preserve scroll and selection — that
 still holds, and now holds per pane.
 
-**Named rules.** `The Accent Rarity Rule`, `The Flat-Until-Floating Rule`, `The Preview Boundary Rule`,
-and `The Reading Measure Rule` are cited by name below and defined in full in `DESIGN.md` §2, §4, §3,
-and §3 respectively.
+**Named rules.** `The Flat-Until-Floating Rule` (`DESIGN.md` §4) and `The Reading Measure Rule`
+(§3) are cited by name below and still carry those names. `The Accent Rarity Rule` and
+`The Preview Boundary Rule` belonged to the design system as it stood before the two-hands
+redesign in `0.1.0-alpha.22`, and no longer appear in `DESIGN.md`. What replaced them: the rules about where colour may go are now
+`The Two Hands Rule`, `The Ink Actions Rule` and `The Paper Desk Rule` (§2), and the question of
+what may stay on screen as persistent chrome is answered structurally, in `DESIGN.md`'s Layout
+(§3) and Tabs and Dock (§4) entries. Where this brief says "olive", read the hand (burnt vermilion).
+
+**Mode names.** This brief calls the three states Preview, Annotate and Edit. They have been Read,
+Review and Edit since the 2026-09-05 review-mode brief, on the wire as well as on screen
+(`docs/requirements.md` R6). The sections below are not renamed; the mapping is Preview → Read,
+Annotate → Review.
 
 **Class R and class F** are glosa's two artifact classes, defined in `docs/requirements.md` §8: class R
 is markdown that glosa renders itself; class F is foreign pre-rendered HTML that glosa must not
 restyle, and therefore serves inside a sandboxed iframe on a separate port. The distinction matters
-here because an iframe reloads when its element is reparented, which §11 addresses.
+here because an iframe reloads when its element is reparented, which §11 addresses. As built, no
+move inside the dock reparents it — see Reconciliation §11.
+
+---
+
+## Reconciliation (2026-09-21, #162)
+
+Everything from §3 onward shipped, most of it in `0.1.0-alpha.12` on the brief's own date. What
+follows is the section-by-section record: where each one lives now, and how what shipped differs
+from what was specified. A blank Delta means the section is built as written.
+
+| Section | Shipped in | Where it lives | Delta from the brief |
+|---|---|---|---|
+| §3 Selected direction | alpha.12 | `packages/spa/src/dock.js`, `vendor/dockview.js` | dockview 8.2.0 vendored as specified; glosa owns everything inside a pane |
+| §4 Scope and boundaries | alpha.12 | `viewer.js` (`singlePane`), `dock.js` | The presentation surface is not a separate route: `surface=document` is a one-pane layout of the same dock, with `storage: null` so it never writes over the workspace's arrangement (#145) |
+| §5 Tab identity | alpha.12 | `dock.js` (`disambiguateLabels`, `diffPanelId`), `viewer.js` (`tabStateFor`) | — |
+| §6 Where every control lives | alpha.12 | `artifact-pane.js`, `viewer-shell.js` | The top bar's title slot shows the ACTIVE PANE's artifact path, not the workspace name; the workspace name appears only while nothing is open (`viewer.js` `refreshTopbarTitle`, `DESIGN.md` §3 Layout). The artifact bar is 40px, not 36px |
+| §7 The manuscript never moves | alpha.12 | `app.css` (`@container pane`), `artifact-pane.js` (`MARGIN_RAIL_FLOOR`) | Both ladders moved. The bar collapses at 520 / 440 / 400 / 270px of BAR width, in that order, rather than "below about 560px". The rail floor is 1205px, not 1130px: the built manuscript block measures 707px rather than the brief's estimated 642px, and the pane's scrollbar takes another ~8px |
+| §8 Editor measure | alpha.12 | `app.css` `[data-editor-face="source"]` | The source face is CENTRED, not left-aligned, so the column sits under the centred mode control. The 100ch cap is as specified |
+| §9 Dock behavior | alpha.12 | `dock.js` (`moveCommands`, `resolveMove`), `viewer.js` `onShortcut` | Every option value in the table is set as specified. The keyboard list changed: `[`, `n` and `p` are gone, and `⌘E` (Edit this page, or Done) was added. `⌘1`/`⌘2` are Hide notes / Show notes. The current list is `viewer-context-surfaces.js`'s `SHORTCUTS`, and the sheet renders it |
+| §10 Persistence and URL | alpha.12; per-pane state 2026-09-21 (#162) | `dock.js` (`saveLayout`/`restoreLayout`/`pruneGrid`), `viewer.js` (`persistPaneMode`) | The arrangement and the defensive restore shipped with the brief. Each pane's MODE did not: it was fixed at open and only the pane named in the URL came back in the state it was left in. Fixed here — the mode rides in that panel's own params |
+| §11 States | alpha.12 | `artifact-pane.js`, `viewer.js` `refreshArtifactIndex` | The class-F row is wrong, and is corrected below |
+| §12 Constraints | n/a |  | The reserved pane kinds are still reserved and still unbuilt. The open decision about context menus is still open and still does not block anything: glosa specifies none |
+
+**§11's class-F row, corrected.** The row says a class-F pane dragged between groups reloads and
+re-mints, and calls that expected. It is not what happens. With `defaultRenderer: "always"`, floating
+groups disabled and popout windows unused, a panel's content sits in a render overlay under the dock
+root and nothing in the dock's move paths takes it out of the document — so a tab switch, a tab move
+and a whole-group merge all keep the same iframe, with no second `load` and no fresh mint.
+
+That is not a performance nicety. `classf-viewer.js` reads a second `load` on one iframe element as
+the document navigating itself (A3's residual), tears the frame down and shows
+"This preview couldn't be opened." So reparenting an INTERACTIVE preview would not look like a
+reload to the reader; it would look like an attack. What pins it: a tab switch and a tab move in
+`test/acceptance/workbench-real-engine.test.ts`, and the whole-group merge — the one path that needs
+a pointer drag of a tab strip's void area to reach in a browser — in `packages/spa/test/dock.test.ts`.
+
+### Remaining
+
+- [ ] **Per-pane claim badge** (§5 tab state, §6 artifact bar). The one piece of §6's vocabulary
+      that is not built. Blocked on #155: there is no per-artifact claim to show yet. The
+      workspace's apply lease already fans out to every open pane (`viewer.js` `setApplyLease` →
+      `artifact-pane.js` `setApplyPause`), so what is missing is the claim, not the routing.
+- [ ] **Dragging, as an actual pointer gesture** (§9). Every move in every test is driven the
+      non-drag way: the pane menu's Move tab commands, or the same movement API the drop handler
+      calls. That is deliberate — those commands are what WCAG 2.2 SC 2.5.7 makes a release
+      requirement, and a CDP-synthesized drag would pin the synthesis rather than the gesture. It
+      does leave the drag itself, including the whole-group drag from a tab strip's void area, to
+      the attended rehearsal.
+- [ ] **Safari.** Every browser assertion here runs on Chromium. `dndStrategy: 'pointer'` was
+      chosen for Safari (§9) and has never been exercised there outside the manual pass.
 
 ---
 
@@ -103,6 +164,12 @@ navigator tree, the top bar's workspace-scoped controls, and every copy string i
 `glosa open <file>` produce for a single artifact — gets no tab strip and no dock. A presented
 document is one document.
 
+> **Shipped delta (2026-09-21).** It is one PANE of the same dock, not a second route — one tab
+> group holding one panel, the navigator hidden, and `storage: null` so a presented document never
+> writes over the workspace's saved arrangement. That is #145's fold: the difference between the
+> two surfaces is a layout and a flag, not a parallel viewer. Gated by the browser tests in
+> `test/acceptance/rich-editor-browser-roundtrip.test.ts`.
+
 **Anti-goals.** No floating panels. No popout windows. No panel-level toolbars beyond the one artifact
 bar specified in §6. No tab colors, icons-as-decoration, or badges beyond the state vocabulary that
 already exists in the navigator tree. Nothing that makes the dock feel like a code editor.
@@ -158,6 +225,14 @@ the pane.
 
 The top bar's title slot loses the artifact name and gains the workspace name. That is the honest
 label for what the bar now controls.
+
+> **Shipped delta (2026-09-21).** The title slot went the other way: it names the ACTIVE PANE's
+> artifact by its workspace-relative path, and falls back to the workspace only while nothing is
+> open. With several panes there is still exactly one thing the bar can honestly name — the pane
+> the mode control, the shortcuts and the address bar are all addressing — and naming it is more
+> use than naming the folder the navigator is already showing. The artifact bar is 40px, not 36px.
+> Two further per-pane arrivals since: the #154 disk-change banner is built inside the pane, so it
+> is per pane by construction, and the apply-lease pause fans out to every open pane at once.
 
 ### The artifact bar
 
@@ -216,6 +291,13 @@ else in the pane is already whitespace. The ladder puts the margin there:
 The 1130px floor is where the right-hand whitespace stops holding a 240px rail. Below it the tray is
 the honest answer, and the tray was already designed.
 
+> **Shipped delta (2026-09-21).** The floor is **1205px**. The arithmetic above assumes a 642px
+> manuscript block; the built one measures 707px, because 68ch at the shipped serif is wider than
+> the estimate, and the pane's scrollbar takes about another 8px. Keeping 1130 would have let the
+> rail cross the manuscript through the whole 1130–1203 band. The number lives in three places that
+> must move together: `MARGIN_RAIL_FLOOR`, `@container pane (min-width: 1205px)`, and
+> `--manuscript-block`. The rule itself — painted in whitespace, never reserved — is unchanged.
+
 Three consequences a builder must implement rather than infer:
 
 Each pane declares `container-type: inline-size`, and the ladder is written as container queries, not
@@ -245,6 +327,11 @@ spare. The source face takes the pane's width up to a 100-character cap, keeps t
 already has, and is the face where optional line numbers apply.
 
 `.glosa-app[data-mode="edit"] .glosa-main { overflow: hidden }` becomes a per-pane rule.
+
+> **Shipped delta (2026-09-21).** The source face is centred, not left-aligned: the column sits
+> under the centred mode control rather than hugging the pane's left edge. The 100ch cap is as
+> specified, declared on the wrap in the mono context so the toolbar and the Save row measure the
+> same width as the text they frame.
 
 ## 9. Dock behavior
 
@@ -297,6 +384,12 @@ Added:
 
 `⌘\` moves rather than copies. Splitting must never produce the same file twice.
 
+> **Shipped delta (2026-09-21).** Every added binding above shipped. The "existing bindings" line
+> did not survive intact: `[`, `n` and `p` are gone, and `⌘E` (Edit this page, or Done) was added
+> beside `⌘1`/`⌘2` (Hide notes / Show notes). The list the sheet renders is `SHORTCUTS` in
+> `viewer-context-surfaces.js`; `docs/accessibility.md`'s keyboard matrix is the normative
+> statement, including that only the focused pane exposes a mode control.
+
 ### Theming
 
 dockview exposes 113 CSS custom properties and accepts a `DockviewTheme` object, so the workbench look
@@ -326,6 +419,11 @@ The mappings that carry the direction:
 `colorScheme` must be re-set from `appearance.js`'s resolved value through `api.updateOptions()`. It
 must not read `prefers-color-scheme` on its own, or the dock will disagree with the app whenever the
 reader has chosen an explicit Light or Dark override.
+
+> **Shipped delta (2026-09-21).** The theme object and the `updateOptions` subscription are built
+> as written. The accent is the hand (burnt vermilion), which is what this brief means by olive —
+> see the Named rules note at the top. The active tab's top edge is ink, and neutral in an
+> unfocused group (`DESIGN.md` §4 Tabs and Dock).
 
 ### Vendoring
 
@@ -363,6 +461,13 @@ Restoration is defensive by requirement:
 - If restore throws for any reason, fall back to a single pane holding the URL's artifact. A corrupt
   saved layout must never make a workspace unopenable.
 
+> **Shipped delta (2026-09-21).** The URL contract and both defensive rules shipped with the brief;
+> §2's "each pane carries its own mode" did not survive a reload. A pane's mode was fixed when the
+> pane was opened, and the only mode that came back was the one in the address bar — so a companion
+> left in Read reopened showing its notes. Fixed in #162: the mode rides in that panel's own params
+> and is saved in the same tick as the change, because dockview buffers the layout-change event a
+> parameter update raises. The arrangement is still never serialized into the URL.
+
 ## 11. States
 
 | State | Behavior |
@@ -372,9 +477,16 @@ Restoration is defensive by requirement:
 | Artifact deleted while its tab is open | the tab dims, the pane says the file is gone and offers Close. Never close a tab the reader opened — that silently destroys their layout |
 | Closing a tab with unsaved edits | the existing `modeReducer` `blocked` path, with its existing prompt copy |
 | Dragging a pane with unsaved edits | no prompt. A move is not a close |
-| Class-F pane dragged between groups | the iframe reloads and re-mints, per A1 §7 "fresh mint per iframe open/reload". Expected behavior, not a defect. `renderer: 'always'` keeps it alive across tab switches, which is the common case |
+| Class-F pane dragged between groups | **Corrected 2026-09-21 — see the callout below.** The iframe does NOT reload and does NOT re-mint. `renderer: 'always'` keeps it alive across a tab switch, a tab move and a whole-group merge alike |
 | Reconnecting | one banner in the top bar above the dock, never one per pane |
 | Single pane, single tab | reads as close to today's surface as the artifact bar allows. The dock must not tax the common case |
+
+> **Shipped delta (2026-09-21).** The class-F row above was written from A1 §7's "fresh mint per
+> iframe open/reload" plus the assumption that a move reparents the element. The second half is
+> wrong, and it matters more than a wasted fetch: `classf-viewer.js` treats a second `load` on one
+> iframe as the document navigating itself, so a reparented interactive preview would be torn down
+> and reported as an error to the reader, not merely reloaded. See Reconciliation §11 for what is
+> pinned where.
 
 ## 12. Constraints and open decisions
 
