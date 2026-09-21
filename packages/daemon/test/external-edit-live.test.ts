@@ -356,7 +356,7 @@ describe("A6 — the cross-workspace watcher count is bounded, and that is a dif
 });
 
 describe("A10 — the new cross-layer write reuses the existing safety primitive", () => {
-  test("eviction during an open quiet window cancels the timer: no capture fires afterwards", async () => {
+  test("allocation preemption during an open quiet window cancels the timer: no capture fires afterwards", async () => {
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const captures: string[] = [];
@@ -378,8 +378,8 @@ describe("A10 — the new cross-layer write reuses the existing safety primitive
     writeFileSync(join(root, "notes.md"), "one\ntwo\n");
     // Wait long enough for the change to be observed and the window to be OPEN, but not to fire.
     await Bun.sleep(150);
-    // This is the call `onHardRemove` and `sealAdoptionSources` already make (lifecycle/daemon.ts).
-    await registry.evict(root);
+    // The allocator demotes through the same safe close path as explicit lifecycle eviction.
+    await registry.applyAllocation([], [root]);
 
     await Bun.sleep(800); // well past when the window would have fired
     expect(captures).toEqual([]);

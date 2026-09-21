@@ -381,6 +381,10 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     registry.subscribe(root, () => {});
     registry.subscribe(root, () => {});
     expect(registry.modeFor(root)).toBe("disabled");
+    expect(registry.liveUpdatesFor(root)).toEqual({
+      state: "offline_catchup",
+      reason: "tracked_artifact_budget",
+    });
     expect(fakes).toHaveLength(0);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("more than 2 tracked artifacts");
@@ -399,6 +403,10 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     writeFile(root, "c.md", "c");
     fakes[0]!.change(join(root, "c.md"));
     await waitUntil(() => registry.modeFor(root) === "disabled");
+    expect(registry.liveUpdatesFor(root)).toEqual({
+      state: "offline_catchup",
+      reason: "tracked_artifact_budget",
+    });
     expect(fakes[0]!.closeCalls).toBe(1);
     expect(events.some((event) => event.type === "artifact_index")).toBe(true);
   });
@@ -421,6 +429,57 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
     expect(fakes[1]!.closeCalls).toBe(1);
     expect(fakes).toHaveLength(2);
     expect(registry.modeFor(root)).toBe("disabled");
+    expect(registry.liveUpdatesFor(root)).toEqual({ state: "offline_catchup", reason: "watch_error" });
     expect(warnings).toHaveLength(1);
+  });
+
+  test("diagnostics distinguish starting, initial scan failure, and watch start failure", async () => {
+    writeFile(root, "docs/note.md", "one");
+    let finishScan!: (value: {
+      tracked: never[];
+      oversize: never[];
+      directories: never[];
+      skippedSymlinks: never[];
+      truncated: boolean;
+    }) => void;
+    const pending = new ArtifactWatcherRegistry({
+      watchFactory: () => ({ close() {} }),
+      initialResolveTrackedFiles: () =>
+        new Promise((resolve) => {
+          finishScan = resolve;
+        }),
+    });
+    registries.push(pending);
+    pending.ensureWatched(root);
+    expect(pending.liveUpdatesFor(root)).toEqual({ state: "starting" });
+    finishScan({ tracked: [], oversize: [], directories: [], skippedSymlinks: [], truncated: false });
+    await Bun.sleep(0);
+    expect(pending.liveUpdatesFor(root)).toEqual({ state: "live" });
+
+    const scanFailed = new ArtifactWatcherRegistry({
+      initialResolveTrackedFiles: () => {
+        throw new Error("scan failed");
+      },
+    });
+    registries.push(scanFailed);
+    const scanFailedRoot = makeDir(root, "scan-failed");
+    scanFailed.ensureWatched(scanFailedRoot);
+    expect(scanFailed.liveUpdatesFor(scanFailedRoot)).toEqual({
+      state: "offline_catchup",
+      reason: "initial_scan_failed",
+    });
+
+    const startFailed = new ArtifactWatcherRegistry({
+      watchFactory: () => {
+        throw new Error("start failed");
+      },
+    });
+    registries.push(startFailed);
+    const startFailedRoot = makeDir(root, "start-failed");
+    startFailed.ensureWatched(startFailedRoot);
+    expect(startFailed.liveUpdatesFor(startFailedRoot)).toEqual({
+      state: "offline_catchup",
+      reason: "watch_start_failed",
+    });
   });
 });

@@ -26,6 +26,7 @@ import { AdapterRegistry } from "../src/adapters/interface.ts";
 import { sourceSha256 } from "../src/artifact-render.ts";
 import { WorkspaceMetadataRegistry } from "../src/adapters/workspace-metadata.ts";
 import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider/interface.ts";
+import { ArtifactWatcherRegistry } from "../src/artifact-watcher.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
 import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
 import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
@@ -188,6 +189,28 @@ describe("A1 §5 route catalog", () => {
     );
     expect(sessionRegistry.get("cwd-only-live")?.workspace_binding).toBeUndefined();
     expect(sessionRegistry.get("explicit-stale")?.workspace_binding).toBe(root);
+  });
+
+  test("GET /api/status exposes live-update allocation and degradation without paths or counts", async () => {
+    const watcher = new ArtifactWatcherRegistry({ watchFactory: () => ({ close() {} }) });
+    const entry = workspaceIndex.get(root)!;
+    ctx.artifactWatcherRegistry = watcher;
+    try {
+      watcher.ensureWatched(entry);
+      let body = await (await fetchFn(req("/api/status"))).json();
+      expect(body.workspaces.find((candidate: { slug: string }) => candidate.slug === slug).live_updates).toEqual({
+        state: "live",
+      });
+
+      await watcher.applyAllocation([], [entry]);
+      body = await (await fetchFn(req("/api/status"))).json();
+      expect(body.workspaces.find((candidate: { slug: string }) => candidate.slug === slug).live_updates).toEqual({
+        state: "offline_catchup",
+        reason: "workspace_budget",
+      });
+    } finally {
+      await watcher.closeAll();
+    }
   });
 
   // --- GET /api/status: orphaned_entry_count (issue #142) ---
