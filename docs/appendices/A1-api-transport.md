@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.15", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.16", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -156,6 +156,17 @@ registration is gone — stranded user work recoverable by re-opening the origin
 route never fails over it. The former `wiring` field is gone (#152): connection state is derived
 from `sessions[]` (explicit `workspace_binding` + `liveness`) and nothing else.
 
+Contract 1.16 (issue #306) additively adds `push:{connected,transport}` to every session row —
+the identical shape `GET /api/sessions/:id/stream/status` (§5.9) already returns, read from
+`SessionPushRegistry` alone. `transport` is `monitor`, `codex_app_server`, or `null`. This is a
+delivery-transport fact about ONE SESSION, not a workspace-connection fact: it must not be used to
+decide whether a workspace is connected, bound, or stale — that derivation remains
+`workspace_binding` + `liveness` and nothing else, as above. It answers only whether a durably
+queued entry could additionally reach this session by push at the instant of the read, with no
+promise it still holds a moment later. `source` is NOT a substitute: an explicit bind overwrites
+it with `mcp`, erasing the monitor's only trace. An N-1 daemon omits the field, and an absent
+field means "this daemon cannot say" — never `connected:false`.
+
 Contract 1.15 (issue #219) additively adds `live_updates` for an eligible registered workspace:
 `{state:"live"|"starting"|"offline_catchup", reason?}`. `reason` is required only for
 `offline_catchup` and is one of `workspace_budget`, `tracked_artifact_budget`,
@@ -175,7 +186,9 @@ a row in that state (absent, never `null`, for every ordinary workspace); a work
 here even once its on-disk path is gone (`present:false`) while this field is set, so an
 interrupted deletion stays discoverable regardless of worktree presence. `doctor` and `glosa
 status`'s human output both print the exact resume command, `glosa forget <slug> --yes`, for any
-row carrying this field.
+row carrying this field. Contract 1.16 additively adds that same sentence as a `remedy` string on
+the row, present only beside `lifecycle`, so a JSON consumer prints the daemon's words instead of
+composing a third copy that drifts.
 
 Contract 1.5 additively permits this workspace field (optional for N-1 clients):
 

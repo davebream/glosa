@@ -37,6 +37,27 @@ function buildDeps(
   };
 }
 
+import { forgetRemedy, forgetRemedyWithoutSlug } from "../src/registry/forget-remedy.ts";
+
+describe("the interrupted-forget remedy (#312)", () => {
+  test("names the slug and the exact resume command", () => {
+    expect(forgetRemedy("my-repo")).toBe(
+      "deletion interrupted (`glosa forget`) — run `glosa forget my-repo --yes` to resume",
+    );
+  });
+
+  test("the slugless variant points at doctor and never interpolates a missing slug", () => {
+    // Reached in the registration-less window, where the forget operation is durable but the row
+    // it names is already gone, so there IS no slug. `glosa doctor` resolves it from the durable
+    // record. Printing `glosa forget undefined --yes` would be worse than saying less: it is a
+    // delete command, and it would not work.
+    const remedy = forgetRemedyWithoutSlug();
+    expect(remedy).toContain("glosa doctor");
+    expect(remedy).not.toContain("undefined");
+    expect(remedy).not.toContain("--yes");
+  });
+});
+
 describe("glosa forget", () => {
   test("refuses live sessions and apply leases before side effects", async () => {
     const home = freshHome();

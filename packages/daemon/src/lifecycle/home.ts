@@ -70,3 +70,27 @@ export function ensureRunDir(home: string = glosaHome()): string {
   chmodSync(dir, 0o700);
   return dir;
 }
+
+/**
+ * Where a Claude Code session monitor takes its singleton lock (issue #306). Its OWN directory,
+ * not `run/`: `ensureRunDir` repairs that directory's mode, and a monitor that repaired daemon
+ * state would contradict its own contract ("never starts, stops, or repairs a daemon"). The
+ * monitor creates this one and nothing else does.
+ *
+ * The session id is hashed rather than interpolated. `CLAUDE_CODE_SESSION_ID` arrives from the
+ * host environment and nothing upstream constrains it — the only validation in the tree lives
+ * inside `deriveMonitorTranscriptPath`, which RETURNS UNDEFINED rather than refusing, so a raw id
+ * here would be a path-traversal primitive. Hashing also bounds the name's length.
+ *
+ * `GLOSA_HOME` is the whole of the scoping, deliberately: a monitor can only reach the daemon
+ * named by its own home's lock, so two homes are two daemons and two push registries, with no
+ * session-slot contention to guard against.
+ */
+export function monitorLockDir(home: string = glosaHome()): string {
+  return join(home, "monitors");
+}
+
+export function monitorLockPath(home: string, sessionId: string): string {
+  const digest = new Bun.CryptoHasher("sha256").update(sessionId).digest("hex").slice(0, 16);
+  return join(monitorLockDir(home), `${digest}.lock`);
+}

@@ -700,7 +700,10 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
         },
       );
       if (!result.ok) {
-        throw new Error(result.error?.message ?? "glosa_present failed");
+        // The code is raised into the message on purpose (#312). `runOpenPresentation` already
+        // derived it from the problem type, and it is the only STABLE token in here — a skill can
+        // branch on `workspace-forgetting` without matching prose that may be reworded.
+        throw new Error(result.error ? `${result.error.code}: ${result.error.message}` : "glosa_present failed");
       }
       const data = result.data;
       if (

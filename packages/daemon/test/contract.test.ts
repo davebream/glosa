@@ -11,8 +11,8 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion(null)).toEqual({ status: "ok" });
   });
 
-  test("exact match (1.15) → ok", () => {
-    expect(checkContractVersion("1.15")).toEqual({ status: "ok" });
+  test("exact match (1.16) → ok", () => {
+    expect(checkContractVersion("1.16")).toEqual({ status: "ok" });
   });
 
   test("N-1 minor (1.12) → stale-minor", () => {
@@ -23,8 +23,8 @@ describe("checkContractVersion", () => {
     expect(checkContractVersion("1.0")).toEqual({ status: "stale-minor" });
   });
 
-  test("minor mismatch, same major (1.16) → stale-minor", () => {
-    expect(checkContractVersion("1.16")).toEqual({ status: "stale-minor" });
+  test("minor mismatch, same major (1.17) → stale-minor", () => {
+    expect(checkContractVersion("1.17")).toEqual({ status: "stale-minor" });
   });
 
   test("major mismatch (2.0) → mismatch", () => {

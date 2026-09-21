@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SESSION_STREAM_FAILURE_DEADLINE_MS } from "../../../cli/src/daemon-client.ts";
 import { BUILD_ID } from "../../../daemon/src/lifecycle/build-id.ts";
-import { lockPath } from "../../../daemon/src/lifecycle/home.ts";
+import { lockPath, monitorLockDir, monitorLockPath } from "../../../daemon/src/lifecycle/home.ts";
 import { INSTALL_ID } from "../../../daemon/src/lifecycle/install.ts";
 import { writeLockExclusive } from "../../../daemon/src/lifecycle/lock.ts";
 import { PROTOCOL_VERSION } from "../../../daemon/src/lifecycle/protocol.ts";
+import { acquireMonitorLock, readMonitorLock } from "../src/monitor-lock.ts";
 import { tokenPath } from "../../../daemon/src/security/token.ts";
 import type { MonitorDeps } from "../src/monitor.ts";
 import {
@@ -180,7 +181,7 @@ describe("Claude plugin monitor", () => {
     let fetches = 0;
     let waits = 0;
     await runClaudeMonitor(
-      { sessionId: "session-1", projectDir: project, pluginRoot: join(home, "plugin") },
+      { sessionId: "session-1", projectDir: project },
       {
         home: () => home,
         fetch: (async () => {
@@ -221,7 +222,7 @@ describe("Claude plugin monitor", () => {
     const deadline = setTimeout(() => abort.abort(), 1_000);
     try {
       await runClaudeMonitor(
-        { sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" },
+        { sessionId: "session-1", projectDir: project },
         {
           home: () => home,
           fetch: (async (input: RequestInfo | URL) => {
@@ -304,7 +305,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => 0,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       registerCalls: 1,
@@ -372,7 +373,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, statusCalls, sleeps, writes }).toEqual({
       // Exactly one register/stream pair before the park, and one more after the free probe — never
@@ -479,7 +480,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, ackCalls, statusCalls, sleeps }).toEqual({
       // The delivery line was written and the ack was attempted (and failed) BEFORE the superseded
@@ -550,7 +551,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     // Four probes before the reconnect: free, CONNECTED (which resets the count), then two free.
     // With a one-probe rule the reconnect would have happened after the first, at `statusCalls: 1`.
@@ -620,7 +621,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       // One connect before the park, six inconclusive probes that must NOT trigger a reconnect,
@@ -704,7 +705,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     // First park probe: discovery itself fails -> inconclusive, the HTTP status route is never
     // reached for that cycle (but the race still starts its own timeout leg unconditionally).
@@ -790,7 +791,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       // The hung first probe timed out (inconclusive) instead of blocking the loop forever; the
@@ -865,7 +866,7 @@ describe("Claude plugin monitor", () => {
       waitForWorkspaceChange: async () => {},
       now: () => clock,
     };
-    await runClaudeMonitor({ sessionId: "session-1", projectDir: project, pluginRoot: "/plugin" }, deps, abort.signal);
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
 
     expect({ registerCalls, streamCalls, statusCalls, sleeps }).toEqual({
       registerCalls: 2,
@@ -887,5 +888,92 @@ describe("Claude plugin monitor", () => {
     });
     rmSync(home, { recursive: true, force: true });
     rmSync(project, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The monitor singleton guard (#306). The end-to-end proof that a second real
+// `glosa monitor` never attaches lives in `packages/daemon/test/monitor.test.ts`; these cover the
+// decisions that process cannot show from the outside — above all that the guard FAILS OPEN.
+// ---------------------------------------------------------------------------
+
+function withHome<T>(run: (home: string) => T): T {
+  const home = mkdtempSync(join(tmpdir(), "glosa-monitor-lock-"));
+  try {
+    return run(home);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe("monitor singleton lock", () => {
+  test("the first caller holds it and records who, so doctor can tell a live monitor from none", () => {
+    withHome((home) => {
+      const outcome = acquireMonitorLock(home, "session-a");
+      expect(outcome.held).toBe(true);
+      expect(readMonitorLock(home, "session-a")).toMatchObject({ pid: process.pid, session_id: "session-a" });
+      if (outcome.held) outcome.release();
+    });
+  });
+
+  test("a second acquire for the SAME session is refused — the property the whole guard rests on", () => {
+    withHome((home) => {
+      const first = acquireMonitorLock(home, "session-a");
+      const second = acquireMonitorLock(home, "session-a");
+      expect(first.held).toBe(true);
+      // `flock` attaches to the open file description, so a second `open` is a second contender
+      // even inside one process. That is why this must be `flock` and not an `fcntl` record lock,
+      // which the same process can silently re-take from itself.
+      expect(second).toMatchObject({ held: false, reason: "already-held" });
+      if (first.held) first.release();
+    });
+  });
+
+  test("two sessions in one home never contend — the slot being guarded is per session", () => {
+    withHome((home) => {
+      const a = acquireMonitorLock(home, "session-a");
+      const b = acquireMonitorLock(home, "session-b");
+      expect({ a: a.held, b: b.held }).toEqual({ a: true, b: true });
+      if (a.held) a.release();
+      if (b.held) b.release();
+    });
+  });
+
+  test("the session id is hashed into the path, so a hostile id cannot escape the lock directory", () => {
+    withHome((home) => {
+      const hostile = "../../../../etc/passwd";
+      const path = monitorLockPath(home, hostile);
+      expect(path.startsWith(`${monitorLockDir(home)}/`)).toBe(true);
+      expect(path).not.toInclude("..");
+    });
+  });
+
+  test("the lock directory is created owner-only", () => {
+    withHome((home) => {
+      const outcome = acquireMonitorLock(home, "session-a");
+      expect(statSync(monitorLockDir(home)).mode & 0o777).toBe(0o700);
+      if (outcome.held) outcome.release();
+    });
+  });
+
+  test("a body that is not a lock reads as absent rather than throwing", () => {
+    withHome((home) => {
+      const outcome = acquireMonitorLock(home, "session-a");
+      writeFileSync(monitorLockPath(home, "session-a"), "not json at all");
+      expect(readMonitorLock(home, "session-a")).toBeNull();
+      if (outcome.held) outcome.release();
+    });
+  });
+
+  test("an unopenable lock path reports unavailable, never already-held — the guard must fail OPEN", () => {
+    withHome((home) => {
+      // A regular file where the lock DIRECTORY belongs: `mkdirSync` fails, so the guard cannot
+      // run at all. Reading that as "someone else holds it" would make every monitor exit and
+      // take push offline entirely, which is strictly worse than having no guard. The caller
+      // branches on `already-held` alone, so this distinction is the whole safety property.
+      writeFileSync(monitorLockDir(home), "");
+      const outcome = acquireMonitorLock(home, "session-a");
+      expect(outcome).toMatchObject({ held: false, reason: "unavailable" });
+    });
   });
 });

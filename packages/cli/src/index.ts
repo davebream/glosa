@@ -739,20 +739,36 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       description: "Claude Code plugin session monitor",
       internal: true,
       args: {
-        "plugin-root": { type: "string", description: "Absolute Claude plugin root" },
-        "project-dir": { type: "string", description: "Absolute Claude project directory" },
+        // Accepted and ignored (issue #306). Nothing has ever read it: the monitor resolves its
+        // executable through the plugin launcher, not through this. Kept so an installed
+        // `monitors.json` from an older plugin keeps working, dropped as a REQUIREMENT so the
+        // `glosa-connect` skill can start a monitor from a Monitor-tool shell, which has no
+        // `CLAUDE_PLUGIN_ROOT` to pass (measured: Claude exports the session id there, not this).
+        "plugin-root": { type: "string", description: "Accepted and ignored; retained for older plugin manifests" },
+        "project-dir": { type: "string", description: "Absolute Claude project directory (default: cwd)" },
       },
     },
     async (context) => {
       const values = withGlobals(context);
       const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
-      const pluginRoot = values["plugin-root"] as string | undefined;
-      const projectDir = values["project-dir"] as string | undefined;
-      if (!sessionId || !pluginRoot || !projectDir) {
-        process.stderr.write("glosa monitor: CLAUDE_CODE_SESSION_ID, --plugin-root, and --project-dir are required\n");
+      const projectDir = (values["project-dir"] as string | undefined) ?? process.cwd();
+      if (!sessionId) {
+        process.stderr.write("glosa monitor: CLAUDE_CODE_SESSION_ID is required\n");
         setExitCode(EXIT_CODES.USAGE);
         return;
       }
+      // One monitor per session (#306). Losing is the DESIGNED common case now that three things
+      // start a monitor, so a loser exits 0 and says nothing on stdout — those lines are messages
+      // in the user's conversation. A guard that cannot run never stops the monitor.
+      const { acquireMonitorLock } = await import("../../providers/claude-code/src/monitor-lock.ts");
+      const { glosaHome } = await import("../../daemon/src/lifecycle/home.ts");
+      const lock = acquireMonitorLock(glosaHome(), sessionId);
+      if (!lock.held && lock.reason === "already-held") {
+        const holder = lock.holder?.pid === undefined ? "" : ` (pid ${lock.holder.pid})`;
+        process.stderr.write(`glosa monitor: session ${sessionId} already has a live monitor${holder}; exiting\n`);
+        return;
+      }
+      if (!lock.held) process.stderr.write(`glosa monitor: singleton guard unavailable, continuing — ${lock.detail}\n`);
       const { runClaudeMonitor } = await import("../../providers/claude-code/src/monitor.ts");
       const shutdown = new AbortController();
       const stop = () => shutdown.abort();
@@ -760,7 +776,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
       process.once("SIGINT", stop);
       process.once("SIGHUP", stop);
       try {
-        await runClaudeMonitor({ sessionId, pluginRoot, projectDir }, undefined, shutdown.signal);
+        await runClaudeMonitor({ sessionId, projectDir }, undefined, shutdown.signal);
       } finally {
         process.off("SIGTERM", stop);
         process.off("SIGINT", stop);

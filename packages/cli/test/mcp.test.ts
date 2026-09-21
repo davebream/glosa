@@ -1213,6 +1213,49 @@ describe("official TypeScript MCP SDK contract", () => {
     });
   });
 
+  test("glosa_present surfaces the daemon's error CODE and remedy, so a skill can branch on it (#312)", async () => {
+    // What an agent receives from a failed MCP tool is one string. Before this, that string was
+    // the bare title "workspace is being forgotten": no slug, no remedy, and no stable token to
+    // match on — which is how a real session ended up improvising around a half-deleted
+    // workspace and never telling anyone it was stuck.
+    const mkdtemp = await import("node:fs").then((fs) => fs.mkdtempSync);
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { writeFileSync, rmSync } = await import("node:fs");
+    const dir = mkdtemp(join(tmpdir(), "glosa-present-forgetting-"));
+    const file = join(dir, "note.md");
+    writeFileSync(file, "# hi\n");
+    try {
+      const api: Partial<GlosaApiClient> = {
+        port: 4646,
+        openWorkspace: async () => {
+          throw apiError(409, {
+            type: "https://glosa.local/errors/workspace-forgetting",
+            title: "workspace is being forgotten",
+            status: 409,
+            detail: "deletion interrupted (`glosa forget`) — run `glosa forget note-abc --yes` to resume",
+          });
+        },
+      };
+      const connected = await connect({ ...deps(new FakeDaemonClient(), api), sessionId: () => "host-session" });
+      try {
+        const result = await callTool(connected.client, {
+          name: "glosa_present",
+          arguments: { path: file, mode: "annotate", session_id: "host-session" },
+        });
+        expect(result.isError).toBe(true);
+        const text = (result.content as Array<{ type: string; text: string }>).map((c) => c.text).join("\n");
+        // The code is the part a skill can rely on; the remedy is the part a human can act on.
+        expect(text).toContain("workspace-forgetting");
+        expect(text).toContain("glosa forget note-abc --yes");
+      } finally {
+        await connected.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("glosa_present preview returns a p= URL without binding, never launches a browser, never returns durable t=", async () => {
     const mkdtemp = await import("node:fs").then((fs) => fs.mkdtempSync);
     const { tmpdir } = await import("node:os");

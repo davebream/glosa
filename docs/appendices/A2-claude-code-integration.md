@@ -5,11 +5,34 @@ mirror. The durable inbox and journal remain authoritative regardless of transpo
 
 ## F06 — plugin monitor capability
 
-The Claude plugin is the install boundary. It carries `.mcp.json`, an always-declared per-session
-monitor, the `glosa-connect` skill, and a launcher that resolves a local glosa executable without a
-`PATH` lookup or download. The monitor receives its exact identity from
-`CLAUDE_CODE_SESSION_ID`; `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PROJECT_DIR}` are expanded into its
-command arguments because Claude does not place them in the monitor environment.
+The Claude plugin is the install boundary. It carries `.mcp.json`, the `glosa-connect` skill, a
+launcher that resolves a local glosa executable without a `PATH` lookup or download, and TWO
+monitor declarations that start ONE process: `when:"always"`, which covers a session that began
+with the plugin installed, and `when:"on-skill-invoke:glosa-connect"` (issue #306), which covers a
+session where it did not — the only mechanism Claude documents for starting a monitor mid-session.
+The skill may additionally start `glosa monitor` through the Monitor tool when neither fired.
+
+Exactly one `glosa monitor` per session survives all three paths, because the command takes an
+exclusive `flock` on `<GLOSA_HOME>/monitors/<sha256(session-id)>.lock` before it registers; a later
+starter exits 0, silent on stdout, naming the holder on stderr. The lock is `flock` and not a pid
+file deliberately: the kernel releases it when the holder dies, SIGKILL included, so there is no
+stale lock to adjudicate and no unlink/recreate window in which two processes both believe they
+own the session. The guard FAILS OPEN — only `EWOULDBLOCK` stops a monitor, so a filesystem
+without `flock` support degrades to the pre-#306 behaviour rather than to no push at all. Without
+this guard two declarations are not merely wasteful: the second displaces the first (the
+park/supersede protocol below),
+and the replacement's empty accepted-set re-emits any entry that was transport-accepted but not
+yet `presented`, delivering the same `[glosa <id>]` line twice.
+
+The Monitor-tool path is a fallback, not an equal: Claude stops a Monitor watch that emits too many
+events, and the monitor's stdout IS the delivery channel, so a burst of queued entries can end a
+skill-started monitor with nothing re-arming it. A plugin-declared monitor has no such governor.
+
+The monitor receives its exact identity from `CLAUDE_CODE_SESSION_ID`, which is the one variable
+Claude exports to both a monitor and an ordinary shell; `${CLAUDE_PROJECT_DIR}` is expanded into
+the command arguments because Claude does not place it in either environment, and `--project-dir`
+defaults to the working directory so the skill can start a monitor without it. `--plugin-root` is
+accepted and ignored, retained only so an older installed manifest keeps working.
 
 The monitor reads `workspaces.json` without mutating it. Outside a registered workspace it waits for
 that file to change and makes no daemon request. Once the project is registered, it registers with
@@ -33,7 +56,12 @@ then make their terminal transition.
 
 Claude suppresses plugin monitors when `DISABLE_TELEMETRY=1` or
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and does not run them for noninteractive or unsupported
-hosted-model sessions. `push` is therefore true only while a monitor is connected. MCP tools still
+hosted-model sessions. `push` is therefore true only while a monitor is connected. Because that is
+a fact about one session rather than about the installation, `GET /api/status` reports it per
+session row as
+`push:{connected,transport}` (contract 1.16), carrying the same shape the `stream/status` probe
+returns; `glosa doctor`'s `claude-monitor` check and the `glosa-connect` skill both read it rather
+than inferring from `source`, which an explicit bind overwrites with `mcp`. MCP tools still
 load in those modes, and doctor names the environment-variable case rather than implying delivery is
 broken.
 
