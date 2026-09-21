@@ -709,24 +709,49 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       const { client } = await launchBrowser({ initialUrl: documentUrl("workspace", "paragraph.md", "edit") });
       cdp = client;
       // Read-mode content is hidden in Edit; wait for the actual editable source face instead.
+      //
+      // WAIT FOR USABLE, NOT FOR PRESENT. Both controls below are built at first paint and merely
+      // `hidden` until the artifact arrives, and `.click()` on a hidden button still fires. Polling
+      // for existence therefore clicked both of them before the file had loaded, which opened the
+      // source face over the empty string and left the rest of this test racing the loader — the
+      // intermittent red on this test in CI, with the file's own bytes in the box and the draft
+      // gone. The load race itself has its own deterministic coverage in
+      // packages/spa/test/typing-during-load.test.ts; this test is about the NAVIGATION prompt and
+      // wants a pane that has finished opening.
       await client.evaluate(`(async () => {
+      // \`hidden\`, not visibility: the Edit source tool lives inside the closed More menu, so it
+      // is never laid out until that menu opens, and this test clicks it programmatically by
+      // design. \`renderArtifactTools\` clears \`hidden\` exactly when the artifact has arrived and
+      // is editable, which is the readiness this needs.
+      const ready = selector => {
+        const el = document.querySelector(selector);
+        return el && !el.hidden && !el.disabled ? el : null;
+      };
+      const settle = async (selector, what) => {
+        for (let i = 0; i < 200 && !ready(selector); i++) await new Promise(resolve => setTimeout(resolve, 25));
+        const el = ready(selector);
+        if (!el) throw new Error(what + ' never became usable');
+        return el;
+      };
       // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
-      for (let i = 0; i < 120 && !document.querySelector('.glosa-tools-edit-source'); i++)
-        await new Promise(resolve => setTimeout(resolve, 25));
-      document.querySelector('.glosa-tools-edit-source').click();
-      for (let i = 0; i < 120 && !document.querySelector('.glosa-face-source'); i++)
-        await new Promise(resolve => setTimeout(resolve, 25));
-      document.querySelector('.glosa-face-source').click();
-      for (let i = 0; i < 120 && (document.querySelector('.glosa-edit-area').hidden || document.querySelector('.glosa-edit-area').value !== ${JSON.stringify(PARAGRAPH_SOURCE)}); i++)
+      (await settle('.glosa-tools-edit-source', 'the Edit source tool')).click();
+      (await settle('.glosa-face-source', 'the source face control')).click();
+      for (let i = 0; i < 200 && (document.querySelector('.glosa-edit-area').hidden || document.querySelector('.glosa-edit-area').value !== ${JSON.stringify(PARAGRAPH_SOURCE)}); i++)
         await new Promise(resolve => setTimeout(resolve, 25));
       const source = document.querySelector('.glosa-edit-area');
       if (source.value !== ${JSON.stringify(PARAGRAPH_SOURCE)}) throw new Error('source did not finish loading');
       source.focus(); source.setSelectionRange(source.value.length, source.value.length);
     })()`);
       await client.send("Input.insertText", { text: "UNSAVED ROUTE DRAFT" });
-      const before: any = await client.evaluate(
-        `({ hash: location.hash, text: document.querySelector('.glosa-edit-area').value })`,
-      );
+      const before: any = await client.evaluate(`(async () => {
+      // The insert is a separate CDP round trip from the focus above, so confirm it actually
+      // landed rather than reading a box something re-rendered in between. A failure here is a
+      // real regression — the draft did not survive — and is reported as one, not as a timeout.
+      const source = () => document.querySelector('.glosa-edit-area');
+      for (let i = 0; i < 40 && !source().value.includes('UNSAVED ROUTE DRAFT'); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      return { hash: location.hash, text: source().value, focused: document.activeElement === source() };
+    })()`);
       expect(before.text).toContain("UNSAVED ROUTE DRAFT");
       const next = new URL(documentUrl("document", "blockquote.md")).hash;
       await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
