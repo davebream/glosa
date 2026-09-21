@@ -16,6 +16,8 @@ a live document week.
 
 ## Read this before writing any code
 
+- **`docs/testing.md`** — the testing convention for test design, suite selection, evidence reuse and review.
+  Read it before adding tests or selecting checks. CI enforces its mechanical rules.
 - **`ROADMAP.md`** — the maintainer-owned public direction. The linked GitHub Project is the live
   status source and GitHub issues are the executable work queue. Agents may propose changes, but must
   not add, remove, or reprioritize roadmap commitments without explicit maintainer approval.

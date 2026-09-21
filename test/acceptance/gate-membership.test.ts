@@ -23,6 +23,8 @@ import {
   type SuiteName,
 } from "../../scripts/acceptance-suites.ts";
 
+import { buildPlan, CI_PROFILES, validatePartitions } from "../../scripts/test-plan.ts";
+
 const root = resolve(import.meta.dir, "../..");
 const gateDoc = readFileSync(join(root, "test/acceptance/T8-GATE.md"), "utf8");
 
@@ -99,9 +101,18 @@ describe("T8 acceptance gate membership", () => {
   });
 
   test("CI runs the same gate the document describes", () => {
+    const plan = buildPlan();
+    const partitions = CI_PROFILES.map((profile) => plan[profile]);
+    validatePartitions(plan.full, partitions);
+    for (const file of acceptanceFiles())
+      expect(
+        partitions.flat().filter((selected) => selected === file),
+        file,
+      ).toHaveLength(1);
     for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
       const yaml = readFileSync(join(root, workflow), "utf8");
-      expect(yaml.includes("bun run test:acceptance"), workflow).toBe(true);
+      expect(yaml).toContain(`profile: [${CI_PROFILES.join(", ")}]`);
+      expect(yaml).toContain('bun run scripts/test-runner.ts "$TEST_PARTITION"');
     }
   });
 });
