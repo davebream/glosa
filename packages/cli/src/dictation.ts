@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import { glosaHome } from "@glosa/daemon";
+import { glosaHome } from "../../daemon/src/lifecycle/home.ts";
 import { isSourceCheckout } from "../../daemon/src/lifecycle/install.ts";
 import {
   MacKeychainCredentialStore,
