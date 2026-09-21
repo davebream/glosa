@@ -424,7 +424,31 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     }
   }
 
-  // 10. orphaned-state (issue #79) — home-state buses (`~/.glosa/state/<id>`) holding pending
+  // 10. live-updates (issue #219) — the selected workspace's daemon-lifetime artifact watch.
+  // This is latency, never loss: every degraded reason falls back to the next reconcile's offline
+  // catch-up. An N-1 daemon omits the additive field and is honestly SKIP rather than guessed live.
+  if (!status) {
+    checks.push(check("live-updates", "skip", "daemon unreachable — artifact watcher state not checked"));
+  } else if (!selected) {
+    checks.push(check("live-updates", "skip", "workspace is not registered — no artifact watcher state"));
+  } else if (!selected.live_updates) {
+    checks.push(check("live-updates", "skip", "daemon does not report artifact watcher state"));
+  } else if (selected.live_updates.state === "live") {
+    checks.push(check("live-updates", "pass", "live artifact updates are active"));
+  } else if (selected.live_updates.state === "starting") {
+    checks.push(check("live-updates", "skip", "artifact watcher is starting"));
+  } else {
+    checks.push(
+      check(
+        "live-updates",
+        "warn",
+        `live artifact updates are delayed (${selected.live_updates.reason.replaceAll("_", " ")}); ` +
+          "changes remain on disk and are captured by offline catch-up on the next reconcile",
+      ),
+    );
+  }
+
+  // 11. orphaned-state (issue #79) — home-state buses (`~/.glosa/state/<id>`) holding pending
   // entries with no live registration: user work stranded by a removed registration. Recovery is
   // re-opening the original path (deterministic registration ids reclaim the surviving bus).
   if (!status) {
@@ -443,7 +467,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 11. A monitor is per interactive Claude session, not a durable installation property.
+  // 12. A monitor is per interactive Claude session, not a durable installation property.
   const monitorDisabledBy = ["DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"].filter(
     (name) => deps.env?.[name] === "1",
   );
@@ -461,7 +485,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
-  // 12. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
+  // 13. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
   const configDir = deps.claudeConfigDir();
   checks.push(
     existsSync(configDir)
@@ -473,7 +497,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
-  // 13. claude-config-roots — every directory a Claude session on this machine might root its
+  // 14. claude-config-roots — every directory a Claude session on this machine might root its
   // transcripts in. An account switcher runs Claude with its own CLAUDE_CONFIG_DIR, so sessions
   // exist that this active root knows nothing about. Reporting them makes a switcher instance
   // without the plugin visible instead of silently unsupported.
@@ -491,7 +515,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
         ),
   );
 
-  // 14. orphaned-entries (issue #142) — journal entries in THIS workspace's bus that are durably
+  // 15. orphaned-entries (issue #142) — journal entries in THIS workspace's bus that are durably
   // created and not yet terminal, but whose inbox payload has gone missing (hand-removed, or
   // otherwise lost). Reuses check 6's status aggregate exactly as check 12 does; daemon-down ->
   // SKIP, same reasoning as check 12 (a warn would just repeat check 6's fail). Recovery is
@@ -520,14 +544,14 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
     );
   }
 
-  // 15. workspace-root (issue #146) — the directory this invocation actually resolved as its
+  // 16. workspace-root (issue #146) — the directory this invocation actually resolved as its
   // workspace, so a boundary decision is visible here rather than only inferable from an unusual
   // shadow-store path (`~/.glosa/shadow.git` on a dotfiles-home machine was the original symptom).
   // `dir` already passed through the caller's bounded `resolveCommandDir`/`enclosingGitRootWithin`
   // — this check reports the outcome, it does not re-derive it.
   checks.push(check("workspace-root", "pass", `resolved workspace root: ${dir}`));
 
-  // 16. legacy-config (#152) — glosa entries `glosa init` used to write into agent config. They
+  // 17. legacy-config (#152) — glosa entries `glosa init` used to write into agent config. They
   // are inert now (`glosa hook` is a silent stub for one release, and no MCP entry outside the
   // plugin is needed), but they are the user's files, so doctor names them and never edits them.
   const leftovers = scanLegacyConfig(dir, deps);
