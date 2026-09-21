@@ -14,7 +14,7 @@
 // it never opens the 0600 token path and never writes the lock path — so a pass cannot come from a
 // capability the real attacker does not have.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync, mkdtempSync } from "node:fs";
 import { connect } from "node:net";
 import { BUILD_ID } from "../../packages/daemon/src/lifecycle/build-id.ts";
 import { daemonPeerMismatchReason } from "../../packages/daemon/src/lifecycle/daemon.ts";
@@ -92,8 +92,7 @@ afterEach(async () => {
   cleanups.length = 0;
 });
 
-function useHome(): { home: string; port: number } {
-  const home = freshHome();
+function useHome(home = freshHome()): { home: string; port: number } {
   const port = randomPort();
   writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
   const savedHome = process.env.GLOSA_HOME;
@@ -112,7 +111,11 @@ function useHome(): { home: string; port: number } {
 
 describe("A3 §5 attack #11 — the loopback port is not where the credential goes", () => {
   test("the socket is 0600 inside a 0700 directory, and the kernel enforces both", async () => {
-    const { home, port } = useHome();
+    // Keep this permission witness below Darwin's Unix-socket pathname limit. Bun can
+    // connect to a long path while its parents are traversable, then report EINVAL when
+    // chmod prevents its path resolution. That would test path handling, not EACCES.
+    // mkdtemp owns this private fixture even when the outer harness has a deeply nested TMPDIR.
+    const { home, port } = useHome(mkdtempSync("/tmp/glosa-socket-mode-"));
     const daemon = spawnDaemon(home, port);
     cleanups.push(async () => {
       daemon.kill("SIGKILL");
@@ -126,13 +129,19 @@ describe("A3 §5 attack #11 — the loopback port is not where the credential go
     expect(statSync(socket).mode & 0o777).toBe(0o600);
     expect(await tryConnect(socket)).toBe("CONNECTED");
 
+    expect(Buffer.byteLength(socket)).toBeLessThan(100);
     // Each permission is enforced independently, so each is asserted independently.
-    chmodSync(socket, 0o000);
-    expect(await tryConnect(socket)).toBe("REFUSED EACCES");
-    chmodSync(socket, 0o600);
-    chmodSync(runDir(home), 0o000);
-    expect(await tryConnect(socket)).toBe("REFUSED EACCES");
-    chmodSync(runDir(home), 0o700);
+    try {
+      chmodSync(socket, 0o000);
+      expect(await tryConnect(socket)).toBe("REFUSED EACCES");
+      chmodSync(socket, 0o600);
+      chmodSync(runDir(home), 0o000);
+      expect(await tryConnect(socket)).toBe("REFUSED EACCES");
+    } finally {
+      // Restore traversal before cleanup even when a permission assertion fails.
+      chmodSync(runDir(home), 0o700);
+      chmodSync(socket, 0o600);
+    }
   }, 40_000);
 
   test("a squatter echoing a dead daemon's handshake receives no Authorization header", async () => {

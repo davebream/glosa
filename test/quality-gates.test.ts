@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MIN_JUNIT_BUN } from "../scripts/test-runner.ts";
 import rootPackage from "../package.json";
@@ -15,6 +16,34 @@ function job(yaml: string, name: string): string {
 }
 
 describe("repository quality gates", () => {
+  test("lint rejects focused and skipped tests while allowing negative fixture source strings", () => {
+    const directory = mkdtempSync(join(tmpdir(), "glosa-lint-policy-"));
+    const file = join(directory, "fixture.test.ts");
+    const lint = (source: string) => {
+      writeFileSync(file, source);
+      return Bun.spawnSync(
+        [join(root, "node_modules/.bin/biome"), "lint", `--config-path=${root}`, "--vcs-enabled=false", file],
+        {
+          cwd: root,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+    };
+    try {
+      for (const modifier of ["only", "skip"]) {
+        const result = lint(`import { test } from "bun:test"; test.${modifier}("required scenario", () => {});`);
+        expect(result.exitCode, result.stderr.toString()).not.toBe(0);
+        expect(result.stderr.toString() + result.stdout.toString()).toContain(
+          modifier === "only" ? "noFocusedTests" : "noSkippedTests",
+        );
+      }
+      const control = lint('const source = "test.skip(negative fixture)"; console.log(source);');
+      expect(control.exitCode, control.stderr.toString()).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   test("CI and release pin the packageManager runtime with the verified JUnit floor (#230)", () => {
     const pinned = rootPackage.packageManager.replace(/^bun@/, "");
     expect(Bun.semver.satisfies(pinned, `>=${MIN_JUNIT_BUN}`)).toBe(true);
@@ -32,9 +61,8 @@ describe("repository quality gates", () => {
   test("CI and release execute complete partitions, independent stability, and the same reporting runner", () => {
     for (const yaml of workflows) {
       const tests = job(yaml, "tests");
-      expect(tests).toContain("profile: [acceptance, remaining-1, remaining-2]");
+      expect(tests).toContain("profile: [ci-1, ci-2, ci-3]");
       expect(tests).toContain("fail-fast: false");
-      expect(tests).toContain("bun run test:acceptance");
       expect(tests).toContain('bun run scripts/test-runner.ts "$TEST_PARTITION"');
       expect(job(yaml, "stability")).toContain('bun run test:stability --repetitions "$TEST_REPETITIONS"');
       expect(job(yaml, "full")).toContain("if: needs.prepare.outputs.whole == 'true'");

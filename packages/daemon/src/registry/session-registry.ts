@@ -54,6 +54,7 @@ export class SessionRegistry {
   private readonly connections = new Map<string, Map<string, () => void>>();
   private readonly scheduleRefresh: NonNullable<SessionRegistryDeps["scheduleRefresh"]>;
   private readonly ownershipCoordinator?: AdoptionCoordinator;
+  private onSessionsChanged: () => void = () => {};
   // #153 Part 2 (W3): a held watch captures a session's binding once, at hold-start, and must
   // stop trusting it the moment that binding actually changes — a rebind or a deregistration,
   // never a bare heartbeat (which re-upserts the SAME binding constantly and must not thrash this).
@@ -75,6 +76,21 @@ export class SessionRegistry {
         timer.unref?.();
         return () => clearInterval(timer);
       });
+  }
+
+  /** Wires a cheap, non-blocking observer for consumers whose derived runtime state depends on
+   * liveness/binding. Production uses it to request (not perform inline) watcher reallocation. */
+  setOnSessionsChanged(fn: () => void): void {
+    this.onSessionsChanged = fn;
+  }
+
+  private announceSessionsChanged(): void {
+    try {
+      this.onSessionsChanged();
+    } catch {
+      // Session registration/liveness is authoritative. A reporting/allocation observer may not
+      // make it fail after the workspace index and session row were already published.
+    }
   }
 
   /** Merge under the same lock as binding: an MCP refresh cannot erase a push registration's
@@ -121,6 +137,7 @@ export class SessionRegistry {
     };
     await this.index?.upsertWorkspace(record.workspace_binding ?? record.cwd, "session");
     this.sessions.set(record.session_id, record);
+    this.announceSessionsChanged();
     // A REBIND, not a heartbeat: the previous binding actually changed value. A held watch that
     // captured the OLD controller's signal must be told its authority moved — see
     // `sessionLifecycleSignal`'s docstring. Deleting rather than reusing the controller means the
@@ -222,8 +239,10 @@ export class SessionRegistry {
     // forgetting mid-lease is not granted a fresh window past its current one either.
     if (this.isForgettingWorkspace(record.workspace_binding ?? record.cwd)) return true;
     const now = this.now();
+    const wasAlive = now.getTime() < new Date(record.lease_expiry).getTime();
     record.last_active_at = now.toISOString();
     record.lease_expiry = new Date(now.getTime() + this.leaseTtlMs).toISOString();
+    if (!wasAlive) this.announceSessionsChanged();
     return true;
   }
 
@@ -302,9 +321,10 @@ export class SessionRegistry {
   deregister(sessionId: string): Promise<void> {
     return this.mutex.runExclusive(() => {
       for (const release of this.connections.get(sessionId)?.values() ?? []) release();
-      this.sessions.delete(sessionId);
+      const deleted = this.sessions.delete(sessionId);
       this.lifecycleControllers.get(sessionId)?.abort();
       this.lifecycleControllers.delete(sessionId);
+      if (deleted) this.announceSessionsChanged();
     });
   }
 

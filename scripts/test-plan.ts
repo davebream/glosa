@@ -15,7 +15,29 @@ export const DOC_FILES = [
   "test/oss-release.test.ts",
 ];
 export const STABILITY_FILES = ["packages/daemon/test/lifecycle.test.ts", "packages/daemon/test/helpers.test.ts"];
-export type Profile = "acceptance" | "remaining-1" | "remaining-2" | "docs" | "stability" | "full";
+export const CI_PROFILES = ["ci-1", "ci-2", "ci-3"] as const;
+export type Profile = "acceptance" | (typeof CI_PROFILES)[number] | "docs" | "stability" | "full";
+type Estimate = { seconds: number; reason: string };
+export function validateTimings(
+  inventory: string[],
+  measured: Record<string, number> = baseline.files,
+  estimates: Record<string, Estimate> = baseline.estimates,
+): Record<string, number> {
+  const weights = { ...measured };
+  for (const [file, estimate] of Object.entries(estimates)) {
+    if (Object.hasOwn(measured, file)) throw new Error(`Measured and estimated duration overlap: ${file}`);
+    if (!estimate.reason?.trim() || !Number.isFinite(estimate.seconds) || estimate.seconds <= 0)
+      throw new Error(`Invalid timing estimate: ${file}`);
+    weights[file] = estimate.seconds;
+  }
+  for (const [file, seconds] of Object.entries(weights)) {
+    if (!inventory.includes(file)) throw new Error(`Stale timing: ${file}`);
+    if (!Number.isFinite(seconds) || seconds < 0) throw new Error(`Invalid duration for ${file}`);
+  }
+  const missing = inventory.filter((file) => !Object.hasOwn(weights, file));
+  if (missing.length) throw new Error(`Tests need a measured duration or reviewed estimate: ${missing.join(", ")}`);
+  return weights;
+}
 export type ChangeProfile = "docs" | "full";
 export type Plan = Record<Profile, string[]>;
 
@@ -68,27 +90,30 @@ export function validatePartitions(inventory: string[], partitions: string[][]):
 export function buildPlan(
   inventory = discoverTests(),
   acceptance = acceptanceFiles(),
-  timings: Record<string, number> = baseline.files,
+  timings: Record<string, number> = validateTimings(inventory),
 ): Plan {
-  const groups: [string[], string[]] = [[], []];
-  const totals = [0, 0];
+  const groups: [string[], string[], string[]] = [[], [], []];
+  const totals = [0, 0, 0];
   const weight = (file: string) => {
-    const value = timings[file] ?? 1;
-    if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid duration for ${file}`);
+    const value = timings[file];
+    if (value === undefined || !Number.isFinite(value) || value < 0) throw new Error(`Invalid duration for ${file}`);
     return value;
   };
-  const remaining = inventory.filter((file) => !acceptance.includes(file));
-  remaining.sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0));
-  for (const file of remaining) {
-    const index = totals[0]! <= totals[1]! ? 0 : 1;
-    groups[index].push(file);
+  if (!acceptance.length || new Set(acceptance).size !== acceptance.length)
+    throw new Error("Empty or duplicate acceptance membership");
+  for (const file of acceptance) if (!inventory.includes(file)) throw new Error(`Unknown acceptance test: ${file}`);
+  const ordered = [...inventory].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const file of ordered) {
+    const index = totals.indexOf(Math.min(...totals));
+    groups[index]!.push(file);
     totals[index]! += weight(file);
   }
-  validatePartitions(inventory, [acceptance, ...groups]);
+  validatePartitions(inventory, groups);
   return {
     acceptance,
-    "remaining-1": groups[0],
-    "remaining-2": groups[1],
+    "ci-1": groups[0],
+    "ci-2": groups[1],
+    "ci-3": groups[2],
     docs: [...DOC_FILES],
     stability: [...STABILITY_FILES],
     full: inventory,
@@ -96,7 +121,8 @@ export function buildPlan(
 }
 
 export function checkedFiles(profile: string, root = ROOT): string[] {
-  const plan = buildPlan(discoverTests(root));
+  const inventory = discoverTests(root);
+  const plan = buildPlan(inventory, acceptanceFiles(), validateTimings(inventory));
   if (!Object.hasOwn(plan, profile)) throw new Error(`Unsupported test profile: ${profile}`);
   const files = plan[profile as Profile];
   if (!files.length || new Set(files).size !== files.length) throw new Error("Empty or duplicate selection");
@@ -155,7 +181,19 @@ if (import.meta.main) {
     const whole = event !== "pull_request";
     const repetitions = process.env.TEST_STABILITY_REPETITIONS || "2";
     if (!["2", "10"].includes(repetitions)) throw new Error("Stability repetitions must be 2 or 10");
-    console.log(JSON.stringify({ profile, whole, repetitions, partitions: buildPlan() }, null, 2));
+    const inventory = discoverTests();
+    console.log(
+      JSON.stringify(
+        {
+          profile,
+          whole,
+          repetitions,
+          partitions: buildPlan(inventory, acceptanceFiles(), validateTimings(inventory)),
+        },
+        null,
+        2,
+      ),
+    );
     if (process.env.GITHUB_OUTPUT)
       appendFileSync(process.env.GITHUB_OUTPUT, `profile=${profile}\nwhole=${whole}\nrepetitions=${repetitions}\n`);
   } else if (command === "aggregate") {

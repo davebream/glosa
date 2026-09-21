@@ -80,8 +80,13 @@ export function printStatusResult(result: CommandEnvelope<StatusData>, json: boo
     `glosa status: daemon ${result.data.daemon?.instance_id} — ${wsCount} workspace(s), ${sessCount} session(s)\n`,
   );
   for (const w of result.data.workspaces ?? []) {
+    const liveUpdates = w.live_updates
+      ? w.live_updates.state === "offline_catchup"
+        ? `  live_updates=offline-catchup(${w.live_updates.reason})`
+        : `  live_updates=${w.live_updates.state}`
+      : "";
     process.stdout.write(
-      `  ${w.slug}  ${w.path}  pending=${w.pending_count}${w.has_attention ? " [attention]" : ""}\n`,
+      `  ${w.slug}  ${w.path}  pending=${w.pending_count}${w.has_attention ? " [attention]" : ""}${liveUpdates}\n`,
     );
     // issue #156 review finding: human status must print the exact resume command for a workspace
     // whose `glosa forget` deletion is durably committed but was interrupted, not just note the

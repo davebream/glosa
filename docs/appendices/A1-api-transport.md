@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.14", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.15", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -148,13 +148,20 @@ recorded from a registration it already held.
 
 ### 5.2b `GET /api/status`
 Bearer required (authed read). The CLI-facing aggregate behind `glosa status`/`doctor`:
-`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, connect?}],
+`{daemon:{…}, workspaces:[{slug, path, last_seen, pending_count, has_attention, connect?, live_updates?}],
 sessions:[…], orphaned_state:[{registration_id, pending_count}]}`. `orphaned_state` (additive,
 issue #79) lists `~/.glosa/state/<id>` buses whose journal still derives pending entries but whose
 registration is gone — stranded user work recoverable by re-opening the original path
 (deterministic registration ids reclaim the surviving bus). A scan failure degrades to `[]`; the
 route never fails over it. The former `wiring` field is gone (#152): connection state is derived
 from `sessions[]` (explicit `workspace_binding` + `liveness`) and nothing else.
+
+Contract 1.15 (issue #219) additively adds `live_updates` for an eligible registered workspace:
+`{state:"live"|"starting"|"offline_catchup", reason?}`. `reason` is required only for
+`offline_catchup` and is one of `workspace_budget`, `tracked_artifact_budget`,
+`initial_scan_failed`, `watch_start_failed`, or `watch_error`. It is runtime diagnosis, never
+journal truth, and contains no paths, counts, or session identity. An N-1 daemon omits the field;
+an N-1 client ignores it.
 
 The two `pending_count` fields in this response are DIFFERENT signals and disagree on purpose
 (issue #153, A5 §F23). A workspace row's is BADGE-facing and excludes `external_edit`; it is the

@@ -17,9 +17,11 @@ bun run audit:licenses
 bun run package:check
 ```
 
-`bun run test:ci` runs the named T8 acceptance files and two disjoint partitions of all remaining
-tests. It runs those partitions sequentially locally; CI gives each its own macOS job. The union
-must equal the discovered test inventory, without duplicates. `bun run test:acceptance` still runs
+`bun run test:ci` runs three duration-balanced partitions of the entire inventory, including every
+named T8 acceptance file exactly once. It runs those partitions sequentially locally; CI gives each
+its own macOS job. The union must equal the discovered test inventory, without duplicates.
+Acceptance membership describes requirements, not a dedicated CI shard. See [the testing
+convention](../../docs/testing.md) for authoring, scheduling and evidence rules. `bun run test:acceptance` still runs
 only the named gate. A docs-only result is never a T8 pass. The main/release full run uses plain
 unpartitioned `bun test` underneath its reporting wrapper; it checks cross-file interactions, not
 randomized order. The manual rehearsal remains a separate, attended requirement.
@@ -27,11 +29,11 @@ randomized order. The manual rehearsal remains a separate, attended requirement.
 | Event | Required test profiles |
 |---|---|
 | Documentation-only PR | `test:docs`: complete editor corpus, membership guard, quality gates and OSS contracts; format and package checks; security |
-| Code, configuration, mixed or unknown PR | Acceptance plus both remaining partitions; stability; lint, typecheck, format, license/package checks; security |
+| Code, configuration, mixed or unknown PR | Three complete balanced partitions; stability; lint, typecheck, format, license/package checks; security |
 | Main push or release tag | All full-validation profiles plus one unpartitioned `test:full` run |
 | Manual dispatch | Full validation; choose two or ten stability repetitions |
 
-Stability repeats the lifecycle, daemon-helper and lease-fallback files twice, in fresh processes.
+Stability repeats the lifecycle and daemon-helper files twice, in fresh processes.
 Every attempt must pass; this is not retry-to-green. To reproduce a stability problem locally:
 
 ```sh
@@ -60,10 +62,12 @@ Do not put private artifacts in this directory. Interrupted runs retain availabl
 a runner forcibly killed by the OS may leave an incomplete record, which cannot prove a pass.
 
 `scripts/test-timings.json` is a reviewed seconds-per-file baseline. Refresh it from successful
-same-runtime CI JUnit suite durations, retaining the source run and commit. Compare multiple runs
-before editing it; never update it automatically in CI. The planner sorts by decreasing duration,
-breaks ties by path, and assigns each remaining test to the lighter partition. Unseen files get a
-one-second estimate. Timing estimates influence scheduling only, never membership or pass/fail.
+same-runtime CI JUnit suite durations, retaining source runs, commits and aggregation method.
+Compare multiple runs; never update it automatically in CI. New files require an explicit positive
+`estimates` entry with a reason until sufficient CI samples exist. Every inventory file must appear
+exactly once in measured `files` or `estimates`; stale entries and implicit one-second fallbacks fail
+the gate. The planner sorts the entire inventory by decreasing duration, breaks ties by path, and
+assigns each test to the lightest of three partitions. The standalone acceptance selection is unchanged.
 
 Before changing guards, ablate the protected mechanism and require a named red; then restore it
 and rerun the relevant tests. Keep real subprocess, browser CSP, journal durability, ownership and
