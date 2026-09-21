@@ -14,6 +14,7 @@ colors:
   hand: "oklch(0.52 0.16 42)"
   hand-hover: "oklch(0.46 0.15 42)"
   pencil: "oklch(0.56 0.01 65)"
+  session: "oklch(0.42 0.11 255)"
   danger: "oklch(0.47 0.17 22)"
   warn: "oklch(0.53 0.11 80)"
   ok: "oklch(0.5 0.09 150)"
@@ -27,6 +28,7 @@ colors:
   dark-border-strong: "oklch(0.58 0.012 65)"
   dark-hand: "oklch(0.72 0.13 45)"
   dark-pencil: "oklch(0.64 0.01 70)"
+  dark-session: "oklch(0.76 0.1 250)"
 typography:
   manuscript-title:
     fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
@@ -221,6 +223,10 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 - **Hand Line** (hand at 70% over transparent): the 2px underline every anchored passage carries; the only trace of a mark in Read.
 - **Scrim** (ink at 30%; black at 45% in dark): behind a blocking dialog.
 
+### Session
+- **Session Ink, Blue-Black** (`{colors.session}`; about 8.9:1 on paper): a session's mark on the page and nothing else: the band's outline, its label and gutter tab (paper text on Session Ink), the "?" glyph on the question notice, and the 1.5px top rule of a session's card (2px on the card that floats at a passage). Dark: `{colors.dark-session}`.
+- **Session Wash** (Session Ink at 10% over transparent, 14% in dark): the fill of a question's band and the ground under a session's quote on its card. Deepens to 17% (22% in dark) on hover and focus.
+
 ### Semantic
 - **Danger, Crimson** (`{colors.danger}`; 7.3:1): errors, destructive actions, the Remove hover, diff deletions. Held apart from the hand by hue and lightness.
 - **Warning, Ochre** (`{colors.warn}`; 5.2:1): stale entries, "Lost its place", attention notices.
@@ -237,7 +243,7 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 - **Region Rule** (`--rule`): ink in light; `{colors.dark-rule}` (7.8:1) in dark, stepped below text ink so a full-width rule does not glare. Draws the top bar's bottom edge, the navigator's right edge and the mode control's outline.
 
 ### Named Rules
-**The Two Hands Rule.** Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. No third colour for marks.
+**The Two Hands Rule.** Everything the human marks takes the hand; everything not yet sent takes the pencil; everything a session writes is printed in ink. A session's *mark on the page* (the band around a passage it asks about or points at) takes Session Ink, and that is the only thing that does (#308). Session Ink is never a button, a link, a panel fill or the colour of a session's words.
 
 **The Paper Desk Rule.** The desk is one paper. Chrome regions do not get their own grey fill; they are separated by the Region Rule. Tinted neutrals stay warm and low in chroma so nothing competes with the hand.
 
@@ -362,7 +368,13 @@ Typography on a hairline, not a card: a 1px Strong Border rule at the passage's 
 - **Note:** the human's words in the Note style, in the hand; applied notes recede to Muted.
 - **State row:** an 8px dot (hollow Muted waiting, filled hand delivered, filled Success applied, filled Warning stale) beside a 12px label and the intent as "· Change the words". Rejected, stale and dismissed entries fade to 75% in light.
 - **Hover thread:** hovering the passage lights the entry's rule in the hand; hovering the entry deepens the passage to Anchor Wash with a hand underline. A new entry flashes its rule in the hand for 1.2s.
-- **A session's entry:** the same object with an ink rule, the verified provider name in 600 ink beside its claimed label in a dashed box, and its message in the Note style, in ink. It never takes the hand.
+- **A session's entry:** the same object with a 1.5px Session Ink rule (the same ink as its band, so the two read as one object in two places), the verified provider name in 600 ink beside its claimed label in a dashed box, and its message in the Note style, in ink. Its quote sits on Session Wash. It never takes the hand.
+
+### The Question Notice
+A 1-row strip under the artifact bar, on paper over a Region Rule, shown whenever a session's question is not beside its words: the passage is off screen, the pane is not in Review, or there is no rail and the question's card is not open. An 18px Session Ink "?" glyph, "{provider} is asking about a passage" with the provider in 600, the passage address, a count when several are open ("1 of 3", oldest first), a primary **Go to it** and a drawn dismiss. glosa never scrolls or switches mode for an arriving request; this strip is the only thing that reaches a reader who is elsewhere. After the reader goes it offers **Back to where you were**. A passage that cannot be located is never offered as somewhere to go: the strip says so and the button reads "Show the question". A question about an artifact no pane has open is offered by the active pane, with the file's name.
+
+### The Question at Its Passage
+Below the rail floor the question the reader is on floats at its passage the way the composer does: under it (above when there is no room), aligned to the column's left edge for a passage that wraps and to its first word for one that does not, 26rem wide, paper (Surface in dark), 1px Strong Border, 2px Session Ink top rule, 10px radius, Menu Lift. Unlike the composer it is not clamped into view: a draft follows its writer, a question belongs to its words. It carries the provider and claimed label, the message, the options, the free-text field, Can't answer and Send answer, and a drawn close. The tray lists the same question as a row with "Answer at the passage", so there is only ever one live answer form.
 
 ### The Composer
 The entry before it is sent, and the one card on the page, because an open draft is above the work for a moment. It floats under the passage it is about, in its own layer in the pane's scroll space, so it travels with the words: paper (Surface in dark), 1px Strong Border, 2px pencil top rule, 10px radius, Menu Lift, 0.75rem 1rem 1rem padding. The address and "You · not sent yet" in pencil, the quote over a graphite underlay, intent chips, a transparent field in pencil Note type over a 1px dashed pencil rule that turns solid ink with ink text on focus, then Cancel and Send to session. Nothing takes the hand until Send. On Send at rail widths, the new entry travels from the draft's place to its own beside the passage (280ms, the standard easing), so the reader sees where the note went.
@@ -373,7 +385,7 @@ Hovering an annotated passage where the rail is not shown opens the entry under 
 ### Marks on the Page
 - **Selection:** transient Hand Wash.
 - **A human annotation** lives on the words: the 2px Hand Line underline in every mode, plus Hand Wash in Review; hovered or focused, the opaque Anchor Wash with a hand underline. Read shows no wash.
-- **A session's pointer** stands beside the words as a sideline in the gutter. Position, not hue, separates it from an annotation.
+- **A session's mark** is a band around the exact words in Session Ink, drawn in an overlay: a 1.5px outline shaped like a text selection (it can start and stop mid-line), with a 20px filled tab in the gutter. A **question** holds its session until answered, so its band is filled with Session Wash, carries a printed "{provider} asks" label on its top edge and a "?" tab. A **pointer** is the outline and an arrow tab: no fill, no label. The band thickens to 2px and its fill deepens while its card is hovered or focused. On arrival it draws in once (1.2s) and the tab pops. The reader's marks colour the words; a session's mark outlines them, so both can sit on one sentence. It is meant to be seen at once.
 
 ### Passage Addresses
 A derived label ("§2.1"; "¶3" on a headless page; a lone leading `h1` is §0). In Review, headings show their address in the 2rem gutter in the hand, positioned `right: 100%` at 0.45em, and any block shows its own while hovered or focused. Entries, the composer and Go to lead with the same label. Addresses renumber with the document; the anchor is the quote. The gutter label is a pseudo-element; nothing is inserted into rendered content.
@@ -396,7 +408,7 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink.
+- **Do** give every human mark the hand, every unsent mark the pencil, and print everything a session writes in ink. Draw a session's mark on the page, and only that, in Session Ink.
 - **Do** keep the whole desk on paper and divide the desk's regions with the Region Rule (ink in light, `oklch(0.74 0.01 80)` in dark).
 - **Do** set anything written (manuscript, quotes, notes, the composer field, a session's message) in Source Serif 4, and everything the application says in Source Sans 3.
 - **Do** strike the chosen mode forward as filled ink inside the ink outline.
@@ -409,6 +421,8 @@ One easing (`cubic-bezier(0.25, 1, 0.5, 1)`), 150ms for hover and colour, 200ms 
 
 ### Don't:
 - **Don't** use the hand for a button, a link, a panel fill or a session's output.
+- **Don't** use Session Ink for a button, a link, a panel fill or a session's words; it marks a passage and names that mark, nothing more.
+- **Don't** scroll, switch mode or move focus because a session's request arrived. Offer the way there.
 - **Don't** give chrome regions a grey fill of their own; the desk is one paper.
 - **Don't** put the face chooser or any reading preference in primary chrome; it lives in the pane's More menu.
 - **Don't** wash annotated words in Read; the underline is the only mark there.

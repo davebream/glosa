@@ -157,30 +157,103 @@ export function agentRequestSummary(requests) {
     .join(" · ");
 }
 
+/** A request that carries a question. A question holds its session until it is answered; a
+ * pointer ("look here") does not, and the two are treated differently everywhere downstream. */
+export function isQuestion(entry) {
+  return (
+    Boolean(entry) && entry.approval_mode !== true && typeof entry.message === "string" && entry.message.length > 0
+  );
+}
+
+/** Every open question in the inbox, oldest first. The order is the order they are offered in:
+ * the session that has waited longest is the one the reader is pointed to first (#308). */
+export function openQuestions(entries) {
+  return (entries ?? [])
+    .filter(isQuestion)
+    .slice()
+    .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+}
+
 /**
- * Which request, if any, should pull the workbench to it.
+ * The requests that arrived since the last look.
  *
- * Pure, and deliberately conservative — this is the one thing in the feature that moves the
- * reviewer without being asked, so every branch here is a reason NOT to:
- *
- * - Nothing on the first load. Opening glosa onto three questions asked overnight would throw the
- *   reader at the last one before they had seen the document.
- * - Only requests that arrived since the last look. A refresh is not an event.
- * - Only one, the oldest, even when several land together. Two jumps is not twice as helpful.
- * - Only requests that carry a question. A pointer is worth a mark in the margin, not the
- *   reader's place in the document.
+ * This used to choose ONE request and pull the workbench to it. #308 removed that: glosa never
+ * moves the reader, and an arrival now does two smaller things instead, neither of which touches
+ * their place — it is announced, and its mark draws itself in once. Whether a question needs the
+ * "Go to it" notice is NOT decided here: that is derived from what is open and where the reader
+ * is, so questions already waiting on the first load get one too. This function only answers
+ * "what is new", and the first load is by definition not news.
  *
  * @param {Set<string>} seenIds ids observed on the previous read
  * @param {Array<any>} entries the inbox as it stands now
  * @param {{ firstLoad?: boolean }} [options]
  */
-export function selectRequestToReveal(seenIds, entries, { firstLoad = false } = {}) {
-  if (firstLoad) return null;
-  const arrived = (entries ?? [])
-    .filter((entry) => entry && !seenIds.has(entry.id))
-    .filter((entry) => entry.approval_mode !== true && typeof entry.message === "string" && entry.message.length > 0)
+export function selectArrivals(seenIds, entries, { firstLoad = false } = {}) {
+  if (firstLoad) return [];
+  return (entries ?? [])
+    .filter((entry) => entry && !seenIds.has(entry.id) && entry.approval_mode !== true)
+    .slice()
     .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
-  return arrived[0] ?? null;
+}
+
+/**
+ * Folds a range's client rects into one box per rendered line.
+ *
+ * `Range.getClientRects()` returns a rect per inline box, so a sentence crossing a `<strong>`
+ * yields three rects on one line, and some engines add a zero-width rect at a wrap. Lines are
+ * told apart by their vertical centre, which survives the different heights inline boxes have.
+ *
+ * @param {Array<{left:number,right:number,top:number,bottom:number}>} rects
+ * @returns {Array<{left:number,right:number,top:number,bottom:number}>} top to bottom
+ */
+export function lineBoxes(rects, tolerance = 6) {
+  const lines = [];
+  for (const rect of rects ?? []) {
+    if (!rect || rect.right - rect.left < 0.5 || rect.bottom - rect.top < 0.5) continue;
+    const mid = (rect.top + rect.bottom) / 2;
+    const line = lines.find((candidate) => Math.abs(candidate.mid - mid) <= tolerance);
+    if (line) {
+      line.left = Math.min(line.left, rect.left);
+      line.right = Math.max(line.right, rect.right);
+      line.top = Math.min(line.top, rect.top);
+      line.bottom = Math.max(line.bottom, rect.bottom);
+    } else {
+      lines.push({ mid, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+    }
+  }
+  return lines.sort((a, b) => a.top - b.top).map(({ left, right, top, bottom }) => ({ left, right, top, bottom }));
+}
+
+/**
+ * The outline of a passage, as an SVG path: the shape a text selection has.
+ *
+ * One line is a rectangle around the words. Several lines make a stepped band — the first line
+ * runs from the first word to the column's right edge, the middle lines span the column, the last
+ * runs from the column's left edge to the last word. Spanning the column rather than each line's
+ * ragged end is what makes it read as ONE band instead of a stack of boxes.
+ *
+ * Returns `null` when there is nothing to draw, so a caller never paints an empty path.
+ *
+ * @param {Array<{left:number,right:number,top:number,bottom:number}>} lines from `lineBoxes`
+ * @param {{left:number,right:number}} column the text column the passage sits in
+ */
+export function bandPath(lines, column, { padX = 5, padY = 1 } = {}) {
+  if (!Array.isArray(lines) || lines.length === 0) return null;
+  const r = (n) => Math.round(n * 10) / 10;
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  const top = r(first.top - padY);
+  const bottom = r(last.bottom + padY);
+  if (lines.length === 1) {
+    return `M${r(first.left - padX)},${top}H${r(first.right + padX)}V${bottom}H${r(first.left - padX)}Z`;
+  }
+  const colLeft = r(Math.min(column?.left ?? first.left, ...lines.map((l) => l.left)) - padX);
+  const colRight = r(Math.max(column?.right ?? first.right, ...lines.map((l) => l.right)) + padX);
+  const startX = r(first.left - padX);
+  const endX = r(last.right + padX);
+  // Clockwise from the first word: across the top, down the right edge to the last line, in to
+  // the last word, along the bottom, up the left edge to the first line, in to the first word.
+  return `M${startX},${top}H${colRight}V${r(last.top)}H${endX}V${bottom}H${colLeft}V${r(first.bottom)}H${startX}Z`;
 }
 
 /**

@@ -1205,3 +1205,58 @@ session — the exact hazard `close()` already refuses to take for deregistratio
 being cleared is not worth reopening it for. `glosa request-review --wait` interrupted with SIGINT
 is unchanged: it passes no signal, and a human at a terminal interrupting their own command is not
 the same act as an agent's call being cancelled out from under it.
+
+## A session's question is shown where it is, and glosa never moves the reader to it (#308)
+
+Maintainer decision, issue #308. A session asked about a paragraph near the top of a long document
+while the reader was near the end, and nothing told them where it was. The code already had both
+halves of an answer, shipped with #134: a 2px grey rule in the gutter beside the passage, and an
+automatic switch to Review with a scroll once typing paused. The rule went unnoticed by a real
+reviewer. The scroll deliberately skipped questions already open on first load, had no fallback,
+and in the reported session did not fire; when it declined to move the reader they got nothing.
+
+**Decision.** Three things change together.
+
+1. *glosa never moves the reader.* The automatic switch and scroll are removed, along with the
+   typing-gap timer and its 15-second cap. Whenever a question is not beside its words, the pane
+   shows a notice under the artifact bar with **Go to it**. The notice is derived from what is open
+   and where the reader is, not from "what just arrived", so questions waiting on first load get one
+   too. After the reader goes, **Back to where you were** restores their place.
+2. *The mark is a band, and it is meant to be seen at once.* An outline around the exact words,
+   shaped the way a text selection is (it can start and stop mid-line), with a printed
+   "… asks" label and a "?" tab in the gutter. A pointer, which does not hold its session, is the
+   outline and an arrow tab with no fill, no label and no notice. It is drawn in an overlay from
+   `Range.getClientRects()`; nothing is inserted into the rendered manuscript and the reader's own
+   wash and underline are untouched. A question blocks its session until answered, so a mark the
+   reader has to hunt for costs more than a plain one.
+3. *Sessions get their own ink for marks.* `--session`, a blue-black. This amends the Two Hands
+   Rule in `DESIGN.md`, which used to end "No third colour for marks". Session ink is a session's
+   mark on the page only: the band, its label and tab, the notice's glyph, the question card's top
+   rule. A session's words stay printed in ordinary ink, and session ink is never a button or a
+   panel fill. Authorship still does not rest on colour: outline, label and tab read in greyscale.
+
+Below the rail floor (a pane under 1205px) the question the reader is on floats at its passage,
+placed like the note composer, and the tray lists it with "Answer at the passage". One live copy of
+an answer form, not two: a form in the tray and another at the passage would let a reader type in
+one and send the other.
+
+**Why not the alternatives.** *Scroll only when idle* was the status quo, more carefully timed; the
+failure was not the timing but that declining to scroll left nothing behind. *An ink-only mark*
+kept the Two Hands Rule intact and was the first proposal; on rendered samples the maintainer found
+it did not separate "a session marked this" from the page's own ink fast enough. *The accent colour
+for session marks* was the most noticeable and made a passage the reader marked and one a session
+marked look alike until the underline was inspected. *A modal* covers the passage the reader needs
+to see to answer.
+
+**Consequences.** With no artifact open there is no pane to raise a notice in; the workspace's
+Attention tray lists the request. Opening the artifact for the reader in that case was built and
+removed in the same change: at boot the inbox can land before the first pane exists, "nothing is
+open" was indistinguishable from "nothing is open yet", and a reader who asked for Read was thrown
+into Review on load. When two open questions overlap, the older keeps the fill and the newer is
+outline only until the older is answered or dismissed. A passage that cannot be located gets no
+band; the card and the notice say so, and the notice offers "Show the question" rather than
+"Go to it".
+
+**Not done.** `docs/assets/screens` has no capture of an agent question yet. `docs/screenshots.md`
+now says how to take one; the existing captures predate the current visual system and the whole set
+is due to be re-recorded from one session, which is the rule that file sets for itself.
