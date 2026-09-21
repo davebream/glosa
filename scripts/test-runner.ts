@@ -2,7 +2,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
-import { checkedFiles, gitEnvironment, ROOT, type Profile } from "./test-plan.ts";
+import { checkedFiles, CI_PROFILES, gitEnvironment, ROOT, type Profile } from "./test-plan.ts";
 
 // Build/test tooling has a newer floor than the shipped application: 1.2.7's JUnit
 // reporter can abort on passing tests (#230). This is the verified tooling floor,
@@ -204,7 +204,7 @@ if (import.meta.main) {
       throw new Error("Usage: test-runner.ts <profile|ci> [--repetitions 2|10]");
     repetitions = Number(args[1]);
   }
-  const profiles: Profile[] = profile === "ci" ? ["acceptance", "remaining-1", "remaining-2"] : [profile as Profile];
+  const profiles: Profile[] = profile === "ci" ? [...CI_PROFILES] : [profile as Profile];
   let exitCode = 0;
   for (const selected of profiles) {
     const files = checkedFiles(selected);

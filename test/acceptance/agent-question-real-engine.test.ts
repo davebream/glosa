@@ -511,7 +511,13 @@ describe("#308 — an agent's question in a real engine", () => {
       });
       const page = await launch("1000,800");
       await page.navigate(pairedUrl("read"));
-      await waitFor(page, "the document rendered with its band", (s) => s.bands.length === 1 && s.scrollMax > 1500);
+      // Dockview briefly renders content in a zero-height placeholder before laying out
+      // the pane. Its scroll range is not the reader's range yet.
+      await waitFor(
+        page,
+        "the document laid out with its band",
+        (s) => s.bands.length === 1 && s.view.bottom > s.view.top && s.scrollMax > 1500,
+      );
 
       await scrollToEnd(page);
       const away = await waitFor(
