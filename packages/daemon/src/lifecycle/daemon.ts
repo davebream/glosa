@@ -16,6 +16,7 @@ import { type AgentProvider, AgentProviderRegistry } from "../agent-provider/int
 import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
+import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -36,8 +37,7 @@ import {
   createRejectionRecorder,
 } from "../transport/http.ts";
 import { internalErrorResponse } from "../transport/problem.ts";
-import { isHomeOrAncestor } from "../registry/workspace-root.ts";
-import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
+import type { WorkspaceTarget } from "../workspace.ts";
 import { BUILD_ID, parseBuildId } from "./build-id.ts";
 import { claimDaemonIdentity, releaseDaemonIdentity } from "./daemon-identity.ts";
 import {
@@ -166,6 +166,8 @@ export interface BuildBackendOptions {
   /** Test-only: how the artifact watcher registry opens a filesystem watch. Production uses
    * `nativeWorkspaceWatch`. */
   artifactWatchFactory?: ArtifactWatcherRegistryOptions["watchFactory"];
+  /** Test-only capacity override for deterministic allocation/preemption coverage. */
+  maxWatchedWorkspaces?: number;
   /** Test-only resolver seam. Production uses the matcher Worker implementation below. */
   resolveTrackedFilesAsync?: typeof resolveTrackedFilesAsync;
   /** Test-only poison seam for synchronous shadow matcher walks. */
@@ -200,6 +202,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     watchFactory: opts.artifactWatchFactory,
+    maxWatchedWorkspaces: opts.maxWatchedWorkspaces,
     warn: (message) => log(home, message),
     initialResolveTrackedFiles: asyncTrackedFiles,
     // The watcher→bus edge (#153), assembled HERE rather than imported inside the watcher: that
@@ -212,6 +215,13 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
       await bus.reconcileOnce();
       return bus.captureExternalEdit();
     },
+  });
+  const artifactWatcherAllocation = new ArtifactWatcherAllocation({
+    workspaceIndex,
+    sessionRegistry,
+    watcherRegistry: artifactWatcherRegistry,
+    userHomeDir,
+    warn: (message) => log(home, message),
   });
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
@@ -226,13 +236,14 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
       resolveTrackedFilesAsync: asyncTrackedFiles,
       resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
     });
-  const closeWorkspaceResources = () =>
-    Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]).then(() => {});
-  let exiting = false;
+  const closeWorkspaceResources = async (): Promise<void> => {
+    await artifactWatcherAllocation.stop();
+    await Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]);
+  };
   const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
     // Watchers first and synchronously, so no quiet-window capture can start against a bus that
     // is closing, and no warm-up step opens a new watch that nothing will ever use.
-    exiting = true;
+    await artifactWatcherAllocation.stop();
     artifactWatcherRegistry.abandonAll();
     await busRegistry.closeAll();
   };
@@ -249,15 +260,17 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   workspaceIndex.setLiveSessionPredicate((canonicalPath) => sessionRegistry.forWorkspace(canonicalPath).length > 0);
   // Hard-remove eviction: a workspace GC actually removes from the index must also drop its open
   // WorkspaceBus (journal fd, mutex slot, in-memory state) — see workspace-bus-registry.ts.
-  workspaceIndex.setOnHardRemove((entry) =>
-    Promise.all([busRegistry.evict(entry), artifactWatcherRegistry.evict(entry)]).then(() => {}),
-  );
+  workspaceIndex.setOnHardRemove(async (entry) => {
+    await Promise.all([busRegistry.evict(entry), artifactWatcherRegistry.evict(entry)]);
+    artifactWatcherAllocation.requestRebalance();
+  });
   // Daemon-lifetime artifact watching (#153). Two halves, and both are needed: workspaces already
   // in the index when this process starts, and workspaces registered while it runs. Without the
   // first, watching would only ever begin after something touched a workspace over HTTP; without
   // the second, a `glosa open` during the daemon's life would produce no watcher until the next
   // restart. Neither half involves a browser — that is the amendment's whole point.
-  workspaceIndex.setOnRegister((entry) => artifactWatcherRegistry.ensureWatched(entry));
+  workspaceIndex.setOnRegister(() => artifactWatcherAllocation.requestRebalance());
+  sessionRegistry.setOnSessionsChanged(() => artifactWatcherAllocation.requestRebalance());
 
   /** The second half: workspaces already in the index when this process started.
    *
@@ -269,24 +282,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
    * Yields between workspaces so registration work stays interleavable, and skips roots that are
    * no longer on disk: an index entry whose directory was deleted is not worth a tree walk, and
    * `present` does not currently catch that on its own. */
-  const warmArtifactWatchers = async (): Promise<void> => {
-    for (const entry of workspaceIndex.list({ presentOnly: true })) {
-      if (exiting) return;
-      if ((entry.lifecycle?.state ?? "active") !== "active") continue;
-      const root = workspaceWorktree(entry);
-      if (!existsSync(root)) continue;
-      // The same refusal workspace RESOLUTION applies (#146/#209). That guard runs when a
-      // workspace is resolved, so it stops new home-directory registrations and refuses to reuse
-      // an existing one — but the index still CONTAINS entries written before it existed, and
-      // this loop watches what the index holds. Without this check the daemon starts a matcher
-      // walk over the whole home directory for a registration `glosa open` would refuse today.
-      // Observed: a registration whose bus path was `~/.glosa` itself, reporting 34,823 tracked
-      // artifacts, on a daemon that then wedged.
-      if (isHomeOrAncestor(root, userHomeDir)) continue;
-      artifactWatcherRegistry.ensureWatched(entry);
-      await new Promise<void>((resume) => setImmediate(resume));
-    }
-  };
+  const warmArtifactWatchers = (): Promise<void> => artifactWatcherAllocation.rebalance();
 
   return {
     warmArtifactWatchers,

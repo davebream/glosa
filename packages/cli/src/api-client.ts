@@ -66,6 +66,19 @@ export interface WorkspaceStatusSummary {
    * interrupted deletion reads as "resume with `glosa forget <slug> --yes`", not as a plain
    * not-yet-opened workspace. */
   lifecycle?: "forgetting";
+  /** Additive in contract 1.15; optional for an N-1 daemon. */
+  live_updates?:
+    | { state: "live" }
+    | { state: "starting" }
+    | {
+        state: "offline_catchup";
+        reason:
+          | "workspace_budget"
+          | "tracked_artifact_budget"
+          | "initial_scan_failed"
+          | "watch_start_failed"
+          | "watch_error";
+      };
   /** Additive in contract 1.5; optional for N-1 daemon compatibility. */
   connect?: {
     providers: Array<{ provider: string; display_name: string; instruction: string }>;
