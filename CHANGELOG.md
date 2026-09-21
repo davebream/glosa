@@ -48,6 +48,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Live file updates now follow the work you are actually doing when more than 64 workspaces are
+  registered. The daemon used to give its bounded watcher slots to the first workspaces encountered
+  during warm-up, so an old registration could stay live while the workspace with your current
+  session fell back to delayed catch-up. It now prefers workspaces with live sessions, then the most
+  recently seen, with a stable tie-break independent of registry order. `glosa status` reports each
+  workspace's live-update state, and `glosa doctor` explains when the selected workspace is using
+  offline catch-up and why. The 64-workspace safety ceiling remains: whole-daemon measurements were
+  already close to the v1 idle-memory limit there.
 - The Claude Code plugin loads. `monitors/monitors.json` wrapped its entry in an object, and Claude
   Code requires a bare array, so the plugin installed and then failed to load: its session monitor
   never started, and a note written in glosa's margin was never pushed into the session. Nothing said

@@ -147,6 +147,12 @@ generic.**
   list containing exactly the requested existing regular non-symlink file and intentionally bypass
   matcher extension, exclusion, and size rules. Per-workspace overrides resolve from
   `<bus-path>/config.json` (A4 §F20).
+- **Live watcher allocation is bounded and preference-driven.** At most 64 registered workspaces
+  receive daemon-lifetime live artifact watching. Slots are recomputed as live sessions and
+  registrations change: a workspace with a live routed session ranks first, then newer `last_seen`,
+  then registration id for a stable tie-break. Allocation order never depends on index insertion or
+  warm-up order. A workspace outside the selected set remains honest and lossless-but-late through
+  offline catch-up, and `/api/status`, `glosa status`, and `glosa doctor` name that degradation.
 - Git-agnostic provenance: shadow repo
   `GIT_DIR=<bus-path>/shadow.git --work-tree=<work-tree>`, argv-safe, one git mutex/registration,
   deterministic init + baseline, index-lock recovery (A4 §F21). UI speaks versions/timeline/restore
@@ -302,7 +308,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.14: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.15: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -452,7 +458,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   `resolve`, `apply-begin`, `request-review [--require-approval] [--wait]`, `inbox list|get|dismiss`,
   `metadata set|show|clear`, `session bind`,
   `token rotate|revoke`, `dictation configure --provider wispr-flow|status|disable`, `doctor`
-  (16 enumerated checks incl. Claude-monitor suppression + transcript-root confinement + orphaned
+  (17 enumerated checks incl. live artifact-update state + Claude-monitor suppression + transcript-root confinement + orphaned
   journal entries + the resolved workspace root, #146 + leftover `glosa init` config, #152), `status`,
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical

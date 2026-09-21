@@ -95,6 +95,35 @@ describe("glosa status", () => {
     expect(out).toContain("glosa forget abc --yes");
   });
 
+  test("human output names live-update state and the offline-catchup reason", async () => {
+    const client = new FakeGlosaApiClient();
+    client.statusResult.workspaces = [
+      {
+        slug: "live",
+        path: "/live",
+        last_seen: "2026-09-21T00:00:00.000Z",
+        pending_count: 0,
+        has_attention: false,
+        live_updates: { state: "live" },
+      },
+      {
+        slug: "delayed",
+        path: "/delayed",
+        last_seen: "2026-09-20T00:00:00.000Z",
+        pending_count: 0,
+        has_attention: false,
+        live_updates: { state: "offline_catchup", reason: "workspace_budget" },
+      },
+    ];
+    const result = await runStatus("/live", {
+      createClient: async () => client as unknown as GlosaApiClient,
+    });
+
+    const out = captureStdout(() => printStatusResult(result, false));
+    expect(out).toContain("live_updates=live");
+    expect(out).toContain("live_updates=offline-catchup(workspace_budget)");
+  });
+
   test("--json envelope has exactly the documented top-level keys", async () => {
     const deps: StatusDeps = {
       createClient: async () => {

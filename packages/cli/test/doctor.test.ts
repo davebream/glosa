@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 16 enumerated checks. Uses REAL directories
+// P5.1 — `glosa doctor [dir] --json` (A6 §F26/§F30): 17 enumerated checks. Uses REAL directories
 // and a REAL shadow-git repo (built the same way the daemon itself would, via `WorkspaceBus`) for
 // the filesystem-level checks — only the daemon+proto check and the git/claude version PROBES are
 // faked (this test must not depend on which git/claude version happens to be on the runner).
@@ -265,7 +265,7 @@ describe("glosa doctor", () => {
     const expectedBytes = statSync(journalPath(dir)).size;
     const result = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(result.data.checks, "workspace");
-    expect(result.data.checks).toHaveLength(16);
+    expect(result.data.checks).toHaveLength(17);
     expect(workspaceCheck?.status).toBe("pass");
     expect(workspaceCheck?.detail).toContain(`${expectedBytes} journal byte(s)`);
     expect(workspaceCheck?.detail).toContain("3 physical journal line(s)");
@@ -311,7 +311,7 @@ describe("glosa doctor", () => {
     mkdirSync(journalPath(dir));
     const unreadable = await runDoctor(dir, deps);
     const workspaceCheck = findCheck(unreadable.data.checks, "workspace");
-    expect(unreadable.data.checks).toHaveLength(16);
+    expect(unreadable.data.checks).toHaveLength(17);
     expect(workspaceCheck?.status).toBe("warn");
     expect(workspaceCheck?.detail).toContain("journal metrics unavailable");
   });
@@ -331,6 +331,7 @@ describe("glosa doctor", () => {
       "token/pairing",
       "workspace",
       "pending-delivery",
+      "live-updates",
       "orphaned-state",
       "claude-monitor",
       "transcript-root",
@@ -505,7 +506,7 @@ describe("glosa doctor", () => {
     );
     expect(parsed.command).toBe("doctor");
     expect(Array.isArray(parsed.data.checks)).toBe(true);
-    expect(parsed.data.checks).toHaveLength(16);
+    expect(parsed.data.checks).toHaveLength(17);
   });
 
   test("pending-delivery: queued entries with no live session -> WARN; with a live bound session -> pass; daemon down -> SKIP", async () => {
@@ -549,6 +550,45 @@ describe("glosa doctor", () => {
     });
     const down = await runDoctor(dir, downDeps);
     expect(findCheck(down.data.checks, "pending-delivery")?.status).toBe("skip");
+  });
+
+  test("live-updates: live passes, degraded warns, starting/N-1/daemon-down skip", async () => {
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    client.statusResult.workspaces = [
+      {
+        slug: "ws",
+        path: dir,
+        last_seen: "2026-09-21T00:00:00.000Z",
+        pending_count: 0,
+        has_attention: false,
+        live_updates: { state: "live" },
+      },
+    ];
+
+    expect(findCheck((await runDoctor(dir, deps)).data.checks, "live-updates")?.status).toBe("pass");
+
+    client.statusResult.workspaces[0]!.live_updates = {
+      state: "offline_catchup",
+      reason: "workspace_budget",
+    };
+    const degraded = findCheck((await runDoctor(dir, deps)).data.checks, "live-updates");
+    expect(degraded?.status).toBe("warn");
+    expect(degraded?.detail).toContain("workspace budget");
+    expect(degraded?.detail).toContain("offline catch-up");
+
+    client.statusResult.workspaces[0]!.live_updates = { state: "starting" };
+    expect(findCheck((await runDoctor(dir, deps)).data.checks, "live-updates")?.status).toBe("skip");
+
+    delete client.statusResult.workspaces[0]!.live_updates;
+    expect(findCheck((await runDoctor(dir, deps)).data.checks, "live-updates")?.status).toBe("skip");
+
+    const { deps: downDeps } = makeDeps({
+      createClient: async () => {
+        throw daemonUnreachable();
+      },
+    });
+    expect(findCheck((await runDoctor(dir, downDeps)).data.checks, "live-updates")?.status).toBe("skip");
   });
 
   test("orphaned-state: orphans reported -> WARN with recovery hint; none -> pass; daemon down -> SKIP", async () => {

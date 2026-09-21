@@ -98,6 +98,18 @@ export const EXTERNAL_EDIT_QUIET_WINDOW_MS = 2_000;
  * workspace, watched through its files' parent directories. */
 type WatchMode = "tree" | "files" | "disabled";
 
+export type ArtifactLiveUpdateReason =
+  | "workspace_budget"
+  | "tracked_artifact_budget"
+  | "initial_scan_failed"
+  | "watch_start_failed"
+  | "watch_error";
+
+export type ArtifactLiveUpdates =
+  | { state: "live" }
+  | { state: "starting" }
+  | { state: "offline_catchup"; reason: ArtifactLiveUpdateReason };
+
 /** One live filesystem watch for one workspace, as the registry sees it. */
 export interface WorkspaceWatch {
   close(): void;
@@ -223,6 +235,10 @@ interface WatchState {
   transitioning: boolean;
   /** Matcher walks run for filesystem events; see `reconcileCount`. */
   reconciles: number;
+  /** Why this selected workspace currently has no live watch. Null while initializing/live. */
+  failureReason: Exclude<ArtifactLiveUpdateReason, "workspace_budget"> | null;
+  /** A filesystem watch is restarted once; the next failure becomes a durable runtime diagnosis. */
+  watchFailures: number;
   warned: Set<string>;
 }
 
@@ -239,6 +255,9 @@ function boundedTargets(workspace: WorkspaceTarget): string[] {
 
 export class ArtifactWatcherRegistry {
   private readonly states = new Map<string, WatchState>();
+  /** Eligible registrations omitted by the daemon allocator. Kept separately from `states` so a
+   * refused workspace consumes no watcher/state slot but remains observable through status. */
+  private readonly workspaceBudgetIds = new Set<string>();
   private readonly maxTrackedArtifacts: number;
   private readonly maxWatchedWorkspaces: number;
   private readonly warn: (message: string) => void;
@@ -266,6 +285,7 @@ export class ArtifactWatcherRegistry {
    * lookup rather than a fresh matcher walk. */
   ensureWatched(workspace: WorkspaceTarget): void {
     const id = workspaceRegistrationId(workspace);
+    this.workspaceBudgetIds.delete(id);
     const existing = this.states.get(id);
     if (existing) {
       existing.daemonLifetime = true;
@@ -277,6 +297,9 @@ export class ArtifactWatcherRegistry {
 
   subscribe(workspace: WorkspaceTarget, listener: (event: ArtifactWatcherEvent) => void): () => void {
     const id = workspaceRegistrationId(workspace);
+    // A browser must not reach around the daemon-wide allocation decision. Its journal stream
+    // still works; only advisory live artifact pushes are absent until this workspace is selected.
+    if (this.workspaceBudgetIds.has(id)) return () => {};
     let state = this.states.get(id);
     if (!state) {
       // Subject to the same cross-workspace ceiling as `ensureWatched`: a bound that any caller
@@ -305,6 +328,7 @@ export class ArtifactWatcherRegistry {
 
   private openState(workspace: WorkspaceTarget, id: string, daemonLifetime: boolean): WatchState | null {
     if (this.states.size >= this.maxWatchedWorkspaces) {
+      this.workspaceBudgetIds.add(id);
       if (!this.budgetWarned) {
         this.budgetWarned = true;
         this.warn(
@@ -331,6 +355,8 @@ export class ArtifactWatcherRegistry {
       capturing: false,
       transitioning: false,
       reconciles: 0,
+      failureReason: null,
+      watchFailures: 0,
       warned: new Set(),
     };
     this.states.set(id, state);
@@ -340,8 +366,10 @@ export class ArtifactWatcherRegistry {
   private initializeState(state: WatchState): void {
     let result: ResolveMatchedFilesResult | Promise<ResolveMatchedFilesResult>;
     try {
+      state.failureReason = null;
       result = this.initialResolveTrackedFiles(state.workspace, { limit: this.maxTrackedArtifacts });
     } catch (error) {
+      state.failureReason = "initial_scan_failed";
       this.warnOnce(state, "initial-scan-failed", `initial matcher scan failed: ${String(error)}`);
       return;
     }
@@ -360,6 +388,7 @@ export class ArtifactWatcherRegistry {
       },
       (error) => {
         if (this.states.get(state.id) !== state) return;
+        state.failureReason = "initial_scan_failed";
         this.warnOnce(state, "initial-scan-failed", `initial matcher scan failed: ${String(error)}`);
       },
     );
@@ -368,6 +397,20 @@ export class ArtifactWatcherRegistry {
   /** Test/diagnostic surface: exposes only the bounded mode, never filesystem paths. */
   modeFor(workspace: WorkspaceTarget): WatchMode | null {
     return this.states.get(workspaceRegistrationId(workspace))?.mode ?? null;
+  }
+
+  /** Runtime truth for `/api/status`: allocation refusal and operational failure stay distinct so
+   * the CLI can name whether capacity, the matcher bound, or the filesystem watch caused delay. */
+  liveUpdatesFor(workspace: WorkspaceTarget): ArtifactLiveUpdates | null {
+    const id = workspaceRegistrationId(workspace);
+    if (this.workspaceBudgetIds.has(id)) {
+      return { state: "offline_catchup", reason: "workspace_budget" };
+    }
+    const state = this.states.get(id);
+    if (!state) return null;
+    if (state.watcher && state.mode !== "disabled") return { state: "live" };
+    if (state.failureReason) return { state: "offline_catchup", reason: state.failureReason };
+    return { state: "starting" };
   }
 
   /** Test/diagnostic surface: how many matcher walks filesystem events have cost this workspace.
@@ -383,13 +426,37 @@ export class ArtifactWatcherRegistry {
     return this.states.size;
   }
 
+  watchedWorkspaceLimit(): number {
+    return this.maxWatchedWorkspaces;
+  }
+
+  /** Applies one complete daemon allocation decision. Existing selected states are reused; every
+   * demoted state goes through the normal eviction path so pending reconcile/quiet timers cannot
+   * fire after its slot has moved elsewhere. */
+  async applyAllocation(selected: readonly WorkspaceTarget[], rejected: readonly WorkspaceTarget[]): Promise<void> {
+    const selectedIds = new Set(selected.map((workspace) => workspaceRegistrationId(workspace)));
+    this.workspaceBudgetIds.clear();
+    for (const workspace of rejected) this.workspaceBudgetIds.add(workspaceRegistrationId(workspace));
+
+    for (const state of [...this.states.values()]) {
+      if (!selectedIds.has(state.id)) await this.closeState(state);
+    }
+    for (const workspace of selected) {
+      this.ensureWatched(workspace);
+      // Warm-up remains post-readiness and interleavable even when all 64 slots are selected.
+      await new Promise<void>((resume) => setImmediate(resume));
+    }
+  }
+
   async evict(workspace: WorkspaceTarget): Promise<void> {
+    this.workspaceBudgetIds.delete(workspaceRegistrationId(workspace));
     const state = this.findState(workspace);
     if (state) await this.closeState(state);
   }
 
   async closeAll(): Promise<void> {
     await Promise.all([...this.states.values()].map((state) => this.closeState(state)));
+    this.workspaceBudgetIds.clear();
   }
 
   /** Retires every watch state for a process that is about to exit, WITHOUT closing the
@@ -406,6 +473,7 @@ export class ArtifactWatcherRegistry {
    * watching one workspace still closes it, or it would leak the handles. */
   abandonAll(): void {
     for (const state of [...this.states.values()]) this.detachState(state);
+    this.workspaceBudgetIds.clear();
   }
 
   private findState(workspace: WorkspaceTarget): WatchState | undefined {
@@ -433,6 +501,7 @@ export class ArtifactWatcherRegistry {
     const mode = this.chooseMode(state);
     state.mode = mode;
     if (mode === "disabled") {
+      state.failureReason = "tracked_artifact_budget";
       this.warnOnce(
         state,
         "disabled",
@@ -471,9 +540,10 @@ export class ArtifactWatcherRegistry {
     };
     try {
       state.watcher = this.watchFactory({ mode, root, files: boundedTargets(state.workspace), onChange, onError });
+      state.failureReason = null;
     } catch {
       state.watcher = null;
-      this.handleWatcherError(state);
+      this.handleWatcherError(state, "start");
     }
   }
 
@@ -534,7 +604,10 @@ export class ArtifactWatcherRegistry {
 
     // Grown past the per-workspace budget since the watch started: stop paying a truncated walk for
     // every change. The crossings this reconcile found are still delivered below.
-    if (state.mode === "tree" && next.truncated) this.retireWatcher(state, "disabled");
+    if (state.mode === "tree" && next.truncated) {
+      this.retireWatcher(state, "disabled");
+      state.failureReason = "tracked_artifact_budget";
+    }
 
     if (crossings.length > 0) {
       this.notify(state, { type: "artifact_index", data: { changes: crossings } });
@@ -572,16 +645,23 @@ export class ArtifactWatcherRegistry {
 
   /** A watch that reports an error is closed and restarted once; a second error leaves the
    * workspace without live updates (offline catch-up still captures its changes). */
-  private handleWatcherError(state: WatchState): void {
+  private handleWatcherError(state: WatchState, kind: "start" | "runtime" = "runtime"): void {
     if (!this.states.has(state.id) || state.transitioning) return;
-    const firstError = !state.warned.has("watch-error");
+    state.watchFailures += 1;
+    const firstError = state.watchFailures === 1;
     this.warnOnce(state, "watch-error", "filesystem watch failed; restarting it once");
     this.retireWatcher(state, "disabled");
-    if (!firstError) return;
+    if (!firstError) {
+      state.failureReason = kind === "start" ? "watch_start_failed" : "watch_error";
+      return;
+    }
     // A daemon-lifetime state legitimately has no listeners and must still be rebuilt — otherwise
     // the first watcher error would silently retire live external-edit capture for every workspace
     // with no browser attached, which is most of them.
-    if (state.listeners.size === 0 && !state.daemonLifetime) return;
+    if (state.listeners.size === 0 && !state.daemonLifetime) {
+      state.failureReason = kind === "start" ? "watch_start_failed" : "watch_error";
+      return;
+    }
     this.startWatcher(state);
   }
 

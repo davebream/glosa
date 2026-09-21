@@ -2325,6 +2325,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
   const workspaces = [
     ...[...ctx.workspaceIndex.list({ presentOnly: true }), ...forgettingAbsent].map((e) => {
       const peek = peekJournal(e);
+      const liveUpdates = ctx.artifactWatcherRegistry?.liveUpdatesFor(e);
       return {
         slug: e.slug,
         path: e.worktree_path,
@@ -2344,6 +2345,9 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         // mid-resume after a crash — so `doctor` can name the interrupted state and the exact resume
         // command instead of misreading a mid-deletion workspace as merely "not yet opened".
         ...(e.lifecycle?.state === "forgetting" ? { lifecycle: "forgetting" as const } : {}),
+        // Additive (contract 1.15, issue #219): runtime truth only. Omitted when a narrow test or
+        // older composition does not provide the daemon-owned watcher registry.
+        ...(liveUpdates ? { live_updates: liveUpdates } : {}),
         // Additive (issue #95): the SPA composes the generic workspace identity + CLI fallback
         // around provider-owned agent instructions. No provider-specific text enters the core.
         connect: {

@@ -893,6 +893,33 @@ way and costs one rescan that finds nothing.
 
 chokidar remains a dependency for transcript tailing, which watches a handful of files.
 
+## Watcher slots follow live work, not registry insertion order
+
+Removing the summed per-file watch-entry budget fixed the first half of #219, but the remaining
+64-workspace ceiling still admitted whichever registrations warm-up encountered first. On a registry
+of 125 workspaces that made a workspace with an active session no more likely to receive live updates
+than one last touched months earlier.
+
+**Measurement and bound.** On the Apple Silicon M3 Pro/Bun 1.4.2 measurements that replaced
+per-file watching, a real daemon with 70 registrations and 64 active watchers already held about
+93 MB RSS; v1's idle-daemon requirement is below 100 MB. An isolated watcher-layer check with 125
+workspaces and 8,750 tracked files opened all 125 in 98 ms at about 71 MB total process RSS, which
+shows native handles are no longer the limiting resource but does not include the rest of the daemon.
+The shipped ceiling therefore stays 64 until whole-daemon evidence supports changing it.
+
+**Decision.** Eligible present workspaces rank by: (1) at least one live session routed to the
+workspace under the normal explicit-binding/cwd rules; (2) newest durable `last_seen`; (3)
+registration id, ascending, as the stable tie-break. A daemon-owned coordinator recomputes the top
+64 after registration/open, session binding/liveness changes, lease expiry, and removal. Lease
+expiry uses one unref'd timer for the nearest known expiry, never polling. Stars remain navigation,
+not capacity pins.
+
+Demotion runs the watcher's ordinary eviction path, so matcher and quiet-window timers cannot fire
+after the slot moves. The edit remains on disk and the next reconcile's offline catch-up records it;
+the trade-off is latency, not loss. Contract 1.15 exposes the runtime result on each eligible status
+row as `live`, `starting`, or `offline_catchup` with a bounded reason. `glosa status` prints it and
+`glosa doctor` warns for the selected workspace without turning a designed degradation into failure.
+
 ## The reader's renderer and the editor's parser construct from one configuration
 
 Read and Edit built their DOM from two markdown-it instances configured with different presets. The
