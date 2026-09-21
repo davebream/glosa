@@ -15,5 +15,13 @@ pre-push:
   commands:
     typecheck:
       run: bun run typecheck
-    test:
-      run: bun test
+    # The full suite deliberately does NOT run here (#318). It takes ~6.5 minutes, and `main`
+    # already requires the `ci` and `security` checks from .github/workflows/ci.yml, which runs the
+    # same suite sharded three ways on every pull request and push. This hook cannot prevent a bad
+    # merge — GitHub does that — so all it bought was a wait long enough to start getting skipped
+    # with --no-verify, and a gate people skip is worse than no gate.
+    #
+    # Running it here was also actively harmful: git exports GIT_DIR into a hook's environment, so
+    # the suite ran against a process env pointing at the real repository (#316). Run the suite
+    # directly (`bun test`) when you want it locally; that has no GIT_DIR set and is the honest
+    # environment for it.
