@@ -64,6 +64,13 @@
         "@glosa/daemon": "workspace:*",
       },
     },
+    "packages/providers/wispr-flow": {
+      "name": "@glosa/providers-wispr-flow",
+      "version": "0.0.0",
+      "dependencies": {
+        "@glosa/daemon": "workspace:*",
+      },
+    },
     "packages/spa": {
       "name": "@glosa/spa",
       "version": "0.0.0",
@@ -109,6 +116,8 @@
     "@glosa/providers-claude-code": ["@glosa/providers-claude-code@workspace:packages/providers/claude-code"],
 
     "@glosa/providers-codex": ["@glosa/providers-codex@workspace:packages/providers/codex"],
+
+    "@glosa/providers-wispr-flow": ["@glosa/providers-wispr-flow@workspace:packages/providers/wispr-flow"],
 
     "@glosa/spa": ["@glosa/spa@workspace:packages/spa"],
 
