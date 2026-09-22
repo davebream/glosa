@@ -219,7 +219,7 @@ export type ResolveOutcome = "applied" | "rejected" | "deferred" | "stale";
  * exactly what is blocking. */
 export type ForgetBlocker =
   | { kind: "live-session"; session_id: string }
-  | { kind: "apply-lease"; lease_id: string; expires_at: string }
+  | { kind: "apply-lease"; lease_id: string; expires_at: string; holder_session?: string }
   | { kind: "adopting" };
 
 export interface ForgetBusEntry {

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { AdoptionCoordinator, adoptLooseLineages } from "../src/adoption.ts";
 import { WorkspaceBus, WorkspaceForgottenError } from "../src/bus/bus.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
-import { APPLY_LEASE_TTL_MS, leaseHeldError } from "../src/bus/lease.ts";
+import { APPLY_LEASE_TTL_MS, claimHeldError } from "../src/bus/lease.ts";
 import { journalPath } from "../src/bus/paths.ts";
 import { reconcileWorkspace } from "../src/bus/reconcile.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
@@ -96,7 +96,10 @@ describe("glosa forget", () => {
     const leaseResult = await forgetWorkspace(deps, leaseEntry.slug, { confirm: false });
     expect(leaseResult).toMatchObject({ ok: false, code: "blocked" });
     if (leaseResult.ok || leaseResult.code !== "blocked") throw new Error("unreachable");
-    expect(leaseResult.blockers).toEqual([{ kind: "apply-lease", lease_id: leaseId, expires_at: expect.any(String) }]);
+    // Issue #155: the blocker names who holds the claim, so the refusal is actionable.
+    expect(leaseResult.blockers).toEqual([
+      { kind: "apply-lease", lease_id: leaseId, expires_at: expect.any(String), holder_session: "session-x" },
+    ]);
 
     // A blocked confirm:true must ALSO refuse before touching anything — the refusal is not a
     // preview-only artifact.
@@ -483,7 +486,10 @@ describe("glosa forget", () => {
 
     // Sealing over an active lease would silently strand its proven pre..post interval — refused,
     // and the bus is provably NOT sealed afterward (no partial commit).
-    await expect(bus.sealForForget()).rejects.toMatchObject({ code: "LEASE_HELD" });
+    await expect(bus.sealForForget()).rejects.toMatchObject({
+      code: "CLAIM_HELD",
+      claim: { holder_session: "session-x", mode: "exclusive" },
+    });
     expect(bus.state.forgetSeal).toBe(false);
 
     await bus.resolveEntry("e1", "applied", "session-x");
@@ -843,7 +849,9 @@ describe("glosa forget", () => {
     const blocked = await forgetWorkspace(deps, entry.slug, { confirm: true });
     expect(blocked).toMatchObject({ ok: false, code: "blocked" });
     if (blocked.ok || blocked.code !== "blocked") throw new Error("unreachable");
-    expect(blocked.blockers).toEqual([{ kind: "apply-lease", lease_id: leaseId, expires_at: expect.any(String) }]);
+    expect(blocked.blockers).toEqual([
+      { kind: "apply-lease", lease_id: leaseId, expires_at: expect.any(String), holder_session: "session-x" },
+    ]);
 
     // Nothing destructive happened: the bus survives, the registration survives, the marker is
     // untouched (still resumable — a resume that loses this race must NOT roll back, unlike a
@@ -1103,7 +1111,7 @@ describe("glosa forget", () => {
     cleanup(root);
   });
 
-  test("a fresh commit's LEASE_HELD abort restores an adopted source's TRUE prior lifecycle, never a bare 'active' (held-review finding)", async () => {
+  test("a fresh commit's CLAIM_HELD abort restores an adopted source's TRUE prior lifecycle, never a bare 'active' (held-review finding)", async () => {
     // Regression: `abortForgetOperation` used to reset EVERY member's lifecycle to a bare
     // `{state:"active"}`. For the TARGET that happens to be correct, but for an already-sealed
     // adopted SOURCE it is a lie — it silently strips the `adoption_id`/`target_registration_id`/
@@ -1111,7 +1119,7 @@ describe("glosa forget", () => {
     // forget attempt would silently leave that source's bus behind forever.
     //
     // Deterministic, no genuine race needed: a real adoption seals the source into the target,
-    // then the target's own bus is made to throw LEASE_HELD on its very first `sealForForget()`
+    // then the target's own bus is made to throw CLAIM_HELD on its very first `sealForForget()`
     // call — landing exactly on the fresh (non-resuming) abort path inside `commitForgetLocked`,
     // which flips BOTH members to "forgetting" via `beginForgetOperation` before sealing ever runs.
     const home = freshHome();
@@ -1157,7 +1165,17 @@ describe("glosa forget", () => {
         if (bus === targetBus && !originalSeal) {
           originalSeal = bus.sealForForget.bind(bus);
           bus.sealForForget = async () => {
-            throw leaseHeldError("fake-lease-id");
+            // The blocker is built from THIS snapshot — the one the seal took under its own
+            // mutex — never from a later read of `bus.state` (which here holds no claim at all).
+            throw claimHeldError({
+              claim_id: "fake-claim-id",
+              holder_session: "fake-session",
+              holder_principal: "unknown",
+              mode: "exclusive",
+              since: "2026-01-01T00:00:00.000Z",
+              expires_at: "2026-01-01T00:15:00.000Z",
+              fence: 1,
+            });
           };
         }
         return bus;
@@ -1167,9 +1185,16 @@ describe("glosa forget", () => {
     const blocked = await forgetWorkspace(crashingDeps, target.slug, { confirm: true });
     expect(blocked).toMatchObject({ ok: false, code: "blocked" });
     if (blocked.ok || blocked.code !== "blocked") throw new Error("unreachable");
-    expect(blocked.blockers).toEqual([{ kind: "apply-lease", lease_id: "fake-lease-id", expires_at: "" }]);
+    expect(blocked.blockers).toEqual([
+      {
+        kind: "apply-lease",
+        lease_id: "fake-claim-id",
+        expires_at: "2026-01-01T00:15:00.000Z",
+        holder_session: "fake-session",
+      },
+    ]);
 
-    // The operation was ABORTED (a fresh commit's LEASE_HELD) — no operation record survives, and
+    // The operation was ABORTED (a fresh commit's CLAIM_HELD) — no operation record survives, and
     // both members return to their TRUE prior state, never a blanket "active".
     expect(index.forgetOperationForSlug(target.slug)).toBeNull();
     expect(index.getBySlug(target.slug)?.lifecycle?.state).toBe("active");

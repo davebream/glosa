@@ -49,7 +49,7 @@ export function shadowRoutes(deps: ShadowAccess, method: string, pathname: strin
           SHADOW_NOT_OWNER: "shadow-not-owner",
           SHADOW_ALREADY_HEALTHY: "shadow-already-healthy",
           SHADOW_REPAIR_ID_CONFLICT: "shadow-repair-id-conflict",
-          LEASE_HELD: "lease-conflict",
+          CLAIM_HELD: "lease-conflict",
           WORKSPACE_ADOPTED: "workspace-adopted",
           WORKSPACE_FORGOTTEN: "workspace-forgetting",
         };

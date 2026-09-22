@@ -38,7 +38,8 @@ import { existsSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AdoptionCoordinator } from "../adoption.ts";
 import type { WorkspaceBus } from "../bus/bus.ts";
-import { isLeaseExpired } from "../bus/lease.ts";
+import { liveExclusiveClaims } from "../bus/claims.ts";
+import type { ClaimHeldError } from "../bus/lease.ts";
 import { peekJournal } from "../bus/peek.ts";
 import { registrationIdFor, type WorkspaceTarget } from "../workspace.ts";
 import type { SessionRegistry } from "./session-registry.ts";
@@ -46,7 +47,9 @@ import type { ForgetMember, ForgetOperationRecord, WorkspaceEntry, WorkspaceInde
 
 export type ForgetBlocker =
   | { kind: "live-session"; session_id: string }
-  | { kind: "apply-lease"; lease_id: string; expires_at: string }
+  /** A live exclusive claim (issue #155). The kind keeps its `apply-lease` name on the wire so an
+   * older CLI still renders it; `lease_id` is the claim id and `holder_session` says who. */
+  | { kind: "apply-lease"; lease_id: string; expires_at: string; holder_session?: string }
   /** The target is mid-adoption (`lifecycle.state === "adopting"`) — forgetting it now would
    * overwrite the durable marker `beginAdoption`'s own resumable transaction depends on. Reuses
    * the generic "blocked"/`forget-blocked` wire shape rather than a dedicated code: from the
@@ -186,9 +189,13 @@ function forgetBlockers(target: WorkspaceEntry, deps: Pick<ForgetDeps, "sessionR
   for (const session of deps.sessionRegistry.forWorkspaceOwnedBy(target.registration_id, target.canonical_path)) {
     blockers.push({ kind: "live-session", session_id: session.session_id });
   }
-  const lease = peekJournal(target).state.applyLease;
-  if (lease && !isLeaseExpired(lease, new Date())) {
-    blockers.push({ kind: "apply-lease", lease_id: lease.leaseId, expires_at: lease.expiresAt });
+  for (const claim of liveExclusiveClaims(peekJournal(target).state.claims, new Date())) {
+    blockers.push({
+      kind: "apply-lease",
+      lease_id: claim.claim_id,
+      expires_at: claim.expires_at,
+      holder_session: claim.holder_session,
+    });
   }
   return blockers;
 }
@@ -620,12 +627,17 @@ async function commitForgetLocked(
     try {
       await bus.sealForForget();
     } catch (err) {
-      if ((err as { code?: string }).code === "LEASE_HELD") {
+      if ((err as { code?: string }).code === "CLAIM_HELD") {
         if (!resuming) await index.abortForgetOperation(operation.operation_id);
-        const lease = bus.state.applyLease;
-        const blocker: ForgetBlocker = lease
-          ? { kind: "apply-lease", lease_id: lease.leaseId, expires_at: lease.expiresAt }
-          : { kind: "apply-lease", lease_id: (err as { activeLeaseId?: string }).activeLeaseId ?? "", expires_at: "" };
+        // Built from the snapshot the seal took UNDER its own mutex — never from a second read of
+        // `bus.state` out here, which could already describe a different moment.
+        const claim = (err as ClaimHeldError).claim;
+        const blocker: ForgetBlocker = {
+          kind: "apply-lease",
+          lease_id: claim.claim_id,
+          expires_at: claim.expires_at,
+          holder_session: claim.holder_session,
+        };
         return {
           ok: false,
           code: "blocked",

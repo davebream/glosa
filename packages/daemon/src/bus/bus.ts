@@ -42,6 +42,7 @@ import {
   holderBy,
   holderSnapshot,
   isClaimExpired,
+  liveExclusiveClaims,
   maxFenceOver,
   type Tombstone,
   type TombstoneReason,
@@ -59,8 +60,6 @@ import {
   EXCLUSIVE_CLAIM_TTL_MS,
   entryResolvedError,
   invalidResourceError,
-  isLeaseExpired,
-  leaseHeldError,
   MAX_CLAIMS_PER_SESSION,
   MAX_CLAIMS_PER_WORKSPACE,
   noClaimError,
@@ -381,9 +380,8 @@ export class WorkspaceBus {
       assertShadowOwner();
       this.state = peekJournal(this.workspace).state;
       this.assertWritable();
-      if (this.state.applyLease && !isLeaseExpired(this.state.applyLease, this.nowFn())) {
-        throw leaseHeldError(this.state.applyLease.leaseId);
-      }
+      const blocker = this.sealBlockerLocked();
+      if (blocker) throw claimHeldError(blocker);
       const health = await inspectShadowRepo(this.workspace);
       if (health.state === "healthy")
         throw Object.assign(new Error("Shadow history is already healthy; no baseline was replaced."), {
@@ -785,11 +783,15 @@ export class WorkspaceBus {
     return this.mutex.runExclusive(this.mutexKey, () => this.sealForAdoptionLocked(adoptionId, targetRegistrationId));
   }
 
-  /** The registry holds every source mutex before calling this. Keep the lease predicate here so
-   * adoption uses the bus clock (including deterministic test clocks), not process wall time. */
-  activeApplyLeaseIdForAdoptionLocked(): string | null {
-    const active = this.state.applyLease;
-    return active && !isLeaseExpired(active, this.nowFn()) ? active.leaseId : null;
+  /** The live exclusive claim that makes this bus unsafe to seal (adoption, forget) or to have its
+   * baseline replaced, if any — sealing over one would strand its interval mid-flight, the exact
+   * provenance violation A4 §F05 exists to prevent. Presence claims hold no interval, so they
+   * never block. The registry holds every source mutex before calling this; the predicate lives
+   * here so it runs on the bus clock (including deterministic test clocks), not process wall
+   * time, and so every caller gets the holder snapshot rather than re-reading state later. */
+  sealBlockerLocked(): ClaimHolderSnapshot | null {
+    const blocking = liveExclusiveClaims(this.state.claims, this.nowFn())[0];
+    return blocking ? holderSnapshot(blocking) : null;
   }
 
   /** Called by `WorkspaceBusRegistry#sealForAdoption` while its shared keyed mutex already holds
@@ -800,8 +802,8 @@ export class WorkspaceBus {
       if (this.state.adoptionSeal.adoptionId === adoptionId) return;
       throw new WorkspaceAdoptedError(this.state.adoptionSeal.targetRegistrationId);
     }
-    const activeLeaseId = this.activeApplyLeaseIdForAdoptionLocked();
-    if (activeLeaseId) throw leaseHeldError(activeLeaseId);
+    const blocker = this.sealBlockerLocked();
+    if (blocker) throw claimHeldError(blocker);
     const event: JournalEvent = {
       v: 1,
       event_id: this.ulidFn(),
@@ -819,9 +821,11 @@ export class WorkspaceBus {
   /** `glosa forget`'s own atomic commit point (issue #156): checked inside the SAME lock as
    * `apply-begin`/every other mutator, exactly like `sealForAdoptionLocked` above, so a lease can
    * never appear between the caller's preflight check and this bus becoming permanently
-   * read-only. Throws `LEASE_HELD` (mirroring adoption's identical refusal) when an unexpired
-   * apply-lease is active — sealing over one would silently strand its proven pre..post interval
-   * mid-flight, the exact honest-provenance violation A4 §F05 exists to prevent. Idempotent:
+   * read-only. Throws `CLAIM_HELD` (mirroring adoption's identical refusal) carrying the holder
+   * snapshot when a live exclusive claim is held — sealing over one would silently strand its
+   * proven pre..post interval mid-flight, the exact honest-provenance violation A4 §F05 exists to
+   * prevent. The snapshot rides on the error so the caller never has to re-read `state` outside
+   * this mutex to say who was blocking. Idempotent:
    * sealing an already-forget-sealed bus is a no-op, so a resumed `glosa forget` that reaches this
    * again (it won't — the caller skips it on resume — but a defensive caller might) never double
    * appends. */
@@ -831,8 +835,8 @@ export class WorkspaceBus {
 
   private sealForForgetLocked(): void {
     if (this.state.forgetSeal) return;
-    const activeLeaseId = this.activeApplyLeaseIdForAdoptionLocked();
-    if (activeLeaseId) throw leaseHeldError(activeLeaseId);
+    const blocker = this.sealBlockerLocked();
+    if (blocker) throw claimHeldError(blocker);
     const event: JournalEvent = {
       v: 1,
       event_id: this.ulidFn(),

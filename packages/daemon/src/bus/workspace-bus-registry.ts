@@ -9,7 +9,7 @@
 // shadow-git repo or journal file.
 import { KeyedMutex } from "./mutex.ts";
 import { WorkspaceBus, type WorkspaceBusDeps } from "./bus.ts";
-import { leaseHeldError } from "./lease.ts";
+import { claimHeldError } from "./lease.ts";
 import { workspaceRegistrationId, type WorkspaceTarget } from "../workspace.ts";
 
 export class WorkspaceBusRegistry {
@@ -48,7 +48,7 @@ export class WorkspaceBusRegistry {
   }
 
   /** Atomically preflights and seals a set of source registrations. All source locks are held in
-   * one total order, so either every source observes no active apply lease and seals, or none do. */
+   * one total order, so either every source observes no live exclusive claim and seals, or none do. */
   sealForAdoption(
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -58,10 +58,10 @@ export class WorkspaceBusRegistry {
     return this.mutex.runExclusiveMany(keys, () => {
       const buses = sources.map((source) => this.get(source));
       // Preflight every source before appending. Holding all source mutexes prevents a new
-      // apply lease between this check and the corresponding seal.
+      // claim between this check and the corresponding seal.
       for (const bus of buses) {
-        const leaseId = bus.activeApplyLeaseIdForAdoptionLocked();
-        if (leaseId) throw leaseHeldError(leaseId);
+        const blocker = bus.sealBlockerLocked();
+        if (blocker) throw claimHeldError(blocker);
       }
       for (const bus of buses) bus.sealForAdoptionLocked(adoptionId, targetRegistrationId);
     });
