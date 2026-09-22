@@ -657,12 +657,12 @@ export function mountApp(
   }
 
   function openDiff({ path, from, to }) {
-    if (!dock || singlePane) return;
+    if (!dock || singlePane) return false;
     const id = diffPanelId(path, from, to);
     const existing = dock.api.getPanel(id);
     if (existing) {
       existing.api.setActive();
-      return;
+      return true;
     }
     dock.api.addPanel({
       id,
@@ -673,6 +673,7 @@ export function mountApp(
       renderer: "always",
       minimumWidth: MIN_PANE_WIDTH,
     });
+    return true;
   }
 
   /** The navigator marks every OPEN artifact quietly and the active pane's artifact as current,

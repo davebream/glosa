@@ -1199,6 +1199,92 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.title).toBe("notes.md");
   });
 
+  test("single-document history renders a selected comparison inline because tabs are unavailable", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const diffCalls: unknown[] = [];
+    const da = fakeDataAccess({
+      getCheckpoints: async () => [
+        { checkpoint_id: "c2", at: "2026-09-22T10:00:00Z", by: "human", summary: "edit" },
+        { checkpoint_id: "c1", at: "2026-09-22T09:00:00Z", by: "unknown", summary: "baseline" },
+      ],
+      getDiff: async (_slug: string, range: unknown) => {
+        diffCalls.push(range);
+        return {
+          from: "c2",
+          to: "c1",
+          hunks: [
+            {
+              path: "notes.md",
+              attribution: "human",
+              diff: "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1 +1 @@\n-old\n+new\n",
+            },
+          ],
+        };
+      },
+    });
+
+    (mountApp as any)(root, {
+      dataAccess: da,
+      surface: "document",
+      initialSlug: "ws-1",
+      initialArtifact: "notes.md",
+    });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    (inPane(root, ".glosa-history-toggle") as any).click();
+    const history = inPane(root, ".glosa-history");
+    for (let i = 0; i < 5 && history.querySelectorAll('input[type="checkbox"]').length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const checkboxes = Array.from(history.querySelectorAll('input[type="checkbox"]')) as any[];
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[0]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    checkboxes[1]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    const historyStatus = inPane(root, ".glosa-history-status");
+    for (let i = 0; i < 5 && historyStatus.textContent === "Loading comparison…"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(diffCalls).toEqual([{ from: "c2", to: "c1" }]);
+    expect(root.querySelectorAll('.glosa-pane[data-kind="diff"]')).toHaveLength(0);
+    expect(historyStatus.textContent).toBe("Comparison ready.");
+    expect(inPane(root, ".glosa-diff-pane .d2h-ins")).not.toBeNull();
+  });
+
+  test("workspace history opens a selected comparison in a diff tab", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess({
+      getCheckpoints: async () => [
+        { checkpoint_id: "c2", at: "2026-09-22T10:00:00Z", by: "human", summary: "edit" },
+        { checkpoint_id: "c1", at: "2026-09-22T09:00:00Z", by: "unknown", summary: "baseline" },
+      ],
+      getDiff: async () => ({ from: "c2", to: "c1", hunks: [] }),
+    });
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    (inPane(root, ".glosa-history-toggle") as any).click();
+    const artifactPane = activePane(root);
+    for (let i = 0; i < 5 && artifactPane.querySelectorAll('.glosa-history input[type="checkbox"]').length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const checkboxes = Array.from(artifactPane.querySelectorAll('.glosa-history input[type="checkbox"]')) as any[];
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[0]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    checkboxes[1]!.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    for (let i = 0; i < 5 && root.querySelectorAll('.glosa-pane[data-kind="diff"]').length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(root.querySelectorAll('.glosa-pane[data-kind="diff"]')).toHaveLength(1);
+    expect(artifactPane.querySelector(".glosa-history-status")?.textContent).toBe("Comparison opened in a new tab.");
+  });
+
   test("workspace surface updates the tab title for workspace and artifact focus", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
