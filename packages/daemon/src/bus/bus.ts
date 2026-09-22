@@ -14,6 +14,7 @@ import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/
 import {
   assertShadowOwner,
   checkpoint,
+  commitsTouching,
   headSha,
   initShadowRepo,
   inspectShadowRepo,
@@ -28,18 +29,42 @@ import {
   safePathspec,
 } from "../git/shadow.ts";
 import { type WorkspaceTarget, workspaceRegistrationId, workspaceWorktree } from "../workspace.ts";
+import {
+  artifactPathOfResource,
+  artifactResource,
+  type Claim,
+  type ClaimHolderSnapshot,
+  type ClaimMode,
+  entryIdOfResource,
+  entryResource,
+  holderBy,
+  holderSnapshot,
+  isClaimExpired,
+  maxFenceOver,
+  type Tombstone,
+  type TombstoneReason,
+  tombstoneFor,
+} from "./claims.ts";
 import { EXTERNAL_EDIT_CHECKPOINT_KIND, externalEditDetail, isExternalEditEntry } from "./external-edit.ts";
 import { externalEditPayloads } from "./external-edit-capture.ts";
 import { readInboxEntry, writeInboxEntryOnce } from "./inbox.ts";
 import { appendEvent, type EventBy, type JournalEvent, JournalWriter } from "./journal.ts";
 import {
-  APPLY_LEASE_TTL_MS,
+  CLAIM_RENEW_GRACE_MS,
+  claimHeldError,
+  claimLimitError,
+  claimTombstoneError,
   driftUnderLeaseError,
+  EXCLUSIVE_CLAIM_TTL_MS,
+  entryResolvedError,
+  invalidResourceError,
   isLeaseExpired,
-  leaseExpiredError,
   leaseHeldError,
-  leaseSessionMismatchError,
-  noActiveLeaseError,
+  MAX_CLAIMS_PER_SESSION,
+  MAX_CLAIMS_PER_WORKSPACE,
+  noClaimError,
+  noSuchClaimError,
+  PRESENCE_CLAIM_TTL_MS,
   unknownEntryError,
 } from "./lease.ts";
 import {
@@ -47,6 +72,7 @@ import {
   type DeliveryOutcome,
   type DeliveryReason,
   type DeliveryVia,
+  entryKindOf,
   isTerminal,
   lifecycleReducer,
 } from "./lifecycle.ts";
@@ -54,7 +80,7 @@ import { KeyedMutex } from "./mutex.ts";
 import { journalPath, quarantinePath, workspaceBusDir } from "./paths.ts";
 import { peekJournal } from "./peek.ts";
 import { type ReconcileOptions, type ReconcileResult, reconcileWorkspace, truncateTornTail } from "./reconcile.ts";
-import { type ApplyLeaseState, applyEvent, createEmptyState, type DerivedState, type Reducer } from "./replay.ts";
+import { applyEvent, createEmptyState, type DerivedEntryState, type DerivedState, type Reducer } from "./replay.ts";
 import { countJournalLines } from "./tail.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
 import type { WorkspaceBusWriteCheckpointObserver } from "./write-checkpoint.ts";
@@ -216,6 +242,64 @@ export class WorkspaceForgottenError extends Error {
 // outside that registry for a root that might already be open elsewhere in the process is still
 // the correctness bug described above; the registry is what makes "elsewhere in the process"
 // impossible instead of just documented.
+/** What `WorkspaceBus.claim` hands back. `fence` is `null` only when renewing a legacy
+ * apply-lease folded forward from before fencing existed. */
+export interface ClaimResult {
+  claimId: string;
+  fence: number | null;
+  expiresAt: string;
+  paths: string[];
+  preSha?: string;
+  renewed: boolean;
+}
+
+/** The artifact paths an immutable inbox payload names: `artifact_path` (annotations),
+ * `target_path`/`path` (attention requests, external edits), `files[].path` (human edits). */
+function pathsOfPayload(payload: unknown): string[] {
+  if (typeof payload !== "object" || payload === null) return [];
+  const record = payload as Record<string, unknown>;
+  const paths = new Set<string>();
+  for (const key of ["artifact_path", "target_path", "path"]) {
+    const value = record[key];
+    if (typeof value === "string" && isConfinedRelativePath(value)) paths.add(value);
+  }
+  if (Array.isArray(record.files)) {
+    for (const file of record.files) {
+      const path = (file as { path?: unknown } | null)?.path;
+      if (typeof path === "string" && isConfinedRelativePath(path)) paths.add(path);
+    }
+  }
+  return [...paths];
+}
+
+/** Workspace-relative, no escape, no absolute root, no empty segment. The route layer validates
+ * too; this is the bus refusing to let a bad string reach a checkpoint pathspec regardless. */
+function isConfinedRelativePath(path: string): boolean {
+  if (path.length === 0 || path.startsWith("/") || path.includes("\0")) return false;
+  return path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+/** Whether two claims (or a claim and a request) cover overlapping ground. Shared resources
+ * collide outright; otherwise paths decide, and an EMPTY path set on either side means "the whole
+ * workspace" — its checkpoints are unscoped, so it overlaps everything. */
+function claimsCollide(
+  claim: Pick<Claim, "resources" | "paths">,
+  request: { resources: readonly string[]; paths: readonly string[] },
+): boolean {
+  if (claim.resources.some((resource) => request.resources.includes(resource))) return true;
+  if (claim.paths.length === 0 || request.paths.length === 0) return true;
+  return claim.paths.some((path) => request.paths.includes(path));
+}
+
+function firstEntryOf(claim: Claim): string | undefined {
+  return claim.resources.map(entryIdOfResource).find((id): id is string => id !== null);
+}
+
+async function anyPathDirty(workspace: WorkspaceTarget, paths: readonly string[]): Promise<boolean> {
+  for (const path of paths) if (await isPathDirty(workspace, path)) return true;
+  return false;
+}
+
 export interface WorkspaceBusDeps {
   /** Shared across every WorkspaceBus in the daemon process so different workspaces never share
    * a mutex slot, but the same workspace (opened twice) does. Defaults to a private one, which is
@@ -1156,182 +1240,554 @@ export class WorkspaceBus {
     return { payload: readInboxEntry(this.workspace, id), status: state.status };
   }
 
-  /** The ONE way a lease dies without a `resolve` having proven anything, shared by `applyBegin`
-   * and `resolveEntry` so both provably do the same thing (A4 §F04 reconcile step 4 —
-   * "apply_begin w/o apply_end & expired -> apply_expired, interval->unknown" — and §F05's
-   * "Lease expiry -> apply_expired, diff->unknown").
-   *
-   * Reconcile implements exactly this at STARTUP, but startup is the one moment a long-lived
-   * daemon never reaches: a session can stall past the 15-minute TTL while the daemon stays up
-   * for days, so without an inline path the journal would hold an `apply_begin` no event ever
-   * closes, and the interval since `pre_sha` would keep accumulating drift no lease covers.
-   *
-   * Event first, then checkpoint — the same order reconcile uses (step 4 appends `apply_expired`,
-   * step 5 captures the drift as `unknown`): the journal records that the lease is dead BEFORE
-   * anything is committed under it, so a crash between the two recovers to "lease already
-   * expired, drift not yet captured", which reconcile's own step 5 then finishes. The reverse
-   * order would recover to "commit exists, lease still nominally open" — a window in which the
-   * next `resolve` could sweep an already-unknown-attributed commit into a session's diff. */
-  private async expireLeaseLocked(lease: ApplyLeaseState): Promise<string> {
-    const event: JournalEvent = {
-      v: 1,
-      event_id: this.ulidFn(),
-      at: this.nowFn().toISOString(),
-      entry: lease.entry,
-      event: "apply_expired",
-      by: "daemon", // never `session:<id>` — a lease that expired proved nothing for its holder
-      detail: { lease_id: lease.leaseId },
-    };
+  // -------------------------------------------------------------------------------------------
+  // Claims (issue #155, A4 §F05). One exclusive claim per resource replaces the one apply-lease
+  // per workspace. Every method here runs under this workspace's ONE git+journal mutex, so the
+  // decision ("may this session take / resolve this?") and the write it licenses are atomic —
+  // a refusal can never be overtaken by a concurrent grant between the check and the append.
+  // -------------------------------------------------------------------------------------------
+
+  private appendClaimEventLocked(event: JournalEvent): void {
     appendEvent(this.writer, event);
     applyEvent(this.state, event, this.reducer);
     this.notify(event);
-
-    // Captures whatever happened since `pre_sha` so nothing is silently lost — as `unknown`,
-    // which is what A4 §F05 says an interval with no live lease over it is. Idempotent when
-    // nothing actually drifted (`checkpoint` returns HEAD without committing).
-    return checkpoint(this.workspace, {
-      attribution: "unknown",
-      kind: "apply_expired",
-      entry: lease.entry,
-      lease: lease.leaseId,
-    });
   }
 
-  /** `apply-begin` (A4 §F05): under this workspace's ONE git+journal mutex (the same slot every
-   * other write to this workspace goes through, so a checkpoint here can never race a concurrent
-   * journal append) — reject `LEASE_HELD` if a lease is already active and not expired (2nd
-   * apply-begin never queues); if one is on record but EXPIRED, close it out honestly first
-   * (`expireLeaseLocked`) rather than silently overwriting `state.applyLease` and leaving its
-   * `apply_begin` dangling in the journal forever; then checkpoint the CURRENT state (attributed
-   * `unknown` — whatever drifted before this lease started isn't this session's doing) as
-   * `pre_sha`, and append `apply_begin` recording it plus a 15-minute expiry. */
-  applyBegin(entry: string, sessionId: string): Promise<{ leaseId: string; preSha: string }> {
+  /** The workspace-relative paths an entry is about, read from its immutable payload (and the
+   * journal-derived `target_path` approvals carry). An entry that names no path yields `[]`, and
+   * an empty path set means "the whole workspace" everywhere below — its checkpoints are
+   * unscoped, so it must be treated as covering every file. */
+  private entryPathsLocked(entryId: string): string[] {
+    const paths = new Set<string>();
+    const derived = this.state.entries[entryId];
+    if (typeof derived?.target_path === "string") paths.add(derived.target_path);
+    for (const path of pathsOfPayload(readInboxEntry(this.workspace, entryId))) paths.add(path);
+    return [...paths].sort();
+  }
+
+  /** Validates `resources` and returns them deduplicated plus the normalized path set they cover.
+   * An `entry:` resource must name an entry this workspace owns (a claim over a foreign id proves
+   * nothing and would still block real work — see `unknownEntryError`). */
+  private normalizeClaimRequestLocked(resources: readonly string[]): { resources: string[]; paths: string[] } {
+    const unique = [...new Set(resources)];
+    if (unique.length === 0) throw invalidResourceError("");
+    const paths = new Set<string>();
+    let wholeWorkspace = false;
+    for (const resource of unique) {
+      const entryId = entryIdOfResource(resource);
+      if (entryId !== null) {
+        if (!this.state.entries[entryId]) throw unknownEntryError(entryId);
+        const entryPaths = this.entryPathsLocked(entryId);
+        if (entryPaths.length === 0) wholeWorkspace = true;
+        for (const path of entryPaths) paths.add(path);
+        continue;
+      }
+      const path = artifactPathOfResource(resource);
+      if (path === null || !isConfinedRelativePath(path)) throw invalidResourceError(resource);
+      paths.add(path);
+    }
+    // One pathless entry makes the whole claim whole-workspace: its checkpoints cannot be scoped,
+    // so listing the other paths would understate what it covers.
+    return { resources: unique, paths: wholeWorkspace ? [] : [...paths].sort() };
+  }
+
+  /** Every claim the fold still holds, exclusive and presence, deduplicated by id. Includes
+   * TTL-lapsed claims — callers decide what lapsed means for them. */
+  private heldClaimsLocked(): Claim[] {
+    const seen = new Set<string>();
+    const held: Claim[] = [];
+    for (const slot of Object.values(this.state.claims)) {
+      for (const claim of [slot.exclusive, ...slot.presence]) {
+        if (!claim || seen.has(claim.claim_id)) continue;
+        seen.add(claim.claim_id);
+        held.push(claim);
+      }
+    }
+    return held;
+  }
+
+  private heldClaimByIdLocked(claimId: string): Claim | null {
+    return this.heldClaimsLocked().find((claim) => claim.claim_id === claimId) ?? null;
+  }
+
+  /** The other session's exclusive claim that `request` would collide with, if any. Collision is
+   * decided over PATHS, not resource strings — two entries against the same artifact are not
+   * disjoint — and an empty path set on either side covers everything. `includeLapsed` keeps a
+   * TTL-lapsed claim in view for the resolve ladder, where a non-holder must never be the one to
+   * drive another session's claim to expiry. */
+  private blockingClaimLocked(
+    sessionId: string,
+    request: { resources: readonly string[]; paths: readonly string[] },
+    now: Date,
+    includeLapsed = false,
+  ): Claim | null {
+    for (const claim of this.heldClaimsLocked()) {
+      if (claim.mode !== "exclusive" || claim.holder_session === sessionId) continue;
+      if (!includeLapsed && isClaimExpired(claim, now)) continue;
+      if (claimsCollide(claim, request)) return claim;
+    }
+    return null;
+  }
+
+  /** `claim_expired` first, then an `unknown` checkpoint scoped to the claim's paths, then one
+   * `external_edit` entry per changed file — so the interval a claim died without proving is on
+   * record, attributed to nobody, and the NEXT agent to look sees the bytes the holder left
+   * behind (issue #155 REQ-7). Event first for the same reason the old lease expiry did it: a
+   * crash between the two recovers to "claim already dead, drift not yet captured", which the
+   * watcher or offline catch-up then finishes; the reverse order would recover to "commit exists,
+   * claim still nominally open", and the holder's next resolve could sweep an unknown commit into
+   * its own interval. */
+  private async expireClaimLocked(claim: Claim, reason: "ttl" | "holder_stale"): Promise<string> {
+    const entry = firstEntryOf(claim);
+    this.appendClaimEventLocked({
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      ...(entry ? { entry } : {}),
+      event: "claim_expired",
+      by: "daemon", // never `session:<id>` — a claim that expired proved nothing for its holder
+      detail: { claim_id: claim.claim_id, holder_session: claim.holder_session, reason },
+    });
+    return this.captureAbandonedIntervalLocked(claim, "claim_expired");
+  }
+
+  /** Commits whatever the holder of a claim that ended WITHOUT a resolve left on disk, as
+   * `unknown`, and reports it as `external_edit` entries. Presence claims cover no interval, so
+   * there is nothing to capture for them. */
+  private async captureAbandonedIntervalLocked(
+    claim: Claim,
+    kind: "claim_expired" | "claim_released",
+  ): Promise<string> {
+    const since = await headSha(this.workspace);
+    if (claim.mode !== "exclusive") return since;
+    const entry = firstEntryOf(claim);
+    const until = await checkpoint(this.workspace, {
+      attribution: "unknown",
+      kind,
+      ...(entry ? { entry } : {}),
+      lease: claim.claim_id,
+      ...(claim.paths.length > 0 ? { paths: claim.paths } : {}),
+    });
+    if (until === since) return until;
+    const payloads = await externalEditPayloads(this.workspace, since, until, "live", this.nowFn().toISOString());
+    for (const payload of payloads) {
+      this.createEntryLocked(this.ulidFn(), payload, { by: "watcher", detail: externalEditDetail(payload) });
+    }
+    return until;
+  }
+
+  /** Ends a live claim without a resolve. `by: "human"` is the human-wins override (issue #155
+   * REQ-6): it needs no session and cannot be refused. Either way the interval since `pre_sha` is
+   * no longer provable for the holder, so it is captured as `unknown`. */
+  private async releaseClaimLocked(claim: Claim, by: "human" | "session", reason: TombstoneReason): Promise<void> {
+    const entry = firstEntryOf(claim);
+    this.appendClaimEventLocked({
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      ...(entry ? { entry } : {}),
+      event: "claim_released",
+      by: by === "human" ? "human" : holderBy(claim),
+      detail: { claim_id: claim.claim_id, by, reason, holder_session: claim.holder_session },
+    });
+    await this.captureAbandonedIntervalLocked(claim, "claim_released");
+  }
+
+  private renewClaimLocked(claim: Claim, ttlMs: number, now: Date): string {
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+    const entry = firstEntryOf(claim);
+    this.appendClaimEventLocked({
+      v: 1,
+      event_id: this.ulidFn(),
+      at: now.toISOString(),
+      ...(entry ? { entry } : {}),
+      event: "claim_renewed",
+      by: holderBy(claim),
+      detail: { claim_id: claim.claim_id, expires_at: expiresAt },
+    });
+    return expiresAt;
+  }
+
+  /** Takes (or renews) a claim. Order matters, and every step before the append is refusable
+   * without side effects beyond `git_index_lock_reclaimed`:
+   *   1. the caller's own claim already covering these resources → renew it, fence unchanged
+   *      (REQ-3: re-claiming your own resource is never a conflict);
+   *   2. claims touching this request whose TTL has lapsed are closed out honestly first, so the
+   *      new holder never silently inherits — or supersedes — a dead interval;
+   *   3. another session's exclusive claim over any of these paths → `CLAIM_HELD`, holder inline;
+   *   4. bounds;
+   *   5. for an exclusive claim, drift already on the claimed paths is reported as
+   *      `external_edit`, then `pre_sha` is checkpointed scoped to exactly those paths. */
+  private async claimLocked(
+    resources: readonly string[],
+    mode: ClaimMode,
+    sessionId: string,
+    principal: string,
+    ttlMs?: number,
+  ): Promise<ClaimResult> {
+    const request = this.normalizeClaimRequestLocked(resources);
+    const now = this.nowFn();
+    const cap = mode === "presence" ? PRESENCE_CLAIM_TTL_MS : EXCLUSIVE_CLAIM_TTL_MS;
+    const ttl = Math.min(Math.max(1, Math.floor(ttlMs ?? cap)), cap);
+
+    const own = this.heldClaimsLocked().find(
+      (claim) =>
+        claim.holder_session === sessionId &&
+        claim.mode === mode &&
+        request.resources.every((resource) => claim.resources.includes(resource)),
+    );
+    if (own) {
+      const expiresAt = this.renewClaimLocked(own, ttl, now);
+      return {
+        claimId: own.claim_id,
+        fence: own.fence,
+        expiresAt,
+        paths: own.paths,
+        ...(own.pre_sha ? { preSha: own.pre_sha } : {}),
+        renewed: true,
+      };
+    }
+
+    for (const lapsed of this.heldClaimsLocked()) {
+      if (lapsed.holder_session === sessionId || !isClaimExpired(lapsed, now)) continue;
+      if (claimsCollide(lapsed, request)) await this.expireClaimLocked(lapsed, "ttl");
+    }
+
+    if (mode === "exclusive") {
+      const blocker = this.blockingClaimLocked(sessionId, request, now);
+      if (blocker) throw claimHeldError(holderSnapshot(blocker));
+      // The caller's own exclusive claim occupying one of these resource slots, without covering
+      // them all, would be displaced in the fold by the new one. Refused rather than silently
+      // superseded: release it, then claim the full set.
+      const overlapping = this.heldClaimsLocked().find(
+        (claim) =>
+          claim.holder_session === sessionId &&
+          claim.mode === "exclusive" &&
+          claim.resources.some((resource) => request.resources.includes(resource)),
+      );
+      if (overlapping) throw claimHeldError(holderSnapshot(overlapping));
+    }
+
+    const live = this.heldClaimsLocked().filter((claim) => !isClaimExpired(claim, now));
+    if (live.filter((claim) => claim.holder_session === sessionId).length >= MAX_CLAIMS_PER_SESSION) {
+      throw claimLimitError("session", MAX_CLAIMS_PER_SESSION);
+    }
+    if (live.length >= MAX_CLAIMS_PER_WORKSPACE) throw claimLimitError("workspace", MAX_CLAIMS_PER_WORKSPACE);
+
+    const claimId = this.ulidFn();
+    const entry = request.resources.map(entryIdOfResource).find((id): id is string => id !== null);
+    let preSha: string | undefined;
+    if (mode === "exclusive") {
+      if (request.paths.length > 0 && (await anyPathDirty(this.workspace, request.paths))) {
+        await this.captureExternalEditLocked({ paths: request.paths });
+      }
+      preSha = await checkpoint(this.workspace, {
+        attribution: "unknown", // whatever drifted before this claim started isn't this session's doing
+        kind: "pre_apply",
+        ...(entry ? { entry } : {}),
+        lease: claimId,
+        ...(request.paths.length > 0 ? { paths: request.paths } : {}),
+      });
+    }
+
+    // Read, never re-derived: the next fence is strictly greater than any this resource has ever
+    // issued, and the number the holder is handed is the number the journal records.
+    const fence = 1 + maxFenceOver(this.state.claims, request.resources);
+    const since = this.nowFn().toISOString();
+    const expiresAt = new Date(now.getTime() + ttl).toISOString();
+    this.appendClaimEventLocked({
+      v: 1,
+      event_id: this.ulidFn(),
+      at: since,
+      ...(entry ? { entry } : {}),
+      event: "claim_taken",
+      by: `session:${sessionId}`,
+      detail: {
+        claim_id: claimId,
+        resources: request.resources,
+        paths: request.paths,
+        mode,
+        session: sessionId,
+        principal,
+        fence,
+        since,
+        expires_at: expiresAt,
+        ...(preSha ? { pre_sha: preSha } : {}),
+      },
+    });
+    return { claimId, fence, expiresAt, paths: request.paths, ...(preSha ? { preSha } : {}), renewed: false };
+  }
+
+  /** Takes an `exclusive` or `presence` claim over `resources` (issue #155). Presence claims never
+   * block anyone and take no checkpoint; exclusive claims are disjoint over paths and open the
+   * interval a later `resolveEntry` proves. */
+  claim(
+    resources: readonly string[],
+    mode: ClaimMode,
+    sessionId: string,
+    principal: string,
+    opts: { ttlMs?: number } = {},
+  ): Promise<ClaimResult> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-
-      // BEFORE anything is written or claimed: this workspace cannot lease an entry it does not
-      // have. A lease proves "this session changed this workspace because of THIS entry", so a
-      // foreign id makes the proof meaningless — and taking the slot first would lock the
-      // workspace out of its own applies for the whole TTL on nothing but a misrouted id.
-      if (!this.state.entries[entry]) throw unknownEntryError(entry);
-
-      const active = this.state.applyLease;
-      if (active) {
-        if (!isLeaseExpired(active, this.nowFn())) throw leaseHeldError(active.leaseId);
-        await this.expireLeaseLocked(active);
-      }
-
-      const preSha = await checkpoint(this.workspace, { attribution: "unknown", kind: "pre_apply", entry });
-
-      const leaseId = this.ulidFn();
-      const now = this.nowFn();
-      const expiresAt = new Date(now.getTime() + APPLY_LEASE_TTL_MS).toISOString();
-      const event: JournalEvent = {
-        v: 1,
-        event_id: this.ulidFn(),
-        at: now.toISOString(),
-        entry,
-        event: "apply_begin",
-        by: `session:${sessionId}`,
-        detail: { lease_id: leaseId, entry, session: sessionId, pre_sha: preSha, expires_at: expiresAt },
-      };
-      appendEvent(this.writer, event);
-      applyEvent(this.state, event, this.reducer);
-      this.notify(event);
-      return { leaseId, preSha };
+      return this.claimLocked(resources, mode, sessionId, principal, opts.ttlMs);
     });
   }
 
-  /** `resolve` (A4 §F05): checkpoint the post-apply state as `post_sha` — the proven
-   * `pre_sha..post_sha` interval is what gets attributed `session:<sessionId>` (both shas ride in
-   * the trailers/journal detail, so the proof is inspectable later via `diffShas`). Requires an
-   * active lease for `entry` held by THIS `sessionId` — the lease is the proof, so the
-   * attribution comes from `lease.session` (what `applyBegin` recorded), never the caller-supplied
-   * `sessionId` directly: without the match check, any caller could resolve someone else's open
-   * lease and have the edit attributed to themselves, which is exactly the forgery §F05 exists to
-   * prevent. A mismatched `sessionId` throws `LEASE_SESSION_MISMATCH` rather than falsely
-   * attributing anything. A lease past its TTL throws `LEASE_EXPIRED` for the same reason, after
-   * closing it out as `unknown` (see `expireLeaseLocked`). Guarded (first-terminal-wins,
-   * illegal-from-status) transition rules belong to P2.5's `lifecycleReducer` — this just appends
-   * the events `resolve` is defined to produce and lets whichever reducer this bus is running
-   * fold them. */
+  /** Extends the caller's own claim by its mode's TTL from now. The fence does not move — a
+   * refreshed lock keeps its token (RFC 4918 §6.6). */
+  renew(claimId: string, sessionId: string): Promise<{ claimId: string; fence: number | null; expiresAt: string }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      const claim = this.heldClaimByIdLocked(claimId);
+      if (!claim) {
+        const tombstone = tombstoneFor(this.state.claims, claimId);
+        throw tombstone ? claimTombstoneError(tombstone) : noSuchClaimError(claimId);
+      }
+      if (claim.holder_session !== sessionId) throw claimHeldError(holderSnapshot(claim));
+      const now = this.nowFn();
+      const ttl = claim.mode === "presence" ? PRESENCE_CLAIM_TTL_MS : EXCLUSIVE_CLAIM_TTL_MS;
+      return { claimId, fence: claim.fence, expiresAt: this.renewClaimLocked(claim, ttl, now) };
+    });
+  }
+
+  /** Ends a claim. `by: "session"` must be the holder; `by: "human"` is the human-wins override
+   * and is never refused. Releasing a claim that is already gone is a no-op that says so
+   * (`released: false`), so a retried release never errors. */
+  release(
+    claimId: string,
+    by: "human" | "session",
+    sessionId?: string,
+  ): Promise<{ released: boolean; claim: ClaimHolderSnapshot | null }> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      const claim = this.heldClaimByIdLocked(claimId);
+      if (!claim) return { released: false, claim: null };
+      if (by === "session" && claim.holder_session !== sessionId) throw claimHeldError(holderSnapshot(claim));
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await this.releaseClaimLocked(claim, by, by === "human" ? "released_by_human" : "released_by_holder");
+      return { released: true, claim: holderSnapshot(claim) };
+    });
+  }
+
+  /** Live claims and the most recent tombstone per resource, optionally narrowed to claims
+   * covering `path`. A snapshot of fold state, taken under the mutex so it never observes a
+   * half-applied claim. */
+  listClaims(path?: string): Promise<{ claims: Claim[]; tombstones: Array<Tombstone & { resource: string }> }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      const now = this.nowFn();
+      const matches = (claim: Claim): boolean =>
+        path === undefined ||
+        claim.paths.length === 0 ||
+        claim.paths.includes(path) ||
+        claim.resources.includes(artifactResource(path));
+      const claims = this.heldClaimsLocked().filter((claim) => !isClaimExpired(claim, now) && matches(claim));
+      const tombstones: Array<Tombstone & { resource: string }> = [];
+      for (const [resource, slot] of Object.entries(this.state.claims)) {
+        if (!slot.last) continue;
+        if (path !== undefined && resource !== artifactResource(path)) {
+          const entryId = entryIdOfResource(resource);
+          if (entryId === null || !this.entryPathsLocked(entryId).includes(path)) continue;
+        }
+        tombstones.push({ ...slot.last, resource });
+      }
+      return { claims: structuredClone(claims), tombstones };
+    });
+  }
+
+  /** `apply-begin` (A4 §F05), kept as an alias: an exclusive claim over `entry:<id>`, whose path
+   * set comes from the entry itself. `leaseId` is the claim id. A second call from the SAME
+   * session renews rather than conflicting; another session's call answers `CLAIM_HELD` naming
+   * the holder. */
+  applyBegin(
+    entry: string,
+    sessionId: string,
+    principal = "unknown",
+  ): Promise<{ leaseId: string; preSha: string; fence: number | null; expiresAt: string; renewed: boolean }> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      this.assertWritable();
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      const result = await this.claimLocked([entryResource(entry)], "exclusive", sessionId, principal);
+      return {
+        leaseId: result.claimId,
+        preSha: result.preSha ?? "",
+        fence: result.fence,
+        expiresAt: result.expiresAt,
+        renewed: result.renewed,
+      };
+    });
+  }
+
+  /** The shared terminal guard (issue #155 Q4) for every path that closes an entry — resolve,
+   * dismiss, defer, withdraw. Answers, in order: unknown entry → `UNKNOWN_ENTRY`; terminal and
+   * closed by THIS actor with THIS outcome → a replay the caller should answer with the original
+   * result; terminal otherwise → `ENTRY_RESOLVED` naming who closed it. Full `by` strings are
+   * compared, so `session:A` never replays `session:AB`'s resolve. Legacy terminal entries that
+   * predate `terminalBy` fall back to the proven interval's `by`. */
+  guardTerminalLocked(
+    entryId: string,
+    by: EventBy,
+    to: string,
+  ): { replay: true; entry: DerivedEntryState } | { replay: false; entry: DerivedEntryState } {
+    const entry = this.state.entries[entryId];
+    if (!entry) throw unknownEntryError(entryId);
+    if (!isTerminal(entryKindOf(entry), entry.status)) return { replay: false, entry };
+    const terminalBy = entry.terminalBy ?? entry.appliedInterval?.by ?? null;
+    if (terminalBy === by && entry.status === to) return { replay: true, entry };
+    throw entryResolvedError(entryId, terminalBy, entry.status);
+  }
+
+  /** `resolve` (A4 §F05, issue #155): the refusal ladder, evaluated in full under the mutex
+   * BEFORE any checkpoint — a refusal appends nothing and commits nothing (the one exception is
+   * `git_index_lock_reclaimed`, and lazy expiry of the caller's own dead claim at rung 3′):
+   *
+   *   0. unknown entry                                   → UNKNOWN_ENTRY
+   *   1. terminal, closed by me with this outcome         → replay the original result
+   *   2. terminal otherwise                              → ENTRY_RESOLVED{terminal_by, status}
+   *   3. my claim is gone (or my fence is stale)          → CLAIM_REVOKED|EXPIRED|SUPERSEDED
+   *   3′ my claim's TTL lapsed but nothing closed it yet  → renew and proceed, within one sweeper
+   *      interval; past that, expire it here and answer CLAIM_EXPIRED
+   *   4. another session holds this entry's paths         → CLAIM_HELD{holder…}
+   *   5. no claim of mine                                 → NO_CLAIM
+   *   6. proceed: `post_apply` checkpoint scoped to the claim's paths, then `apply_end` + the
+   *      transition. A commit inside pre..post that touched the claimed paths and is neither the
+   *      holder's own nor this claim's makes the interval `unknown`; the entry still closes.
+   *
+   * Attribution always comes from the CLAIM's recorded holder, never from `sessionId` — they are
+   * equal by the time rung 6 runs, but the proof is what the claim recorded. */
   resolveEntry(
     entry: string,
     outcome: "applied" | "rejected" | "stale",
     sessionId: string,
-    opts: { note?: string } = {},
-  ): Promise<{ leaseId: string; postSha: string }> {
+    opts: { note?: string; fence?: number } = {},
+  ): Promise<{ leaseId: string; postSha: string; fence: number | null; replayed: boolean }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
 
-      const lease = this.state.applyLease;
-      if (!lease || lease.entry !== entry) throw noActiveLeaseError(entry);
-      if (lease.session !== sessionId) throw leaseSessionMismatchError(entry, lease.session, sessionId);
-      // The TTL is what BOUNDS the proof (A4 §F05). Past `expires_at` the pre..post diff no
-      // longer describes "what this session did under a live lease" — it describes everything
-      // that reached the worktree since `pre_sha`, including however many hours of drift arrived
-      // by some other route while the session was stalled. Attributing that to `lease.session`
-      // would be exactly the forged provenance §F05 exists to prevent, so close the lease out as
-      // `unknown` and make the caller re-open a provable window. Deliberately AFTER the session
-      // check: a caller that doesn't hold this lease never gets to drive someone else's lease to
-      // expiry — the holder's own next `resolve`, the next `applyBegin`, or reconcile step 4 all
-      // reach the same place, so nothing is lost by refusing a non-holder first.
-      if (isLeaseExpired(lease, this.nowFn())) {
-        await this.expireLeaseLocked(lease);
-        throw leaseExpiredError(entry, lease.leaseId, lease.expiresAt);
+      // Rungs 0–2.
+      const me: EventBy = `session:${sessionId}`;
+      const guard = this.guardTerminalLocked(entry, me, outcome);
+      if (guard.replay) {
+        const interval = guard.entry.appliedInterval;
+        return {
+          leaseId: interval?.claim_id ?? "",
+          postSha: interval?.post_sha ?? "",
+          fence: null,
+          replayed: true,
+        };
       }
 
-      // Attribution comes from the LEASE's own recorded session (the proven identity), not the
-      // `sessionId` parameter — they're equal here (just checked above), but using `lease.session`
-      // keeps the attributed value tied to what `applyBegin` actually proved, not to whatever this
-      // call happened to be invoked with.
-      const attributedSession = lease.session;
+      const now = this.nowFn();
+      const resource = entryResource(entry);
+      const request = { resources: [resource], paths: this.entryPathsLocked(entry) };
+      const slot = this.state.claims[resource];
+      const mine =
+        (slot?.exclusive?.holder_session === sessionId ? slot.exclusive : null) ??
+        this.heldClaimsLocked().find(
+          (claim) =>
+            claim.mode === "exclusive" &&
+            claim.holder_session === sessionId &&
+            request.paths.length > 0 &&
+            claim.paths.length > 0 &&
+            request.paths.every((path) => claim.paths.includes(path)),
+        ) ??
+        null;
+
+      // Rung 3: the caller's claim is over. The tombstone says why, and that is what the caller
+      // needs — a human took the file, the clock ran out, or someone else took the resource.
+      const tombstone = slot?.last ?? null;
+      if (!mine) {
+        if (
+          tombstone &&
+          (tombstone.holder_session === sessionId || (opts.fence !== undefined && tombstone.fence === opts.fence))
+        ) {
+          throw claimTombstoneError(tombstone);
+        }
+      } else if (opts.fence !== undefined && mine.fence !== null && opts.fence !== mine.fence) {
+        // A token from an earlier claim of mine that has since ended.
+        throw tombstone ? claimTombstoneError(tombstone) : noClaimError(entry);
+      }
+
+      // Rung 3′.
+      if (mine && isClaimExpired(mine, now)) {
+        const lapsedMs = now.getTime() - new Date(mine.expires_at).getTime();
+        if (lapsedMs > CLAIM_RENEW_GRACE_MS) {
+          await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+          await this.expireClaimLocked(mine, "ttl");
+          const ended = tombstoneFor(this.state.claims, mine.claim_id);
+          throw ended ? claimTombstoneError(ended) : noClaimError(entry);
+        }
+        this.renewClaimLocked(mine, EXCLUSIVE_CLAIM_TTL_MS, now);
+      }
+
+      if (!mine) {
+        // Rung 4. A lapsed-but-unclosed claim still counts here: a caller that does not hold a
+        // claim never gets to drive someone else's to expiry — the holder's own resolve, a new
+        // claim over the same paths, the sweeper, or reconcile all reach the same place.
+        const blocker = this.blockingClaimLocked(sessionId, request, now, true);
+        if (blocker) throw claimHeldError(holderSnapshot(blocker));
+        // Rung 5.
+        throw noClaimError(entry);
+      }
+
+      // Rung 6.
+      const claim = mine;
+      const scoped = claim.paths.length > 0 ? { paths: claim.paths } : {};
       const postSha = await checkpoint(this.workspace, {
-        attribution: `session:${attributedSession}`,
+        attribution: holderBy(claim),
         kind: "post_apply",
         entry,
-        lease: lease.leaseId,
+        lease: claim.claim_id,
+        ...scoped,
       });
+      const preSha = claim.pre_sha ?? "";
+      const foreign = preSha
+        ? (await commitsTouching(this.workspace, preSha, postSha, claim.paths)).filter(
+            (commit) => commit.attribution !== holderBy(claim) && commit.lease !== claim.claim_id,
+          )
+        : [];
 
-      const now = this.nowFn();
-      const endEvent: JournalEvent = {
+      const at = this.nowFn().toISOString();
+      this.appendClaimEventLocked({
         v: 1,
         event_id: this.ulidFn(),
-        at: now.toISOString(),
+        at,
         entry,
         event: "apply_end",
-        by: `session:${attributedSession}`,
-        // BOTH ends of the interval. `apply_end` is the event that declares the proven
-        // `pre_sha..post_sha` diff (F05), so recording only the post half left every consumer
-        // unable to compute the very thing this event exists to describe — including the reader
-        // being offered "undo what the session just applied", whose rollback target IS `pre_sha`.
-        // It is not recoverable from the checkpoint graph either: `checkpoint()` is idempotent, so
-        // a lease taken against a clean worktree writes no `pre_apply` commit at all and `pre_sha`
-        // is simply whatever HEAD already was (a `baseline`, a prior `post_apply`, ...).
-        detail: { lease_id: lease.leaseId, pre_sha: lease.preSha, post_sha: postSha },
-      };
-      appendEvent(this.writer, endEvent);
-      applyEvent(this.state, endEvent, this.reducer);
-      this.notify(endEvent);
-
-      const to = outcome; // A5 §F23 conformance: common terminals are literally applied|rejected|stale
-      const transitionEvent: JournalEvent = {
+        by: holderBy(claim),
+        // BOTH ends of the interval, plus the claim that proves it. `apply_end` is the event that
+        // declares the proven `pre_sha..post_sha` diff (F05), so recording only one half left
+        // every consumer — including the reader offered "undo what the session just applied",
+        // whose rollback target IS `pre_sha` — unable to compute the thing it describes. It is
+        // not recoverable from the checkpoint graph either: `checkpoint()` is idempotent, so a
+        // claim taken against a clean worktree writes no `pre_apply` commit at all.
+        detail: {
+          lease_id: claim.claim_id,
+          claim_id: claim.claim_id,
+          fence: claim.fence,
+          paths: claim.paths,
+          pre_sha: preSha,
+          post_sha: postSha,
+          interval_attribution: foreign.length > 0 ? "unknown" : "session",
+          ...(foreign.length > 0 ? { reason: "foreign-commit-in-interval" } : {}),
+        },
+      });
+      this.appendClaimEventLocked({
         v: 1,
         event_id: this.ulidFn(),
-        at: now.toISOString(),
+        at,
         entry,
         event: "transition_committed",
-        by: `session:${attributedSession}`,
-        detail: { to, outcome, ...(opts.note !== undefined ? { note: opts.note } : {}) },
-      };
-      appendEvent(this.writer, transitionEvent);
-      applyEvent(this.state, transitionEvent, this.reducer);
-      this.notify(transitionEvent);
+        by: holderBy(claim),
+        detail: { to: outcome, outcome, ...(opts.note !== undefined ? { note: opts.note } : {}) },
+      });
 
-      return { leaseId: lease.leaseId, postSha };
+      return { leaseId: claim.claim_id, postSha, fence: claim.fence, replayed: false };
     });
   }
 
@@ -1367,7 +1823,8 @@ export class WorkspaceBus {
         if (isLeaseExpired(activeLease, this.nowFn())) {
           // Same closing-out `applyBegin` already does for a dangling expired lease — nothing
           // left to refuse over once its own interval is honestly checkpointed as `unknown`.
-          await this.expireLeaseLocked(activeLease);
+          const lapsed = this.heldClaimByIdLocked(activeLease.leaseId);
+          if (lapsed) await this.expireClaimLocked(lapsed, "ttl");
           await this.captureExternalEditLocked();
         } else if (await isPathDirty(this.workspace, path)) {
           throw driftUnderLeaseError(path, activeLease.leaseId);
@@ -1451,11 +1908,14 @@ export class WorkspaceBus {
    * same key here would deadlock against itself), after making its own lease decision. Callers
    * are responsible for `assertWritable`/`reclaimIndexLock`/`initShadowRepo` having already run —
    * both current callers are already past that point when they reach here. */
-  private async captureExternalEditLocked(): Promise<ExternalEditCapture> {
+  private async captureExternalEditLocked(opts: { paths?: readonly string[] } = {}): Promise<ExternalEditCapture> {
     const since = await headSha(this.workspace);
     const until = await checkpoint(this.workspace, {
       attribution: "unknown", // A4 §F05: everything the daemon cannot prove, never falsely `human`
       kind: EXTERNAL_EDIT_CHECKPOINT_KIND,
+      // Scoped staging is scoped committing (`checkpoint` resets the index to HEAD first), so the
+      // payloads below — read from this commit's own diff — can only name these paths.
+      ...(opts.paths && opts.paths.length > 0 ? { paths: [...opts.paths] } : {}),
     });
     if (until === since) return { committed: false, suppressed: null, entries: [] };
 

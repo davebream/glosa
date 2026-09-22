@@ -166,7 +166,7 @@ function payloadFactsFromDetail(detail: Record<string, unknown> | undefined): Pa
   };
 }
 
-function entryKindOf(entryState: DerivedEntryState): EntryKind {
+export function entryKindOf(entryState: DerivedEntryState): EntryKind {
   if (entryState.kind === "attention") return "attention";
   if (entryState.kind === "conversation") return "conversation";
   return "common";

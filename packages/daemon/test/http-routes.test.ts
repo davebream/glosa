@@ -29,7 +29,7 @@ import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider
 import { ArtifactWatcherRegistry } from "../src/artifact-watcher.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
 import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
-import { APPLY_LEASE_TTL_MS } from "../src/bus/lease.ts";
+import { APPLY_LEASE_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../src/bus/lease.ts";
 import { inboxDir, inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
@@ -2514,7 +2514,9 @@ describe("A1 §5 route catalog", () => {
       await bus.createEntry("entry-1", { kind: "annotation" });
       const { leaseId, preSha } = await bus.applyBegin("entry-1", "sess-a");
 
-      nowMs += APPLY_LEASE_TTL_MS + 1_000;
+      // Past the TTL AND past the one-sweeper-interval renew grace: a resolve this late gets the
+      // answer it would have got had the sweeper already closed the claim.
+      nowMs += APPLY_LEASE_TTL_MS + CLAIM_RENEW_GRACE_MS + 1_000;
       writeFileSync(join(root, "notes.md"), "v2 — drift no lease ever covered\n");
 
       const res = await fetchFn(
@@ -2537,7 +2539,8 @@ describe("A1 §5 route catalog", () => {
       // The refusal is honest all the way down: nothing was attributed to sess-a, and the
       // unproven interval is on record as `unknown`.
       const journal = readFileSync(journalPath(root), "utf8");
-      expect(journal).toContain(`"apply_expired"`);
+      expect(journal).toContain(`"claim_expired"`);
+      expect(journal).not.toContain(`"apply_expired"`);
       expect(journal).toContain(leaseId);
       expect(journal).not.toContain(`"apply_end"`);
       const head = await headSha(root);

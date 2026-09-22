@@ -20,7 +20,7 @@
 // `fence: null`. They predate fencing, so there is no honest number to give them; `null` passes the
 // fence check rather than failing it, because a journal written before this feature existed must
 // still replay to the same status it always did.
-import type { EventBy, JournalEvent } from "./journal.ts";
+import type { JournalEvent } from "./journal.ts";
 
 export type ClaimMode = "exclusive" | "presence";
 
@@ -345,6 +345,6 @@ export function holderSnapshot(claim: Claim): ClaimHolderSnapshot {
 /** `EventBy` for a claim's holder — the one place `session:<id>` is built from a claim, so the
  * comparison the terminal guard does ("was this entry resolved by ME?") can never drift from the
  * string the attribution path wrote. */
-export function holderBy(claim: Claim): EventBy {
+export function holderBy(claim: Claim): `session:${string}` {
   return `session:${claim.holder_session}`;
 }

@@ -2051,19 +2051,33 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
 
   try {
     const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, { note });
-    return Response.json({ entry, status: outcome, to: outcome, lease_id: result.leaseId, post_sha: result.postSha });
+    return Response.json({
+      entry,
+      status: outcome,
+      to: outcome,
+      lease_id: result.leaseId,
+      post_sha: result.postSha,
+      ...(result.replayed ? { replayed: true } : {}),
+    });
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "NO_ACTIVE_LEASE" || code === "LEASE_SESSION_MISMATCH") {
+    if (
+      code === "UNKNOWN_ENTRY" ||
+      code === "NO_CLAIM" ||
+      code === "CLAIM_HELD" ||
+      code === "ENTRY_RESOLVED" ||
+      code === "CLAIM_REVOKED" ||
+      code === "CLAIM_SUPERSEDED"
+    ) {
       return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
     }
-    // A4 §F05 lease expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
-    // `entry_error`) as the two above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
-    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s LEASE_HELD. The
+    // A4 §F05 claim expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
+    // `entry_error`) as the refusals above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
+    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s conflict. The
     // recovery step goes in the TITLE, not just the detail, because `runResolve`'s
     // `mapEntryFailure` (packages/cli/src/resolve.ts) surfaces `problem.title` as the CLI's
     // error message and never reads `detail` — guidance parked in `detail` would never be seen.
-    if (code === "LEASE_EXPIRED") {
+    if (code === "CLAIM_EXPIRED") {
       return problem(
         409,
         "conflict",
@@ -2184,7 +2198,7 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
-    if ((err as { code?: string }).code === "LEASE_HELD") {
+    if ((err as { code?: string }).code === "CLAIM_HELD") {
       return problem(
         409,
         "lease-conflict",

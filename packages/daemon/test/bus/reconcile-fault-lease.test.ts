@@ -87,16 +87,18 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
 
     const text = fullBytes.toString("utf8");
     const rawLines = text.split("\n").filter((l) => l.length > 0);
-    expect(rawLines.some((l) => l.includes('"apply_begin"'))).toBe(true);
+    // `applyBegin` is an alias for an exclusive claim now (issue #155), so the record that opens
+    // the interval is `claim_taken`; `apply_end` still closes it.
+    expect(rawLines.some((l) => l.includes('"claim_taken"'))).toBe(true);
     expect(rawLines.some((l) => l.includes('"apply_end"'))).toBe(true);
 
-    // expires_at from the real apply_begin event, so the sweep can deliberately reconcile from
-    // both sides of the lease's own expiry — proving BOTH legal outcomes (still-active, and
+    // expires_at from the real claim_taken event, so the sweep can deliberately reconcile from
+    // both sides of the claim's own expiry — proving BOTH legal outcomes (still-active, and
     // auto-expired) recover cleanly, not just whichever one the wall clock happens to hit.
-    const applyBeginLine = rawLines.find((l) => l.includes('"apply_begin"'));
-    expect(applyBeginLine).toBeDefined();
-    const applyBeginEvent = JSON.parse(applyBeginLine as string) as JournalEvent;
-    const expiresAt = new Date((applyBeginEvent.detail as Record<string, unknown>).expires_at as string);
+    const claimTakenLine = rawLines.find((l) => l.includes('"claim_taken"'));
+    expect(claimTakenLine).toBeDefined();
+    const claimTakenEvent = JSON.parse(claimTakenLine as string) as JournalEvent;
+    const expiresAt = new Date((claimTakenEvent.detail as Record<string, unknown>).expires_at as string);
     const wellBeforeExpiry = new Date(expiresAt.getTime() - 60_000);
     const wellAfterExpiry = new Date(expiresAt.getTime() + 60_000);
 
@@ -107,13 +109,13 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
     }
     const recordBoundaries = [...starts, fullBytes.length];
 
-    // Exhaustive byte-offset sweep, but scoped to just the lease-critical span (apply_begin's
-    // record start through apply_end's record end) rather than the whole journal — the
+    // Exhaustive byte-offset sweep, but scoped to just the lease-critical span (claim_taken's
+    // record start through transition_committed's record end) rather than the whole journal — the
     // torn-write/quarantine mechanism itself is already proven content-agnostic by
     // reconcile-fault.test.ts's own exhaustive sweep; what's new and worth paying for here is the
     // real lease STATE SHAPE at every possible crash point within it. Elsewhere, only whole-record
     // boundaries are swept.
-    const applyBeginRecordStart = text.indexOf('"apply_begin"');
+    const applyBeginRecordStart = text.indexOf('"claim_taken"');
     const transitionCommittedRecordStart = text.indexOf('"transition_committed"');
     expect(applyBeginRecordStart).toBeGreaterThan(-1);
     expect(transitionCommittedRecordStart).toBeGreaterThan(-1);
