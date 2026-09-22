@@ -42,6 +42,33 @@ function assertLeaseShapeLegal(lease: ApplyLeaseState | null, expectedLeaseId: s
   expect(() => new Date(lease.expiresAt).toISOString()).not.toThrow();
 }
 
+/** Issue #155: `applyLease` is now a VIEW over the claims fold, so the same "never a partially
+ * folded shape" property has to hold of the thing it is derived FROM — otherwise a legal-looking
+ * lease view could be covering a half-built claim underneath. Asserted beside the lease shape, not
+ * instead of it, so both the view and its source stay pinned while the migration is in flight. */
+function assertClaimShapeLegal(state: DerivedState, expectedLeaseId: string): void {
+  const slot = state.claims["entry:e1"];
+  if (state.applyLease === null) {
+    // Either the claim was never taken, or it ended — and if it ended it left a tombstone naming
+    // the holder, which is precisely what `apply_expired` never recorded before this change.
+    if (slot?.last) {
+      expect(slot.last.claim_id).toBe(expectedLeaseId);
+      expect(slot.last.holder_session).toBe("sess-1");
+      expect(() => new Date(slot.last?.ended_at ?? "").toISOString()).not.toThrow();
+    }
+    expect(slot?.exclusive ?? null).toBeNull();
+    return;
+  }
+  const claim = slot?.exclusive;
+  expect(claim).toBeDefined();
+  expect(claim?.claim_id).toBe(expectedLeaseId);
+  expect(claim?.mode).toBe("exclusive");
+  expect(claim?.holder_session).toBe("sess-1");
+  expect(claim?.resources).toContain("entry:e1");
+  // A lease folded forward from before fencing existed carries `null`, never a fabricated number.
+  expect(claim?.fence === null || typeof claim?.fence === "number").toBe(true);
+}
+
 describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)", () => {
   test("truncating a real createEntry->applyBegin->resolveEntry journal at every byte offset of the lease-critical records never yields a phantom lease or an unproven 'applied' status", async () => {
     // 1. Build a reference journal via real WorkspaceBus operations — a genuine lease lifecycle,
@@ -157,6 +184,7 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
 
         // 2. The recovered lease is never a phantom/partial shape.
         assertLeaseShapeLegal(result.state.applyLease, leaseId);
+        assertClaimShapeLegal(result.state, leaseId);
 
         // 3. THE crux: "applied" can never appear without the lease already being closed. If
         // transition_committed's bytes never fully landed, status stays "pending" by construction

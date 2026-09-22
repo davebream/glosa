@@ -203,7 +203,12 @@ function applyGuardedTransition(state: DerivedState, event: JournalEvent): void 
     // with nothing recorded) — today that's unreachable (nothing emits `attention_committed`
     // without a preceding `createEntry`), so it's left as a known gap rather than guessed at.
     if (!(to in guardsFor("common"))) return; // not a legal common transition target — no-op
-    state.entries[event.entry] = { status: to, kind: "common", deliveryAttempts: [] as DeliveryAttemptRecord[] };
+    state.entries[event.entry] = {
+      status: to,
+      kind: "common",
+      deliveryAttempts: [] as DeliveryAttemptRecord[],
+      ...(isTerminal("common", to) ? { terminalBy: event.by } : {}),
+    };
     return;
   }
 
@@ -211,6 +216,20 @@ function applyGuardedTransition(state: DerivedState, event: JournalEvent): void 
   if (!canTransition(kind, entryState.status, to)) return; // illegal-from OR already-terminal
 
   entryState.status = to;
+  // Recorded ONLY on this side of the guard (issue #155). A transition the guard discarded — a
+  // second session resolving an entry the first already closed — must leave no trace saying it
+  // won, or the fold would answer "yes, you resolved this" to the session that lost. Because this
+  // runs after `canTransition`, the value is always the `by` of the transition that actually
+  // moved the entry.
+  if (isTerminal(kind, to)) {
+    entryState.terminalBy = event.by;
+    // The `apply_end` that preceded this transition proves an interval only if the SAME actor
+    // then closed the entry. A loser's `apply_end` (it checkpointed before the fold discarded its
+    // transition) stays stashed and unattributed.
+    if (entryState.lastApplyEnd && entryState.lastApplyEnd.by === event.by) {
+      entryState.appliedInterval = entryState.lastApplyEnd;
+    }
+  }
   // The terminal (or any legally-applied) transition's own `detail` — e.g. an attention `done`'s
   // verdict — rides along on the entry so a `--wait` caller (R9) can read it off the derived
   // state without re-scanning the journal for the resolving event.
