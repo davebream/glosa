@@ -6,8 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Two agents can work on two different files in one workspace at the same time.** A workspace
+  allowed one agent to apply a change at a time, whatever it was touching, so a second agent on an
+  unrelated file waited for nothing. An agent now claims the entry or the file it is working on, and
+  only an agent reaching for the same file is refused. `glosa claim` and `glosa release` (and the
+  `glosa_claim`/`glosa_release` MCP tools) take and give up a claim directly; `apply-begin` still
+  works and claims the one entry.
+- **An agent that is refused is told who got there first.** It used to learn only that "an
+  apply-lease is already active". The refusal now names the session holding the file, since when, and
+  until when, and an entry delivered to a second agent says the same thing before it tries.
+  `glosa inbox list` shows who holds each entry.
+
+### Changed
+
+- **Your save wins over an agent's claim.** Saving a file an agent was in the middle of changing used
+  to be refused, which left you unable to save your own document until the agent finished. The save
+  now goes through: what the agent had left on disk is recorded as a change nobody can be credited
+  for, you are credited with exactly what you typed, and the agent is told a person took over.
+  Dismissing an entry an agent is working on does the same. If another program writes the file in the
+  instant you save, you now get the Keep mine / Take disk / Compare choice again instead of a save
+  that no longer matches the file.
+- **A claim ends when its agent goes away.** An abandoned apply blocked its files for fifteen
+  minutes. A claim now also ends two minutes after its session stops responding, and the journal
+  names the session that abandoned it.
+- **Only the file an agent is working on pauses editing.** The editor paused every open file while
+  any agent applied a change; it now pauses the files that agent claimed.
+
 ### Fixed
 
+- **A second agent resolving an entry someone already closed is refused instead of silently
+  ignored.** It used to get a success for a change that was discarded, after taking a checkpoint
+  credited to it. It is now told the entry is closed and by whom, and nothing is written. An agent
+  repeating its own resolve gets its original answer back.
+- **Changes are attributed file by file.** An agent's apply recorded everything that changed in the
+  workspace while it held the lease, including other files other programs touched. It now records
+  only the files it claimed, and marks its change as unattributable if something else wrote those
+  files in the middle.
 - **Passage numbers no longer run off the edge of a narrow pane.** In a window 640px wide or less,
   the page's side margins were cut from 2rem to 1rem. The margins are where the page's marks sit:
   the § addresses and a session's tab on the left, the note dots on the right. So the addresses
