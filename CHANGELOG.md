@@ -63,6 +63,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   The passage now reads differently." in grey, and "nudged ×N" is gone once a note is finished.
 - **A Clear that fails no longer turns a finished note back into open work.** It keeps its state
   and says "Couldn't clear — try again".
+- **The dictation button now appears when you open a note.** With Wispr Flow configured and the
+  provider reporting ready, no dictate control was ever drawn — in the note composer, the
+  conversation composer, an agent question's answer, or the attention tray. The control is created
+  for a field the moment that field is built, and it was being discarded in the same breath: the
+  code that clears away controls whose field has left the page could not tell "gone" from "not added
+  yet", and a composer builds its form before putting it on the page. Nothing was wrong with your
+  configuration; the button was removed a fraction of a second after it was made.
 - **A second agent resolving an entry someone already closed is refused instead of silently
   ignored.** It used to get a success for a change that was discarded, after taking a checkpoint
   credited to it. It is now told the entry is closed and by whom, and nothing is written. An agent

@@ -150,12 +150,28 @@ export function createDictationController({
           .catch(() => null)
       : Promise.resolve(null);
 
+  /** Drops the bindings whose field has left the page — and ONLY those.
+   *
+   * "Not in the document" answers two different questions and this used to conflate them. A field
+   * that was on the page and is gone is abandoned, and its button has to go with it. A field that
+   * has never been on the page is not abandoned, it is not born yet: its caller is still building
+   * the subtree it belongs to and will append the whole thing in a moment.
+   *
+   * Conflating them made dictation unreachable everywhere it was offered. `attachField` ends by
+   * refreshing, refreshing begins by pruning, and the annotation composer builds its form detached
+   * and returns it (artifact-pane.js) — so the binding was created and deleted inside the same
+   * call, and the composer opened with no button, for every reader, with the provider reporting
+   * `ready` the whole time. `seen` is what tells the two apart. */
   function pruneBindings() {
     for (const binding of bindings) {
-      if (!binding.field.isConnected && binding !== active?.binding) {
-        binding.host.remove();
-        bindings.delete(binding);
+      if (binding.field.isConnected) {
+        binding.seen = true;
+        continue;
       }
+      if (!binding.seen) continue;
+      if (binding === active?.binding) continue;
+      binding.host.remove();
+      bindings.delete(binding);
     }
   }
 
@@ -351,7 +367,10 @@ export function createDictationController({
       status.setAttribute("aria-live", "polite");
       host.append(button, status);
       field.insertAdjacentElement("afterend", host);
-      const binding = { field, controls, getContext, host, button, status, invocation: null };
+      // `seen` starts false on purpose: a field is almost always attached before its subtree is in
+      // the document, and `pruneBindings` must not read that as abandonment. It flips the first
+      // time the field is observed connected and never flips back.
+      const binding = { field, controls, getContext, host, button, status, invocation: null, seen: false };
       bindings.add(binding);
       button.addEventListener("pointerdown", () => {
         binding.invocation = {
