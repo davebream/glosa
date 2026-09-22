@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import type { JournalEvent } from "../../src/bus/journal.ts";
-import { CLAIM_RENEW_GRACE_MS, EXCLUSIVE_CLAIM_TTL_MS } from "../../src/bus/lease.ts";
+import { EXCLUSIVE_CLAIM_TTL_MS } from "../../src/bus/lease.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";

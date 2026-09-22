@@ -398,6 +398,20 @@ export async function isAncestorOrEqual(
  * real path — poisoning the union so the next `git add -- <union>` fatals on a pathspec that
  * doesn't exist, wedging every future checkpoint for this workspace. `-z` output is raw bytes,
  * never quoted, so this holds for ANY filename git can track. */
+/** The set a whole-workspace `checkpoint` would stage: currently tracked files plus everything HEAD
+ * already records (so a deletion is staged too). Exposed so a caller that must stage "everything
+ * EXCEPT these paths" (issue #155: drift capture that steps around live claims) computes the same
+ * set a scopeless checkpoint would, rather than an approximation of it. */
+export async function checkpointUnion(
+  root: WorkspaceTarget,
+  resolve: typeof resolveTrackedFiles = resolveTrackedFiles,
+): Promise<string[]> {
+  return trackedUnion(
+    root,
+    resolve(root).tracked.map((file) => file.path),
+  );
+}
+
 async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];

@@ -210,6 +210,18 @@ export function prepareArtifactSave(
   return { workspace, match };
 }
 
+/** The bus's post-write byte check (issue #155): another writer landed between this write and the
+ * check, so what is on disk is not what the reviewer saved. Surfaced as the same `source-changed`
+ * the If-Match check uses, because the remedy is the same — the SPA re-runs its Keep-mine /
+ * Take-disk / Compare dialog against the bytes actually there — and as an artifact error rather
+ * than the bus's own code, so the route layer stays the one place that builds an HTTP problem. */
+function asSourceChanged(error: unknown): unknown {
+  if (error instanceof Error && (error as { code?: string }).code === "SOURCE_CHANGED") {
+    return new ArtifactError("source-changed");
+  }
+  return error;
+}
+
 export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: PreparedArtifactSave, content: string) {
   const { workspace, match } = prepared;
   const bus = await workspaceBus(deps, workspace);
@@ -218,14 +230,7 @@ export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: P
   try {
     captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
   } catch (error) {
-    // #182 R5: the bus refuses a save it cannot honestly pre-capture drift for (an active,
-    // unexpired apply-lease plus pending drift on this exact path) rather than folding that
-    // interval into `human`. Surfaced as its own artifact error, not the bus's DRIFT_UNDER_LEASE
-    // code, so the route layer stays the one place that turns an error into an HTTP problem.
-    if (error instanceof Error && (error as { code?: string }).code === "DRIFT_UNDER_LEASE") {
-      throw new ArtifactError("drift-under-lease", { path: match.path });
-    }
-    throw error;
+    throw asSourceChanged(error);
   }
   return {
     source_path: match.path,
@@ -551,12 +556,17 @@ export async function restoreArtifact(
   const content = await readFileAtCheckpoint(workspace, to, checkpointPath);
   if (content === null) throw new ArtifactError("artifact-missing-at-checkpoint");
   const inboxId = id();
-  const captured = await bus.captureHumanEdit(
-    inboxId,
-    match.path,
-    () => writeArtifactAtomic(match.rawPath, content),
-    "restore",
-  );
+  let captured: { checkpoint_before: string; checkpoint_after: string } | null;
+  try {
+    captured = await bus.captureHumanEdit(
+      inboxId,
+      match.path,
+      () => writeArtifactAtomic(match.rawPath, content),
+      "restore",
+    );
+  } catch (error) {
+    throw asSourceChanged(error);
+  }
   const fullSha = captured?.checkpoint_after ?? to;
   const shortSha = (await runGit(workspace, ["rev-parse", "--short", fullSha])).stdout.trim();
   return {

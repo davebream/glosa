@@ -8,12 +8,14 @@
 //     requires but can't enforce by itself, since it spans both inbox.ts and journal.ts.
 // This is what the HTTP layer (later tasks) and this task's concurrency tests call.
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DeliverableEntry } from "../agent-provider/interface.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
 import {
   assertShadowOwner,
   checkpoint,
+  checkpointUnion,
   commitsTouching,
   headSha,
   initShadowRepo,
@@ -54,7 +56,6 @@ import {
   claimHeldError,
   claimLimitError,
   claimTombstoneError,
-  driftUnderLeaseError,
   EXCLUSIVE_CLAIM_TTL_MS,
   entryResolvedError,
   invalidResourceError,
@@ -65,6 +66,7 @@ import {
   noClaimError,
   noSuchClaimError,
   PRESENCE_CLAIM_TTL_MS,
+  sourceChangedError,
   unknownEntryError,
 } from "./lease.ts";
 import {
@@ -99,7 +101,9 @@ interface DeliveryReservation {
  * from "nothing happened". */
 export interface ExternalEditCapture {
   committed: boolean;
-  suppressed: "apply_lease" | null;
+  /** `"claimed"`: every path this capture could have staged is under a live claim, whose own
+   * resolve owns that interval. */
+  suppressed: "claimed" | null;
   entries: string[];
 }
 
@@ -1796,44 +1800,57 @@ export class WorkspaceBus {
    * workspace mutex across before -> mutate -> checkpoint -> diff -> entry creation prevents an
    * unrelated filesystem change from being folded into this human-attributed edit.
    *
-   * #182 R5's honest pre-save boundary: BEFORE `mutate()`, this captures any drift already on
-   * disk for `path` exactly as the watcher's own quiet window would — an `unknown`-attributed
-   * checkpoint plus `external_edit` entries, via the same `captureExternalEditLocked` this
-   * method's public sibling uses — so `before` (this human edit's diff base) already contains
-   * that drift and the diff this commits contains only what `mutate()` itself changed. Without
-   * this, a Keep-mine save that legitimately carries disk's bytes into its own write would still
-   * misattribute those bytes to the human, because `before` was captured too early to have them.
+   * #182 R5's honest pre-save boundary: BEFORE `mutate()`, drift already on disk is captured
+   * exactly as the watcher's own quiet window would — an `unknown`-attributed checkpoint plus
+   * `external_edit` entries — so `before` (this human edit's diff base) already contains it and
+   * the diff this commits contains only what `mutate()` itself changed.
    *
-   * An active apply lease is the one case this cannot pre-capture honestly (that interval is the
-   * lease's own `resolveEntry`'s to prove, A4 §F05) — refuse rather than fold it into `human`
-   * (`driftUnderLeaseError`) when `path` actually has pending drift; no drift under a lease still
-   * saves exactly as before this existed. */
+   * THE HUMAN WINS (issue #155 REQ-6). A live exclusive claim over `path` used to make a save with
+   * drift on that path a refusal (`DRIFT_UNDER_LEASE`): the interval belonged to the lease, so the
+   * save could neither be attributed to the human nor honestly pre-captured. Agents must never
+   * block a person, so the order is now: the claim is released `by: "human"`, the bytes its holder
+   * left on the path are checkpointed as `unknown` and reported as `external_edit`, and only then
+   * does the save run — against a base that already holds them. Nothing is attributed to the
+   * holder (its interval was never proven) and nothing is attributed to the human that the human
+   * did not write. The holder's late `resolve` then answers `CLAIM_REVOKED`. With NO drift on the
+   * path the claim is left alone: the human's commit lands inside the holder's interval, and the
+   * resolve-time interval guard records that interval `unknown` rather than crediting it.
+   *
+   * THE BYTES ARE CHECKED AFTER THE WRITE. `mutate` returns the bytes it wrote; if the file no
+   * longer holds them when re-read, some other writer landed in the same instant. There is no
+   * truthful `human` checkpoint for that state, so disk is captured as `unknown` and the save
+   * answers `SOURCE_CHANGED` — the SPA's Keep-mine / Take-disk / Compare dialog runs again rather
+   * than the reviewer being told a save succeeded that no longer describes the file. */
   captureHumanEdit(
     entryId: string,
     path: string,
-    mutate: () => void,
+    mutate: () => Buffer | string | undefined | void,
     editKind: "edit" | "restore" = "edit",
   ): Promise<{ checkpoint_before: string; checkpoint_after: string } | null> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      const activeLease = this.state.applyLease;
-      if (activeLease) {
-        if (isLeaseExpired(activeLease, this.nowFn())) {
-          // Same closing-out `applyBegin` already does for a dangling expired lease — nothing
-          // left to refuse over once its own interval is honestly checkpointed as `unknown`.
-          const lapsed = this.heldClaimByIdLocked(activeLease.leaseId);
-          if (lapsed) await this.expireClaimLocked(lapsed, "ttl");
-          await this.captureExternalEditLocked();
-        } else if (await isPathDirty(this.workspace, path)) {
-          throw driftUnderLeaseError(path, activeLease.leaseId);
-        }
-      } else {
-        await this.captureExternalEditLocked();
+      const now = this.nowFn();
+
+      const covering = this.heldClaimsLocked().filter(
+        (claim) => claim.mode === "exclusive" && (claim.paths.length === 0 || claim.paths.includes(path)),
+      );
+      // A claim whose TTL already lapsed is closed out the way the sweeper would have — honestly,
+      // naming its holder — before anything else looks at this path.
+      for (const claim of covering) if (isClaimExpired(claim, now)) await this.expireClaimLocked(claim, "ttl");
+      const live = covering.filter((claim) => !isClaimExpired(claim, now));
+      if (live.length > 0 && (await isPathDirty(this.workspace, path))) {
+        for (const claim of live) await this.releaseClaimLocked(claim, "human", "released_by_human");
       }
+      await this.captureExternalEditLocked({ paths: await this.unclaimedTrackedPathsLocked(true) });
+
       const before = await headSha(this.workspace);
-      mutate();
+      const written = mutate();
+      if (written !== undefined && !this.pathHoldsLocked(path, written)) {
+        await this.captureExternalEditLocked({ paths: [path] });
+        throw sourceChangedError(path);
+      }
       const after = await checkpoint(this.workspace, {
         attribution: "human",
         kind: editKind === "restore" ? "restore" : "human_edit",
@@ -1851,6 +1868,35 @@ export class WorkspaceBus {
       });
       return { checkpoint_before: before, checkpoint_after: after };
     });
+  }
+
+  /** Whether `path` on disk holds exactly `expected`. A read failure is "no" — a file that vanished
+   * between the write and this check certainly does not hold what was written. */
+  private pathHoldsLocked(path: string, expected: Buffer | string): boolean {
+    try {
+      const actual = readFileSync(join(this.root, path));
+      return actual.equals(typeof expected === "string" ? Buffer.from(expected, "utf8") : expected);
+    } catch {
+      return false;
+    }
+  }
+
+  /** The paths a drift capture may stage without trespassing on a live claim: the full checkpoint
+   * union minus every claimed path. `undefined` means "no claims at all — capture the whole
+   * workspace", the cheap common case that needs no path listing. `[]` means everything capturable
+   * is claimed (including by a pathless claim, which covers the whole workspace), so there is
+   * nothing to capture. `includeLapsed` keeps a TTL-lapsed claim's paths out of reach until
+   * something closes it and captures them in its holder's name. */
+  private async unclaimedTrackedPathsLocked(includeLapsed: boolean): Promise<string[] | undefined> {
+    const now = this.nowFn();
+    const claims = this.heldClaimsLocked().filter(
+      (claim) => claim.mode === "exclusive" && (includeLapsed || !isClaimExpired(claim, now)),
+    );
+    if (claims.length === 0) return undefined;
+    if (claims.some((claim) => claim.paths.length === 0)) return [];
+    const claimed = new Set(claims.flatMap((claim) => claim.paths));
+    const union = await checkpointUnion(this.workspace, this.resolveTrackedFilesSync);
+    return union.filter((path) => !claimed.has(path));
   }
 
   /** The daemon-lifetime artifact watcher's quiet-window capture (#153): a tracked artifact
@@ -1872,10 +1918,12 @@ export class WorkspaceBus {
    * ever called from the watcher's timer, never from a GET.
    *
    * TWO SUPPRESSIONS, both of them A4 §F05's rule rather than an invention here:
-   *   - AN ACTIVE APPLY LEASE. The interval belongs to that lease's own `resolveEntry`, and this
-   *     defers COMPLETELY — no checkpoint, no entry, no git spawned — which is the same decision
-   *     `offlineCatchUp` (reconcile.ts step 5a) already makes, for the same reason it states
-   *     there: `checkpoint()` is idempotent, so committing the in-flight edit here as
+   *   - A LIVE CLAIM'S PATHS. The interval on a claimed path belongs to that claim's own
+   *     `resolveEntry`, and this steps around those paths COMPLETELY — staging everything else,
+   *     never them (issue #155; before claims, a lease deferred the whole workspace, and a second
+   *     agent's untouched files went uncaptured for as long as the first one worked). The reason is
+   *     the one `offlineCatchUp` (reconcile.ts step 5a) states: `checkpoint()` is idempotent, so
+   *     committing the in-flight edit here as
    *     `Glosa-Attribution: unknown` would leave `resolveEntry`'s own later checkpoint with
    *     nothing new to stage, returning THAT SAME sha as `post_sha` — and the journal would then
    *     record `session:<id>` for a commit whose trailer says `unknown`. Measured, not theorized:
@@ -1892,13 +1940,16 @@ export class WorkspaceBus {
   captureExternalEdit(): Promise<ExternalEditCapture> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
-      // Before any git is spawned, and before the index lock is touched: a lease-held workspace is
-      // not this producer's business at all.
-      if (this.state.applyLease) return { committed: false, suppressed: "apply_lease" as const, entries: [] };
-
+      // A pathless claim covers the whole workspace: nothing here is this producer's business, and
+      // that is decidable before any git is spawned or the index lock is touched.
+      if (this.heldClaimsLocked().some((claim) => claim.mode === "exclusive" && claim.paths.length === 0)) {
+        return { committed: false, suppressed: "claimed" as const, entries: [] };
+      }
       reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
       await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
-      return this.captureExternalEditLocked();
+      // Lapsed-but-unclosed claims stay excluded: the sweeper closes them within one interval and
+      // reports their bytes in the holder's name, which a watcher capture here would pre-empt.
+      return this.captureExternalEditLocked({ paths: await this.unclaimedTrackedPathsLocked(true) });
     });
   }
 
@@ -1909,6 +1960,10 @@ export class WorkspaceBus {
    * are responsible for `assertWritable`/`reclaimIndexLock`/`initShadowRepo` having already run —
    * both current callers are already past that point when they reach here. */
   private async captureExternalEditLocked(opts: { paths?: readonly string[] } = {}): Promise<ExternalEditCapture> {
+    // An explicit EMPTY scope means "every capturable path is claimed" — never "the whole
+    // workspace", which is what an empty `paths` would mean to `checkpoint`.
+    if (opts.paths !== undefined && opts.paths.length === 0)
+      return { committed: false, suppressed: "claimed", entries: [] };
     const since = await headSha(this.workspace);
     const until = await checkpoint(this.workspace, {
       attribution: "unknown", // A4 §F05: everything the daemon cannot prove, never falsely `human`
