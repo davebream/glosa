@@ -234,7 +234,7 @@ describe("shadow health and repair boundary (#226)", () => {
     await expect(repairBaseline(deps, entry.slug)).rejects.toMatchObject({ code: "SHADOW_INVALID_HEAD" });
     expect(existsSync(foreign)).toBe(false);
   });
-  test("repair refuses an active apply lease without changing its history or journal", async () => {
+  test("repair refuses a live claim without changing its history or journal", async () => {
     const bus = registry.get(entry);
     await bus.reconcile();
     const id = ids();
@@ -243,7 +243,10 @@ describe("shadow health and repair boundary (#226)", () => {
     const sha = await headSha(entry);
     unlinkSync(join(shadowGitDir(entry), "objects", sha.slice(0, 2), sha.slice(2)));
     const journal = readFileSync(journalPath(entry));
-    await expect(repairBaseline(deps, entry.slug)).rejects.toMatchObject({ code: "LEASE_HELD" });
+    await expect(repairBaseline(deps, entry.slug)).rejects.toMatchObject({
+      code: "CLAIM_HELD",
+      claim: { holder_session: "fixture-session" },
+    });
     expect(readFileSync(journalPath(entry))).toEqual(journal);
     expect(await headSha(entry)).toBe(sha);
   });

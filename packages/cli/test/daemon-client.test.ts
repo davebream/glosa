@@ -12,7 +12,7 @@ import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isApiError } from "../src/api-client.ts";
-import { createHttpDaemonClient, type DaemonClient } from "../src/daemon-client.ts";
+import { createHttpDaemonClient, type DaemonClient, type StreamSignalFrame } from "../src/daemon-client.ts";
 import { tokenPath } from "../../daemon/src/security/token.ts";
 import {
   cleanupHome,
@@ -127,6 +127,62 @@ describe("createHttpDaemonClient().openSessionStream against a real daemon (issu
       // Neither rejection ever got a response worth calling "established" — the monitor's
       // reconnect loop must be able to tell these apart from a connection that actually opened.
       expect(opens).toBe(0);
+    });
+  }, 30_000);
+
+  test("issue #155: a real daemon pushes another session's claim to A as an `event: signal`, and A acknowledges it with its own token", async () => {
+    // The only test that runs the daemon's OWN wiring (lifecycle/daemon.ts: the bus registry's
+    // on-open hook attaching the signal registry, and the push registry's signal writer) rather
+    // than a hand-built one.
+    await withRealDaemon(async ({ client, register, port }) => {
+      const agentCwd = realDir();
+      const workspace = realDir();
+      for (const session_id of ["sess-A", "sess-B"]) {
+        await register({
+          session_id,
+          provider: "claude-code",
+          cwd: agentCwd,
+          source: "mcp",
+          workspace_binding: workspace,
+        });
+      }
+      const signals: StreamSignalFrame[] = [];
+      const abort = new AbortController();
+      const stream = client.openSessionStream!(
+        "sess-A",
+        "monitor",
+        async () => {},
+        abort.signal,
+        undefined,
+        async (frame) => void signals.push(frame),
+      );
+      await Bun.sleep(300);
+
+      const claimed = await fetch(`http://127.0.0.1:${port}/api/workspaces/claims`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          Origin: `http://127.0.0.1:${port}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: workspace, session: "sess-B", resources: ["artifact:notes.md"] }),
+      });
+      expect(claimed.status).toBe(201);
+      await waitUntil(() => signals.length > 0, 5_000);
+      expect(signals[0]).toMatchObject({ kind: "info", resources: ["artifact:notes.md"] });
+      expect(signals[0]?.message).toContain("session sess-B is editing artifact:notes.md");
+
+      await client.acknowledgeSignal!("sess-A", signals[0]!.id, signals[0]!.ack_token);
+      let foreign: unknown;
+      try {
+        await client.acknowledgeSignal!("sess-B", signals[0]!.id, signals[0]!.ack_token);
+      } catch (error) {
+        foreign = error;
+      }
+      expect((foreign as { status?: number }).status).toBe(404);
+
+      abort.abort();
+      await stream.catch(() => {});
     });
   }, 30_000);
 

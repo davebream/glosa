@@ -17,6 +17,8 @@ import { SessionPushRegistry } from "../agent-provider/push-registry.ts";
 import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
+import { ClaimSweeper } from "../claim-sweeper.ts";
+import { SignalRegistry } from "../agent-provider/signal-registry.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -121,6 +123,7 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   dictationRegistry: DictationProviderRegistry;
   pushRegistry: SessionPushRegistry;
+  signalRegistry: SignalRegistry;
   watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
   /** Starts daemon-lifetime watching for workspaces already in the index. Call AFTER serving:
@@ -199,6 +202,20 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const providerRegistry = new AgentProviderRegistry();
   const dictationRegistry = new DictationProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
+  // Issue #155: session signals, derived from each bus's claim events as they are appended. Routed
+  // with the same R2 predicate as delivery, pushed on the session's own stream when it has one, and
+  // otherwise held for its next drain. In memory only — the journal event is the durable record.
+  const signalRegistry = new SignalRegistry({
+    sessionsFor: (workspace) => sessionRegistry.forWorkspace(workspace).map((session) => session.session_id),
+    push: (sessionId, frame) => pushRegistry.sendSignal(sessionId, frame),
+  });
+  busRegistry.setOnOpen((bus, workspace) => {
+    const unsubscribe = signalRegistry.attach(
+      bus,
+      typeof workspace === "string" ? workspace : workspace.canonical_path,
+    );
+    bus.closeSignal().addEventListener("abort", unsubscribe, { once: true });
+  });
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     watchFactory: opts.artifactWatchFactory,
@@ -223,6 +240,15 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     userHomeDir,
     warn: (message) => log(home, message),
   });
+  // Issue #155: claims die with their TTL or their holder session, including claims nobody meets
+  // again. Started with the backend; it only ever touches buses something already opened.
+  const claimSweeper = new ClaimSweeper({
+    workspaceIndex,
+    busRegistry,
+    sessionRegistry,
+    warn: (message) => log(home, message),
+  });
+  claimSweeper.start();
   const sealAdoptionSources = async (
     sources: readonly WorkspaceTarget[],
     adoptionId: string,
@@ -237,12 +263,15 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
       resolveTrackedFilesSync: opts.resolveTrackedFilesSync,
     });
   const closeWorkspaceResources = async (): Promise<void> => {
+    await claimSweeper.stop();
     await artifactWatcherAllocation.stop();
     await Promise.all([artifactWatcherRegistry.closeAll(), busRegistry.closeAll()]);
   };
   const releaseWorkspaceResourcesForExit = async (): Promise<void> => {
     // Watchers first and synchronously, so no quiet-window capture can start against a bus that
-    // is closing, and no warm-up step opens a new watch that nothing will ever use.
+    // is closing, and no warm-up step opens a new watch that nothing will ever use. The claim
+    // sweeper stops first for the same reason: no expiry may start against a closing bus.
+    await claimSweeper.stop();
     await artifactWatcherAllocation.stop();
     artifactWatcherRegistry.abandonAll();
     await busRegistry.closeAll();
@@ -294,6 +323,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     providerRegistry,
     dictationRegistry,
     pushRegistry,
+    signalRegistry,
     watchEmissions,
     artifactWatcherRegistry,
     adoptionCoordinator,
@@ -407,6 +437,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     providerRegistry: backend.providerRegistry,
     dictationRegistry: backend.dictationRegistry,
     pushRegistry: backend.pushRegistry,
+    signalRegistry: backend.signalRegistry,
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,

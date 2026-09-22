@@ -101,14 +101,6 @@ function mapError(error: unknown, pathname: string, context: ErrorContext = {}):
         undefined,
         pathname,
       );
-    case "drift-under-lease":
-      return problem(
-        409,
-        "drift-under-lease",
-        "an apply-lease is active and this path has uncommitted drift — that interval belongs to the lease, not to this save",
-        error.data.path as string,
-        pathname,
-      );
     case "unknown-checkpoint": {
       const title =
         context.unknownCheckpoint === "checkpoints"
@@ -125,7 +117,19 @@ function mapError(error: unknown, pathname: string, context: ErrorContext = {}):
     case "annotation-not-found":
       return problem(404, "not-found", "no such annotation entry", error.data.id as string, pathname);
     case "annotation-closed":
-      return problem(409, "conflict", "entry already closed", `status is ${String(error.data.status)}`, pathname);
+      // Contract 1.17 (issue #155): the same `entry-resolved` body resolve and dismiss answer,
+      // naming who closed it — a session may well have applied the note first.
+      return problem(
+        409,
+        "entry-resolved",
+        "entry already closed",
+        `status is ${String(error.data.status)}`,
+        pathname,
+        {
+          terminal_by: error.data.terminal_by ?? null,
+          entry_status: error.data.status,
+        },
+      );
     case "presentation-not-actionable":
       return problem(422, "validation-failed", "entry payload is not actionable", error.data.id as string, pathname);
     case "class-r-capability":

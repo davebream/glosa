@@ -30,6 +30,10 @@ export type EventType =
   | "apply_begin"
   | "apply_end"
   | "apply_expired"
+  | "claim_taken"
+  | "claim_renewed"
+  | "claim_released"
+  | "claim_expired"
   | "journal_tail_truncated"
   | "line_quarantined"
   | "offline_catchup"
@@ -89,6 +93,12 @@ const LIFECYCLE_CRITICAL_EVENTS: ReadonlySet<EventType> = new Set([
   "attention_committed",
   "apply_begin",
   "apply_end",
+  // A claim taken or released is the only proof of who may be attributed for the interval that
+  // follows it, and of when that interval stopped — losing either to an un-fsynced buffer would
+  // leave a resource claimed by nobody or claimed forever. `claim_renewed` only extends a window
+  // that already exists, and `claim_expired` is re-derivable from the TTL, so neither needs this.
+  "claim_taken",
+  "claim_released",
   "baseline_checkpoint",
   "adoption_sealed",
   "lineage_attached",

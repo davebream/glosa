@@ -20,6 +20,29 @@ describe("problem", () => {
     });
   });
 
+  test("carries RFC 9457 §3.2 extension members beside the standard ones (issue #155)", async () => {
+    const res = problem(409, "claim-held", "session A holds this", undefined, "/api/x", {
+      holder_session: "A",
+      fence: 1,
+    });
+    expect(await res.json()).toEqual({
+      type: "https://glosa.local/errors/claim-held",
+      title: "session A holds this",
+      status: 409,
+      instance: "/api/x",
+      holder_session: "A",
+      fence: 1,
+    });
+  });
+
+  test("refuses an extension that would shadow a standard member or is not a legal member name", () => {
+    // Ablating the guard lets `status: "applied"` overwrite the HTTP status in the body — exactly
+    // the collision the `entry-resolved` body hit before it was renamed `entry_status`.
+    expect(() => problem(409, "entry-resolved", "t", undefined, undefined, { status: "applied" })).toThrow();
+    expect(() => problem(409, "entry-resolved", "t", undefined, undefined, { ab: 1 })).toThrow();
+    expect(() => problem(409, "entry-resolved", "t", undefined, undefined, { "holder-session": 1 })).toThrow();
+  });
+
   test("omits detail/instance when not provided", async () => {
     const res = problem(401, "unauthorized", "missing token");
     const body = await res.json();

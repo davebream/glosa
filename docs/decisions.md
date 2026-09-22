@@ -1306,3 +1306,59 @@ band; the card and the notice say so, and the notice offers "Show the question" 
 **Not done.** `docs/assets/screens` has no capture of an agent question yet. `docs/screenshots.md`
 now says how to take one; the existing captures predate the current visual system and the whole set
 is due to be re-recorded from one session, which is the rule that file sets for itself.
+
+## Claims are per resource, and the human's save wins (#155)
+
+Maintainer decision, 2026-09-22. A workspace held one apply-lease for one entry. Two agents on two
+different files queued behind each other for no reason; the second learned only that "a lease is
+active", with no way to find out whose; and a second `resolve` on an entry someone else had already
+closed was quietly discarded by the fold after taking a checkpoint credited to the loser. The lease
+did two jobs at once, mutual exclusion and attribution proof, and it did the first one for the whole
+workspace.
+
+A lease is now an exclusive **claim** on resources (`entry:<id>`, `artifact:<path>`), with a
+non-blocking `presence` mode for "I am looking at this". Claims are disjoint over files between
+sessions, checkpoints are scoped to the claimed files, and every refusal names who holds what.
+`apply-begin` stays as the one-entry shorthand. Three decisions carry it:
+
+- **Refusal is derived from the journal, not keyed.** The fold records which actor made an entry
+  terminal (`terminalBy`), and `resolve` evaluates its refusals in a fixed order under the workspace
+  mutex, before any checkpoint: unknown entry, the caller's own completed resolve (answered as a
+  replay), an entry someone else closed, a claim that has ended, a claim someone else holds, no claim
+  at all. No journal field `idem` takes part. An idempotency key would have deduplicated the record
+  and still let the loser's checkpoint happen; a client `Idempotency-Key` header would have needed a
+  response store outside the journal, which is the one place truth may not live.
+- **The fence is read from the event, never recomputed.** Each resource carries a monotonic fence,
+  bumped for each new holder and kept on renewal, and it is written into `claim_taken`. A fold that
+  inferred "the Nth claim gets fence N" would hand one number to two holders the moment an event was
+  skipped or quarantined. Leases written before this fold forward with `fence: null`, which passes
+  every check, so an old journal replays unchanged.
+- **The human's save wins, which reverses #182's refusal.** A save over a file an agent held used to
+  be refused when the agent's edits were on disk, because that interval belonged to the lease. The
+  refusal put an agent between a person and their own document. Now the claim is released by the
+  human, the holder's bytes are recorded as `unknown`, and the save runs against a base that already
+  holds them: the reviewer is credited with what they typed and the holder with nothing, and the
+  holder's late `resolve` is told its claim was revoked. The save also re-reads its own bytes; if
+  another writer landed in the same instant it answers `source-changed` instead of reporting a save
+  that no longer describes the file.
+
+**Lifetime.** 15 minutes for an exclusive claim and 5 for presence, plus death with the session: a
+30-second sweeper expires a claim whose holder has been stale for two minutes, twice the registry's
+own lease, so one missed heartbeat never costs a working session its claim. A resolve that arrives
+after its claim's TTL but before anything closed it renews and proceeds — the case is a resolve that
+queued behind the mutex while the clock ran out — within one sweeper interval only. Past that it
+gets the answer the sweeper would already have given, so the outcome never depends on when a timer
+happened to fire, and hours of drift on a suspended laptop are never credited to the session that
+stalled.
+
+**Why not the alternatives.** *Keep one lease and just name the holder* fixed the opaque conflict and
+nothing else; two agents on two files is the ordinary case. *Expire on the registry's 60-second
+session lease alone* would take a claim away from a session that was merely slow mid-apply. *Carve
+apply-begin out of the human-wins rule* bought nothing, since the holder's late resolve is already
+answered `claim-revoked`.
+
+**Consequences.** Claims are not access control and do not stop an agent writing to disk outside
+one; that write is attributed `unknown`, as before. The one daemon token means every caller shares
+one `principal` today; the field exists so conflicts read at the participant level once per-caller
+tokens do. Signals to the holder when a person overrides its claim, and the SPA naming the holder,
+land in the second half of #155.
