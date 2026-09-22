@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The dictation button now appears when you open a note.** With Wispr Flow configured and the
+  provider reporting ready, no dictate control was ever drawn — in the note composer, the
+  conversation composer, an agent question's answer, or the attention tray. The control is created
+  for a field the moment that field is built, and it was being discarded in the same breath: the
+  code that clears away controls whose field has left the page could not tell "gone" from "not added
+  yet", and a composer builds its form before putting it on the page. Nothing was wrong with your
+  configuration; the button was removed a fraction of a second after it was made.
 - **Passage numbers no longer run off the edge of a narrow pane.** In a window 640px wide or less,
   the page's side margins were cut from 2rem to 1rem. The margins are where the page's marks sit:
   the § addresses and a session's tab on the left, the note dots on the right. So the addresses
