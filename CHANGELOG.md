@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.30] — 2026-09-22
+
 ### Fixed
 
 - **A note no longer reads "Lost its place" when its sentence only moved across a line break.**
@@ -14,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   receiving them, because the daemon has always ignored that kind of difference when it looks a
   passage up. The page now looks it up the same way, and still refuses to choose when the quoted
   words fit two places.
+- **The history panel no longer says a comparison opened when nothing did.** Picking two versions
+  and comparing them always reported "Comparison opened in a new tab", including on a presented
+  document, which shows a single document and has no tabs to open one in. It says so only when the
+  comparison is really there.
 
 ## [0.1.0-alpha.29] — 2026-09-22
 
@@ -1104,7 +1110,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.30...HEAD
+[0.1.0-alpha.30]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
 [0.1.0-alpha.29]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...v0.1.0-alpha.29
 [0.1.0-alpha.28]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...v0.1.0-alpha.28
 [0.1.0-alpha.27]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.26...v0.1.0-alpha.27
