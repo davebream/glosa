@@ -407,31 +407,53 @@ export function mountApp(
     return commands;
   }
 
-  /** The workspace's apply lease as the journal stream reports it (A4 §F05: at most one per
-   * workspace). While a session holds one, every pane pauses Edit. A lease that began before this
-   * page connected is not known here; the save guard still refuses a stale save in that case. */
-  let applyLease = null;
-  let applyLeaseTimer = null;
-  function setApplyLease(lease) {
-    applyLease = lease;
-    if (applyLeaseTimer) clearTimeout(applyLeaseTimer);
-    applyLeaseTimer = null;
-    if (lease?.expires_at) {
-      const ms = Date.parse(lease.expires_at) - Date.now();
-      if (ms > 0) applyLeaseTimer = setTimeout(() => setApplyLease(null), ms);
-      else applyLease = null;
+  /** Exclusive claims as the journal stream reports them (issue #155; before claims, the one
+   * apply lease per workspace). While a session holds one over a file, that file's pane pauses
+   * Edit; a legacy lease or a claim with no recorded paths covers the whole workspace and pauses
+   * every pane, exactly as the lease did. A claim taken before this page connected is not known
+   * here; the save guard still refuses a stale save in that case. */
+  const liveClaims = new Map();
+  let claimTimer = null;
+  function claimFor(path) {
+    const now = Date.now();
+    for (const claim of [...liveClaims.values()].reverse()) {
+      if (claim.expires_at && Date.parse(claim.expires_at) <= now) continue;
+      if (claim.paths.length === 0 || (path && claim.paths.includes(path))) return claim;
     }
-    for (const pane of panes.values()) pane.setApplyPause?.(applyLease);
+    return null;
   }
-  function trackApplyLease(frame) {
-    if (frame?.event === "apply_begin" && frame.detail?.lease_id) {
-      setApplyLease({ lease_id: frame.detail.lease_id, expires_at: frame.detail.expires_at ?? null });
-    } else if (
-      (frame?.event === "apply_end" || frame?.event === "apply_expired") &&
-      (!applyLease || !frame.detail?.lease_id || frame.detail.lease_id === applyLease.lease_id)
-    ) {
-      setApplyLease(null);
+  function refreshClaims() {
+    const now = Date.now();
+    for (const [id, claim] of liveClaims) {
+      if (claim.expires_at && Date.parse(claim.expires_at) <= now) liveClaims.delete(id);
     }
+    if (claimTimer) clearTimeout(claimTimer);
+    claimTimer = null;
+    const soonest = Math.min(
+      ...[...liveClaims.values()].map((claim) => (claim.expires_at ? Date.parse(claim.expires_at) : Infinity)),
+    );
+    if (Number.isFinite(soonest)) claimTimer = setTimeout(refreshClaims, Math.max(0, soonest - now));
+    for (const pane of panes.values()) pane.setApplyPause?.(claimFor(pane.path));
+  }
+  function trackClaims(frame) {
+    const detail = frame?.detail ?? {};
+    const id = typeof detail.claim_id === "string" ? detail.claim_id : detail.lease_id;
+    if (frame?.event === "claim_taken" && id && detail.mode !== "presence") {
+      const paths = Array.isArray(detail.paths) ? detail.paths.filter((path) => typeof path === "string") : [];
+      liveClaims.set(id, { lease_id: id, expires_at: detail.expires_at ?? null, paths });
+    } else if (frame?.event === "apply_begin" && id) {
+      liveClaims.set(id, { lease_id: id, expires_at: detail.expires_at ?? null, paths: [] });
+    } else if (frame?.event === "claim_renewed" && liveClaims.has(id)) {
+      liveClaims.set(id, { ...liveClaims.get(id), expires_at: detail.expires_at ?? null });
+    } else if (["claim_released", "claim_expired", "apply_end", "apply_expired"].includes(frame?.event)) {
+      // An end naming no claim cannot be matched to one; clearing is the side that cannot leave a
+      // pane paused forever.
+      if (id) liveClaims.delete(id);
+      else liveClaims.clear();
+    } else {
+      return;
+    }
+    refreshClaims();
   }
 
   /** With several artifacts open, the reader has to be able to tell at a glance which pane the
@@ -556,7 +578,7 @@ export function mountApp(
       const [, path, from, to] = splitDiffId(id);
       const pane = createDiffPane(host, { dataAccess, slug: currentSlug, path, from, to, describeVersion });
       panes.set(id, pane);
-      if (applyLease) pane.setApplyPause?.(applyLease);
+      pane.setApplyPause?.(claimFor(path));
       return pane;
     }
     const pane = createArtifactPane(host, {
@@ -591,7 +613,7 @@ export function mountApp(
     // Seeded from what this panel was restored (or opened) with, so restoring a layout does not
     // immediately write the same arrangement back over itself.
     persistedModes.set(id, pane.getMode?.() ?? params.mode ?? requestedMode);
-    if (applyLease) pane.setApplyPause?.(applyLease);
+    pane.setApplyPause?.(claimFor(pane.path));
     pane.element.setAttribute("data-active", String(id === activePanelId));
     void pane.ready.then(() => {
       refreshTabs();
@@ -821,7 +843,7 @@ export function mountApp(
         if (frame.event === "artifact" && frame.data?.path) refreshOpenArtifact(frame.data.path);
         if (frame.event === "artifact_index") void refreshArtifactIndex();
         if (frame.event === "journal") {
-          trackApplyLease(frame.data);
+          trackClaims(frame.data);
           for (const pane of panes.values()) {
             if (pane.applyJournalEvent(frame.data)) break;
           }
