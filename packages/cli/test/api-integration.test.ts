@@ -265,6 +265,31 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     expect((await client.getEntryStatus(workspaceDir, asked.id))?.status).toBe("expired");
   }, 20000);
 
+  // Elapsed real time IS the contract here, which is the one case `docs/testing.md` allows a fixed
+  // wait for: the behavior under test is "a hold outlives the server's idle close", and the only
+  // observation that distinguishes it from the bug is crossing that boundary. 14s is the shortest
+  // wait that clears Bun's ~10s default with room for a loaded CI runner; shortening it below 12s
+  // would stop observing the failure.
+  //
+  // This goes over the Unix socket because `createHttpGlosaClient` does (`authedRequest`), and the
+  // socket is where the close happened: the route's `server.timeout(req, 0)` is ignored there, so
+  // before the listener's own `idleTimeout: 0` this rejected with DAEMON_UNREACHABLE at ~12s
+  // instead of returning the open entry at ~14s.
+  test("a held read outlives the socket listener's idle close", async () => {
+    const workspaceDir = freshWorkspaceDir();
+    await client.openWorkspace(workspaceDir);
+    const asked = await client.createAttentionRequest(workspaceDir, { message: "Ready?", action: "ask" });
+
+    const started = Date.now();
+    const status = await client.getEntryStatus(workspaceDir, asked.id, 14_000);
+    const elapsed = Date.now() - started;
+
+    // Nobody answers it, so the hold runs its full `wait_ms` and reports the entry still open.
+    // A connection closed underneath it cannot produce this: it rejects instead.
+    expect(status?.status).toBe("open");
+    expect(elapsed).toBeGreaterThan(12_000);
+  }, 40_000);
+
   test("request-review approval mode creates, approves, and returns the typed verdict through --wait", async () => {
     const workspaceDir = freshWorkspaceDir();
     const content = "# Ready for approval\n";
