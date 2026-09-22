@@ -4118,7 +4118,8 @@ input,
    explicit dark theme Chromium paints an UNCHECKED radio as a solid light disc — every option
    reads as the selected one, which is worse than no indicator at all. Drawing it also puts the
    control on the palette, the way the caret and the scrollbar already are. */
-.glosa-agent-option input[type="radio"] {
+.glosa-agent-option input[type="radio"],
+.glosa-composer-intent input[type="radio"] {
   appearance: none;
   -webkit-appearance: none;
   margin: 0;
@@ -4131,7 +4132,8 @@ input,
   place-content: center;
 }
 
-.glosa-agent-option input[type="radio"]::before {
+.glosa-agent-option input[type="radio"]::before,
+.glosa-composer-intent input[type="radio"]::before {
   content: "";
   width: 7px;
   height: 7px;
@@ -4141,15 +4143,18 @@ input,
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-.glosa-agent-option input[type="radio"]:checked {
+.glosa-agent-option input[type="radio"]:checked,
+.glosa-composer-intent input[type="radio"]:checked {
   border-color: var(--primary);
 }
 
-.glosa-agent-option input[type="radio"]:checked::before {
+.glosa-agent-option input[type="radio"]:checked::before,
+.glosa-composer-intent input[type="radio"]:checked::before {
   transform: scale(1);
 }
 
-.glosa-agent-option input[type="radio"]:focus-visible {
+.glosa-agent-option input[type="radio"]:focus-visible,
+.glosa-composer-intent input[type="radio"]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -4559,37 +4564,37 @@ input,
   overflow: hidden;
 }
 
-/* Intent choice: free-floating radio chips, not a segmented tub — three writer-length labels
-   wrap naturally as tags instead of breaking a control that pretends to be one piece. */
+/* Intent choice: one of three, with "Change the words" already chosen, drawn as the radio set it
+   is. It used to be three outlined pills, the vocabulary of tags and filters, which reads as
+   "pick any". The chosen pill differed only by a darker outline and a bolder label, and the bolder
+   label was wider, so the row shifted on every pick. On the composer, the one card on the page,
+   they were also three more boxes between the quote and the field. A drawn radio says "pick one"
+   before a word is read. Its filled dot is the shape the choice needs, so the label changes colour
+   only, never weight, and the row holds still. It is the same radio a session's question uses. */
 .glosa-composer-intents {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-1) var(--space-4);
 }
 
-.glosa-composer-intents button {
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+.glosa-composer-intent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   white-space: nowrap;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
-.glosa-composer-intents button:hover {
-  border-color: var(--border-strong);
+.glosa-composer-intent:hover,
+.glosa-composer-intent:has(input:checked) {
   color: var(--ink);
 }
 
-.glosa-composer-intents button[aria-pressed="true"] {
-  background: transparent;
+.glosa-composer-intent:hover input[type="radio"]:not(:checked) {
   border-color: var(--ink);
-  color: var(--ink);
-  font-weight: 600;
 }
 
 .glosa-composer-input {
@@ -5619,14 +5624,13 @@ input,
   .glosa-conversation-toggle,
   .glosa-editor-face button,
   .glosa-rich-toolbar button,
-  .glosa-composer-intents button {
+  .glosa-composer-intent {
     min-height: 2.75rem;
   }
 
   .glosa-modebar button,
   .glosa-editor-face button,
-  .glosa-rich-toolbar button,
-  .glosa-composer-intents button {
+  .glosa-rich-toolbar button {
     min-width: 2.75rem;
   }
 }
@@ -6193,7 +6197,7 @@ input,
   .glosa-nav-toggle,
   .glosa-sidebar-section-toggle,
   .glosa-sidebar-section-chevron,
-  .glosa-composer-intents button,
+  .glosa-composer-intent,
   .glosa-history-toggle,
   .glosa-conversation-toggle,
   .glosa-conv-close,

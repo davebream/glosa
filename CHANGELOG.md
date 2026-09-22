@@ -41,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   names the session that abandoned it.
 - **Only the file an agent is working on pauses editing.** The editor paused every open file while
   any agent applied a change; it now pauses the files that agent claimed.
+- **The kind of change a note asks for is now a set of radio buttons.** "Change the words", "Wrong
+  label or split" and "Fix how it looks" were three outlined pills, which look like tags you can
+  pick several of. The chosen one differed only by a darker outline and bolder text, and the bolder
+  text was wider, so the row shifted every time you picked. They are now radios in one row: one
+  filled dot says which is chosen, and nothing moves. The keyboard gets one stop instead of three,
+  the arrow keys move between the choices, and a screen reader announces "1 of 3, checked".
 
 ### Fixed
 

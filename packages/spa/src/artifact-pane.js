@@ -2334,18 +2334,25 @@ export function createArtifactPane(host, deps) {
         el("p", { className: "glosa-composer-quote" }, [el("span", { textContent: record.target.quote.exact })]),
       );
     }
-    const intents = el("div", { className: "glosa-composer-intents", role: "group", "aria-label": "Feedback intent" });
+    // One choice of three with one already made, so it is the radio group it behaves as. Three
+    // `aria-pressed` toggles were announced as three independent buttons and cost three tab stops;
+    // native radios are one stop, move on the arrow keys and say "1 of 3, checked". The name only
+    // has to be unique per form: a radio group is scoped to its form owner, and each pane's
+    // composer is its own <form>.
+    const intents = el("div", {
+      className: "glosa-composer-intents",
+      role: "radiogroup",
+      "aria-label": "Feedback intent",
+    });
     for (const intent of INTENTS) {
-      const btn = el("button", {
-        type: "button",
-        textContent: intent.label,
-        onClick: () => {
-          record.intent = intent.value;
-          for (const b of intents.children) b.setAttribute("aria-pressed", String(b === btn));
-        },
+      const radio = el("input", { type: "radio", name: "intent", value: intent.value });
+      radio.checked = record.intent === intent.value;
+      radio.addEventListener("change", () => {
+        record.intent = intent.value;
       });
-      btn.setAttribute("aria-pressed", String(record.intent === intent.value));
-      intents.append(btn);
+      intents.append(
+        el("label", { className: "glosa-composer-intent" }, [radio, el("span", { textContent: intent.label })]),
+      );
     }
     const input = el("textarea", {
       className: "glosa-composer-input",
@@ -2387,7 +2394,7 @@ export function createArtifactPane(host, deps) {
     form.addEventListener("submit", (e) => e.preventDefault());
     form.append(intents, input, status, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
     dictationController?.attachField(input, {
-      controls: () => [cancel, send, ...intents.querySelectorAll("button")],
+      controls: () => [cancel, send, ...intents.querySelectorAll("input")],
       getContext: () => ({
         surfaceBlocks: [record.target?.quote?.exact, contentEl.innerText],
       }),

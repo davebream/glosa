@@ -368,9 +368,9 @@ Quiet and ink-led.
 - **Style:** 6px radius, ink text, Muted placeholders. Source editor: mono 13px / 1.7.
 - **Focus:** the border turns to the hand with a 3px halo of hand at 14%.
 - **Caret:** the hand, in every field.
+- **Intent choice** (composer): three drawn radios in a row that wraps, no boxes. Each is a 13px circle with a 1.5px Strong Border beside a 13px Muted label. Chosen, the circle takes an ink edge and a 7px ink dot, and the label turns ink. Its weight never changes, so the row holds still. Hover lifts the label and an empty circle's edge to ink. It is the same radio a session's question draws. One choice of three with one already made is a radio group, never a row of pills: pills read as tags you can pick several of.
 
 ### Chips
-- **Intent chips** (composer): pills with a Quiet Border, 12px Muted; hover to Strong Border and ink; selected is transparent with an ink border, ink text, 600.
 - **Attribution chips** (history): 12px 600 pills. Human: filled hand, paper text. Session: paper, ink border, ink text. Unknown: dashed Strong Border, Muted.
 
 ### The Margin Entry (signature)
@@ -389,7 +389,7 @@ A 1-row strip under the artifact bar, on paper over a Region Rule, shown wheneve
 Below the rail floor the question the reader is on floats at its passage the way the composer does: under it (above when there is no room), aligned to the column's left edge for a passage that wraps and to its first word for one that does not, 26rem wide, paper (Surface in dark), 1px Strong Border, 2px Session Ink top rule, 10px radius, Menu Lift. Unlike the composer it is not clamped into view: a draft follows its writer, a question belongs to its words. It carries the provider and claimed label, the message, the options, the free-text field, Can't answer and Send answer, and a drawn close. The tray lists the same question as a row with "Answer at the passage", so there is only ever one live answer form.
 
 ### The Composer
-The entry before it is sent, and the one card on the page, because an open draft is above the work for a moment. It floats under the passage it is about, in its own layer in the pane's scroll space, so it travels with the words: paper (Surface in dark), 1px Strong Border, 2px pencil top rule, 10px radius, Menu Lift, 0.75rem 1rem 1rem padding. The address and "You · not sent yet" in pencil, the quote over a graphite underlay, intent chips, a transparent field in pencil Note type over a 1px dashed pencil rule that turns solid ink with ink text on focus, then Cancel and Send to session. Nothing takes the hand until Send. On Send at rail widths, the new entry travels from the draft's place to its own beside the passage (280ms, the standard easing), so the reader sees where the note went.
+The entry before it is sent, and the one card on the page, because an open draft is above the work for a moment. It floats under the passage it is about, in its own layer in the pane's scroll space, so it travels with the words: paper (Surface in dark), 1px Strong Border, 2px pencil top rule, 10px radius, Menu Lift, 0.75rem 1rem 1rem padding. The address and "You · not sent yet" in pencil, the quote over a graphite underlay, the intent radios, a transparent field in pencil Note type over a 1px dashed pencil rule that turns solid ink with ink text on focus, then Cancel and Send to session. Nothing takes the hand until Send. On Send at rail widths, the new entry travels from the draft's place to its own beside the passage (280ms, the standard easing), so the reader sees where the note went.
 
 ### Mark Preview
 Hovering an annotated passage where the rail is not shown opens the entry under its words as a floating card: paper fill, 1px Strong Border, 10px radius, 0.75rem 1rem padding, Menu Lift. Unlike an entry in the rail it has its own paper, because it floats over the manuscript.
