@@ -30,7 +30,7 @@ import {
   openQuestions,
   requestsForArtifact,
 } from "./agent-request.js";
-import { buildAnnotationRecordFromSelection } from "./annotate.js";
+import { buildAnnotationRecordFromSelection, foldQuote, locateFoldedQuote } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
 import { faceKey, mountFaceControl } from "./face.js";
@@ -2390,14 +2390,21 @@ export function createArtifactPane(host, deps) {
 
   /** Resolves an annotation target against the CURRENT rendered text — the client-side echo of
    * the daemon's anchoring cascade (A5 §F10): (1) stored offsets, accepted only if the text there
-   * still IS the quoted text; (2) re-find the quote by its prefix+exact+suffix context; (3) exact
-   * quote alone when it's unambiguous; else null — unanchored, and the card says so. */
+   * still IS the quoted text, up to the fold; (2) re-find the quote by its prefix+exact+suffix
+   * context; (3) exact quote alone when it's unambiguous; (4) the quote under the fixed
+   * normalization, again only when it's unambiguous; else null — unanchored, and the card says
+   * so. Rung (4) is why a re-wrapped paragraph keeps its notes: the daemon has always folded
+   * before searching, so without it the page could call a note lost that the session still gets. */
   function rangeForTarget(target) {
     const pos = target?.position;
     const exact = target?.quote?.exact;
     if (pos && typeof pos.start === "number" && typeof pos.end === "number") {
       const range = offsetsToRange(pos.start, pos.end);
-      if (range && (!exact || range.toString() === exact)) return range;
+      // A re-wrap swaps a space for a newline in place, so the stored offsets still hold and only
+      // the whitespace differs — the same words, and no search needed to say so.
+      if (range && (!exact || range.toString() === exact || foldQuote(range.toString()) === foldQuote(exact))) {
+        return range;
+      }
     }
     if (!exact) return null;
     const text = contentEl.textContent;
@@ -2407,7 +2414,8 @@ export function createArtifactPane(host, deps) {
     if (contextIdx !== -1) return offsetsToRange(contextIdx + prefix.length, contextIdx + prefix.length + exact.length);
     const first = text.indexOf(exact);
     if (first !== -1 && text.indexOf(exact, first + 1) === -1) return offsetsToRange(first, first + exact.length);
-    return null;
+    const folded = locateFoldedQuote(text, exact);
+    return folded ? offsetsToRange(folded.start, folded.end) : null;
   }
 
   /** True when the margin is the anchor-aligned side rail rather than the in-flow block under the

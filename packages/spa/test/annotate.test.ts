@@ -3,7 +3,7 @@
 // `buildAnnotationRecordFromSelection` is the DOM-facing half, tested against a real happy-dom
 // Selection/Range (see dom-env.ts for why happy-dom rather than jsdom/native).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { buildAnnotationRecordFromSelection, buildAnnotationTarget } from "../src/annotate.js";
+import { buildAnnotationRecordFromSelection, buildAnnotationTarget, locateFoldedQuote } from "../src/annotate.js";
 import { installDom, type DomEnv } from "./dom-env.ts";
 
 describe("buildAnnotationTarget — pure, no DOM", () => {
@@ -189,5 +189,68 @@ describe("buildAnnotationRecordFromSelection — DOM (happy-dom)", () => {
       intent: "content",
     });
     expect(record).toBeNull();
+  });
+});
+
+// The fixed A5 §F10 normalization, as the page runs it. The defect this exists to catch: a
+// paragraph re-wrapped in the source (a space becomes a soft break, or the reverse) leaves the
+// rendered WORDS untouched, and the page still called every note on it lost — while the daemon,
+// which has always folded before searching, went on delivering them. So the offsets asserted here
+// are the offsets into the ORIGINAL text, not the folded one: a match that cannot say where in
+// the real text it landed cannot underline anything.
+describe("locateFoldedQuote — the fixed normalization, unique or nothing", () => {
+  test("a space in the quote against a newline in the text (the paragraph was split)", () => {
+    const text = "Alpha beta gamma\ndelta epsilon.";
+    expect(locateFoldedQuote(text, "gamma delta")).toEqual({ start: 11, end: 22 });
+    expect(text.slice(11, 22)).toBe("gamma\ndelta");
+  });
+
+  test("a newline in the quote against a space in the text (the paragraph was joined back up)", () => {
+    const text = "Alpha beta gamma delta epsilon.";
+    expect(locateFoldedQuote(text, "gamma\ndelta")).toEqual({ start: 11, end: 22 });
+    expect(text.slice(11, 22)).toBe("gamma delta");
+  });
+
+  test("a whole whitespace run — doubled space, NBSP, tab — is spanned, not just its first unit", () => {
+    const text = "Alpha beta gamma  \tdelta epsilon.";
+    const found = locateFoldedQuote(text, "gamma delta")!;
+    expect(found).toEqual({ start: 11, end: 24 });
+    expect(text.slice(found.start, found.end)).toBe("gamma  \tdelta");
+  });
+
+  test("a decomposed accent in the text matches a composed quote, with offsets on the original units", () => {
+    const text = "Zapisz krótko tutaj."; // o + U+0301 COMBINING ACUTE
+    const found = locateFoldedQuote(text, "krótko")!;
+    expect(found).toEqual({ start: 7, end: 14 });
+    expect(text.slice(found.start, found.end)).toBe("krótko");
+  });
+
+  test("and the reverse: a composed accent in the text matches a decomposed quote", () => {
+    const text = "Zapisz krótko tutaj.";
+    const found = locateFoldedQuote(text, "krótko")!;
+    expect(found).toEqual({ start: 7, end: 13 });
+    expect(text.slice(found.start, found.end)).toBe("krótko");
+  });
+
+  test("a quote that folds to two places in the text resolves to neither", () => {
+    // Would be unambiguous before folding — which is exactly the trap: folding widens the search,
+    // so it has to narrow the acceptance to match, or a note silently moves to another paragraph.
+    expect(locateFoldedQuote("gamma delta and then gamma\ndelta", "gamma delta")).toBeNull();
+  });
+
+  test("a quote that is not in the text at all resolves to nothing", () => {
+    expect(locateFoldedQuote("Alpha beta gamma delta.", "omicron pi")).toBeNull();
+  });
+
+  test("an empty or whitespace-only quote is not a quote", () => {
+    expect(locateFoldedQuote("Alpha beta gamma delta.", "")).toBeNull();
+    expect(locateFoldedQuote("Alpha beta gamma delta.", "  \n\t ")).toBeNull();
+    expect(locateFoldedQuote("", "gamma")).toBeNull();
+  });
+
+  test("text that never changed lands on the same offsets a plain indexOf would give", () => {
+    const text = "Alpha beta gamma delta epsilon.";
+    const at = text.indexOf("gamma delta");
+    expect(locateFoldedQuote(text, "gamma delta")).toEqual({ start: at, end: at + "gamma delta".length });
   });
 });

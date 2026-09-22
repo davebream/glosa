@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A note no longer reads "Lost its place" when its sentence only moved across a line break.**
+  Re-wrapping a paragraph in your editor, or letting a doubled space in, left the rendered words
+  untouched and still emptied the margin of every note on that passage — while the session kept
+  receiving them, because the daemon has always ignored that kind of difference when it looks a
+  passage up. The page now looks it up the same way, and still refuses to choose when the quoted
+  words fit two places.
+
 ## [0.1.0-alpha.29] — 2026-09-22
 
 ### Security
