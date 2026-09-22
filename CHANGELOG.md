@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0-alpha.29] — 2026-09-22
+
 ### Security
 
 - **The daemon's API for glosa's own commands moved off the network onto a local socket only you can
@@ -48,6 +50,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Connecting a Claude Code session now tells you whether your notes can actually reach it.**
+  Binding a session and being able to push to it were different things, and nothing said which you
+  had. A session could bind, open the document, and show as connected while no monitor was running
+  anywhere — so margin notes queued against a workspace nothing was listening to, silently, until
+  someone thought to pull them. `glosa-connect` now says in one line whether delivery is live, and
+  what happens to notes if it is not. `glosa doctor` answers the same question instead of shrugging
+  at it, and `glosa status --json` reports it per session.
+- **A session that installed the plugin mid-conversation gets delivery without restarting.** The
+  monitor only ever started at session start, so installing glosa partway through a session left
+  push off until the next one. Running `glosa-connect` now starts it. Whichever way it starts, a
+  session runs exactly one monitor: before, two could race, and the loser's replacement re-sent an
+  entry the first had already shown you — the same margin note twice.
+- **`glosa-connect` stops improvising when a workspace is half-deleted.** An interrupted
+  `glosa forget` leaves a workspace that refuses to bind, and the skill knew one failure and
+  guessed at the rest — it would quietly open the document somewhere else and never mention that a
+  workspace of yours is stuck mid-deletion. It now names the state and prints the command that
+  finishes the removal, and refuses anything it cannot do honestly rather than opening a document
+  that looks connected and is not.
+- Errors from glosa's MCP tools carry the daemon's own remedy and a stable error code, instead of a
+  bare sentence an agent could only guess at.
 - Live file updates now follow the work you are actually doing when more than 64 workspaces are
   registered. The daemon used to give its bounded watcher slots to the first workspaces encountered
   during warm-up, so an old registration could stay live while the workspace with your current
@@ -1065,7 +1087,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...HEAD
+[0.1.0-alpha.29]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...v0.1.0-alpha.29
 [0.1.0-alpha.28]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...v0.1.0-alpha.28
 [0.1.0-alpha.27]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.26...v0.1.0-alpha.27
 [0.1.0-alpha.26]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.25...v0.1.0-alpha.26

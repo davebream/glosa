@@ -59,7 +59,6 @@ export const STREAM_FAILURE_DEADLINE_MS = 12_000;
 export interface MonitorOptions {
   sessionId: string;
   projectDir: string;
-  pluginRoot: string;
 }
 
 export interface MonitorDeps {

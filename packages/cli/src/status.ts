@@ -9,6 +9,7 @@
 // global (every present workspace, every registered session) — `status` answering "what's glosa
 // doing right now" doesn't need to be scoped to one workspace to be useful, and scoping it would
 // need a canonicalize-and-match step this thin a command doesn't otherwise need.
+import { forgetRemedy } from "../../daemon/src/registry/forget-remedy.ts";
 import type { GlosaApiClient, SessionStatusSummary, StatusSummary, WorkspaceStatusSummary } from "./api-client.ts";
 import { type CommandEnvelope, EXIT_CODES, printJsonEnvelope } from "./envelope.ts";
 
@@ -92,9 +93,9 @@ export function printStatusResult(result: CommandEnvelope<StatusData>, json: boo
     // whose `glosa forget` deletion is durably committed but was interrupted, not just note the
     // fact — this is what `doctor` also prints (doctor.ts's own "workspace" check).
     if (w.lifecycle === "forgetting") {
-      process.stdout.write(
-        `    deletion interrupted (\`glosa forget\`) — run \`glosa forget ${w.slug} --yes\` to resume\n`,
-      );
+      // Prefer the daemon's own sentence; `forgetRemedy` is the same builder it used, so an N-1
+      // daemon that omits `remedy` still prints exactly what it always did.
+      process.stdout.write(`    ${w.remedy ?? forgetRemedy(w.slug)}\n`);
     }
   }
 }

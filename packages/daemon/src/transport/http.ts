@@ -29,6 +29,7 @@ import { BUILD_ID } from "../lifecycle/build-id.ts";
 import { glosaHome } from "../lifecycle/home.ts";
 import { INSTALL_ID } from "../lifecycle/install.ts";
 import { PROTOCOL_VERSION } from "../lifecycle/protocol.ts";
+import { forgetRemedy, forgetRemedyWithoutSlug } from "../registry/forget-remedy.ts";
 import { forgetWorkspace } from "../registry/forget-workspace.ts";
 import { type OrphanedState, scanOrphanedHomeState } from "../registry/orphan-scan.ts";
 import { SessionProviderConflict, type SessionRecord, type SessionRegistry } from "../registry/session-registry.ts";
@@ -497,7 +498,16 @@ function workspaceOrNotFound(ctx: ApiContext, slug: string, pathname: string) {
   if (isBeingForgotten(entry)) {
     return {
       ok: false as const,
-      response: problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, pathname),
+      // #312: the TITLE stays byte-identical (the SPA and its tests read it); the remedy rides in
+      // `detail`, because the whole message an agent used to receive was "workspace is being
+      // forgotten" — true, and useless. Now it also learns how to finish the deletion.
+      response: problem(
+        409,
+        "workspace-forgetting",
+        "workspace is being forgotten",
+        forgetRemedy(entry.slug),
+        pathname,
+      ),
     };
   }
   return { ok: true as const, entry };
@@ -765,7 +775,13 @@ async function handleSessionBinding(ctx: ApiContext, slug: string, req: Request)
       return false;
     });
     if (blocked) {
-      return problem(409, "workspace-forgetting", "workspace is being forgotten", undefined, url.pathname);
+      return problem(
+        409,
+        "workspace-forgetting",
+        "workspace is being forgotten",
+        forgetRemedy(owner.slug),
+        url.pathname,
+      );
     }
   } catch (error) {
     if (error instanceof SessionProviderConflict)
@@ -1586,12 +1602,19 @@ async function handleSessionStream(
   });
 }
 
+/** The one read behind both the `stream/status` probe and `/api/status`'s per-session `push`
+ * (#306). An absent registry is an honest "no push", never an error: a daemon assembled without
+ * one simply has no session holding a stream. */
+function pushTransport(ctx: ApiContext, sessionId: string): "monitor" | "codex_app_server" | null {
+  return ctx.pushRegistry?.transport(sessionId) ?? null;
+}
+
 /** `GET /api/sessions/:id/stream/status` (#206) — an authenticated, read-only ownership probe. It
  * answers from `SessionPushRegistry` alone: no session-registry lookup, no liveness check, no lease
  * hold, no registration. An unknown session id honestly reports `connected:false` the same as a
  * known one with no live connection — a parked client's probe treats both as "free". */
 function handleSessionStreamStatus(ctx: ApiContext, sessionId: string): Response {
-  const transport = ctx.pushRegistry?.transport(sessionId) ?? null;
+  const transport = pushTransport(ctx, sessionId);
   return Response.json({ connected: transport !== null, transport });
 }
 
@@ -1835,6 +1858,23 @@ async function handleWorkspaceOpen(ctx: ApiContext, req: Request): Promise<Respo
 
 /** The shared body of `glosa open` and reopening a star: register (or refresh) the target, adopt
  * loose lineages into a directory, and reconcile its bus once. */
+/** The remedy for whatever row owns `rawPath`, or the slugless fallback when none survives. Never
+ * throws: this runs on an error path, and a failed lookup must not replace one refusal with
+ * another. */
+function forgetRemedyForPath(ctx: ApiContext, rawPath: string): string {
+  try {
+    const canonical = canonicalize(rawPath);
+    const row = ctx.workspaceIndex
+      .list()
+      .find(
+        (e) => e.lifecycle?.state === "forgetting" && (e.canonical_path === canonical || e.worktree_path === rawPath),
+      );
+    return row ? forgetRemedy(row.slug) : forgetRemedyWithoutSlug();
+  } catch {
+    return forgetRemedyWithoutSlug();
+  }
+}
+
 async function openWorkspaceAt(
   ctx: ApiContext,
   rawPath: string,
@@ -1883,7 +1923,14 @@ async function openWorkspaceAt(
       return problem(status, error.code, error.message, undefined, pathname);
     }
     if (error instanceof AdoptionError) {
-      return problem(409, error.code, error.message, undefined, pathname);
+      // THE site the connect flow hits: `glosa_session_bind` and `glosa_present` both open the
+      // workspace before they bind, so this is where a session inside a half-deleted workspace is
+      // refused (#312). `resolveOpenTarget` throws from several depths and does not carry a slug,
+      // so resolve one from the requested path when the index still has a row; when it does not —
+      // the registration-less window, where the row is already gone — name `doctor`, which reads
+      // the durable forget record, rather than interpolate `undefined` into a delete command.
+      const detail = error.code === "workspace-forgetting" ? forgetRemedyForPath(ctx, rawPath) : undefined;
+      return problem(409, error.code, error.message, detail, pathname);
     }
     if (error instanceof WorkspaceAdoptedError) {
       return problem(409, "workspace-adopted", error.message, undefined, pathname);
@@ -2312,6 +2359,7 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         has_attention: false,
         orphaned_entry_count: 0,
         lifecycle: "forgetting" as const,
+        remedy: forgetRemedy(op.target_slug),
         connect: {
           providers: (ctx.providerRegistry?.list() ?? []).map((provider) => ({
             provider: provider.id,
@@ -2344,7 +2392,9 @@ function handleStatusAggregate(ctx: ApiContext): Response {
         // Additive (issue #156): a `glosa forget` whose deletion is durably committed — possibly
         // mid-resume after a crash — so `doctor` can name the interrupted state and the exact resume
         // command instead of misreading a mid-deletion workspace as merely "not yet opened".
-        ...(e.lifecycle?.state === "forgetting" ? { lifecycle: "forgetting" as const } : {}),
+        ...(e.lifecycle?.state === "forgetting"
+          ? { lifecycle: "forgetting" as const, remedy: forgetRemedy(e.slug) }
+          : {}),
         // Additive (contract 1.15, issue #219): runtime truth only. Omitted when a narrow test or
         // older composition does not provide the daemon-owned watcher registry.
         ...(liveUpdates ? { live_updates: liveUpdates } : {}),
@@ -2361,16 +2411,28 @@ function handleStatusAggregate(ctx: ApiContext): Response {
     }),
     ...registrationlessRows,
   ];
-  const sessions = ctx.sessionRegistry.list().map((s) => ({
-    session_id: s.session_id,
-    provider: s.provider,
-    cwd: s.cwd,
-    workspace_binding: s.workspace_binding ?? null,
-    source: s.source,
-    lease_expiry: s.lease_expiry,
-    last_active_at: s.last_active_at,
-    liveness: ctx.sessionRegistry.liveness(s.session_id),
-  }));
+  const sessions = ctx.sessionRegistry.list().map((s) => {
+    const transport = pushTransport(ctx, s.session_id);
+    return {
+      session_id: s.session_id,
+      provider: s.provider,
+      cwd: s.cwd,
+      workspace_binding: s.workspace_binding ?? null,
+      source: s.source,
+      lease_expiry: s.lease_expiry,
+      last_active_at: s.last_active_at,
+      liveness: ctx.sessionRegistry.liveness(s.session_id),
+      // Contract 1.16 (issue #306). Answered from `SessionPushRegistry` alone, exactly like the
+      // `GET /api/sessions/:id/stream/status` probe, and carrying that probe's shape verbatim so
+      // there is ONE wire shape for "is push live" rather than two that must be kept in step.
+      //
+      // This is a delivery-transport fact about one session, NOT a workspace-connection fact: it
+      // must never feed the connected/stale/unbound derivation, which stays `workspace_binding` +
+      // liveness and nothing else (A1 §5.2b). `source` cannot stand in for it — an explicit bind
+      // overwrites `source` with "mcp", erasing the only trace a monitor leaves behind.
+      push: { connected: transport !== null, transport },
+    };
+  });
   // Additive (contract-minor-safe) orphan report — see registry/orphan-scan.ts. Never throws;
   // a scan failure degrades to an empty list rather than breaking the whole status aggregate.
   let orphanedState: OrphanedState[] = [];

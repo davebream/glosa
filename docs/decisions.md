@@ -117,6 +117,25 @@ Nothing migrates existing installs. `glosa hook <event>` survives one release as
 stub so a machine still carrying old hook entries never shows a failing hook on every prompt, and
 `glosa doctor` names the leftover entries; both are the whole of the compatibility story.
 
+Amended 2026-09-22 (issues #306, #312). Making the monitor the only Claude push path left two gaps
+this closes. First, connecting and delivery became unrelated events on Claude Code while they stay
+the same event on Codex, so a session could bind, open a document, and show as connected with no
+monitor anywhere — the user wrote margin notes into a workspace nothing was listening to, and
+nothing said so. The plugin now declares a second start trigger,
+`on-skill-invoke:glosa-connect`, and the skill can start one itself; `glosa monitor` takes a
+per-session `flock` so all three routes still yield exactly one process. Two monitors was never
+merely wasteful — the second displaced the first and re-sent it an entry, delivering the same line
+twice. Displacement itself stays: it is the only recovery from a wedged incumbent, it is shared
+with the Codex rail, and refusing instead would leave an older monitor retrying against a daemon
+that will never accept it.
+
+Second, `push` was computed per session and reported nowhere, so nothing could tell a bound
+session apart from a reachable one. It is now a field on `/api/status`'s session rows rather than
+on the bind result: the bind's own registration is what wakes an idle monitor, so a bind-time
+answer is structurally `false` on Claude Code and authoritative on Codex while looking identical
+on the wire, and a client cannot tell which case it holds. An absent field means "this daemon
+cannot say", never "push is down".
+
 ## Codex `turn/steer` is the agent's own API, not keystroke injection
 
 The roadmap rules out "cmux coupling or terminal-keystroke injection". Codex push is neither: the

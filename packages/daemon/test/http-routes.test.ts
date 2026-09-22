@@ -187,6 +187,15 @@ describe("A1 §5 route catalog", () => {
         expect.objectContaining({ session_id: "explicit-stale", workspace_binding: root, liveness: "stale" }),
       ]),
     );
+    // #306: a bound session and a session that can actually be PUSHED to are different facts, and
+    // conflating them is the silent failure this field exists to end — every one of these rows is
+    // bound, and none of them holds a stream, so all of them report `connected:false`.
+    expect(body.sessions.map((s: { session_id: string; push: unknown }) => [s.session_id, s.push])).toEqual(
+      expect.arrayContaining([
+        ["cwd-only-live", { connected: false, transport: null }],
+        ["explicit-stale", { connected: false, transport: null }],
+      ]),
+    );
     expect(sessionRegistry.get("cwd-only-live")?.workspace_binding).toBeUndefined();
     expect(sessionRegistry.get("explicit-stale")?.workspace_binding).toBe(root);
   });
@@ -2954,7 +2963,15 @@ describe("A1 §5 route catalog", () => {
         }),
       );
       expect(bindRes.status).toBe(409);
-      expect((await bindRes.json()).type).toContain("workspace-forgetting");
+      const bindProblem = await bindRes.json();
+      expect(bindProblem.type).toContain("workspace-forgetting");
+      // #312: an agent receives only the flattened message, and "workspace is being forgotten"
+      // was the WHOLE of it — true, and no help. The title stays byte-identical because the SPA
+      // reads it; the remedy rides in `detail`, naming the real slug and the exact command.
+      expect(bindProblem.title).toBe("workspace is being forgotten");
+      expect(bindProblem.detail).toBe(
+        `deletion interrupted (\`glosa forget\`) — run \`glosa forget ${slug} --yes\` to resume`,
+      );
       expect(sessionRegistry.get("bind-1")).toBeNull();
 
       const registerRes = await fetchFn(
@@ -2967,6 +2984,28 @@ describe("A1 §5 route catalog", () => {
       expect(registerRes.status).toBe(409);
       expect((await registerRes.json()).type).toContain("workspace-forgetting");
       expect(sessionRegistry.get("register-1")).toBeNull();
+    });
+
+    test("POST /api/workspaces/open — the refusal the connect flow actually reaches — carries the remedy too (#312)", async () => {
+      // This, not the bind route, is where a `glosa-connect` session in a half-deleted workspace
+      // is refused: `glosa_session_bind` and `glosa_present` both open the workspace before they
+      // bind. A remedy added only to the bind sites would be invisible to every agent.
+      const entry = workspaceIndex.getBySlug(slug)!;
+      await workspaceIndex.beginForgetOperation(entry, [entry]);
+
+      const res = await fetchFn(
+        stateChangingReq("/api/workspaces/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: root }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.type).toContain("workspace-forgetting");
+      expect(body.detail).toBe(
+        `deletion interrupted (\`glosa forget\`) — run \`glosa forget ${slug} --yes\` to resume`,
+      );
     });
 
     test("GET /api/status includes a forgetting workspace even once its worktree is gone (issue #156)", async () => {
@@ -2989,6 +3028,9 @@ describe("A1 §5 route catalog", () => {
       const row = body.workspaces.find((w: { slug: string }) => w.slug === slug);
       expect(row).toBeDefined();
       expect(row.lifecycle).toBe("forgetting");
+      // #312: the resume sentence travels in the JSON too, so a machine consumer prints the
+      // daemon's words rather than composing a copy that drifts from `status` and `doctor`.
+      expect(row.remedy).toBe(`deletion interrupted (\`glosa forget\`) — run \`glosa forget ${slug} --yes\` to resume`);
 
       mkdirSync(root, { recursive: true }); // recreate for afterEach's cleanup
     });

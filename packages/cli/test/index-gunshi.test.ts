@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { BUILD_ID } from "../../daemon/src/lifecycle/build-id.ts";
 import { randomPort } from "../../daemon/test/helpers.ts";
 import { createHttpDaemonClient } from "../src/daemon-client.ts";
+import { EXIT_CODES } from "../src/envelope.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
 import { run, type CliRunDependencies } from "../src/index.ts";
 import { FakeGlosaApiClient } from "./fake-api-client.ts";
@@ -300,6 +301,48 @@ describe("Gunshi completion", () => {
       expect(result.stderr).toBe("");
       expect(result.stdout.length).toBeGreaterThan(100);
       expect(result.stdout.toLowerCase()).toContain("glosa");
+    }
+  });
+
+  test("glosa monitor needs only the session id — the form the glosa-connect skill can actually produce (#306)", async () => {
+    // Measured in a live Claude Code session: a Bash/Monitor command inherits
+    // CLAUDE_CODE_SESSION_ID but NOT CLAUDE_PLUGIN_ROOT or CLAUDE_PROJECT_DIR. So the skill can
+    // never pass `--plugin-root`, and requiring it made the documented fallback command
+    // impossible to run. Nothing ever read it.
+    const home = mkdtempSync(join(tmpdir(), "glosa-monitor-args-"));
+    try {
+      const env = { GLOSA_HOME: home, CLAUDE_CODE_SESSION_ID: "args-session" };
+      // No daemon is running, so a monitor that got past argument parsing idles rather than
+      // exiting; a USAGE exit is what proves it was REFUSED. Bounded so a pass cannot hang.
+      const started = Bun.spawn({
+        cmd: [process.execPath, CLI_PATH, "monitor", "--project-dir", home],
+        env: { ...Bun.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // Raced, not polled on `exitCode`: that field is only settled once the child is awaited, so
+      // reading it directly would report "still running" for a process that had already refused —
+      // a check that cannot observe what it claims.
+      // Raced, not polled on `exitCode`: that field is only settled once the child is awaited, so
+      // reading it directly would report "still running" for a process that had already refused —
+      // a check that cannot observe what it claims. stderr is read only AFTER the process is
+      // stopped, because a live monitor never closes it.
+      const outcome = await Promise.race([started.exited, Bun.sleep(1_500).then(() => "still-running" as const)]);
+      started.kill("SIGTERM");
+      await started.exited;
+      expect({ outcome, stderr: await new Response(started.stderr).text() }).toMatchObject({
+        outcome: "still-running",
+      });
+
+      // Without a session id there is nothing to key the stream or the singleton lock on, so this
+      // one stays required.
+      const noSession = runCli(["monitor", "--project-dir", home], {
+        env: { GLOSA_HOME: home, CLAUDE_CODE_SESSION_ID: undefined },
+      });
+      expect(noSession.exitCode).toBe(EXIT_CODES.USAGE);
+      expect(noSession.stderr).toContain("CLAUDE_CODE_SESSION_ID is required");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
