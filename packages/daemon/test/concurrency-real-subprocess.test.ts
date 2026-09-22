@@ -94,7 +94,7 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
     return ((await res.json()) as { id: string }).id;
   }
 
-  it("N real concurrent apply-begin requests for the SAME entry, from N different sessions, over real sockets: exactly one lease wins, everyone else gets a real 409, and the journal ends up with exactly one apply_begin", async () => {
+  it("N real concurrent apply-begin requests for the SAME entry, from N different sessions, over real sockets: exactly one claim wins, everyone else gets a real 409, and the journal ends up with exactly one claim_taken", async () => {
     const N = 8;
     const entry = await seedEntry(workspaceRoot);
     const sessions = Array.from({ length: N }, (_, i) => `session-${i}`);
@@ -114,18 +114,23 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
       if (typeof body.lease_id === "string") {
         expect(body.entry).toBe(entry); // the winner really is for the entry we asked about
       } else {
-        expect(body.type).toContain("lease-conflict");
+        // Contract 1.17: the conflict names its holder (issue #155), so the loser knows who won.
+        expect(body.type).toContain("claim-held");
+        expect(sessions).toContain(body.holder_session);
+        expect(body.fence).toBe(1);
       }
     }
 
     // The durable proof, read directly off disk: the real journal this real subprocess wrote has
-    // exactly ONE apply_begin line for e1 — not zero (lost write), not N (the mutex didn't hold).
+    // exactly ONE claim_taken line for the entry — not zero (lost write), not N (the mutex didn't
+    // hold) — and no legacy apply_begin at all, since apply-begin is now an alias for a claim.
     const journalPath = join(workspaceRoot, ".glosa", "journal.ndjson");
     const journalText = readFileSync(journalPath, "utf8");
     const lines = journalText.split("\n").filter((l) => l.length > 0);
     for (const line of lines) expect(() => JSON.parse(line)).not.toThrow(); // never a torn/corrupt line
-    const applyBeginLines = lines.filter((l) => l.includes('"apply_begin"'));
-    expect(applyBeginLines).toHaveLength(1);
+    const claimTakenLines = lines.filter((l) => l.includes('"claim_taken"'));
+    expect(claimTakenLines).toHaveLength(1);
+    expect(lines.some((l) => l.includes('"apply_begin"'))).toBe(false);
   });
 
   it("concurrent apply-begin requests against TWO DIFFERENT real workspaces never contend with each other — the mutex is genuinely workspace-scoped, not a global daemon-wide lock", async () => {

@@ -2,7 +2,7 @@
 // Workspace connection lifecycle. All I/O is caller-injected so this module stays transport-free
 // and the SPA retains one data-access boundary.
 
-import { boundProviderName, deriveAgentConnection } from "./agent-feedback.js";
+import { boundProviderName, deriveAgentConnection, providerNameForSession } from "./agent-feedback.js";
 
 export function createViewerFeedbackController({ dataAccess, view, getWorkspaceSlug, pollIntervalMs = 15_000 }) {
   let status = null;
@@ -48,6 +48,11 @@ export function createViewerFeedbackController({ dataAccess, view, getWorkspaceS
      * session's self-reported label as something glosa verified. */
     providerName() {
       return boundProviderName(deriveAgentConnection(status, getWorkspaceSlug()));
+    },
+    /** The provider's own display name for one session, or null when it cannot be proven
+     * (issue #155). Names the holder of a claim; never a guess. */
+    providerNameFor(sessionId) {
+      return providerNameForSession(deriveAgentConnection(status, getWorkspaceSlug()), sessionId);
     },
     selectWorkspace,
     destroy() {

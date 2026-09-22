@@ -12,7 +12,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { JournalEvent } from "../../src/bus/journal.ts";
-import type { ApplyLeaseState, DerivedState } from "../../src/bus/replay.ts";
+import type { Claim } from "../../src/bus/claims.ts";
+import type { DerivedState } from "../../src/bus/replay.ts";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import { journalPath, workspaceBusDir } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
@@ -30,16 +31,47 @@ function stateAfterPrefix(bytes: Buffer): DerivedState {
   return foldEvents(events, lifecycleReducer);
 }
 
-/** A recovered lease is either entirely absent, or a fully-populated, internally-consistent
+/** The claim over the entry this lifecycle applies — what `state.applyLease` used to answer. */
+function leaseOf(state: DerivedState): Claim | null {
+  return state.claims["entry:e1"]?.exclusive ?? null;
+}
+
+/** A recovered claim is either entirely absent, or a fully-populated, internally-consistent
  * object — never a partially-folded/corrupt shape (which would itself be a §F05 violation: a
- * lease glosa can't correctly attribute or expire). */
-function assertLeaseShapeLegal(lease: ApplyLeaseState | null, expectedLeaseId: string): void {
-  if (lease === null) return;
-  expect(lease.leaseId).toBe(expectedLeaseId);
-  expect(lease.entry).toBe("e1");
-  expect(lease.session).toBe("sess-1");
-  expect(lease.preSha.length).toBeGreaterThan(0);
-  expect(() => new Date(lease.expiresAt).toISOString()).not.toThrow();
+ * claim glosa can't correctly attribute or expire). */
+function assertLeaseShapeLegal(claim: Claim | null, expectedLeaseId: string): void {
+  if (claim === null) return;
+  expect(claim.claim_id).toBe(expectedLeaseId);
+  expect(claim.resources).toEqual(["entry:e1"]);
+  expect(claim.holder_session).toBe("sess-1");
+  expect((claim.pre_sha ?? "").length).toBeGreaterThan(0);
+  expect(() => new Date(claim.expires_at).toISOString()).not.toThrow();
+}
+
+/** The same "never a partially folded shape" property, of the resource slot and its tombstone:
+ * when no claim is live, whatever ended it must have left a tombstone naming the holder, which is
+ * precisely what `apply_expired` never recorded before issue #155. */
+function assertClaimShapeLegal(state: DerivedState, expectedLeaseId: string): void {
+  const slot = state.claims["entry:e1"];
+  if (leaseOf(state) === null) {
+    // Either the claim was never taken, or it ended — and if it ended it left a tombstone naming
+    // the holder, which is precisely what `apply_expired` never recorded before this change.
+    if (slot?.last) {
+      expect(slot.last.claim_id).toBe(expectedLeaseId);
+      expect(slot.last.holder_session).toBe("sess-1");
+      expect(() => new Date(slot.last?.ended_at ?? "").toISOString()).not.toThrow();
+    }
+    expect(slot?.exclusive ?? null).toBeNull();
+    return;
+  }
+  const claim = slot?.exclusive;
+  expect(claim).toBeDefined();
+  expect(claim?.claim_id).toBe(expectedLeaseId);
+  expect(claim?.mode).toBe("exclusive");
+  expect(claim?.holder_session).toBe("sess-1");
+  expect(claim?.resources).toContain("entry:e1");
+  // A lease folded forward from before fencing existed carries `null`, never a fabricated number.
+  expect(claim?.fence === null || typeof claim?.fence === "number").toBe(true);
 }
 
 describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)", () => {
@@ -60,16 +92,18 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
 
     const text = fullBytes.toString("utf8");
     const rawLines = text.split("\n").filter((l) => l.length > 0);
-    expect(rawLines.some((l) => l.includes('"apply_begin"'))).toBe(true);
+    // `applyBegin` is an alias for an exclusive claim now (issue #155), so the record that opens
+    // the interval is `claim_taken`; `apply_end` still closes it.
+    expect(rawLines.some((l) => l.includes('"claim_taken"'))).toBe(true);
     expect(rawLines.some((l) => l.includes('"apply_end"'))).toBe(true);
 
-    // expires_at from the real apply_begin event, so the sweep can deliberately reconcile from
-    // both sides of the lease's own expiry — proving BOTH legal outcomes (still-active, and
+    // expires_at from the real claim_taken event, so the sweep can deliberately reconcile from
+    // both sides of the claim's own expiry — proving BOTH legal outcomes (still-active, and
     // auto-expired) recover cleanly, not just whichever one the wall clock happens to hit.
-    const applyBeginLine = rawLines.find((l) => l.includes('"apply_begin"'));
-    expect(applyBeginLine).toBeDefined();
-    const applyBeginEvent = JSON.parse(applyBeginLine as string) as JournalEvent;
-    const expiresAt = new Date((applyBeginEvent.detail as Record<string, unknown>).expires_at as string);
+    const claimTakenLine = rawLines.find((l) => l.includes('"claim_taken"'));
+    expect(claimTakenLine).toBeDefined();
+    const claimTakenEvent = JSON.parse(claimTakenLine as string) as JournalEvent;
+    const expiresAt = new Date((claimTakenEvent.detail as Record<string, unknown>).expires_at as string);
     const wellBeforeExpiry = new Date(expiresAt.getTime() - 60_000);
     const wellAfterExpiry = new Date(expiresAt.getTime() + 60_000);
 
@@ -80,13 +114,13 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
     }
     const recordBoundaries = [...starts, fullBytes.length];
 
-    // Exhaustive byte-offset sweep, but scoped to just the lease-critical span (apply_begin's
-    // record start through apply_end's record end) rather than the whole journal — the
+    // Exhaustive byte-offset sweep, but scoped to just the lease-critical span (claim_taken's
+    // record start through transition_committed's record end) rather than the whole journal — the
     // torn-write/quarantine mechanism itself is already proven content-agnostic by
     // reconcile-fault.test.ts's own exhaustive sweep; what's new and worth paying for here is the
     // real lease STATE SHAPE at every possible crash point within it. Elsewhere, only whole-record
     // boundaries are swept.
-    const applyBeginRecordStart = text.indexOf('"apply_begin"');
+    const applyBeginRecordStart = text.indexOf('"claim_taken"');
     const transitionCommittedRecordStart = text.indexOf('"transition_committed"');
     expect(applyBeginRecordStart).toBeGreaterThan(-1);
     expect(transitionCommittedRecordStart).toBeGreaterThan(-1);
@@ -124,7 +158,7 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
       // in one of this offset's two legal snapshots — everywhere else (no lease on record either
       // way) the wall clock is inert, so skip the redundant (and git-spawning) second pass there.
       const leaseCouldBeOpenHere =
-        legalBefore.applyLease?.leaseId === leaseId || legalAfter.applyLease?.leaseId === leaseId;
+        leaseOf(legalBefore)?.claim_id === leaseId || leaseOf(legalAfter)?.claim_id === leaseId;
       const clocksToTry = leaseCouldBeOpenHere ? [wellBeforeExpiry, wellAfterExpiry] : [wellBeforeExpiry];
 
       for (const now of clocksToTry) {
@@ -156,7 +190,8 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
         }
 
         // 2. The recovered lease is never a phantom/partial shape.
-        assertLeaseShapeLegal(result.state.applyLease, leaseId);
+        assertLeaseShapeLegal(leaseOf(result.state), leaseId);
+        assertClaimShapeLegal(result.state, leaseId);
 
         // 3. THE crux: "applied" can never appear without the lease already being closed. If
         // transition_committed's bytes never fully landed, status stays "pending" by construction
@@ -164,20 +199,20 @@ describe("reconcile — kill mid real apply-lease lifecycle (A4 §F05 x §F04)",
         // recovery-specific property: even after auto-expiry runs during THIS reconcile call,
         // status is never fast-forwarded to "applied" as a side effect of closing the lease.
         if (result.state.entries.e1?.status === "applied") {
-          expect(result.state.applyLease).toBeNull();
+          expect(leaseOf(result.state)).toBeNull();
         }
 
         // 4. If a lease was legally open in the pre-crash state and we reconciled well past its
         // expiry, it must have been closed out (never left dangling forever) — and closing it out
         // must NEVER fabricate a completed status.
         const leaseWasOpenBefore =
-          legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId !== leaseId
-            ? legalBefore.applyLease
-            : legalBefore.applyLease?.leaseId === leaseId && legalAfter.applyLease?.leaseId === leaseId
-              ? legalBefore.applyLease
+          leaseOf(legalBefore)?.claim_id === leaseId && leaseOf(legalAfter)?.claim_id !== leaseId
+            ? leaseOf(legalBefore)
+            : leaseOf(legalBefore)?.claim_id === leaseId && leaseOf(legalAfter)?.claim_id === leaseId
+              ? leaseOf(legalBefore)
               : null;
         if (leaseWasOpenBefore && now === wellAfterExpiry) {
-          expect(result.state.applyLease).toBeNull();
+          expect(leaseOf(result.state)).toBeNull();
           expect(result.state.entries.e1?.status).not.toBe("applied");
         }
       }

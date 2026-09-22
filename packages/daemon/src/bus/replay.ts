@@ -24,7 +24,8 @@
 // not re-announced or re-copied.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import type { EventType, JournalEvent } from "./journal.ts";
+import { type Claim, type ClaimsState, entryIdOfResource, ENTRY_RESOURCE_PREFIX, reduceClaimEvent } from "./claims.ts";
+import type { EventBy, EventType, JournalEvent } from "./journal.ts";
 import { appendEvent, isJournalEvent, parseJournalEventLine, type JournalWriter } from "./journal.ts";
 import { quarantineLine } from "./quarantine.ts";
 
@@ -50,23 +51,46 @@ export interface DerivedEntryState {
    * Absent until a lease has actually closed, and on entries applied before `apply_end` recorded
    * both ends of the interval. */
   rollbackPreSha?: string;
+  /** The `by` of the transition that made this entry TERMINAL — set only when the guard actually
+   * let that transition through, so it names the session whose resolve won, never one whose
+   * resolve was discarded. This is what makes "is this my own duplicate resolve, or someone
+   * else's loss?" decidable from the fold alone, with no idempotency key on the wire and no
+   * response store beside the journal (issue #155). Absent on entries that are still open, and on
+   * terminal entries written before this field existed. */
+  terminalBy?: EventBy;
+  /** The last `apply_end` seen for this entry, stashed unattributed. The fold sees `apply_end`
+   * BEFORE the `transition_committed` that closes the entry, so at this point there is nothing to
+   * compare it against yet; `applyGuardedTransition` promotes it to `appliedInterval` only if the
+   * transition it precedes was committed by the same `by`. */
+  lastApplyEnd?: AppliedInterval;
+  /** The proven `pre_sha..post_sha` interval, scoped to the paths the claim covered, for the
+   * apply that actually closed this entry. Promoted from `lastApplyEnd` — a loser's `apply_end`
+   * never reaches here, which is the point: an interval attributed to a session whose transition
+   * the fold discarded would be provenance for work that did not happen. */
+  appliedInterval?: AppliedInterval;
   [key: string]: unknown;
 }
 
-/** The one active apply-lease for a workspace, derived from the last unmatched `apply_begin`
- * (A4 §F05 — "exactly ONE active apply-lease/workspace"). `null` means no lease is outstanding.
- * `apply_end`/`apply_expired` for this `leaseId` clear it back to `null`. */
-export interface ApplyLeaseState {
-  leaseId: string;
-  entry: string;
-  session: string;
-  preSha: string;
-  expiresAt: string;
+/** One proven apply interval. `interval_attribution` is `"unknown"` when a commit inside
+ * `pre_sha..post_sha` touched the claimed paths and was neither the holder's own `pre_apply` nor
+ * trailered with the holder's session — the entry still transitions, but the bytes cannot be
+ * credited to anyone. */
+export interface AppliedInterval {
+  by: EventBy;
+  claim_id?: string;
+  pre_sha?: string;
+  post_sha?: string;
+  paths?: string[];
+  interval_attribution?: "session" | "unknown";
+  reason?: string;
 }
 
 export interface DerivedState {
   entries: Record<string, DerivedEntryState>;
-  applyLease: ApplyLeaseState | null;
+  /** Per-resource claims (issue #155) — the generalization of `applyLease` from one lease per
+   * workspace to one exclusive claim per resource, plus non-blocking `presence` claims. Folded by
+   * `bus/claims.ts`. */
+  claims: ClaimsState;
   /** Present only after a durable `adoption_sealed`; mutators must reject rather than letting a
    * stale in-memory bus append into historical lineage. */
   adoptionSeal: { adoptionId: string; targetRegistrationId: string } | null;
@@ -87,13 +111,30 @@ export interface DerivedState {
 export function createEmptyState(): DerivedState {
   return {
     entries: {},
-    applyLease: null,
+    claims: {},
     adoptionSeal: null,
     forgetSeal: false,
     lineages: {},
     appliedEventIds: new Set(),
     appliedIdemKeys: new Set(),
     quarantineCount: 0,
+  };
+}
+
+/** Reads one `apply_end` into the interval shape, carrying only what the event itself states. */
+export function appliedIntervalOf(event: JournalEvent): AppliedInterval {
+  const d = event.detail ?? {};
+  return {
+    by: event.by,
+    ...(typeof d.claim_id === "string" ? { claim_id: d.claim_id } : {}),
+    ...(typeof d.lease_id === "string" && typeof d.claim_id !== "string" ? { claim_id: d.lease_id } : {}),
+    ...(typeof d.pre_sha === "string" ? { pre_sha: d.pre_sha } : {}),
+    ...(typeof d.post_sha === "string" ? { post_sha: d.post_sha } : {}),
+    ...(Array.isArray(d.paths) ? { paths: d.paths.filter((p): p is string => typeof p === "string") } : {}),
+    ...(d.interval_attribution === "unknown" || d.interval_attribution === "session"
+      ? { interval_attribution: d.interval_attribution }
+      : {}),
+    ...(typeof d.reason === "string" ? { reason: d.reason } : {}),
   };
 }
 
@@ -125,28 +166,22 @@ export const defaultReducer: Reducer = (state, event) => {
       else state.entries[event.entry] = { status: to };
       return;
     }
-    // P2.3 §F05: tracks the single outstanding apply-lease so `applyBegin` can reject a 2nd
-    // concurrent lease (LEASE_HELD) and reconcile step 4 can find a dangling one to expire —
-    // without either having to re-scan the raw journal themselves.
+    // §F05: the claim axis (issue #155) owns who holds what, including the three legacy
+    // apply-lease events folded forward as claims — so `applyBegin` can report the holder of a
+    // conflicting claim and reconcile step 4 can find a dangling one to expire, without either
+    // having to re-scan the raw journal themselves.
+    case "claim_taken":
+    case "claim_renewed":
+    case "claim_released":
+    case "claim_expired":
     case "apply_begin": {
-      const d = event.detail;
-      if (!d || typeof d.lease_id !== "string") return;
-      state.applyLease = {
-        leaseId: d.lease_id,
-        entry: event.entry ?? "",
-        session: typeof d.session === "string" ? d.session : "",
-        preSha: typeof d.pre_sha === "string" ? d.pre_sha : "",
-        expiresAt: typeof d.expires_at === "string" ? d.expires_at : "",
-      };
+      reduceClaimEvent(state.claims, event);
       return;
     }
     case "apply_end":
     case "apply_expired": {
+      reduceClaimEvent(state.claims, event);
       const d = event.detail;
-      const leaseId = d?.lease_id;
-      if (state.applyLease && typeof leaseId === "string" && state.applyLease.leaseId === leaseId) {
-        state.applyLease = null;
-      }
       // `apply_end.detail.pre_sha` is the ONE place the proven "what it read before this session
       // touched it" commit is stated (A4 §F05), and until now it was only ever seen by whoever
       // happened to be listening on the SSE stream at that instant. Carrying it onto the entry
@@ -156,6 +191,9 @@ export const defaultReducer: Reducer = (state, event) => {
       // interval it closes is attributed to nobody), so the guard below skips it by itself.
       const entryState = event.entry ? state.entries[event.entry] : undefined;
       if (entryState && typeof d?.pre_sha === "string") entryState.rollbackPreSha = d.pre_sha;
+      // Stash, never promote, here: the transition that decides whether this interval belongs to
+      // anybody has not been folded yet (see `DerivedEntryState.lastApplyEnd`).
+      if (entryState && event.event === "apply_end") entryState.lastApplyEnd = appliedIntervalOf(event);
       return;
     }
     case "adoption_sealed": {

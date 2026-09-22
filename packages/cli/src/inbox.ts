@@ -58,11 +58,14 @@ export function printInboxListResult(result: CommandEnvelope<InboxListResult>, j
     process.stderr.write(`glosa inbox list: ${result.error?.message ?? "failed"}\n`);
     return;
   }
-  // Two-space-indented columns, matching status.ts's `  <slug>  <path>  pending=<n>` register.
+  // Two-space-indented columns, matching status.ts's `  <slug>  <path>  pending=<n>` register. The
+  // holder column (issue #155, the "who holds it" #142 promised) is `-` when nobody holds the
+  // entry, and when an N-1 daemon does not report it.
   for (const entry of result.data.entries) {
     const payloadNote = entry.payload_present ? "" : "  [no payload]";
+    const holder = entry.holder ? `held by ${entry.holder}` : "-";
     process.stdout.write(
-      `  ${entry.id}  ${entry.kind}  ${entry.status}  ${formatAge(entry.created_at)}  ${entry.target_path ?? "-"}${payloadNote}\n`,
+      `  ${entry.id}  ${entry.kind}  ${entry.status}  ${formatAge(entry.created_at)}  ${entry.target_path ?? "-"}  ${holder}${payloadNote}\n`,
     );
   }
 }

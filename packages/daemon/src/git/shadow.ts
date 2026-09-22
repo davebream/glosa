@@ -278,10 +278,88 @@ export async function headSha(root: WorkspaceTarget): Promise<string> {
 }
 
 /** `git diff -M a b` — renames surface here (`-M`), not at write time; nothing about staging
- * needs to know about them. */
-export async function diffShas(root: WorkspaceTarget, a: string, b: string): Promise<string> {
+ * needs to know about them.
+ *
+ * `paths` scopes the result to the files a claim covered (issue #155), so two claims on two
+ * different artifacts read back two clean intervals even when their checkpoints interleave. It is
+ * deliberately NOT passed to git as a pathspec: rename detection pairs a deleted path with an added
+ * one only when it can see both, so a pathspec naming just the claimed side of a rename would turn
+ * `notes.md -> essay.md` into a bare "new file". Instead the full `-M` diff is computed and each
+ * file section is kept when EITHER its pre-image or its post-image path is claimed. */
+export async function diffShas(
+  root: WorkspaceTarget,
+  a: string,
+  b: string,
+  paths?: readonly string[],
+): Promise<string> {
   const result = await runGit(root, ["diff", "-M", a, b]);
-  return result.stdout;
+  if (paths === undefined) return result.stdout;
+  const wanted = new Set(paths);
+  // The authoritative path pair for each section, NUL-delimited so no path is ever C-quoted.
+  // `git diff` and `git diff --name-status` walk the same file list in the same order, so the
+  // i-th record names the i-th `diff --git` section.
+  const listed = await runGit(root, ["diff", "-M", "--name-status", "-z", a, b]);
+  const pairs = parseNameStatusZ(listed.stdout);
+  const sections = result.stdout.split(/(?=^diff --git )/m).filter((section) => section.startsWith("diff --git "));
+  if (sections.length !== pairs.length) {
+    // Never guess which section is which: an unpaired split could attribute one file's hunks to
+    // another's claim. Returning nothing claims less than returning something wrong.
+    return "";
+  }
+  return sections.filter((_, i) => wanted.has(pairs[i]?.pre ?? "") || wanted.has(pairs[i]?.post ?? "")).join("");
+}
+
+/** Parses `git diff --name-status -z` output: a status token, then one path (or two, for a
+ * rename/copy), each NUL-terminated. */
+function parseNameStatusZ(stdout: string): Array<{ pre: string; post: string }> {
+  const fields = stdout.split("\0");
+  const pairs: Array<{ pre: string; post: string }> = [];
+  let i = 0;
+  while (i < fields.length) {
+    const status = fields[i] ?? "";
+    if (status.length === 0) break;
+    const twoPaths = status.startsWith("R") || status.startsWith("C");
+    const pre = fields[i + 1] ?? "";
+    const post = twoPaths ? (fields[i + 2] ?? "") : pre;
+    pairs.push({ pre, post });
+    i += twoPaths ? 3 : 2;
+  }
+  return pairs;
+}
+
+export interface CommitTrailers {
+  sha: string;
+  attribution: string;
+  kind: string;
+  lease: string;
+}
+
+/** Every commit in `from..to` that touched any of `paths`, with the three trailers the interval
+ * guard needs to decide whose it is. One spawn for the whole range, `%x1e`-terminated records with
+ * `%x1f`-separated fields — a trailer block ends with its own newline, so line-oriented parsing
+ * would mis-frame every record after the first (same framing `unreportedDriftCommits` uses).
+ * An empty `paths` walks the whole range: a claim whose path set was never recorded can only be
+ * checked against everything. */
+export async function commitsTouching(
+  root: WorkspaceTarget,
+  from: string,
+  to: string,
+  paths: readonly string[],
+): Promise<CommitTrailers[]> {
+  if (from === to) return [];
+  const format =
+    "--format=%H%x1f%(trailers:key=Glosa-Attribution,valueonly)%x1f%(trailers:key=Glosa-Kind,valueonly)%x1f%(trailers:key=Glosa-Lease,valueonly)%x1e";
+  const pathspec = paths.length > 0 ? ["--", ...paths.map(safePathspec)] : [];
+  const log = await runGit(root, ["log", format, `${from}..${to}`, ...pathspec], { allowExitCodes: [0, 128] });
+  if (log.exitCode !== 0) return [];
+  const commits: CommitTrailers[] = [];
+  for (const record of log.stdout.split("\x1e")) {
+    const fields = record.trim().split("\x1f");
+    const [sha = "", attribution = "", kind = "", lease = ""] = fields;
+    if (sha.length === 0) continue;
+    commits.push({ sha, attribution: attribution.trim(), kind: kind.trim(), lease: lease.trim() });
+  }
+  return commits;
 }
 
 /** Answers "is `candidate` `of` itself, or an ancestor of it" — the `since` cursor's fail-toward-
@@ -320,7 +398,21 @@ export async function isAncestorOrEqual(
  * real path — poisoning the union so the next `git add -- <union>` fatals on a pathspec that
  * doesn't exist, wedging every future checkpoint for this workspace. `-z` output is raw bytes,
  * never quoted, so this holds for ANY filename git can track. */
-async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
+/** The set a whole-workspace `checkpoint` would stage: currently tracked files plus everything HEAD
+ * already records (so a deletion is staged too). Exposed so a caller that must stage "everything
+ * EXCEPT these paths" (issue #155: drift capture that steps around live claims) computes the same
+ * set a scopeless checkpoint would, rather than an approximation of it. */
+export async function checkpointUnion(
+  root: WorkspaceTarget,
+  resolve: typeof resolveTrackedFiles = resolveTrackedFiles,
+): Promise<string[]> {
+  return trackedUnion(
+    root,
+    resolve(root).tracked.map((file) => file.path),
+  );
+}
+
+export async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];
   return [...new Set([...currentTracked, ...headTracked])].sort();
@@ -624,6 +716,22 @@ export interface CheckpointOptions {
   resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
+/** The subset of `paths` git can stage: those on disk (an edit or a new file) plus those HEAD
+ * records (a deletion). A path that is neither — an entry about a file that does not exist yet, or
+ * one removed before it was ever checkpointed — has nothing to stage, and naming it would make
+ * `git add` exit 128 on an unmatched pathspec and fail the whole checkpoint. Whole-workspace
+ * staging never hits this because `trackedUnion` only ever lists paths that exist in one of the
+ * two; path-scoped claims (issue #155) are what made it reachable. */
+async function stageablePaths(root: WorkspaceTarget, paths: readonly string[]): Promise<string[]> {
+  const unique = [...new Set(paths)];
+  const listed = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...unique.map(safePathspec)], {
+    allowExitCodes: [0, 128],
+  });
+  const inHead = new Set(listed.exitCode === 0 ? listed.stdout.split("\0").filter((path) => path.length > 0) : []);
+  const worktree = workspaceWorktree(root);
+  return unique.filter((path) => inHead.has(path) || existsSync(join(worktree, path)));
+}
+
 /** Resets the index to HEAD, stages the tracked∪HEAD union (or just `opts.paths`), and commits iff
  * something actually changed — otherwise returns the current HEAD sha without creating a commit
  * (A4 §F21's idempotency rule: "nothing staged -> return current HEAD sha, DO NOT commit"). The
@@ -650,7 +758,8 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
 
   const tracked =
     opts.trackedPaths ?? (opts.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
-  const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
+  const union =
+    opts.paths && opts.paths.length > 0 ? await stageablePaths(root, opts.paths) : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire
   // work-tree, including `.glosa/shadow.git/` itself (its own object store, refs, the journal) —

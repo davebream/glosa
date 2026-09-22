@@ -2,7 +2,8 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AdoptionCoordinator } from "../adoption.ts";
-import { isLeaseExpired, leaseHeldError } from "../bus/lease.ts";
+import { holderSnapshot, liveExclusiveClaims } from "../bus/claims.ts";
+import { claimHeldError } from "../bus/lease.ts";
 import { peekJournal } from "../bus/peek.ts";
 import { diagnoseShadow } from "../git/shadow-health.ts";
 import { assertShadowOwner } from "../git/shadow.ts";
@@ -81,8 +82,8 @@ export async function repairBaseline(deps: ShadowAccess, slug: string) {
         throw new ShadowAccessError("shadow-workspace-inactive");
       }
       assertShadowOwner();
-      const lease = peekJournal(current).state.applyLease;
-      if (lease && !isLeaseExpired(lease, new Date())) throw leaseHeldError(lease.leaseId);
+      const blocking = liveExclusiveClaims(peekJournal(current).state.claims, new Date())[0];
+      if (blocking) throw claimHeldError(holderSnapshot(blocking));
     };
     validate();
     const bus = deps.getWorkspaceBus(selected);

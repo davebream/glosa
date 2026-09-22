@@ -27,6 +27,8 @@ import type { DaemonClient, DrainResult } from "./daemon-client.ts";
 import {
   askInputSchema,
   askOutputSchema,
+  claimInputSchema,
+  claimOutputSchema,
   deliveryAckInputSchema,
   deliveryAckOutputSchema,
   inboxGetInputSchema,
@@ -41,6 +43,10 @@ import {
   metadataShowOutputSchema,
   presentInputSchema,
   presentOutputSchema,
+  releaseInputSchema,
+  releaseOutputSchema,
+  signalAckInputSchema,
+  signalAckOutputSchema,
   sessionBindInputSchema,
   sessionBindOutputSchema,
   watchInputSchema,
@@ -92,6 +98,9 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_metadata_clear",
   "glosa_session_bind",
   "glosa_delivery_ack",
+  "glosa_claim",
+  "glosa_release",
+  "glosa_signal_ack",
   "glosa_present",
   "glosa_ask",
   "glosa_watch",
@@ -404,7 +413,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     { name: "glosa", version: CLI_VERSION },
     {
       instructions:
-        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting.",
+        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting. Lines beginning [glosa signal <id>] are notices about claims, already acknowledged: act on them (a conflict means a person took over that file), but never pass a signal id to glosa_delivery_ack.",
     },
   );
 
@@ -469,12 +478,19 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       const drained: DrainResult = generic
         ? await client.drainScoped(sessionId, { workspace: session.cwd, limit })
         : await client.drain(sessionId, { via: "mcp_pull", limit });
-      const text =
+      const signals = drained.signals ?? [];
+      const entriesText =
         drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
+      // Issue #155: notices about claims ride beside the entries, outside their budget, one line each.
+      const text =
+        signals.length > 0
+          ? `${signals.map((notice) => `[glosa signal ${notice.id}] ${notice.kind}: ${notice.message}`).join("\n")}\n\n${entriesText}`
+          : entriesText;
       const structuredContent = {
         entries: drained.drained,
         count: drained.count,
         has_more: drained.has_more ?? false,
+        ...(signals.length > 0 ? { signals } : {}),
       };
       if (drained.delivery_id) {
         acknowledgements.reserve(
@@ -634,6 +650,75 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       if (!client.acknowledgePushed) throw new Error("pushed-entry acknowledgement is unavailable");
       await client.acknowledgePushed(sessionId, entryId, "presented");
       return toolResult({ entry_id: entryId, presented: true });
+    },
+  );
+
+  registerTool(
+    "glosa_claim",
+    {
+      title: "Claim a glosa entry or file",
+      description:
+        "Claim entry:<id> or artifact:<path> before working on it, so other sessions see who is. An exclusive claim refuses other sessions' exclusive claims over the same files and names the holder; claiming again renews. apply-begin is the one-entry shorthand.",
+      inputSchema: claimInputSchema,
+      outputSchema: claimOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Claim an entry or file",
+      },
+    },
+    async ({ resources, mode, workspace, session_id: requestedSession }) => {
+      // The same identity the wrapper just registered: the host's session, never a different one —
+      // one agent cannot claim in another's name through this process. A `claim-held` refusal
+      // surfaces as the daemon's own sentence naming the holder (`apiError` carries it).
+      const sessionId = identity(requestedSession).session_id;
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const client = await deps.createApiClient(shutdownAbort.signal);
+      if (!client.claim) throw new Error("claims are unavailable from this daemon");
+      return toolResult({ ...(await client.claim(root, resources, sessionId, { ...(mode ? { mode } : {}) })) });
+    },
+  );
+
+  registerTool(
+    "glosa_release",
+    {
+      title: "Release a glosa claim",
+      description:
+        "Release a claim this session holds, when stopping without resolving. Releasing a claim that already ended returns released:false.",
+      inputSchema: releaseInputSchema,
+      outputSchema: releaseOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Release a claim",
+      },
+    },
+    async ({ claim_id: claimId, workspace, session_id: requestedSession }) => {
+      const sessionId = identity(requestedSession).session_id;
+      const root = workspace ?? (deps.cwd ?? process.cwd)();
+      const client = await deps.createApiClient(shutdownAbort.signal);
+      if (!client.releaseClaim) throw new Error("claims are unavailable from this daemon");
+      return toolResult({ ...(await client.releaseClaim(root, claimId, sessionId)) });
+    },
+  );
+
+  registerTool(
+    "glosa_signal_ack",
+    {
+      title: "Acknowledge a glosa signal",
+      description:
+        "Acknowledge a signal returned by glosa_inbox_pull after acting on it, with its own ack_token. Only the session a signal is addressed to can acknowledge it. Monitor and Codex stream signals are acknowledged automatically.",
+      inputSchema: signalAckInputSchema,
+      outputSchema: signalAckOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Acknowledge a signal",
+      },
+    },
+    async ({ signal_id: signalId, ack_token: ackToken, session_id: requestedSession }) => {
+      const sessionId = identity(requestedSession).session_id;
+      const client = await deps.createDaemonClient(shutdownAbort.signal);
+      if (!client.acknowledgeSignal) throw new Error("signal acknowledgement is unavailable");
+      await client.acknowledgeSignal(sessionId, signalId, ackToken);
+      return toolResult({ signal_id: signalId, acked: true });
     },
   );
 

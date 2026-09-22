@@ -4,7 +4,7 @@
 // coverage lives — the integration suite (http.test.ts) only has to prove the pipeline wires
 // this function in correctly, not re-derive every combination.
 import { describe, expect, test } from "bun:test";
-import { authorizeRequest } from "../src/security/auth.ts";
+import { authorizeRequest, principalOf, principalOfRequest } from "../src/security/auth.ts";
 
 const PORT = 4646;
 const SELF_ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -242,5 +242,29 @@ describe("authorizeRequest — the second allowlisted Host (#159)", () => {
       token: TOKEN,
     });
     expect(result).toEqual({ ok: false, status: 403, slug: "invalid-origin" });
+  });
+});
+
+// Issue #155 REQ-9: the principal is derived from the bearer, stable per token, distinct across
+// tokens, and never the bearer itself.
+describe("principalOf", () => {
+  test("is stable for one token, 14 characters, and never contains the token", () => {
+    const a = principalOf("secret-token-one");
+    expect(a).toBe(principalOf("secret-token-one"));
+    expect(a).toMatch(/^token:[0-9a-f]{8}$/);
+    expect(a).toHaveLength(14);
+    expect(a).not.toContain("secret");
+  });
+
+  test("differs per token", () => {
+    expect(principalOf("secret-token-one")).not.toBe(principalOf("secret-token-two"));
+  });
+
+  test("is `unknown` when there is no bearer", () => {
+    expect(principalOf(null)).toBe("unknown");
+    expect(principalOfRequest(new Request("http://127.0.0.1/"))).toBe("unknown");
+    expect(principalOfRequest(new Request("http://127.0.0.1/", { headers: { Authorization: "Bearer x-token" } }))).toBe(
+      principalOf("x-token"),
+    );
   });
 });
