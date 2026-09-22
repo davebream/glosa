@@ -426,6 +426,10 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
   // §8.3) regardless of that call, which is exactly the defect a real bound-daemon test (as
   // opposed to `http-routes.test.ts`'s in-process, no-bound-server calls) can observe and this
   // one bound-parameter fix closes for every current and future caller of `server.timeout`.
+  //
+  // Forwarding it is necessary and not sufficient: on the pinned Bun, `server.timeout(req, n)` is
+  // ignored on the UNIX listener for every `n`, so the socket needs its own `idleTimeout` (see
+  // `bindApiSocketOrExit`). A real `server` here still matters for the hostname/port listeners.
   const readyApiFetch = async (request: Request, server: BunServer): Promise<Response> => {
     if (new URL(request.url).pathname === "/api/handshake") await startupReady;
     return apiFetch(request, server);
@@ -734,6 +738,27 @@ async function bindApiSocketOrExit(
     Bun.serve({
       unix: socketPath,
       fetch,
+      // A1 8.3's per-request opt-out (`server.timeout(req, 0)`) is IGNORED on this listener by the
+      // pinned Bun: a held request is still closed at Bun's ~10s default, whatever value the route
+      // passes, and Bun's own warning says to configure `idleTimeout` instead. That silently cost
+      // every held read on this transport, because this is the transport the monitor and the MCP
+      // shim use: a `wait_ms` of 15 minutes ended at 10 seconds, and the Claude Code monitor's
+      // session stream, which sends nothing between deliveries, was closed every 10 seconds and
+      // reconnected on a backoff that climbs to the 60s ceiling. `glosa status` then reported
+      // `push.connected:false` for most of every minute while push delivery did in fact work, just
+      // a minute late.
+      //
+      // Disabled rather than merely raised: Bun caps `idleTimeout` at 255s and `MAX_ENTRY_WAIT_MS`
+      // is 15 minutes, so no finite value can serve the wait this API already promises. Nothing is
+      // left unbounded by it — every held route aborts on `req.signal`, on its own `wait_ms` timer,
+      // and on the credential/lifecycle signals, and this listener is reachable only by this uid.
+      //
+      // Spread through a cast because `bun-types` declares `idleTimeout` on the hostname/port
+      // variant only and `Serve.Options` is an XOR, so the unix branch types it as `undefined`.
+      // The runtime honors it on both — `a held read outlives the socket listener's idle close`
+      // fails without this line and passes with it — so the cast records a gap in the
+      // declarations, not an assumption about behavior.
+      ...({ idleTimeout: 0 } as object),
       // Same reasoning as bindMainOrExit: Bun's default error page leaks source and stack.
       error: () => internalErrorResponse(errorCsp),
     });
