@@ -2525,6 +2525,9 @@ export function createArtifactPane(host, deps) {
     return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
 
+  /** Whether an entry's words are on the page as it stands, so it has a height in the rail. */
+  const hasPlace = (item) => Boolean(rangeForTarget(item.record?.target ?? item.target));
+
   /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`/
    * `dismissed`), so there is nothing left to withdraw and nothing to revise. */
   const isTerminalState = (state) =>
@@ -2624,13 +2627,36 @@ export function createArtifactPane(host, deps) {
   /** The tray states its count even when collapsed — the one honest thing a reader scrolling a
    * long manuscript needs from it — and only becomes a scrollable sheet when asked. */
   function renderTray() {
-    const show = modeState.mode === "review" && Boolean(currentArtifact) && !isSideMargin();
+    const beside = isSideMargin();
+    // Beside the rail the tray holds only what has no place on the page, so it shows only when
+    // there is some. renderMargin has filled the list by the time this runs.
+    const show =
+      modeState.mode === "review" && Boolean(currentArtifact) && (!beside || trayListEl.childElementCount > 0);
     trayEl.hidden = !show;
+    trayEl.toggleAttribute("data-beside", show && beside);
     if (!show) {
       trayOpen = false;
       trayEl.removeAttribute("data-open");
+      trayEl.removeAttribute("data-lost");
       return;
     }
+    if (beside) {
+      const cards = [...trayListEl.querySelectorAll(".glosa-annotation")];
+      const lost = cards.filter((card) => !isTerminalState(card._glosaItem?.state)).length;
+      const settled = cards.length - lost;
+      trayCountEl.textContent = [
+        lost === 0 ? "" : lost === 1 ? "1 lost its place" : `${lost} lost their place`,
+        settled === 0 ? "" : `${settled} resolved`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      trayEl.toggleAttribute("data-lost", lost > 0);
+      trayToggle.setAttribute("aria-expanded", String(trayOpen));
+      trayToggle.disabled = false;
+      trayEl.toggleAttribute("data-open", trayOpen);
+      return;
+    }
+    trayEl.removeAttribute("data-lost");
     // The tray holds everything the rail would have held, so it must COUNT everything the rail
     // holds. Counting annotations alone disabled the toggle whenever a session's question was the
     // only thing in the margin, which at compact widths made that question unreachable while a
@@ -2768,7 +2794,10 @@ export function createArtifactPane(host, deps) {
     // Compact: the margin is not a block under the manuscript any more, it is the coordinate
     // space the open composer floats in beside its own passage.
     marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "review");
-    const positioned = [...marginEl.querySelectorAll(".glosa-annotation")];
+    // A session's card is placed like a note: it is about a passage too. Left in flow it sat at the
+    // rail's top under the notes placed there, and the rail's `pointer-events: none` made it
+    // unclickable, so a question a turn was blocked on could not be answered from the rail.
+    const positioned = [...marginEl.querySelectorAll(".glosa-annotation, .glosa-agent-card")];
     const form = composerLayerEl.querySelector(".glosa-composer");
     if (form && composer) placeAtAnchor(form, composer.record?.target, { alignToSelection: true });
     const floatingAsk = askLayerEl.querySelector(".glosa-agent-card");
@@ -2785,9 +2814,15 @@ export function createArtifactPane(host, deps) {
     // Stack in PAGE order, not in the order the cards were written: a note added later about an
     // earlier passage must not be pushed below every card after it and out of reach of its words.
     // Cards whose passage is gone keep their relative order after the anchored ones.
+    const requests = agentRequests();
     const measured = positioned.map((cardEl, index) => {
       const item = cardEl._glosaItem;
-      const range = item ? rangeForTarget(item.record?.target ?? item.target) : null;
+      const request = item ? null : requests.find((r) => r.id === cardEl.getAttribute("data-entry"));
+      const range = item
+        ? rangeForTarget(item.record?.target ?? item.target)
+        : request
+          ? rangeForPassage(request.passage)
+          : null;
       const anchorTop = range ? range.getBoundingClientRect().top - mainTop + paneMain.scrollTop : null;
       return { cardEl, anchorTop, index };
     });
@@ -3667,7 +3702,17 @@ export function createArtifactPane(host, deps) {
    * them disagree cannot tell which one is lying. */
   function repaintAnchorVerdicts() {
     const addresses = addressBlocks(contentEl);
-    for (const card of paneEl.querySelectorAll(".glosa-annotation")) applyAnchorVerdict(card, addresses);
+    let moved = false;
+    for (const card of paneEl.querySelectorAll(".glosa-annotation")) {
+      const before = card.getAttribute("data-anchored");
+      applyAnchorVerdict(card, addresses);
+      const after = card.getAttribute("data-anchored");
+      // With the rail showing, where a card lives follows its verdict: placed notes in the rail,
+      // placeless ones in the tray. A verdict that flips on an open note in either host means the
+      // card is now in the wrong one.
+      if (before !== after && isSideMargin() && !isTerminalState(card._glosaItem?.state)) moved = true;
+    }
+    return moved;
   }
 
   /** One margin entry. The same component in the side rail, in the compact collection tray,
@@ -3808,8 +3853,8 @@ export function createArtifactPane(host, deps) {
       // The cards are gone; the marks they point at are not. layoutMargin also runs so the rail
       // class does not linger on an empty margin after leaving Annotate.
       const marks = () => {
-        layoutMargin();
         paintAnnotationMarks();
+        layoutMargin();
       };
       if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(marks);
       else marks();
@@ -3839,13 +3884,19 @@ export function createArtifactPane(host, deps) {
     // not. Under their own heading, so a rail holding both never reads as one undifferentiated
     // stack of cards.
     const requests = agentRequests();
+    const beside = cardHost === marginEl;
     if (requests.length > 0) {
-      cardHost.append(
-        el("p", {
-          className: "glosa-margin-subhead",
-          textContent: agentRequestSummary(requests),
-        }),
-      );
+      // A heading only where the cards are a list. In the rail every card is placed by
+      // layoutMargin beside its own passage, so a heading in flow had nowhere to go but the rail's
+      // top, where it was painted over the first card placed there.
+      if (!beside) {
+        cardHost.append(
+          el("p", {
+            className: "glosa-margin-subhead",
+            textContent: agentRequestSummary(requests),
+          }),
+        );
+      }
       for (const request of requests) {
         // With no rail, a question whose passage is located is answered AT the passage, in the
         // floating card; the tray lists it. Two live copies of one answer form would let a reader
@@ -3865,11 +3916,21 @@ export function createArtifactPane(host, deps) {
     const open = annotations.filter((item) => !isTerminalState(item.state));
     const resolved = annotations.filter((item) => isTerminalState(item.state));
     const addresses = addressBlocks(contentEl); // numbered once per render, not once per entry
-    for (const item of open) cardHost.append(buildAnnotationCard(item, { addresses }));
+    // The rail holds what has a place on the page: open notes whose words are still there. An
+    // open note whose passage is gone has no height to sit at. Stacked after the placed ones, it
+    // landed beside some unrelated paragraph with no address to say otherwise. So it goes to the
+    // tray, first, where its card says it lost its place. Below the rail floor the tray holds
+    // everything, as before.
+    const railNotes = beside ? open.filter((item) => hasPlace(item)) : [];
+    for (const item of railNotes) marginEl.append(buildAnnotationCard(item, { addresses }));
+    for (const item of open) {
+      if (!railNotes.includes(item)) trayListEl.append(buildAnnotationCard(item, { addresses }));
+    }
     if (resolved.length) {
       // Named even when it is the whole list: "Resolved" is the state of the work, and a reader
-      // opening a tray of settled cards should not have to infer that from the dots.
-      cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
+      // opening a tray of settled cards should not have to infer that from the dots. Not in the
+      // rail, for the reason the session's heading is not.
+      if (!beside) cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
       for (const item of resolved) cardHost.append(buildAnnotationCard(item, { addresses }));
     }
     renderTray();
@@ -3882,9 +3943,12 @@ export function createArtifactPane(host, deps) {
       );
     }
     // Absolute positioning needs painted card heights — align on the next frame.
+    // Verdicts first, positions second. The verdict can add or drop a card's "Lost its place" line,
+    // about 40px; measured the other way round, a card grew after its neighbour had been placed
+    // under it, and the two overlapped until the next full render.
     const align = () => {
-      layoutMargin();
       paintAnnotationMarks();
+      layoutMargin();
       paintComposerSelection();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(align);
@@ -3906,10 +3970,11 @@ export function createArtifactPane(host, deps) {
 
   function paintAnnotationMarks() {
     stampAddresses();
-    repaintAnchorVerdicts();
+    const moved = repaintAnchorVerdicts();
     paintAnchorUnderlines();
     renderMarkers();
     paintAgentBands();
+    if (moved) renderMargin();
   }
 
   function setMode(mode) {
@@ -4859,8 +4924,8 @@ export function createArtifactPane(host, deps) {
     } else {
       contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when it closes
     }
+    paintAnnotationMarks(); // verdicts before positions, as in renderMargin's align
     layoutMargin(); // anchors may have moved with the new content
-    paintAnnotationMarks();
     refreshOutline(); // a session's edit can add or remove a section
   }
 

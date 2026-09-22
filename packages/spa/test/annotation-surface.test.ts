@@ -817,4 +817,69 @@ describe("the annotation surface", () => {
     expect(q(host, ".glosa-address").textContent).toBe("§0.2");
     expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
   });
+
+  // --- the rail at desktop width: it holds only what has a place on the page ---
+  //
+  // Every card in the rail is placed by layoutMargin at its passage's height. Anything the rail
+  // cannot place was painted wrong there: a heading in flow landed on the first placed card, and a
+  // note whose passage is gone was stacked beside whatever paragraph came last. Those go to the
+  // tray, which beside the rail holds only them and shows only when it has some.
+
+  /** A pane measured past the rail floor, for the duration of `fn`. */
+  async function atRailWidth(fn: () => Promise<void>) {
+    const proto = dom.window.HTMLElement.prototype;
+    const original = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 1400 });
+    try {
+      await fn();
+    } finally {
+      if (original) Object.defineProperty(proto, "clientWidth", original);
+      else delete (proto as any).clientWidth;
+    }
+  }
+  const idsIn = (root: any, selector: string) => qa(root, selector).map((card) => card._glosaItem?.id);
+
+  test("beside the rail, a note whose passage is gone goes to the tray, and no heading is painted over the cards", async () => {
+    await atRailWidth(async () => {
+      const da = fakeDataAccess({
+        ...listing(
+          { ...noteOn(PLAIN, "kappa lambda"), id: "inb-1", status: "delivered" },
+          { ...noteOn(PLAIN, "gamma delta"), id: "inb-2", status: "pending" },
+          { ...noteOn(PLAIN, "epsilon zeta"), id: "inb-3", status: "applied" },
+        ),
+        ...serving(REWRITTEN),
+      });
+      const { host } = await mountPane(da);
+      const margin = q(host, ".glosa-margin");
+      expect(margin.classList.contains("glosa-margin-side")).toBe(true);
+
+      expect(idsIn(margin, ".glosa-annotation")).toEqual(["inb-1", "inb-3"]);
+      expect(qa(margin, ".glosa-margin-subhead")).toHaveLength(0);
+      expect(idsIn(host, ".glosa-tray-list .glosa-annotation")).toEqual(["inb-2"]);
+      const tray = q(host, ".glosa-annotations-tray");
+      expect(tray.hidden).toBe(false);
+      expect(tray.hasAttribute("data-beside")).toBe(true);
+      expect(q(host, ".glosa-tray-count").textContent).toBe("1 lost its place");
+    });
+  });
+
+  test("beside the rail, a note whose words a session rewrites moves from the rail to the tray", async () => {
+    await atRailWidth(async () => {
+      const da: any = fakeDataAccess({
+        ...listing({ ...noteOn(PLAIN, "gamma delta"), status: "delivered" }),
+        ...sessionRewrites(RENDERED, REWRITTEN),
+      });
+      const { host, pane } = await mountPane(da);
+      expect(qa(host, ".glosa-margin .glosa-annotation")).toHaveLength(1);
+      expect(q(host, ".glosa-annotations-tray").hidden).toBe(true);
+
+      da.moved = true;
+      await pane.refreshArtifact();
+      await paint();
+
+      expect(qa(host, ".glosa-margin .glosa-annotation")).toHaveLength(0);
+      expect(qa(host, ".glosa-tray-list .glosa-annotation")).toHaveLength(1);
+      expect(q(host, ".glosa-annotations-tray").hidden).toBe(false);
+    });
+  });
 });

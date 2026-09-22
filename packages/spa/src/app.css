@@ -3673,7 +3673,8 @@ input,
   pointer-events: none; /* the rail is a coordinate space; only its cards are interactive */
 }
 
-.glosa-margin-side .glosa-annotation {
+.glosa-margin-side .glosa-annotation,
+.glosa-margin-side .glosa-agent-card {
   position: absolute;
   left: 0;
   right: var(--space-3);
