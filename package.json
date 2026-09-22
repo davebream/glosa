@@ -99,7 +99,7 @@
     "idiomorph": "^0.8.0",
     "markdown-it": "^14.3.1",
     "picomatch": "^4.0.7",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
