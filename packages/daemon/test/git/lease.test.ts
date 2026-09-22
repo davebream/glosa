@@ -225,6 +225,43 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
   });
 });
 
+describe("offline catch-up steps around claimed paths, never the whole workspace (issue #155)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    cleanupWorkspace(root);
+  });
+
+  test("with a live claim on notes.md, a reconcile captures drift on other.md as unknown and leaves notes.md to the claim", async () => {
+    // Before claims, any lease made this step skip everything. Ablating the path exclusion commits
+    // the claimed edit as unknown (red: the resolve can no longer credit it); restoring the
+    // whole-workspace skip leaves other.md uncaptured (red: occurred is false).
+    writeFile(root, "notes.md", "notes v1");
+    writeFile(root, "other.md", "other v1");
+    const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: () => new Date() });
+    await bus.reconcile();
+    await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md" });
+    const { preSha } = await bus.applyBegin("e1", "sess-1");
+    writeFile(root, "notes.md", "notes edited under the claim");
+    writeFile(root, "other.md", "other edited by nobody glosa knows");
+
+    const result = await bus.reconcile();
+    expect(result.offlineCatchup.occurred).toBe(true);
+    const caught = result.offlineCatchup.postSha as string;
+    expect(await commitTrailers(root, caught)).toContain("Glosa-Attribution: unknown");
+    const caughtDiff = await diffShas(root, preSha, caught);
+    expect(caughtDiff).toContain("+other edited by nobody glosa knows");
+    expect(caughtDiff).not.toContain("notes edited under the claim");
+    expect(result.externalEditIds).toHaveLength(1); // step 5b reports it, with the claim still live
+
+    const { postSha } = await bus.resolveEntry("e1", "applied", "sess-1");
+    expect(await commitTrailers(root, postSha)).toContain("Glosa-Attribution: session:sess-1");
+    expect(await diffShas(root, caught, postSha)).toContain("+notes edited under the claim");
+  });
+});
+
 describe("CLAIM_HELD on resolve — resolve requires the claim's own session, never trusts the caller", () => {
   let root: string;
   beforeEach(() => {
@@ -388,7 +425,7 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     cleanupWorkspace(root);
   });
 
-  test("a lease past expires_at with no apply_end -> reconcile emits apply_expired, drift folds in as unknown", async () => {
+  test("a claim past expires_at with no apply_end -> reconcile emits claim_expired naming the holder, drift folds in as unknown", async () => {
     writeFile(root, "notes.md", "v1");
     const clock = settableClock(1_700_000_000_000);
     const bus = new WorkspaceBus(root, { ulid: deterministicUlid(), now: clock.now });
@@ -402,6 +439,13 @@ describe("expired lease reconcile — the interval stays unknown, never session"
 
     expect(result.expiredLeaseIds).toEqual([leaseId]);
     expect(bus.state.applyLease).toBeNull();
+    // Issue #155 REQ-7: the expiry names who abandoned it — `apply_expired` recorded nobody, and is
+    // no longer written at all.
+    const events = journalOf(root);
+    expect(events.filter((e) => e.event === "claim_expired").map((e) => e.detail)).toEqual([
+      { claim_id: leaseId, holder_session: "sess-1", reason: "ttl" },
+    ]);
+    expect(events.some((e) => e.event === "apply_expired")).toBe(false);
     // Step 5 (offline catch-up), same reconcile pass, picks up the orphaned edit as drift.
     expect(result.offlineCatchup.occurred).toBe(true);
     const body = await commitTrailers(root, result.offlineCatchup.postSha as string);

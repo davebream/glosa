@@ -412,7 +412,7 @@ export async function checkpointUnion(
   );
 }
 
-async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
+export async function trackedUnion(root: WorkspaceTarget, currentTracked: readonly string[]): Promise<string[]> {
   const result = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD"], { allowExitCodes: [0, 128] });
   const headTracked = result.exitCode === 0 ? result.stdout.split("\0").filter((line) => line.length > 0) : [];
   return [...new Set([...currentTracked, ...headTracked])].sort();
