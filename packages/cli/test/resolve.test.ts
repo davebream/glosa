@@ -10,6 +10,7 @@ import {
   type ResolveDeps,
 } from "../src/resolve.ts";
 import type { GlosaApiClient } from "../src/api-client.ts";
+import { printClaimResult, printReleaseResult, runClaim, runRelease } from "../src/claim.ts";
 import { apiError, daemonUnreachable, FakeGlosaApiClient } from "./fake-api-client.ts";
 import { captureStdout } from "./test-utils.ts";
 
@@ -164,7 +165,24 @@ describe("glosa apply-begin", () => {
     expect(result.exitCode).toBe(3);
   });
 
-  test("already-leased entry -> exit 12 (lease_conflict)", async () => {
+  test("another session holds the entry (contract 1.17 claim-held) -> exit 12, holder named in the message", async () => {
+    // Issue #155 renamed the conflict. Ablating either half of the slug match drops that half to
+    // the generic exit 8 and reds one of these two tests.
+    const client = new FakeGlosaApiClient();
+    client.applyBeginImpl = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/claim-held",
+        title: "session sess-A holds an exclusive claim on this until 2026-09-22T12:15:00.000Z",
+      });
+    };
+    const { deps } = makeClientDeps(client);
+    const result = await runApplyBegin({ dir: "/repo", id: "inb-1", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(12);
+    expect(result.error).toMatchObject({ code: "claim-held", kind: "lease_conflict" });
+    expect(result.error?.message).toContain("sess-A");
+  });
+
+  test("already-leased entry from an N-1 daemon (lease-conflict) -> still exit 12 (lease_conflict)", async () => {
     const client = new FakeGlosaApiClient();
     client.applyBeginImpl = async () => {
       throw apiError(409, {
@@ -197,5 +215,93 @@ describe("glosa apply-begin", () => {
       ["command", "data", "error", "exit_code", "glosa_json", "ok", "warnings"].sort(),
     );
     expect(parsed).toMatchObject({ glosa_json: 1, ok: true, command: "apply-begin", exit_code: 0 });
+  });
+});
+
+// Issue #155 — `glosa claim` / `glosa release`. Kept beside apply-begin, which is the one-entry
+// shorthand for the same exclusive claim and shares its exit contract.
+describe("glosa claim", () => {
+  test("claims the named resources for the session, in the given mode, and prints the bare claim id", async () => {
+    const { deps, client } = makeClientDeps();
+    const result = await runClaim(
+      { dir: "/repo", resources: ["entry:inb-1", "artifact:notes.md"], session: "sess-1", mode: "presence" },
+      deps,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.calls.find((call) => call.method === "claim")?.args).toEqual([
+      "/repo",
+      ["entry:inb-1", "artifact:notes.md"],
+      "sess-1",
+      { mode: "presence" },
+    ]);
+    const out = captureStdout(() => printClaimResult(result, false));
+    expect(out.trim()).toBe("claim-1");
+  });
+
+  test("another session holding the files -> exit 12 (lease_conflict), holder named", async () => {
+    const client = new FakeGlosaApiClient();
+    client.claimImpl = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/claim-held",
+        title: "session sess-A holds an exclusive claim on this until 2026-09-22T12:15:00.000Z",
+      });
+    };
+    const { deps } = makeClientDeps(client);
+    const result = await runClaim({ dir: "/repo", resources: ["entry:inb-1"], session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(12);
+    expect(result.error).toMatchObject({ code: "claim-held", kind: "lease_conflict" });
+    expect(result.error?.message).toContain("sess-A");
+  });
+
+  test("any other daemon refusal -> exit 8 (entry_error)", async () => {
+    const client = new FakeGlosaApiClient();
+    client.claimImpl = async () => {
+      throw apiError(404, { type: "https://glosa.local/errors/not-found", title: "no such inbox entry" });
+    };
+    const { deps } = makeClientDeps(client);
+    expect((await runClaim({ dir: "/repo", resources: ["entry:nope"], session: "s" }, deps)).exitCode).toBe(8);
+  });
+
+  test("usage: no resources, a malformed resource, a bad mode, or no session -> exit 2, with no daemon call", async () => {
+    for (const args of [
+      { dir: "/repo", resources: [], session: "s" },
+      { dir: "/repo", resources: ["notes.md"], session: "s" },
+      { dir: "/repo", resources: ["entry:inb-1"], session: "s", mode: "loud" },
+      { dir: "/repo", resources: ["entry:inb-1"] },
+    ]) {
+      const { deps, client } = makeClientDeps();
+      const result = await runClaim(args, deps);
+      expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 2 });
+      expect(client.calls.filter((call) => call.method === "claim")).toHaveLength(0);
+    }
+  });
+});
+
+describe("glosa release", () => {
+  test("releases the claim for the session; an already-ended claim is reported, not an error", async () => {
+    const client = new FakeGlosaApiClient();
+    let released = true;
+    client.releaseClaimImpl = async (_path, claimId) => ({ claim_id: claimId, released });
+    const { deps } = makeClientDeps(client);
+
+    const first = await runRelease({ dir: "/repo", claimId: "claim-1", session: "sess-1" }, deps);
+    expect(first.exitCode).toBe(0);
+    expect(captureStdout(() => printReleaseResult(first, false))).toContain("released claim-1");
+
+    released = false;
+    const again = await runRelease({ dir: "/repo", claimId: "claim-1", session: "sess-1" }, deps);
+    expect(again.exitCode).toBe(0);
+    expect(captureStdout(() => printReleaseResult(again, false))).toContain("already released");
+  });
+
+  test("another session's claim -> exit 12, and a missing id or session -> exit 2", async () => {
+    const client = new FakeGlosaApiClient();
+    client.releaseClaimImpl = async () => {
+      throw apiError(409, { type: "https://glosa.local/errors/claim-held", title: "session sess-A holds this" });
+    };
+    const { deps } = makeClientDeps(client);
+    expect((await runRelease({ dir: "/repo", claimId: "claim-1", session: "sess-B" }, deps)).exitCode).toBe(12);
+    expect((await runRelease({ dir: "/repo", session: "sess-B" }, deps)).exitCode).toBe(2);
+    expect((await runRelease({ dir: "/repo", claimId: "claim-1" }, deps)).exitCode).toBe(2);
   });
 });

@@ -59,6 +59,22 @@ const presentationTruncationSchema = z
     truncated: z.boolean(),
     omitted_bytes: z.number().int().min(0),
     omitted_hunks: z.number().int().min(0),
+    omitted_claims: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("Contract 1.17: how many claims on this entry did not fit in `claims`."),
+  })
+  .strict();
+
+const presentationClaimSchema = z
+  .object({
+    session: z.string().min(1).describe("The session holding the claim."),
+    principal: z.string().min(1).describe("Reporting-only principal that session registered under."),
+    mode: z.enum(["exclusive", "presence"]).describe("exclusive = editing it; presence = looking at it."),
+    since: z.string().min(1).describe("When the claim was taken (ISO 8601)."),
+    fence: z.number().int().min(1).nullable().describe("The claim's fencing token; null for a legacy lease."),
   })
   .strict();
 
@@ -83,6 +99,13 @@ const presentationBaseShape = {
   truncation: presentationTruncationSchema,
   retrieval: presentationRetrievalSchema,
   detail: z.record(z.string(), z.unknown()).describe("Kind-specific presentation detail; shape varies by entry kind."),
+  claims: z
+    .array(presentationClaimSchema)
+    .max(4)
+    .optional()
+    .describe(
+      "Contract 1.17: live claims on this entry or its file, exclusive first. A claim is a fence, not a filter — the entry is still yours to read; this says who is already working on it.",
+    ),
 };
 
 export const inboxPresentationSchema = z.discriminatedUnion("kind", [
@@ -115,6 +138,20 @@ export const inboxPullInputSchema = z
   })
   .strict();
 
+const signalSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["conflict", "info"]).describe("conflict = a person took over something you held; info = news."),
+    workspace: z.string().min(1),
+    resources: z.array(z.string()),
+    claim_id: z.string().min(1).optional(),
+    message: z.string().describe("One sentence saying what happened and what to do."),
+    created_at: z.string().min(1),
+    expires_at: z.string().min(1),
+    ack_token: z.string().min(1),
+  })
+  .strict();
+
 export const inboxPullOutputSchema = z
   .object({
     entries: z
@@ -125,6 +162,28 @@ export const inboxPullOutputSchema = z
       ),
     count: z.number().int().min(0).max(8).describe("Number of returned entries."),
     has_more: z.boolean().describe("True when more eligible entries remain."),
+    signals: z
+      .array(signalSchema)
+      .max(8)
+      .optional()
+      .describe(
+        "Contract 1.17: notices about claims around this session, oldest first. Acknowledge each with glosa_signal_ack after acting on it.",
+      ),
+  })
+  .strict();
+
+export const signalAckInputSchema = z
+  .object({
+    signal_id: z.string().min(1),
+    ack_token: z.string().min(1).describe("The ack_token from the signal itself."),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const signalAckOutputSchema = z
+  .object({
+    signal_id: z.string().min(1),
+    acked: z.literal(true),
   })
   .strict();
 
@@ -187,6 +246,52 @@ export const deliveryAckInputSchema = z
   .object({
     entry_id: inboxId,
     session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+// Contract 1.17 (issue #155): claims. A resource is `entry:<inbox id>` or
+// `artifact:<workspace-relative path>`; the daemon validates confinement, this only rejects shapes
+// that could never be one.
+const claimResource = z
+  .string()
+  .regex(/^(entry|artifact):.+/)
+  .describe("entry:<inbox id> or artifact:<workspace-relative path>.");
+
+export const claimInputSchema = z
+  .object({
+    resources: z.array(claimResource).min(1).max(16).describe("What to claim; an entry implies the file it is about."),
+    mode: z
+      .enum(["exclusive", "presence"])
+      .optional()
+      .describe("exclusive (default) = you are editing it and others are refused; presence = you are looking at it."),
+    workspace: workspacePath.optional(),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const claimOutputSchema = z
+  .object({
+    claim_id: z.string().min(1).describe("Pass to glosa_release when done without resolving."),
+    fence: z.number().int().min(1).nullable().describe("Fencing token for this claim."),
+    expires_at: z.string().min(1).describe("When the claim lapses unless renewed (claiming again renews)."),
+    paths: z.array(z.string()).describe("Workspace-relative paths covered; empty = the whole workspace."),
+    mode: z.enum(["exclusive", "presence"]),
+    renewed: z.boolean().describe("True when this session already held it and the call extended it."),
+  })
+  .strict();
+
+export const releaseInputSchema = z
+  .object({
+    claim_id: z.string().min(1),
+    workspace: workspacePath.optional(),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const releaseOutputSchema = z
+  .object({
+    claim_id: z.string().min(1),
+    released: z.boolean().describe("False when the claim had already ended — never an error."),
   })
   .strict();
 

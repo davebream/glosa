@@ -23,7 +23,8 @@ import { quarantineRawBytes } from "./quarantine.ts";
 import { applyEvent, replayJournal, type DerivedState, type Reducer } from "./replay.ts";
 import { lifecycleReducer } from "./lifecycle.ts";
 import { ulid as defaultUlid } from "./ulid.ts";
-import { checkpoint, headSha, initShadowRepo, reclaimIndexLock } from "../git/shadow.ts";
+import { checkpoint, headSha, initShadowRepo, reclaimIndexLock, trackedUnion } from "../git/shadow.ts";
+import { type Claim, entryIdOfResource, isClaimExpired, liveExclusiveClaims } from "./claims.ts";
 import { resolveTrackedFiles } from "../matcher.ts";
 import type { ResolveTrackedFilesAsync } from "../matcher-async.ts";
 import { workspaceWorktree, type WorkspaceTarget } from "../workspace.ts";
@@ -144,18 +145,19 @@ export function selfHealInbox(deps: {
   return healed;
 }
 
-// Step 4: apply-lease reconcile (A4 §F05/F04). `state.applyLease` already carries the one
-// outstanding lease, if any (replay.ts's reducer derives it) — this never has to re-scan raw
-// journal lines itself. A lease whose `expires_at` is still in the future is left alone (still
-// legitimately active, e.g. a session that's mid-edit right now); only a genuinely dangling one
-// gets closed out, and closing it out NEVER attributes it to a session — the interval just goes
-// unrecorded as anything more than "unknown" (no checkpoint here either; step 5 immediately after
-// this one is what captures whatever the worktree looks like now, as `unknown`).
+// Step 4: claim reconcile (A4 §F05/F04, issue #155). `state.claims` already carries every
+// outstanding claim, legacy apply-leases included (claims.ts folds them) — this never has to
+// re-scan raw journal lines itself. A claim whose `expires_at` is still in the future is left
+// alone (still legitimately active, e.g. a session that's mid-edit right now); only a genuinely
+// lapsed one is closed out, as `claim_expired{holder_session, reason:"ttl"}` — naming its holder,
+// which `apply_expired` never did — and closing it out NEVER attributes it to that session: no
+// checkpoint here either, because step 5 immediately after this one captures whatever the worktree
+// looks like now, as `unknown`.
 //
-// This runs at STARTUP only, so it is not the only closer: a daemon that stays up for days never
-// reaches it, and `WorkspaceBus#expireLeaseLocked` does the same job inline on the two paths that
-// meet a dead lease live (`applyBegin` superseding one, `resolveEntry` arriving after the TTL).
-// Both emit the same `apply_expired{lease_id}` and leave the interval `unknown`.
+// Only the TTL can be decided here. The other way a claim dies — its holder session going stale —
+// needs the session registry, which reconcile does not have; the daemon's claim sweeper owns it.
+// And this runs at STARTUP only: a daemon that stays up for days never reaches it, which is what
+// the sweeper and `WorkspaceBus#expireClaimLocked`'s inline callers are for.
 export interface ApplyLeaseReconcileDeps {
   workspaceRoot: WorkspaceTarget;
   state: DerivedState;
@@ -164,24 +166,36 @@ export interface ApplyLeaseReconcileDeps {
   now?: () => Date;
   reducer?: Reducer;
 }
-export function reconcileApplyLeases(deps: ApplyLeaseReconcileDeps): string[] {
-  const lease = deps.state.applyLease;
-  if (!lease) return [];
+export function reconcileClaims(deps: ApplyLeaseReconcileDeps): string[] {
   const now = deps.now?.() ?? new Date();
-  if (new Date(lease.expiresAt).getTime() > now.getTime()) return []; // still active, not our concern
-
-  const event: JournalEvent = {
-    v: 1,
-    event_id: deps.ulid(),
-    at: now.toISOString(),
-    entry: lease.entry,
-    event: "apply_expired",
-    by: "daemon",
-    detail: { lease_id: lease.leaseId },
-  };
-  appendEvent(deps.writer, event);
-  applyEvent(deps.state, event, deps.reducer);
-  return [lease.leaseId];
+  // Collected before anything is appended: folding a `claim_expired` edits the very slots this
+  // walks, and a claim spanning several resources would otherwise be visited more than once.
+  const lapsed = new Map<string, Claim>();
+  for (const slot of Object.values(deps.state.claims)) {
+    for (const claim of [slot.exclusive, ...slot.presence]) {
+      if (claim && isClaimExpired(claim, now)) lapsed.set(claim.claim_id, claim);
+    }
+  }
+  for (const claim of lapsed.values()) {
+    const entry = claim.resources.map(entryIdOfResource).find((id): id is string => id !== null);
+    const event: JournalEvent = {
+      v: 1,
+      event_id: deps.ulid(),
+      at: now.toISOString(),
+      ...(entry ? { entry } : {}),
+      event: "claim_expired",
+      by: "daemon", // never `session:<id>` — a claim that expired proved nothing for its holder
+      detail: {
+        claim_id: claim.claim_id,
+        holder_session: claim.holder_session,
+        reason: "ttl",
+        resources: claim.resources,
+      },
+    };
+    appendEvent(deps.writer, event);
+    applyEvent(deps.state, event, deps.reducer);
+  }
+  return [...lapsed.keys()];
 }
 
 // Step 5: offline catch-up (A4 §F04/F21). While the daemon was down, a human (or anything else)
@@ -212,17 +226,19 @@ export interface OfflineCatchUpDeps {
   resolveTrackedFilesSync?: typeof resolveTrackedFiles;
 }
 export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineCatchUpResult> {
-  // A lease still on record here means step 4 (which runs first, in the same reconcile pass)
-  // looked at it and did NOT find it expired — i.e. it's legitimately active right now. That
-  // interval belongs to the lease's own eventual `resolveEntry`, not to us: checkpointing it here
-  // would durably commit the in-flight edit as `Glosa-Attribution: unknown` — and since
+  // A claim still on record here means step 4 (which runs first, in the same reconcile pass)
+  // looked at it and did NOT find it expired — i.e. it's legitimately active right now. The
+  // interval on ITS paths belongs to its own eventual `resolveEntry`, not to us: checkpointing
+  // them here would durably commit the in-flight edit as `Glosa-Attribution: unknown` — and since
   // `checkpoint()` is idempotent (nothing left to stage once we've already committed it),
   // `resolveEntry`'s own later checkpoint would then find nothing new, return that SAME sha, and
-  // the journal would say `session:<id>` for a commit whose trailer says `unknown`. Skip
-  // entirely — no git spawned, nothing captured — and let the lease's own checkpoint at
-  // `applyBegin` (pre-existing drift) / `resolveEntry` (the proven interval) be the only two
-  // checkpoints that ever touch this window.
-  if (deps.state.applyLease) return { occurred: false };
+  // the journal would say `session:<id>` for a commit whose trailer says `unknown`. So claimed
+  // paths are stepped around and everything else is captured (issue #155 — before claims, one
+  // lease skipped the whole workspace). A pathless claim covers everything: skip entirely, no git
+  // spawned.
+  const claims = liveExclusiveClaims(deps.state.claims, deps.now?.() ?? new Date());
+  if (claims.some((claim) => claim.paths.length === 0)) return { occurred: false };
+  const claimed = new Set(claims.flatMap((claim) => claim.paths));
 
   const tracked = deps.resolveTrackedFilesAsync
     ? await deps.resolveTrackedFilesAsync(deps.workspaceRoot)
@@ -241,12 +257,19 @@ export async function offlineCatchUp(deps: OfflineCatchUpDeps): Promise<OfflineC
     resolveTrackedFiles: deps.resolveTrackedFilesSync,
   });
 
+  const unclaimed =
+    claimed.size > 0
+      ? (await trackedUnion(deps.workspaceRoot, trackedPaths)).filter((path) => !claimed.has(path))
+      : undefined;
+  if (unclaimed !== undefined && unclaimed.length === 0) return { occurred: false };
+
   const preSha = await headSha(deps.workspaceRoot);
   const postSha = await checkpoint(deps.workspaceRoot, {
     attribution: "unknown",
     kind: "auto_checkpoint",
     trackedPaths,
     resolveTrackedFiles: deps.resolveTrackedFilesSync,
+    ...(unclaimed ? { paths: unclaimed } : {}),
   });
   if (postSha === preSha) return { occurred: false }; // baseline (just created, or already current) covers it
 
@@ -290,9 +313,11 @@ export interface ReportExternalEditsDeps {
 }
 
 export async function reportExternalEdits(deps: ReportExternalEditsDeps): Promise<string[]> {
-  // A live lease owns its own interval (A4 §F05) — step 5a already declined to checkpoint under
-  // one, and reporting under one would race the same attribution edge from the other side.
-  if (deps.state.applyLease) return [];
+  // No claim gate here (issue #155). This only ever reports drift-kind commits, and no producer
+  // writes one for a path under a live claim — step 5a, the watcher and the pre-save capture all
+  // step around claimed paths — so a claim's own `pre_apply`/`post_apply` commits can never reach
+  // it. Gating on "any claim is live" would leave the unclaimed drift step 5a just committed
+  // unreported until every claim in the workspace ended.
   if (!existsSync(shadowGitDir(deps.workspaceRoot))) return []; // nothing ever checkpointed here
 
   // Every commit an `external_edit` entry already names, and the most recent of them as the
@@ -427,7 +452,7 @@ export async function reconcileWorkspace(
       reducer,
     });
 
-    const expiredLeaseIds = reconcileApplyLeases({
+    const expiredLeaseIds = reconcileClaims({
       workspaceRoot: workspaceWorktree(workspaceRoot),
       state,
       writer,

@@ -7,7 +7,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JournalWriter } from "../../src/bus/journal.ts";
+import type { Claim } from "../../src/bus/claims.ts";
 import { journalPath } from "../../src/bus/paths.ts";
+import type { DerivedState } from "../../src/bus/replay.ts";
 import { createUlidGenerator, type UlidGenerator } from "../../src/bus/ulid.ts";
 import {
   claimDaemonIdentity,
@@ -82,4 +84,19 @@ export function claimTestDaemonIdentity(root: string, instanceId = "gl-test-inst
 
 export function dropDaemonIdentity(): void {
   releaseDaemonIdentity();
+}
+
+/** Every exclusive claim the fold still holds, TTL-lapsed ones included, deduplicated across the
+ * resource slots a multi-resource claim occupies — the question `state.applyLease` used to answer
+ * ("is an interval in flight, and whose?"), asked of the claims fold directly (issue #155). */
+export function heldClaims(state: Pick<DerivedState, "claims">): Claim[] {
+  const seen = new Set<string>();
+  const held: Claim[] = [];
+  for (const slot of Object.values(state.claims)) {
+    const claim = slot.exclusive;
+    if (!claim || seen.has(claim.claim_id)) continue;
+    seen.add(claim.claim_id);
+    held.push(claim);
+  }
+  return held;
 }

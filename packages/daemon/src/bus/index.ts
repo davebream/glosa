@@ -22,7 +22,7 @@ export {
   replayJournal,
 } from "./replay.ts";
 export type {
-  ApplyLeaseState,
+  AppliedInterval,
   DerivedEntryState,
   DerivedState,
   Reducer,
@@ -33,7 +33,7 @@ export { isTerminal, lifecycleReducer } from "./lifecycle.ts";
 export type { DeliveryAttemptRecord, DeliveryOutcome, DeliveryReason, DeliveryVia, EntryKind } from "./lifecycle.ts";
 export {
   offlineCatchUp,
-  reconcileApplyLeases,
+  reconcileClaims,
   reconcileWorkspace,
   selfHealInbox,
   truncateTornTail,
@@ -47,13 +47,47 @@ export type {
   TailTruncateResult,
 } from "./reconcile.ts";
 export {
-  APPLY_LEASE_TTL_MS,
-  isLeaseExpired,
-  leaseExpiredError,
-  leaseHeldError,
-  leaseSessionMismatchError,
-  noActiveLeaseError,
+  artifactResource,
+  claimForEntry,
+  claimsOnPaths,
+  entryResource,
+  isClaimExpired,
+  liveExclusiveClaims,
+  reduceClaimEvent,
+  tombstoneFor,
+} from "./claims.ts";
+export type {
+  Claim,
+  ClaimHolderSnapshot,
+  ClaimMode,
+  ClaimsState,
+  ResourceClaims,
+  Tombstone,
+  TombstoneReason,
+} from "./claims.ts";
+export {
+  CLAIM_RENEW_GRACE_MS,
+  claimHeldError,
+  claimLimitError,
+  claimTombstoneError,
+  EXCLUSIVE_CLAIM_TTL_MS,
+  entryResolvedError,
+  HOLDER_STALE_GRACE_MS,
+  MAX_CLAIMS_PER_SESSION,
+  MAX_CLAIMS_PER_WORKSPACE,
+  noClaimError,
+  PRESENCE_CLAIM_TTL_MS,
+  sourceChangedError,
+  unknownEntryError,
 } from "./lease.ts";
-export type { LeaseExpiredError, LeaseHeldError, LeaseSessionMismatchError, NoActiveLeaseError } from "./lease.ts";
+export type {
+  ClaimGoneError,
+  ClaimHeldError,
+  ClaimLimitError,
+  EntryResolvedError,
+  NoClaimError,
+  SourceChangedError,
+  UnknownEntryError,
+} from "./lease.ts";
 export { WorkspaceBus } from "./bus.ts";
 export type { WorkspaceBusDeps } from "./bus.ts";

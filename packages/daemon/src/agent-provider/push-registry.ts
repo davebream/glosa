@@ -3,6 +3,7 @@
 // Durable truth remains in the workspace inbox/journal; losing this registry on restart only
 // removes the optional push rung and leaves MCP pull eligible.
 import type { DeliverableEntry } from "./interface.ts";
+import type { SignalFrame } from "./signal-registry.ts";
 
 interface Connection {
   /** Called with the replacing connection's transport when `register` displaces this one, so the
@@ -11,6 +12,10 @@ interface Connection {
    * those must stay byte-identical EOF on the wire. */
   close?: (supersededBy?: Connection["transport"]) => void;
   send: (entry: DeliverableEntry) => void;
+  /** Writes an `event: signal` frame (issue #155) on the SAME serialized writer as `send`, so a
+   * signal and a delivery can never interleave mid-frame. Absent on a transport that cannot carry
+   * one; such a session gets its signals from the drain instead. */
+  sendSignal?: (frame: SignalFrame) => void;
   transport: "monitor" | "codex_app_server";
   accepted: Set<string>;
 }
@@ -30,9 +35,16 @@ export class SessionPushRegistry {
     send: Connection["send"],
     close: Connection["close"],
     transport: Connection["transport"],
+    sendSignal?: Connection["sendSignal"],
   ): () => void {
     this.connections.get(sessionId)?.close?.(transport);
-    this.connections.set(sessionId, { send, close, transport, accepted: new Set() });
+    this.connections.set(sessionId, {
+      send,
+      close,
+      transport,
+      accepted: new Set(),
+      ...(sendSignal ? { sendSignal } : {}),
+    });
     return () => {
       const current = this.connections.get(sessionId);
       if (current?.send !== send) return;
@@ -83,6 +95,20 @@ export class SessionPushRegistry {
       resolvePromise(false);
     }
     return promise;
+  }
+
+  /** Pushes a signal to the session's live stream. `false` when there is no stream, or it cannot
+   * carry signals — the signal then stays pending for the next drain or reconnect. Fire-and-forget:
+   * a signal is acknowledged by its addressee through the ack route, not by the transport. */
+  sendSignal(sessionId: string, frame: SignalFrame): boolean {
+    const connection = this.connections.get(sessionId);
+    if (!connection?.sendSignal) return false;
+    try {
+      connection.sendSignal(frame);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   acknowledgeTransport(sessionId: string, entryId: string): boolean {

@@ -125,7 +125,7 @@ describe("seal-and-link loose-file adoption", () => {
           registry.sealForAdoption(sources, adoptionId, targetRegistrationId),
         coordinator,
       ),
-    ).rejects.toMatchObject({ code: "adoption-blocked" });
+    ).rejects.toMatchObject({ code: "adoption-blocked", message: expect.stringContaining("session-a") });
 
     expect(sourceBus.state.adoptionSeal).toBeNull();
     expect(existsSync(join(root, ".glosa"))).toBe(false);

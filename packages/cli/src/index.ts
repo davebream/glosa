@@ -28,6 +28,8 @@ const PUBLIC_COMMANDS = new Set([
   "open",
   "resolve",
   "apply-begin",
+  "claim",
+  "release",
   "request-review",
   "doctor",
   "status",
@@ -283,7 +285,7 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
   const applyBegin = lazyHandler(
     {
       name: "apply-begin",
-      description: "Acquire an entry application lease",
+      description: "Claim an inbox entry exclusively before applying it",
       args: {
         ...GLOBAL_ARGS,
         id: { type: "positional", required: true, description: "Inbox entry ID" },
@@ -306,6 +308,73 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
         { createClient: createHttpGlosaClient },
       );
       resolveModule.printApplyBeginResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
+  const claim = lazyHandler(
+    {
+      name: "claim",
+      description: "Claim resources so other sessions see who is working on them",
+      args: {
+        ...GLOBAL_ARGS,
+        resources: {
+          type: "positional",
+          required: true,
+          multiple: true,
+          description: "entry:<id> or artifact:<workspace-relative path>, one or more",
+        },
+        session: { type: "string", required: true, description: "Claiming session ID" },
+        mode: { type: "string", description: "exclusive (editing, the default) or presence (looking)" },
+        workspace: { type: "string", description: "Workspace directory (defaults to the cwd)" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const [{ createHttpGlosaClient }, claimModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./claim.ts"),
+      ]);
+      const result = await claimModule.runClaim(
+        {
+          dir: (values.workspace as string | undefined) ?? process.cwd(),
+          resources: (values.resources as string[] | undefined) ?? [],
+          session: values.session as string,
+          mode: values.mode as string | undefined,
+        },
+        { createClient: createHttpGlosaClient },
+      );
+      claimModule.printClaimResult(result, Boolean(values.json));
+      setExitCode(result.exitCode);
+    },
+  );
+
+  const release = lazyHandler(
+    {
+      name: "release",
+      description: "Release a claim this session holds",
+      args: {
+        ...GLOBAL_ARGS,
+        id: { type: "positional", required: true, description: "Claim ID (printed by glosa claim)" },
+        session: { type: "string", required: true, description: "The session that holds the claim" },
+        workspace: { type: "string", description: "Workspace directory (defaults to the cwd)" },
+      },
+    },
+    async (context) => {
+      const values = withGlobals(context);
+      const [{ createHttpGlosaClient }, claimModule] = await Promise.all([
+        import("./api-client.ts"),
+        import("./claim.ts"),
+      ]);
+      const result = await claimModule.runRelease(
+        {
+          dir: (values.workspace as string | undefined) ?? process.cwd(),
+          claimId: values.id as string,
+          session: values.session as string,
+        },
+        { createClient: createHttpGlosaClient },
+      );
+      claimModule.printReleaseResult(result, Boolean(values.json));
       setExitCode(result.exitCode);
     },
   );
@@ -866,6 +935,8 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     open,
     resolve,
     "apply-begin": applyBegin,
+    claim,
+    release,
     "request-review": requestReview,
     doctor,
     status,

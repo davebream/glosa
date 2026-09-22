@@ -15,6 +15,7 @@ import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapt
 import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import type { SignalFrame, SignalRegistry } from "../agent-provider/signal-registry.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
@@ -43,11 +44,12 @@ import {
 } from "../registry/workspace-index.ts";
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
+import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
-import { authorizeRequest, isForeignOrigin, type Transport } from "../security/auth.ts";
+import { authorizeRequest, isForeignOrigin, principalOfRequest, type Transport } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
@@ -60,7 +62,7 @@ import {
   listInboxEntries,
 } from "../services/artifact.ts";
 import { MAX_ENTRY_WAIT_MS, waitForWatch } from "../services/watch.ts";
-import { getOrRegisterWorkspace } from "../services/workspace-access.ts";
+import { findWorkspace, getOrRegisterWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { confineTranscriptPath } from "../transcript/root.ts";
 import { createTranscriptStreamResponse } from "../transcript/stream.ts";
 import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
@@ -215,6 +217,9 @@ export interface ApiContext {
   /** Optional external dictation providers, injected by the CLI composition root. */
   dictationRegistry?: DictationProviderRegistry;
   pushRegistry?: SessionPushRegistry;
+  /** Session signals derived from claim events (issue #155). Optional so a hand-built test context
+   * keeps compiling; absent, drains carry no `signals` and the ack route answers 404. */
+  signalRegistry?: SignalRegistry;
   /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
    * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
    * refuses rather than falling back to the old "any in-scope external_edit" rule, because that
@@ -1004,6 +1009,7 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
       provider,
       cwd: canonicalCwd,
       source,
+      principal: principalOfRequest(req),
       ...(workspaceBinding !== undefined ? { workspace_binding: workspaceBinding } : {}),
       fallback_workspace_binding: fallbackBinding,
       ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
@@ -1193,7 +1199,8 @@ async function handleCompositeSessionDrain(
       const plan = await bus.previewDelivery(
         DRAIN_MAX,
         { session: sessionId, ...(entryId ? { entryId } : {}) },
-        (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
+        (id, payload, status, { claims }) =>
+          buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
       );
       undisclosedLocalCandidates ||= plan.has_more;
       for (const item of plan.entries) {
@@ -1219,7 +1226,9 @@ async function handleCompositeSessionDrain(
     }
 
     if (selected.length === 0) {
-      return Response.json({ delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 });
+      return Response.json(
+        withSignals(ctx, sessionId, { delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 }),
+      );
     }
 
     const children: Array<{ bus: WorkspaceBus; delivery_id: string }> = [];
@@ -1233,8 +1242,10 @@ async function handleCompositeSessionDrain(
         const prepared = await candidate.bus.prepareDelivery(
           1,
           { via, session: sessionId, entryId: candidate.id },
-          (id, payload, status) =>
-            buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor),
+          (id, payload, status, { claims }) =>
+            buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor, {
+              claims,
+            }),
         );
         if (prepared.count !== 1 || prepared.delivery_id === null || prepared.drained[0]?.id !== candidate.id) {
           if (prepared.delivery_id) children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
@@ -1272,13 +1283,44 @@ async function handleCompositeSessionDrain(
       throw error;
     }
 
-    return Response.json({
-      delivery_id: compositeDeliveryId,
-      drained,
-      count: drained.length,
-      has_more: undisclosedLocalCandidates || candidates.length > selected.length,
-    });
+    return Response.json(
+      withSignals(ctx, sessionId, {
+        delivery_id: compositeDeliveryId,
+        drained,
+        count: drained.length,
+        has_more: undisclosedLocalCandidates || candidates.length > selected.length,
+      }),
+    );
   });
+}
+
+/** Adds the session's pending signals (issue #155) to a drain response — outside the 32 KiB entry
+ * budget, with their own cap of 8 signals / 8 KiB — and only when there are any, so a drain with
+ * nothing to say is byte-identical to one from before signals existed. */
+function withSignals<T extends object>(ctx: ApiContext, sessionId: string, body: T): T & { signals?: SignalFrame[] } {
+  const signals = ctx.signalRegistry?.pending(sessionId) ?? [];
+  return signals.length > 0 ? { ...body, signals } : body;
+}
+
+/** `POST /api/sessions/:id/signals/:sid/ack` — the addressee acknowledges one signal (issue #155).
+ * The path session AND the body's `ack_token` must both match the signal's own; anything else is
+ * the same 404 as a signal that does not exist, so the route reveals nothing about other sessions'
+ * signals. Repeating an ack is a 200. */
+async function handleSignalAck(ctx: ApiContext, sessionId: string, signalId: string, req: Request): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, pathname);
+  }
+  const token = (body as { ack_token?: unknown } | null)?.ack_token;
+  if (typeof token !== "string" || token.length === 0) {
+    return problem(400, "validation-failed", "ack_token is required", undefined, pathname);
+  }
+  const outcome = ctx.signalRegistry?.ack(sessionId, signalId, token) ?? "not-found";
+  if (outcome === "not-found") return problem(404, "not-found", "no such signal for this session", undefined, pathname);
+  return Response.json({ signal_id: signalId, acked: true, ...(outcome === "already" ? { already: true } : {}) });
 }
 
 /** `POST /api/sessions/:id/drain` — prepares the MCP pull payload (`glosa_inbox_pull`, A1 §5.15).
@@ -1381,10 +1423,11 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   const prepared = await bus.prepareDelivery(
     limit,
     { via, session: sessionId, ...(entryId ? { entryId } : {}) },
-    (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
+    (id, payload, status, { claims }) =>
+      buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
   );
 
-  return Response.json(prepared);
+  return Response.json(withSignals(ctx, sessionId, prepared));
 }
 
 async function handleSessionDeliveryAck(
@@ -1555,7 +1598,17 @@ async function handleSessionStream(
           throw error;
         }
       };
-      unregister = ctx.pushRegistry?.register(sessionId, send, close, transport);
+      // Issue #155: signals share this one writer with deliveries, so frames never interleave.
+      // `ack_token` rides only in this session's own frames — every signal record has one addressee.
+      const sendSignal = (frame: SignalFrame) => {
+        try {
+          controller.enqueue(encoder.encode(`event: signal\ndata: ${JSON.stringify(frame)}\n\n`));
+        } catch (error) {
+          close();
+          throw error;
+        }
+      };
+      unregister = ctx.pushRegistry?.register(sessionId, send, close, transport, sendSignal);
       releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
 
       const pump = async () => {
@@ -1571,7 +1624,8 @@ async function handleSessionStream(
             const plan = await bus.previewDelivery(
               DRAIN_MAX,
               { session: sessionId, excludeEntryIds: sent },
-              (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status),
+              (id, payload, status, { claims }) =>
+                buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, undefined, { claims }),
             );
             for (const candidate of plan.entries) {
               if (closed || !candidate.presentation) break;
@@ -1591,6 +1645,13 @@ async function handleSessionStream(
         if (event.event !== "delivery_attempt") void pump();
       });
       controller.enqueue(encoder.encode(": connected\n\n"));
+      // Anything addressed to this session while it had no stream is sent now, oldest first.
+      for (const frame of ctx.signalRegistry?.pending(sessionId, {
+        limit: Number.POSITIVE_INFINITY,
+        maxBytes: Number.POSITIVE_INFINITY,
+      }) ?? []) {
+        sendSignal(frame);
+      }
       signal.addEventListener("abort", abortClose, { once: true });
       void pump();
     },
@@ -2015,28 +2076,19 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
 
   if (outcome === "deferred") {
-    const entryState = bus.state.entries[entry];
-    if (!entryState) {
-      return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
-    }
     // `deferred` is a legal-but-inert no-op on the lifecycle reducer (absent from both guard
     // tables) — firing it on an entry that's ALREADY terminal would otherwise still return 200
     // `{to: "deferred"}`, which a client reading only `to` could misread as a successful
-    // transition. Guard it the same way `resolveEntry`'s illegal-transition cases are guarded
-    // below (409 `conflict`) rather than silently accepting it — first-terminal-wins, and this
-    // endpoint always tells the truth about what happened.
-    const kind = entryState.kind === "attention" ? "attention" : "common";
-    if (isTerminal(kind, entryState.status)) {
-      return problem(
-        409,
-        "conflict",
-        `entry is already ${entryState.status}; deferred is a no-op on a terminal entry`,
-        undefined,
-        url.pathname,
-      );
+    // transition. The bus refuses it under the same in-mutex terminal guard every other close
+    // uses (issue #155), so this endpoint always tells the truth about what happened.
+    try {
+      const deferred = await bus.deferEntry(entry, session, { ...(note !== undefined ? { note } : {}) });
+      return Response.json({ entry, status: deferred.status, to: "deferred" });
+    } catch (err) {
+      const mapped = claimProblem(err, url.pathname);
+      if (mapped) return mapped;
+      throw err;
     }
-    await bus.commitTransition(entry, "deferred", { by: `session:${session}`, note });
-    return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "deferred" });
   }
 
   if (!RESOLVE_TERMINAL_OUTCOMES.has(outcome)) {
@@ -2049,41 +2101,43 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
     );
   }
 
+  const fence = b?.fence;
+  if (fence !== undefined && (typeof fence !== "number" || !Number.isInteger(fence) || fence < 1)) {
+    return problem(400, "validation-failed", "fence must be a positive integer", undefined, url.pathname);
+  }
   try {
-    const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, { note });
-    return Response.json({ entry, status: outcome, to: outcome, lease_id: result.leaseId, post_sha: result.postSha });
+    const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, {
+      note,
+      ...(typeof fence === "number" ? { fence } : {}),
+    });
+    // A replay (issue #155 rung 1) answers with the ORIGINAL result and says so, so a retrying
+    // caller can tell "this is what you already did" from "this just happened".
+    return Response.json({
+      entry,
+      status: outcome,
+      to: outcome,
+      lease_id: result.leaseId,
+      post_sha: result.postSha,
+      ...(result.fence !== null ? { fence: result.fence } : {}),
+      ...(result.replayed ? { replayed: true } : {}),
+    });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "NO_ACTIVE_LEASE" || code === "LEASE_SESSION_MISMATCH") {
-      return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
-    }
-    // A4 §F05 lease expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
-    // `entry_error`) as the two above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
-    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s LEASE_HELD. The
-    // recovery step goes in the TITLE, not just the detail, because `runResolve`'s
-    // `mapEntryFailure` (packages/cli/src/resolve.ts) surfaces `problem.title` as the CLI's
-    // error message and never reads `detail` — guidance parked in `detail` would never be seen.
-    if (code === "LEASE_EXPIRED") {
-      return problem(
-        409,
-        "conflict",
-        "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
-        "past its TTL the lease could no longer prove its pre..post interval, so that interval was recorded as unknown rather than attributed to the session",
-        url.pathname,
-      );
-    }
+    // Every ladder refusal is a 409 with a slug of its own and the holder/tombstone inline, and an
+    // unknown entry is a 404 — all of them exit 8 in the CLI (A6 §F26 fixes `resolve`'s exit set
+    // at `0;3;8;2`; exit 12 belongs to apply-begin's conflict).
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
     throw err;
   }
 }
 
 /** `POST /api/workspaces/inbox/dismiss` — `glosa inbox dismiss <id>`'s daemon-side half (issue
- * #142). Mirrors `handleWorkspaceResolve`'s `deferred` arm above exactly (404 → terminal-guard
- * 409 → one `commitTransition` → JSON): a guarded transition that takes no lease. The difference
- * is the attribution and the terminal it lands on — `by: "human"` (a person typed the command,
- * never a session), `to: "dismissed"`, first-terminal-wins against `applied`/`rejected`/`stale`
- * exactly as it does against a second dismiss. No lease is opened or closed and no inbox file is
- * touched; this is precisely the supported, durably-recorded reconciliation the issue's hand-move
- * workaround never left a trace of. */
+ * #142). Mirrors `handleWorkspaceResolve`'s `deferred` arm above (404 → terminal-guard 409
+ * `entry-resolved` → one transition → JSON), with `by: "human"` (a person typed the command,
+ * never a session) and `to: "dismissed"`, first-terminal-wins against `applied`/`rejected`/`stale`
+ * exactly as it does against a second dismiss. No inbox file is touched; this is precisely the
+ * supported, durably-recorded reconciliation the issue's hand-move workaround never left a trace
+ * of. Unchanged on the wire except that a claim it released is named in `released`. */
 async function handleWorkspaceInboxDismiss(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -2104,16 +2158,28 @@ async function handleWorkspaceInboxDismiss(ctx: ApiContext, req: Request): Promi
 
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
 
-  const entryState = bus.state.entries[entry];
-  if (!entryState) {
-    return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
+  try {
+    // A person dismissing an entry an agent holds is the human-wins case (issue #155 REQ-6): the
+    // claim is released `by: "human"` inside the same critical section that closes the entry.
+    const dismissed = await bus.dismissEntry(entry, { ...(note !== undefined ? { note } : {}) });
+    return Response.json({
+      entry,
+      status: dismissed.status,
+      to: "dismissed",
+      ...(dismissed.released.length > 0
+        ? {
+            released: dismissed.released.map((claim) => ({
+              claim_id: claim.claim_id,
+              holder_session: claim.holder_session,
+            })),
+          }
+        : {}),
+    });
+  } catch (err) {
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
+    throw err;
   }
-  const kind = entryState.kind === "attention" ? "attention" : "common";
-  if (isTerminal(kind, entryState.status)) {
-    return problem(409, "conflict", `entry is already ${entryState.status}`, undefined, url.pathname);
-  }
-  await bus.commitTransition(entry, "dismissed", { by: "human", ...(note !== undefined ? { note } : {}) });
-  return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "dismissed" });
 }
 
 /** `GET /api/workspaces/inbox?path=<ws>[&all=1]` — `glosa inbox list`'s daemon-side half (issue
@@ -2156,8 +2222,8 @@ function handleWorkspaceInboxList(ctx: ApiContext, req: Request): Response {
 }
 
 /** `POST /api/workspaces/apply-begin` — `glosa apply-begin <id> --session <sid>`'s daemon-side
- * half (A4 §F05). A second apply-begin already active for this workspace surfaces as
- * `LEASE_HELD` — mapped to 409 `lease-conflict`, which the CLI maps to exit 12. */
+ * half (A4 §F05). Kept as an alias for an exclusive claim over `entry:<id>` (issue #155): another
+ * session holding the entry's paths surfaces as 409 `claim-held`, which the CLI maps to exit 12. */
 async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -2178,33 +2244,27 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
 
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   try {
-    const { leaseId, preSha } = await bus.applyBegin(entry, session);
-    return new Response(JSON.stringify({ entry, lease_id: leaseId, pre_sha: preSha }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
-    });
+    const principal = ctx.sessionRegistry.get(session)?.principal ?? principalOfRequest(req);
+    const result = await bus.applyBegin(entry, session, principal);
+    // Same session again renews (issue #155 REQ-3): 200 with the SAME lease id and fence, never a
+    // conflict. `lease_id` is the claim id; `pre_sha` is what the claim's interval is measured from.
+    return new Response(
+      JSON.stringify({
+        entry,
+        lease_id: result.leaseId,
+        pre_sha: result.preSha,
+        fence: result.fence,
+        expires_at: result.expiresAt,
+        ...(result.renewed ? { renewed: true } : {}),
+      }),
+      { status: result.renewed ? 200 : 201, headers: { "Content-Type": "application/json" } },
+    );
   } catch (err) {
-    if ((err as { code?: string }).code === "LEASE_HELD") {
-      return problem(
-        409,
-        "lease-conflict",
-        "an apply-lease is already active for this workspace",
-        undefined,
-        url.pathname,
-      );
-    }
-    // The entry belongs to another workspace, or does not exist. A 404 naming the reason, not the
-    // detail-free 500 an unhandled throw would produce — this is the likeliest mistake a caller
-    // can make here, and it was previously indistinguishable from a daemon fault.
-    if ((err as { code?: string }).code === "UNKNOWN_ENTRY") {
-      return problem(
-        404,
-        "not-found",
-        "this workspace has no such inbox entry — pass --workspace to name the one that owns it",
-        undefined,
-        url.pathname,
-      );
-    }
+    // Another session's claim over this entry's paths → 409 `claim-held` with the holder inline
+    // (the CLI maps it to exit 12). An entry from another workspace, or none at all → 404 naming
+    // the likeliest mistake, never the detail-free 500 an unhandled throw would produce.
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
     throw err;
   }
 }
@@ -2422,6 +2482,8 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       lease_expiry: s.lease_expiry,
       last_active_at: s.last_active_at,
       liveness: ctx.sessionRegistry.liveness(s.session_id),
+      // Contract 1.17 (issue #155): which principal registered this session — reporting only.
+      ...(s.principal ? { principal: s.principal } : {}),
       // Contract 1.16 (issue #306). Answered from `SessionPushRegistry` alone, exactly like the
       // `GET /api/sessions/:id/stream/status` probe, and carrying that probe's shape verbatim so
       // there is ONE wire shape for "is push live" rather than two that must be kept in step.
@@ -2561,8 +2623,14 @@ async function handleWorkspaceWatch(
   const releaseLease = ctx.sessionRegistry.holdConnection(sessionId, `watch:${randomUUID()}`);
   server?.timeout(req, 0);
   try {
-    const result = await waitForWatch(bus, { session: sessionId, path, since, waitMs, signal }, (id, payload, status) =>
-      buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, { watched: true }),
+    const result = await waitForWatch(
+      bus,
+      { session: sessionId, path, since, waitMs, signal },
+      (id, payload, status, { claims }) =>
+        buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, {
+          watched: true,
+          claims,
+        }),
     );
     // Revalidate the admitted authority before anything leaves this handler (review round 3,
     // F-7/F-3). `waitForWatch` can settle on an authority-loss abort and still carry entries it
@@ -2776,6 +2844,38 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && pathname === "/api/workspaces/forget") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceForget(ctx, req) };
   }
+  const claimRoute = claimRoutes(
+    {
+      busForPath: async (rawPath) => {
+        const root = canonicalOrNull(rawPath);
+        if (!root) throw Object.assign(new Error("invalid workspace path"), { code: "INVALID_WORKSPACE_PATH" });
+        return resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
+      },
+      busForSlug: async (slug) => {
+        let entry: WorkspaceEntry;
+        try {
+          entry = findWorkspace(ctx, slug);
+        } catch (error) {
+          if (error instanceof WorkspaceLookupError && error.code !== "not-found") {
+            throw new AdoptionError(
+              error.code,
+              error.code === "workspace-forgetting"
+                ? "workspace is being forgotten"
+                : "workspace adoption is in progress",
+            );
+          }
+          throw Object.assign(new Error("unknown workspace"), { code: "WORKSPACE_NOT_FOUND" });
+        }
+        return resolveBus(ctx, entry);
+      },
+      // The principal the session registered under, when it registered; otherwise the one this
+      // request's own bearer derives. Reporting only (see `principalOf`).
+      principalFor: (sessionId, req) => ctx.sessionRegistry.get(sessionId)?.principal ?? principalOfRequest(req),
+    },
+    method,
+    pathname,
+  );
+  if (claimRoute) return claimRoute;
   const attentionRoute = attentionRoutes(
     {
       workspaceIndex: ctx.workspaceIndex,
@@ -2801,6 +2901,11 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/deregister$/))) {
     const sessionId = m[1] as string;
     return { routeClass: "state-changing", handle: () => handleSessionDeregister(ctx, sessionId) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/signals\/([^/]+)\/ack$/))) {
+    const sessionId = m[1] as string;
+    const signalId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSignalAck(ctx, sessionId, signalId, req) };
   }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/drain$/))) {
     const sessionId = m[1] as string;

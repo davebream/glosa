@@ -82,6 +82,20 @@ export interface PresentationTruncation {
   truncated: boolean;
   omitted_bytes: number;
   omitted_hunks: number;
+  /** How many claims on this entry did not fit in `claims` (issue #155). Present only when some
+   * were left out — `claims` holds at most `MAX_PRESENTATION_CLAIMS`, exclusive first. */
+  omitted_claims?: number;
+}
+
+/** A live claim on the entry being presented, or on the file it is about (issue #155 REQ-11).
+ * A claim is a fence, not a filter: the entry is still delivered, and this tells the reader who
+ * is already working on it, so a second agent can decide to leave it alone. */
+export interface PresentationClaim {
+  session: string;
+  principal: string;
+  mode: "exclusive" | "presence";
+  since: string;
+  fence: number | null;
 }
 
 interface PresentationBase {
@@ -91,6 +105,9 @@ interface PresentationBase {
   bytes: number;
   truncation: PresentationTruncation;
   retrieval: PresentationRetrieval;
+  /** Present only when the entry or its file is claimed. Reserved INSIDE the 16 KiB entry budget
+   * before the body is sized, so body hunks are what yield — never the claims. */
+  claims?: PresentationClaim[];
 }
 
 /** Provider-neutral, already-bounded actionable content. The `kind` discriminant keeps annotation,

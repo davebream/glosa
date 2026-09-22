@@ -116,8 +116,12 @@ async function adoptLooseLineagesExclusive(
         }
       }
     } catch (error) {
-      if (typeof error === "object" && error !== null && (error as { code?: string }).code === "LEASE_HELD") {
-        throw new AdoptionError("adoption-blocked", "an active apply lease must resolve or expire before adoption");
+      if (typeof error === "object" && error !== null && (error as { code?: string }).code === "CLAIM_HELD") {
+        const holder = (error as { claim?: { holder_session?: string } }).claim?.holder_session;
+        throw new AdoptionError(
+          "adoption-blocked",
+          `a live claim${holder ? ` held by session ${holder}` : ""} must be resolved, released, or expire before adoption`,
+        );
       }
       throw error;
     }

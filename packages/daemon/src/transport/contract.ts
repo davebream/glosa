@@ -49,8 +49,17 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * derivation, which stays `workspace_binding` + liveness (A1 §5.2b). `remedy` is present only
  * beside `lifecycle`, so a JSON client can print the resume command the human output already
  * prints instead of composing its own. Additive, N/N-1 safe: an N-1 daemon omits both, and an
- * absent `push` means "cannot say", never "not live". */
-export const CONTRACT_VERSION = "1.16";
+ * absent `push` means "cannot say", never "not live".
+ *
+ * v1.17 (issue #155) adds per-resource claims: `POST/GET /api/workspaces/claims`,
+ * `POST /api/workspaces/claims/:id/{renew,release}`, `POST /w/:slug/claims/:id/release`; an optional
+ * `fence` on `POST /api/workspaces/resolve` and `replayed:true` on a replayed resolve; `fence`,
+ * `expires_at` and `renewed` on apply-begin (a same-session repeat now renews with 200); and the
+ * claim problem slugs (`claim-held`, `claim-revoked`, `claim-expired`, `claim-superseded`,
+ * `entry-resolved`, `no-claim`, `claim-limit`) carrying their facts as RFC 9457 extension members.
+ * apply-begin's conflict moves from `lease-conflict` to `claim-held`; an N-1 CLI that matched only
+ * `lease-conflict` falls back to its generic exit 8, and this CLI accepts both. */
+export const CONTRACT_VERSION = "1.17";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

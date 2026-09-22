@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Actionable, provider-neutral inbox presentation (R3/R4, issue #18).
 
-import type { DeliverableEntry, PresentationRetrieval } from "../agent-provider/interface.ts";
+import type { DeliverableEntry, PresentationClaim, PresentationRetrieval } from "../agent-provider/interface.ts";
 import type { Resolution } from "../anchoring.ts";
 
 export const MAX_ENTRY_PRESENTATION_BYTES = 16 * 1024;
 export const MAX_BATCH_PRESENTATION_BYTES = 32 * 1024;
 export const MAX_DELIVERY_ENTRIES = 8;
+/** At most this many claims ride on one presentation (issue #155), exclusive first. */
+export const MAX_PRESENTATION_CLAIMS = 4;
 
 const encoder = new TextEncoder();
 
@@ -93,6 +95,9 @@ export interface BuildPresentationOptions {
    * only ever surfaces that kind — and it swaps the "nothing is being asked" wording for one that
    * names why the session is seeing this at all: it asked to watch. */
   watched?: boolean;
+  /** Live claims on this entry or its file (issue #155). Their text is reserved out of `maxBytes`
+   * BEFORE the body is sized, so the body truncates and the claims never do. */
+  claims?: readonly PresentationClaim[];
 }
 
 function annotationPresentation(
@@ -367,7 +372,42 @@ function conversationPresentation(
   };
 }
 
+/** One line per claim, appended after the body so the entry's own first line — the one every
+ * transport keys on — never moves. */
+function claimsBlock(kept: readonly PresentationClaim[], omitted: number): string {
+  const lines = kept.map(
+    (claim) =>
+      `claimed: session ${claim.session} ${claim.mode === "exclusive" ? "is editing this" : "is looking at this"} since ${claim.since}${claim.fence !== null ? ` (fence ${claim.fence})` : ""}`,
+  );
+  if (omitted > 0) lines.push(`claimed: …and ${omitted} more`);
+  return `\n${lines.join("\n")}`;
+}
+
 export function buildDeliveryPresentation(
+  id: string,
+  payloadInput: unknown,
+  opts: BuildPresentationOptions,
+): DeliverableEntry | null {
+  const claims = opts.claims ?? [];
+  if (claims.length === 0) return buildPresentationBody(id, payloadInput, opts);
+  const ordered = [...claims].sort((a, b) => (a.mode === b.mode ? 0 : a.mode === "exclusive" ? -1 : 1));
+  const kept = ordered.slice(0, MAX_PRESENTATION_CLAIMS);
+  const omitted = ordered.length - kept.length;
+  const block = claimsBlock(kept, omitted);
+  const maxBytes = opts.maxBytes ?? MAX_ENTRY_PRESENTATION_BYTES;
+  const body = buildPresentationBody(id, payloadInput, { ...opts, maxBytes: Math.max(0, maxBytes - utf8Bytes(block)) });
+  if (!body) return null;
+  const text = `${body.text}${block}`;
+  return {
+    ...body,
+    text,
+    bytes: utf8Bytes(text),
+    claims: kept.map((claim) => ({ ...claim })),
+    truncation: { ...body.truncation, ...(omitted > 0 ? { omitted_claims: omitted } : {}) },
+  };
+}
+
+function buildPresentationBody(
   id: string,
   payloadInput: unknown,
   opts: BuildPresentationOptions,

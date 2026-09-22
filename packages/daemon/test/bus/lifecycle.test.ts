@@ -459,3 +459,122 @@ describe("live WorkspaceBus state == a fresh restart's reconcile fold (concurren
     cleanupWorkspace(root);
   });
 });
+
+// Issue #155: the fold has to be able to answer "did I resolve this, or did someone else?" with
+// no idempotency key on the wire. `terminalBy` is that answer, and it is recorded only on the
+// winning side of the guard — a loser's discarded transition must leave nothing behind that says
+// it won. `appliedInterval` is the same rule applied to the proven pre..post interval.
+describe("lifecycle — terminalBy and the promoted apply interval (issue #155)", () => {
+  function applyEnd(entry: string, by: string, claimId: string, post: string): JournalEvent {
+    return mkEvent("apply_end", entry, {
+      by: by as JournalEvent["by"],
+      detail: { claim_id: claimId, pre_sha: `pre-${claimId}`, post_sha: post, paths: ["notes.md"] },
+    });
+  }
+
+  test("terminalBy names the session whose terminal transition the guard let through", () => {
+    const state = foldEvents(
+      [
+        created("e1"),
+        transition("e1", "applied", { by: "session:A" }),
+        // B's resolve arrives second. `canTransition` refuses to leave a terminal status, so it is
+        // discarded — and must not overwrite the record of who actually closed the entry.
+        transition("e1", "rejected", { by: "session:B" }),
+      ],
+      lifecycleReducer,
+    );
+    expect(state.entries.e1?.status).toBe("applied");
+    expect(state.entries.e1?.terminalBy).toBe("session:A");
+  });
+
+  test("a non-terminal transition records no terminalBy", () => {
+    const state = foldEvents([created("e1"), transition("e1", "delivered", { by: "session:A" })], lifecycleReducer);
+    expect(state.entries.e1?.terminalBy).toBeUndefined();
+  });
+
+  test("an illegal-from transition records no terminalBy", () => {
+    // `seen` is legal only from `delivered`; the entry is still `pending`, so this is discarded.
+    const state = foldEvents([created("e1"), transition("e1", "seen", { by: "session:A" })], lifecycleReducer);
+    expect(state.entries.e1?.status).toBe("pending");
+    expect(state.entries.e1?.terminalBy).toBeUndefined();
+  });
+
+  test("the apply interval is promoted only when the same actor closed the entry", () => {
+    const state = foldEvents(
+      [created("e1"), applyEnd("e1", "session:A", "C1", "post-A"), transition("e1", "applied", { by: "session:A" })],
+      lifecycleReducer,
+    );
+    expect(state.entries.e1?.appliedInterval).toEqual({
+      by: "session:A",
+      claim_id: "C1",
+      pre_sha: "pre-C1",
+      post_sha: "post-A",
+      paths: ["notes.md"],
+    });
+  });
+
+  test("a loser's apply_end stays stashed and is never promoted to an interval", () => {
+    // B checkpointed before the fold discarded its transition. That checkpoint is real, but it
+    // proves nothing about who closed this entry — crediting it would attribute work that the
+    // entry's own history says did not close it.
+    const state = foldEvents(
+      [
+        created("e1"),
+        applyEnd("e1", "session:A", "C1", "post-A"),
+        transition("e1", "applied", { by: "session:A" }),
+        applyEnd("e1", "session:B", "C2", "post-B"),
+        transition("e1", "rejected", { by: "session:B" }),
+      ],
+      lifecycleReducer,
+    );
+    expect(state.entries.e1?.terminalBy).toBe("session:A");
+    expect(state.entries.e1?.appliedInterval?.claim_id).toBe("C1");
+    expect(state.entries.e1?.lastApplyEnd?.claim_id).toBe("C2"); // stashed, unattributed
+  });
+
+  test("an interval left over from a crash is not credited to whoever closes the entry next", () => {
+    // `apply_end` and `transition_committed` are two appends. A crash between them leaves the
+    // first on disk and the second never written — and the entry stays open, so the next terminal
+    // transition it gets is somebody else's: here a human dismiss. Promoting the stashed interval
+    // would attribute the human's close to session B, which is the forgery honest provenance
+    // exists to prevent. Ablating the `by` comparison reds exactly this test.
+    const state = foldEvents(
+      [created("e1"), applyEnd("e1", "session:B", "C2", "post-B"), transition("e1", "dismissed", { by: "human" })],
+      lifecycleReducer,
+    );
+    expect(state.entries.e1?.status).toBe("dismissed");
+    expect(state.entries.e1?.terminalBy).toBe("human");
+    expect(state.entries.e1?.appliedInterval).toBeUndefined();
+    expect(state.entries.e1?.lastApplyEnd?.claim_id).toBe("C2"); // still stashed, still unattributed
+  });
+
+  test("an interval recorded unknown carries its reason onto the entry", () => {
+    const state = foldEvents(
+      [
+        created("e1"),
+        mkEvent("apply_end", "e1", {
+          by: "session:A",
+          detail: {
+            claim_id: "C1",
+            pre_sha: "pre-C1",
+            post_sha: "post-A",
+            paths: ["notes.md"],
+            interval_attribution: "unknown",
+            reason: "foreign-commit-in-interval",
+          },
+        }),
+        transition("e1", "applied", { by: "session:A" }),
+      ],
+      lifecycleReducer,
+    );
+    expect(state.entries.e1?.status).toBe("applied"); // the entry still transitions
+    expect(state.entries.e1?.appliedInterval?.interval_attribution).toBe("unknown");
+    expect(state.entries.e1?.appliedInterval?.reason).toBe("foreign-commit-in-interval");
+  });
+
+  test("terminalBy is recorded on the vivify path too (resolve with no entry_created)", () => {
+    const state = foldEvents([transition("e1", "applied", { by: "session:A" })], lifecycleReducer);
+    expect(state.entries.e1?.status).toBe("applied");
+    expect(state.entries.e1?.terminalBy).toBe("session:A");
+  });
+});

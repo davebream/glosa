@@ -39,9 +39,10 @@ a live document week.
    runs with zero adapters and never imports an external integration package.
 2. **The journal is the single source of truth.** Inbox entries are immutable; status is derived by
    replaying the journal. No cross-file "atomic" writes exist (A4).
-3. **Honest provenance.** Attribute a change to a session only when a `apply-begin`→`resolve` lease
-   proves it; edits made in glosa's editor are `human` by construction; everything else is `unknown`,
-   never falsely `human` (A4 §F05).
+3. **Honest provenance.** Attribute a change to a session only when its claim's `pre..post` interval
+   proves it (`apply-begin`/`claim` → `resolve`, scoped to the claimed files); edits made in glosa's
+   editor are `human` by construction; everything else is `unknown`, never falsely `human`. A person's
+   save over an agent's claim wins, and the agent's unfinished bytes become `unknown` (A4 §F05).
 4. **No cmux.** glosa is fully decoupled from cmux — not a dependency, not a delivery mechanism, not the
    UI host. The SPA runs in any browser over loopback (`http://glosa.localhost` or `http://127.0.0.1`).
    Delivery uses each agent's own push transport (Claude: the plugin monitor; Codex: the app-server
