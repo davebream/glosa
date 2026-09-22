@@ -135,7 +135,14 @@ generic.**
   of it (created before this boundary existed) is never silently reused for a new file lookup —
   the registration is surfaced by slug with remediation, and continuing to use it requires the
   same explicit intent as creating one, namely opening that directory itself rather than an
-  unrelated nested file. `glosa doctor`'s cwd default falls back to the literal cwd
+  unrelated nested file. **A session registration is bounded the same way** — an agent reports the
+  directory it happens to be running in, which is not a request to make that directory a
+  workspace: `$HOME` or an ancestor is never registered from it (the session still registers and
+  still pulls over MCP, with no workspace invented), and a directory already inside a registered
+  workspace resolves to that workspace instead of receiving a second registration and a second
+  bus. The session's `cwd` stays literal and its `workspace_binding` carries the enclosing
+  workspace, because the cwd fallback in R2's routing matches a session ABOVE a workspace, never
+  one inside it. `glosa doctor`'s cwd default falls back to the literal cwd
   instead of promoting to home, and an explicit `--dir` naming `$HOME` itself is refused the same
   way a temp-root or multi-repo target is (`home-dir` risk, clearable with `--force` or a TTY
   confirmation). A repository that is merely a subdirectory of home is unaffected and keeps

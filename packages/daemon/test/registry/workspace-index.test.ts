@@ -1819,3 +1819,121 @@ describe("WorkspaceIndex — a failed persist changes nothing", () => {
     cleanup(home);
   });
 });
+
+// A session registering is not the same act as a person running `glosa open`, and until now the
+// index could not tell them apart: `upsertWorkspace` took any path and made it a workspace.
+// `upsertDirectoryForOpen`, which is what `open` actually reaches, already refused a row that was
+// mid-deletion and refused to recreate one inside a forget's registration-less window. The session
+// path reached none of that, and it is the path an agent takes automatically, from whatever
+// directory it happened to start in.
+describe("registering a workspace for a session is not the same as opening one", () => {
+  test("a mid-deletion row is not refreshed back to present by a session registering on it", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const index = new WorkspaceIndex({ home, now: manualClock() });
+    const entry = await index.upsertWorkspace(root, "session");
+    cleanup(root);
+    await index.gc({ force: true });
+    expect(index.getWorkspaceByRegistration(entry.registration_id)?.present).toBe(false);
+    await index.beginForgetOperation(entry, [entry]);
+
+    // `present = true` and a cleared `absent_since` on a row a durable `glosa forget` has already
+    // committed to removing is that deletion partially undone, by a caller that never asked to.
+    await expect(index.upsertWorkspace(root, "session")).rejects.toThrow(AdoptionError);
+    const after = index.getWorkspaceByRegistration(entry.registration_id);
+    expect({ present: after?.present, absent: after?.absent_since !== undefined }).toEqual({
+      present: false,
+      absent: true,
+    });
+
+    cleanup(home);
+  });
+
+  test("the registration-less window of a forget is not reopened as a brand-new workspace", async () => {
+    // Between removing a row and stamping the completion receipt nothing is registered at the
+    // path. Recreating it there reads as an ordinary new workspace to every later caller, so the
+    // deletion's own remaining steps stop being able to see what they are deleting.
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const index = new WorkspaceIndex({ home, now: deterministicClock() });
+    const entry = await index.upsertWorkspace(root, "session");
+    await index.beginForgetOperation(entry, [entry]);
+    expect(await index.forget(entry.slug)).toBe(true);
+    expect(index.get(root)).toBeNull();
+
+    await expect(index.upsertWorkspace(root, "session")).rejects.toThrow(AdoptionError);
+    expect(index.get(root)).toBeNull();
+
+    cleanup(home);
+    cleanup(root);
+  });
+});
+
+// The other half of the same asymmetry (#146's boundary): `resolveOpenTarget` refuses to reach a
+// `$HOME` registration automatically and reuses the enclosing workspace for a nested path, but the
+// session path took whatever directory it was handed. An agent starts wherever the user's shell
+// happened to be, so "whatever directory" is a real input, not a hypothetical one.
+describe("a session's own directory is not automatically a new workspace", () => {
+  test("a directory inside a registered workspace reuses it instead of minting a second one", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const nested = join(root, "packages", "cli");
+    mkdirSync(nested, { recursive: true });
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), userHomeDir: home });
+    const parent = await index.upsertWorkspace(root, "glosa-open");
+
+    // A second registration here would give the subdirectory its own slug and its own `.glosa`
+    // bus, splitting one project's notes across two inboxes — and the session's cwd already
+    // routes to the parent through the registry's own cwd-ancestor rung, so nothing needed it.
+    const resolved = await index.upsertSessionWorkspace(nested);
+    expect(resolved?.registration_id).toBe(parent.registration_id);
+    expect(index.list().map((e) => e.canonical_path)).toEqual([root]);
+
+    cleanup(home);
+    cleanup(root);
+  });
+
+  test("the home directory is never registered just because a session started there", async () => {
+    const home = freshHome();
+    // Realpath'd on both sides, as production is: the route canonicalizes a session's cwd before
+    // it ever reaches the index, and macOS's tmpdir is a symlink.
+    const userHome = realpathSync(freshWorkspaceDir());
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), userHomeDir: userHome });
+
+    // Registering `$HOME` writes a `.glosa` directory into it and then matches every file the user
+    // owns, forever. `glosa open` already refuses to arrive here by accident; arriving by accident
+    // is the only way a session ever would.
+    expect(await index.upsertSessionWorkspace(userHome)).toBeNull();
+    expect(index.list()).toEqual([]);
+
+    cleanup(home);
+    cleanup(userHome);
+  });
+
+  test("a home workspace someone opened on purpose is still reused, never re-minted", async () => {
+    const home = freshHome();
+    const userHome = realpathSync(freshWorkspaceDir());
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), userHomeDir: userHome });
+    const explicit = await index.upsertWorkspace(userHome, "glosa-open");
+
+    // Refusing to CREATE one is the boundary; refusing to USE the one a person deliberately made
+    // would be a different, unasked-for change.
+    expect((await index.upsertSessionWorkspace(userHome))?.registration_id).toBe(explicit.registration_id);
+
+    cleanup(home);
+    cleanup(userHome);
+  });
+
+  test("an ordinary directory with no workspace above it still becomes one", async () => {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const index = new WorkspaceIndex({ home, now: deterministicClock(), userHomeDir: home });
+
+    // The behaviour worth keeping: a session in a fresh project registers it, which is how a
+    // workspace comes into being without anyone running `glosa open` first.
+    expect((await index.upsertSessionWorkspace(root))?.canonical_path).toBe(root);
+
+    cleanup(home);
+    cleanup(root);
+  });
+});

@@ -146,6 +146,13 @@ Providers register through the daemon API; no hook writes registry files directl
 }
 ```
 
+Registering does not, by itself, make the reported `cwd` a workspace (#146). A directory already
+inside a registered workspace resolves to that workspace and the row's `workspace_binding` is set to
+it; `$HOME` or an ancestor registers no workspace at all, leaving the session live and pullable over
+MCP with nothing minted; a path a `glosa forget` is midway through deleting is refused with
+`workspace-forgetting` rather than recreated. `cwd` always keeps saying where the process runs, and
+a binding the caller supplied is never overridden by this resolution.
+
 Liveness is one unexpired 60-second registry lease, never `kill(pid,0)`. Registration, every MCP
 tool call, and an open session transport refresh it. Connection-held refreshes run
 every 20 seconds; closing/replacing/revoking a stream stops its own refreshes and the last lease then

@@ -1031,18 +1031,10 @@ describe("glosa forget", () => {
     });
     const initialExpiry = sessionRegistry.get("s1")!.lease_expiry;
 
-    // Forget commits: the workspace is now durably "forgetting".
-    await index.markForgetting([entry.registration_id], entry.registration_id);
-
-    // Advance time (but not past the lease TTL) and heartbeat — a bare "still known" ping must not
-    // extend the lease for a workspace whose forget has committed.
-    clock.advance(500);
-    expect(await sessionRegistry.heartbeat("s1")).toBe(true); // still a KNOWN session
-    expect(sessionRegistry.get("s1")!.lease_expiry).toBe(initialExpiry); // but NOT extended
-
-    // The connection-refresh timer goes through the exact same gated path. `holdConnection` calls
-    // `scheduleRefresh` once (capturing the periodic tick below) AND fires an immediate refresh —
-    // the workspace is ALREADY forgetting by this point, so even that immediate bump is withheld.
+    // s2 registers BEFORE the forget commits. It used to register after, which only worked
+    // because the session path recreated the row it was bound to; that path now refuses a
+    // forgetting workspace outright (asserted below), so the ordering has to be honest. The
+    // subject is unchanged: what `holdConnection` does once the workspace IS forgetting.
     let refresh: (() => void) | undefined;
     const withScheduler = new SessionRegistry({
       index,
@@ -1062,6 +1054,32 @@ describe("glosa forget", () => {
       workspace_binding: root,
       source: "mcp",
     });
+
+    // Forget commits: the workspace is now durably "forgetting".
+    await index.markForgetting([entry.registration_id], entry.registration_id);
+
+    // The coverage the reordering above would otherwise have dropped: registering INTO a
+    // workspace whose forget has committed is refused, rather than quietly recreating it.
+    await expect(
+      sessionRegistry.register({
+        session_id: "s3",
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "mcp",
+      }),
+    ).rejects.toThrow("workspace is being forgotten");
+    expect(sessionRegistry.get("s3")).toBeNull();
+
+    // Advance time (but not past the lease TTL) and heartbeat — a bare "still known" ping must not
+    // extend the lease for a workspace whose forget has committed.
+    clock.advance(500);
+    expect(await sessionRegistry.heartbeat("s1")).toBe(true); // still a KNOWN session
+    expect(sessionRegistry.get("s1")!.lease_expiry).toBe(initialExpiry); // but NOT extended
+
+    // The connection-refresh timer goes through the exact same gated path. `holdConnection` calls
+    // `scheduleRefresh` once (capturing the periodic tick below) AND fires an immediate refresh —
+    // the workspace is ALREADY forgetting by this point, so even that immediate bump is withheld.
     const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
     const s2RegisteredExpiry = withScheduler.get("s2")!.lease_expiry;

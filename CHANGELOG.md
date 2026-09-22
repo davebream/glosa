@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coding agent no longer turns whatever directory it started in into a glosa workspace.**
+  Starting one in your home directory registered your whole home as a workspace, wrote a `.glosa`
+  directory into it, and from then on matched every file you own. Starting one in a subdirectory of
+  a project you had already opened gave that subdirectory a second workspace with its own inbox, so
+  notes you left went to one and the agent watched the other. Now a session inside a project joins
+  that project, a session in your home registers nothing at all and still works over pull, and a
+  session whose workspace is part-way through `glosa forget` is told so instead of quietly
+  resurrecting it.
+
 ## [0.1.0-alpha.29] — 2026-09-22
 
 ### Security

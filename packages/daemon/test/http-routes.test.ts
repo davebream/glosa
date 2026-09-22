@@ -2951,6 +2951,42 @@ describe("A1 §5 route catalog", () => {
       }
     });
 
+    test("a session registering from a subdirectory joins the workspace above it instead of minting a second one (#146)", async () => {
+      // The end-to-end shape of the defect: an agent starts in `packages/cli`, its first MCP call
+      // registers the session, and the daemon used to give that subdirectory its own slug and its
+      // own `.glosa` bus. One project, two inboxes, and notes left in whichever the human happened
+      // to open. `cwd` stays truthful; routing to the parent is the registry's cwd-ancestor rung.
+      const nested = join(root, "packages", "cli");
+      mkdirSync(nested, { recursive: true });
+      const before = ((await (await fetchFn(req("/api/status"))).json()) as { workspaces: unknown[] }).workspaces
+        .length;
+
+      const res = await fetchFn(
+        stateChangingReq("/api/sessions/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: "nested-1", provider: "claude-code", cwd: nested, source: "mcp" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const after = (await (await fetchFn(req("/api/status"))).json()) as {
+        workspaces: Array<{ path: string }>;
+        sessions: Array<{ session_id: string; cwd: string }>;
+      };
+      expect(after.workspaces).toHaveLength(before);
+      expect(after.workspaces.some((w) => w.path === nested)).toBe(false);
+      // `cwd` still says where the process runs; the binding says where its notes come from.
+      // Both matter: without the binding, declining to register the subdirectory would leave this
+      // session reachable from nothing, because the cwd fallback only matches a session sitting
+      // ABOVE a workspace, never inside one.
+      expect(after.sessions.find((x) => x.session_id === "nested-1")).toMatchObject({
+        cwd: nested,
+        workspace_binding: root,
+      });
+      expect(sessionRegistry.forWorkspace(root).map((x) => x.session_id)).toContain("nested-1");
+    });
+
     test("a session bind refuses once the target is durably being forgotten, without ever creating a live session for it", async () => {
       const entry = workspaceIndex.getBySlug(slug)!;
       await workspaceIndex.beginForgetOperation(entry, [entry]);

@@ -210,6 +210,14 @@ explicit connection as follows: any alive row whose `workspace_binding` equals t
 connected; otherwise any stale explicit row is stale; otherwise it is unbound. Cwd-ancestor routing
 does not count as an explicit connection.
 
+A session that registers from a directory INSIDE a registered workspace is given that workspace as
+its `workspace_binding` and therefore reads as connected here (#146). That is not cwd-ancestor
+routing being promoted: the binding is stored on the row, and the derivation above is unchanged.
+Registering does not mint a workspace for the subdirectory, so the alternative would be a session
+reachable from nothing — R2's cwd fallback matches a session sitting above a workspace, never one
+inside it. `cwd` keeps saying where the process runs, and an explicitly supplied binding always
+wins over this inference.
+
 ### 5.18 / 5.19 — removed (#152)
 `GET /w/:slug/wiring` and `POST /w/:slug/init` (the consent-gated `glosa init` trigger from issue
 #80) no longer exist; both answer **404**. There is no installation state to report and nothing for
