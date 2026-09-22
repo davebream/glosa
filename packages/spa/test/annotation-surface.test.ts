@@ -596,4 +596,225 @@ describe("the annotation surface", () => {
     await mountPane(da);
     expect(da.listedFor).toEqual(["notes.md"]);
   });
+
+  // --- what survives a re-wrap ---
+  //
+  // Re-wrapping a paragraph in an editor — a space becomes a soft break, or the reverse — changes
+  // the source bytes and leaves the rendered WORDS identical. The daemon has always folded
+  // whitespace before searching, so it kept delivering these notes; the page compared raw text and
+  // called every one of them lost. A card saying "Lost its place" about a note the session is
+  // about to act on is worse than no card. The page now folds too, by the same rule, including
+  // the same refusal to choose when the folded quote fits two passages.
+
+  /** The same manuscript with `gamma delta` split across a soft break — the only difference is
+   * which whitespace character sits between the two words. */
+  const REWRAPPED = `<h1>Konspekt</h1><p id="para">Alpha beta gamma\ndelta epsilon zeta eta theta iota kappa lambda mu.</p>`;
+  const PLAIN_REWRAPPED = "KonspektAlpha beta gamma\ndelta epsilon zeta eta theta iota kappa lambda mu.";
+
+  /** A manuscript where the quote, once folded, fits two different passages. */
+  const DOUBLED = `<h1>Konspekt</h1><p id="para">Alpha beta gamma\ndelta epsilon.</p><p>Later again gamma\ndelta omega.</p>`;
+  /** What that same manuscript said when the note was written: one occurrence, and not yet
+   * re-wrapped. Both the offsets and the ±40 context window come from here. */
+  const PLAIN_WHEN_WRITTEN = "KonspektAlpha beta gamma delta epsilon.";
+
+  function serving(html: string) {
+    return {
+      async getArtifact() {
+        return {
+          source_path: "notes.md",
+          content: "# Konspekt",
+          rendered_html: html,
+          source_sha256: "sha-1",
+          rendered_sha256: "r-1",
+          class: "R",
+        };
+      },
+    };
+  }
+
+  /** A stored note as the daemon lists it: the quote and offsets captured against `capturedIn`,
+   * now being resolved against whatever the pane is showing. */
+  function noteOn(capturedIn: string, phrase: string, overrides: Record<string, unknown> = {}) {
+    const start = capturedIn.indexOf(phrase);
+    expect(start).toBeGreaterThan(-1);
+    return {
+      id: "inb-7",
+      status: "pending",
+      artifact_path: "notes.md",
+      body: "tighten this",
+      intent: "content",
+      attempts: 0,
+      target: {
+        quote: {
+          exact: phrase,
+          prefix: capturedIn.slice(Math.max(0, start - 40), start),
+          suffix: capturedIn.slice(start + phrase.length, start + phrase.length + 40),
+        },
+        position: { start, end: start + phrase.length },
+        ...((overrides.target as Record<string, unknown>) ?? {}),
+      },
+    };
+  }
+
+  test("a note keeps its place after its sentence is split across a line break", async () => {
+    const da = fakeDataAccess({ ...listing(noteOn(PLAIN, "gamma delta")), ...serving(REWRAPPED) });
+    const { host } = await mountPane(da);
+
+    const card = q(host, ".glosa-annotation");
+    expect(card.getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+  });
+
+  test("and after it is joined back up — the stored quote carries the line break, not the page", async () => {
+    const da = fakeDataAccess({ ...listing(noteOn(PLAIN_REWRAPPED, "gamma\ndelta")), ...serving(RENDERED) });
+    const { host } = await mountPane(da);
+
+    const card = q(host, ".glosa-annotation");
+    expect(card.getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+  });
+
+  test("a note written across a soft break really does store the newline inside its quote", async () => {
+    // The premise the test above rests on. `quote.exact` is a slice of the container's text, so a
+    // selection spanning a soft break keeps the `\n` — if it did not, the joined-back-up direction
+    // would not be a case at all and the fixture would be inventing a shape nothing produces.
+    const da = fakeDataAccess(serving(REWRAPPED));
+    const { host } = await mountPane(da);
+    await annotate(host, 11, 22, "tighten this");
+
+    expect((da.posted[0] as any).target.quote.exact).toBe("gamma\ndelta");
+  });
+
+  test("the passage is re-found even when the stored offsets have moved with it", async () => {
+    // The offsets in the test above still happened to land on the right words, because a newline
+    // replaced a space in place. Here they do not, so nothing but the folded search can save it:
+    // the context window still holds the old spacing, and the raw quote is nowhere in the text.
+    const stale = noteOn(PLAIN, "gamma delta");
+    stale.target.position = { start: 0, end: 8 }; // "Konspekt" — where the words used to be
+    const da = fakeDataAccess({ ...listing(stale), ...serving(REWRAPPED) });
+    const { host } = await mountPane(da);
+
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+  });
+
+  test("offsets that still hold outrank an ambiguity elsewhere in the document", async () => {
+    // Two passages fold to the same words, so a search cannot choose between them — but this note
+    // never needed a search: the text at its own offsets is still the text it quoted, give or take
+    // a line break. Losing it here would punish a note for a coincidence further down the page.
+    const da = fakeDataAccess({ ...listing(noteOn(PLAIN_WHEN_WRITTEN, "gamma delta")), ...serving(DOUBLED) });
+    const { host } = await mountPane(da);
+
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+  });
+
+  test("but a note whose folded quote fits two passages stays lost rather than picking one", async () => {
+    // Same note as above, except the passage it quoted has moved, so its own offsets can no
+    // longer speak for it and the search is all that is left.
+    const ambiguous = noteOn(PLAIN_WHEN_WRITTEN, "gamma delta");
+    ambiguous.target.position = { start: 0, end: 8 };
+    const da = fakeDataAccess({ ...listing(ambiguous), ...serving(DOUBLED) });
+    const { host } = await mountPane(da);
+
+    const card = q(host, ".glosa-annotation");
+    expect(card.getAttribute("data-anchored")).toBe("false");
+    expect(q(host, ".glosa-annotation-lost").textContent).toContain("Lost its place");
+    expect(qa(host, ".glosa-marker")).toHaveLength(0);
+  });
+
+  // --- what a session's write does to the cards ---
+  //
+  // A card's verdict is derived from the CURRENT text, exactly like the underline under the
+  // passage and the dot in the gutter. Those two are re-derived every time the manuscript moves.
+  // The cards were derived once, when they were built, and an external write repainted the marks
+  // around them while they went on asserting something about a document that was gone — until a
+  // mode toggle, a new note or a reload happened to rebuild them.
+  //
+  // Both directions are wrong and the second is the worse one: a card saying "Lost its place"
+  // about a passage the daemon's resolver can still find tells the reader to give up on a note the
+  // session is about to act on.
+
+  /** The same manuscript with the annotated sentence rewritten — `gamma delta` is gone. */
+  const REWRITTEN = `<h1>Konspekt</h1><p id="para">Alpha beta omicron sigma epsilon zeta eta theta iota kappa lambda mu.</p>`;
+  /** Two versions of one artifact, switchable mid-life. `moved` stands for "a session has written
+   * the file since this pane read it"; the SSE frame that follows it is `refreshArtifact`. */
+  function sessionRewrites(before: string, after: string) {
+    return {
+      moved: false,
+      async getArtifact(this: { moved: boolean }) {
+        return {
+          source_path: "notes.md",
+          content: "# Konspekt",
+          rendered_html: this.moved ? after : before,
+          source_sha256: this.moved ? "sha-2" : "sha-1",
+          rendered_sha256: this.moved ? "r-2" : "r-1",
+          class: "R",
+        };
+      },
+    };
+  }
+
+  test("a session rewriting the quoted sentence marks the card lost without waiting for another render", async () => {
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(RENDERED, REWRITTEN),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    // The mark and the card have to agree. Asserting both is the point: the underline and the dot
+    // were always right here, and that is exactly what made the card's silence convincing.
+    expect(qa(host, ".glosa-marker")).toHaveLength(0);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("false");
+    expect(q(host, ".glosa-annotation-lost").textContent).toContain("Lost its place");
+  });
+
+  test("a session putting the words back clears the card's lost notice without waiting for another render", async () => {
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(REWRITTEN, RENDERED),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("false");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+  });
+
+  test("a session inserting a block above the passage renumbers the address on the card", async () => {
+    // The address is a display label derived from the rendered structure (address.js), so it moves
+    // when the structure does. It is stamped onto the block on every paint; the card held the
+    // number the page had when the card was built, and named a different passage than the one it
+    // was anchored to.
+    const ADDRESSED = `<h1 data-line="0">Konspekt</h1><p data-line="2" id="para">Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p>`;
+    const INSERTED = `<h1 data-line="0">Konspekt</h1><p data-line="2">A paragraph the session added.</p><p data-line="4" id="para">Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p>`;
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(ADDRESSED, INSERTED),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-address").textContent).toBe("§0.1");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(q(host, "#para").getAttribute("data-address")).toBe("§0.2");
+    expect(q(host, ".glosa-address").textContent).toBe("§0.2");
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+  });
 });

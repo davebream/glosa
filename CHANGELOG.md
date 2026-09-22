@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A note's card no longer holds a verdict from before the session wrote the file.** The underline
+  under a passage and the dot in the gutter were worked out again every time the manuscript changed
+  underneath them; the cards in the margin were not. So a note whose sentence a session had just
+  rewritten went on looking attached, and a note whose words a session had put back went on saying
+  "Lost its place" — each until a mode toggle, a new note or a reload happened to rebuild the
+  margin. The card is now worked out in the same pass as the marks beside it, and the passage
+  number on it follows the page when a session adds or removes a block above it.
+
+## [0.1.0-alpha.30] — 2026-09-22
+
+### Fixed
+
+- **A note no longer reads "Lost its place" when its sentence only moved across a line break.**
+  Re-wrapping a paragraph in your editor, or letting a doubled space in, left the rendered words
+  untouched and still emptied the margin of every note on that passage — while the session kept
+  receiving them, because the daemon has always ignored that kind of difference when it looks a
+  passage up. The page now looks it up the same way, and still refuses to choose when the quoted
+  words fit two places.
+- **The history panel no longer says a comparison opened when nothing did.** Picking two versions
+  and comparing them always reported "Comparison opened in a new tab", including on a presented
+  document, which shows a single document and has no tabs to open one in. It says so only when the
+  comparison is really there.
+
 ## [0.1.0-alpha.29] — 2026-09-22
 
 ### Security
@@ -1095,7 +1120,8 @@ remembers, and makes the apply-lease behind it work at all outside a lab.
 
 - Loopback-only daemon access with capability tokens and confined workspace paths.
 
-[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...HEAD
+[Unreleased]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.30...HEAD
+[0.1.0-alpha.30]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.29...v0.1.0-alpha.30
 [0.1.0-alpha.29]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.28...v0.1.0-alpha.29
 [0.1.0-alpha.28]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.27...v0.1.0-alpha.28
 [0.1.0-alpha.27]: https://github.com/davebream/glosa/compare/v0.1.0-alpha.26...v0.1.0-alpha.27
