@@ -207,7 +207,7 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease).toBeNull();
+      expect(state.claims["entry:e1"]?.exclusive).toBeNull();
       expect(state.entries.e1?.status).toBe("pending"); // never fast-forwarded to a terminal
     });
 
@@ -221,9 +221,9 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease?.leaseId).toBe("L2");
-      expect(state.applyLease?.entry).toBe("e2");
-      expect(state.applyLease?.session).toBe("sess-2");
+      expect(state.claims["entry:e1"]?.exclusive).toBeNull();
+      expect(state.claims["entry:e2"]?.exclusive?.claim_id).toBe("L2");
+      expect(state.claims["entry:e2"]?.exclusive?.holder_session).toBe("sess-2");
     });
 
     test(`${name}: a full expire-then-retry lifecycle ends closed, applied, and replay-stable`, () => {
@@ -237,10 +237,10 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
       ];
       const first = foldEvents(events, reducer);
       const second = foldEvents(events, reducer);
-      expect(first.applyLease).toBeNull();
+      expect(first.claims["entry:e1"]?.exclusive).toBeNull();
       expect(first.entries.e1?.status).toBe("applied");
       expect(first.entries).toEqual(second.entries); // replay twice == identical
-      expect(second.applyLease).toBeNull();
+      expect(second.claims).toEqual(first.claims);
     });
 
     test(`${name}: an apply_expired naming a DIFFERENT lease never closes the live one`, () => {
@@ -252,7 +252,146 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease?.leaseId).toBe("L1");
+      expect(state.claims["entry:e1"]?.exclusive?.claim_id).toBe("L1");
     });
   }
+});
+
+// Issue #155: the one-per-workspace `applyLease` slot is gone; the three legacy apply-lease events
+// fold forward as per-resource claims. A journal written before claims existed has to replay to
+// exactly the status it always did, which is what these pin. Ablating the `apply_begin` arm of
+// `reduceClaimEvent` reds every one of them: the claims map stays empty and the holder is
+// unknowable.
+describe("replay — legacy apply-lease events fold forward as claims (issue #155)", () => {
+  const legacy: JournalEvent[] = [
+    mkEvent("entry_created", "e1"),
+    mkEvent("apply_begin", "e1", {
+      by: "session:sess-1",
+      detail: {
+        lease_id: "L1",
+        entry: "e1",
+        session: "sess-1",
+        pre_sha: "sha-pre",
+        expires_at: "2023-11-14T22:15:00.000Z",
+      },
+    }),
+  ];
+
+  test("a legacy apply_begin folds to an exclusive claim with fence: null", () => {
+    const state = foldEvents(legacy, lifecycleReducer);
+    const slot = state.claims["entry:e1"];
+    expect(slot?.exclusive?.claim_id).toBe("L1");
+    expect(slot?.exclusive?.holder_session).toBe("sess-1");
+    expect(slot?.exclusive?.mode).toBe("exclusive");
+    // No honest number exists for a lease taken before fencing shipped, and `null` PASSES the
+    // fence check rather than failing it — a pre-upgrade journal must keep replaying.
+    expect(slot?.exclusive?.fence).toBeNull();
+    expect(slot?.exclusive?.legacy).toBe(true);
+    // The path set was never recorded, so it stays empty — and an empty set is read as "covers
+    // everything" by `claimsOnPaths`, preserving one-lease-per-workspace for an in-flight lease.
+    expect(slot?.exclusive?.paths).toEqual([]);
+  });
+
+  test("the folded claim carries every fact the old lease slot did — id, entry, holder, pre_sha, expiry", () => {
+    const state = foldEvents(legacy, lifecycleReducer);
+    expect(state.claims["entry:e1"]?.exclusive).toMatchObject({
+      claim_id: "L1",
+      resources: ["entry:e1"],
+      holder_session: "sess-1",
+      pre_sha: "sha-pre",
+      expires_at: "2023-11-14T22:15:00.000Z",
+    });
+  });
+
+  test("a legacy journal folds twice to deep-equal claims and entries", () => {
+    const events: JournalEvent[] = [
+      ...legacy,
+      mkEvent("apply_end", "e1", {
+        by: "session:sess-1",
+        detail: { lease_id: "L1", pre_sha: "sha-pre", post_sha: "sha-post" },
+      }),
+      mkEvent("transition_committed", "e1", { by: "session:sess-1", detail: { to: "applied", outcome: "applied" } }),
+    ];
+    const first = foldEvents(events, lifecycleReducer);
+    const second = foldEvents(events, lifecycleReducer);
+    expect(first.claims).toEqual(second.claims);
+    expect(first.entries).toEqual(second.entries);
+    expect(first.claims["entry:e1"]?.exclusive).toBeNull(); // apply_end ends the claim
+    expect(first.claims["entry:e1"]?.last).toEqual({
+      claim_id: "L1",
+      holder_session: "sess-1",
+      fence: null,
+      ended_at: new Date(0).toISOString(),
+      reason: "resolved",
+    });
+  });
+
+  test("apply_expired tombstones the claim as expired_ttl, not resolved", () => {
+    const state = foldEvents(
+      [...legacy, mkEvent("apply_expired", "e1", { detail: { lease_id: "L1" } })],
+      lifecycleReducer,
+    );
+    expect(state.claims["entry:e1"]?.exclusive).toBeNull();
+    expect(state.claims["entry:e1"]?.last?.reason).toBe("expired_ttl");
+  });
+
+  test("a claim_taken carries its fence from the EVENT and renewal never moves it", () => {
+    const state = foldEvents(
+      [
+        mkEvent("claim_taken", "e1", {
+          by: "session:sess-2",
+          detail: {
+            claim_id: "C1",
+            resources: ["entry:e1", "artifact:notes.md"],
+            paths: ["notes.md"],
+            mode: "exclusive",
+            session: "sess-2",
+            principal: "token:abc12345",
+            fence: 7,
+            since: "2023-11-14T22:00:00.000Z",
+            expires_at: "2023-11-14T22:15:00.000Z",
+          },
+        }),
+        mkEvent("claim_renewed", "e1", { detail: { claim_id: "C1", expires_at: "2023-11-14T22:30:00.000Z" } }),
+      ],
+      lifecycleReducer,
+    );
+    // One claim, two resource slots — and the fence is 7 because the event said 7, not because it
+    // is the first claim on either resource.
+    expect(state.claims["entry:e1"]?.exclusive?.fence).toBe(7);
+    expect(state.claims["artifact:notes.md"]?.exclusive?.claim_id).toBe("C1");
+    expect(state.claims["entry:e1"]?.last_fence).toBe(7);
+    // RFC 4918 §6.6: a refreshed lock keeps its token. Bumping here would revoke the holder's own.
+    expect(state.claims["entry:e1"]?.exclusive?.fence).toBe(7);
+    expect(state.claims["entry:e1"]?.exclusive?.expires_at).toBe("2023-11-14T22:30:00.000Z");
+  });
+
+  test("claim_released ends the claim on every resource it spanned and records who ended it", () => {
+    const state = foldEvents(
+      [
+        mkEvent("claim_taken", "e1", {
+          by: "session:sess-2",
+          detail: {
+            claim_id: "C1",
+            resources: ["entry:e1", "artifact:notes.md"],
+            paths: ["notes.md"],
+            mode: "exclusive",
+            session: "sess-2",
+            fence: 1,
+            expires_at: "2023-11-14T22:15:00.000Z",
+          },
+        }),
+        mkEvent("claim_released", "e1", {
+          by: "human",
+          detail: { claim_id: "C1", by: "human", reason: "released_by_human" },
+        }),
+      ],
+      lifecycleReducer,
+    );
+    expect(state.claims["entry:e1"]?.exclusive).toBeNull();
+    expect(state.claims["artifact:notes.md"]?.exclusive).toBeNull();
+    expect(state.claims["artifact:notes.md"]?.last?.reason).toBe("released_by_human");
+    // The fence floor survives the release — a new holder must never be handed 1 again.
+    expect(state.claims["artifact:notes.md"]?.last_fence).toBe(1);
+  });
 });

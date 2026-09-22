@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
+import type { JournalEvent } from "../../src/bus/journal.ts";
 import { EXTERNAL_EDIT_KIND, isExternalEditEntry } from "../../src/bus/external-edit.ts";
 import { readInboxEntry } from "../../src/bus/inbox.ts";
 import { type DeliveryAttemptRecord, isTerminal } from "../../src/bus/lifecycle.ts";
@@ -21,7 +22,7 @@ import { journalPath } from "../../src/bus/paths.ts";
 import { reconcileWorkspace } from "../../src/bus/reconcile.ts";
 import { workspaceRegistrationId } from "../../src/workspace.ts";
 import { buildDeliveryPresentation, MAX_DELIVERY_ENTRIES } from "../../src/delivery/presentation.ts";
-import { runGit } from "../../src/git/shadow.ts";
+import { diffShas, runGit } from "../../src/git/shadow.ts";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
 import { waitForWatch } from "../../src/services/watch.ts";
 import {
@@ -71,6 +72,13 @@ function entriesOf(bus: WorkspaceBus): Array<{ id: string; payload: Record<strin
     id,
     payload: (readInboxEntry(bus.workspace, id) ?? {}) as Record<string, unknown>,
   }));
+}
+
+function journalEventsOf(root: string): JournalEvent[] {
+  return readFileSync(journalPath(root), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as JournalEvent);
 }
 
 function kindsOf(bus: WorkspaceBus): string[] {
@@ -309,7 +317,7 @@ describe("A3b — retention-facing counting survives the exclusion", () => {
 });
 
 describe("A5 — glosa's own writes never come back as external", () => {
-  test("under a held apply lease the capture defers entirely, and the lease still proves session attribution", async () => {
+  test("under a live claim the capture steps around the claimed path entirely, and the claim still proves session attribution", async () => {
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const bus = openBus(root);
@@ -321,7 +329,8 @@ describe("A5 — glosa's own writes never come back as external", () => {
     writeFileSync(join(root, "notes.md"), "one\nsession wrote this\n");
     const captured = await bus.captureExternalEdit();
 
-    expect(captured.suppressed).toBe("apply_lease");
+    // notes.md is the only tracked file, and it is claimed — so there is nothing left to capture.
+    expect(captured.suppressed).toBe("claimed");
     expect(captured.entries).toEqual([]);
     expect(kindsOf(bus)).toEqual(["annotation"]);
 
@@ -462,44 +471,119 @@ describe("#182 R5 — captureHumanEdit's own honest pre-save boundary", () => {
     await bus.close();
   });
 
-  test("no drift under an active apply lease — unchanged behaviour, still human, still no refusal", async () => {
+  test("no drift under a live claim — still human, still no refusal, and the claim is left alone", async () => {
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const bus = openBus(root);
     await bus.reconcile();
     await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
-    await bus.applyBegin("ann-1", "sess-1");
+    const claim = await bus.applyBegin("ann-1", "sess-1");
 
     await bus.captureHumanEdit("edit-1", "notes.md", () => {
       writeFileSync(join(root, "notes.md"), "one\nreviewer typed this\n");
     });
 
     expect(kindsOf(bus)).toEqual(["annotation", "human_edit"]);
+    // Nothing on the path belonged to the holder yet, so there was nothing to take away from it.
+    expect(journalEventsOf(root).some((event) => event.event === "claim_released")).toBe(false);
+    expect(bus.state.claims["entry:ann-1"]?.exclusive?.claim_id).toBe(claim.leaseId);
     await bus.close();
   });
 
-  test("drift on the exact path under an active apply lease is refused, not attributed to the human", async () => {
+  test("drift on the exact path under a live claim: the human wins — the claim is released, the drift is unknown, the save is the human's", async () => {
+    // Issue #155 REQ-6 reverses #182's refusal. Ablating the release leaves the holder's resolve
+    // succeeding below (it must answer CLAIM_REVOKED); attributing the drift to the human reds the
+    // trailer and diff assertions.
     const root = workspace();
     writeFile(root, "notes.md", "one\n");
     const bus = openBus(root);
     await bus.reconcile();
     await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
-    await bus.applyBegin("ann-1", "sess-1");
+    const claim = await bus.applyBegin("ann-1", "sess-1");
 
-    // Drift on THIS path while the lease is held — that interval belongs to the lease's own
-    // resolveEntry, not to a save that happens to arrive while it is open.
-    writeFileSync(join(root, "notes.md"), "one\nsomething changed under the lease\n");
+    // Drift on THIS path while the claim is held — the holder's half-finished edit.
+    writeFileSync(join(root, "notes.md"), "one\nsomething changed under the claim\n");
+
+    const captured = await bus.captureHumanEdit("edit-1", "notes.md", () => {
+      writeFileSync(join(root, "notes.md"), "one\nsomething changed under the claim\nreviewer typed this\n");
+    });
+    expect(captured).not.toBeNull();
+
+    // 1. The claim was released BY THE HUMAN, naming its holder.
+    const released = journalEventsOf(root).find((event) => event.event === "claim_released");
+    expect(released).toMatchObject({
+      by: "human",
+      detail: { claim_id: claim.leaseId, by: "human", reason: "released_by_human", holder_session: "sess-1" },
+    });
+    expect(bus.state.claims["entry:ann-1"]?.exclusive).toBeNull();
+
+    // 2. The holder's bytes are on record as unknown, as an external_edit — never the human's.
+    const external = entriesOf(bus).find((entry) => entry.payload.kind === EXTERNAL_EDIT_KIND)!;
+    expect(String(external.payload.diff)).toContain("+something changed under the claim");
+    expect(await trailer(root, String(external.payload.until_checkpoint), "Glosa-Attribution")).toBe("unknown");
+    expect(await trailer(root, String(external.payload.until_checkpoint), "Glosa-Kind")).toBe("claim_released");
+
+    // 3. The human edit carries only what the human typed, against a base that already held the drift.
+    const human = entriesOf(bus).find((entry) => entry.payload.kind === "human_edit")!;
+    const diff = (human.payload.files as Array<{ diff: string }>)[0]!.diff;
+    expect(diff).toContain("+reviewer typed this");
+    expect(diff).not.toContain("+something changed under the claim");
+    expect(await trailer(root, captured!.checkpoint_after, "Glosa-Attribution")).toBe("human");
+
+    // 4. The holder's late resolve is told what happened — and attributes nothing.
+    await expect(bus.resolveEntry("ann-1", "applied", "sess-1")).rejects.toMatchObject({
+      code: "CLAIM_REVOKED",
+      tombstone: { claim_id: claim.leaseId, reason: "released_by_human" },
+    });
+    await bus.close();
+  });
+
+  test("the post-save byte check: bytes on disk that are not the bytes written are captured unknown and answer SOURCE_CHANGED", async () => {
+    // Another writer lands between the save's write and its checkpoint. Ablating the check commits
+    // the other writer's bytes as `human` and creates a human_edit — both asserted absent below.
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
 
     await expect(
       bus.captureHumanEdit("edit-1", "notes.md", () => {
-        writeFileSync(join(root, "notes.md"), "one\nreviewer typed this\n");
+        writeFileSync(join(root, "notes.md"), "one\nsomeone else won the race\n");
+        return Buffer.from("one\nreviewer typed this\n", "utf8"); // what the save believes it wrote
       }),
-    ).rejects.toMatchObject({ code: "DRIFT_UNDER_LEASE" });
+    ).rejects.toMatchObject({ code: "SOURCE_CHANGED", path: "notes.md" });
 
-    // Refused, not written: the file still carries the drift, no human_edit exists, and the
-    // drift itself was never folded into a false `human` attribution.
-    expect(readFileSync(join(root, "notes.md"), "utf8")).toBe("one\nsomething changed under the lease\n");
-    expect(kindsOf(bus)).toEqual(["annotation"]);
+    expect(kindsOf(bus)).toEqual([EXTERNAL_EDIT_KIND]);
+    const external = entriesOf(bus)[0]!;
+    expect(String(external.payload.diff)).toContain("+someone else won the race");
+    expect(await trailer(root, String(external.payload.until_checkpoint), "Glosa-Attribution")).toBe("unknown");
+    await bus.close();
+  });
+
+  test("the watcher captures drift on UNCLAIMED paths while a claim is live, and never the claimed one", async () => {
+    // Before claims, one lease deferred the whole workspace. Ablating the path exclusion commits
+    // the claimed file as `unknown` (red: the claim's resolve then finds nothing to credit);
+    // restoring the whole-workspace skip leaves other.md uncaptured (red: no external_edit).
+    const root = workspace();
+    writeFile(root, "notes.md", "one\n");
+    writeFile(root, "other.md", "other one\n");
+    const bus = openBus(root);
+    await bus.reconcile();
+    await bus.createEntry("ann-1", { kind: "annotation", artifact_path: "notes.md", body: "b", intent: "content" });
+    const claim = await bus.applyBegin("ann-1", "sess-1");
+
+    writeFileSync(join(root, "notes.md"), "one\nsession wrote this\n");
+    writeFileSync(join(root, "other.md"), "other one\nsomething else wrote this\n");
+    const captured = await bus.captureExternalEdit();
+
+    expect(captured.committed).toBe(true);
+    const external = entriesOf(bus).filter((entry) => entry.payload.kind === EXTERNAL_EDIT_KIND);
+    expect(external.map((entry) => entry.payload.path)).toEqual(["other.md"]);
+
+    const resolved = await bus.resolveEntry("ann-1", "applied", "sess-1");
+    expect(await trailer(root, resolved.postSha, "Glosa-Attribution")).toBe("session:sess-1");
+    const proven = await diffShas(root, claim.preSha, resolved.postSha, ["notes.md"]);
+    expect(proven).toContain("+session wrote this");
     await bus.close();
   });
 });

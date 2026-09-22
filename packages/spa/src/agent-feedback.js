@@ -58,6 +58,20 @@ export function boundProviderName(connection) {
   return typeof match?.display_name === "string" && match.display_name.length > 0 ? match.display_name : null;
 }
 
+/**
+ * The provider's own display name for ONE session, or null (issue #155: naming who holds a claim).
+ *
+ * Only a session explicitly bound to this workspace is named, and only with the name its provider
+ * gives itself. A session the connection does not list — cwd-routed, stale beyond the list, from
+ * another workspace — gets null, and the caller says "An agent session" rather than guessing.
+ */
+export function providerNameForSession(connection, sessionId) {
+  const session = (connection?.sessions ?? []).find((candidate) => candidate.session_id === sessionId);
+  if (!session?.provider) return null;
+  const match = connection?.workspace?.connect?.providers?.find((candidate) => candidate.provider === session.provider);
+  return typeof match?.display_name === "string" && match.display_name.length > 0 ? match.display_name : null;
+}
+
 /** The wrapper is generic; the identity-discovery sentence comes verbatim from the provider. */
 export function buildAgentConnectPrompt(connection, providerId) {
   const provider = connection?.workspace?.connect?.providers?.find((candidate) => candidate.provider === providerId);

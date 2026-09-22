@@ -54,7 +54,7 @@ export function renderMarkdown(source: string): string {
  * POSIX), fsync its contents, rename over the existing file, then fsync the containing directory
  * so the rename itself is durable. This never creates a NEW artifact — callers only invoke it
  * once `rawPath` has already been proven to be a currently-tracked artifact's real on-disk path. */
-export function writeArtifactAtomic(rawPath: string, content: string): void {
+export function writeArtifactAtomic(rawPath: string, content: string): Buffer {
   const dir = dirname(rawPath);
   const tmpPath = join(dir, `.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
   const bytes = Buffer.from(content, "utf8");
@@ -67,6 +67,9 @@ export function writeArtifactAtomic(rawPath: string, content: string): void {
   }
   renameSync(tmpPath, rawPath); // atomic on POSIX — replaces the existing file in one step
   fsyncContainingDir(rawPath);
+  // The exact bytes that landed, so the caller can check the file still holds them before it
+  // attributes anything to whoever asked for this write (issue #155, `captureHumanEdit`).
+  return bytes;
 }
 
 /** The class-R/class-F split (A1 §5.3/§5.4/§7) by extension. One place so `GET /w/:slug/artifacts`

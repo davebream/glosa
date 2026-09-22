@@ -4430,6 +4430,18 @@ input,
   content: "· ";
 }
 
+/* Issue #155: who is applying this note. Metadata like the intent, in session ink because it names
+   a session; the note's author line above stays the reader's. */
+.glosa-annotation-holder {
+  font-size: var(--text-xs);
+  color: var(--session);
+}
+
+.glosa-annotation-holder::before {
+  content: "· ";
+  color: var(--muted);
+}
+
 /* The reverse thread: hovering the underlined passage lights its card up. */
 .glosa-annotation.glosa-annotation-hover {
   border-top-color: var(--hand);
@@ -5936,6 +5948,20 @@ input,
   height: 7px;
   border-radius: 50%;
   background: var(--hand); /* an unsaved edit is the human's hand, not yet on disk */
+}
+
+/* Issue #155: an agent session holds this file. Session ink, because it is a session's mark; the
+   shape carries the kind so it reads in greyscale too — filled for editing, a ring for looking. */
+.glosa-tab-claim {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--session);
+}
+
+.glosa-tab-claim[data-mode="presence"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--session);
 }
 
 .glosa-tab-close {

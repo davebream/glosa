@@ -29,7 +29,7 @@ those are cross-referenced, not duplicated.
   ```
   Common `<slug>` values, not an exhaustive catalogue — each route's own section and the status
   table below are authoritative, and routes added since have their own (`source-changed` §5.4a,
-  `drift-under-lease` §5.4a, `not-utf8` §5.4a): `invalid-origin`, `unauthorized`, `contract-mismatch`,
+  `not-utf8` §5.4a, the claim slugs §5.11f): `invalid-origin`, `unauthorized`, `contract-mismatch`,
   `invalid-path`, `not-found`, `payload-too-large`, `validation-failed`,
   `capability-expired`, `internal`, `workspace-forgetting`, `forget-blocked`,
 
@@ -118,7 +118,7 @@ are linked to the second; programmatic clients use the first. `:slug` is the wor
 No auth, Origin-gated only. **200** always (on the TCP listeners the Host/Origin allowlist is the
 only rejection path: 400 for Host, 403 for Origin, per §1; on the socket neither applies).
 ```json
-{ "contract_version": "1.16", "daemon_version": "0.3.1", "paired": true,
+{ "contract_version": "1.17", "daemon_version": "0.3.1", "paired": true,
   "protocol_version": "1.0", "build_id": "0.3.1-1a2b3c4d5e6f7a8b",
   "install_id": "9f8e7d6c5b4a3210", "instance_id": "gl-2f6c…", "pid": 41822,
   "started_at": "2026-07-20T10:00:00Z", "serves_socket": true }
@@ -282,10 +282,13 @@ file's line endings does NOT refuse the write; the body is still written verbati
   `source-changed` — that slug is what routes a client into a stale-save merge, and every outcome
   of one would write a replacement-character decode back over the original bytes. Refusal is
   unconditional: there is no header or body form that makes this write proceed.
-- **409 drift-under-lease** (#182) — an apply-lease is active and `:path` has drift on disk this
-  save cannot honestly pre-capture (A4 §F05): the interval belongs to that lease's own `resolve`,
-  not to this save. Nothing was written. A save against a path with no such drift is unaffected by
-  an active lease and proceeds normally.
+- **409 source-changed**, a second way (contract 1.17, issue #155) — the save WAS written, and when
+  re-read the file no longer held the written bytes: another writer landed in the same instant. Disk
+  is recorded as `unknown`, no `human` checkpoint is taken, and the client re-runs the same stale-save
+  choice against the bytes actually there.
+- A save is never refused because an agent holds a claim on `:path` (contract 1.17; `drift-under-lease`
+  is retired). The human wins: when the holder's edits are still on disk, the claim is released
+  `by:"human"`, those edits are recorded as `unknown`, and the save then proceeds (A4 §F05).
 
 ### 5.5 `GET /w/:slug/stream`
 Bearer required. Artifact/journal SSE stream — full protocol in §7... see §8 (SSE resync).
@@ -598,6 +601,105 @@ Path-addressed like §5.11a, since the caller holds a workspace directory rather
 A wait that merely ELAPSES does not call this: the question stays in the margin, which is what
 `wait_seconds` promises. Shim shutdown and a crash also leave it open (A6 §F26).
 
+### 5.11f Claims (contract 1.17, issue #155)
+Per-resource claims replace the one apply-lease per workspace (A4 §F05). A resource is
+`entry:<inbox id>` or `artifact:<workspace-relative path>`; an entry implies the file(s) it is about.
+Agent routes are path-addressed and state-changing (Bearer + Origin), like `apply-begin`/`resolve`.
+Claims are not authorization: any bearer may claim anything (A3).
+
+**`POST /api/workspaces/claims`**
+```json
+{ "path": "<workspace>", "session": "<session id>", "resources": ["entry:inb-…", "artifact:notes.md"],
+  "mode": "exclusive", "ttl_ms": 900000 }
+```
+`mode` defaults to `exclusive`; `ttl_ms` is optional and capped at the mode's TTL (15 min exclusive,
+5 min presence).
+- **201** `{ "claim_id", "fence", "expires_at", "paths", "mode", "renewed": false }` — `paths` are the
+  workspace-relative paths covered; `[]` means the whole workspace (an entry that names no file).
+- **200** the same body with `renewed: true` — this session already held these resources; the claim
+  is extended and keeps its `claim_id` and `fence`.
+- **409 claim-held** — another session holds an exclusive claim over overlapping paths. Extension
+  members name the holder: `claim_id`, `holder_session`, `holder_principal`, `mode`, `since`,
+  `expires_at`, `fence`; the `title` names the session too, since the CLI prints only the title.
+- **409 claim-limit** `{scope, limit}` — 32 live claims per session or 256 per workspace.
+- **404 not-found** — an `entry:` resource this workspace does not own.
+- **400 validation-failed** — missing fields, an empty `resources`, a resource that is not
+  `entry:`/`artifact:`, an absolute or escaping artifact path, a bad `mode` or `ttl_ms`.
+
+**`POST /api/workspaces/claims/:id/renew`** `{path, session}` → **200** `{claim_id, fence, expires_at}`;
+**409 claim-held** when `session` is not the holder; **409 claim-revoked|claim-expired|claim-superseded**
+when the claim already ended; **404** when there is no such claim.
+
+**`POST /api/workspaces/claims/:id/release`** `{path, session}` — the holder gives the claim up; `by`
+is fixed to `"session"` by the route. **200** `{claim_id, released}`; `released:false` when it had
+already ended (idempotent, never an error); **409 claim-held** when `session` is not the holder. What
+the holder left on the claimed paths is recorded as `unknown`.
+
+**`POST /w/:slug/claims/:id/release`** — the SPA's human override. Origin-gated like every SPA write
+(no Origin → 403). `by` is fixed to `"human"` by the route and the release is never refused.
+**200** `{claim_id, released, holder_session?}`.
+
+**`GET /api/workspaces/claims?path=<workspace>[&artifact=<relative>]`** (authed read) →
+**200** `{claims:[{claim_id, resources, artifacts, mode, holder_session, holder_principal, fence, since,
+expires_at}], tombstones:[{resource, claim_id, holder_session, fence, ended_at, reason}]}`. Resources
+are always `entry:`/`artifact:<relative>` strings, never an absolute path. `artifact` narrows to claims
+covering that file.
+
+**`GET /w/:slug/claims[?artifact=<relative>]`** (authed read) — the SPA's read of the same list,
+addressed by slug with no `path` parameter; same body. The workbench reads it when a workspace opens
+and on stream reconnect, then follows `claim_*` journal frames. **404** for an unknown slug.
+
+**Changes to existing routes in 1.17:**
+- `POST /api/workspaces/apply-begin` is an alias for an exclusive claim on `entry:<id>`: **201**
+  `{entry, lease_id, pre_sha, fence, expires_at}`; the same session again → **200** with `renewed:true`
+  and the same `lease_id`; another session over the same paths → **409 claim-held** (was
+  `lease-conflict`; the CLI maps both to exit 12).
+- `POST /api/workspaces/resolve` accepts an optional integer `fence`. The same session repeating a
+  resolve it completed gets **200** with the original `lease_id`/`post_sha` and `replayed:true`, and
+  nothing is appended. Refusals, all evaluated before anything is written: **404 not-found** (unknown
+  entry), **409 entry-resolved** `{terminal_by, entry_status}`, **409 claim-revoked | claim-expired |
+  claim-superseded** (tombstone members: `claim_id`, `holder_session`, `fence`, `ended_at`, `reason`),
+  **409 claim-held** (holder members, as above), **409 no-claim**. Every one is exit 8 in the CLI.
+- `POST /api/workspaces/inbox/dismiss` and `POST /w/:slug/annotations/:id/withdraw` answer an already
+  closed entry with **409 entry-resolved** (was `conflict`). A dismiss over a claimed entry releases the
+  claim `by:"human"` and names it in an additive `released:[{claim_id, holder_session}]`.
+- Delivered presentations (§5.15) may carry `claims:[{session, principal, mode, since, fence}]`.
+- `GET /api/workspaces/inbox` rows carry `holder` — the session holding a live claim, or `null`.
+- `GET /api/status` session rows carry `principal` (reporting only).
+
+### 5.11g Signals (contract 1.17, issue #155)
+A signal is a short notice telling one agent session what happened to the claims around it. They are
+derived from claim events as the journal appends them, held in memory for 15 minutes, and lost on
+restart. The journal event that caused each signal stays the durable record; nothing about a signal
+is ever written back to the journal.
+
+| Journal event | Addressee | Kind |
+|---|---|---|
+| `claim_released` with `by:"human"` | the holder | `conflict`: a person took the files over |
+| `claim_expired` | the holder | `info`, naming the reason |
+| `claim_taken`, `claim_released` | every other session routed to the workspace | `info` |
+
+Nobody is told about their own action, and the holder of a human-released claim gets the `conflict`
+only. Every record has exactly one addressee: "every other session" is resolved to the sessions
+routed to the workspace (R2 `forWorkspace`) when the event is appended. At most 64 records are kept
+per session, and when the cap is reached the oldest is dropped.
+
+A signal reaches its session in three ways: as an `event: signal` frame on the session stream (§5.16,
+sent live, and on connect for anything still unacknowledged); as `signals[]` on a drain response; and
+from MCP `glosa_inbox_pull`. The frame is:
+```json
+{ "id": "sig-…", "kind": "conflict", "workspace": "<canonical path>", "resources": ["entry:inb-…"],
+  "claim_id": "01J…", "message": "a person took over entry:inb-…: …", "created_at": "…",
+  "expires_at": "…", "ack_token": "<32 hex>" }
+```
+`ack_token` appears only in the addressee's own copy.
+
+**`POST /api/sessions/:id/signals/:signal_id/ack`** `{ack_token}` (Bearer + Origin) → **200**
+`{signal_id, acked:true}`, with `already:true` added on a repeat. **404 not-found** when the signal does
+not exist, has expired, is addressed to another session, or the token does not match. These cases
+are indistinguishable by design, so the route reveals nothing about another session's signals.
+**400 validation-failed** when `ack_token` is missing. An acknowledged signal is no longer offered.
+
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
 is the authoritative routing path for CLI, MCP, and SPA callers; cwd ancestry remains a fallback.
@@ -688,6 +790,13 @@ adds the canonical absolute `workspace` path to each structured presentation and
 `workspace: <path>` to its agent-visible text; both the label and separator count inside those
 existing byte caps. Same-major N/N-1 client schemas continue to accept its absence from a 1.5 daemon.
 
+A drain response (contract 1.17, issue #155) also carries `signals[]`: the session's unacknowledged
+signals (§5.11g), oldest first, at most eight and 8 KiB. That budget is separate from the entry
+caps and outside them, so a signal never displaces an entry. The field is present only when there is
+at least one signal, so a drain with nothing to report is byte-identical to one from before signals
+existed. A drain does not acknowledge a signal. It is offered again until the addressee acks it or
+it expires.
+
 An explicitly bound session prepares and acknowledges only its exact workspace. For an unbound
 session, the daemon enumerates every present, active workspace for which the R2 `forWorkspace`
 predicate includes that session, without selecting one descendant. It first plans candidates without
@@ -740,6 +849,12 @@ Channel-era `GET /api/sessions/:id/push-stream` and `POST /api/sessions/:id/conv
 routes are removed (#152): a conversation message reaches its session through the same stream or
 through MCP pull, and `presented` comes from `glosa_delivery_ack` or the pull's own acknowledgement.
 `POST /api/sessions/:id/drain` accepts only `via:"mcp_pull"`; any other value is **400**.
+
+The same stream also carries `event: signal` frames (contract 1.17, issue #155), whose data is one
+signal addressed to this session (§5.11g). They carry no `id:` line and share the stream's single
+writer with deliveries, so the two never interleave. On connect the stream first sends every
+unacknowledged signal for the session, oldest first, then follows new ones live. A client that does
+not recognise the event ignores it, as it ignores any non-`delivery` event.
 
 #### Replacement and ownership (contract 1.9, issue #206)
 
@@ -1106,7 +1221,7 @@ which needs the identical disable for the identical reason.
 | 401 | missing/invalid Bearer token | every route except `/api/handshake` |
 | 403 | Origin/Host not allowlisted | every route, checked first |
 | 404 | unknown workspace/artifact/session/capability token | all resource-scoped GETs, capability consumption |
-| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale (`source-changed`); an apply-lease is active and the path has drift this save cannot honestly pre-capture (`drift-under-lease`); the target file's bytes are not valid UTF-8 (`not-utf8`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
+| 409 | contract major mismatch; active metadata owned by another id; target adoption in progress (`workspace-adopting`); `If-Match` `source_sha256` stale, or the file changed underneath a save (`source-changed`); the target file's bytes are not valid UTF-8 (`not-utf8`); claims (§5.11f): another session holds it (`claim-held`), the caller's claim ended (`claim-revoked`/`claim-expired`/`claim-superseded`), the entry is already closed (`entry-resolved`), no claim to prove a resolve (`no-claim`), too many live claims (`claim-limit`) | any route, `PUT .../metadata`, ordinary workspace routes (slug- and root-addressed), `PUT .../artifacts/:path` |
 | 413 | request body over 1 MiB | any POST |
 | 429 | configured dictation provider rate-limited a foreground token request | `POST /api/dictation/session` |
 | 502 | configured dictation provider rejected credentials or returned an invalid/failing response | `POST /api/dictation/session` |

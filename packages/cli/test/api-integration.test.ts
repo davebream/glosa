@@ -188,13 +188,17 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
     expect(begin.lease_id).toBeTruthy();
     expect(begin.pre_sha).toBeTruthy();
 
-    // A second apply-begin while one is already active for this workspace -> LEASE_HELD -> 409.
-    await expect(client.applyBegin(workspaceDir, entry2, "sess-real-1")).rejects.toMatchObject({ status: 409 });
+    // Another session's apply-begin over the same file while the claim is live -> CLAIM_HELD -> 409
+    // (issue #155: claims are disjoint over paths between sessions; the same session may extend
+    // its own, so the conflicting caller here is deliberately a different one).
+    await expect(client.applyBegin(workspaceDir, entry2, "sess-real-2")).rejects.toMatchObject({ status: 409 });
 
     // A real change between apply-begin and resolve — proves resolveEntry's post_sha checkpoint
     // actually captures something (an untouched workspace would idempotently return the SAME sha
-    // as pre_sha, which would prove nothing about the pre..post mechanism).
-    writeFileSync(join(workspaceDir, "change.md"), "a real change\n");
+    // as pre_sha, which would prove nothing about the pre..post mechanism). It goes into the
+    // artifact the entry is about: the claim's checkpoints are scoped to that path (issue #155),
+    // so a write to any other file is deliberately NOT credited to the session.
+    writeFileSync(join(workspaceDir, "seed.md"), "seed, changed under the claim\n");
 
     const resolved = await client.resolveEntry(workspaceDir, entry1, "applied", "sess-real-1", "looks good");
     expect(resolved.status).toBe("applied");
@@ -203,7 +207,7 @@ describe("GlosaApiClient — real daemon end-to-end", () => {
 
     // entry-1 is now terminal ("applied"). A `deferred` fired on it must NOT come back as a bare
     // 200 `{to: "deferred"}` that a client reading only `to` could misread as a real re-defer —
-    // it must 409, the same honest-conflict signal LEASE_HELD/NO_ACTIVE_LEASE already use above.
+    // it must 409, the same honest-conflict signal the claim refusals already use above.
     await expect(
       client.resolveEntry(workspaceDir, entry1, "deferred", "sess-real-1", "too late"),
     ).rejects.toMatchObject({

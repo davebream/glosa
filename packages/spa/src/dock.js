@@ -207,6 +207,18 @@ export function createDock(host, deps) {
             el("span", { className: "glosa-tab-dirty", title: "Unsaved edits", "aria-label": "Unsaved edits" }),
           );
         }
+        // Issue #155: an agent session is working on this file. The shape says which kind of claim
+        // (a filled mark for editing, a ring for looking); the words say who, since when.
+        if (state.claim) {
+          badges.append(
+            el("span", {
+              className: "glosa-tab-claim",
+              "data-mode": state.claim.mode,
+              title: state.claim.label,
+              "aria-label": state.claim.label,
+            }),
+          );
+        }
       }
 
       tabViews.set(id, { element, refresh });

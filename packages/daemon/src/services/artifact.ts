@@ -12,7 +12,8 @@ import {
   orderWithAdapter,
   resolveManifest,
 } from "../adapters/interface.ts";
-import type { DeliverableEntry } from "../agent-provider/interface.ts";
+import type { DeliverableEntry, PresentationClaim } from "../agent-provider/interface.ts";
+import { type Claim, claimForEntry, isClaimExpired } from "../bus/claims.ts";
 import {
   type ClassFArtifact,
   type ClassRArtifact,
@@ -50,7 +51,6 @@ export type ArtifactErrorCode =
   | "class-f-not-editable"
   | "not-utf8"
   | "source-changed"
-  | "drift-under-lease"
   | "unknown-checkpoint"
   | "artifact-missing-at-checkpoint"
   | "restore-conflict"
@@ -210,6 +210,18 @@ export function prepareArtifactSave(
   return { workspace, match };
 }
 
+/** The bus's post-write byte check (issue #155): another writer landed between this write and the
+ * check, so what is on disk is not what the reviewer saved. Surfaced as the same `source-changed`
+ * the If-Match check uses, because the remedy is the same — the SPA re-runs its Keep-mine /
+ * Take-disk / Compare dialog against the bytes actually there — and as an artifact error rather
+ * than the bus's own code, so the route layer stays the one place that builds an HTTP problem. */
+function asSourceChanged(error: unknown): unknown {
+  if (error instanceof Error && (error as { code?: string }).code === "SOURCE_CHANGED") {
+    return new ArtifactError("source-changed");
+  }
+  return error;
+}
+
 export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: PreparedArtifactSave, content: string) {
   const { workspace, match } = prepared;
   const bus = await workspaceBus(deps, workspace);
@@ -218,14 +230,7 @@ export async function saveArtifact(deps: ArtifactAccessDependencies, prepared: P
   try {
     captured = await bus.captureHumanEdit(inboxId, match.path, () => writeArtifactAtomic(match.rawPath, content));
   } catch (error) {
-    // #182 R5: the bus refuses a save it cannot honestly pre-capture drift for (an active,
-    // unexpired apply-lease plus pending drift on this exact path) rather than folding that
-    // interval into `human`. Surfaced as its own artifact error, not the bus's DRIFT_UNDER_LEASE
-    // code, so the route layer stays the one place that turns an error into an HTTP problem.
-    if (error instanceof Error && (error as { code?: string }).code === "DRIFT_UNDER_LEASE") {
-      throw new ArtifactError("drift-under-lease", { path: match.path });
-    }
-    throw error;
+    throw asSourceChanged(error);
   }
   return {
     source_path: match.path,
@@ -282,7 +287,7 @@ export function actionablePresentation(
   payload: unknown,
   status: string,
   cursor?: string,
-  opts: { watched?: boolean } = {},
+  opts: { watched?: boolean; claims?: readonly PresentationClaim[] } = {},
 ): (DeliverableEntry & { workspace: string }) | null {
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
@@ -306,6 +311,7 @@ export function actionablePresentation(
     ...(resolution ? { resolution } : {}),
     ...(cursor ? { cursor } : {}),
     ...(opts.watched ? { watched: true } : {}),
+    ...(opts.claims && opts.claims.length > 0 ? { claims: opts.claims } : {}),
     maxBytes: Math.max(0, MAX_ENTRY_PRESENTATION_BYTES - utf8Bytes(workspaceLine) - 1),
   });
   if (!presentation) return null;
@@ -348,21 +354,20 @@ export async function createAnnotation(deps: ArtifactAccessDependencies, slug: s
 export async function withdrawAnnotation(deps: ArtifactAccessDependencies, slug: string, entryId: string) {
   const workspace = findWorkspace(deps, slug);
   const bus = await workspaceBus(deps, workspace);
-  const entry = bus.state.entries[entryId];
-  if (!entry) throw new ArtifactError("annotation-not-found", { id: entryId });
-  if (isTerminal(entry.kind === "attention" ? "attention" : "common", entry.status)) {
-    throw new ArtifactError("annotation-closed", { status: entry.status });
+  // The terminal check, any claim release, and the transition are one step under the bus mutex
+  // (issue #155) — checking `bus.state` here first would let a session's resolve land in between.
+  try {
+    const withdrawn = await bus.withdrawAnnotationEntry(entryId);
+    return { id: entryId, status: withdrawn.status };
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "UNKNOWN_ENTRY") throw new ArtifactError("annotation-not-found", { id: entryId });
+    if (code === "ENTRY_RESOLVED") {
+      const resolved = error as { terminalBy: string | null; status: string };
+      throw new ArtifactError("annotation-closed", { status: resolved.status, terminal_by: resolved.terminalBy });
+    }
+    throw error;
   }
-  // `withdrawn` is what tells a later reader that this `rejected` came from the human taking the
-  // note back — not from a session declining it. Both land on the same terminal status, and the
-  // pane must show one and not the other, so the journal states which rather than leaving the
-  // listing to guess from the note text.
-  await bus.commitTransition(entryId, "rejected", {
-    by: "human",
-    note: "withdrawn in glosa",
-    detail: { withdrawn: true },
-  });
-  return { id: entryId, status: bus.state.entries[entryId]?.status ?? "rejected" };
 }
 
 /** One annotation as the artifact pane needs it back: the immutable payload it was written with,
@@ -474,6 +479,9 @@ export interface InboxListEntry {
   created_at: string | null;
   target_path: string | null;
   payload_present: boolean;
+  /** The session holding a live exclusive claim on this entry, or `null` (issue #155 — the "who
+   * holds it" column `glosa inbox list` was promised in #142). */
+  holder: string | null;
 }
 
 /** Every entry the journal itself remembers, oldest first — `glosa inbox list`'s daemon-side
@@ -488,8 +496,13 @@ export interface InboxListEntry {
  * Non-terminal entries only by default (D4); `opts.all` includes terminal ones too, which is what
  * makes a dismiss's effect observable end to end: dismiss, then see the same id again under
  * `--all` as `dismissed`. */
+function holderOf(claim: Claim | null, now: Date): string | null {
+  return claim && !isClaimExpired(claim, now) ? claim.holder_session : null;
+}
+
 export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boolean } = {}): InboxListEntry[] {
   const { state, createdAt, entryOrder } = peekJournal(workspace);
+  const now = new Date();
   const rows: InboxListEntry[] = [];
   for (const id of entryOrder.keys()) {
     const entry = state.entries[id];
@@ -506,6 +519,7 @@ export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boole
       // field) — stated as `null` here rather than papered over by reading the payload.
       target_path: typeof entry.target_path === "string" ? entry.target_path : null,
       payload_present: readInboxEntry(workspace, id) !== null,
+      holder: holderOf(claimForEntry(state.claims, id), now),
     });
   }
   return rows;
@@ -551,12 +565,17 @@ export async function restoreArtifact(
   const content = await readFileAtCheckpoint(workspace, to, checkpointPath);
   if (content === null) throw new ArtifactError("artifact-missing-at-checkpoint");
   const inboxId = id();
-  const captured = await bus.captureHumanEdit(
-    inboxId,
-    match.path,
-    () => writeArtifactAtomic(match.rawPath, content),
-    "restore",
-  );
+  let captured: { checkpoint_before: string; checkpoint_after: string } | null;
+  try {
+    captured = await bus.captureHumanEdit(
+      inboxId,
+      match.path,
+      () => writeArtifactAtomic(match.rawPath, content),
+      "restore",
+    );
+  } catch (error) {
+    throw asSourceChanged(error);
+  }
   const fullSha = captured?.checkpoint_after ?? to;
   const shortSha = (await runGit(workspace, ["rev-parse", "--short", fullSha])).stdout.trim();
   return {
@@ -628,6 +647,8 @@ export async function inboxPresentation(
     entry.payload,
     state?.status ?? "pending",
     cursor,
+    // A plain read of fold state, like `readEntry` above — who is already working on this.
+    { claims: bus.presentationClaimsLocked(entryId) },
   );
   if (!presentation) throw new ArtifactError("presentation-not-actionable", { id: entryId });
   return presentation;

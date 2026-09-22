@@ -454,6 +454,12 @@ export function createDataAccess(deps = {}) {
     getStatus() {
       return requestJson("/api/status");
     },
+    /** `GET /w/:slug/claims` (A1 §5.11f, authed read) — the live claims and the most recent claim
+     * to end on each resource, so the workbench can say who is working on a file when it opens
+     * rather than only from the next journal frame. @param {string} slug */
+    getClaims(slug) {
+      return requestJson(`/w/${encodeURIComponent(slug)}/claims`);
+    },
     /** @param {string} slug */
     getArtifacts(slug) {
       return requestJson(`/w/${encodeURIComponent(slug)}/artifacts`);

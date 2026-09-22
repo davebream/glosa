@@ -71,6 +71,17 @@ describe("createDataAccess — request shape", () => {
     expect(calls[3]![1].body).toBeUndefined();
   });
 
+  test("getClaims reads the workspace's claims over the SPA's own authed read (issue #155)", async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchFn = async (path: string, init: RequestInit) => {
+      calls.push([path, init]);
+      return jsonResponse(200, { claims: [], tombstones: [] });
+    };
+    const da = createDataAccess({ fetchFn, storage: fakeStorage({ glosa_token: "tok" }) });
+    expect(await da.getClaims("my ws")).toEqual({ claims: [], tombstones: [] });
+    expect(calls.map(([path, init]) => [path, init.method ?? "GET"])).toEqual([["/w/my%20ws/claims", "GET"]]);
+  });
+
   test("getArtifact with render:'html' appends ?render=html and URL-encodes the path", async () => {
     const calls: string[] = [];
     const fetchFn = async (path: string) => {

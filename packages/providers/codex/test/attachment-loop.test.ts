@@ -344,6 +344,43 @@ describe("Codex attachment park/retry state machine (#206, socket-free)", () => 
     });
   });
 
+  test("issue #155: a signal frame is steered into the thread as one `[glosa signal <id>]` line, then acknowledged with its own token", async () => {
+    const controller = new AbortController();
+    const notified: string[] = [];
+    const acks: Array<[string, string, string]> = [];
+    const sleeps: number[] = [];
+    const deps: CodexAttachDeps = {
+      createControlClient: async () => fakeControl({ notify: async (_threadId, line) => void notified.push(line) }),
+      createDaemonClient: async () => ({
+        register: async () => {},
+        heartbeat: async () => {},
+        acknowledgeStreamTransport: async () => {},
+        acknowledgeSignal: async (sessionId, signalId, token) => void acks.push([sessionId, signalId, token]),
+        openSessionStream: async (_sessionId, _transport, _onEntry, _signal, _onOpen, onSignal) => {
+          await onSignal?.({
+            id: "sig-1",
+            kind: "conflict",
+            message: "a person took over entry:e1.",
+            ack_token: "tok-1",
+          });
+          controller.abort();
+          return { ended: "eof" as const };
+        },
+      }),
+      random: () => 0,
+      sleep: trackedSleep(sleeps),
+      now: () => 0,
+    };
+    await runCodexAttachment(
+      { sessionId: "thread-1", workspace: "/workspace", cwd: "/agent" },
+      deps,
+      controller.signal,
+    );
+
+    expect(notified).toEqual(["[glosa signal sig-1] conflict: a person took over entry:e1."]);
+    expect(acks).toEqual([["thread-1", "sig-1", "tok-1"]]);
+  });
+
   test("only a literal connected:false frees a parked client — malformed bodies stay parked (#206 review round 1, F-6)", async () => {
     const controller = new AbortController();
     let connectAttempts = 0;

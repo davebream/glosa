@@ -207,7 +207,7 @@ export function printForgetResult(result: CommandEnvelope<ForgetData>, json: boo
         blocker.kind === "live-session"
           ? `  blocked by live session ${blocker.session_id}\n`
           : blocker.kind === "apply-lease"
-            ? `  blocked by apply lease ${blocker.lease_id} (expires ${blocker.expires_at})\n`
+            ? `  blocked by a claim ${blocker.lease_id}${blocker.holder_session ? ` held by session ${blocker.holder_session}` : ""} (expires ${blocker.expires_at})\n`
             : "  blocked by an adoption already in progress for this workspace\n",
       );
     }

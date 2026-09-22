@@ -503,6 +503,32 @@ describe("the annotation surface", () => {
     expect(cards.map((c) => c.getAttribute("data-state"))).toEqual(["waiting", "delivered"]);
   });
 
+  test("issue #155: a card whose entry an agent has claimed says who is acting on it, and stops once the claim ends", async () => {
+    const note = (id: string, body: string, word: string) => ({
+      id,
+      status: "delivered",
+      artifact_path: "notes.md",
+      body,
+      intent: "content",
+      target: targetFor(word),
+      attempts: 1,
+    });
+    const da = fakeDataAccess(listing(note("inb-7", "tighten this", "gamma"), note("inb-8", "and this", "lambda")));
+    const { host, pane } = await mountPane(da);
+
+    pane.setClaims([{ resources: ["entry:inb-7"], label: "Claude Code · session sess-A-1 · editing since 14:02" }]);
+    await paint();
+    // Only the claimed note's card, and the author line is still the reader's own.
+    expect(qa(host, ".glosa-annotation-holder").map((n) => n.textContent)).toEqual([
+      "Claude Code · session sess-A-1 · editing since 14:02",
+    ]);
+    expect(qa(host, ".glosa-annotation")[0]!.textContent).toContain("You");
+
+    pane.setClaims([]);
+    await paint();
+    expect(qa(host, ".glosa-annotation-holder")).toHaveLength(0);
+  });
+
   test("a note that came back from the daemon can still be withdrawn — its real entry id survived the round trip", async () => {
     const da = fakeDataAccess(
       listing({
