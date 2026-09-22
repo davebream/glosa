@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(720);
+    ).toBe(725);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1969,7 +1969,21 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // #219 adds a watcher-allocation decision entry: 712 → 717 blocks / 647 → 652 edits. The
   // per-cause map stays 46, shipped stays 1/1, ablated stays 41/41, and missed/false alarms remain
   // zero. Denominator only.
-  const BLOCKS = 720;
+  // #329 opens `## [Unreleased]` with a `### Fixed` heading and its list — two blocks, one edit:
+  // 720 → 722 blocks / 655 → 656 edits. The heading is not a `## [x.y.z]` release heading and has
+  // no link definition, so no numerator moved: metric 1's per-cause map still totals 47, shipped
+  // stays 1/1, ablated stays 42/42, and missed/false alarms remain zero. Denominator only.
+  // Cutting alpha.30: a dated `## [0.1.0-alpha.30]` heading, plus a second bullet joining the
+  // `### Fixed` list already there, so one new block: 722 → 723 blocks / 656 → 657 edits. This is
+  // the release case, not the bookkeeping one — the new heading's definition sits at the foot of
+  // the file, so it is a reference link: `link reference definition inlined` 26 → 27, `ablated`
+  // 42 → 43, and nothing else moved. `shipped` held at 1/1 and `missed` at 0.
+  // #333 reopens `## [Unreleased]` with a `### Fixed` heading and its list, the same shape #329
+  // had: two blocks, one edit, 723 → 725 blocks / 657 → 658 edits. `[Unreleased]` is not a
+  // `## [x.y.z]` release heading and gains no link definition, so this is the bookkeeping case and
+  // no numerator moved — metric 1's per-cause map still totals 48, `shipped` stays 1/1, `ablated`
+  // stays 43/43, and missed/false alarms remain zero.
+  const BLOCKS = 725;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2005,7 +2019,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 47 of 720 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 48 of 725 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2027,7 +2041,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     ).toBe(BLOCKS);
     // REQ-8's direction, stated as its own assertion. It survives a future author deciding the
     // per-cause record below is too brittle and relaxing it.
-    expect(misses).toBeLessThanOrEqual(47);
+    expect(misses).toBeLessThanOrEqual(48);
     // And the record beside it. These are the design's own 43 causes measured at `d965ffb`, minus
     // the 3 bracket/backslash-escaping blocks M1 removed (43 → 40), minus the one front-matter block
     // #143 removed (40 → 39), plus the one `## [0.1.0-alpha.18]` heading the alpha.18 release added
@@ -2045,10 +2059,10 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       byCause,
       countNote(
-        "the per-cause record, a NUMERATOR totalling 47. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
+        "the per-cause record, a NUMERATOR totalling 48. A move here is not bookkeeping: either the serializer changed, or a document gained a block that is itself lossy. Establish which before touching these numbers.",
       ),
     ).toEqual({
-      "link reference definition inlined": 26,
+      "link reference definition inlined": 27,
       "continuation-line indent dropped": 6,
       "soft break inside a code span collapsed": 5,
       "indented blockquote marker normalised": 5,
@@ -2062,7 +2076,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 655; the guard fires on it and, ablated, on 42", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 658; the guard fires on it and, ablated, on 43", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2134,7 +2148,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     expect(
       tally,
       countNote(
-        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 42/42 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
+        "`edits` is a DENOMINATOR — how many synthetic edits the generator produced over the live corpus — and it moves with the documents exactly as BLOCKS does. `dishonest` and `fired` are the numerators: they must stay 1/1 shipped and 43/43 ablated whatever `edits` becomes. If `ablated` grew by exactly one and the ONLY per-cause move in metric 1 is `link reference definition inlined`, a release was cut and that is the cause; anything else is not.",
       ),
       // A MOVED NUMERATOR IS THE REAL SIGNAL, and here it moved twice, both legitimately: `shipped`
       // fell 3 → 2 when #143 made front matter a verbatim node (no longer re-serialized, so it can
@@ -2153,9 +2167,9 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 655,
+      edits: 658,
       shipped: { dishonest: 1, fired: 1 },
-      ablated: { dishonest: 42, fired: 42 },
+      ablated: { dishonest: 43, fired: 43 },
     });
   }, 15_000);
 

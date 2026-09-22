@@ -30,7 +30,7 @@ import {
   openQuestions,
   requestsForArtifact,
 } from "./agent-request.js";
-import { buildAnnotationRecordFromSelection } from "./annotate.js";
+import { buildAnnotationRecordFromSelection, foldQuote, locateFoldedQuote } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
 import { choiceDialog, confirmDialog } from "./dialog.js";
 import { faceKey, mountFaceControl } from "./face.js";
@@ -2390,14 +2390,21 @@ export function createArtifactPane(host, deps) {
 
   /** Resolves an annotation target against the CURRENT rendered text — the client-side echo of
    * the daemon's anchoring cascade (A5 §F10): (1) stored offsets, accepted only if the text there
-   * still IS the quoted text; (2) re-find the quote by its prefix+exact+suffix context; (3) exact
-   * quote alone when it's unambiguous; else null — unanchored, and the card says so. */
+   * still IS the quoted text, up to the fold; (2) re-find the quote by its prefix+exact+suffix
+   * context; (3) exact quote alone when it's unambiguous; (4) the quote under the fixed
+   * normalization, again only when it's unambiguous; else null — unanchored, and the card says
+   * so. Rung (4) is why a re-wrapped paragraph keeps its notes: the daemon has always folded
+   * before searching, so without it the page could call a note lost that the session still gets. */
   function rangeForTarget(target) {
     const pos = target?.position;
     const exact = target?.quote?.exact;
     if (pos && typeof pos.start === "number" && typeof pos.end === "number") {
       const range = offsetsToRange(pos.start, pos.end);
-      if (range && (!exact || range.toString() === exact)) return range;
+      // A re-wrap swaps a space for a newline in place, so the stored offsets still hold and only
+      // the whitespace differs — the same words, and no search needed to say so.
+      if (range && (!exact || range.toString() === exact || foldQuote(range.toString()) === foldQuote(exact))) {
+        return range;
+      }
     }
     if (!exact) return null;
     const text = contentEl.textContent;
@@ -2407,7 +2414,8 @@ export function createArtifactPane(host, deps) {
     if (contextIdx !== -1) return offsetsToRange(contextIdx + prefix.length, contextIdx + prefix.length + exact.length);
     const first = text.indexOf(exact);
     if (first !== -1 && text.indexOf(exact, first + 1) === -1) return offsetsToRange(first, first + exact.length);
-    return null;
+    const folded = locateFoldedQuote(text, exact);
+    return folded ? offsetsToRange(folded.start, folded.end) : null;
   }
 
   /** True when the margin is the anchor-aligned side rail rather than the in-flow block under the
@@ -3520,37 +3528,67 @@ export function createArtifactPane(host, deps) {
     return range ? addressForRange(contentEl, range, map) : null;
   }
 
+  /** Everything on a card that is derived from the CURRENT text: whether the passage is still
+   * there, and what it is called. Honest anchoring — if the quoted passage no longer exists (edited
+   * away, rewritten), the card says "Lost its place" and keeps the original quote; it never
+   * underlines different words (client echo of A5 §F10; the daemon's resolver is the authority at
+   * delivery time).
+   *
+   * In place, on a card that may already be on the page, rather than by rebuilding it. The verdict
+   * has to follow the manuscript — a session's write moves the text under a card that nothing else
+   * is going to rebuild — and rebuilding the rail on every external frame would take the reader's
+   * focus, their hover and any open draft with it. */
+  function applyAnchorVerdict(card, addresses) {
+    const item = card._glosaItem;
+    const target = item?.record?.target ?? item?.target ?? null;
+    const range = target ? rangeForTarget(target) : null;
+    card.setAttribute("data-anchored", String(Boolean(range)));
+    const addressEl = card.querySelector(".glosa-address");
+    if (addressEl) addressEl.textContent = (range ? addressForRange(contentEl, range, addresses) : null) ?? "";
+    const lost = card.querySelector(".glosa-annotation-lost");
+    if (range) {
+      lost?.remove();
+      return;
+    }
+    if (lost) return;
+    // Between the quote and the body, which is where it was built: the reader reads the words that
+    // were marked, then that they are gone, then what was said about them.
+    card.insertBefore(
+      el("p", {
+        className: "glosa-annotation-lost",
+        textContent: "Lost its place — the passage changed since this was written.",
+      }),
+      card.querySelector(".glosa-annotation-body"),
+    );
+  }
+
+  /** Re-derives every card's verdict against the text as it stands now. Called from the same paint
+   * as the underlines and the dots, because those three answer one question and a reader who sees
+   * them disagree cannot tell which one is lying. */
+  function repaintAnchorVerdicts() {
+    const addresses = addressBlocks(contentEl);
+    for (const card of paneEl.querySelectorAll(".glosa-annotation")) applyAnchorVerdict(card, addresses);
+  }
+
   /** One margin entry. The same component in the side rail, in the compact collection tray,
    * and inside the passage's hover preview — only its container changes. */
   function buildAnnotationCard(item, { actions = true, addresses } = {}) {
     const { record, state } = item;
     const intentLabel = INTENTS.find((i) => i.value === record.intent)?.label ?? record.intent;
-    const address = addressForTarget(record.target, addresses);
-    // Honest anchoring: if the quoted passage no longer exists in the current text (edited
-    // away, rewritten), the card says "Lost its place" and keeps the original quote — it never
-    // underlines different words (client echo of A5 §F10; the daemon's resolver is the
-    // authority at delivery time).
-    const anchored = Boolean(rangeForTarget(record.target));
-    const card = el("div", { className: "glosa-annotation", "data-state": state, "data-anchored": String(anchored) });
+    const card = el("div", { className: "glosa-annotation", "data-state": state });
     // The entry's header: its address in the hand, then who wrote it. "You" is honest here — every
-    // entry in this list was written in glosa's own composer (invariant 3).
+    // entry in this list was written in glosa's own composer (invariant 3). The address is left
+    // empty and filled by `applyAnchorVerdict` below, which owns everything on this card that is
+    // derived from the current text.
     card.append(
       el("p", { className: "glosa-annotation-head" }, [
-        el("span", { className: "glosa-address", textContent: address ?? "" }),
+        el("span", { className: "glosa-address" }),
         el("span", { className: "glosa-annotation-who", textContent: "You" }),
       ]),
     );
     if (record.target?.quote?.exact) {
       card.append(
         el("p", { className: "glosa-annotation-quote" }, [el("span", { textContent: record.target.quote.exact })]),
-      );
-    }
-    if (!anchored) {
-      card.append(
-        el("p", {
-          className: "glosa-annotation-lost",
-          textContent: "Lost its place — the passage changed since this was written.",
-        }),
       );
     }
     const stateRow = el("p", { className: "glosa-annotation-state" }, [
@@ -3616,6 +3654,7 @@ export function createArtifactPane(host, deps) {
     }
     card.append(el("p", { className: "glosa-annotation-body", textContent: record.body }), stateRow);
     card._glosaItem = item;
+    applyAnchorVerdict(card, addresses);
     connectAnchorHighlight(card, item);
     return card;
   }
@@ -3767,6 +3806,7 @@ export function createArtifactPane(host, deps) {
 
   function paintAnnotationMarks() {
     stampAddresses();
+    repaintAnchorVerdicts();
     paintAnchorUnderlines();
     renderMarkers();
     paintAgentBands();
