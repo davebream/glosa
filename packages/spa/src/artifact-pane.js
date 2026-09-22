@@ -671,7 +671,33 @@ export function createArtifactPane(host, deps) {
   for (let i = 0; i < 8; i++) skeletonEl.append(el("i"));
   const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Artifact source" });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
-  const editStatus = el("p", { className: "glosa-edit-status", role: "status", "aria-live": "polite" });
+  // What the page says about the write, and it sits under the MANUSCRIPT rather than inside
+  // `editWrap`.
+  //
+  // It lived in the Save row, which `renderArtifact` hides whenever the full-page face is not
+  // showing — so per-block editing, the way a writer normally edits, wrote "Saving…", "Saved." and
+  // every error into a hidden element. `hidden` also takes a node out of the accessibility tree, so
+  // the `aria-live` region announced none of it either. The result was a surface that writes to a
+  // real file and creates an inbox entry an agent acts on, and reports neither that it worked nor
+  // that it did not: a writer whose save failed kept typing into a document they believed was
+  // saved. The tab's unsaved dot says something is pending; nothing said it landed.
+  const editStatus = el("p", {
+    className: "glosa-edit-status",
+    role: "status",
+    "aria-live": "polite",
+    hidden: true,
+  });
+
+  /** The one way this line is written, so "shown" and "says something" cannot come apart.
+   *
+   * Emptying it hides it: a status line is not a slot that is always there and usually blank, it is
+   * a sentence that exists when there is one to say. */
+  function setEditStatus(text, { error = false } = {}) {
+    editStatus.textContent = text;
+    if (error) editStatus.setAttribute("data-error", "true");
+    else editStatus.removeAttribute("data-error");
+    editStatus.hidden = !text;
+  }
   const richEl = el("div", { className: "glosa-rich", hidden: true });
   const faceRichBtn = el("button", { className: "glosa-face-rich", type: "button", textContent: "Rich" });
   const faceSourceBtn = el("button", { className: "glosa-face-source", type: "button", textContent: "Source" });
@@ -683,7 +709,7 @@ export function createArtifactPane(host, deps) {
     el("div", { className: "glosa-edit-topbar" }, [faceToggle]),
     richEl,
     editArea,
-    el("div", { className: "glosa-edit-actions" }, [editStatus, saveButton]),
+    el("div", { className: "glosa-edit-actions" }, [saveButton]),
   ]);
   const classFEl = el("div", {
     className: "glosa-classf",
@@ -747,6 +773,7 @@ export function createArtifactPane(host, deps) {
     emptyEl,
     skeletonEl,
     contentEl,
+    editStatus,
     provenanceEl,
     classFEl,
     editWrap,
@@ -1415,8 +1442,7 @@ export function createArtifactPane(host, deps) {
         markdown: pendingRichMarkdown ?? markdown,
         onDirty: () => {
           modeState = modeReducer(modeState, { type: "edited" });
-          editStatus.textContent = "";
-          editStatus.removeAttribute("data-error");
+          setEditStatus("");
           onStateChange();
         },
       });
@@ -1933,7 +1959,16 @@ export function createArtifactPane(host, deps) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      void saveCurrentArtifact({ onlyIfDirty: true });
+      // Caught, not floated. `saveCurrentArtifact` rethrows anything that is not a 409, so a downed
+      // daemon or a file that went read-only left an unhandled rejection and nothing else — no
+      // dialog, no line on the page, and a writer who goes on typing into a document they believe
+      // is on disk. Nobody is awaiting this call, so the catch is the only place it can be said.
+      saveCurrentArtifact({ onlyIfDirty: true }).catch((error) => {
+        setEditStatus(
+          error instanceof Error ? `Couldn't save this passage: ${error.message}` : "Couldn't save this passage.",
+          { error: true },
+        );
+      });
     }, RUN_SAVE_DELAY);
   }
 
@@ -3926,8 +3961,7 @@ export function createArtifactPane(host, deps) {
     if (pendingReport && editArea.value !== pendingReport.text) pendingReport = null;
     unsavedFacePath = currentArtifact?.source_path ?? null;
     modeState = modeReducer(modeState, { type: "edited" });
-    editStatus.textContent = "";
-    editStatus.removeAttribute("data-error");
+    setEditStatus("");
     onStateChange();
   });
 
@@ -4044,8 +4078,7 @@ export function createArtifactPane(host, deps) {
    */
   async function writeAndSettle(artifact, content, ifMatch) {
     saveButton.disabled = true;
-    editStatus.removeAttribute("data-error");
-    editStatus.textContent = "Saving…";
+    setEditStatus("Saving…");
     try {
       const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
       currentArtifact = { ...artifact, content, ...saved };
@@ -4067,18 +4100,19 @@ export function createArtifactPane(host, deps) {
       endEditSession();
       contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
       teardownRichFace(); // remount the rich face from the freshly saved content
-      editStatus.textContent = "Saved.";
+      setEditStatus("Saved.");
       renderModeBar();
       renderContent();
       onStateChange();
       void refreshHistory?.();
       return currentArtifact;
     } catch (error) {
-      editStatus.setAttribute("data-error", "true");
-      editStatus.textContent =
+      setEditStatus(
         error instanceof Error
           ? `Couldn't save this artifact: ${error.message}`
-          : "Couldn't save this artifact. Try again.";
+          : "Couldn't save this artifact. Try again.",
+        { error: true },
+      );
       throw error;
     } finally {
       saveButton.disabled = false;
@@ -4283,8 +4317,7 @@ export function createArtifactPane(host, deps) {
       return await writeAndSettle(artifact, result.text, fresh.source_sha256);
     } catch (error) {
       if (error?.status === 409) {
-        editStatus.setAttribute("data-error", "true");
-        editStatus.textContent = "Not saved — this file changed again while you were deciding.";
+        setEditStatus("Not saved — this file changed again while you were deciding.", { error: true });
         return SAVE_DECLINED;
       }
       throw error;
@@ -4297,15 +4330,16 @@ export function createArtifactPane(host, deps) {
    * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
    */
   async function staleSave(artifact) {
-    editStatus.textContent = "Checking what changed…";
+    setEditStatus("Checking what changed…");
     const fresh = await dataAccess.getArtifact(slug, artifact.source_path, { render: "html" });
     // Whatever landed on disk is not decodable any more, so there is no version of this dialog
     // worth opening: every choice in it writes a replacement-character decode back. Take disk
     // would fill the editor from one, and Keep mine would splice onto it as a merge base.
     if (fresh.valid_utf8 === false) {
-      editStatus.setAttribute("data-error", "true");
-      editStatus.textContent =
-        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.";
+      setEditStatus(
+        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.",
+        { error: true },
+      );
       return SAVE_DECLINED;
     }
     const choice = await choiceDialog({
@@ -4727,7 +4761,7 @@ export function createArtifactPane(host, deps) {
         from = undefined;
       }
       if (!from) {
-        editStatus.textContent = "This artifact has no saved versions to compare with yet.";
+        setEditStatus("This artifact has no saved versions to compare with yet.");
         return;
       }
     }
@@ -4865,9 +4899,9 @@ export function createArtifactPane(host, deps) {
       renderModeBar();
       renderArtifactTools();
       if (modeState.mode === "edit") {
-        editStatus.textContent = next
-          ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes."
-          : "";
+        setEditStatus(
+          next ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes." : "",
+        );
       }
     },
     /** Hide notes / show notes on the one page: the read ↔ review toggle, for commands. */

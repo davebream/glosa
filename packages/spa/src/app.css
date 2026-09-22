@@ -3190,8 +3190,17 @@ input,
   gap: var(--space-2);
 }
 
+/* The save line sits under the manuscript, on the manuscript's own measure, so a sentence about the
+   writer's file lands under the file rather than against the pane's edge — the same placement the
+   provenance line uses, for the same reason. It used to live in the Save row, which is hidden
+   whenever the full-page face is not showing; per-block editing is the normal way to edit, so
+   everything this line had to say went into a hidden element and was never read or announced. */
 .glosa-edit-status {
-  margin-right: auto;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--space-8));
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-8) 0;
+  font-family: var(--font-sans);
 }
 
 .glosa-edit-topbar {
