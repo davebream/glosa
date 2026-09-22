@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **At desktop width the rail holds only notes that still sit beside their words.** Notes a
+  session applied, closed or dismissed, and open notes whose passage is gone, now live in a drawer
+  at the foot of the rail. Its strip counts them ("1 lost its place · 3 resolved"), and "N applied"
+  in the line under the page opens it. "Clear all" clears the settled ones at once. A question
+  from a session now sits beside the passage it asks about, and can be clicked there.
 - **The kind of change a note asks for is now a set of radio buttons.** "Change the words", "Wrong
   label or split" and "Fix how it looks" were three outlined pills, which look like tags you can
   pick several of. The chosen one differed only by a darker outline and bolder text, and the bolder
@@ -17,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The margin rail no longer paints its "Resolved" heading over the first note, or stacks
+  notes on top of each other.** The heading sat in the page flow while every note was placed by
+  position, and a note that gained its "Lost its place" line was measured before it grew.
+- **A note the session applied no longer warns "Lost its place".** Applying a "Change the words"
+  note removes the words it quoted, so every success showed the warning. It now says "Applied.
+  The passage now reads differently." in grey, and "nudged ×N" is gone once a note is finished.
+- **A Clear that fails no longer turns a finished note back into open work.** It keeps its state
+  and says "Couldn't clear — try again".
 - **Passage numbers no longer run off the edge of a narrow pane.** In a window 640px wide or less,
   the page's side margins were cut from 2rem to 1rem. The margins are where the page's marks sit:
   the § addresses and a session's tab on the left, the note dots on the right. So the addresses

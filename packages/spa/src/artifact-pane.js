@@ -79,7 +79,9 @@ export const INTENTS = [
  * its place" in the warning colour there raised an alarm on every success. Closed and dismissed
  * notes are finished too, so their line is the same quiet record. `stale` keeps the warning: it is
  * the state that means the passage moved out from under the note. */
-const LOST_ITS_PLACE = { text: "Lost its place — the passage changed since this was written.", settled: false };
+// One line in the rail's column: the full sentence wrapped to two lines of 12px semibold ochre,
+// which made the warning the heaviest thing on the card, above the note it was about.
+const LOST_ITS_PLACE = { text: "Lost its place — the passage has changed.", settled: false };
 const SETTLED_ELSEWHERE = {
   applied: { text: "Applied. The passage now reads differently.", settled: true },
   rejected: { text: "The passage has changed since.", settled: true },
