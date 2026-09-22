@@ -59,6 +59,7 @@ import {
   claimTombstoneError,
   EXCLUSIVE_CLAIM_TTL_MS,
   entryResolvedError,
+  HOLDER_STALE_GRACE_MS,
   invalidResourceError,
   MAX_CLAIMS_PER_SESSION,
   MAX_CLAIMS_PER_WORKSPACE,
@@ -1524,6 +1525,36 @@ export class WorkspaceBus {
       },
     });
     return { claimId, fence, expiresAt, paths: request.paths, ...(preSha ? { preSha } : {}), renewed: false };
+  }
+
+  /** The sweeper's pass over this bus (issue #155 Q2): every claim whose TTL has lapsed expires
+   * `ttl`, and every claim whose holder session has been stale for at least
+   * `HOLDER_STALE_GRACE_MS` expires `holder_stale` — a claim dies with its session (etcd's "keys
+   * die with their lease"), after a grace long enough that one missed heartbeat never costs a
+   * working session its claim. `staleSince` answers from the session registry, which this bus
+   * does not have; `null` means "live, or never registered", and a holder that never registered
+   * is bounded by the TTL alone. Decisions use the caller's `now`; nothing is spawned or appended
+   * when nothing is due, and a sealed bus is left alone rather than refused, since a timer has no
+   * caller to report a refusal to. */
+  sweepExpiredClaims(now: Date, staleSince: (sessionId: string) => Date | null): Promise<string[]> {
+    return this.mutex.runExclusive(this.mutexKey, async () => {
+      if (this.state.adoptionSeal || this.state.forgetSeal) return [];
+      const due: Array<{ claim: Claim; reason: "ttl" | "holder_stale" }> = [];
+      for (const claim of this.heldClaimsLocked()) {
+        if (isClaimExpired(claim, now)) {
+          due.push({ claim, reason: "ttl" });
+          continue;
+        }
+        const stale = staleSince(claim.holder_session);
+        if (stale && now.getTime() - stale.getTime() >= HOLDER_STALE_GRACE_MS)
+          due.push({ claim, reason: "holder_stale" });
+      }
+      if (due.length === 0) return [];
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      for (const { claim, reason } of due) await this.expireClaimLocked(claim, reason);
+      return due.map(({ claim }) => claim.claim_id);
+    });
   }
 
   /** Takes an `exclusive` or `presence` claim over `resources` (issue #155). Presence claims never

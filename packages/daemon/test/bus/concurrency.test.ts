@@ -11,6 +11,11 @@ import { journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
 import { checkpoint, diffShas, runGit } from "../../src/git/shadow.ts";
 import { writeFile } from "../git/helpers.ts";
+import { WorkspaceBusRegistry } from "../../src/bus/workspace-bus-registry.ts";
+import { CLAIM_SWEEP_INTERVAL_MS, ClaimSweeper } from "../../src/claim-sweeper.ts";
+import { SessionRegistry } from "../../src/registry/session-registry.ts";
+import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
+import { cleanup, freshHome, freshWorkspaceDir, manualClock } from "../registry/helpers.ts";
 import { cleanupWorkspace, deterministicClock, deterministicUlid, freshWorkspace } from "./helpers.ts";
 
 function readLines(root: string): string[] {
@@ -294,5 +299,125 @@ describe("claims — two sessions, one workspace (issue #155 AC-1)", () => {
     expect(events(root).find((e) => e.event === "apply_end")?.detail?.interval_attribution).toBe("session");
     await bus.close();
     cleanupWorkspace(root);
+  });
+});
+
+// Issue #155 Q2 / AC-1.7 — "A dies → claim_expired{holder:A}". A claim nobody meets again would
+// otherwise outlive its holder for the rest of the TTL; the daemon's sweeper closes it once the
+// holder's session has been stale for the grace period, naming the holder.
+describe("claims — the daemon sweeper (issue #155 AC-1.7)", () => {
+  async function setup() {
+    const home = freshHome();
+    const root = freshWorkspaceDir();
+    const idle = freshWorkspaceDir();
+    writeFile(root, "notes.md", "v1\n");
+    writeFile(idle, "idle.md", "idle\n");
+    const clock = manualClock();
+    const index = new WorkspaceIndex({ home, now: clock });
+    const sessions = new SessionRegistry({ now: clock });
+    const buses = new WorkspaceBusRegistry({ now: clock, ulid: deterministicUlid() });
+    const entry = await index.upsertWorkspace(root, "glosa-open");
+    const idleEntry = await index.upsertWorkspace(idle, "glosa-open");
+    const bus = buses.get(entry);
+    await bus.reconcileOnce();
+    await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md" });
+    let tick: (() => void) | null = null;
+    let interval = 0;
+    const sweeper = new ClaimSweeper({
+      workspaceIndex: index,
+      busRegistry: buses,
+      sessionRegistry: sessions,
+      now: clock,
+      schedule: (fn, ms) => {
+        tick = fn;
+        interval = ms;
+        return () => {
+          tick = null;
+        };
+      },
+    });
+    sweeper.start();
+    const done = async () => {
+      await sweeper.stop();
+      await buses.closeAll();
+      cleanup(home);
+      cleanup(root);
+      cleanup(idle);
+    };
+    return { root, clock, sessions, buses, bus, sweeper, idleEntry, done, scheduled: () => ({ tick, interval }) };
+  }
+
+  test("a claim survives its holder's first 119 s of staleness and expires holder_stale at 120 s, naming the holder", async () => {
+    const { root, clock, sessions, bus, sweeper, done, scheduled } = await setup();
+    expect(scheduled().interval).toBe(CLAIM_SWEEP_INTERVAL_MS);
+    expect(scheduled().tick).not.toBeNull();
+
+    await sessions.register({ session_id: "A", provider: "claude-code", cwd: root, source: "startup" });
+    const a = await bus.applyBegin("e1", "A");
+    writeFile(root, "notes.md", "v2, A's half-finished edit\n");
+
+    // The session registry's lease is 60 s, so A is stale from t+60 s. One missed heartbeat must
+    // never cost a working session its claim.
+    clock.advance(60_000);
+    await sweeper.tick();
+    clock.advance(119_000);
+    await sweeper.tick();
+    expect(bus.state.claims["entry:e1"]?.exclusive?.claim_id).toBe(a.leaseId);
+    expect(events(root).some((e) => e.event === "claim_expired")).toBe(false);
+
+    clock.advance(1_000);
+    await sweeper.tick();
+    const expired = events(root).filter((e) => e.event === "claim_expired");
+    expect(expired.map((e) => [e.by, e.detail])).toEqual([
+      ["daemon", { claim_id: a.leaseId, holder_session: "A", reason: "holder_stale" }],
+    ]);
+    expect(bus.state.claims["entry:e1"]?.last?.reason).toBe("expired_holder_stale");
+
+    // What A left behind is captured as unknown and reported — never A's, never lost.
+    const abandoned = Object.values(bus.state.entries).filter((entry) => entry.payload_kind === "external_edit");
+    expect(abandoned).toHaveLength(1);
+    const head = (await runGit(root, ["show", "-s", "--format=%B", "HEAD"])).stdout;
+    expect(head).toContain("Glosa-Attribution: unknown");
+    expect(head).toContain("Glosa-Kind: claim_expired");
+
+    // B can now claim the same file (AC-1.8), with a fence A's stale token can never match.
+    const b = await bus.applyBegin("e1", "B");
+    expect(b.fence).toBe(2);
+    await expect(bus.resolveEntry("e1", "applied", "A")).rejects.toMatchObject({ code: "CLAIM_EXPIRED" });
+    await done();
+  });
+
+  test("a live holder's claim still expires by TTL, reason ttl", async () => {
+    const { root, clock, sessions, bus, sweeper, done } = await setup();
+    await sessions.register({ session_id: "A", provider: "claude-code", cwd: root, source: "startup" });
+    const a = await bus.applyBegin("e1", "A");
+    // A keeps heartbeating: never stale.
+    for (let elapsed = 0; elapsed <= EXCLUSIVE_CLAIM_TTL_MS; elapsed += 30_000) {
+      clock.advance(30_000);
+      await sessions.register({ session_id: "A", provider: "claude-code", cwd: root, source: "startup" });
+      await sweeper.tick();
+    }
+    const expired = events(root).filter((e) => e.event === "claim_expired");
+    expect(expired.map((e) => e.detail)).toEqual([{ claim_id: a.leaseId, holder_session: "A", reason: "ttl" }]);
+    await done();
+  });
+
+  test("a holder that never registered is bounded by the TTL alone, not expired as stale", async () => {
+    // The registry answers "stale" for a session it has never seen — there is no heartbeat to have
+    // missed. Treating that as holder-stale would expire every CLI-only claim on the first sweep.
+    const { root, clock, bus, sweeper, done } = await setup();
+    await bus.applyBegin("e1", "cli-only");
+    clock.advance(10 * 60_000);
+    await sweeper.tick();
+    expect(events(root).some((e) => e.event === "claim_expired")).toBe(false);
+    await done();
+  });
+
+  test("the sweeper never opens a bus that nothing else opened", async () => {
+    const { buses, sweeper, idleEntry, clock, done } = await setup();
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS * 2);
+    await sweeper.tick();
+    expect(buses.has(idleEntry)).toBe(false);
+    await done();
   });
 });
