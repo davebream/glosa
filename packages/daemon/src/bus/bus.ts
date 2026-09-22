@@ -10,7 +10,7 @@
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DeliverableEntry } from "../agent-provider/interface.ts";
+import type { DeliverableEntry, PresentationClaim } from "../agent-provider/interface.ts";
 import { MAX_BATCH_PRESENTATION_BYTES, MAX_DELIVERY_ENTRIES } from "../delivery/presentation.ts";
 import {
   assertShadowOwner,
@@ -303,6 +303,16 @@ async function anyPathDirty(workspace: WorkspaceTarget, paths: readonly string[]
   for (const path of paths) if (await isPathDirty(workspace, path)) return true;
   return false;
 }
+
+/** Builds one entry's presentation. `context.claims` are the live claims on the entry or its file
+ * (issue #155) — handed to the builder rather than stamped on afterwards, because their bytes have
+ * to be reserved inside the entry budget BEFORE the body is sized. */
+export type DeliveryBuilder = (
+  id: string,
+  payload: unknown,
+  status: string,
+  context: { claims: PresentationClaim[] },
+) => DeliverableEntry | null | Promise<DeliverableEntry | null>;
 
 export interface WorkspaceBusDeps {
   /** Shared across every WorkspaceBus in the daemon process so different workspaces never share
@@ -1099,7 +1109,7 @@ export class WorkspaceBus {
   previewDelivery(
     limit: number,
     opts: { session: string; entryId?: string; excludeEntryIds?: ReadonlySet<string> },
-    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+    build: DeliveryBuilder,
   ): Promise<PlannedDelivery> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
@@ -1112,7 +1122,7 @@ export class WorkspaceBus {
           id,
           created_at: createdAt.get(id) ?? "9999-12-31T23:59:59.999Z",
           journal_order: entryOrder.get(id) ?? Number.MAX_SAFE_INTEGER,
-          presentation: await build(id, payload, entry.status),
+          presentation: await build(id, payload, entry.status, { claims: this.presentationClaimsLocked(id) }),
         });
         if (planned.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
       }
@@ -1125,7 +1135,7 @@ export class WorkspaceBus {
   prepareDelivery(
     limit: number,
     opts: { via: DeliveryVia; session: string; entryId?: string },
-    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+    build: DeliveryBuilder,
   ): Promise<PreparedDelivery> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       this.assertWritable();
@@ -1138,7 +1148,7 @@ export class WorkspaceBus {
         if (presentations.length >= Math.min(Math.max(1, limit), MAX_DELIVERY_ENTRIES)) break;
         let presentation: DeliverableEntry | null = null;
         try {
-          presentation = await build(id, payload, entry.status);
+          presentation = await build(id, payload, entry.status, { claims: this.presentationClaimsLocked(id) });
         } catch (error) {
           const attempts = Array.isArray(entry.deliveryAttempts) ? entry.deliveryAttempts : [];
           this.recordDeliveryAttemptLocked(id, {
@@ -1555,6 +1565,32 @@ export class WorkspaceBus {
       for (const { claim, reason } of due) await this.expireClaimLocked(claim, reason);
       return due.map(({ claim }) => claim.claim_id);
     });
+  }
+
+  /** The live claims a reader of `entryId` should see (issue #155 REQ-11): claims on the entry
+   * itself, on any file it is about, and any pathless claim (which covers the whole workspace).
+   * Exclusive first, then oldest first. A read of fold state — the delivery paths call it inside
+   * their own critical section, and `inbox get` calls it as the plain read it is. */
+  presentationClaimsLocked(entryId: string): PresentationClaim[] {
+    const resource = entryResource(entryId);
+    const paths = this.entryPathsLocked(entryId);
+    const now = this.nowFn();
+    return this.heldClaimsLocked()
+      .filter(
+        (claim) =>
+          !isClaimExpired(claim, now) &&
+          (claim.resources.includes(resource) ||
+            claim.paths.length === 0 ||
+            claim.paths.some((path) => paths.includes(path))),
+      )
+      .sort((a, b) => (a.mode === b.mode ? a.since.localeCompare(b.since) : a.mode === "exclusive" ? -1 : 1))
+      .map((claim) => ({
+        session: claim.holder_session,
+        principal: claim.holder_principal,
+        mode: claim.mode,
+        since: claim.since,
+        fence: claim.fence,
+      }));
   }
 
   /** Takes an `exclusive` or `presence` claim over `resources` (issue #155). Presence claims never
@@ -2247,7 +2283,7 @@ export class WorkspaceBus {
    * the watermark past a checkpoint it only partially returns. */
   previewWatch(
     opts: { session: string; path?: string; since?: string },
-    build: (id: string, payload: unknown, status: string) => DeliverableEntry | null | Promise<DeliverableEntry | null>,
+    build: DeliveryBuilder,
   ): Promise<{ entries: DeliverableEntry[]; has_more: boolean; latest_checkpoint: string | null }> {
     return this.mutex.runExclusive(this.mutexKey, async () => {
       const candidates = this.inScopeExternalEditEntriesLocked(opts.path);
@@ -2282,7 +2318,9 @@ export class WorkspaceBus {
       for (const candidate of candidates) {
         if (await accountedFor(candidate)) continue;
         if (selected.length >= MAX_DELIVERY_ENTRIES) break;
-        const presentation = await build(candidate.id, candidate.payload, candidate.entry.status);
+        const presentation = await build(candidate.id, candidate.payload, candidate.entry.status, {
+          claims: this.presentationClaimsLocked(candidate.id),
+        });
         if (!presentation) continue; // malformed payload — never eligible, never blocks the watermark
         const separatorBytes = selected.length > 0 ? Buffer.byteLength("\n\n---\n\n", "utf8") : 0;
         if (batchBytes + separatorBytes + presentation.bytes > MAX_BATCH_PRESENTATION_BYTES) break;

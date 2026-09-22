@@ -1195,7 +1195,8 @@ async function handleCompositeSessionDrain(
       const plan = await bus.previewDelivery(
         DRAIN_MAX,
         { session: sessionId, ...(entryId ? { entryId } : {}) },
-        (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
+        (id, payload, status, { claims }) =>
+          buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
       );
       undisclosedLocalCandidates ||= plan.has_more;
       for (const item of plan.entries) {
@@ -1235,8 +1236,10 @@ async function handleCompositeSessionDrain(
         const prepared = await candidate.bus.prepareDelivery(
           1,
           { via, session: sessionId, entryId: candidate.id },
-          (id, payload, status) =>
-            buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor),
+          (id, payload, status, { claims }) =>
+            buildArtifactPresentation(artifactAccess(ctx), candidate.workspace, id, payload, status, cursor, {
+              claims,
+            }),
         );
         if (prepared.count !== 1 || prepared.delivery_id === null || prepared.drained[0]?.id !== candidate.id) {
           if (prepared.delivery_id) children.push({ bus: candidate.bus, delivery_id: prepared.delivery_id });
@@ -1383,7 +1386,8 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
   const prepared = await bus.prepareDelivery(
     limit,
     { via, session: sessionId, ...(entryId ? { entryId } : {}) },
-    (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor),
+    (id, payload, status, { claims }) =>
+      buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
   );
 
   return Response.json(prepared);
@@ -1573,7 +1577,8 @@ async function handleSessionStream(
             const plan = await bus.previewDelivery(
               DRAIN_MAX,
               { session: sessionId, excludeEntryIds: sent },
-              (id, payload, status) => buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status),
+              (id, payload, status, { claims }) =>
+                buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, undefined, { claims }),
             );
             for (const candidate of plan.entries) {
               if (closed || !candidate.presentation) break;
@@ -2564,8 +2569,14 @@ async function handleWorkspaceWatch(
   const releaseLease = ctx.sessionRegistry.holdConnection(sessionId, `watch:${randomUUID()}`);
   server?.timeout(req, 0);
   try {
-    const result = await waitForWatch(bus, { session: sessionId, path, since, waitMs, signal }, (id, payload, status) =>
-      buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, { watched: true }),
+    const result = await waitForWatch(
+      bus,
+      { session: sessionId, path, since, waitMs, signal },
+      (id, payload, status, { claims }) =>
+        buildArtifactPresentation(artifactAccess(ctx), entry, id, payload, status, undefined, {
+          watched: true,
+          claims,
+        }),
     );
     // Revalidate the admitted authority before anything leaves this handler (review round 3,
     // F-7/F-3). `waitForWatch` can settle on an authority-loss abort and still carry entries it

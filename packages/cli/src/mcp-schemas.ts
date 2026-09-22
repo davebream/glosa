@@ -59,6 +59,22 @@ const presentationTruncationSchema = z
     truncated: z.boolean(),
     omitted_bytes: z.number().int().min(0),
     omitted_hunks: z.number().int().min(0),
+    omitted_claims: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("Contract 1.17: how many claims on this entry did not fit in `claims`."),
+  })
+  .strict();
+
+const presentationClaimSchema = z
+  .object({
+    session: z.string().min(1).describe("The session holding the claim."),
+    principal: z.string().min(1).describe("Reporting-only principal that session registered under."),
+    mode: z.enum(["exclusive", "presence"]).describe("exclusive = editing it; presence = looking at it."),
+    since: z.string().min(1).describe("When the claim was taken (ISO 8601)."),
+    fence: z.number().int().min(1).nullable().describe("The claim's fencing token; null for a legacy lease."),
   })
   .strict();
 
@@ -83,6 +99,13 @@ const presentationBaseShape = {
   truncation: presentationTruncationSchema,
   retrieval: presentationRetrievalSchema,
   detail: z.record(z.string(), z.unknown()).describe("Kind-specific presentation detail; shape varies by entry kind."),
+  claims: z
+    .array(presentationClaimSchema)
+    .max(4)
+    .optional()
+    .describe(
+      "Contract 1.17: live claims on this entry or its file, exclusive first. A claim is a fence, not a filter — the entry is still yours to read; this says who is already working on it.",
+    ),
 };
 
 export const inboxPresentationSchema = z.discriminatedUnion("kind", [

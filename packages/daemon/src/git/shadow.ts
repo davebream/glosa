@@ -716,6 +716,22 @@ export interface CheckpointOptions {
   resolveTrackedFiles?: typeof resolveTrackedFiles;
 }
 
+/** The subset of `paths` git can stage: those on disk (an edit or a new file) plus those HEAD
+ * records (a deletion). A path that is neither — an entry about a file that does not exist yet, or
+ * one removed before it was ever checkpointed — has nothing to stage, and naming it would make
+ * `git add` exit 128 on an unmatched pathspec and fail the whole checkpoint. Whole-workspace
+ * staging never hits this because `trackedUnion` only ever lists paths that exist in one of the
+ * two; path-scoped claims (issue #155) are what made it reachable. */
+async function stageablePaths(root: WorkspaceTarget, paths: readonly string[]): Promise<string[]> {
+  const unique = [...new Set(paths)];
+  const listed = await runGit(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...unique.map(safePathspec)], {
+    allowExitCodes: [0, 128],
+  });
+  const inHead = new Set(listed.exitCode === 0 ? listed.stdout.split("\0").filter((path) => path.length > 0) : []);
+  const worktree = workspaceWorktree(root);
+  return unique.filter((path) => inHead.has(path) || existsSync(join(worktree, path)));
+}
+
 /** Resets the index to HEAD, stages the tracked∪HEAD union (or just `opts.paths`), and commits iff
  * something actually changed — otherwise returns the current HEAD sha without creating a commit
  * (A4 §F21's idempotency rule: "nothing staged -> return current HEAD sha, DO NOT commit"). The
@@ -742,7 +758,8 @@ export async function checkpoint(root: WorkspaceTarget, opts: CheckpointOptions)
 
   const tracked =
     opts.trackedPaths ?? (opts.resolveTrackedFiles ?? resolveTrackedFiles)(root).tracked.map((f) => f.path);
-  const union = opts.paths && opts.paths.length > 0 ? [...new Set(opts.paths)] : await trackedUnion(root, tracked);
+  const union =
+    opts.paths && opts.paths.length > 0 ? await stageablePaths(root, opts.paths) : await trackedUnion(root, tracked);
   // An empty union means nothing is tracked and nothing was ever committed under the ruleset —
   // there is NOTHING to stage. A bare `git add -A` (no pathspec) would stage the entire
   // work-tree, including `.glosa/shadow.git/` itself (its own object store, refs, the journal) —

@@ -390,6 +390,36 @@ describe("official TypeScript MCP SDK contract", () => {
     );
     delete legacyPresentation.workspace;
     expect(inboxPresentationSchema.safeParse(legacyPresentation).success).toBe(true);
+
+    // Contract 1.17 (issue #155): an entry someone already holds carries `claims`, and a
+    // presentation that dropped some carries `omitted_claims`. The schema stays `.strict()`, so a
+    // claim with an unknown member — or an unknown top-level key — is still refused.
+    const claimed = {
+      ...presentation("inb-claimed", "annotation", "held"),
+      claims: [
+        {
+          session: "sess-A",
+          principal: "token:0123abcd",
+          mode: "exclusive",
+          since: "2026-09-22T12:00:00.000Z",
+          fence: 1,
+        },
+      ],
+    };
+    expect(inboxPresentationSchema.safeParse(claimed).success).toBe(true);
+    expect(
+      inboxPresentationSchema.safeParse({
+        ...claimed,
+        truncation: { ...claimed.truncation, omitted_claims: 2 },
+      }).success,
+    ).toBe(true);
+    expect(
+      inboxPresentationSchema.safeParse({ ...claimed, claims: [{ ...claimed.claims[0], holder: "x" }] }).success,
+    ).toBe(false);
+    expect(
+      inboxPresentationSchema.safeParse({ ...claimed, claims: [{ ...claimed.claims[0], mode: "loud" }] }).success,
+    ).toBe(false);
+    expect(inboxPresentationSchema.safeParse({ ...claimed, claimz: [] }).success).toBe(false);
   });
 
   test("SDK-native tool errors reject invalid input and session identity overrides", async () => {

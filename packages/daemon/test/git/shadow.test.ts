@@ -484,6 +484,48 @@ describe("delete/rename staging (A4 §F21 union staging)", () => {
   });
 });
 
+describe("checkpoint — a scoped path that does not exist yet (issue #155)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    cleanupWorkspace(root);
+  });
+
+  test("a path on neither disk nor HEAD is skipped instead of failing the checkpoint; real paths beside it still commit", async () => {
+    // A claim over an entry whose artifact has not been written yet scopes its checkpoints to that
+    // path. `git add` exits 128 on an unmatched pathspec, so without the filter the claim itself
+    // fails. Ablating the filter reds both halves.
+    writeFile(root, "notes.md", "v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    const head = await headSha(root);
+
+    expect(await checkpoint(root, { attribution: "unknown", kind: "pre_apply", paths: ["not-yet.md"] })).toBe(head);
+
+    writeFile(root, "notes.md", "v2");
+    const next = await checkpoint(root, {
+      attribution: "unknown",
+      kind: "pre_apply",
+      paths: ["not-yet.md", "notes.md"],
+    });
+    expect(next).not.toBe(head);
+    expect((await runGit(root, ["show", "--name-only", "--format=", next])).stdout.trim()).toBe("notes.md");
+  });
+
+  test("a scoped path deleted from disk but recorded in HEAD still stages the deletion", async () => {
+    writeFile(root, "gone.md", "here");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    rmSync(`${root}/gone.md`);
+    const sha = await checkpoint(root, { attribution: "unknown", kind: "claim_expired", paths: ["gone.md"] });
+    expect((await runGit(root, ["ls-tree", "-r", "--name-only", sha])).stdout).not.toContain("gone.md");
+  });
+});
+
 describe("checkpoint — empty union never self-stages the shadow repo", () => {
   let root: string;
   beforeEach(() => {

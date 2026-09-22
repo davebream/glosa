@@ -417,6 +417,48 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(workspace.canonical_path).toBe(root);
   });
 
+  test("issue #155: the push stream's delivery frame names who already holds the entry", async () => {
+    // The push path builds from the preview presentation, not from a prepared drain — so it needs
+    // its own pin that claims reach it. Ablating the stream's forwarding reds this test only.
+    ctx.pushRegistry = new SessionPushRegistry();
+    await workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const bus = busRegistry.get(root);
+    await bus.createEntry("claimed-entry", actionableAnnotation("Already being worked on."));
+    await bus.applyBegin("claimed-entry", "sess-A");
+    await sessionRegistry.register({
+      session_id: "monitor-B",
+      provider: "claude-code",
+      cwd: root,
+      workspace_binding: root,
+      source: "monitor",
+    });
+
+    const response = await fetchFn(req("/api/sessions/monitor-B/stream"));
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    while (!received.includes("event: delivery")) {
+      const chunk = await reader.read();
+      expect(chunk.done).toBe(false);
+      received += decoder.decode(chunk.value);
+    }
+    while (!received.slice(received.indexOf("event: delivery")).includes("\n\n")) {
+      received += decoder.decode((await reader.read()).value);
+    }
+    const frame = received.slice(received.indexOf("event: delivery")).split("\n\n")[0] ?? "";
+    const data = JSON.parse(
+      frame
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice("data: ".length))
+        .join("\n"),
+    );
+    expect(data.id).toBe("claimed-entry");
+    expect(data.claims?.[0]).toMatchObject({ session: "sess-A", mode: "exclusive", fence: 1 });
+    expect(data.text).toContain("claimed: session sess-A is editing this");
+    await reader.cancel();
+  });
+
   test("Codex stream requires the exact bound session and journals codex_app_server acceptance", async () => {
     ctx.pushRegistry = new SessionPushRegistry();
     await workspaceIndex.upsertWorkspace(root, "glosa-open");
@@ -613,6 +655,74 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
       await ack("sess-1", prepared.delivery_id);
       const attempts = bus.state.entries.e1?.deliveryAttempts as { via?: string }[] | undefined;
       expect(attempts?.[0]?.via).toBe("mcp_pull");
+    });
+
+    test("issue #155 AC-1.1–1.3: both sessions drain the entry; after A claims it, B's drain still presents it and names A's claim", async () => {
+      writeFileSync(join(root, "notes.md"), "a sentence here\n");
+      for (const session_id of ["sess-A", "sess-B"]) {
+        await sessionRegistry.register({ session_id, provider: "claude-code", cwd: root, source: "startup" });
+      }
+      const bus = busRegistry.get(root);
+      await bus.createEntry("e1", actionableAnnotation());
+      const drain = async (session: string) =>
+        (await fetchFn(req(`/api/sessions/${session}/drain`, { method: "POST", body: "" }))).json();
+
+      // Both sessions get the entry. A drain reserves what it returns until acknowledged, so each
+      // releases it with a `failed` ack — the entry stays deliverable, which is the state two
+      // agents are in when both saw it and neither has confirmed presenting it yet.
+      const aFirst = await drain("sess-A");
+      expect(aFirst.drained.map((entry: { id: string }) => entry.id)).toEqual(["e1"]);
+      expect(aFirst.drained[0].claims).toBeUndefined(); // nobody holds it yet
+      await ack("sess-A", aFirst.delivery_id, "failed");
+      const bFirst = await drain("sess-B");
+      expect(bFirst.drained.map((entry: { id: string }) => entry.id)).toEqual(["e1"]);
+      await ack("sess-B", bFirst.delivery_id, "failed");
+
+      // A claims.
+      const claimed = await fetchFn(
+        req("/api/workspaces/apply-begin", {
+          method: "POST",
+          body: JSON.stringify({ path: root, entry: "e1", session: "sess-A" }),
+        }),
+      );
+      expect(claimed.status).toBe(201);
+
+      // B's drain still presents it — a claim is a fence, not a filter — and names who holds it,
+      // both structurally and in the text a push transport prints.
+      const bAgain = await drain("sess-B");
+      expect(bAgain.drained).toHaveLength(1);
+      const presented = bAgain.drained[0];
+      expect(presented.claims).toEqual([
+        { session: "sess-A", principal: principalOf(TOKEN), mode: "exclusive", since: expect.any(String), fence: 1 },
+      ]);
+      expect(presented.text).toContain("claimed: session sess-A is editing this");
+      expect(presented.bytes).toBe(Buffer.byteLength(presented.text, "utf8"));
+      await ack("sess-B", bAgain.delivery_id, "failed");
+    });
+
+    test("issue #155: a claimed entry whose body fills the 16 KiB budget still carries its claims — the body is what yields", async () => {
+      writeFileSync(join(root, "notes.md"), "a sentence here\n");
+      await sessionRegistry.register({ session_id: "sess-B", provider: "claude-code", cwd: root, source: "startup" });
+      const bus = busRegistry.get(root);
+      await bus.createEntry("big", actionableAnnotation("x".repeat(40_000)));
+      // Long session ids and more claims than fit: the claim block is then larger than the slack
+      // the body builder keeps for its own truncation marker, so the budget only holds if the
+      // block is reserved BEFORE the body is sized (ablating the reservation drops this entry).
+      const long = (name: string) => `${name}-${"s".repeat(90)}`;
+      await bus.applyBegin("big", long("holder"));
+      for (const watcher of ["w1", "w2", "w3", "w4"]) {
+        await bus.claim(["entry:big"], "presence", long(watcher), "unknown");
+      }
+
+      const drained = (await (await fetchFn(req("/api/sessions/sess-B/drain", { method: "POST", body: "" }))).json())
+        .drained[0];
+      expect(drained).toBeDefined();
+      expect(drained.claims).toHaveLength(4);
+      expect(drained.claims[0]).toMatchObject({ session: long("holder"), mode: "exclusive" }); // exclusive first
+      expect(drained.truncation).toMatchObject({ truncated: true, omitted_claims: 1 });
+      expect(drained.text).toContain(`claimed: session ${long("holder")} is editing this`);
+      expect(drained.text).toContain("claimed: …and 1 more");
+      expect(drained.bytes).toBeLessThanOrEqual(16 * 1024);
     });
 
     test("a second drain call does NOT re-return already-attempted entries", async () => {

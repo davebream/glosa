@@ -2828,6 +2828,21 @@ describe("A1 §5 route catalog", () => {
       expect(new Date(orphanedRow.created_at).toISOString()).toBe(orphanedRow.created_at);
     });
 
+    test("each row names the session holding a live claim on it, or null (issue #155, the column #142 promised)", async () => {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      const bus = ctx.getWorkspaceBus(root);
+      await bus.reconcileOnce();
+      await bus.createEntry("held", { kind: "annotation", artifact_path: "notes.md", body: "being applied" });
+      await bus.createEntry("free", { kind: "annotation", artifact_path: "other.md", body: "nobody yet" });
+      await bus.applyBegin("held", "sess-A");
+
+      const body = await (await fetchFn(req(`/api/workspaces/inbox?path=${encodeURIComponent(root)}`))).json();
+      const rows = Object.fromEntries(
+        body.entries.map((row: { id: string; holder: string | null }) => [row.id, row.holder]),
+      );
+      expect(rows).toEqual({ held: "sess-A", free: null });
+    });
+
     test("a terminal entry is omitted by default and included under all=1", async () => {
       const bus = ctx.getWorkspaceBus(root);
       await bus.createEntry("open-1", { kind: "annotation", artifact_path: "notes.md", body: "still open" });

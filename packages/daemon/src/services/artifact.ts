@@ -12,7 +12,8 @@ import {
   orderWithAdapter,
   resolveManifest,
 } from "../adapters/interface.ts";
-import type { DeliverableEntry } from "../agent-provider/interface.ts";
+import type { DeliverableEntry, PresentationClaim } from "../agent-provider/interface.ts";
+import { type Claim, claimForEntry, isClaimExpired } from "../bus/claims.ts";
 import {
   type ClassFArtifact,
   type ClassRArtifact,
@@ -287,7 +288,7 @@ export function actionablePresentation(
   payload: unknown,
   status: string,
   cursor?: string,
-  opts: { watched?: boolean } = {},
+  opts: { watched?: boolean; claims?: readonly PresentationClaim[] } = {},
 ): (DeliverableEntry & { workspace: string }) | null {
   const record =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
@@ -311,6 +312,7 @@ export function actionablePresentation(
     ...(resolution ? { resolution } : {}),
     ...(cursor ? { cursor } : {}),
     ...(opts.watched ? { watched: true } : {}),
+    ...(opts.claims && opts.claims.length > 0 ? { claims: opts.claims } : {}),
     maxBytes: Math.max(0, MAX_ENTRY_PRESENTATION_BYTES - utf8Bytes(workspaceLine) - 1),
   });
   if (!presentation) return null;
@@ -478,6 +480,9 @@ export interface InboxListEntry {
   created_at: string | null;
   target_path: string | null;
   payload_present: boolean;
+  /** The session holding a live exclusive claim on this entry, or `null` (issue #155 — the "who
+   * holds it" column `glosa inbox list` was promised in #142). */
+  holder: string | null;
 }
 
 /** Every entry the journal itself remembers, oldest first — `glosa inbox list`'s daemon-side
@@ -492,8 +497,13 @@ export interface InboxListEntry {
  * Non-terminal entries only by default (D4); `opts.all` includes terminal ones too, which is what
  * makes a dismiss's effect observable end to end: dismiss, then see the same id again under
  * `--all` as `dismissed`. */
+function holderOf(claim: Claim | null, now: Date): string | null {
+  return claim && !isClaimExpired(claim, now) ? claim.holder_session : null;
+}
+
 export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boolean } = {}): InboxListEntry[] {
   const { state, createdAt, entryOrder } = peekJournal(workspace);
+  const now = new Date();
   const rows: InboxListEntry[] = [];
   for (const id of entryOrder.keys()) {
     const entry = state.entries[id];
@@ -510,6 +520,7 @@ export function listInboxEntries(workspace: WorkspaceTarget, opts: { all?: boole
       // field) — stated as `null` here rather than papered over by reading the payload.
       target_path: typeof entry.target_path === "string" ? entry.target_path : null,
       payload_present: readInboxEntry(workspace, id) !== null,
+      holder: holderOf(claimForEntry(state.claims, id), now),
     });
   }
   return rows;
@@ -637,6 +648,8 @@ export async function inboxPresentation(
     entry.payload,
     state?.status ?? "pending",
     cursor,
+    // A plain read of fold state, like `readEntry` above — who is already working on this.
+    { claims: bus.presentationClaimsLocked(entryId) },
   );
   if (!presentation) throw new ArtifactError("presentation-not-actionable", { id: entryId });
   return presentation;
