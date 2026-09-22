@@ -407,20 +407,45 @@ export function mountApp(
     return commands;
   }
 
-  /** Exclusive claims as the journal stream reports them (issue #155; before claims, the one
-   * apply lease per workspace). While a session holds one over a file, that file's pane pauses
-   * Edit; a legacy lease or a claim with no recorded paths covers the whole workspace and pauses
-   * every pane, exactly as the lease did. A claim taken before this page connected is not known
-   * here; the save guard still refuses a stale save in that case. */
+  /** Claims as the journal stream reports them (issue #155; before claims, the one apply lease per
+   * workspace). Hydrated from `GET /w/:slug/claims` when a workspace opens and followed from
+   * `claim_*` journal frames after that. An exclusive claim over a file pauses that file's Edit; a
+   * legacy lease, or a claim with no recorded paths, covers the whole workspace and pauses every
+   * pane, exactly as the lease did. Presence claims pause nothing and only show who is looking. */
   const liveClaims = new Map();
   let claimTimer = null;
-  function claimFor(path) {
+  function covers(claim, path) {
+    return claim.paths.length === 0 || (Boolean(path) && claim.paths.includes(path));
+  }
+  function claimsFor(path) {
     const now = Date.now();
-    for (const claim of [...liveClaims.values()].reverse()) {
-      if (claim.expires_at && Date.parse(claim.expires_at) <= now) continue;
-      if (claim.paths.length === 0 || (path && claim.paths.includes(path))) return claim;
-    }
-    return null;
+    return [...liveClaims.values()]
+      .filter((claim) => !(claim.expires_at && Date.parse(claim.expires_at) <= now) && covers(claim, path))
+      .sort((a, b) => (a.mode === b.mode ? 0 : a.mode === "exclusive" ? -1 : 1));
+  }
+  function claimFor(path) {
+    const exclusive = claimsFor(path).filter((claim) => claim.mode === "exclusive");
+    return exclusive.at(-1) ?? null;
+  }
+  function clockOf(iso) {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "";
+    return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  }
+  /** "Claude Code · session 1a2b3c4d · editing since 14:02". The provider is named only when this
+   * workspace's explicit binding proves it; otherwise "An agent session" — never a guess. */
+  function holderName(claim) {
+    return feedbackController?.providerNameFor(claim.holder_session) ?? "An agent session";
+  }
+  /** The short form for sentences: "Claude Code (session 1a2b3c4d)". */
+  function holderWho(claim) {
+    return `${holderName(claim)} (session ${String(claim.holder_session ?? "").slice(0, 8)})`;
+  }
+  function describeClaim(claim) {
+    const who = holderName(claim);
+    const doing = claim.mode === "presence" ? "looking at this" : "editing";
+    const since = claim.since ? clockOf(claim.since) : "";
+    return `${who} · session ${String(claim.holder_session ?? "").slice(0, 8)} · ${doing}${since ? ` since ${since}` : ""}`;
   }
   function refreshClaims() {
     const now = Date.now();
@@ -433,16 +458,37 @@ export function mountApp(
       ...[...liveClaims.values()].map((claim) => (claim.expires_at ? Date.parse(claim.expires_at) : Infinity)),
     );
     if (Number.isFinite(soonest)) claimTimer = setTimeout(refreshClaims, Math.max(0, soonest - now));
-    for (const pane of panes.values()) pane.setApplyPause?.(claimFor(pane.path));
+    for (const pane of panes.values()) applyClaimsTo(pane, pane.path);
+    refreshTabs();
+  }
+  function applyClaimsTo(pane, path) {
+    const pause = claimFor(path);
+    pane.setApplyPause?.(pause ? { ...pause, label: describeClaim(pause), who: holderWho(pause) } : null);
+    pane.setClaims?.(claimsFor(path).map((claim) => ({ resources: claim.resources, label: describeClaim(claim) })));
+  }
+  function claimRecord(id, detail, fallbackSession) {
+    const strings = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
+    return {
+      lease_id: id,
+      expires_at: detail.expires_at ?? null,
+      paths: strings(detail.paths),
+      resources: strings(detail.resources),
+      mode: detail.mode === "presence" ? "presence" : "exclusive",
+      holder_session: typeof detail.session === "string" ? detail.session : fallbackSession,
+      since: typeof detail.since === "string" ? detail.since : null,
+    };
   }
   function trackClaims(frame) {
     const detail = frame?.detail ?? {};
     const id = typeof detail.claim_id === "string" ? detail.claim_id : detail.lease_id;
-    if (frame?.event === "claim_taken" && id && detail.mode !== "presence") {
-      const paths = Array.isArray(detail.paths) ? detail.paths.filter((path) => typeof path === "string") : [];
-      liveClaims.set(id, { lease_id: id, expires_at: detail.expires_at ?? null, paths });
+    if (frame?.event === "claim_taken" && id) {
+      liveClaims.set(id, claimRecord(id, detail, ""));
     } else if (frame?.event === "apply_begin" && id) {
-      liveClaims.set(id, { lease_id: id, expires_at: detail.expires_at ?? null, paths: [] });
+      liveClaims.set(id, {
+        ...claimRecord(id, { ...detail, paths: [] }, detail.session ?? ""),
+        since: frame.at ?? null,
+        resources: frame.entry ? [`entry:${frame.entry}`] : [],
+      });
     } else if (frame?.event === "claim_renewed" && liveClaims.has(id)) {
       liveClaims.set(id, { ...liveClaims.get(id), expires_at: detail.expires_at ?? null });
     } else if (["claim_released", "claim_expired", "apply_end", "apply_expired"].includes(frame?.event)) {
@@ -452,6 +498,31 @@ export function mountApp(
       else liveClaims.clear();
     } else {
       return;
+    }
+    refreshClaims();
+  }
+  /** Who already holds what, when a workspace opens. Best effort: a daemon that predates the route
+   * just leaves the badges to the next journal frame. */
+  async function hydrateClaims() {
+    const slug = currentSlug;
+    let listed;
+    try {
+      listed = await dataAccess.getClaims?.(slug);
+    } catch {
+      return;
+    }
+    if (!listed || slug !== currentSlug) return;
+    liveClaims.clear();
+    for (const claim of listed.claims ?? []) {
+      liveClaims.set(claim.claim_id, {
+        lease_id: claim.claim_id,
+        expires_at: claim.expires_at ?? null,
+        paths: (claim.artifacts ?? []).map((resource) => String(resource).replace(/^artifact:/, "")),
+        resources: claim.resources ?? [],
+        mode: claim.mode === "presence" ? "presence" : "exclusive",
+        holder_session: claim.holder_session,
+        since: claim.since ?? null,
+      });
     }
     refreshClaims();
   }
@@ -499,8 +570,11 @@ export function mountApp(
       };
     }
     const summary = knownArtifacts.get(id);
+    // Issue #155: who is working on this file — the exclusive holder first, else whoever is looking.
+    const holder = claimFor(id) ?? claimsFor(id)[0] ?? null;
     return {
       kind: "artifact",
+      ...(holder ? { claim: { mode: holder.mode, label: describeClaim(holder) } } : {}),
       label: tabLabels().get(id) ?? id.split("/").pop(),
       tooltip: id,
       artifactClass: pane.artifactClass() ?? summary?.class ?? "R",
@@ -578,7 +652,7 @@ export function mountApp(
       const [, path, from, to] = splitDiffId(id);
       const pane = createDiffPane(host, { dataAccess, slug: currentSlug, path, from, to, describeVersion });
       panes.set(id, pane);
-      pane.setApplyPause?.(claimFor(path));
+      applyClaimsTo(pane, path);
       return pane;
     }
     const pane = createArtifactPane(host, {
@@ -613,7 +687,7 @@ export function mountApp(
     // Seeded from what this panel was restored (or opened) with, so restoring a layout does not
     // immediately write the same arrangement back over itself.
     persistedModes.set(id, pane.getMode?.() ?? params.mode ?? requestedMode);
-    pane.setApplyPause?.(claimFor(pane.path));
+    applyClaimsTo(pane, pane.path);
     pane.element.setAttribute("data-active", String(id === activePanelId));
     void pane.ready.then(() => {
       refreshTabs();
@@ -819,7 +893,14 @@ export function mountApp(
 
   const feedbackController = createViewerFeedbackController({
     dataAccess,
-    view: agentFeedback,
+    view: {
+      setState(state) {
+        agentFeedback.setState(state);
+        // A claim's holder is named from this same connection data, so its badges are
+        // re-described whenever the data changes rather than waiting for the next claim frame.
+        if (liveClaims.size > 0) refreshClaims();
+      },
+    },
     getWorkspaceSlug: () => currentSlug,
   });
 
@@ -834,6 +915,7 @@ export function mountApp(
         bannerEl.hidden = status !== "down";
       },
       onReconnect: () => {
+        void hydrateClaims();
         void refreshArtifactList();
         for (const pane of panes.values()) void pane.refreshArtifact();
         void attentionTray.refresh();
@@ -907,6 +989,7 @@ export function mountApp(
     // The dock was just emptied, so the bar must stop naming the previous workspace's document.
     refreshTopbarTitle();
     startStream();
+    void hydrateClaims();
     void renderConversation(); // the open pane, if any, should follow the newly selected workspace
 
     // §10: the arrangement is restored per workspace, defensively. A panel whose artifact no

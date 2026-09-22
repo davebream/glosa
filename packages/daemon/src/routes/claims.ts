@@ -269,14 +269,17 @@ async function releaseByHuman(deps: ClaimRouteDependencies, slug: string, claimI
   }
 }
 
-async function list(deps: ClaimRouteDependencies, req: Request): Promise<Response> {
+async function list(deps: ClaimRouteDependencies, req: Request, slug?: string): Promise<Response> {
   const url = new URL(req.url);
   const path = url.searchParams.get("path");
-  if (!path) return problem(400, "validation-failed", "path query param is required", undefined, url.pathname);
+  if (slug === undefined && !path) {
+    return problem(400, "validation-failed", "path query param is required", undefined, url.pathname);
+  }
   const artifact = url.searchParams.get("artifact") ?? undefined;
   let snapshot: Awaited<ReturnType<WorkspaceBus["listClaims"]>>;
   try {
-    snapshot = await (await deps.busForPath(path)).listClaims(artifact);
+    const bus = slug !== undefined ? await deps.busForSlug(slug) : await deps.busForPath(path as string);
+    snapshot = await bus.listClaims(artifact);
   } catch (error) {
     const mapped = claimProblem(error, url.pathname);
     if (mapped) return mapped;
@@ -317,6 +320,12 @@ export function claimRoutes(deps: ClaimRouteDependencies, method: string, pathna
     return match[2] === "renew"
       ? { routeClass: "state-changing", handle: (req) => renew(deps, claimId, req) }
       : { routeClass: "state-changing", handle: (req) => releaseBySession(deps, claimId, req) };
+  }
+  // The SPA's read of the same list, addressed by slug like every other SPA route (issue #155 part
+  // 2): it hydrates the claim badges when a workspace opens, then follows `claim_*` journal frames.
+  if (method === "GET" && (match = pathname.match(/^\/w\/([^/]+)\/claims$/))) {
+    const slug = match[1] as string;
+    return { routeClass: "authed-read", handle: (req) => list(deps, req, slug) };
   }
   if (method === "POST" && (match = pathname.match(/^\/w\/([^/]+)\/claims\/([^/]+)\/release$/))) {
     const slug = match[1] as string;
