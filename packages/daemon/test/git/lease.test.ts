@@ -14,7 +14,7 @@ import { WorkspaceBus } from "../../src/bus/bus.ts";
 import type { JournalEvent } from "../../src/bus/journal.ts";
 import { lifecycleReducer } from "../../src/bus/lifecycle.ts";
 import { KeyedMutex } from "../../src/bus/mutex.ts";
-import { APPLY_LEASE_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../../src/bus/lease.ts";
+import { EXCLUSIVE_CLAIM_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../../src/bus/lease.ts";
 import { journalPath } from "../../src/bus/paths.ts";
 import { foldEvents } from "../../src/bus/replay.ts";
 import { shadowGitDir } from "../../src/bus/paths.ts";
@@ -25,6 +25,7 @@ import {
   deterministicUlid,
   dropDaemonIdentity,
   freshWorkspace,
+  heldClaims,
   testWriter,
   writeFile,
 } from "./helpers.ts";
@@ -102,7 +103,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as JournalEvent);
-    expect(foldEvents(journal).applyLease).toBeNull();
+    expect(heldClaims(foldEvents(journal))).toEqual([]);
     await bus.createEntry("e1", { kind: "annotation" });
     expect((await bus.applyBegin("e1", "sess-1")).leaseId).toBeTruthy();
   });
@@ -163,7 +164,7 @@ describe("attribution correctness — the crux (A4 §F05)", () => {
     // Journal side of the same proof: apply_begin{pre_sha} .. apply_end{post_sha}, both under
     // `session:sess-1`, plus the resulting status transition.
     expect(bus.state.entries.e1?.status).toBe("applied");
-    expect(bus.state.applyLease).toBeNull(); // lease closed out
+    expect(heldClaims(bus.state)).toEqual([]); // lease closed out
   });
 
   test("drift present BEFORE a lease starts is captured by applyBegin's own checkpoint as unknown, never session", async () => {
@@ -298,7 +299,7 @@ describe("CLAIM_HELD on resolve — resolve requires the claim's own session, ne
     // real holder.
     const shaAfterAttempt = await headSha(root);
     expect(shaAfterAttempt).toBe(preSha);
-    expect(bus.state.applyLease?.session).toBe("sess-A");
+    expect(heldClaims(bus.state)[0]?.holder_session).toBe("sess-A");
 
     // The real holder can still resolve it correctly afterward.
     const { postSha } = await bus.resolveEntry("e1", "applied", "sess-A");
@@ -342,7 +343,7 @@ describe("CLAIM_HELD — exclusive claims are disjoint over paths", () => {
     });
 
     // The first claim is still the one on record — the rejected 2nd attempt didn't clobber it.
-    expect(bus.state.applyLease?.entry).toBe("e1");
+    expect(heldClaims(bus.state)[0]?.resources).toEqual(["entry:" + "e1"]);
     await bus.resolveEntry("e1", "applied", "sess-1");
   });
 
@@ -434,11 +435,11 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "notes.md", "edited under the lease, but never resolved before it expired");
 
-    clock.advance(APPLY_LEASE_TTL_MS + 1_000); // past expiry, still no resolveEntry call
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1_000); // past expiry, still no resolveEntry call
     const result = await bus.reconcile();
 
     expect(result.expiredLeaseIds).toEqual([leaseId]);
-    expect(bus.state.applyLease).toBeNull();
+    expect(heldClaims(bus.state)).toEqual([]);
     // Issue #155 REQ-7: the expiry names who abandoned it — `apply_expired` recorded nobody, and is
     // no longer written at all.
     const events = journalOf(root);
@@ -464,7 +465,7 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     const result = await bus.reconcile();
 
     expect(result.expiredLeaseIds).toEqual([]);
-    expect(bus.state.applyLease?.leaseId).toBe(leaseId);
+    expect(heldClaims(bus.state)[0]?.claim_id).toBe(leaseId);
     await bus.resolveEntry("e1", "applied", "sess-1");
   });
 });
@@ -552,7 +553,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     // The session stalls for hours. No sweeper runs in this test, so nothing closes the claim on
     // schedule. Meanwhile the artifact changes by some other route entirely (a watcher, a direct
     // edit): no live claim covers this interval, so A4 §F05 says it is `unknown`.
-    clock.advance(APPLY_LEASE_TTL_MS + 3 * 60 * 60 * 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 3 * 60 * 60 * 1_000);
     writeFile(root, "notes.md", "three hours of drift that no lease ever covered");
 
     let caught: unknown;
@@ -591,7 +592,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     ).toBe(true);
     expect(events.some((e) => e.event === "apply_expired")).toBe(false);
     expect(events.some((e) => e.event === "apply_end")).toBe(false);
-    expect(bus.state.applyLease).toBeNull();
+    expect(heldClaims(bus.state)).toEqual([]);
 
     // 4. No status was fabricated — the entry never reached a terminal it can't prove.
     expect(bus.state.entries.e1?.status).toBe("pending");
@@ -599,7 +600,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
 
     // 5. The journal really is the truth: a cold replay of the bytes agrees with live state.
     const replayed = foldEvents(events, lifecycleReducer);
-    expect(replayed.applyLease).toBeNull();
+    expect(heldClaims(replayed)).toEqual([]);
     expect(replayed.entries.e1?.status).toBe("pending");
   });
 
@@ -614,7 +615,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md" });
     const { leaseId, fence } = await bus.applyBegin("e1", "sess-1");
     writeFile(root, "notes.md", "edited under the claim");
-    clock.advance(APPLY_LEASE_TTL_MS + CLAIM_RENEW_GRACE_MS - 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + CLAIM_RENEW_GRACE_MS - 1_000);
 
     const result = await bus.resolveEntry("e1", "applied", "sess-1");
     expect(result.leaseId).toBe(leaseId);
@@ -635,7 +636,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.reconcile();
     await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
-    clock.advance(APPLY_LEASE_TTL_MS + 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1_000);
     await bus.reconcile(); // startup-style expiry closes it
     const linesBefore = journalEvents().length;
 
@@ -658,7 +659,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.createEntry("e1", { kind: "human_edit" });
 
     await bus.applyBegin("e1", "sess-1");
-    clock.advance(APPLY_LEASE_TTL_MS + CLAIM_RENEW_GRACE_MS + 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + CLAIM_RENEW_GRACE_MS + 1_000);
     writeFile(root, "notes.md", "drift under the dead lease");
     await expect(bus.resolveEntry("e1", "applied", "sess-1")).rejects.toMatchObject({ code: "CLAIM_EXPIRED" });
 
@@ -688,14 +689,14 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.reconcile();
     await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-A");
-    clock.advance(APPLY_LEASE_TTL_MS + 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1_000);
 
     await expect(bus.resolveEntry("e1", "applied", "sess-EVIL")).rejects.toMatchObject({
       code: "CLAIM_HELD",
       claim: { claim_id: leaseId, holder_session: "sess-A" },
     });
     expect(journalEvents().some((e) => e.event === "claim_expired" || e.event === "apply_expired")).toBe(false);
-    expect(bus.state.applyLease?.leaseId).toBe(leaseId);
+    expect(heldClaims(bus.state)[0]?.claim_id).toBe(leaseId);
   });
 
   test("applyBegin superseding an expired claim closes it out with claim_expired + an unknown checkpoint BEFORE granting the new one", async () => {
@@ -705,7 +706,7 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.reconcile();
     await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId: firstLease } = await bus.applyBegin("e1", "sess-1");
-    clock.advance(APPLY_LEASE_TTL_MS + 1_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 1_000);
     writeFile(root, "notes.md", "drift while the first lease was already dead");
     await bus.createEntry("e2", { kind: "annotation" });
     const { leaseId: secondLease } = await bus.applyBegin("e2", "sess-2");
@@ -750,14 +751,14 @@ describe("CLAIM_EXPIRED — a claim past its TTL proves nothing, on either path 
     await bus.reconcile();
     await bus.createEntry("e1", { kind: "annotation" });
     const { leaseId } = await bus.applyBegin("e1", "sess-1");
-    clock.advance(APPLY_LEASE_TTL_MS - 1_000); // one second short of the TTL
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS - 1_000); // one second short of the TTL
     await bus.createEntry("e2", { kind: "annotation" });
     await expect(bus.applyBegin("e2", "sess-2")).rejects.toMatchObject({
       code: "CLAIM_HELD",
       claim: { claim_id: leaseId, holder_session: "sess-1" },
     });
     expect(journalEvents().some((e) => e.event === "claim_expired" || e.event === "apply_expired")).toBe(false);
-    expect(bus.state.applyLease?.leaseId).toBe(leaseId);
+    expect(heldClaims(bus.state)[0]?.claim_id).toBe(leaseId);
   });
 });
 

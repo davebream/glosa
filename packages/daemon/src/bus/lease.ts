@@ -1,155 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
-// @glosa/daemon — apply-lease pure helpers (A4 §F05). The orchestration itself (append
-// apply_begin/apply_end under the workspace's git+journal mutex, drive a shadow-git checkpoint)
-// lives on WorkspaceBus (bus.ts), which already holds the mutex/writer/ulid/clock this needs —
-// this module only carries the bits that don't need any of that: the TTL constant, the
-// expiry check, and the typed "someone already holds the lease" error.
+// @glosa/daemon — claim pure helpers (A4 §F05, issue #155). The orchestration itself (append
+// claim events under the workspace's git+journal mutex, drive a shadow-git checkpoint) lives on
+// WorkspaceBus (bus.ts), which already holds the mutex/writer/ulid/clock this needs — this module
+// only carries the bits that don't need any of that: the TTL and bound constants, and the typed
+// refusals, each of which names who and why.
 import type { ClaimHolderSnapshot, Tombstone, TombstoneReason } from "./claims.ts";
 import type { EventBy } from "./journal.ts";
-import type { ApplyLeaseState } from "./replay.ts";
-
-export const APPLY_LEASE_TTL_MS = 15 * 60 * 1000; // 15 minutes (A4 §F05)
-
-/** A lease with a past `expiresAt` is treated as gone for the purpose of "is one active right
- * now". Reconcile step 4 closes out a dangling one at daemon STARTUP, but a daemon that stays up
- * for days never reaches it — so `WorkspaceBus.applyBegin` and `WorkspaceBus.resolveEntry` share
- * this same predicate and close the lease out inline (see `WorkspaceBus#expireLeaseLocked`).
- * Every consumer of a lease must consult this: the TTL is precisely what bounds the window a
- * lease can PROVE (A4 §F05), so a consumer that skips it is attributing unproven time. */
-export function isLeaseExpired(lease: ApplyLeaseState, now: Date): boolean {
-  return new Date(lease.expiresAt).getTime() <= now.getTime();
-}
-
-export interface LeaseHeldError extends Error {
-  code: "LEASE_HELD";
-  activeLeaseId: string;
-}
-
-/** A 2nd `apply-begin` while one is already active never queues (A4 §F05) — it fails loudly so
- * the caller retries later, rather than silently blocking behind the mutex indefinitely. */
-export function leaseHeldError(activeLeaseId: string): LeaseHeldError {
-  const err = new Error(
-    `an apply-lease is already active (lease_id=${activeLeaseId}) — resolve it or wait for it to expire before starting another`,
-  ) as LeaseHeldError;
-  err.code = "LEASE_HELD";
-  err.activeLeaseId = activeLeaseId;
-  return err;
-}
 
 export interface UnknownEntryError extends Error {
   code: "UNKNOWN_ENTRY";
 }
 
-export interface NoActiveLeaseError extends Error {
-  code: "NO_ACTIVE_LEASE";
-}
-
-export interface LeaseSessionMismatchError extends Error {
-  code: "LEASE_SESSION_MISMATCH";
-  entry: string;
-  leaseSession: string;
-  callerSession: string;
-}
-
-export interface LeaseExpiredError extends Error {
-  code: "LEASE_EXPIRED";
-  entry: string;
-  leaseId: string;
-  expiresAt: string;
-}
-
-/** The lease's TTL is what BOUNDS the interval it can prove (A4 §F05: "Lease expiry ->
- * apply_expired, diff->unknown"). Past `expires_at` there is no proof left, so a `resolve` that
- * arrives late cannot be attributed to its holder no matter how genuine the caller is — the
- * pre..post diff by then also spans however many hours of drift arrived from elsewhere while the
- * session was stalled. Distinct from `NO_ACTIVE_LEASE` on purpose: the caller did everything
- * right and simply needs to re-run `apply-begin` to open a fresh, provable window, and the
- * message has to say so. */
-export function leaseExpiredError(entry: string, leaseId: string, expiresAt: string): LeaseExpiredError {
-  const err = new Error(
-    `resolve(${entry}): the apply-lease (lease_id=${leaseId}) expired at ${expiresAt} — its interval can no longer be proven and was recorded as unknown; re-run apply-begin and resolve again`,
-  ) as LeaseExpiredError;
-  err.code = "LEASE_EXPIRED";
-  err.entry = entry;
-  err.leaseId = leaseId;
-  err.expiresAt = expiresAt;
-  return err;
-}
-
-export interface DriftUnderLeaseError extends Error {
-  code: "DRIFT_UNDER_LEASE";
-  path: string;
-  leaseId: string;
-}
-
-/** #182 R5: `captureHumanEdit`'s honest pre-save boundary refuses rather than guesses when an
- * active apply-lease holds the workspace AND `path` already has uncommitted drift. The interval
- * belongs to the lease's own `resolveEntry` (A4 §F05) — checkpointing it here as `unknown` would
- * leave `resolveEntry`'s later checkpoint with nothing new to stage (idempotency, A4 §F21),
- * exactly the double-report `captureExternalEdit`'s own lease suppression already avoids for the
- * watcher. Attributing the interval to the human instead — the alternative if this refusal did
- * not exist — is the one thing #182 R5 exists to prevent. */
-export function driftUnderLeaseError(path: string, leaseId: string): DriftUnderLeaseError {
-  const err = new Error(
-    `save refused: ${path} has uncommitted drift and an apply-lease (lease_id=${leaseId}) is active — that interval belongs to the lease, not to this save; resolve or wait out the lease and try again`,
-  ) as DriftUnderLeaseError;
-  err.code = "DRIFT_UNDER_LEASE";
-  err.path = path;
-  err.leaseId = leaseId;
-  return err;
-}
-
-/** The lease IS the proof (A4 §F05) — a lease for `entry` held by session A resolved by a caller
- * claiming to be session B would attribute A's edit to B, which is exactly the forgery honest
- * provenance exists to prevent. Never falls back to trusting the caller's `sessionId` for
- * attribution; this must be checked before any checkpoint/journal write happens. */
-export function leaseSessionMismatchError(
-  entry: string,
-  leaseSession: string,
-  callerSession: string,
-): LeaseSessionMismatchError {
-  const err = new Error(
-    `resolve(${entry}): lease is held by session:${leaseSession}, not session:${callerSession} — refusing to attribute this resolve to a caller that isn't the lease holder`,
-  ) as LeaseSessionMismatchError;
-  err.code = "LEASE_SESSION_MISMATCH";
-  err.entry = entry;
-  err.leaseSession = leaseSession;
-  err.callerSession = callerSession;
-  return err;
-}
-
-/** An `apply-begin` naming an entry this workspace has never seen. F05's lease is the ONLY thing
- * that attributes a change to a session, so a lease over an entry this workspace does not own is a
- * lease that proves nothing: it checkpoints this workspace, hands back a `pre_sha` pointing into
- * it, and attributes whatever happens next to a session acting on somebody else's entry.
- *
- * It also consumes the single per-workspace lease slot ("exactly ONE active apply-lease/workspace"),
- * so a mistyped id — or a command run from the wrong directory before `--workspace` existed —
- * silently locks a real workspace out of its own applies for the full TTL. Refuse before either
- * side effect happens. */
+/** A claim naming an entry this workspace has never seen. A claim is the ONLY thing that
+ * attributes a change to a session, so a claim over an entry this workspace does not own proves
+ * nothing: it checkpoints this workspace, hands back a `pre_sha` pointing into it, and attributes
+ * whatever happens next to a session acting on somebody else's entry. It would also block real
+ * work over the entry's files for the full TTL on nothing but a mistyped id — or a command run
+ * from the wrong directory. Refuse before either side effect happens. */
 export function unknownEntryError(entry: string): UnknownEntryError {
-  const err = new Error(
-    `apply-begin(${entry}): this workspace has no such inbox entry — check --workspace`,
-  ) as UnknownEntryError;
+  const err = new Error(`${entry}: this workspace has no such inbox entry — check --workspace`) as UnknownEntryError;
   err.code = "UNKNOWN_ENTRY";
   return err;
 }
 
-/** `resolveEntry` needs a matching `apply_begin` to prove the pre..post interval — without one
- * there is nothing to attribute to a session, so this fails loudly rather than falsely attributing
- * (the honest-provenance invariant applies to error paths too, not just the happy path). */
-export function noActiveLeaseError(entry: string): NoActiveLeaseError {
-  const err = new Error(`resolve(${entry}): no active apply-lease for this entry`) as NoActiveLeaseError;
-  err.code = "NO_ACTIVE_LEASE";
-  return err;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Issue #155 — claims. The lease's one-per-workspace slot becomes one exclusive claim per
-// resource, so the errors change shape with it: every refusal now names WHO, not just that
-// something was refused. These land beside the lease errors above rather than replacing them; the
-// lease surface is deleted only once nothing reads it (task 11).
-// ---------------------------------------------------------------------------------------------
+// The one-per-workspace lease slot became one exclusive claim per resource (issue #155), and the
+// errors changed shape with it: every refusal names WHO, not just that something was refused.
 
 /** 15 minutes, unchanged from the apply-lease it generalizes (A4 §F05). This is the bound on what
  * a claim can PROVE, which is why it stays long: shortening it would not make conflicts rarer, it

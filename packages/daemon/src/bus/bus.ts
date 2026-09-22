@@ -231,7 +231,7 @@ export class WorkspaceForgottenError extends Error {
 // P2.4 — LOAD-BEARING, NOT JUST FOR THE JOURNAL: nothing here stops two WorkspaceBus instances
 // (or a WorkspaceBus + a standalone `reconcileWorkspace(root, ...)` call, e.g. from a health-check
 // endpoint or a cron) from being opened/run for the same canonical root at once. Each would hold
-// its own fd, its own in-memory `state` (including `state.applyLease` — see applyBegin/
+// its own fd, its own in-memory `state` (including `state.claims` — see applyBegin/
 // resolveEntry above), AND its own `KeyedMutex` unless one is explicitly shared via
 // `WorkspaceBusDeps.mutex`. Since P2.3, that's no longer just a journal-interleaving risk: two
 // unsynchronized writers can each independently believe no lease is active, both pass the

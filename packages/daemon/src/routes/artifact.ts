@@ -101,14 +101,6 @@ function mapError(error: unknown, pathname: string, context: ErrorContext = {}):
         undefined,
         pathname,
       );
-    case "drift-under-lease":
-      return problem(
-        409,
-        "drift-under-lease",
-        "an apply-lease is active and this path has uncommitted drift — that interval belongs to the lease, not to this save",
-        error.data.path as string,
-        pathname,
-      );
     case "unknown-checkpoint": {
       const title =
         context.unknownCheckpoint === "checkpoints"

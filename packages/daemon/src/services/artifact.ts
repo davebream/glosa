@@ -51,7 +51,6 @@ export type ArtifactErrorCode =
   | "class-f-not-editable"
   | "not-utf8"
   | "source-changed"
-  | "drift-under-lease"
   | "unknown-checkpoint"
   | "artifact-missing-at-checkpoint"
   | "restore-conflict"

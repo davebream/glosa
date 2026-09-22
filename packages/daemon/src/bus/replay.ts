@@ -85,28 +85,12 @@ export interface AppliedInterval {
   reason?: string;
 }
 
-/** The one active apply-lease for a workspace, derived from the last unmatched `apply_begin`
- * (A4 §F05 — "exactly ONE active apply-lease/workspace"). `null` means no lease is outstanding.
- * `apply_end`/`apply_expired` for this `leaseId` clear it back to `null`. */
-export interface ApplyLeaseState {
-  leaseId: string;
-  entry: string;
-  session: string;
-  preSha: string;
-  expiresAt: string;
-}
-
 export interface DerivedState {
   entries: Record<string, DerivedEntryState>;
   /** Per-resource claims (issue #155) — the generalization of `applyLease` from one lease per
    * workspace to one exclusive claim per resource, plus non-blocking `presence` claims. Folded by
    * `bus/claims.ts`. */
   claims: ClaimsState;
-  /** MIGRATION SHIM, read-only: the first live exclusive claim on an `entry:` resource, in the
-   * shape the one-per-workspace apply-lease had. Deleted once every reader asks `claims` directly
-   * (issue #155 task 11); until then this is what keeps reconcile, seal/forget and the existing
-   * suites answering the same question they always did. */
-  readonly applyLease: ApplyLeaseState | null;
   /** Present only after a durable `adoption_sealed`; mutators must reject rather than letting a
    * stale in-memory bus append into historical lineage. */
   adoptionSeal: { adoptionId: string; targetRegistrationId: string } | null;
@@ -124,38 +108,10 @@ export interface DerivedState {
   quarantineCount: number;
 }
 
-/** The shape of the one-per-workspace apply-lease, rebuilt from a claim. Preferring the LEGACY
- * claim when both kinds are present keeps a journal that straddles the upgrade answering about the
- * lease that was actually in flight when the daemon restarted. */
-function leaseViewOf(claim: Claim, entryId: string): ApplyLeaseState {
-  return {
-    leaseId: claim.claim_id,
-    entry: entryId,
-    session: claim.holder_session,
-    preSha: claim.pre_sha ?? "",
-    expiresAt: claim.expires_at,
-  };
-}
-
-function deriveApplyLease(claims: ClaimsState): ApplyLeaseState | null {
-  let fallback: ApplyLeaseState | null = null;
-  for (const [resource, slot] of Object.entries(claims)) {
-    if (!resource.startsWith(ENTRY_RESOURCE_PREFIX) || !slot.exclusive) continue;
-    const entryId = entryIdOfResource(resource) ?? "";
-    if (slot.exclusive.legacy) return leaseViewOf(slot.exclusive, entryId);
-    fallback ??= leaseViewOf(slot.exclusive, entryId);
-  }
-  return fallback;
-}
-
 export function createEmptyState(): DerivedState {
-  const claims: ClaimsState = {};
   return {
     entries: {},
-    claims,
-    get applyLease(): ApplyLeaseState | null {
-      return deriveApplyLease(claims);
-    },
+    claims: {},
     adoptionSeal: null,
     forgetSeal: false,
     lineages: {},

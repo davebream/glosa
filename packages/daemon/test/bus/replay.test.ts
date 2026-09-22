@@ -207,7 +207,7 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease).toBeNull();
+      expect(state.claims["entry:e1"]?.exclusive).toBeNull();
       expect(state.entries.e1?.status).toBe("pending"); // never fast-forwarded to a terminal
     });
 
@@ -221,9 +221,9 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease?.leaseId).toBe("L2");
-      expect(state.applyLease?.entry).toBe("e2");
-      expect(state.applyLease?.session).toBe("sess-2");
+      expect(state.claims["entry:e1"]?.exclusive).toBeNull();
+      expect(state.claims["entry:e2"]?.exclusive?.claim_id).toBe("L2");
+      expect(state.claims["entry:e2"]?.exclusive?.holder_session).toBe("sess-2");
     });
 
     test(`${name}: a full expire-then-retry lifecycle ends closed, applied, and replay-stable`, () => {
@@ -237,10 +237,10 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
       ];
       const first = foldEvents(events, reducer);
       const second = foldEvents(events, reducer);
-      expect(first.applyLease).toBeNull();
+      expect(first.claims["entry:e1"]?.exclusive).toBeNull();
       expect(first.entries.e1?.status).toBe("applied");
       expect(first.entries).toEqual(second.entries); // replay twice == identical
-      expect(second.applyLease).toBeNull();
+      expect(second.claims).toEqual(first.claims);
     });
 
     test(`${name}: an apply_expired naming a DIFFERENT lease never closes the live one`, () => {
@@ -252,16 +252,16 @@ describe("replay — inline apply-lease expiry sequences (A4 §F05)", () => {
         ],
         reducer,
       );
-      expect(state.applyLease?.leaseId).toBe("L1");
+      expect(state.claims["entry:e1"]?.exclusive?.claim_id).toBe("L1");
     });
   }
 });
 
-// Issue #155: `applyLease` is no longer a slot the reducer writes — it is a VIEW over the
-// per-resource claims fold, and the three legacy apply-lease events fold forward as claims. A
-// journal written before claims existed has to replay to exactly the status it always did, which
-// is what these pin. Ablating the `apply_begin` arm of `reduceClaimEvent` reds every one of them:
-// the claims map stays empty, so `applyLease` derives to null and the holder is unknowable.
+// Issue #155: the one-per-workspace `applyLease` slot is gone; the three legacy apply-lease events
+// fold forward as per-resource claims. A journal written before claims existed has to replay to
+// exactly the status it always did, which is what these pin. Ablating the `apply_begin` arm of
+// `reduceClaimEvent` reds every one of them: the claims map stays empty and the holder is
+// unknowable.
 describe("replay — legacy apply-lease events fold forward as claims (issue #155)", () => {
   const legacy: JournalEvent[] = [
     mkEvent("entry_created", "e1"),
@@ -292,14 +292,14 @@ describe("replay — legacy apply-lease events fold forward as claims (issue #15
     expect(slot?.exclusive?.paths).toEqual([]);
   });
 
-  test("the derived applyLease view answers exactly what the old slot did", () => {
+  test("the folded claim carries every fact the old lease slot did — id, entry, holder, pre_sha, expiry", () => {
     const state = foldEvents(legacy, lifecycleReducer);
-    expect(state.applyLease).toEqual({
-      leaseId: "L1",
-      entry: "e1",
-      session: "sess-1",
-      preSha: "sha-pre",
-      expiresAt: "2023-11-14T22:15:00.000Z",
+    expect(state.claims["entry:e1"]?.exclusive).toMatchObject({
+      claim_id: "L1",
+      resources: ["entry:e1"],
+      holder_session: "sess-1",
+      pre_sha: "sha-pre",
+      expires_at: "2023-11-14T22:15:00.000Z",
     });
   });
 
@@ -316,7 +316,7 @@ describe("replay — legacy apply-lease events fold forward as claims (issue #15
     const second = foldEvents(events, lifecycleReducer);
     expect(first.claims).toEqual(second.claims);
     expect(first.entries).toEqual(second.entries);
-    expect(first.applyLease).toBeNull(); // apply_end ends the claim
+    expect(first.claims["entry:e1"]?.exclusive).toBeNull(); // apply_end ends the claim
     expect(first.claims["entry:e1"]?.last).toEqual({
       claim_id: "L1",
       holder_session: "sess-1",
@@ -331,7 +331,7 @@ describe("replay — legacy apply-lease events fold forward as claims (issue #15
       [...legacy, mkEvent("apply_expired", "e1", { detail: { lease_id: "L1" } })],
       lifecycleReducer,
     );
-    expect(state.applyLease).toBeNull();
+    expect(state.claims["entry:e1"]?.exclusive).toBeNull();
     expect(state.claims["entry:e1"]?.last?.reason).toBe("expired_ttl");
   });
 

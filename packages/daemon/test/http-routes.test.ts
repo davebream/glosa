@@ -29,7 +29,7 @@ import { type AgentProvider, AgentProviderRegistry } from "../src/agent-provider
 import { ArtifactWatcherRegistry } from "../src/artifact-watcher.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
 import { appendEvent, JournalWriter } from "../src/bus/journal.ts";
-import { APPLY_LEASE_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../src/bus/lease.ts";
+import { EXCLUSIVE_CLAIM_TTL_MS, CLAIM_RENEW_GRACE_MS } from "../src/bus/lease.ts";
 import { inboxDir, inboxEntryPath, journalPath } from "../src/bus/paths.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { checkpoint, headSha } from "../src/git/shadow.ts";
@@ -2745,7 +2745,7 @@ describe("A1 §5 route catalog", () => {
 
       // Past the TTL AND past the one-sweeper-interval renew grace: a resolve this late gets the
       // answer it would have got had the sweeper already closed the claim.
-      nowMs += APPLY_LEASE_TTL_MS + CLAIM_RENEW_GRACE_MS + 1_000;
+      nowMs += EXCLUSIVE_CLAIM_TTL_MS + CLAIM_RENEW_GRACE_MS + 1_000;
       writeFileSync(join(root, "notes.md"), "v2 — drift no lease ever covered\n");
 
       const res = await fetchFn(

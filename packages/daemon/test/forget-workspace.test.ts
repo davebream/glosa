@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { AdoptionCoordinator, adoptLooseLineages } from "../src/adoption.ts";
 import { WorkspaceBus, WorkspaceForgottenError } from "../src/bus/bus.ts";
 import { writeInboxEntryOnce } from "../src/bus/inbox.ts";
-import { APPLY_LEASE_TTL_MS, claimHeldError } from "../src/bus/lease.ts";
+import { claimHeldError, EXCLUSIVE_CLAIM_TTL_MS } from "../src/bus/lease.ts";
+import { heldClaims } from "./git/helpers.ts";
 import { journalPath } from "../src/bus/paths.ts";
 import { reconcileWorkspace } from "../src/bus/reconcile.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
@@ -824,7 +825,7 @@ describe("glosa forget", () => {
     // active apply-lease. This proves the second-pass fix: resuming re-attempts sealing (a no-op
     // if already sealed, a hard LEASE_HELD refusal otherwise) before ever touching a file. Ablate
     // the resume's `existsSync(target.bus_path)`-gated seal block in commitForgetLocked to see
-    // this go red: it would call `rmSync` on the bus while `bus.state.applyLease` is still active.
+    // this go red: it would call `rmSync` on the bus while a claim is still held on it.
     const home = freshHome();
     const root = freshWorkspaceDir();
     const index = new WorkspaceIndex({ home, now: deterministicClock() });
@@ -947,11 +948,11 @@ describe("glosa forget", () => {
     await bus.reconcileOnce();
     await bus.createEntry("e1", { kind: "annotation" });
     await bus.applyBegin("e1", "session-x");
-    expect(bus.state.applyLease).not.toBeNull();
+    expect(heldClaims(bus.state)).not.toEqual([]);
 
     // The lease is now expired but the journal has no `apply_expired` for it yet — exactly the
     // dangling state reconcile step 4 exists to close, on an ORDINARY (non-sealed) bus.
-    clock.advance(APPLY_LEASE_TTL_MS + 60_000);
+    clock.advance(EXCLUSIVE_CLAIM_TTL_MS + 60_000);
     await bus.sealForForget(); // legal: sealing checks for an ACTIVE lease, and this one is expired
     expect(bus.state.forgetSeal).toBe(true);
 

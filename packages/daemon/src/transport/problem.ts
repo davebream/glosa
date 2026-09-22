@@ -72,9 +72,6 @@ export type ProblemSlug =
   // slot for — the slug is still named here so the vocabulary of possible `type` values is
   // documented in one place regardless of which helper builds the response.
   | "restore-conflict"
-  // P5.1 addition — `POST /api/workspaces/apply-begin` (A4 §F05 / A6 §F26 exit 12
-  // `lease_conflict`): a second apply-begin while one is already active for this workspace.
-  | "lease-conflict"
   // Issue #155 — claims. Every refusal on the claim/resolve path says WHO and WHY in extension
   // members (RFC 9457 §3.2), so a second session can act on it instead of guessing:
   //   claim-held        another session holds an exclusive claim over these paths (holder inline)
@@ -116,11 +113,6 @@ export type ProblemSlug =
   // Named separately so the SPA can open the stale-save dialog on exactly this condition, never on
   // the unrelated `workspace-adopting` 409 that can also reach this route.
   | "source-changed"
-  // #182 R5 addition — `PUT /w/:slug/artifacts/:path`'s honest pre-save boundary
-  // (`captureHumanEdit`, bus.ts): an active apply-lease plus pending drift on this exact path.
-  // Distinct from `lease-conflict` (that one's about a SECOND apply-begin); this route's own
-  // refusal is about a SAVE arriving while a lease already holds the workspace.
-  | "drift-under-lease"
   // #250 addition — `PUT /w/:slug/artifacts/:path` against a file whose bytes are not valid UTF-8.
   // Named separately from `source-changed` because the two demand opposite things of the SPA: a
   // stale save opens the merge dialog, and this one must never, since every choice there writes a
