@@ -853,13 +853,18 @@ describe("the annotation surface", () => {
       const margin = q(host, ".glosa-margin");
       expect(margin.classList.contains("glosa-margin-side")).toBe(true);
 
-      expect(idsIn(margin, ".glosa-annotation")).toEqual(["inb-1", "inb-3"]);
+      // The rail: only the open note whose words are on the page, and no heading over it.
+      expect(idsIn(margin, ".glosa-annotation")).toEqual(["inb-1"]);
       expect(qa(margin, ".glosa-margin-subhead")).toHaveLength(0);
-      expect(idsIn(host, ".glosa-tray-list .glosa-annotation")).toEqual(["inb-2"]);
+      // The tray beside it: the note that lost its place first, then the settled one under
+      // "Resolved". An applied note removed its own words, so it has no place to be beside.
+      expect(idsIn(host, ".glosa-tray-list .glosa-annotation")).toEqual(["inb-2", "inb-3"]);
+      expect(q(host, ".glosa-tray-list .glosa-margin-subhead").textContent).toBe("Resolved");
       const tray = q(host, ".glosa-annotations-tray");
       expect(tray.hidden).toBe(false);
       expect(tray.hasAttribute("data-beside")).toBe(true);
-      expect(q(host, ".glosa-tray-count").textContent).toBe("1 lost its place");
+      expect(tray.hasAttribute("data-lost")).toBe(true);
+      expect(q(host, ".glosa-tray-count").textContent).toBe("1 lost its place · 1 resolved");
     });
   });
 
@@ -881,5 +886,49 @@ describe("the annotation surface", () => {
       expect(qa(host, ".glosa-tray-list .glosa-annotation")).toHaveLength(1);
       expect(q(host, ".glosa-annotations-tray").hidden).toBe(false);
     });
+  });
+
+  test("beside the rail, the provenance line's applied count opens the tray on the settled notes", async () => {
+    await atRailWidth(async () => {
+      const da = fakeDataAccess({
+        ...listing(
+          { ...noteOn(PLAIN, "gamma delta"), id: "inb-1", status: "applied" },
+          { ...noteOn(PLAIN, "kappa lambda"), id: "inb-2", status: "applied" },
+        ),
+        ...serving(RENDERED),
+      });
+      const { host } = await mountPane(da);
+      expect(qa(host, ".glosa-margin .glosa-annotation")).toHaveLength(0);
+      const tray = q(host, ".glosa-annotations-tray");
+      expect(tray.hidden).toBe(false);
+      expect(tray.hasAttribute("data-open")).toBe(false);
+
+      const link = q(host, ".glosa-provenance .glosa-provenance-link");
+      expect(link.textContent).toBe("2 applied");
+      expect(link.getAttribute("aria-label")).toBe("Show the 2 applied annotations");
+      link.click();
+      await paint();
+      expect(tray.hasAttribute("data-open")).toBe(true);
+      expect(dom.document.activeElement).toBe(q(host, ".glosa-tray-toggle"));
+    });
+  });
+
+  test("Clear all clears every resolved note through each card's own Clear", async () => {
+    const da = fakeDataAccess({
+      ...listing(
+        { ...noteOn(PLAIN, "gamma delta"), id: "inb-1", status: "applied" },
+        { ...noteOn(PLAIN, "kappa lambda"), id: "inb-2", status: "rejected" },
+        { ...noteOn(PLAIN, "epsilon zeta"), id: "inb-3", status: "delivered" },
+      ),
+      ...serving(RENDERED),
+    });
+    const { host } = await mountPane(da);
+    const clearAll = q(host, ".glosa-clear-resolved");
+    expect(clearAll.getAttribute("aria-label")).toBe("Clear all 2 resolved annotations from the list");
+    clearAll.click();
+    await paint();
+    expect(da.withdrawn).toEqual(["inb-1", "inb-2"]);
+    expect(idsIn(host, ".glosa-tray-list .glosa-annotation")).toEqual(["inb-3"]);
+    expect(q(host, ".glosa-clear-resolved")).toBeNull();
   });
 });

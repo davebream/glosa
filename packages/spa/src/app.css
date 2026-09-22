@@ -3700,8 +3700,18 @@ input,
    the 240px floor at 1203px — below which artifact-pane.js stops setting .glosa-margin-side at
    all and the compact tray takes over. Keep the threshold below in step with MARGIN_RAIL_FLOOR. */
 @container pane (min-width: 1205px) {
-  .glosa-margin-side {
+  .glosa-margin-side,
+  .glosa-annotations-tray[data-beside] {
     --margin-width: clamp(240px, calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2)), 320px);
+  }
+
+  /* Beside the rail the tray is the rail's own drawer: the same column, at the pane's foot, holding
+     what the rail cannot place (settled notes, notes that lost their passage). Spanning the pane it
+     would put a 1200px sheet of notes over the manuscript to show a 300px column's worth of cards. */
+  .glosa-annotations-tray[data-beside] {
+    justify-self: end;
+    width: var(--margin-width);
+    border-left: 1px solid var(--border);
   }
 }
 
@@ -4507,6 +4517,24 @@ input,
   margin-top: 0;
 }
 
+/* "Resolved" and its one bulk verb on one line: the heading names the group, the verb acts on all
+   of it, in the same recessive underlined text each card's own Clear uses. */
+.glosa-margin-subhead-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.glosa-margin-subhead-row:first-child {
+  margin-top: 0;
+}
+
+.glosa-margin-subhead-row .glosa-margin-subhead {
+  margin: 0;
+}
+
 .glosa-annotation-remove:hover {
   color: var(--danger);
   text-decoration-color: currentColor;
@@ -4723,6 +4751,23 @@ input,
 
 .glosa-provenance dd {
   margin: 0;
+}
+
+/* "N applied" is the way to the applied notes, which live in the tray, not the rail. It reads as
+   the fact it is, underlined like the entries' own verbs, and lifts to ink when it is pointed at. */
+.glosa-provenance-link {
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-provenance-link:hover {
+  color: var(--ink);
+  text-decoration-color: currentColor;
 }
 
 /* ---------- 10b. Confirm dialog ---------- */
@@ -5448,6 +5493,19 @@ input,
 .glosa-tray-toggle:hover:not(:disabled) {
   background: var(--surface-sunken);
   color: var(--ink);
+}
+
+/* A note that lost its place is open work with nowhere to sit, so the strip says so in the ochre
+   the card itself uses, as a dot beside the words (Status Needs Shape), not as coloured text. */
+.glosa-annotations-tray[data-lost] .glosa-tray-count::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--warn);
+  vertical-align: 1px;
 }
 
 .glosa-tray-toggle:disabled {

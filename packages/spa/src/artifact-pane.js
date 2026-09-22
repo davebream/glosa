@@ -2435,6 +2435,14 @@ export function createArtifactPane(host, deps) {
   /** Withdraws the entry (terminal `rejected` — the journal keeps it, delivery stops) and drops
    * the card. A 404/409 means the entry is already gone or closed daemon-side, so dropping the
    * card is still honest; any other failure keeps the card and says so. */
+  /** Clears every settled note from this view, one at a time through the same path as each card's
+   * own Clear, so a failure lands on the card it belongs to and the rest still clear. */
+  async function clearResolved() {
+    for (const item of annotations.filter((entry) => isTerminalState(entry.state))) {
+      await removeAnnotation(item, { failureLabel: "Couldn't clear — try again" });
+    }
+  }
+
   async function removeAnnotation(item, { failureLabel = "Couldn't remove — try again" } = {}) {
     closePreview();
     try {
@@ -3816,18 +3824,35 @@ export function createArtifactPane(host, deps) {
     const open = annotations.filter((item) => !isTerminalState(item.state)).length;
     const applied = annotations.filter((item) => item.state === "applied").length;
     const total = annotations.length;
-    const fact = (term, detail) =>
+    const fact = (term, detail, action) =>
       provenanceEl.append(
         el("div", { className: "glosa-provenance-fact" }, [
           el("dt", { textContent: term }),
-          el("dd", { textContent: detail }),
+          el("dd", {}, [
+            action ? el("button", { className: "glosa-provenance-link", type: "button", ...action }) : detail,
+          ]),
         ]),
       );
     fact(
       "You",
       total === 0 ? "no marks" : `${total} ${total === 1 ? "mark" : "marks"}${open ? ` · ${open} open` : ""}`,
     );
-    fact(getProviderName(), applied === 0 ? "nothing applied" : `${applied} applied`);
+    // The way to the applied notes, now that they are not in the rail: the fact that counts them
+    // opens the tray on them. Only where the tray exists, which is while notes are shown.
+    fact(
+      getProviderName(),
+      applied === 0 ? "nothing applied" : `${applied} applied`,
+      applied > 0 && modeState.mode === "review"
+        ? {
+            textContent: `${applied} applied`,
+            "aria-label": `Show the ${applied} applied ${applied === 1 ? "annotation" : "annotations"}`,
+            onClick: () => {
+              setTrayOpen(true);
+              trayToggle.focus({ preventScroll: true });
+            },
+          }
+        : null,
+    );
     fact("Outside glosa", diskChange ? "changed on disk" : "no changes");
     const approved = approvalResult && approvalResult.path === currentArtifact.source_path;
     fact(
@@ -3927,11 +3952,27 @@ export function createArtifactPane(host, deps) {
       if (!railNotes.includes(item)) trayListEl.append(buildAnnotationCard(item, { addresses }));
     }
     if (resolved.length) {
-      // Named even when it is the whole list: "Resolved" is the state of the work, and a reader
-      // opening a tray of settled cards should not have to infer that from the dots. Not in the
-      // rail, for the reason the session's heading is not.
-      if (!beside) cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
-      for (const item of resolved) cardHost.append(buildAnnotationCard(item, { addresses }));
+      // Settled notes live in the tray at every width, never the rail. An applied note removed the
+      // very words it was attached to, so beside the text it could only say "Lost its place"; and
+      // work that is done is a record, not something the page needs to show beside the passage.
+      // The provenance line's "N applied" opens the tray on them. Named even when it is the whole
+      // list: a reader should not have to infer "Resolved" from the dots.
+      const heading = el("div", { className: "glosa-margin-subhead-row" }, [
+        el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }),
+      ]);
+      if (resolved.length > 1) {
+        heading.append(
+          el("button", {
+            className: "glosa-annotation-remove glosa-clear-resolved",
+            type: "button",
+            textContent: "Clear all",
+            "aria-label": `Clear all ${resolved.length} resolved annotations from the list`,
+            onClick: () => void clearResolved(),
+          }),
+        );
+      }
+      trayListEl.append(heading);
+      for (const item of resolved) trayListEl.append(buildAnnotationCard(item, { addresses }));
     }
     renderTray();
     if (!composer && annotations.length === 0 && requests.length === 0 && cardHost === marginEl) {
