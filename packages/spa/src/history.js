@@ -85,7 +85,7 @@ function el(tag, props = {}, children = []) {
  *   slug: string,
  *   path?: string,
  *   canRestore?: boolean,
- *   onCompare?: (range: { from: string, to: string }) => void,
+ *   onCompare?: (range: { from: string, to: string }) => boolean,
  *   onClose?: () => void,
  * }} options
  */
@@ -142,8 +142,7 @@ export function mountHistoryPane(
       // With a dock to put it in, a comparison becomes a pane of its own (2026-09-04 brief §4) so
       // it can stay on screen beside the manuscript it describes. Without one — a presented
       // single document — it still renders here.
-      if (onCompare) {
-        onCompare({ from, to });
+      if (onCompare?.({ from, to })) {
         status.textContent = "Comparison opened in a new tab.";
         return;
       }
