@@ -1149,7 +1149,7 @@ describe("A1 §5 route catalog", () => {
     expect(transition.detail.withdrawn).toBe(true);
   });
 
-  test("POST withdraw on an already-terminal entry → 409 conflict (a session may have closed it first)", async () => {
+  test("POST withdraw on an already-terminal entry → 409 entry-resolved naming who closed it (a session may have closed it first)", async () => {
     const createRes = await fetchFn(
       stateChangingReq(`/w/${slug}/annotations`, {
         method: "POST",
@@ -1162,7 +1162,13 @@ describe("A1 §5 route catalog", () => {
 
     const res = await fetchFn(stateChangingReq(`/w/${slug}/annotations/${id}/withdraw`, { method: "POST" }));
     expect(res.status).toBe(409);
-    expect((await res.json()).type).toContain("conflict");
+    // A second human close is not replayed: `by: "human"` names every person, so it cannot prove
+    // this is the same person retrying (issue #155).
+    expect(await res.json()).toMatchObject({
+      type: "https://glosa.local/errors/entry-resolved",
+      terminal_by: "human",
+      entry_status: "rejected",
+    });
   });
 
   test("POST withdraw on an unknown entry id → 404", async () => {
@@ -2966,6 +2972,11 @@ describe("A1 §5 route catalog", () => {
       );
       expect(second.status).toBe(409);
       expect(second.headers.get("Content-Type")).toBe("application/problem+json");
+      expect(await second.json()).toMatchObject({
+        type: "https://glosa.local/errors/entry-resolved",
+        terminal_by: "human",
+        entry_status: "dismissed",
+      });
       expect(countJournalLines()).toBe(linesBeforeSecond);
       expect(bus.state.entries["entry-2"]?.status).toBe("dismissed");
     });
@@ -2983,6 +2994,10 @@ describe("A1 §5 route catalog", () => {
         }),
       );
       expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        type: "https://glosa.local/errors/entry-resolved",
+        entry_status: "applied",
+      });
       expect(bus.state.entries["entry-3"]?.status).toBe("applied");
     });
 

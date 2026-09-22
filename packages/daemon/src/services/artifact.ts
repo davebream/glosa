@@ -353,21 +353,20 @@ export async function createAnnotation(deps: ArtifactAccessDependencies, slug: s
 export async function withdrawAnnotation(deps: ArtifactAccessDependencies, slug: string, entryId: string) {
   const workspace = findWorkspace(deps, slug);
   const bus = await workspaceBus(deps, workspace);
-  const entry = bus.state.entries[entryId];
-  if (!entry) throw new ArtifactError("annotation-not-found", { id: entryId });
-  if (isTerminal(entry.kind === "attention" ? "attention" : "common", entry.status)) {
-    throw new ArtifactError("annotation-closed", { status: entry.status });
+  // The terminal check, any claim release, and the transition are one step under the bus mutex
+  // (issue #155) — checking `bus.state` here first would let a session's resolve land in between.
+  try {
+    const withdrawn = await bus.withdrawAnnotationEntry(entryId);
+    return { id: entryId, status: withdrawn.status };
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "UNKNOWN_ENTRY") throw new ArtifactError("annotation-not-found", { id: entryId });
+    if (code === "ENTRY_RESOLVED") {
+      const resolved = error as { terminalBy: string | null; status: string };
+      throw new ArtifactError("annotation-closed", { status: resolved.status, terminal_by: resolved.terminalBy });
+    }
+    throw error;
   }
-  // `withdrawn` is what tells a later reader that this `rejected` came from the human taking the
-  // note back — not from a session declining it. Both land on the same terminal status, and the
-  // pane must show one and not the other, so the journal states which rather than leaving the
-  // listing to guess from the note text.
-  await bus.commitTransition(entryId, "rejected", {
-    by: "human",
-    note: "withdrawn in glosa",
-    detail: { withdrawn: true },
-  });
-  return { id: entryId, status: bus.state.entries[entryId]?.status ?? "rejected" };
 }
 
 /** One annotation as the artifact pane needs it back: the immutable payload it was written with,

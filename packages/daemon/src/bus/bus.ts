@@ -1662,22 +1662,107 @@ export class WorkspaceBus {
   }
 
   /** The shared terminal guard (issue #155 Q4) for every path that closes an entry — resolve,
-   * dismiss, defer, withdraw. Answers, in order: unknown entry → `UNKNOWN_ENTRY`; terminal and
-   * closed by THIS actor with THIS outcome → a replay the caller should answer with the original
-   * result; terminal otherwise → `ENTRY_RESOLVED` naming who closed it. Full `by` strings are
-   * compared, so `session:A` never replays `session:AB`'s resolve. Legacy terminal entries that
+   * dismiss, defer, withdraw — evaluated under the mutex, so the check and the transition it
+   * licenses are one step. Answers, in order: unknown entry → `UNKNOWN_ENTRY`; terminal and closed
+   * by `replayAs.by` with `replayAs.to` → a replay the caller answers with the original result;
+   * terminal otherwise → `ENTRY_RESOLVED` naming who closed it. Full `by` strings are compared, so
+   * `session:A` never replays `session:AB`'s resolve.
+   *
+   * Replay is opt-in. A session id names one participant, so "the same session asked again" is a
+   * retry; `by: "human"` names every person at once, so a second human close is not provably the
+   * same person retrying and is answered `ENTRY_RESOLVED` instead. Legacy terminal entries that
    * predate `terminalBy` fall back to the proven interval's `by`. */
   guardTerminalLocked(
     entryId: string,
-    by: EventBy,
-    to: string,
-  ): { replay: true; entry: DerivedEntryState } | { replay: false; entry: DerivedEntryState } {
+    replayAs?: { by: EventBy; to: string },
+  ): { replay: boolean; entry: DerivedEntryState } {
     const entry = this.state.entries[entryId];
     if (!entry) throw unknownEntryError(entryId);
     if (!isTerminal(entryKindOf(entry), entry.status)) return { replay: false, entry };
     const terminalBy = entry.terminalBy ?? entry.appliedInterval?.by ?? null;
-    if (terminalBy === by && entry.status === to) return { replay: true, entry };
+    if (replayAs && terminalBy === replayAs.by && entry.status === replayAs.to) return { replay: true, entry };
     throw entryResolvedError(entryId, terminalBy, entry.status);
+  }
+
+  private appendTransitionLocked(entryId: string, to: string, by: EventBy, detail: Record<string, unknown>): void {
+    this.appendClaimEventLocked({
+      v: 1,
+      event_id: this.ulidFn(),
+      at: this.nowFn().toISOString(),
+      entry: entryId,
+      event: "transition_committed",
+      by,
+      detail: { to, ...detail },
+    });
+  }
+
+  /** A person closing an entry (dismiss, withdraw). The human wins (issue #155 REQ-6): any claim
+   * over the entry is released `by: "human"` first — its holder's bytes captured as `unknown`, its
+   * holder's late resolve told `CLAIM_REVOKED` — and only then does the entry close. A claim whose
+   * TTL already lapsed is expired rather than released, which is the truer account of it. */
+  private async closeByHumanLocked(
+    entryId: string,
+    to: "dismissed" | "rejected",
+    detail: Record<string, unknown>,
+  ): Promise<{ status: string; released: ClaimHolderSnapshot[] }> {
+    this.guardTerminalLocked(entryId);
+    const resource = entryResource(entryId);
+    const covering = this.heldClaimsLocked().filter((claim) => claim.resources.includes(resource));
+    const released: ClaimHolderSnapshot[] = [];
+    if (covering.length > 0) {
+      reclaimIndexLock(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      await initShadowRepo(this.workspace, { writer: this.writer, ulid: this.ulidFn, now: this.nowFn });
+      const now = this.nowFn();
+      for (const claim of covering) {
+        if (isClaimExpired(claim, now)) {
+          await this.expireClaimLocked(claim, "ttl");
+          continue;
+        }
+        await this.releaseClaimLocked(claim, "human", "released_by_human");
+        released.push(holderSnapshot(claim));
+      }
+    }
+    this.appendTransitionLocked(entryId, to, "human", detail);
+    return { status: this.state.entries[entryId]?.status ?? to, released };
+  }
+
+  /** `glosa inbox dismiss` (issue #142): a person closes the entry. See `closeByHumanLocked`. */
+  dismissEntry(
+    entryId: string,
+    opts: { note?: string } = {},
+  ): Promise<{ status: string; released: ClaimHolderSnapshot[] }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      return this.closeByHumanLocked(entryId, "dismissed", opts.note !== undefined ? { note: opts.note } : {});
+    });
+  }
+
+  /** The SPA taking a note back. `withdrawn` is what tells a later reader that this `rejected` came
+   * from the human, not from a session declining it — both land on the same terminal status, and
+   * the pane must show one and not the other. */
+  withdrawAnnotationEntry(entryId: string): Promise<{ status: string; released: ClaimHolderSnapshot[] }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      return this.closeByHumanLocked(entryId, "rejected", { note: "withdrawn in glosa", withdrawn: true });
+    });
+  }
+
+  /** `glosa resolve <id> deferred`: a legal-but-inert transition (see `commitTransition`) that
+   * re-surfaces the entry later. Refused on a terminal entry rather than answered with a `200
+   * {to: "deferred"}` a client could misread as a real re-defer. Takes no claim and releases none —
+   * deferring is the session saying "not now", not giving anything up. */
+  deferEntry(entryId: string, sessionId: string, opts: { note?: string } = {}): Promise<{ status: string }> {
+    return this.mutex.runExclusive(this.mutexKey, () => {
+      this.assertWritable();
+      this.guardTerminalLocked(entryId);
+      this.appendTransitionLocked(
+        entryId,
+        "deferred",
+        `session:${sessionId}`,
+        opts.note !== undefined ? { note: opts.note } : {},
+      );
+      return { status: this.state.entries[entryId]?.status ?? "unknown" };
+    });
   }
 
   /** `resolve` (A4 §F05, issue #155): the refusal ladder, evaluated in full under the mutex
@@ -1710,7 +1795,7 @@ export class WorkspaceBus {
 
       // Rungs 0–2.
       const me: EventBy = `session:${sessionId}`;
-      const guard = this.guardTerminalLocked(entry, me, outcome);
+      const guard = this.guardTerminalLocked(entry, { by: me, to: outcome });
       if (guard.replay) {
         const interval = guard.entry.appliedInterval;
         return {

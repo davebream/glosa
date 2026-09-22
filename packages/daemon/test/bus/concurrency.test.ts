@@ -265,6 +265,71 @@ describe("claims — two sessions, one workspace (issue #155 AC-1)", () => {
     cleanupWorkspace(root);
   });
 
+  test("a human dismiss releases A's claim by:\"human\" and closes the entry; A's late resolve is told a person closed it (AC-1.6)", async () => {
+    const { root, bus } = await setup();
+    const a = await bus.applyBegin("e1", "A");
+    writeFile(root, "notes.md", "v2, A mid-edit\n");
+
+    const dismissed = await bus.dismissEntry("e1", { note: "not needed" });
+    expect(dismissed.status).toBe("dismissed");
+    expect(dismissed.released.map((claim) => claim.holder_session)).toEqual(["A"]);
+    const tail = events(root)
+      .slice(-3)
+      .map((e) => [e.event, e.by]);
+    // Release first, then A's abandoned bytes reported, then the close — in that order.
+    expect(tail[0]).toEqual(["claim_released", "human"]);
+    expect(tail.at(-1)).toEqual(["transition_committed", "human"]);
+    expect(events(root).find((e) => e.event === "claim_released")?.detail).toMatchObject({
+      claim_id: a.leaseId,
+      by: "human",
+      reason: "released_by_human",
+    });
+
+    // The terminal rung answers before the tombstone rung: the entry is closed, by a person.
+    await expect(bus.resolveEntry("e1", "applied", "A")).rejects.toMatchObject({
+      code: "ENTRY_RESOLVED",
+      terminalBy: "human",
+      status: "dismissed",
+    });
+    expect(bus.state.claims["entry:e1"]?.last).toMatchObject({ holder_session: "A", reason: "released_by_human" });
+    await bus.close();
+    cleanupWorkspace(root);
+  });
+
+  // PR 2 of #155 adds the signals rail; this is the half of AC-1.6 it completes.
+  test.todo("a human dismiss over A's claim delivers A a `conflict` signal naming what happened (AC-1.6)", () => {});
+
+  for (const order of ["resolve first", "dismiss first"] as const) {
+    test(`resolve and dismiss racing on one entry (${order}): exactly one terminal transition, and the loser is told ENTRY_RESOLVED`, async () => {
+      const { root, bus } = await setup();
+      await bus.applyBegin("e1", "A");
+      writeFile(root, "notes.md", "v2, A\n");
+      const before = readLines(root).length;
+
+      const resolve = () => bus.resolveEntry("e1", "applied", "A");
+      const dismiss = () => bus.dismissEntry("e1");
+      const [first, second] = order === "resolve first" ? [resolve(), dismiss()] : [dismiss(), resolve()];
+      const results = await Promise.allSettled([first, second]);
+
+      expect(results[0]?.status).toBe("fulfilled");
+      expect(results[1]).toMatchObject({ status: "rejected" });
+      const loser = (results[1] as PromiseRejectedResult).reason;
+      if (order === "resolve first") {
+        expect(loser).toMatchObject({ code: "ENTRY_RESOLVED", terminalBy: "session:A", status: "applied" });
+      } else {
+        // The dismiss released A's claim before closing the entry, so A's resolve meets the entry
+        // already closed by a person — the terminal guard answers before the claim rungs do.
+        expect(loser).toMatchObject({ code: "ENTRY_RESOLVED", terminalBy: "human", status: "dismissed" });
+      }
+      const terminal = events(root)
+        .slice(before)
+        .filter((e) => e.event === "transition_committed");
+      expect(terminal).toHaveLength(1);
+      await bus.close();
+      cleanupWorkspace(root);
+    });
+  }
+
   test("a foreign commit inside the claimed interval makes it unknown — the entry still closes, but nobody is credited", async () => {
     const { root, bus } = await setup();
     const a = await bus.applyBegin("e1", "A");

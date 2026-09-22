@@ -2017,28 +2017,19 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
 
   if (outcome === "deferred") {
-    const entryState = bus.state.entries[entry];
-    if (!entryState) {
-      return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
-    }
     // `deferred` is a legal-but-inert no-op on the lifecycle reducer (absent from both guard
     // tables) — firing it on an entry that's ALREADY terminal would otherwise still return 200
     // `{to: "deferred"}`, which a client reading only `to` could misread as a successful
-    // transition. Guard it the same way `resolveEntry`'s illegal-transition cases are guarded
-    // below (409 `conflict`) rather than silently accepting it — first-terminal-wins, and this
-    // endpoint always tells the truth about what happened.
-    const kind = entryState.kind === "attention" ? "attention" : "common";
-    if (isTerminal(kind, entryState.status)) {
-      return problem(
-        409,
-        "conflict",
-        `entry is already ${entryState.status}; deferred is a no-op on a terminal entry`,
-        undefined,
-        url.pathname,
-      );
+    // transition. The bus refuses it under the same in-mutex terminal guard every other close
+    // uses (issue #155), so this endpoint always tells the truth about what happened.
+    try {
+      const deferred = await bus.deferEntry(entry, session, { ...(note !== undefined ? { note } : {}) });
+      return Response.json({ entry, status: deferred.status, to: "deferred" });
+    } catch (err) {
+      const mapped = claimProblem(err, url.pathname);
+      if (mapped) return mapped;
+      throw err;
     }
-    await bus.commitTransition(entry, "deferred", { by: `session:${session}`, note });
-    return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "deferred" });
   }
 
   if (!RESOLVE_TERMINAL_OUTCOMES.has(outcome)) {
@@ -2082,13 +2073,12 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
 }
 
 /** `POST /api/workspaces/inbox/dismiss` — `glosa inbox dismiss <id>`'s daemon-side half (issue
- * #142). Mirrors `handleWorkspaceResolve`'s `deferred` arm above exactly (404 → terminal-guard
- * 409 → one `commitTransition` → JSON): a guarded transition that takes no lease. The difference
- * is the attribution and the terminal it lands on — `by: "human"` (a person typed the command,
- * never a session), `to: "dismissed"`, first-terminal-wins against `applied`/`rejected`/`stale`
- * exactly as it does against a second dismiss. No lease is opened or closed and no inbox file is
- * touched; this is precisely the supported, durably-recorded reconciliation the issue's hand-move
- * workaround never left a trace of. */
+ * #142). Mirrors `handleWorkspaceResolve`'s `deferred` arm above (404 → terminal-guard 409
+ * `entry-resolved` → one transition → JSON), with `by: "human"` (a person typed the command,
+ * never a session) and `to: "dismissed"`, first-terminal-wins against `applied`/`rejected`/`stale`
+ * exactly as it does against a second dismiss. No inbox file is touched; this is precisely the
+ * supported, durably-recorded reconciliation the issue's hand-move workaround never left a trace
+ * of. Unchanged on the wire except that a claim it released is named in `released`. */
 async function handleWorkspaceInboxDismiss(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -2109,16 +2099,28 @@ async function handleWorkspaceInboxDismiss(ctx: ApiContext, req: Request): Promi
 
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
 
-  const entryState = bus.state.entries[entry];
-  if (!entryState) {
-    return problem(404, "not-found", "unknown inbox entry", undefined, url.pathname);
+  try {
+    // A person dismissing an entry an agent holds is the human-wins case (issue #155 REQ-6): the
+    // claim is released `by: "human"` inside the same critical section that closes the entry.
+    const dismissed = await bus.dismissEntry(entry, { ...(note !== undefined ? { note } : {}) });
+    return Response.json({
+      entry,
+      status: dismissed.status,
+      to: "dismissed",
+      ...(dismissed.released.length > 0
+        ? {
+            released: dismissed.released.map((claim) => ({
+              claim_id: claim.claim_id,
+              holder_session: claim.holder_session,
+            })),
+          }
+        : {}),
+    });
+  } catch (err) {
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
+    throw err;
   }
-  const kind = entryState.kind === "attention" ? "attention" : "common";
-  if (isTerminal(kind, entryState.status)) {
-    return problem(409, "conflict", `entry is already ${entryState.status}`, undefined, url.pathname);
-  }
-  await bus.commitTransition(entry, "dismissed", { by: "human", ...(note !== undefined ? { note } : {}) });
-  return Response.json({ entry, status: bus.state.entries[entry]?.status ?? "unknown", to: "dismissed" });
 }
 
 /** `GET /api/workspaces/inbox?path=<ws>[&all=1]` — `glosa inbox list`'s daemon-side half (issue
