@@ -48,18 +48,6 @@ function trackLines(stream: ReadableStream<Uint8Array>): {
   return { lines, stamped, done };
 }
 
-/** Drains a pipe with nobody caring about its content, only that it never fills and blocks the
- * child (issue #206 review lesson: "own the processes you spawn"). */
-function drainDiscard(stream: ReadableStream<Uint8Array>): void {
-  void (async () => {
-    const reader = stream.getReader();
-    for (;;) {
-      const { done } = await reader.read();
-      if (done) return;
-    }
-  })();
-}
-
 describe("Claude monitor integration", () => {
   test("real glosa monitor idles until glosa open, streams parked entries, reconnects after restart, and never replaces the daemon", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-real-home-"));
@@ -198,7 +186,17 @@ describe("Claude monitor integration", () => {
     }
   }, 20_000);
 
-  test("#206: two real glosa monitor processes sharing one session converge — the displaced one prints at most once and never ping-pongs; killing the owner lets the parked one re-acquire within 30s; a daemon restart still reconnects it", async () => {
+  // #306: three things now start a monitor for one Claude session — the plugin's `always` entry,
+  // its `on-skill-invoke:glosa-connect` entry, and the skill's own Monitor-tool fallback. Before
+  // the singleton guard this test proved the DISPLACEMENT that resulted, using monitor B's
+  // re-emission of an already-transport-accepted entry as the proof. That re-emission was also
+  // the user-visible defect: the same `[glosa <id>]` line twice. The guard removes the cause, so
+  // the old proof is now unreachable by construction and this test proves the guard instead.
+  //
+  // Displacement itself is deliberately NOT removed from the daemon (it is the only recovery from
+  // a wedged incumbent, and Codex shares that rail); it is covered where it lives, in
+  // `agent-provider/push-registry.test.ts` and the monitor's own park unit tests.
+  test("#306: a second glosa monitor for one session never attaches — it exits quietly, the first keeps the stream, and killing the owner (even with SIGKILL) frees the slot for a fresh one", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-two-home-"));
     const projectPath = mkdtempSync(join(tmpdir(), "glosa-monitor-two-project-"));
     const project = realpathSync(projectPath);
@@ -225,9 +223,13 @@ describe("Claude monitor integration", () => {
       CLAUDE_CODE_SESSION_ID: sessionId,
     } as Record<string, string>;
 
-    function spawnMonitor() {
+    // `legacyArgs` spawns the form an already-installed `monitors.json` still sends; the default
+    // is the form the `glosa-connect` skill can actually produce, which has no CLAUDE_PLUGIN_ROOT
+    // to pass. Both must work, so both are exercised here.
+    function spawnMonitor(legacyArgs = false) {
+      const args = legacyArgs ? ["--plugin-root", PLUGIN_ROOT, "--project-dir", project] : ["--project-dir", project];
       return Bun.spawn({
-        cmd: [process.execPath, MAIN, "monitor", "--plugin-root", PLUGIN_ROOT, "--project-dir", project],
+        cmd: [process.execPath, MAIN, "monitor", ...args],
         env,
         stdin: "ignore",
         stdout: "pipe",
@@ -235,11 +237,15 @@ describe("Claude monitor integration", () => {
       });
     }
 
-    const monitorA = spawnMonitor();
+    const monitorA = spawnMonitor(true);
     const trackA = trackLines(monitorA.stdout);
-    drainDiscard(monitorA.stderr);
+    const errorsA = trackLines(monitorA.stderr);
     let monitorB: ReturnType<typeof spawnMonitor> | undefined;
     let trackB: ReturnType<typeof trackLines> | undefined;
+    let errorsB: ReturnType<typeof trackLines> | undefined;
+    let monitorC: ReturnType<typeof spawnMonitor> | undefined;
+    let trackC: ReturnType<typeof trackLines> | undefined;
+    let errorsC: ReturnType<typeof trackLines> | undefined;
 
     try {
       const opened = Bun.spawnSync({
@@ -283,56 +289,50 @@ describe("Claude monitor integration", () => {
       const id1 = await createEntry("remark");
       expect(await waitUntil(() => trackA.lines.some((l) => l.includes(`[glosa ${id1}] `)), 8_000)).toBe(true);
 
-      // 2. Monitor B joins with the SAME session id — the daemon displaces A's push connection.
+      // 2. Monitor B joins with the SAME session id. The guard must stop it before it registers:
+      // it exits 0, and — critically — prints NOTHING on stdout, because a monitor's stdout lines
+      // are messages in the user's conversation. It says why on stderr, where `doctor` can look.
       monitorB = spawnMonitor();
       trackB = trackLines(monitorB.stdout);
-      drainDiscard(monitorB.stderr);
+      errorsB = trackLines(monitorB.stderr);
+      // Bounded, not a bare `await monitorB.exited`: without the guard B never exits at all, and
+      // an unbounded await would surface that as a suite timeout naming nothing. Asserted as an
+      // object so the ablated build reports WHAT B did instead — still running, and streaming.
+      const bExit = await Promise.race([monitorB.exited, Bun.sleep(15_000).then(() => "still-running")]);
+      expect({ bExit, bDeliveryLines: trackB.lines.filter((l) => l.includes("[glosa ")) }).toEqual({
+        bExit: 0,
+        bDeliveryLines: [],
+      });
+      await Promise.all([trackB.done, errorsB.done]);
+      expect(errorsB.lines.join("\n")).toInclude(`session ${sessionId} already has a live monitor`);
 
-      // `id1` is only `transport_accepted`, never MCP-`presented` (out of scope: re-emission to a
-      // fresh connection's empty `sent` set, #206's "amplifier"), so B's own pump necessarily
-      // re-emits it the moment its connection becomes the registry's live one. That re-emission is
-      // this test's OWN deterministic proof that displacement is now complete — not a race guess.
-      expect(await waitUntil(() => trackB!.lines.some((l) => l.includes(`[glosa ${id1}] `)), 8_000)).toBe(true);
-
-      // 3. Bounded settle window with NO new work: `id1` is still only `transport_accepted`, so if
-      // A ever reconnects on its own (an ablated build's ordinary retry floor is 5s), it would
-      // immediately re-fetch and reprint it — the exact amplifier this test uses as its displacement
-      // proof above, now used as a NEGATIVE proof of no alternation. The fix's park probe floor is
-      // 15s, comfortably outside this window, so a correct build reconnects only much later — this
-      // window must end well before that. 12s covers more than two ordinary-retry cycles at the 5s
-      // floor without reaching the park probe's own earliest possible firing.
-      await Bun.sleep(12_000);
+      // 3. Ownership never moved, so `id1` was never re-emitted. Before the guard, B's fresh
+      // connection re-sent it the instant it displaced A — that duplicate was this test's old
+      // proof of displacement AND the defect #306 is about. Ablating the guard restores both.
+      await Bun.sleep(2_000);
       expect(trackA.lines.filter((l) => l.includes(`[glosa ${id1}] `))).toHaveLength(1);
 
-      // 4. Ownership keeps working going forward, and stays with B alone — the displaced side must
-      // not alternate back in even once, however long it keeps discovering the same daemon/workspace
-      // on every parked probe.
+      // 4. A is still the owner and still delivers. Compared as an object carrying the timeline,
+      // because when this fails on a runner nobody can attach to, the message itself has to say
+      // when each side printed what.
       const id2 = await createEntry("clause");
-      expect(await waitUntil(() => trackB!.lines.some((l) => l.includes(`[glosa ${id2}] `)), 8_000)).toBe(true);
-      // Compared as an object carrying both timelines: when this fails on a runner nobody can
-      // attach to, the message itself has to say WHEN each side printed what, since that is what
-      // separates "the displaced side re-acquired through its probe" from "it never parked and
-      // took an ordinary retry".
+      expect(await waitUntil(() => trackA.lines.some((l) => l.includes(`[glosa ${id2}] `)), 8_000)).toBe(true);
       expect({
-        aPrintedId2: trackA.lines.filter((l) => l.includes(`[glosa ${id2}] `)).length,
+        bDeliveryLines: trackB!.lines.filter((l) => l.includes("[glosa ")).length,
         aTimeline: trackA.stamped,
-        bTimeline: trackB!.stamped,
-      }).toEqual({ aPrintedId2: 0, aTimeline: trackA.stamped, bTimeline: trackB!.stamped });
+      }).toEqual({ bDeliveryLines: 0, aTimeline: trackA.stamped });
 
+      // 5. SIGKILL the owner. This is the property a pid-file lock cannot offer: the holder gets
+      // no chance to clean up, yet the kernel drops its `flock` with the process, so a fresh
+      // monitor acquires immediately rather than waiting out a staleness heuristic. Delivery
+      // resumes on the NEW process with no daemon restart involved.
+      monitorA.kill("SIGKILL");
+      await monitorA.exited;
+      monitorC = spawnMonitor();
+      trackC = trackLines(monitorC.stdout);
+      errorsC = trackLines(monitorC.stderr);
       const id3 = await createEntry("notion");
-      expect(await waitUntil(() => trackB!.lines.some((l) => l.includes(`[glosa ${id3}] `)), 8_000)).toBe(true);
-      expect(trackA.lines.filter((l) => l.includes(`[glosa ${id3}] `))).toHaveLength(0);
-      // The FIRST entry is still the only thing A ever printed — not reprinted, not alternated.
-      const aDeliveryLines = trackA.lines.filter((l) => l.includes("[glosa "));
-      expect(aDeliveryLines).toHaveLength(1);
-      expect(aDeliveryLines[0]).toInclude(`[glosa ${id1}] `);
-
-      // 5. Kill the owner (B). The parked side (A) must re-acquire within 30s (<=18s probe window
-      // plus its own reconnect), with no daemon restart involved.
-      monitorB.kill("SIGTERM");
-      await monitorB.exited;
-      const id4 = await createEntry("insight");
-      expect(await waitUntil(() => trackA.lines.some((l) => l.includes(`[glosa ${id4}] `)), 30_000)).toBe(true);
+      expect(await waitUntil(() => trackC!.lines.some((l) => l.includes(`[glosa ${id3}] `)), 30_000)).toBe(true);
 
       // 6. A daemon restart still reconnects the (now sole) owner, same as the single-monitor case.
       await stopDaemon(home, daemon);
@@ -341,14 +341,50 @@ describe("Claude monitor integration", () => {
       expect(restarted).not.toBeNull();
       expect(restarted!.pid).not.toBe(daemonPid);
       const id5 = await createEntry("thought");
-      expect(await waitUntil(() => trackA.lines.some((l) => l.includes(`[glosa ${id5}] `)), 10_000)).toBe(true);
+      expect(await waitUntil(() => trackC!.lines.some((l) => l.includes(`[glosa ${id5}] `)), 10_000)).toBe(true);
+    } catch (error) {
+      throw new Error(
+        `${error}\n${JSON.stringify(
+          {
+            a: {
+              pid: monitorA.pid,
+              exitCode: monitorA.exitCode,
+              signal: monitorA.signalCode,
+              stdout: trackA.stamped,
+              stderr: errorsA.stamped,
+            },
+            b: monitorB
+              ? {
+                  pid: monitorB.pid,
+                  exitCode: monitorB.exitCode,
+                  signal: monitorB.signalCode,
+                  stdout: trackB?.stamped,
+                  stderr: errorsB?.stamped,
+                }
+              : null,
+            c: monitorC
+              ? {
+                  pid: monitorC.pid,
+                  exitCode: monitorC.exitCode,
+                  signal: monitorC.signalCode,
+                  stdout: trackC?.stamped,
+                  stderr: errorsC?.stamped,
+                }
+              : null,
+          },
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
     } finally {
       if (monitorA.exitCode === null) monitorA.kill("SIGTERM");
       await monitorA.exited;
       if (monitorB && monitorB.exitCode === null) monitorB.kill("SIGTERM");
       if (monitorB) await monitorB.exited;
-      await trackA.done;
-      if (trackB) await trackB.done;
+      if (monitorC && monitorC.exitCode === null) monitorC.kill("SIGTERM");
+      if (monitorC) await monitorC.exited;
+      await Promise.all([trackA.done, errorsA.done, trackB?.done, errorsB?.done, trackC?.done, errorsC?.done]);
       await stopDaemon(home, daemon);
       rmSync(home, { recursive: true, force: true });
       rmSync(project, { recursive: true, force: true });

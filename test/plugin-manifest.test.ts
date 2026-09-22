@@ -56,6 +56,16 @@ describe("the shipped Claude Code plugin", () => {
     }
   });
 
+  test("both start triggers are declared: session start, and glosa-connect run mid-session (#306)", () => {
+    // A declaration pin, not execution evidence: it records WHICH triggers ship, so deleting one
+    // is a named failure. `always` alone leaves a session that installed the plugin mid-run with
+    // no push until it restarts; `on-skill-invoke` alone loses the idle-then-connect behaviour a
+    // session in an already-registered workspace relies on. Both are only safe together because
+    // `glosa monitor` takes a per-session lock — see packages/daemon/test/monitor.test.ts.
+    const monitors = readJson("monitors/monitors.json") as Array<Record<string, unknown>>;
+    expect(monitors.map((entry) => entry.when).sort()).toEqual(["always", "on-skill-invoke:glosa-connect"]);
+  });
+
   test("plugin.json points at a skills directory that actually holds skills", () => {
     const manifest = readJson(".claude-plugin/plugin.json") as Record<string, unknown>;
     expect(manifest.name).toBe("glosa");

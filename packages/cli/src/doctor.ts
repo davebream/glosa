@@ -7,6 +7,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { countJournalLines } from "../../daemon/src/bus/tail.ts";
+import { forgetRemedy } from "../../daemon/src/registry/forget-remedy.ts";
 import {
   claudeConfigDir,
   claudeConfigRoots,
@@ -331,13 +332,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
       }
     }
   } else if (forgetting) {
-    checks.push(
-      check(
-        "workspace",
-        "fail",
-        `this workspace's deletion was interrupted mid-way (\`glosa forget\`) — run \`glosa forget ${forgetting.slug} --yes\` to resume and finish removing it`,
-      ),
-    );
+    checks.push(check("workspace", "fail", forgetting.remedy ?? forgetRemedy(forgetting.slug)));
   } else {
     const glosaDir = join(dir, ".glosa");
     if (!existsSync(glosaDir)) {
@@ -478,11 +473,7 @@ async function runChecks(dir: string, deps: DoctorDeps, options: DoctorOptions):
           "warn",
           `Claude Code suppresses plugin monitors while ${monitorDisabledBy.join(" and ")} is set; glosa entries remain queued for MCP pull`,
         )
-      : check(
-          "claude-monitor",
-          "skip",
-          "monitor availability is per interactive Claude session; a live stream, not plugin installation, enables push",
-        ),
+      : claudeMonitorCheck(status, canonicalDirForForgetting, dir),
   );
 
   // 13. transcript-root (confined under the allowed CLAUDE_CONFIG_DIR)
@@ -619,6 +610,43 @@ function scanLegacyConfig(dir: string, deps: DoctorDeps): string[] {
     if (existsSync(path)) found.push(path);
   }
   return found;
+}
+
+/** Whether any live session bound to this workspace actually holds a push stream (#306).
+ *
+ * This check could previously only answer `skip`, and its own words said why: "a live stream, not
+ * plugin installation, enables push" — true, and unobservable, because nothing reported the
+ * stream. Contract 1.16 puts it on the session row, so the one diagnosis nobody could make is now
+ * the ordinary answer: a session bound with no stream is a monitor that never started, which is
+ * exactly the silent failure #306 is about.
+ *
+ * Still `skip` when the daemon is unreachable or predates the field. An ABSENT `push` is "cannot
+ * say", never "not live" — reporting an N-1 daemon as broken would be a worse lie than saying
+ * nothing. */
+function claudeMonitorCheck(status: StatusSummary | null, canonicalDir: string, dir: string): CheckResult {
+  const skip = check(
+    "claude-monitor",
+    "skip",
+    "monitor availability is per interactive Claude session; a live stream, not plugin installation, enables push",
+  );
+  if (!status) return skip;
+  const ws = status.workspaces.find((w) => w.path === canonicalDir || w.path === dir);
+  if (!ws) return skip;
+  const bound = status.sessions.filter((s) => s.liveness === "alive" && s.workspace_binding === ws.path);
+  if (bound.length === 0) return skip;
+  if (bound.every((s) => s.push === undefined)) return skip;
+  const pushing = bound.filter((s) => s.push?.connected === true);
+  return pushing.length > 0
+    ? check(
+        "claude-monitor",
+        "pass",
+        `${pushing.length} of ${bound.length} live session(s) hold a push stream (${[...new Set(pushing.map((s) => s.push?.transport))].join(", ")})`,
+      )
+    : check(
+        "claude-monitor",
+        "warn",
+        `${bound.length} live session(s) bound here, none holding a push stream — entries queue until pulled. On Claude Code a session monitor starts the stream; run the glosa-connect skill, or restart the session if the plugin was installed after it began`,
+      );
 }
 
 export async function runDoctor(

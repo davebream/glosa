@@ -35,7 +35,12 @@ function isApiError(err: unknown): err is ApiError {
 }
 
 export function apiError(status: number, problem: ApiProblem | null): ApiError {
-  const err = new Error(problem?.title ?? `glosa daemon request failed with status ${status}`) as ApiError;
+  // `detail` joins the message rather than staying on `err.problem` (#312). An MCP tool's thrown
+  // Error becomes a bare string in the agent's context, so anything the daemon says that is not
+  // in `.message` never reaches the one reader who most needs it — the agent deciding what to do
+  // next. The title stays first and unchanged; the remedy follows it.
+  const title = problem?.title ?? `glosa daemon request failed with status ${status}`;
+  const err = new Error(problem?.detail ? `${title} — ${problem.detail}` : title) as ApiError;
   err.code = "API_ERROR";
   err.status = status;
   err.problem = problem;
@@ -66,6 +71,10 @@ export interface WorkspaceStatusSummary {
    * interrupted deletion reads as "resume with `glosa forget <slug> --yes`", not as a plain
    * not-yet-opened workspace. */
   lifecycle?: "forgetting";
+  /** Additive in contract 1.16 (issue #312) — the daemon's own resume sentence, present only
+   * beside `lifecycle`. A JSON consumer (the `glosa-connect` skill) prints this verbatim instead
+   * of composing a copy that drifts from what `status` and `doctor` print. */
+  remedy?: string;
   /** Additive in contract 1.15; optional for an N-1 daemon. */
   live_updates?:
     | { state: "live" }
@@ -95,6 +104,11 @@ export interface SessionStatusSummary {
   workspace_binding: string | null;
   last_active_at: string;
   liveness: "alive" | "stale";
+  /** Additive in contract 1.16 (issue #306) — whether this session holds a live push stream right
+   * now, and over which transport. Optional for an N-1 daemon, and the distinction matters: an
+   * ABSENT field means "this daemon cannot say", which is not the same as `connected:false` and
+   * must never be reported as "push is not live". */
+  push?: { connected: boolean; transport: "monitor" | "codex_app_server" | null };
 }
 
 export interface OrphanedStateSummary {

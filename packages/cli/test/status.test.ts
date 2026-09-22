@@ -95,6 +95,30 @@ describe("glosa status", () => {
     expect(out).toContain("glosa forget abc --yes");
   });
 
+  test("human output prefers the daemon's own remedy sentence over composing its own (#312)", async () => {
+    // One sentence, four readers: this output, `doctor`, the 409 an agent sees, and the JSON the
+    // glosa-connect skill quotes. They agree because the daemon writes it once and everything
+    // else prints what it sent.
+    const client = new FakeGlosaApiClient();
+    client.statusResult.workspaces = [
+      {
+        slug: "abc",
+        path: "/repo",
+        last_seen: "2020-01-01T00:00:00.000Z",
+        pending_count: 0,
+        has_attention: false,
+        lifecycle: "forgetting",
+        remedy: "deletion interrupted (`glosa forget`) — run `glosa forget abc --yes` to resume",
+      },
+    ];
+    const deps: StatusDeps = { createClient: async () => client as unknown as GlosaApiClient };
+    const result = await runStatus("/repo", deps);
+    expect(result.data.workspaces?.[0]?.remedy).toContain("glosa forget abc --yes");
+    expect(captureStdout(() => printStatusResult(result, false))).toContain(
+      "deletion interrupted (`glosa forget`) — run `glosa forget abc --yes` to resume",
+    );
+  });
+
   test("human output names live-update state and the offline-catchup reason", async () => {
     const client = new FakeGlosaApiClient();
     client.statusResult.workspaces = [

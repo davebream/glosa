@@ -3,6 +3,12 @@
     "name": "glosa-session",
     "description": "Deliver queued glosa review entries to this Claude Code session",
     "when": "always",
-    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/glosa monitor --plugin-root \"${CLAUDE_PLUGIN_ROOT}\" --project-dir \"${CLAUDE_PROJECT_DIR}\""
+    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/glosa monitor --project-dir \"${CLAUDE_PROJECT_DIR}\""
+  },
+  {
+    "name": "glosa-session-on-connect",
+    "description": "Deliver queued glosa review entries after glosa-connect runs mid-session",
+    "when": "on-skill-invoke:glosa-connect",
+    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/glosa monitor --project-dir \"${CLAUDE_PROJECT_DIR}\""
   }
 ]

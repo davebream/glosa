@@ -135,7 +135,23 @@ export class SessionRegistry {
       last_active_at: input.last_active_at ?? now.toISOString(),
       lease_expiry: input.lease_expiry ?? new Date(now.getTime() + this.leaseTtlMs).toISOString(),
     };
-    await this.index?.upsertWorkspace(record.workspace_binding ?? record.cwd, "session");
+    // `upsertSessionWorkspace`, not `upsertWorkspace`: a session reports where it is RUNNING, and
+    // that is not by itself a request to make that directory a workspace (#146). It declines to
+    // mint one for `$HOME` or for a directory already inside a registered workspace, and refuses a
+    // path a `glosa forget` is midway through deleting. A null result is an ordinary outcome — the
+    // session stays registered and reachable by MCP pull with no workspace invented for it.
+    const resolved = await this.index?.upsertSessionWorkspace(record.workspace_binding ?? record.cwd);
+    // When it resolved us to an ENCLOSING workspace rather than our own directory, that workspace
+    // becomes the binding. Declining to register the subdirectory without this would be strictly
+    // worse than the duplicate it prevents: `forWorkspace`'s fallback rung matches a session whose
+    // cwd is an ANCESTOR of the workspace, never a descendant, so a session in `packages/cli`
+    // would be reachable from nothing at all. `cwd` is left alone — it says where the process
+    // runs and stays true; `workspace_binding` is the routing answer, which is the same thing the
+    // Claude session monitor already computes for itself. Never overrides a binding the caller
+    // supplied: an explicit request outranks anything inferred from a directory.
+    if (resolved && record.workspace_binding === undefined && resolved.canonical_path !== record.cwd) {
+      record.workspace_binding = resolved.canonical_path;
+    }
     this.sessions.set(record.session_id, record);
     this.announceSessionsChanged();
     // A REBIND, not a heartbeat: the previous binding actually changed value. A held watch that

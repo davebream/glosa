@@ -216,6 +216,68 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(await afterClose.json()).toEqual({ connected: false, transport: null });
   });
 
+  test("GET /api/status reports the same push fact on the session row, so a client that already reads status need not probe (#306)", async () => {
+    ctx.pushRegistry = new SessionPushRegistry();
+    await sessionRegistry.register({
+      session_id: "status-push-session",
+      provider: "claude-code",
+      cwd: root,
+      workspace_binding: root,
+      source: "monitor",
+    });
+
+    // Bound, registered, alive — and not reachable by push. This is precisely the state that used
+    // to be indistinguishable from a working connection, and `source:"monitor"` is why nothing
+    // could stand in for the real answer: an explicit bind overwrites it with "mcp".
+    const before = await fetchFn(req("/api/status"));
+    const beforeRow = (await before.json()).sessions.find(
+      (s: { session_id: string }) => s.session_id === "status-push-session",
+    );
+    expect(beforeRow).toMatchObject({ workspace_binding: root, liveness: "alive" });
+    expect(beforeRow.push).toEqual({ connected: false, transport: null });
+
+    const stream = await fetchFn(req("/api/sessions/status-push-session/stream?transport=monitor"));
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    await reader.read(); // consume ": connected"
+
+    const during = await fetchFn(req("/api/status"));
+    const duringRow = (await during.json()).sessions.find(
+      (s: { session_id: string }) => s.session_id === "status-push-session",
+    );
+    // The same shape the probe returns, on purpose: one wire shape for this fact, not two.
+    expect(duringRow.push).toEqual({ connected: true, transport: "monitor" });
+    const probe = await fetchFn(req("/api/sessions/status-push-session/stream/status"));
+    expect(await probe.json()).toEqual(duringRow.push);
+
+    await reader.cancel();
+    const after = await fetchFn(req("/api/status"));
+    const afterRow = (await after.json()).sessions.find(
+      (s: { session_id: string }) => s.session_id === "status-push-session",
+    );
+    expect(afterRow.push).toEqual({ connected: false, transport: null });
+  });
+
+  test("a Codex app-server attachment reports its own transport, not the Claude one (#306)", async () => {
+    ctx.pushRegistry = new SessionPushRegistry();
+    await sessionRegistry.register({
+      session_id: "codex-push-session",
+      provider: "codex",
+      cwd: root,
+      workspace_binding: root,
+      source: "codex-app-server",
+    });
+    const stream = await fetchFn(req("/api/sessions/codex-push-session/stream?transport=codex_app_server"));
+    expect(stream.status).toBe(200);
+    const codexReader = stream.body!.getReader();
+    await codexReader.read();
+
+    const res = await fetchFn(req("/api/status"));
+    const row = (await res.json()).sessions.find((s: { session_id: string }) => s.session_id === "codex-push-session");
+    expect(row.push).toEqual({ connected: true, transport: "codex_app_server" });
+    await codexReader.cancel();
+  });
+
   async function ack(sessionId: string, deliveryId: string, outcome: "presented" | "failed" = "presented") {
     return fetchFn(
       req(`/api/sessions/${sessionId}/deliveries/${deliveryId}/ack`, {
