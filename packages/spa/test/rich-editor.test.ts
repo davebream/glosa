@@ -1552,7 +1552,7 @@ describe("the restoration's size guard", () => {
       countNote(
         "the corpus block total, the same number the REQ-8 harness below pins as BLOCKS. Re-baseline both together.",
       ),
-    ).toBe(725);
+    ).toBe(727);
     // Measured here: 8,773,444 cells, in the `### Fixed` list under the most recent release
     // heading in CHANGELOG.md. (#183's bullet was appended to that released list by mistake and has
     // since moved to `[Unreleased]`, which is why the worst block dips rather than grows here.) That list is ONE
@@ -1983,7 +1983,12 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
   // `## [x.y.z]` release heading and gains no link definition, so this is the bookkeeping case and
   // no numerator moved — metric 1's per-cause map still totals 48, `shipped` stays 1/1, `ablated`
   // stays 43/43, and missed/false alarms remain zero.
-  const BLOCKS = 725;
+  // The composer's intent radios add a `### Changed` heading and its list under `[Unreleased]`,
+  // beside the `### Fixed` one already there: two blocks, two edits, 725 → 727 blocks / 658 → 660
+  // edits. Neither is a release heading and neither gains a link definition, so no numerator
+  // moved: metric 1's per-cause map still totals 48, `shipped` stays 1/1, `ablated` stays 43/43,
+  // and missed/false alarms remain zero. Denominator only.
+  const BLOCKS = 727;
 
   /** Every top-level block of the corpus, with the bytes and the reference context it was read in. */
   const corpus = () => {
@@ -2019,7 +2024,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
     return `unclassified: ${JSON.stringify(source.slice(0, 24))} → ${JSON.stringify(written.slice(0, 24))}`;
   };
 
-  test("metric 1 — 48 of 725 blocks still cost bytes re-serialized, with no restoration", () => {
+  test("metric 1 — 48 of 727 blocks still cost bytes re-serialized, with no restoration", () => {
     const byCause: Record<string, number> = {};
     let blockCount = 0;
     for (const { body, node, referenceSuffix } of corpus()) {
@@ -2076,7 +2081,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
 
   // This exhaustive corpus sweep took 6.96s on the Bun 1.4.2 CI runner (#230).
   // Give all 484 edits a bounded budget; no cases or fidelity assertions are skipped.
-  test("metrics 2 and 3 — 1 dishonest write of 658; the guard fires on it and, ablated, on 43", () => {
+  test("metrics 2 and 3 — 1 dishonest write of 660; the guard fires on it and, ablated, on 43", () => {
     // METRIC 2 is the ground truth — "the save wrote more than the writer's word" — and METRIC 3 is
     // the guard's verdict checked against it, in TWO configurations. The second is the ratchet: with
     // the restoration off the writes really are dishonest, currently 39 of them, and the guard must catch
@@ -2167,7 +2172,7 @@ describe("the REQ-8 measurement harness (AC-4) — four metrics over the nine ha
       // link definition, which the ablated path re-serializes and the shipped path restores, so
       // `shipped` held at 1/1 and metric 1's only per-cause move was the reference-link one.
     ).toEqual({
-      edits: 658,
+      edits: 660,
       shipped: { dishonest: 1, fired: 1 },
       ablated: { dishonest: 43, fired: 43 },
     });
