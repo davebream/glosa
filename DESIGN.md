@@ -36,9 +36,21 @@ typography:
     fontWeight: 650
     lineHeight: 1.1
     letterSpacing: "-0.015em"
+  manuscript-title-narrow:
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.875rem"
+    fontWeight: 650
+    lineHeight: 1.1
+    letterSpacing: "-0.015em"
   manuscript-section:
     fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
     fontSize: "1.625rem"
+    fontWeight: 620
+    lineHeight: 1.25
+    letterSpacing: "-0.01em"
+  manuscript-section-narrow:
+    fontFamily: "Source Serif 4, Iowan Old Style, Charter, Georgia, serif"
+    fontSize: "1.5rem"
     fontWeight: 620
     lineHeight: 1.25
     letterSpacing: "-0.01em"
@@ -264,8 +276,8 @@ Warm paper, warm near-black ink, low-chroma warm greys, one burnt vermilion hand
 The writer can switch a page's face in the pane's More menu (Default = serif, Sans, Mono) through one variable, `--font-manuscript`, with its own size and leading. The chooser rows lead with an "Aa" sample in the face they name; the chosen row is told by weight and a drawn check.
 
 ### Hierarchy
-- **Manuscript Title** (650, 2.5rem, 1.1, −0.015em): the artifact's `h1`, 2rem below.
-- **Manuscript Section** (620, 1.625rem, 1.25, −0.01em): `h2`, 3rem above, 0.75rem below.
+- **Manuscript Title** (650, 2.5rem, 1.1, −0.015em): the artifact's `h1`, 2rem below. It scales with the pane, not the viewport: full size from an 800px pane, down to **Manuscript Title Narrow** (1.875rem) at 400px and below.
+- **Manuscript Section** (620, 1.625rem, 1.25, −0.01em): `h2`, 3rem above, 0.75rem below. It scales with the pane too, down to **Manuscript Section Narrow** (1.5rem), so the title keeps its lead at every width.
 - **Manuscript Subhead** (620, 1.25rem, 1.3): `h3`, 2rem above, 0.5rem below; closes to 0.75rem above when it follows its section directly. `h4`–`h6` at 600, 17px, 1.4.
 - **Manuscript Body** (400, 18px / 1.62 serif; 16px / 1.6 sans; 15px / 1.65 mono): prose on a 68ch measure, pretty wrapping, hanging punctuation. Emphasis is 600, not the full bold.
 - **Note** (400, 15px / 1.45, serif): the words of a margin entry, the composer field and a session's message, in the serif whatever the page face. Notes are writing, not chrome.
@@ -294,7 +306,7 @@ The manuscript column is 68ch plus two 2rem gutters, centred; its painted block 
 
 **The margin** is painted, never reserved: the manuscript never moves when Review is entered or the first entry arrives. From a pane width of 1205px the margin is a right rail (240–320px) of entries positioned beside their passages over whitespace; below it, saved entries move into a collection tray at the pane's foot. At every width the composer opens at its passage: directly under the selection (flipping above it when there is no room), aligned to its first word and held inside the manuscript column, 26rem wide. A draft never opens in the rail, where it sat far from the words just selected. The outline is reached through Go to (⌘K), never through the gutter.
 
-Compact (≤ 1023px) hides the logo, tightens the top bar and lets the tray span the width. Phone (≤ 640px) reduces the manuscript's side padding to 1rem and stacks the approval strip. Coarse pointers grow hit targets to 44px without changing the visible vocabulary. The dock floor is one 360px pane; below that, the app scrolls.
+Compact (≤ 1023px) hides the logo, tightens the top bar and lets the tray span the width. Phone (≤ 640px) stacks the approval strip. The manuscript keeps both 2rem gutters at every width, because its marks live there: the § addresses and a session's tabs on the left, the note dots on the right. The title and section heading shrink with the pane instead. Coarse pointers grow hit targets to 44px without changing the visible vocabulary. The dock floor is one 360px pane; below that, the app scrolls.
 
 Spacing is a 4pt scale: 0.25 / 0.5 / 0.75 / 1 / 1.5 / 2 / 3rem.
 

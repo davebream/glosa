@@ -164,6 +164,7 @@
   --artifact-bar-height: 40px;
   --nav-foot-height: 44px;
   --strip-height: 36px; /* the tab strip; the navigator's first row shares this band */
+  --tray-strip-height: 35px; /* the collapsed annotations tray: its 34px toggle over a 1px rule */
   --measure: 68ch;
   /* The painted width of the manuscript column: a 68ch serif measure plus its two 2rem gutters.
      Fixed in px because the annotation ladder below has to reason about it from OUTSIDE the
@@ -2089,19 +2090,29 @@ input,
   pointer-events: none;
 }
 
+/* One path, set in two faces: no gap after the directory. Its own trailing slash is the separator,
+   and the mono slash already carries air on both sides; a 6px gap on top of it split
+   "drafts/ index.md" into two words. */
 .glosa-artifact-id {
   display: flex;
   align-items: baseline;
-  gap: 0.375rem;
+  gap: 0;
   min-width: 0;
   flex: 1;
 }
 
 /* Genuine middle truncation, without JS: the leading segments shrink and ellipsize while the
    segment nearest the filename never does, so the directory always ends where the reader is
-   looking. artifact-pane.js splits the path into these two spans. */
+   looking. artifact-pane.js splits the path into these two spans.
+
+   The directory is itself a flex row, so its baseline is borrowed from a child, and it must be
+   one that has text. A one-level path leaves the head empty. Without `align-items: baseline`
+   the empty head was the child the row asked, and an empty box's baseline is its bottom edge.
+   The directory then sat a full descent above the filename, and the row it made was tall enough
+   to push the filename below the bar's centre line. */
 .glosa-artifact-dir {
   display: flex;
+  align-items: baseline;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -2113,6 +2124,10 @@ input,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.glosa-artifact-dir-head:empty {
+  display: none;
 }
 
 .glosa-artifact-dir-tail {
@@ -2575,9 +2590,15 @@ input,
 /* A document scale, set in the same serif as the body: the title is a title, a section opens with
    air above it, and a subhead sits close to what it introduces. Weight stays near semibold so the
    headings read as a well-set page rather than a magazine; the optical-size axis gives the title
-   its display cut on its own. */
+   its display cut on its own.
+
+   The title and the section heading step down with the PANE (`cqi` is the pane's inline size, the
+   nearest container), not the viewport, and fluidly, so dragging a sash never makes them jump. The
+   title is 40px from an 800px pane and bottoms out at 30px from 400px down; set at 40px in a 300px
+   column it broke a short title into three lines of display type. The section heading keeps 26px
+   to about 670px and bottoms out at 24px, so the step between the two holds at every width. */
 .glosa-content h1 {
-  font-size: 2.5rem;
+  font-size: clamp(1.875rem, 1.25rem + 2.5cqi, 2.5rem);
   line-height: 1.1;
   font-weight: 650;
   letter-spacing: -0.015em;
@@ -2585,7 +2606,7 @@ input,
 }
 
 .glosa-content h2 {
-  font-size: 1.625rem;
+  font-size: clamp(1.5rem, 1.25rem + 0.9cqi, 1.625rem);
   font-weight: 620;
   letter-spacing: -0.01em;
   margin: var(--space-12) 0 var(--space-3);
@@ -4653,18 +4674,30 @@ input,
 /* The provenance line (direction contract): written, changed, outside glosa, approval — one quiet
    row of facts at the foot of the manuscript, in the chrome face, on the manuscript's measure. It
    reports whether the workbench's promises hold for this document; it is never a badge. */
+/* `ch` is measured in the element's OWN face. Set in the chrome's 12px sans, `68ch` came to about
+   385px against the serif's 612px, so the line sat centred well inside the text, over 110px short
+   of it at each end on a desktop pane and visibly off the text's left edge on a narrow one. The
+   box takes the manuscript's face and size, which is all the measure reads, and the facts inside
+   are set in the chrome face. The rule spans the text column exactly: the 2rem gutters are outside
+   the box, not padding inside it. */
 .glosa-provenance {
-  width: 100%;
-  max-width: calc(var(--measure) + 2 * var(--space-8));
+  width: calc(100% - 2 * var(--space-8));
+  max-width: var(--measure);
   margin: 0 auto;
-  padding: var(--space-3) var(--space-8) var(--space-8);
+  padding: var(--space-3) 0 var(--space-8);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-6);
   border-top: 1px solid var(--border);
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
+  font-family: var(--font-manuscript);
+  font-size: var(--manuscript-size);
   color: var(--muted);
+}
+
+/* The collapsed tray is a strip laid over the foot of the scroller (it is not in the flow), so
+   the page's last line needs that much more room to scroll clear of it. */
+.glosa-pane:has(> .glosa-annotations-tray:not([hidden])) .glosa-provenance {
+  padding-bottom: calc(var(--space-8) + var(--tray-strip-height));
 }
 
 .glosa-provenance-fact {
@@ -4672,6 +4705,9 @@ input,
   gap: var(--space-1);
   align-items: baseline;
   white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 .glosa-provenance dt {
@@ -5395,7 +5431,7 @@ input,
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 34px;
+  min-height: calc(var(--tray-strip-height) - 1px);
   padding: 0 var(--space-4);
   color: var(--muted);
   font-size: var(--text-xs);
@@ -5506,12 +5542,11 @@ input,
     min-height: 2.25rem;
   }
 
-  .glosa-content,
-  .glosa-skeleton,
-  .glosa-edit-wrap {
-    padding-left: var(--space-4);
-    padding-right: var(--space-4);
-  }
+  /* The manuscript keeps its two 2rem gutters here too. They are not padding to trade for
+     measure: the left one holds the § addresses and a session's tab (BAND_TAB_OFFSET), the right
+     one the note dots (.glosa-markers). This rule used to cut them to 1rem, which pushed every
+     address past the pane's edge, where the scroller clipped it to a stray digit. A split pane
+     beside a terminal hits this width as well as a phone, so it cut where the marks matter most. */
 
   .glosa-history,
   .glosa-conversation {

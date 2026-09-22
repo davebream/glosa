@@ -385,9 +385,17 @@
         "displayName": "Manuscript Title",
         "purpose": "The artifact's h1, in the serif with optical sizing."
       },
+      "manuscript-title-narrow": {
+        "displayName": "Manuscript Title Narrow",
+        "purpose": "The h1's floor in a pane of 400px or less; the title scales fluidly from here to 2.5rem at 800px."
+      },
       "manuscript-section": {
         "displayName": "Manuscript Section",
         "purpose": "The artifact's h2; 3rem above, 0.75rem below."
+      },
+      "manuscript-section-narrow": {
+        "displayName": "Manuscript Section Narrow",
+        "purpose": "The h2's floor in a narrow pane; it scales fluidly back to 1.625rem by about 670px."
       },
       "manuscript-subhead": {
         "displayName": "Manuscript Subhead",
