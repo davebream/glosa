@@ -18,6 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   apply-lease is already active". The refusal now names the session holding the file, since when, and
   until when, and an entry delivered to a second agent says the same thing before it tries.
   `glosa inbox list` shows who holds each entry.
+- **An agent learns right away when a person takes its file over.** When your save or dismiss
+  overrides an agent's claim, that agent gets a notice through its Claude monitor or Codex thread, or
+  with its next `glosa_inbox_pull`. It no longer finds out only when its resolve is refused. Other
+  agents on the workspace are told when a claim is taken or given up. `glosa_signal_ack` acknowledges
+  a notice pulled over MCP.
+- **The workbench shows which agent is working on a file.** A tab whose file an agent has claimed
+  carries a badge naming the session and since when. The paused Edit button and the card of a note
+  an agent is applying say the same.
 
 ### Changed
 

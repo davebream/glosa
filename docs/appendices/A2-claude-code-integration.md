@@ -54,6 +54,12 @@ eligible for MCP pull. Claude calls `glosa_delivery_ack` with the in-band id aft
 agent context. Only that exact-session acknowledgement records `presented`; conversation messages
 then make their terminal transition.
 
+An `event: signal` frame (A1 §5.11g, issue #155) is written as its own stdout line,
+`[glosa signal <signal-id>] <kind>: <message>`, and the monitor then acknowledges it itself with the
+frame's `ack_token`. For a signal, reaching agent context is the whole point, so there is no separate
+agent acknowledgement. A failed print or ack never ends the stream. The signal stays unacknowledged
+and is offered again on the next connect or MCP pull.
+
 Claude suppresses plugin monitors when `DISABLE_TELEMETRY=1` or
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and does not run them for noninteractive or unsupported
 hosted-model sessions. `push` is therefore true only while a monitor is connected. Because that is
@@ -128,6 +134,10 @@ already-running turn. A successful JSON-RPC response records
 `glosa_delivery_ack`; only that exact-session acknowledgement records `presented`. `turn/completed`
 clears the active turn and provides the hook-free boundary signal while the open generic stream
 continues draining parked and new entries.
+
+An `event: signal` frame (A1 §5.11g, issue #155) is steered into the same thread as one text input,
+`[glosa signal <signal-id>] <kind>: <message>`, the line the Claude monitor prints. The attachment
+then acknowledges it with the frame's `ack_token`.
 
 ## F08 — session registry and explicit binding
 

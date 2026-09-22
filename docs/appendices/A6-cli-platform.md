@@ -260,7 +260,8 @@
 - Same-id set and repeated clear are idempotent. A different active id is an explicit conflict.
 - MCP parity tools are `glosa_inbox_pull`, `glosa_inbox_get`, `glosa_metadata_set`,
   `glosa_metadata_show`, `glosa_metadata_clear`, `glosa_session_bind`, `glosa_delivery_ack`,
-  `glosa_claim`, `glosa_release` (issue #155), `glosa_present`, `glosa_ask`, and `glosa_watch`; their
+  `glosa_claim`, `glosa_release`, `glosa_signal_ack` (issue #155), `glosa_present`, `glosa_ask`, and
+  `glosa_watch`; their
   arguments and returned data
   match the CLI/API contract. (`glosa_ask` and `glosa_watch` were both already-shipped/newly-added
   tools this list previously omitted — `GLOSA_MCP_TOOL_NAMES`'s exact-list test in `cli/test/mcp.test.ts`
