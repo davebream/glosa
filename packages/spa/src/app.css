@@ -3673,7 +3673,8 @@ input,
   pointer-events: none; /* the rail is a coordinate space; only its cards are interactive */
 }
 
-.glosa-margin-side .glosa-annotation {
+.glosa-margin-side .glosa-annotation,
+.glosa-margin-side .glosa-agent-card {
   position: absolute;
   left: 0;
   right: var(--space-3);
@@ -3699,8 +3700,18 @@ input,
    the 240px floor at 1203px — below which artifact-pane.js stops setting .glosa-margin-side at
    all and the compact tray takes over. Keep the threshold below in step with MARGIN_RAIL_FLOOR. */
 @container pane (min-width: 1205px) {
-  .glosa-margin-side {
+  .glosa-margin-side,
+  .glosa-annotations-tray[data-beside] {
     --margin-width: clamp(240px, calc((100cqi - var(--manuscript-block)) / 2 - var(--space-2)), 320px);
+  }
+
+  /* Beside the rail the tray is the rail's own drawer: the same column, at the pane's foot, holding
+     what the rail cannot place (settled notes, notes that lost their passage). Spanning the pane it
+     would put a 1200px sheet of notes over the manuscript to show a 300px column's worth of cards. */
+  .glosa-annotations-tray[data-beside] {
+    justify-self: end;
+    width: var(--margin-width);
+    border-left: 1px solid var(--border);
   }
 }
 
@@ -4118,7 +4129,8 @@ input,
    explicit dark theme Chromium paints an UNCHECKED radio as a solid light disc — every option
    reads as the selected one, which is worse than no indicator at all. Drawing it also puts the
    control on the palette, the way the caret and the scrollbar already are. */
-.glosa-agent-option input[type="radio"] {
+.glosa-agent-option input[type="radio"],
+.glosa-composer-intent input[type="radio"] {
   appearance: none;
   -webkit-appearance: none;
   margin: 0;
@@ -4131,7 +4143,8 @@ input,
   place-content: center;
 }
 
-.glosa-agent-option input[type="radio"]::before {
+.glosa-agent-option input[type="radio"]::before,
+.glosa-composer-intent input[type="radio"]::before {
   content: "";
   width: 7px;
   height: 7px;
@@ -4141,15 +4154,18 @@ input,
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-.glosa-agent-option input[type="radio"]:checked {
+.glosa-agent-option input[type="radio"]:checked,
+.glosa-composer-intent input[type="radio"]:checked {
   border-color: var(--primary);
 }
 
-.glosa-agent-option input[type="radio"]:checked::before {
+.glosa-agent-option input[type="radio"]:checked::before,
+.glosa-composer-intent input[type="radio"]:checked::before {
   transform: scale(1);
 }
 
-.glosa-agent-option input[type="radio"]:focus-visible {
+.glosa-agent-option input[type="radio"]:focus-visible,
+.glosa-composer-intent input[type="radio"]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -4462,6 +4478,19 @@ input,
   font-weight: 600;
 }
 
+/* A settled note whose words are gone is a record, not a warning: the session applied it, or it
+   was closed. The line is muted and the quote is not struck, because nothing was lost. */
+.glosa-annotation-lost[data-settled] {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.glosa-annotation[data-anchored="false"]:is([data-state="applied"], [data-state="rejected"], [data-state="dismissed"])
+  .glosa-annotation-quote
+  > span {
+  text-decoration: none;
+}
+
 /* Edit and Remove share one recessive vocabulary — quiet underlined text, never buttons
    competing with the note itself. Only the hover colour separates revising from withdrawing. */
 .glosa-annotation-edit,
@@ -4513,6 +4542,24 @@ input,
   margin-top: 0;
 }
 
+/* "Resolved" and its one bulk verb on one line: the heading names the group, the verb acts on all
+   of it, in the same recessive underlined text each card's own Clear uses. */
+.glosa-margin-subhead-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.glosa-margin-subhead-row:first-child {
+  margin-top: 0;
+}
+
+.glosa-margin-subhead-row .glosa-margin-subhead {
+  margin: 0;
+}
+
 .glosa-annotation-remove:hover {
   color: var(--danger);
   text-decoration-color: currentColor;
@@ -4559,37 +4606,37 @@ input,
   overflow: hidden;
 }
 
-/* Intent choice: free-floating radio chips, not a segmented tub — three writer-length labels
-   wrap naturally as tags instead of breaking a control that pretends to be one piece. */
+/* Intent choice: one of three, with "Change the words" already chosen, drawn as the radio set it
+   is. It used to be three outlined pills, the vocabulary of tags and filters, which reads as
+   "pick any". The chosen pill differed only by a darker outline and a bolder label, and the bolder
+   label was wider, so the row shifted on every pick. On the composer, the one card on the page,
+   they were also three more boxes between the quote and the field. A drawn radio says "pick one"
+   before a word is read. Its filled dot is the shape the choice needs, so the label changes colour
+   only, never weight, and the row holds still. It is the same radio a session's question uses. */
 .glosa-composer-intents {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-1) var(--space-4);
 }
 
-.glosa-composer-intents button {
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+.glosa-composer-intent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   white-space: nowrap;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 
-.glosa-composer-intents button:hover {
-  border-color: var(--border-strong);
+.glosa-composer-intent:hover,
+.glosa-composer-intent:has(input:checked) {
   color: var(--ink);
 }
 
-.glosa-composer-intents button[aria-pressed="true"] {
-  background: transparent;
+.glosa-composer-intent:hover input[type="radio"]:not(:checked) {
   border-color: var(--ink);
-  color: var(--ink);
-  font-weight: 600;
 }
 
 .glosa-composer-input {
@@ -4729,6 +4776,23 @@ input,
 
 .glosa-provenance dd {
   margin: 0;
+}
+
+/* "N applied" is the way to the applied notes, which live in the tray, not the rail. It reads as
+   the fact it is, underlined like the entries' own verbs, and lifts to ink when it is pointed at. */
+.glosa-provenance-link {
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.glosa-provenance-link:hover {
+  color: var(--ink);
+  text-decoration-color: currentColor;
 }
 
 /* ---------- 10b. Confirm dialog ---------- */
@@ -5456,6 +5520,19 @@ input,
   color: var(--ink);
 }
 
+/* A note that lost its place is open work with nowhere to sit, so the strip says so in the ochre
+   the card itself uses, as a dot beside the words (Status Needs Shape), not as coloured text. */
+.glosa-annotations-tray[data-lost] .glosa-tray-count::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--warn);
+  vertical-align: 1px;
+}
+
 .glosa-tray-toggle:disabled {
   color: var(--faint);
   cursor: default;
@@ -5619,14 +5696,13 @@ input,
   .glosa-conversation-toggle,
   .glosa-editor-face button,
   .glosa-rich-toolbar button,
-  .glosa-composer-intents button {
+  .glosa-composer-intent {
     min-height: 2.75rem;
   }
 
   .glosa-modebar button,
   .glosa-editor-face button,
-  .glosa-rich-toolbar button,
-  .glosa-composer-intents button {
+  .glosa-rich-toolbar button {
     min-width: 2.75rem;
   }
 }
@@ -6193,7 +6269,7 @@ input,
   .glosa-nav-toggle,
   .glosa-sidebar-section-toggle,
   .glosa-sidebar-section-chevron,
-  .glosa-composer-intents button,
+  .glosa-composer-intent,
   .glosa-history-toggle,
   .glosa-conversation-toggle,
   .glosa-conv-close,

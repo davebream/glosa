@@ -1081,6 +1081,53 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(root.querySelector(".glosa-tab-count")).toBeNull();
   });
 
+  test("Review mode: the composer's intent is one radio group, and the intent picked is the one sent", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess();
+
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const content = inPane(root, ".glosa-content");
+    const textNode = content.querySelector("h1")!.firstChild!;
+    (content.querySelector("h1") as unknown as HTMLElement).scrollIntoView = () => {};
+    const range = dom.document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 5);
+    const selection = dom.window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    content.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    // One choice of three with one already made: a named radio group, not three toggle buttons,
+    // so assistive technology hears "1 of 3, checked" and the keyboard gets one stop, not three.
+    const group = root.querySelector(".glosa-composer-intents") as any;
+    expect(group.getAttribute("role")).toBe("radiogroup");
+    const radios = [...group.querySelectorAll("input")] as any[];
+    expect(radios.map((r) => [r.type, r.value])).toEqual([
+      ["radio", "content"],
+      ["radio", "classification"],
+      ["radio", "style"],
+    ]);
+    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+    expect(radios.filter((r) => r.checked).map((r) => r.value)).toEqual(["content"]);
+    expect(group.querySelector("button")).toBeNull();
+
+    radios[2].click();
+    expect(radios.filter((r) => r.checked).map((r) => r.value)).toEqual(["style"]);
+
+    (root.querySelector(".glosa-composer-input") as any).value = "the list renders as one line";
+    (root.querySelector(".glosa-composer-send") as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(da.posted).toHaveLength(1);
+    expect((da.posted[0] as { intent: string }).intent).toBe("style");
+  });
+
   test("Review mode: a focused passage opens the composer with Enter and Cancel restores passage focus", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

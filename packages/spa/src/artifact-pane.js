@@ -73,6 +73,21 @@ export const INTENTS = [
 
 // Writer-register labels for every status the journal can hand us (2026-07-21 brief §7.5).
 // `waiting` is the SPA's own name for the wire's initial `pending`.
+/** What a card says when its quoted words are no longer on the page. For open work that is a
+ * warning: the note is still waiting and its passage is gone. For a note a session APPLIED it is
+ * the expected outcome, since a "Change the words" note removes the words it quoted; saying "Lost
+ * its place" in the warning colour there raised an alarm on every success. Closed and dismissed
+ * notes are finished too, so their line is the same quiet record. `stale` keeps the warning: it is
+ * the state that means the passage moved out from under the note. */
+// One line in the rail's column: the full sentence wrapped to two lines of 12px semibold ochre,
+// which made the warning the heaviest thing on the card, above the note it was about.
+const LOST_ITS_PLACE = { text: "Lost its place — the passage has changed.", settled: false };
+const SETTLED_ELSEWHERE = {
+  applied: { text: "Applied. The passage now reads differently.", settled: true },
+  rejected: { text: "The passage has changed since.", settled: true },
+  dismissed: { text: "The passage has changed since.", settled: true },
+};
+
 const STATE_LABELS = {
   waiting: "Waiting for a session",
   delivered: "Sent to session",
@@ -2334,18 +2349,25 @@ export function createArtifactPane(host, deps) {
         el("p", { className: "glosa-composer-quote" }, [el("span", { textContent: record.target.quote.exact })]),
       );
     }
-    const intents = el("div", { className: "glosa-composer-intents", role: "group", "aria-label": "Feedback intent" });
+    // One choice of three with one already made, so it is the radio group it behaves as. Three
+    // `aria-pressed` toggles were announced as three independent buttons and cost three tab stops;
+    // native radios are one stop, move on the arrow keys and say "1 of 3, checked". The name only
+    // has to be unique per form: a radio group is scoped to its form owner, and each pane's
+    // composer is its own <form>.
+    const intents = el("div", {
+      className: "glosa-composer-intents",
+      role: "radiogroup",
+      "aria-label": "Feedback intent",
+    });
     for (const intent of INTENTS) {
-      const btn = el("button", {
-        type: "button",
-        textContent: intent.label,
-        onClick: () => {
-          record.intent = intent.value;
-          for (const b of intents.children) b.setAttribute("aria-pressed", String(b === btn));
-        },
+      const radio = el("input", { type: "radio", name: "intent", value: intent.value });
+      radio.checked = record.intent === intent.value;
+      radio.addEventListener("change", () => {
+        record.intent = intent.value;
       });
-      btn.setAttribute("aria-pressed", String(record.intent === intent.value));
-      intents.append(btn);
+      intents.append(
+        el("label", { className: "glosa-composer-intent" }, [radio, el("span", { textContent: intent.label })]),
+      );
     }
     const input = el("textarea", {
       className: "glosa-composer-input",
@@ -2387,7 +2409,7 @@ export function createArtifactPane(host, deps) {
     form.addEventListener("submit", (e) => e.preventDefault());
     form.append(intents, input, status, el("div", { className: "glosa-composer-actions" }, [cancel, send]));
     dictationController?.attachField(input, {
-      controls: () => [cancel, send, ...intents.querySelectorAll("button")],
+      controls: () => [cancel, send, ...intents.querySelectorAll("input")],
       getContext: () => ({
         surfaceBlocks: [record.target?.quote?.exact, contentEl.innerText],
       }),
@@ -2436,13 +2458,23 @@ export function createArtifactPane(host, deps) {
   /** Withdraws the entry (terminal `rejected` — the journal keeps it, delivery stops) and drops
    * the card. A 404/409 means the entry is already gone or closed daemon-side, so dropping the
    * card is still honest; any other failure keeps the card and says so. */
+  /** Clears every settled note from this view, one at a time through the same path as each card's
+   * own Clear, so a failure lands on the card it belongs to and the rest still clear. */
+  async function clearResolved() {
+    for (const item of annotations.filter((entry) => isTerminalState(entry.state))) {
+      await removeAnnotation(item, { failureLabel: "Couldn't clear — try again" });
+    }
+  }
+
   async function removeAnnotation(item, { failureLabel = "Couldn't remove — try again" } = {}) {
     closePreview();
     try {
       if (item.id) await dataAccess.withdrawAnnotation(slug, item.id);
     } catch (err) {
       if (err?.status !== 404 && err?.status !== 409) {
-        item.state = "waiting";
+        // The note is exactly where it was: a Clear or a Remove that did not reach the daemon
+        // changed nothing. This used to set `waiting`, which turned a finished note back into an
+        // open one, hollow dot and Edit button included, because a request failed.
         item.error = failureLabel;
         renderMargin();
         return;
@@ -2525,6 +2557,9 @@ export function createArtifactPane(host, deps) {
   function isSideMargin() {
     return modeState.mode === "review" && paneWidth >= MARGIN_RAIL_FLOOR;
   }
+
+  /** Whether an entry's words are on the page as it stands, so it has a height in the rail. */
+  const hasPlace = (item) => Boolean(rangeForTarget(item.record?.target ?? item.target));
 
   /** A terminal entry has left the state machine for good (A5's `applied`/`rejected`/`stale`/
    * `dismissed`), so there is nothing left to withdraw and nothing to revise. */
@@ -2625,13 +2660,36 @@ export function createArtifactPane(host, deps) {
   /** The tray states its count even when collapsed — the one honest thing a reader scrolling a
    * long manuscript needs from it — and only becomes a scrollable sheet when asked. */
   function renderTray() {
-    const show = modeState.mode === "review" && Boolean(currentArtifact) && !isSideMargin();
+    const beside = isSideMargin();
+    // Beside the rail the tray holds only what has no place on the page, so it shows only when
+    // there is some. renderMargin has filled the list by the time this runs.
+    const show =
+      modeState.mode === "review" && Boolean(currentArtifact) && (!beside || trayListEl.childElementCount > 0);
     trayEl.hidden = !show;
+    trayEl.toggleAttribute("data-beside", show && beside);
     if (!show) {
       trayOpen = false;
       trayEl.removeAttribute("data-open");
+      trayEl.removeAttribute("data-lost");
       return;
     }
+    if (beside) {
+      const cards = [...trayListEl.querySelectorAll(".glosa-annotation")];
+      const lost = cards.filter((card) => !isTerminalState(card._glosaItem?.state)).length;
+      const settled = cards.length - lost;
+      trayCountEl.textContent = [
+        lost === 0 ? "" : lost === 1 ? "1 lost its place" : `${lost} lost their place`,
+        settled === 0 ? "" : `${settled} resolved`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      trayEl.toggleAttribute("data-lost", lost > 0);
+      trayToggle.setAttribute("aria-expanded", String(trayOpen));
+      trayToggle.disabled = false;
+      trayEl.toggleAttribute("data-open", trayOpen);
+      return;
+    }
+    trayEl.removeAttribute("data-lost");
     // The tray holds everything the rail would have held, so it must COUNT everything the rail
     // holds. Counting annotations alone disabled the toggle whenever a session's question was the
     // only thing in the margin, which at compact widths made that question unreachable while a
@@ -2769,7 +2827,10 @@ export function createArtifactPane(host, deps) {
     // Compact: the margin is not a block under the manuscript any more, it is the coordinate
     // space the open composer floats in beside its own passage.
     marginEl.classList.toggle("glosa-margin-anchored", !side && modeState.mode === "review");
-    const positioned = [...marginEl.querySelectorAll(".glosa-annotation")];
+    // A session's card is placed like a note: it is about a passage too. Left in flow it sat at the
+    // rail's top under the notes placed there, and the rail's `pointer-events: none` made it
+    // unclickable, so a question a turn was blocked on could not be answered from the rail.
+    const positioned = [...marginEl.querySelectorAll(".glosa-annotation, .glosa-agent-card")];
     const form = composerLayerEl.querySelector(".glosa-composer");
     if (form && composer) placeAtAnchor(form, composer.record?.target, { alignToSelection: true });
     const floatingAsk = askLayerEl.querySelector(".glosa-agent-card");
@@ -2786,9 +2847,15 @@ export function createArtifactPane(host, deps) {
     // Stack in PAGE order, not in the order the cards were written: a note added later about an
     // earlier passage must not be pushed below every card after it and out of reach of its words.
     // Cards whose passage is gone keep their relative order after the anchored ones.
+    const requests = agentRequests();
     const measured = positioned.map((cardEl, index) => {
       const item = cardEl._glosaItem;
-      const range = item ? rangeForTarget(item.record?.target ?? item.target) : null;
+      const request = item ? null : requests.find((r) => r.id === cardEl.getAttribute("data-entry"));
+      const range = item
+        ? rangeForTarget(item.record?.target ?? item.target)
+        : request
+          ? rangeForPassage(request.passage)
+          : null;
       const anchorTop = range ? range.getBoundingClientRect().top - mainTop + paneMain.scrollTop : null;
       return { cardEl, anchorTop, index };
     });
@@ -3647,20 +3714,18 @@ export function createArtifactPane(host, deps) {
     const addressEl = card.querySelector(".glosa-address");
     if (addressEl) addressEl.textContent = (range ? addressForRange(contentEl, range, addresses) : null) ?? "";
     const lost = card.querySelector(".glosa-annotation-lost");
-    if (range) {
+    const notice = range ? null : (SETTLED_ELSEWHERE[item?.state] ?? LOST_ITS_PLACE);
+    if (!notice) {
       lost?.remove();
       return;
     }
-    if (lost) return;
+    if (lost?.textContent === notice.text) return;
+    lost?.remove();
     // Between the quote and the body, which is where it was built: the reader reads the words that
-    // were marked, then that they are gone, then what was said about them.
-    card.insertBefore(
-      el("p", {
-        className: "glosa-annotation-lost",
-        textContent: "Lost its place — the passage changed since this was written.",
-      }),
-      card.querySelector(".glosa-annotation-body"),
-    );
+    // were marked, then what became of them, then what was said about them.
+    const line = el("p", { className: "glosa-annotation-lost", textContent: notice.text });
+    if (notice.settled) line.setAttribute("data-settled", "");
+    card.insertBefore(line, card.querySelector(".glosa-annotation-body"));
   }
 
   /** Re-derives every card's verdict against the text as it stands now. Called from the same paint
@@ -3668,7 +3733,17 @@ export function createArtifactPane(host, deps) {
    * them disagree cannot tell which one is lying. */
   function repaintAnchorVerdicts() {
     const addresses = addressBlocks(contentEl);
-    for (const card of paneEl.querySelectorAll(".glosa-annotation")) applyAnchorVerdict(card, addresses);
+    let moved = false;
+    for (const card of paneEl.querySelectorAll(".glosa-annotation")) {
+      const before = card.getAttribute("data-anchored");
+      applyAnchorVerdict(card, addresses);
+      const after = card.getAttribute("data-anchored");
+      // With the rail showing, where a card lives follows its verdict: placed notes in the rail,
+      // placeless ones in the tray. A verdict that flips on an open note in either host means the
+      // card is now in the wrong one.
+      if (before !== after && isSideMargin() && !isTerminalState(card._glosaItem?.state)) moved = true;
+    }
+    return moved;
   }
 
   /** One margin entry. The same component in the side rail, in the compact collection tray,
@@ -3698,7 +3773,11 @@ export function createArtifactPane(host, deps) {
         role: "status",
         "aria-live": "polite",
         textContent:
-          item.error || (STATE_LABELS[state] ?? state) + (item.attempts > 1 ? ` · nudged ×${item.attempts}` : ""),
+          item.error ||
+          (STATE_LABELS[state] ?? state) +
+            // How often delivery was retried is news while the note is waiting, and history once it
+            // is settled: "Done · nudged ×4" read as if something were still wrong.
+            (item.attempts > 1 && !isTerminalState(state) ? ` · nudged ×${item.attempts}` : ""),
       }),
       el("span", { className: "glosa-annotation-intent", textContent: intentLabel }),
     ]);
@@ -3752,7 +3831,8 @@ export function createArtifactPane(host, deps) {
           type: "button",
           textContent: settled ? "Clear" : "Remove",
           "aria-label": settled ? "Clear this annotation from the list" : "Remove this annotation",
-          onClick: () => void removeAnnotation(item),
+          // A failure says the verb the reader pressed.
+          onClick: () => void removeAnnotation(item, settled ? { failureLabel: "Couldn't clear — try again" } : {}),
         }),
       );
       stateRow.append(actionGroup);
@@ -3776,18 +3856,35 @@ export function createArtifactPane(host, deps) {
     const open = annotations.filter((item) => !isTerminalState(item.state)).length;
     const applied = annotations.filter((item) => item.state === "applied").length;
     const total = annotations.length;
-    const fact = (term, detail) =>
+    const fact = (term, detail, action) =>
       provenanceEl.append(
         el("div", { className: "glosa-provenance-fact" }, [
           el("dt", { textContent: term }),
-          el("dd", { textContent: detail }),
+          el("dd", {}, [
+            action ? el("button", { className: "glosa-provenance-link", type: "button", ...action }) : detail,
+          ]),
         ]),
       );
     fact(
       "You",
       total === 0 ? "no marks" : `${total} ${total === 1 ? "mark" : "marks"}${open ? ` · ${open} open` : ""}`,
     );
-    fact(getProviderName(), applied === 0 ? "nothing applied" : `${applied} applied`);
+    // The way to the applied notes, now that they are not in the rail: the fact that counts them
+    // opens the tray on them. Only where the tray exists, which is while notes are shown.
+    fact(
+      getProviderName(),
+      applied === 0 ? "nothing applied" : `${applied} applied`,
+      applied > 0 && modeState.mode === "review"
+        ? {
+            textContent: `${applied} applied`,
+            "aria-label": `Show the ${applied} applied ${applied === 1 ? "annotation" : "annotations"}`,
+            onClick: () => {
+              setTrayOpen(true);
+              trayToggle.focus({ preventScroll: true });
+            },
+          }
+        : null,
+    );
     fact("Outside glosa", diskChange ? "changed on disk" : "no changes");
     const approved = approvalResult && approvalResult.path === currentArtifact.source_path;
     fact(
@@ -3813,8 +3910,8 @@ export function createArtifactPane(host, deps) {
       // The cards are gone; the marks they point at are not. layoutMargin also runs so the rail
       // class does not linger on an empty margin after leaving Annotate.
       const marks = () => {
-        layoutMargin();
         paintAnnotationMarks();
+        layoutMargin();
       };
       if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(marks);
       else marks();
@@ -3844,13 +3941,19 @@ export function createArtifactPane(host, deps) {
     // not. Under their own heading, so a rail holding both never reads as one undifferentiated
     // stack of cards.
     const requests = agentRequests();
+    const beside = cardHost === marginEl;
     if (requests.length > 0) {
-      cardHost.append(
-        el("p", {
-          className: "glosa-margin-subhead",
-          textContent: agentRequestSummary(requests),
-        }),
-      );
+      // A heading only where the cards are a list. In the rail every card is placed by
+      // layoutMargin beside its own passage, so a heading in flow had nowhere to go but the rail's
+      // top, where it was painted over the first card placed there.
+      if (!beside) {
+        cardHost.append(
+          el("p", {
+            className: "glosa-margin-subhead",
+            textContent: agentRequestSummary(requests),
+          }),
+        );
+      }
       for (const request of requests) {
         // With no rail, a question whose passage is located is answered AT the passage, in the
         // floating card; the tray lists it. Two live copies of one answer form would let a reader
@@ -3870,12 +3973,38 @@ export function createArtifactPane(host, deps) {
     const open = annotations.filter((item) => !isTerminalState(item.state));
     const resolved = annotations.filter((item) => isTerminalState(item.state));
     const addresses = addressBlocks(contentEl); // numbered once per render, not once per entry
-    for (const item of open) cardHost.append(buildAnnotationCard(item, { addresses }));
+    // The rail holds what has a place on the page: open notes whose words are still there. An
+    // open note whose passage is gone has no height to sit at. Stacked after the placed ones, it
+    // landed beside some unrelated paragraph with no address to say otherwise. So it goes to the
+    // tray, first, where its card says it lost its place. Below the rail floor the tray holds
+    // everything, as before.
+    const railNotes = beside ? open.filter((item) => hasPlace(item)) : [];
+    for (const item of railNotes) marginEl.append(buildAnnotationCard(item, { addresses }));
+    for (const item of open) {
+      if (!railNotes.includes(item)) trayListEl.append(buildAnnotationCard(item, { addresses }));
+    }
     if (resolved.length) {
-      // Named even when it is the whole list: "Resolved" is the state of the work, and a reader
-      // opening a tray of settled cards should not have to infer that from the dots.
-      cardHost.append(el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }));
-      for (const item of resolved) cardHost.append(buildAnnotationCard(item, { addresses }));
+      // Settled notes live in the tray at every width, never the rail. An applied note removed the
+      // very words it was attached to, so beside the text it could only say "Lost its place"; and
+      // work that is done is a record, not something the page needs to show beside the passage.
+      // The provenance line's "N applied" opens the tray on them. Named even when it is the whole
+      // list: a reader should not have to infer "Resolved" from the dots.
+      const heading = el("div", { className: "glosa-margin-subhead-row" }, [
+        el("p", { className: "glosa-margin-subhead", textContent: "Resolved" }),
+      ]);
+      if (resolved.length > 1) {
+        heading.append(
+          el("button", {
+            className: "glosa-annotation-remove glosa-clear-resolved",
+            type: "button",
+            textContent: "Clear all",
+            "aria-label": `Clear all ${resolved.length} resolved annotations from the list`,
+            onClick: () => void clearResolved(),
+          }),
+        );
+      }
+      trayListEl.append(heading);
+      for (const item of resolved) trayListEl.append(buildAnnotationCard(item, { addresses }));
     }
     renderTray();
     if (!composer && annotations.length === 0 && requests.length === 0 && cardHost === marginEl) {
@@ -3887,9 +4016,12 @@ export function createArtifactPane(host, deps) {
       );
     }
     // Absolute positioning needs painted card heights — align on the next frame.
+    // Verdicts first, positions second. The verdict can add or drop a card's "Lost its place" line,
+    // about 40px; measured the other way round, a card grew after its neighbour had been placed
+    // under it, and the two overlapped until the next full render.
     const align = () => {
-      layoutMargin();
       paintAnnotationMarks();
+      layoutMargin();
       paintComposerSelection();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(align);
@@ -3911,10 +4043,11 @@ export function createArtifactPane(host, deps) {
 
   function paintAnnotationMarks() {
     stampAddresses();
-    repaintAnchorVerdicts();
+    const moved = repaintAnchorVerdicts();
     paintAnchorUnderlines();
     renderMarkers();
     paintAgentBands();
+    if (moved) renderMargin();
   }
 
   function setMode(mode) {
@@ -4498,6 +4631,15 @@ export function createArtifactPane(host, deps) {
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
 
+  // Card heights depend on the faces. The rail is laid out from painted heights, and a pane that
+  // rendered its notes before Source Serif and Source Sans arrived placed them with the fallback's
+  // metrics: every card that grew when the real face landed then overlapped the one under it.
+  // Nothing about the pane's width changes when a font loads, so the observer above never fires.
+  function onFontsLoaded() {
+    if (!destroyed) layoutMargin();
+  }
+  document.fonts?.addEventListener?.("loadingdone", onFontsLoaded);
+
   /** A new pane width. Crossing the rail floor changes WHERE the cards live (the rail beside their
    * passages, or the collection tray), which only renderMargin decides; a width that stays on the
    * same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
@@ -4864,8 +5006,8 @@ export function createArtifactPane(host, deps) {
     } else {
       contentEl.removeAttribute("data-path"); // repaint from fresh rendered_html when it closes
     }
+    paintAnnotationMarks(); // verdicts before positions, as in renderMargin's align
     layoutMargin(); // anchors may have moved with the new content
-    paintAnnotationMarks();
     refreshOutline(); // a session's edit can add or remove a section
   }
 
@@ -5016,6 +5158,7 @@ export function createArtifactPane(host, deps) {
     confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
+      document.fonts?.removeEventListener?.("loadingdone", onFontsLoaded);
       // Best effort, and the last chance this pane gets: a pending write outlives the element it
       // was typed into or it does not survive at all.
       void flushRunSave();

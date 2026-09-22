@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createArtifactPane } from "../src/artifact-pane.js";
 import {
   buildDictationContext,
   createDictationController,
@@ -305,6 +306,49 @@ describe("DictationController", () => {
     expect(dom.document.querySelector(".glosa-dictation-status")?.textContent).toContain("changed");
     controller.destroy();
   });
+
+  // Attaching to a field whose subtree is not in the page yet. Not an edge case: it is how every
+  // caller works, because a render function builds its form and RETURNS it for someone else to
+  // append. `attachField` ends by refreshing, refreshing began by pruning, and pruning read "not in
+  // the document" as "abandoned" — so the binding was created and deleted inside the same call, and
+  // dictation was unreachable everywhere it was offered while the provider reported `ready`.
+  //
+  // Every other test in this file appends the field FIRST, which is the one ordering the product
+  // never uses. That is why a green suite meant nothing here.
+  test("a field attached before its subtree reaches the page keeps its button", async () => {
+    const { controller } = setup();
+    const form = dom.document.createElement("form");
+    const field = dom.document.createElement("textarea");
+    form.append(field);
+
+    controller.attachField(field as any);
+    await controller.readiness;
+    // Asserted on the detached form, before anything is appended: surviving its own attach is the
+    // property, and checking after the append would let a re-created binding pass for a kept one.
+    expect(form.querySelector(".glosa-dictation"), "the binding did not survive its own attach").toBeTruthy();
+
+    dom.document.body.append(form);
+    await flush();
+    const host = form.querySelector(".glosa-dictation") as any;
+    expect(host.hidden).toBe(false);
+    expect(host.textContent).toContain("Start dictation");
+    controller.destroy();
+  });
+
+  test("a field that WAS in the page and then leaves still takes its button with it", async () => {
+    // The behaviour the prune exists for, stated so the fix can never be "stop pruning".
+    const { controller } = setup();
+    const field = dom.document.createElement("textarea");
+    dom.document.body.append(field);
+    controller.attachField(field as any);
+    await controller.readiness;
+    expect(dom.document.querySelectorAll(".glosa-dictation")).toHaveLength(1);
+
+    field.remove();
+    await flush();
+    expect(dom.document.querySelectorAll(".glosa-dictation")).toHaveLength(0);
+    controller.destroy();
+  });
 });
 
 describe("dictation surface allowlist", () => {
@@ -316,5 +360,98 @@ describe("dictation surface allowlist", () => {
     for (const excluded of ["../src/rich-editor.js", "../src/palette.js", "../src/outline.js"]) {
       expect(source(excluded)).not.toContain("attachField(");
     }
+  });
+});
+
+// The test that would have caught it. Everything above exercises the CONTROLLER; this exercises the
+// surface a reader actually touches — open a note on a passage and look for the button. The defect
+// was invisible to every controller test because they all append the field before attaching, and
+// invisible to the surface allowlist test because counting `attachField(` call sites proves the
+// calls exist, never that they produce anything.
+describe("dictation reaches the annotation composer", () => {
+  let dom: DomEnv;
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => dom.teardown());
+
+  const paint = async () => {
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+  };
+
+  test("opening a note on a passage gives the writer a dictate button", async () => {
+    const dataAccess = {
+      async getArtifact() {
+        return {
+          source_path: "notes.md",
+          content: "A paragraph to annotate.\n",
+          rendered_html: '<p id="para" data-line="0">A paragraph to annotate.</p>',
+          source_sha256: "sha-1",
+          rendered_sha256: "r-1",
+          class: "R",
+        };
+      },
+      async getAnnotations() {
+        return { annotations: [] };
+      },
+      async getCheckpoints() {
+        return [];
+      },
+      async getDictationStatus() {
+        return { state: "ready", provider: "wispr-flow", display_name: "Wispr Flow", client_module: CLIENT_MODULE };
+      },
+    };
+    const scope = {
+      navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } },
+      AudioContext: class {},
+      AudioWorkletNode: class {},
+      WebSocket: class {},
+      Event: dom.window.Event,
+      MutationObserver: dom.window.MutationObserver,
+    };
+    const dictationController = createDictationController({
+      dataAccess,
+      scope: scope as any,
+      document: dom.document as any,
+    });
+    // Resolved before the pane mounts, which is the real ordering: the status request is in flight
+    // from first paint, long before a reader selects anything.
+    await dictationController.readiness;
+
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const pane = createArtifactPane(host as any, {
+      dataAccess,
+      slug: "ws-1",
+      path: "notes.md",
+      initialMode: "review",
+      dictationController,
+    });
+    await pane.ready;
+    await paint();
+
+    // The reader's own gesture: drag across words. That is what opens the composer, and the composer
+    // is the only thing that ever creates a dictate button.
+    const textNode = (host.querySelector("#para") as any).firstChild;
+    const range = dom.document.createRange();
+    range.setStart(textNode, 2);
+    range.setEnd(textNode, 11);
+    const selection = dom.window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    host.querySelector(".glosa-content")!.dispatchEvent(new dom.window.Event("mouseup", { bubbles: true }));
+    await paint();
+
+    expect(host.querySelectorAll(".glosa-composer-input"), "the composer never opened").toHaveLength(1);
+    const button = host.querySelector(".glosa-dictation-toggle") as any;
+    expect(button, "the composer opened with no dictate button in it").toBeTruthy();
+    // Present is not enough: the defect this guards left a hidden host behind on other paths.
+    expect((button.closest(".glosa-dictation") as any).hidden).toBe(false);
+    expect(button.textContent).toBe("Start dictation");
+
+    pane.destroy();
+    dictationController.destroy();
   });
 });

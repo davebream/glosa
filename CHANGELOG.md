@@ -29,6 +29,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **At desktop width the rail holds only notes that still sit beside their words.** Notes a
+  session applied, closed or dismissed, and open notes whose passage is gone, now live in a drawer
+  at the foot of the rail. Its strip counts them ("1 lost its place · 3 resolved"), and "N applied"
+  in the line under the page opens it. "Clear all" clears the settled ones at once. A question
+  from a session now sits beside the passage it asks about, and can be clicked there.
 - **Your save wins over an agent's claim.** Saving a file an agent was in the middle of changing used
   to be refused, which left you unable to save your own document until the agent finished. The save
   now goes through: what the agent had left on disk is recorded as a change nobody can be credited
@@ -41,9 +46,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   names the session that abandoned it.
 - **Only the file an agent is working on pauses editing.** The editor paused every open file while
   any agent applied a change; it now pauses the files that agent claimed.
+- **The kind of change a note asks for is now a set of radio buttons.** "Change the words", "Wrong
+  label or split" and "Fix how it looks" were three outlined pills, which look like tags you can
+  pick several of. The chosen one differed only by a darker outline and bolder text, and the bolder
+  text was wider, so the row shifted every time you picked. They are now radios in one row: one
+  filled dot says which is chosen, and nothing moves. The keyboard gets one stop instead of three,
+  the arrow keys move between the choices, and a screen reader announces "1 of 3, checked".
 
 ### Fixed
 
+- **The margin rail no longer paints its "Resolved" heading over the first note, or stacks
+  notes on top of each other.** The heading sat in the page flow while every note was placed by
+  position, and a note that gained its "Lost its place" line was measured before it grew.
+- **A note the session applied no longer warns "Lost its place".** Applying a "Change the words"
+  note removes the words it quoted, so every success showed the warning. It now says "Applied.
+  The passage now reads differently." in grey, and "nudged ×N" is gone once a note is finished.
+- **A Clear that fails no longer turns a finished note back into open work.** It keeps its state
+  and says "Couldn't clear — try again".
+- **The dictation button now appears when you open a note.** With Wispr Flow configured and the
+  provider reporting ready, no dictate control was ever drawn — in the note composer, the
+  conversation composer, an agent question's answer, or the attention tray. The control is created
+  for a field the moment that field is built, and it was being discarded in the same breath: the
+  code that clears away controls whose field has left the page could not tell "gone" from "not added
+  yet", and a composer builds its form before putting it on the page. Nothing was wrong with your
+  configuration; the button was removed a fraction of a second after it was made.
 - **A second agent resolving an entry someone already closed is refused instead of silently
   ignored.** It used to get a success for a change that was discarded, after taking a checkpoint
   credited to it. It is now told the entry is closed and by whom, and nothing is written. An agent
