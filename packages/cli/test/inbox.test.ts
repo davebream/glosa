@@ -54,7 +54,7 @@ describe("glosa inbox list", () => {
     expect(result.data.entries).toEqual([]);
   });
 
-  test("human rendering: two-space-indented columns, `-` for a missing target_path, and a `[no payload]` marker that never drops the row", () => {
+  test("human rendering: two-space-indented columns, `-` for a missing target_path or holder, and a `[no payload]` marker that never drops the row", () => {
     const client = new FakeGlosaApiClient();
     client.inboxListResult = {
       entries: [
@@ -65,6 +65,7 @@ describe("glosa inbox list", () => {
           created_at: new Date(Date.now() - 65_000).toISOString(),
           target_path: "notes.md",
           payload_present: true,
+          holder: "sess-A",
         },
         {
           id: "inb-orphaned",
@@ -80,11 +81,14 @@ describe("glosa inbox list", () => {
       const out = captureStdout(() => printInboxListResult(result, false));
       const lines = out.trimEnd().split("\n");
       expect(lines).toHaveLength(2);
-      expect(lines[0]).toMatch(/^ {2}inb-kept {2}common {2}pending {2}\S+ {2}notes\.md$/);
+      // Issue #155: the "who holds it" column #142 promised — and `-` for an N-1 daemon's row,
+      // which has no `holder` field at all.
+      expect(lines[0]).toMatch(/^ {2}inb-kept {2}common {2}pending {2}\S+ {2}notes\.md {2}held by sess-A$/);
       expect(lines[0]).not.toContain("no payload");
       expect(lines[1]).toContain("inb-orphaned");
       expect(lines[1]).toContain("  -  ");
       expect(lines[1]).toContain("[no payload]");
+      expect(lines[1]).toMatch(/ {2}- {2}- {2}\[no payload\]$/);
     });
   });
 });

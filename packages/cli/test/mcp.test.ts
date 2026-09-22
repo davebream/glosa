@@ -268,7 +268,7 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(response.result.protocolVersion).toBe("2025-06-18");
   });
 
-  test("tools/list is SDK-generated from the ten Zod registrations", async () => {
+  test("tools/list is SDK-generated from the twelve Zod registrations", async () => {
     const connected = await connect(deps(new FakeDaemonClient()));
     try {
       const tools = (await connected.client.listTools()).tools;
@@ -306,6 +306,16 @@ describe("official TypeScript MCP SDK contract", () => {
         },
       });
       expect(byName.get("glosa_metadata_clear")?.annotations?.destructiveHint).toBe(true);
+      // Issue #155: claiming and releasing change daemon state but destroy nothing, and repeating
+      // either is harmless (a repeat claim renews; a repeat release reports released:false).
+      for (const name of ["glosa_claim", "glosa_release"]) {
+        expect(byName.get(name)?.annotations).toMatchObject({
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        });
+      }
       expect(byName.get("glosa_present")?.annotations).toMatchObject({
         readOnlyHint: false,
         destructiveHint: false,
@@ -441,6 +451,9 @@ describe("official TypeScript MCP SDK contract", () => {
         ["glosa_inbox_pull", { session_id: "other-session" }],
         ["glosa_delivery_ack", { entry_id: "e-1", session_id: "other-session" }],
         ["glosa_watch", { session_id: "other-session" }],
+        // Issue #155: one agent can never claim or release in another's name through this process.
+        ["glosa_claim", { resources: ["entry:e-1"], session_id: "other-session" }],
+        ["glosa_release", { claim_id: "c-1", session_id: "other-session" }],
       ] as const) {
         const result = await callTool(connected.client, { name, arguments: args });
         expect(result.isError).toBe(true);
@@ -465,6 +478,53 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(result.isError).toBe(true);
       expect(result.content).toEqual([
         expect.objectContaining({ type: "text", text: expect.stringContaining("Output validation error") }),
+      ]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("glosa_claim acts as the host session and turns a claim-held refusal into the daemon's own sentence naming the holder", async () => {
+    const hook = new FakeDaemonClient();
+    const seen: unknown[][] = [];
+    let conflict = false;
+    const api: Partial<GlosaApiClient> = {
+      claim: async (path, resources, session, opts) => {
+        seen.push([path, resources, session, opts]);
+        if (conflict) {
+          throw apiError(409, {
+            type: "https://glosa.local/errors/claim-held",
+            title: "session sess-A holds an exclusive claim on this until 2026-09-22T12:15:00.000Z",
+          });
+        }
+        return {
+          claim_id: "claim-1",
+          fence: 1,
+          expires_at: "2026-09-22T12:15:00.000Z",
+          paths: ["notes.md"],
+          mode: "exclusive",
+          renewed: false,
+        };
+      },
+    };
+    const connected = await connect({ ...deps(hook, api), sessionId: () => "host-session" });
+    try {
+      const ok = await callTool(connected.client, {
+        name: "glosa_claim",
+        arguments: { resources: ["entry:e-1"], workspace: "/repo" },
+      });
+      expect(ok.isError).not.toBe(true);
+      expect(ok.structuredContent).toMatchObject({ claim_id: "claim-1", fence: 1 });
+      expect(seen[0]?.slice(0, 3)).toEqual(["/repo", ["entry:e-1"], "host-session"]);
+
+      conflict = true;
+      const refused = await callTool(connected.client, {
+        name: "glosa_claim",
+        arguments: { resources: ["entry:e-1"], workspace: "/repo" },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("sess-A") }),
       ]);
     } finally {
       await connected.close();

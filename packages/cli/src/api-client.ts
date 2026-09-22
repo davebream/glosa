@@ -159,6 +159,11 @@ export interface ResolveResult {
   to: string;
   lease_id?: string;
   post_sha?: string;
+  /** Contract 1.17 (issue #155). */
+  fence?: number;
+  /** Contract 1.17: `true` when this repeats a resolve this session already completed — the body
+   * is the original result and nothing new happened. */
+  replayed?: boolean;
 }
 
 /** `glosa inbox dismiss <id>`'s daemon-side result (issue #142) — always `to: "dismissed"`, no
@@ -173,6 +178,51 @@ export interface ApplyBeginResult {
   entry: string;
   lease_id: string;
   pre_sha: string;
+  /** Contract 1.17 (issue #155): the claim's fencing token, when it has one. */
+  fence?: number | null;
+  expires_at?: string;
+  /** Contract 1.17: `true` when this same session already held the entry and the call renewed it. */
+  renewed?: boolean;
+}
+
+/** Contract 1.17 (issue #155): `POST /api/workspaces/claims`. */
+export interface ClaimResult {
+  claim_id: string;
+  fence: number | null;
+  expires_at: string;
+  /** Workspace-relative paths the claim covers; empty means the whole workspace. */
+  paths: string[];
+  mode: "exclusive" | "presence";
+  renewed: boolean;
+}
+
+export interface ReleaseClaimResult {
+  claim_id: string;
+  released: boolean;
+}
+
+export interface ListedClaim {
+  claim_id: string;
+  resources: string[];
+  artifacts: string[];
+  mode: "exclusive" | "presence";
+  holder_session: string;
+  holder_principal: string;
+  fence: number | null;
+  since: string;
+  expires_at: string;
+}
+
+export interface ListClaimsResult {
+  claims: ListedClaim[];
+  tombstones: Array<{
+    resource: string;
+    claim_id: string;
+    holder_session: string;
+    fence: number | null;
+    ended_at: string;
+    reason: string;
+  }>;
 }
 
 export interface AttentionRequestResult {
@@ -206,6 +256,9 @@ export interface InboxListEntry {
   /** `false` marks a row whose inbox `.json` is gone (hand-removed, or otherwise lost) — the row
    * is still listed, never dropped, which is the entire point of issue #142. */
   payload_present: boolean;
+  /** Contract 1.17 (issue #155): the session holding a live claim on this entry, or `null`.
+   * Absent from an N-1 daemon. */
+  holder?: string | null;
 }
 
 export interface InboxListResult {
@@ -306,6 +359,15 @@ export interface GlosaApiClient {
    * entry whose inbox payload is gone. `opts.all` includes terminal entries; the default omits
    * them. */
   listInboxEntries(path: string, opts?: { all?: boolean }): Promise<InboxListResult>;
+  /** Contract 1.17 (issue #155) — optional so an N-1 fake or client still type-checks. */
+  claim?(
+    path: string,
+    resources: string[],
+    session: string,
+    opts?: { mode?: "exclusive" | "presence"; ttlMs?: number },
+  ): Promise<ClaimResult>;
+  releaseClaim?(path: string, claimId: string, session: string): Promise<ReleaseClaimResult>;
+  listClaims?(path: string, opts?: { artifact?: string }): Promise<ListClaimsResult>;
   getInboxPresentation(path: string, entry: string, cursor?: string): Promise<InboxPresentationResult>;
   getStatus(): Promise<StatusSummary>;
   getShadowHealth?(slug: string): Promise<ShadowDiagnosis>;
@@ -500,6 +562,27 @@ export async function createHttpGlosaClient(options: HttpGlosaClientOptions = {}
     },
     async withdrawAttention(path, entry, session) {
       return (await call("POST", "/api/workspaces/attention-withdraw", { path, entry, session })).json();
+    },
+    async claim(path, resources, session, opts = {}) {
+      return (
+        await call("POST", "/api/workspaces/claims", {
+          path,
+          resources,
+          session,
+          ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
+          ...(opts.ttlMs !== undefined ? { ttl_ms: opts.ttlMs } : {}),
+        })
+      ).json();
+    },
+    async releaseClaim(path, claimId, session) {
+      return (
+        await call("POST", `/api/workspaces/claims/${encodeURIComponent(claimId)}/release`, { path, session })
+      ).json();
+    },
+    async listClaims(path, opts = {}) {
+      const params: Record<string, string> = { path };
+      if (opts.artifact !== undefined) params.artifact = opts.artifact;
+      return (await call("GET", `/api/workspaces/claims?${new URLSearchParams(params).toString()}`)).json();
     },
     async listInboxEntries(path, opts = {}) {
       const params: Record<string, string> = { path };

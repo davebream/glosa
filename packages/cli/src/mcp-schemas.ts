@@ -213,6 +213,52 @@ export const deliveryAckInputSchema = z
   })
   .strict();
 
+// Contract 1.17 (issue #155): claims. A resource is `entry:<inbox id>` or
+// `artifact:<workspace-relative path>`; the daemon validates confinement, this only rejects shapes
+// that could never be one.
+const claimResource = z
+  .string()
+  .regex(/^(entry|artifact):.+/)
+  .describe("entry:<inbox id> or artifact:<workspace-relative path>.");
+
+export const claimInputSchema = z
+  .object({
+    resources: z.array(claimResource).min(1).max(16).describe("What to claim; an entry implies the file it is about."),
+    mode: z
+      .enum(["exclusive", "presence"])
+      .optional()
+      .describe("exclusive (default) = you are editing it and others are refused; presence = you are looking at it."),
+    workspace: workspacePath.optional(),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const claimOutputSchema = z
+  .object({
+    claim_id: z.string().min(1).describe("Pass to glosa_release when done without resolving."),
+    fence: z.number().int().min(1).nullable().describe("Fencing token for this claim."),
+    expires_at: z.string().min(1).describe("When the claim lapses unless renewed (claiming again renews)."),
+    paths: z.array(z.string()).describe("Workspace-relative paths covered; empty = the whole workspace."),
+    mode: z.enum(["exclusive", "presence"]),
+    renewed: z.boolean().describe("True when this session already held it and the call extended it."),
+  })
+  .strict();
+
+export const releaseInputSchema = z
+  .object({
+    claim_id: z.string().min(1),
+    workspace: workspacePath.optional(),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const releaseOutputSchema = z
+  .object({
+    claim_id: z.string().min(1),
+    released: z.boolean().describe("False when the claim had already ended — never an error."),
+  })
+  .strict();
+
 export const deliveryAckOutputSchema = z
   .object({
     entry_id: inboxId,

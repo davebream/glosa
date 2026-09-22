@@ -5,6 +5,7 @@
 import type {
   ApplyBeginResult,
   AttentionRequestResult,
+  ClaimResult,
   DismissResult,
   EntryStatus,
   ForgetWorkspaceResult,
@@ -13,6 +14,7 @@ import type {
   InboxPresentationResult,
   OpenWorkspaceResult,
   OpenWorkspaceOptions,
+  ReleaseClaimResult,
   ResolveOutcome,
   ResolveResult,
   StatusSummary,
@@ -28,6 +30,15 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     | null = null;
   applyBeginImpl: ((path: string, entry: string, session: string) => Promise<ApplyBeginResult>) | null = null;
   dismissEntryImpl: ((path: string, entry: string, note?: string) => Promise<DismissResult>) | null = null;
+  claimImpl:
+    | ((
+        path: string,
+        resources: string[],
+        session: string,
+        opts?: { mode?: "exclusive" | "presence" },
+      ) => Promise<ClaimResult>)
+    | null = null;
+  releaseClaimImpl: ((path: string, claimId: string, session: string) => Promise<ReleaseClaimResult>) | null = null;
   attentionRequestResult: AttentionRequestResult = { id: "inb-1", slug: "ws-slug", status: "open" };
   entryStatusResult: EntryStatus | null = null;
   inboxListResult: InboxListResult = { entries: [] };
@@ -73,6 +84,30 @@ export class FakeGlosaApiClient implements GlosaApiClient {
     this.calls.push({ method: "applyBegin", args: [path, entry, session] });
     if (this.applyBeginImpl) return this.applyBeginImpl(path, entry, session);
     return { entry, lease_id: "lease-1", pre_sha: "abc123" };
+  }
+
+  async claim(
+    path: string,
+    resources: string[],
+    session: string,
+    opts?: { mode?: "exclusive" | "presence" },
+  ): Promise<ClaimResult> {
+    this.calls.push({ method: "claim", args: [path, resources, session, opts] });
+    if (this.claimImpl) return this.claimImpl(path, resources, session, opts);
+    return {
+      claim_id: "claim-1",
+      fence: 1,
+      expires_at: "2026-09-22T12:15:00.000Z",
+      paths: ["notes.md"],
+      mode: opts?.mode ?? "exclusive",
+      renewed: false,
+    };
+  }
+
+  async releaseClaim(path: string, claimId: string, session: string): Promise<ReleaseClaimResult> {
+    this.calls.push({ method: "releaseClaim", args: [path, claimId, session] });
+    if (this.releaseClaimImpl) return this.releaseClaimImpl(path, claimId, session);
+    return { claim_id: claimId, released: true };
   }
 
   async dismissEntry(path: string, entry: string, note?: string): Promise<DismissResult> {

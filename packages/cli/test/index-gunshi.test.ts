@@ -21,6 +21,8 @@ const PUBLIC_COMMANDS = [
   "open",
   "resolve",
   "apply-begin",
+  "claim",
+  "release",
   "request-review",
   "doctor",
   "status",
@@ -123,7 +125,7 @@ describe("Gunshi command surface", () => {
     expect(runCli(["dictation", "--help"]).stdout).toContain("--provider");
     // An entry id already names one workspace, so both lease commands must let a caller standing
     // somewhere else say which — `inbox get`, the other entry-id command, always could.
-    for (const command of ["resolve", "apply-begin", "inbox"]) {
+    for (const command of ["resolve", "apply-begin", "claim", "release", "inbox"]) {
       expect(runCli([command, "--help"]).stdout).toContain("--workspace");
     }
   });
