@@ -444,7 +444,7 @@ describe("expired lease reconcile — the interval stays unknown, never session"
     // no longer written at all.
     const events = journalOf(root);
     expect(events.filter((e) => e.event === "claim_expired").map((e) => e.detail)).toEqual([
-      { claim_id: leaseId, holder_session: "sess-1", reason: "ttl" },
+      { claim_id: leaseId, holder_session: "sess-1", reason: "ttl", resources: ["entry:e1"] },
     ]);
     expect(events.some((e) => e.event === "apply_expired")).toBe(false);
     // Step 5 (offline catch-up), same reconcile pass, picks up the orphaned edit as drift.

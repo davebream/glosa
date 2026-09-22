@@ -18,6 +18,7 @@ import { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import { type DictationProvider, DictationProviderRegistry } from "../dictation/interface.ts";
 import { ArtifactWatcherAllocation } from "../artifact-watcher-allocation.ts";
 import { ClaimSweeper } from "../claim-sweeper.ts";
+import { SignalRegistry } from "../agent-provider/signal-registry.ts";
 import { ArtifactWatcherRegistry, type ArtifactWatcherRegistryOptions } from "../artifact-watcher.ts";
 import { WorkspaceBus } from "../bus/bus.ts";
 import { WorkspaceBusRegistry } from "../bus/workspace-bus-registry.ts";
@@ -122,6 +123,7 @@ export interface DaemonBackend {
   providerRegistry: AgentProviderRegistry;
   dictationRegistry: DictationProviderRegistry;
   pushRegistry: SessionPushRegistry;
+  signalRegistry: SignalRegistry;
   watchEmissions: WatchEmissionRegistry;
   artifactWatcherRegistry: ArtifactWatcherRegistry;
   /** Starts daemon-lifetime watching for workspaces already in the index. Call AFTER serving:
@@ -200,6 +202,20 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
   const providerRegistry = new AgentProviderRegistry();
   const dictationRegistry = new DictationProviderRegistry();
   const pushRegistry = new SessionPushRegistry();
+  // Issue #155: session signals, derived from each bus's claim events as they are appended. Routed
+  // with the same R2 predicate as delivery, pushed on the session's own stream when it has one, and
+  // otherwise held for its next drain. In memory only — the journal event is the durable record.
+  const signalRegistry = new SignalRegistry({
+    sessionsFor: (workspace) => sessionRegistry.forWorkspace(workspace).map((session) => session.session_id),
+    push: (sessionId, frame) => pushRegistry.sendSignal(sessionId, frame),
+  });
+  busRegistry.setOnOpen((bus, workspace) => {
+    const unsubscribe = signalRegistry.attach(
+      bus,
+      typeof workspace === "string" ? workspace : workspace.canonical_path,
+    );
+    bus.closeSignal().addEventListener("abort", unsubscribe, { once: true });
+  });
   const watchEmissions = new WatchEmissionRegistry();
   const artifactWatcherRegistry = new ArtifactWatcherRegistry({
     watchFactory: opts.artifactWatchFactory,
@@ -307,6 +323,7 @@ export function buildBackend(home: string, opts: BuildBackendOptions = {}): Daem
     providerRegistry,
     dictationRegistry,
     pushRegistry,
+    signalRegistry,
     watchEmissions,
     artifactWatcherRegistry,
     adoptionCoordinator,
@@ -420,6 +437,7 @@ export async function bootDaemon(opts: BuildBackendOptions = {}): Promise<never>
     providerRegistry: backend.providerRegistry,
     dictationRegistry: backend.dictationRegistry,
     pushRegistry: backend.pushRegistry,
+    signalRegistry: backend.signalRegistry,
     watchEmissions: backend.watchEmissions,
     artifactWatcherRegistry: backend.artifactWatcherRegistry,
     shutdownSignal: shutdownController.signal,

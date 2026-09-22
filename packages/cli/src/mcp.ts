@@ -45,6 +45,8 @@ import {
   presentOutputSchema,
   releaseInputSchema,
   releaseOutputSchema,
+  signalAckInputSchema,
+  signalAckOutputSchema,
   sessionBindInputSchema,
   sessionBindOutputSchema,
   watchInputSchema,
@@ -98,6 +100,7 @@ export const GLOSA_MCP_TOOL_NAMES = [
   "glosa_delivery_ack",
   "glosa_claim",
   "glosa_release",
+  "glosa_signal_ack",
   "glosa_present",
   "glosa_ask",
   "glosa_watch",
@@ -410,7 +413,7 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
     { name: "glosa", version: CLI_VERSION },
     {
       instructions:
-        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting.",
+        "glosa monitor lines begin with [glosa <entry-id>]. Immediately call glosa_delivery_ack for that entry id before acting. Lines beginning [glosa signal <id>] are notices about claims, already acknowledged: act on them (a conflict means a person took over that file), but never pass a signal id to glosa_delivery_ack.",
     },
   );
 
@@ -475,12 +478,19 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       const drained: DrainResult = generic
         ? await client.drainScoped(sessionId, { workspace: session.cwd, limit })
         : await client.drain(sessionId, { via: "mcp_pull", limit });
-      const text =
+      const signals = drained.signals ?? [];
+      const entriesText =
         drained.count > 0 ? formatPresentationBatch(drained.drained) : "glosa inbox: no pending actionable entries";
+      // Issue #155: notices about claims ride beside the entries, outside their budget, one line each.
+      const text =
+        signals.length > 0
+          ? `${signals.map((notice) => `[glosa signal ${notice.id}] ${notice.kind}: ${notice.message}`).join("\n")}\n\n${entriesText}`
+          : entriesText;
       const structuredContent = {
         entries: drained.drained,
         count: drained.count,
         has_more: drained.has_more ?? false,
+        ...(signals.length > 0 ? { signals } : {}),
       };
       if (drained.delivery_id) {
         acknowledgements.reserve(
@@ -687,6 +697,28 @@ export function createMcpServer(deps: McpDeps): GlosaMcpServer {
       const client = await deps.createApiClient(shutdownAbort.signal);
       if (!client.releaseClaim) throw new Error("claims are unavailable from this daemon");
       return toolResult({ ...(await client.releaseClaim(root, claimId, sessionId)) });
+    },
+  );
+
+  registerTool(
+    "glosa_signal_ack",
+    {
+      title: "Acknowledge a glosa signal",
+      description:
+        "Acknowledge a signal returned by glosa_inbox_pull after acting on it, with its own ack_token. Only the session a signal is addressed to can acknowledge it. Monitor and Codex stream signals are acknowledged automatically.",
+      inputSchema: signalAckInputSchema,
+      outputSchema: signalAckOutputSchema,
+      annotations: {
+        ...stateChangingClosedWorld({ destructiveHint: false, idempotentHint: true }),
+        title: "Acknowledge a signal",
+      },
+    },
+    async ({ signal_id: signalId, ack_token: ackToken, session_id: requestedSession }) => {
+      const sessionId = identity(requestedSession).session_id;
+      const client = await deps.createDaemonClient(shutdownAbort.signal);
+      if (!client.acknowledgeSignal) throw new Error("signal acknowledgement is unavailable");
+      await client.acknowledgeSignal(sessionId, signalId, ackToken);
+      return toolResult({ signal_id: signalId, acked: true });
     },
   );
 

@@ -138,6 +138,20 @@ export const inboxPullInputSchema = z
   })
   .strict();
 
+const signalSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["conflict", "info"]).describe("conflict = a person took over something you held; info = news."),
+    workspace: z.string().min(1),
+    resources: z.array(z.string()),
+    claim_id: z.string().min(1).optional(),
+    message: z.string().describe("One sentence saying what happened and what to do."),
+    created_at: z.string().min(1),
+    expires_at: z.string().min(1),
+    ack_token: z.string().min(1),
+  })
+  .strict();
+
 export const inboxPullOutputSchema = z
   .object({
     entries: z
@@ -148,6 +162,28 @@ export const inboxPullOutputSchema = z
       ),
     count: z.number().int().min(0).max(8).describe("Number of returned entries."),
     has_more: z.boolean().describe("True when more eligible entries remain."),
+    signals: z
+      .array(signalSchema)
+      .max(8)
+      .optional()
+      .describe(
+        "Contract 1.17: notices about claims around this session, oldest first. Acknowledge each with glosa_signal_ack after acting on it.",
+      ),
+  })
+  .strict();
+
+export const signalAckInputSchema = z
+  .object({
+    signal_id: z.string().min(1),
+    ack_token: z.string().min(1).describe("The ack_token from the signal itself."),
+    session_id: sessionId.optional().describe("Required only when the MCP host provides no session identity."),
+  })
+  .strict();
+
+export const signalAckOutputSchema = z
+  .object({
+    signal_id: z.string().min(1),
+    acked: z.literal(true),
   })
   .strict();
 

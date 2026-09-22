@@ -3,6 +3,7 @@
 // mutex slot) must never interleave or tear a journal record, no matter how they're scheduled.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { SignalRegistry } from "../../src/agent-provider/signal-registry.ts";
 import { WorkspaceBus } from "../../src/bus/bus.ts";
 import type { JournalEvent } from "../../src/bus/journal.ts";
 import { EXCLUSIVE_CLAIM_TTL_MS } from "../../src/bus/lease.ts";
@@ -296,9 +297,25 @@ describe("claims — two sessions, one workspace (issue #155 AC-1)", () => {
     cleanupWorkspace(root);
   });
 
-  // The other half of this step, A receiving a `conflict` signal, lands with the signals rail
-  // (#155's second half). It is not a `test.todo` here: the CI runner fails a partition on any
-  // skipped test.
+  test("a human dismiss over A's claim delivers A a `conflict` signal naming what happened, and B an `info` (AC-1.6)", async () => {
+    const { root, bus } = await setup();
+    const signals = new SignalRegistry({ sessionsFor: () => ["A", "B"] });
+    const detach = signals.attach(bus, root);
+    const a = await bus.applyBegin("e1", "A");
+    writeFile(root, "notes.md", "v2, A mid-edit\n");
+    await bus.dismissEntry("e1");
+
+    // Ablating the human-release arm of `planSignals` leaves A with nothing but the info it never
+    // gets for its own claim — this reds.
+    const forA = signals.pending("A");
+    expect(forA.map((frame) => frame.kind)).toEqual(["conflict"]);
+    expect(forA[0]).toMatchObject({ claim_id: a.leaseId, resources: ["entry:e1"] });
+    expect(forA[0]?.message).toContain("a person took over entry:e1");
+    expect(signals.pending("B").map((frame) => frame.kind)).toEqual(["info", "info"]); // taken, then released
+    detach();
+    await bus.close();
+    cleanupWorkspace(root);
+  });
 
   for (const order of ["resolve first", "dismiss first"] as const) {
     test(`resolve and dismiss racing on one entry (${order}): exactly one terminal transition, and the loser is told ENTRY_RESOLVED`, async () => {
@@ -435,7 +452,7 @@ describe("claims — the daemon sweeper (issue #155 AC-1.7)", () => {
     await sweeper.tick();
     const expired = events(root).filter((e) => e.event === "claim_expired");
     expect(expired.map((e) => [e.by, e.detail])).toEqual([
-      ["daemon", { claim_id: a.leaseId, holder_session: "A", reason: "holder_stale" }],
+      ["daemon", { claim_id: a.leaseId, holder_session: "A", reason: "holder_stale", resources: ["entry:e1"] }],
     ]);
     expect(bus.state.claims["entry:e1"]?.last?.reason).toBe("expired_holder_stale");
 
@@ -464,7 +481,9 @@ describe("claims — the daemon sweeper (issue #155 AC-1.7)", () => {
       await sweeper.tick();
     }
     const expired = events(root).filter((e) => e.event === "claim_expired");
-    expect(expired.map((e) => e.detail)).toEqual([{ claim_id: a.leaseId, holder_session: "A", reason: "ttl" }]);
+    expect(expired.map((e) => e.detail)).toEqual([
+      { claim_id: a.leaseId, holder_session: "A", reason: "ttl", resources: ["entry:e1"] },
+    ]);
     await done();
   });
 

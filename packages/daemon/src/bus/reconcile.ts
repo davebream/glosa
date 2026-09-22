@@ -185,7 +185,12 @@ export function reconcileClaims(deps: ApplyLeaseReconcileDeps): string[] {
       ...(entry ? { entry } : {}),
       event: "claim_expired",
       by: "daemon", // never `session:<id>` — a claim that expired proved nothing for its holder
-      detail: { claim_id: claim.claim_id, holder_session: claim.holder_session, reason: "ttl" },
+      detail: {
+        claim_id: claim.claim_id,
+        holder_session: claim.holder_session,
+        reason: "ttl",
+        resources: claim.resources,
+      },
     };
     appendEvent(deps.writer, event);
     applyEvent(deps.state, event, deps.reducer);

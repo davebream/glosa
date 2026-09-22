@@ -1365,7 +1365,7 @@ export class WorkspaceBus {
       ...(entry ? { entry } : {}),
       event: "claim_expired",
       by: "daemon", // never `session:<id>` — a claim that expired proved nothing for its holder
-      detail: { claim_id: claim.claim_id, holder_session: claim.holder_session, reason },
+      detail: { claim_id: claim.claim_id, holder_session: claim.holder_session, reason, resources: claim.resources },
     });
     return this.captureAbandonedIntervalLocked(claim, "claim_expired");
   }
@@ -1407,7 +1407,13 @@ export class WorkspaceBus {
       ...(entry ? { entry } : {}),
       event: "claim_released",
       by: by === "human" ? "human" : holderBy(claim),
-      detail: { claim_id: claim.claim_id, by, reason, holder_session: claim.holder_session },
+      detail: {
+        claim_id: claim.claim_id,
+        by,
+        reason,
+        holder_session: claim.holder_session,
+        resources: claim.resources,
+      },
     });
     await this.captureAbandonedIntervalLocked(claim, "claim_released");
   }

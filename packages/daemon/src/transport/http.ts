@@ -15,6 +15,7 @@ import { WorkspaceMetadataError, type WorkspaceMetadataRegistry } from "../adapt
 import { AdoptionCoordinator, adoptLooseLineages } from "../adoption.ts";
 import type { AgentProviderRegistry, DeliverableEntry } from "../agent-provider/interface.ts";
 import type { SessionPushRegistry } from "../agent-provider/push-registry.ts";
+import type { SignalFrame, SignalRegistry } from "../agent-provider/signal-registry.ts";
 import type { WatchEmissionRegistry } from "../agent-provider/watch-emissions.ts";
 import type { DictationProviderRegistry } from "../dictation/interface.ts";
 import { createHash } from "node:crypto";
@@ -216,6 +217,9 @@ export interface ApiContext {
   /** Optional external dictation providers, injected by the CLI composition root. */
   dictationRegistry?: DictationProviderRegistry;
   pushRegistry?: SessionPushRegistry;
+  /** Session signals derived from claim events (issue #155). Optional so a hand-built test context
+   * keeps compiling; absent, drains carry no `signals` and the ack route answers 404. */
+  signalRegistry?: SignalRegistry;
   /** Proves a `watch/transport-ack` names entries this session's own watch response emitted (#153
    * Part 2). Optional so every hand-built test context keeps compiling; when absent the ack route
    * refuses rather than falling back to the old "any in-scope external_edit" rule, because that
@@ -1222,7 +1226,9 @@ async function handleCompositeSessionDrain(
     }
 
     if (selected.length === 0) {
-      return Response.json({ delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 });
+      return Response.json(
+        withSignals(ctx, sessionId, { delivery_id: null, drained: [], count: 0, has_more: candidates.length > 0 }),
+      );
     }
 
     const children: Array<{ bus: WorkspaceBus; delivery_id: string }> = [];
@@ -1277,13 +1283,44 @@ async function handleCompositeSessionDrain(
       throw error;
     }
 
-    return Response.json({
-      delivery_id: compositeDeliveryId,
-      drained,
-      count: drained.length,
-      has_more: undisclosedLocalCandidates || candidates.length > selected.length,
-    });
+    return Response.json(
+      withSignals(ctx, sessionId, {
+        delivery_id: compositeDeliveryId,
+        drained,
+        count: drained.length,
+        has_more: undisclosedLocalCandidates || candidates.length > selected.length,
+      }),
+    );
   });
+}
+
+/** Adds the session's pending signals (issue #155) to a drain response — outside the 32 KiB entry
+ * budget, with their own cap of 8 signals / 8 KiB — and only when there are any, so a drain with
+ * nothing to say is byte-identical to one from before signals existed. */
+function withSignals<T extends object>(ctx: ApiContext, sessionId: string, body: T): T & { signals?: SignalFrame[] } {
+  const signals = ctx.signalRegistry?.pending(sessionId) ?? [];
+  return signals.length > 0 ? { ...body, signals } : body;
+}
+
+/** `POST /api/sessions/:id/signals/:sid/ack` — the addressee acknowledges one signal (issue #155).
+ * The path session AND the body's `ack_token` must both match the signal's own; anything else is
+ * the same 404 as a signal that does not exist, so the route reveals nothing about other sessions'
+ * signals. Repeating an ack is a 200. */
+async function handleSignalAck(ctx: ApiContext, sessionId: string, signalId: string, req: Request): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return problem(400, "validation-failed", "body must be valid JSON", undefined, pathname);
+  }
+  const token = (body as { ack_token?: unknown } | null)?.ack_token;
+  if (typeof token !== "string" || token.length === 0) {
+    return problem(400, "validation-failed", "ack_token is required", undefined, pathname);
+  }
+  const outcome = ctx.signalRegistry?.ack(sessionId, signalId, token) ?? "not-found";
+  if (outcome === "not-found") return problem(404, "not-found", "no such signal for this session", undefined, pathname);
+  return Response.json({ signal_id: signalId, acked: true, ...(outcome === "already" ? { already: true } : {}) });
 }
 
 /** `POST /api/sessions/:id/drain` — prepares the MCP pull payload (`glosa_inbox_pull`, A1 §5.15).
@@ -1390,7 +1427,7 @@ async function handleSessionDrain(ctx: ApiContext, sessionId: string, req: Reque
       buildArtifactPresentation(artifactAccess(ctx), workspace, id, payload, status, cursor, { claims }),
   );
 
-  return Response.json(prepared);
+  return Response.json(withSignals(ctx, sessionId, prepared));
 }
 
 async function handleSessionDeliveryAck(
@@ -1561,7 +1598,17 @@ async function handleSessionStream(
           throw error;
         }
       };
-      unregister = ctx.pushRegistry?.register(sessionId, send, close, transport);
+      // Issue #155: signals share this one writer with deliveries, so frames never interleave.
+      // `ack_token` rides only in this session's own frames — every signal record has one addressee.
+      const sendSignal = (frame: SignalFrame) => {
+        try {
+          controller.enqueue(encoder.encode(`event: signal\ndata: ${JSON.stringify(frame)}\n\n`));
+        } catch (error) {
+          close();
+          throw error;
+        }
+      };
+      unregister = ctx.pushRegistry?.register(sessionId, send, close, transport, sendSignal);
       releaseLease = ctx.sessionRegistry.holdConnection(sessionId);
 
       const pump = async () => {
@@ -1598,6 +1645,13 @@ async function handleSessionStream(
         if (event.event !== "delivery_attempt") void pump();
       });
       controller.enqueue(encoder.encode(": connected\n\n"));
+      // Anything addressed to this session while it had no stream is sent now, oldest first.
+      for (const frame of ctx.signalRegistry?.pending(sessionId, {
+        limit: Number.POSITIVE_INFINITY,
+        maxBytes: Number.POSITIVE_INFINITY,
+      }) ?? []) {
+        sendSignal(frame);
+      }
       signal.addEventListener("abort", abortClose, { once: true });
       void pump();
     },
@@ -2847,6 +2901,11 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/deregister$/))) {
     const sessionId = m[1] as string;
     return { routeClass: "state-changing", handle: () => handleSessionDeregister(ctx, sessionId) };
+  }
+  if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/signals\/([^/]+)\/ack$/))) {
+    const sessionId = m[1] as string;
+    const signalId = m[2] as string;
+    return { routeClass: "state-changing", handle: (req) => handleSignalAck(ctx, sessionId, signalId, req) };
   }
   if (method === "POST" && (m = pathname.match(/^\/api\/sessions\/([^/]+)\/drain$/))) {
     const sessionId = m[1] as string;
