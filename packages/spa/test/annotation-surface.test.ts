@@ -726,4 +726,95 @@ describe("the annotation surface", () => {
     expect(q(host, ".glosa-annotation-lost").textContent).toContain("Lost its place");
     expect(qa(host, ".glosa-marker")).toHaveLength(0);
   });
+
+  // --- what a session's write does to the cards ---
+  //
+  // A card's verdict is derived from the CURRENT text, exactly like the underline under the
+  // passage and the dot in the gutter. Those two are re-derived every time the manuscript moves.
+  // The cards were derived once, when they were built, and an external write repainted the marks
+  // around them while they went on asserting something about a document that was gone — until a
+  // mode toggle, a new note or a reload happened to rebuild them.
+  //
+  // Both directions are wrong and the second is the worse one: a card saying "Lost its place"
+  // about a passage the daemon's resolver can still find tells the reader to give up on a note the
+  // session is about to act on.
+
+  /** The same manuscript with the annotated sentence rewritten — `gamma delta` is gone. */
+  const REWRITTEN = `<h1>Konspekt</h1><p id="para">Alpha beta omicron sigma epsilon zeta eta theta iota kappa lambda mu.</p>`;
+  /** Two versions of one artifact, switchable mid-life. `moved` stands for "a session has written
+   * the file since this pane read it"; the SSE frame that follows it is `refreshArtifact`. */
+  function sessionRewrites(before: string, after: string) {
+    return {
+      moved: false,
+      async getArtifact(this: { moved: boolean }) {
+        return {
+          source_path: "notes.md",
+          content: "# Konspekt",
+          rendered_html: this.moved ? after : before,
+          source_sha256: this.moved ? "sha-2" : "sha-1",
+          rendered_sha256: this.moved ? "r-2" : "r-1",
+          class: "R",
+        };
+      },
+    };
+  }
+
+  test("a session rewriting the quoted sentence marks the card lost without waiting for another render", async () => {
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(RENDERED, REWRITTEN),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    // The mark and the card have to agree. Asserting both is the point: the underline and the dot
+    // were always right here, and that is exactly what made the card's silence convincing.
+    expect(qa(host, ".glosa-marker")).toHaveLength(0);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("false");
+    expect(q(host, ".glosa-annotation-lost").textContent).toContain("Lost its place");
+  });
+
+  test("a session putting the words back clears the card's lost notice without waiting for another render", async () => {
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(REWRITTEN, RENDERED),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("false");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(qa(host, ".glosa-marker")).toHaveLength(1);
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+    expect(q(host, ".glosa-annotation-lost")).toBeNull();
+  });
+
+  test("a session inserting a block above the passage renumbers the address on the card", async () => {
+    // The address is a display label derived from the rendered structure (address.js), so it moves
+    // when the structure does. It is stamped onto the block on every paint; the card held the
+    // number the page had when the card was built, and named a different passage than the one it
+    // was anchored to.
+    const ADDRESSED = `<h1 data-line="0">Konspekt</h1><p data-line="2" id="para">Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p>`;
+    const INSERTED = `<h1 data-line="0">Konspekt</h1><p data-line="2">A paragraph the session added.</p><p data-line="4" id="para">Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p>`;
+    const da: any = fakeDataAccess({
+      ...listing(noteOn(PLAIN, "gamma delta")),
+      ...sessionRewrites(ADDRESSED, INSERTED),
+    });
+    const { host, pane } = await mountPane(da);
+    expect(q(host, ".glosa-address").textContent).toBe("§0.1");
+
+    da.moved = true;
+    await pane.refreshArtifact();
+    await paint();
+
+    expect(q(host, "#para").getAttribute("data-address")).toBe("§0.2");
+    expect(q(host, ".glosa-address").textContent).toBe("§0.2");
+    expect(q(host, ".glosa-annotation").getAttribute("data-anchored")).toBe("true");
+  });
 });

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A note's card no longer holds a verdict from before the session wrote the file.** The underline
+  under a passage and the dot in the gutter were worked out again every time the manuscript changed
+  underneath them; the cards in the margin were not. So a note whose sentence a session had just
+  rewritten went on looking attached, and a note whose words a session had put back went on saying
+  "Lost its place" — each until a mode toggle, a new note or a reload happened to rebuild the
+  margin. The card is now worked out in the same pass as the marks beside it, and the passage
+  number on it follows the page when a session adds or removes a block above it.
+
 ## [0.1.0-alpha.30] — 2026-09-22
 
 ### Fixed
