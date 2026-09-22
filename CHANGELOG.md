@@ -29,6 +29,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **At desktop width the rail holds only notes that still sit beside their words.** Notes a
+  session applied, closed or dismissed, and open notes whose passage is gone, now live in a drawer
+  at the foot of the rail. Its strip counts them ("1 lost its place · 3 resolved"), and "N applied"
+  in the line under the page opens it. "Clear all" clears the settled ones at once. A question
+  from a session now sits beside the passage it asks about, and can be clicked there.
 - **Your save wins over an agent's claim.** Saving a file an agent was in the middle of changing used
   to be refused, which left you unable to save your own document until the agent finished. The save
   now goes through: what the agent had left on disk is recorded as a change nobody can be credited
@@ -50,6 +55,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The margin rail no longer paints its "Resolved" heading over the first note, or stacks
+  notes on top of each other.** The heading sat in the page flow while every note was placed by
+  position, and a note that gained its "Lost its place" line was measured before it grew.
+- **A note the session applied no longer warns "Lost its place".** Applying a "Change the words"
+  note removes the words it quoted, so every success showed the warning. It now says "Applied.
+  The passage now reads differently." in grey, and "nudged ×N" is gone once a note is finished.
+- **A Clear that fails no longer turns a finished note back into open work.** It keeps its state
+  and says "Couldn't clear — try again".
 - **The dictation button now appears when you open a note.** With Wispr Flow configured and the
   provider reporting ready, no dictate control was ever drawn — in the note composer, the
   conversation composer, an agent question's answer, or the attention tray. The control is created
