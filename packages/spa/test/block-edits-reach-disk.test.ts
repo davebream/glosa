@@ -192,4 +192,38 @@ describe("a block edit reaches the file", () => {
     const { host } = await mountPane(fakeDataAccess());
     expect(readable(q(host, ".glosa-edit-status"))).toBe(false);
   });
+
+  // Undo after the save has taken the stack.
+  //
+  // Every write empties `runUndo`, roughly a second after typing stops, and that is right — the
+  // checkpoint pair the write captured is what reverts a saved run, and a stack that outlived its
+  // source would splice against moved offsets. What was wrong is that nothing said so, so the first
+  // shortcut a writer reaches for went dead mid-sentence and read as a broken key.
+  const pressUndo = (host: any) =>
+    q(host, ".glosa-content").dispatchEvent(
+      new dom.window.KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }),
+    );
+
+  test("Cmd-Z after a save says where undo went instead of doing nothing", async () => {
+    const da = fakeDataAccess();
+    const { host } = await mountPane(da);
+    await editBlock(host, 2, "First paragraph, edited by a human.");
+    await written(da);
+    await statusSays(host, "Saved");
+
+    pressUndo(host);
+    await paint();
+    const status = q(host, ".glosa-edit-status");
+    expect(status?.textContent).toContain("History");
+    expect(readable(status)).toBe(true);
+  });
+
+  test("Cmd-Z on a document nobody has edited says nothing, because there is nothing to say", async () => {
+    // The flag earns its place here: without it the sentence would fire on any bare Cmd-Z, which is
+    // noise rather than help — there is no earlier version of an untouched passage to go back to.
+    const { host } = await mountPane(fakeDataAccess());
+    pressUndo(host);
+    await paint();
+    expect(readable(q(host, ".glosa-edit-status"))).toBe(false);
+  });
 });

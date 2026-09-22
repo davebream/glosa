@@ -361,6 +361,12 @@ export function createArtifactPane(host, deps) {
    * than no undo. With the caret inside a run, Cmd-Z is ProseMirror's; outside one, it reverts the
    * last committed run from here. */
   let runUndo = [];
+  /** Whether a SAVE is what emptied `runUndo`, rather than there never having been anything in it.
+   *
+   * The difference is the whole point: after a save, Cmd-Z has somewhere to go and the writer needs
+   * telling where. On a document nobody has touched it has nowhere to go and there is nothing worth
+   * saying. */
+  let undoMovedToHistory = false;
   /** The pending debounced write, so a second edit inside the window replaces it rather than
    * queueing a second save. */
   let saveTimer = null;
@@ -2032,9 +2038,25 @@ export function createArtifactPane(host, deps) {
   });
   contentEl.addEventListener("keydown", (event) => {
     if (!openRun) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "z" && runUndo.length) {
-        event.preventDefault();
-        void undoLastRun();
+      if ((event.metaKey || event.ctrlKey) && event.key === "z" && !event.shiftKey) {
+        if (runUndo.length) {
+          event.preventDefault();
+          void undoLastRun();
+          return;
+        }
+        // Every save empties the stack, about a second after typing stops, and that is correct: the
+        // checkpoint pair the write captured is what reverts a saved run now, and a stack that
+        // outlived its source would splice against moved offsets. What was not correct was saying
+        // nothing about it. The first shortcut a writer reaches for went dead mid-sentence with no
+        // explanation, which reads as a broken key rather than a considered design.
+        //
+        // Only after a save actually took the stack. On a document nobody has edited there is
+        // genuinely nothing to undo, and answering a bare Cmd-Z with a sentence about History would
+        // be noise.
+        if (undoMovedToHistory) {
+          event.preventDefault();
+          setEditStatus("This passage is saved. Use History to go back to an earlier version.");
+        }
       }
       return;
     }
@@ -4089,6 +4111,7 @@ export function createArtifactPane(host, deps) {
       // stack goes with it: the checkpoint pair the write captured is what reverts a saved run now,
       // through History, and a stack that outlived its source would splice against moved offsets.
       workingSource = null;
+      undoMovedToHistory = runUndo.length > 0;
       runUndo = [];
       clearParkedSource(); // the parked copy is now behind the file it was parked against
       pendingReport = null;
@@ -4531,6 +4554,8 @@ export function createArtifactPane(host, deps) {
     await flushRunSave();
     workingSource = null;
     runUndo = [];
+    // A different artifact: the last one's history is not this one's to point at.
+    undoMovedToHistory = false;
     composer = null;
     focusedRequestId = null;
     returnPlace = null;
