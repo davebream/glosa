@@ -4676,9 +4676,10 @@ input,
    reports whether the workbench's promises hold for this document; it is never a badge. */
 /* `ch` is measured in the element's OWN face. Set in the chrome's 12px sans, `68ch` came to about
    385px against the serif's 612px, so the line sat centred well inside the text, over 110px short
-   of it at each end on a desktop pane and visibly off the text's left edge on a narrow one. The box takes the manuscript's face
-   and size, which is all the measure reads, and the facts inside are set in the chrome face. The
-   rule spans the text column exactly: the 2rem gutters are outside the box, not padding inside it. */
+   of it at each end on a desktop pane and visibly off the text's left edge on a narrow one. The
+   box takes the manuscript's face and size, which is all the measure reads, and the facts inside
+   are set in the chrome face. The rule spans the text column exactly: the 2rem gutters are outside
+   the box, not padding inside it. */
 .glosa-provenance {
   width: calc(100% - 2 * var(--space-8));
   max-width: var(--measure);
