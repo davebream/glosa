@@ -258,6 +258,12 @@ async function entryStatus(deps: AttentionDependencies, req: Request, server?: B
     // per-request opt-out the session stream already uses (`transport/http.ts`'s
     // `handleSessionStream`). Missing here was a latent bug this task's premise delta found: the
     // route's own test holds for ~50ms, in-process with no bound server, so it never observed it.
+    //
+    // The pinned Bun ignores this call on the UNIX listener — the transport the CLI, the MCP shim
+    // and the Claude Code monitor all use — whatever value it is given, so what actually keeps a
+    // hold open there is that listener's own `idleTimeout` (`lifecycle/daemon.ts`'s
+    // `bindApiSocketOrExit`). The call stays for the hostname/port listeners and for a Bun that
+    // honors it, which would narrow the exemption back to this route.
     server?.timeout(req, 0);
     return Response.json(await waitForEntryTerminal(deps, path, id, waitMs, req.signal));
   } catch (error) {

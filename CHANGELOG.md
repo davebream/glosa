@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A note now reaches a running session as soon as you write it, instead of up to a minute later.**
+  The connection a Claude Code session holds open for notes was closed by the daemon's local socket
+  after ten seconds of quiet, every time. The session reconnected, waited longer after each close,
+  and settled on trying again once a minute. A note written just after a close waited that long, and
+  `glosa status` reported the session as having no push connection for most of every minute while
+  push was in fact working, slowly. Held reads over the same socket ended the same way: anything an
+  agent waited on for more than ten seconds, `glosa_ask` and the file watch included, failed with
+  "the socket connection was closed unexpectedly" instead of waiting the time it asked for.
 - **A note's card no longer holds a verdict from before the session wrote the file.** The underline
   under a passage and the dot in the gutter were worked out again every time the manuscript changed
   underneath them; the cards in the margin were not. So a note whose sentence a session had just
