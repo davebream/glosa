@@ -173,4 +173,57 @@ describe("Notes and writing are different states of the page", () => {
     // And the full-page editor really is the thing now showing.
     expect(q(host, ".glosa-edit-wrap")?.hidden).toBe(false);
   });
+
+  // Reaching a passage without a pointer. Until now the roving tabindex was Review's alone, so Edit
+  // — the one state that writes the user's files — could be entered and then not used: no block was
+  // focusable and no key opened one. Everything INSIDE an open run was already keyboard-complete,
+  // which is what made the gap easy to miss; it was the door, not the room.
+  const targets = (host: any): any[] => Array.from(host.querySelectorAll(".glosa-content .glosa-block-target"));
+  const press = (block: any, key: string) =>
+    block.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true }));
+
+  test("in Edit every passage is a focus target, and the help says what Enter will do there", async () => {
+    const { host } = await mountPane("edit");
+    expect(targets(host).map((block) => block.getAttribute("data-line"))).toEqual(["0", "2", "4"]);
+    // One stop in the tab order, arrows from there — the standard roving pattern, not three tab stops.
+    expect(targets(host).filter((block) => block.getAttribute("tabindex") === "0")).toHaveLength(1);
+    // The sentence a screen reader is given has to name the action of THIS state; "annotate" here
+    // would be a confident lie about what the key does.
+    expect(q(host, ".glosa-visually-hidden[id]")?.textContent).toContain("to edit one");
+  });
+
+  test("Enter on a focused passage opens it for writing, exactly as clicking it does", async () => {
+    const { host } = await mountPane("edit");
+    const block = q(host, '.glosa-content [data-line="2"]');
+    block.focus();
+    press(block, "Enter");
+    await settleUntil(() => Boolean(q(host, ".glosa-run-editor")));
+    expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(1);
+  });
+
+  test("Space opens it too, because a focused thing that Enter activates is one Space activates", async () => {
+    const { host } = await mountPane("edit");
+    const block = q(host, '.glosa-content [data-line="2"]');
+    block.focus();
+    press(block, " ");
+    await settleUntil(() => Boolean(q(host, ".glosa-run-editor")));
+    expect(host.querySelectorAll(".glosa-run-editor")).toHaveLength(1);
+  });
+
+  test("Up and Down step between passages in Edit, not only where notes are shown", async () => {
+    const { host } = await mountPane("edit");
+    const first = q(host, '.glosa-content [data-line="0"]');
+    first.focus();
+    press(first, "ArrowDown");
+    await paint();
+    expect(dom.document.activeElement?.getAttribute("data-line")).toBe("2");
+    press(dom.document.activeElement, "ArrowUp");
+    await paint();
+    expect(dom.document.activeElement?.getAttribute("data-line")).toBe("0");
+  });
+
+  test("plain reading leaves the passages alone — neither state claims the click, so nothing is a target", async () => {
+    const { host } = await mountPane("read");
+    expect(targets(host)).toHaveLength(0);
+  });
 });

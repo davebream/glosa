@@ -2775,7 +2775,7 @@ input,
 
 /* Annotate mode exposes each rendered block as an explicit keyboard target. The focus ring is
    intentionally inset so enlarged text and narrow layouts never acquire horizontal overflow. */
-.glosa-content .glosa-annotatable-block {
+.glosa-content .glosa-block-target {
   border-radius: var(--radius-micro);
 }
 
@@ -2817,7 +2817,7 @@ input,
   opacity: 1;
 }
 
-.glosa-content .glosa-annotatable-block:focus-visible {
+.glosa-content .glosa-block-target:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }

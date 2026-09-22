@@ -447,7 +447,7 @@ export function createArtifactPane(host, deps) {
   const rollbackPoints = new Map();
   let previewItem = null; // the annotation whose passage the pointer is currently over
   let previewCloseTimer = null;
-  let annotatableFocusIndex = 0;
+  let blockTargetFocusIndex = 0;
   let stopClassFViewer = null;
   let classFInteractive = false;
   let approvalBusy = false;
@@ -654,12 +654,17 @@ export function createArtifactPane(host, deps) {
       }),
     ],
   );
-  const annotateInstructions = el("p", {
+  // What Enter does to the focused passage is the whole difference between the two states, so the
+  // sentence that teaches it cannot be one fixed string. `updateBlockTargets` sets it per mode.
+  const BLOCK_TARGET_HELP = {
+    review: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
+    edit: "Use Up and Down arrow keys to move between passages. Press Enter or Space to edit one.",
+  };
+  const blockTargetInstructions = el("p", {
     className: "glosa-visually-hidden",
-    textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
     hidden: true,
   });
-  annotateInstructions.id = `glosa-annotate-instructions-${Math.random().toString(36).slice(2, 9)}`;
+  blockTargetInstructions.id = `glosa-block-instructions-${Math.random().toString(36).slice(2, 9)}`;
   const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Artifact preview" });
   const emptyEl = el("div", { className: "glosa-empty", hidden: true, role: "status", "aria-live": "polite" });
   const skeletonEl = el("div", { className: "glosa-skeleton", hidden: true, "aria-hidden": "true" });
@@ -738,7 +743,7 @@ export function createArtifactPane(host, deps) {
     approvalStrip,
     diskChangeEl,
     encodingNoticeEl,
-    annotateInstructions,
+    blockTargetInstructions,
     emptyEl,
     skeletonEl,
     contentEl,
@@ -1560,26 +1565,40 @@ export function createArtifactPane(host, deps) {
 
   // ---------- manuscript ----------
 
-  function updateAnnotatableBlocks() {
-    for (const block of contentEl.querySelectorAll(".glosa-annotatable-block")) {
-      block.classList.remove("glosa-annotatable-block");
+  /** Makes every top-level rendered block a focus target, in whichever state claims the passage.
+   *
+   * BOTH STATES, NOT JUST REVIEW. This was Review-only, and the consequence was that Edit — the
+   * one state that writes the user's files — could not be entered from a keyboard at all. A reader
+   * could tab to the Edit control, press it, and then face a document with no focusable blocks and
+   * no key that opened one; the roving tabindex they had a moment earlier in Review was taken away
+   * by the very switch that was supposed to let them write. Everything inside an open run is
+   * already keyboard-complete (arrows cross the seam, Backspace merges), so the gap was the door,
+   * not the room.
+   *
+   * What Enter means differs — annotate in Review, put a caret in it in Edit — and that belongs in
+   * the keydown handler. The reachability is the same question in both, so it is answered once. */
+  function updateBlockTargets() {
+    for (const block of contentEl.querySelectorAll(".glosa-block-target")) {
+      block.classList.remove("glosa-block-target");
       block.removeAttribute("tabindex");
       block.removeAttribute("aria-describedby");
     }
-    annotateInstructions.hidden = true;
+    blockTargetInstructions.hidden = true;
     contentEl.removeAttribute("aria-describedby");
-    if (loading || modeState.mode !== "review" || !currentArtifact || currentArtifact.class === "F") return;
-    annotateInstructions.hidden = false;
-    contentEl.setAttribute("aria-describedby", annotateInstructions.id);
+    const reachable = modeState.mode === "review" || (modeState.mode === "edit" && runEditingAvailable());
+    if (loading || !reachable || !currentArtifact || currentArtifact.class === "F") return;
+    blockTargetInstructions.textContent = BLOCK_TARGET_HELP[modeState.mode];
+    blockTargetInstructions.hidden = false;
+    contentEl.setAttribute("aria-describedby", blockTargetInstructions.id);
     const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]")).filter((block) =>
       block.textContent.trim(),
     );
     const focusedIndex = blocks.indexOf(document.activeElement);
-    if (focusedIndex >= 0) annotatableFocusIndex = focusedIndex;
-    annotatableFocusIndex = Math.min(annotatableFocusIndex, Math.max(0, blocks.length - 1));
+    if (focusedIndex >= 0) blockTargetFocusIndex = focusedIndex;
+    blockTargetFocusIndex = Math.min(blockTargetFocusIndex, Math.max(0, blocks.length - 1));
     for (const [index, block] of blocks.entries()) {
-      block.classList.add("glosa-annotatable-block");
-      block.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+      block.classList.add("glosa-block-target");
+      block.setAttribute("tabindex", index === blockTargetFocusIndex ? "0" : "-1");
     }
   }
 
@@ -1893,7 +1912,7 @@ export function createArtifactPane(host, deps) {
     const kit = await loadEditorKit();
     morphArtifactContent(contentEl, kit.renderMarkdown(currentSource()));
     contentEl.setAttribute("data-path", currentArtifact?.source_path ?? "");
-    updateAnnotatableBlocks();
+    updateBlockTargets();
     renderMargin();
     refreshOutline();
     onStateChange();
@@ -2044,13 +2063,13 @@ export function createArtifactPane(host, deps) {
     renderApprovalStrip();
 
     if (!currentArtifact) {
-      updateAnnotatableBlocks();
+      updateBlockTargets();
       renderMargin();
       refreshOutline();
       return;
     }
     if (isClassF) {
-      updateAnnotatableBlocks();
+      updateBlockTargets();
       mountClassFArtifact();
       renderMargin();
       // Class F is an iframe glosa deliberately cannot read into, so there is no outline to draw
@@ -2082,7 +2101,7 @@ export function createArtifactPane(host, deps) {
         contentEl.setAttribute("data-path", currentArtifact.source_path);
       }
     }
-    updateAnnotatableBlocks();
+    updateBlockTargets();
     renderMargin();
     refreshOutline();
   }
@@ -4331,14 +4350,16 @@ export function createArtifactPane(host, deps) {
     openComposer(record, { returnFocus: returnFocus instanceof HTMLElement ? returnFocus : contentEl });
   });
 
-  // Keyboard-equivalent annotation path: in Annotate mode each top-level rendered block is a
-  // focus target. Enter/Space selects that block and opens the exact same composer as a pointer
-  // selection, so annotation composition never depends on drag-selection alone.
+  // The keyboard equivalent of reaching a passage with the pointer. Each top-level rendered block
+  // is a focus target, and Enter or Space does to the focused one exactly what a click would do:
+  // in Review it selects the block and opens the same composer a drag-selection opens, so
+  // annotating never depends on dragging; in Edit it opens the run editor with the caret in it,
+  // so writing never depends on clicking.
   contentEl.addEventListener("keydown", (event) => {
     const block = event.target;
-    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
-    if (modeState.mode !== "review") return;
-    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-block-target")) return;
+    if (modeState.mode !== "review" && modeState.mode !== "edit") return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-block-target"));
     if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       event.preventDefault();
       const current = Math.max(0, blocks.indexOf(block));
@@ -4348,7 +4369,7 @@ export function createArtifactPane(host, deps) {
           : event.key === "End"
             ? blocks.length - 1
             : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
-      annotatableFocusIndex = next;
+      blockTargetFocusIndex = next;
       for (const [index, candidate] of blocks.entries())
         candidate.setAttribute("tabindex", index === next ? "0" : "-1");
       blocks[next]?.focus();
@@ -4356,6 +4377,12 @@ export function createArtifactPane(host, deps) {
     }
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
+    // No coordinates to hand it: a key names the passage, not a point inside it, so the caret goes
+    // where `focusAt` puts it with nothing to aim at rather than under a pointer that was never here.
+    if (modeState.mode === "edit") {
+      void openRunEditor(block, null);
+      return;
+    }
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     const textNodes = [];
     let textNode = walker.nextNode();
@@ -4377,11 +4404,11 @@ export function createArtifactPane(host, deps) {
 
   contentEl.addEventListener("focusin", (event) => {
     const block = event.target;
-    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
-    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
-    annotatableFocusIndex = Math.max(0, blocks.indexOf(block));
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-block-target")) return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-block-target"));
+    blockTargetFocusIndex = Math.max(0, blocks.indexOf(block));
     for (const [index, candidate] of blocks.entries())
-      candidate.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+      candidate.setAttribute("tabindex", index === blockTargetFocusIndex ? "0" : "-1");
   });
 
   // §7: `layoutMargin`'s anchor measurement observes the PANE, not the window — a pane changes
