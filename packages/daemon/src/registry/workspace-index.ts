@@ -959,20 +959,93 @@ export class WorkspaceIndex {
    * its existing slug unchanged (idempotent). This is the single place every session
    * registration, `glosa open`, and discovery sweep funnels through. */
   upsertWorkspace(canonicalPath: string, source: WorkspaceSource): Promise<WorkspaceEntry> {
+    return this.mutex.runExclusive(() => this.upsertWorkspaceLocked(this.loadForMutation(), canonicalPath, source));
+  }
+
+  /**
+   * The workspace a REGISTERING SESSION belongs to, which is not always one to create (#146).
+   *
+   * `glosa open` is a person naming a directory; a session registration is an agent reporting
+   * where it happens to be running, and the two were reaching the same unconditional "make this a
+   * workspace" call. Two directories must not be taken at face value:
+   *
+   *   - one already inside a registered workspace — a second registration there gets its own slug
+   *     and its own `.glosa` bus, splitting one project's notes across two inboxes, when the
+   *     session's `cwd` already routes to the enclosing workspace through `forWorkspace`'s
+   *     cwd-ancestor rung. The deepest non-forgetting match wins, the same rule
+   *     `resolveOpenTarget` and the Claude monitor already use.
+   *   - `$HOME`, or an ancestor of it — registering it writes `.glosa` into the user's home and
+   *     then matches every file they own, forever. `resolveOpenTarget` already refuses to REACH
+   *     such a registration automatically; this refuses to create one. Returns null, which leaves
+   *     the session registered and reachable by MCP pull with no workspace minted.
+   *
+   * Reuse of a `$HOME` workspace someone opened deliberately is untouched: an exact match is an
+   * existing registration, and declining to use what a person explicitly made would be a
+   * different change from declining to invent one.
+   *
+   * Resolution and creation share ONE critical section on purpose — a caller that looked first and
+   * upserted after would race a concurrent registration into exactly the duplicate this prevents.
+   */
+  upsertSessionWorkspace(canonicalPath: string): Promise<WorkspaceEntry | null> {
     return this.mutex.runExclusive(() => {
       const index = this.loadForMutation();
+      const owning = Object.values(index.workspaces)
+        .filter(
+          (entry) =>
+            entry.present &&
+            entry.kind === "directory" &&
+            entry.lifecycle?.state !== "forgetting" &&
+            isInside(entry.worktree_path, canonicalPath),
+        )
+        .sort((a, b) => b.worktree_path.length - a.worktree_path.length)[0];
+      if (owning && owning.canonical_path !== canonicalPath) {
+        const now = this.now().toISOString();
+        owning.last_seen = now;
+        index.updated_at = now;
+        this.persist(index);
+        return this.announceRegistered(owning);
+      }
+      if (!owning && isHomeOrAncestor(canonicalPath, this.userHomeDir)) return null;
+      return this.upsertWorkspaceLocked(index, canonicalPath, "session");
+    });
+  }
+
+  /** Caller MUST already hold the index mutex. */
+  private upsertWorkspaceLocked(
+    index: WorkspaceIndexFile,
+    canonicalPath: string,
+    source: WorkspaceSource,
+  ): WorkspaceEntry {
+    {
       const now = this.now().toISOString();
       const existing = Object.values(index.workspaces).find(
         (entry) => entry.kind === "directory" && entry.canonical_path === canonicalPath,
       );
 
       if (existing) {
+        // The same guard `upsertDirectoryForOpen` has carried since #156, which this path never
+        // got. Refreshing `present`/`absent_since` on a row whose durable `glosa forget` is
+        // already committed partially undoes that deletion — and the caller here is a session
+        // registering, which nobody asked to have that effect.
+        if (existing.lifecycle?.state === "forgetting") {
+          throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
+        }
         existing.last_seen = now;
         existing.present = true;
         delete existing.absent_since;
         index.updated_at = now;
         this.persist(index);
         return this.announceRegistered(existing);
+      }
+
+      // No live row for this exact path — which is also the registration-less window a forget
+      // passes through between removing its row and stamping its completion receipt. Creating
+      // here makes an ACTIVE row, and every later caller then sees an ordinary workspace and never
+      // reaches its own registration-less check (those only fire when nothing is indexed). Checked
+      // inside the SAME critical section that is about to create, never as a caller's pre-check:
+      // `getOrRegisterWorkspace` does it beforehand and can still lose the gap between the two.
+      if (this.hasActiveForgetOperation(index, canonicalPath)) {
+        throw new AdoptionError("workspace-forgetting", "workspace is being forgotten");
       }
 
       const id = registrationId("directory", canonicalPath);
@@ -1007,7 +1080,7 @@ export class WorkspaceIndex {
       index.updated_at = now;
       this.persist(index);
       return this.announceRegistered(entry);
-    });
+    }
   }
 
   /** Resolves a raw `glosa open` target under the same global-index mutex that persists any new

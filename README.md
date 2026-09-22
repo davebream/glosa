@@ -144,7 +144,7 @@ mapping outranks the `--registry` flag, and bun has no scoped-registry flag at a
 Install from the published tarball URL, which resolves without consulting any registry configuration:
 
 ```sh
-bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.28.tgz
+bun add --global https://registry.npmjs.org/@davebream/glosa/-/glosa-0.1.0-alpha.29.tgz
 ```
 
 Or, with npm, use the scoped form, which does beat a scope mapping:
@@ -178,9 +178,12 @@ cd /path/to/your/workspace
 glosa open
 ```
 
-The plugin supplies Claude's MCP tools and one session monitor. A session started outside a glosa
-workspace stays idle; once `glosa open` registers that directory, the same monitor connects without
-restarting the session. Read-only `glosa open --read` and `glosa_present` do not need an agent session.
+The plugin supplies Claude's MCP tools and one session monitor per session. A session started
+outside a glosa workspace stays idle; once `glosa open` registers that directory, the same monitor
+connects without restarting the session. A session that installed the plugin after it began has no
+monitor yet, so running the `glosa-connect` skill starts one — and whichever route starts it, only
+one ever runs for a session. Read-only `glosa open --read` and `glosa_present` do not need an agent
+session.
 
 A few commands worth knowing:
 
@@ -216,8 +219,8 @@ Dictate and sends only the data named in its consent disclosure.
 
 | Agent | Integration |
 |---|---|
-| **Claude Code** | Official plugin with MCP pull and a per-session monitor over the generic push stream. |
-| **Codex** | App-server push when its local control socket is running, with MCP pull as the fallback. |
+| **Claude Code** | Official plugin with MCP pull and a per-session monitor over the generic push stream. The monitor starts at session start, or when `glosa-connect` runs in a session that began without the plugin. |
+| **Codex** | App-server push when its local control socket is running, with MCP pull as the fallback. Binding a session is what starts the attachment. |
 | **Generic MCP host** | Notes can be pulled through the MCP tools without teaching glosa's core about that agent. |
 
 glosa binds notes to an explicit live session when it can. If more than one session matches, the
@@ -234,7 +237,10 @@ thread identity, so the agent reads `CODEX_THREAD_ID` in its shell and passes it
 evidence, binding uses a generic MCP session.
 
 A missing transcript only affects the conversation mirror. Open session streams keep the session lease
-alive; once they close, the lease expires after its remaining time.
+alive; once they close, the lease expires after its remaining time. Whether a session holds one right
+now is reported per session by `glosa status --json` and named by `glosa doctor`, because being bound
+and being reachable by push are different things — and a note queued for a bound session with no
+stream waits until something pulls it.
 
 Codex push needs a separately running app-server control socket, and glosa never starts it. The
 standalone Codex distribution can manage that daemon; Homebrew and npm users can start it themselves

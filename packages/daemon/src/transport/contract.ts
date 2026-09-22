@@ -41,8 +41,16 @@ import { parseProtocolVersion } from "../lifecycle/protocol.ts";
  * as it does today.
  * v1.14 adds the provider-neutral dictation status and foreground session-grant routes.
  * v1.15 (issue #219) adds the optional `live_updates` diagnosis to `/api/status` workspace rows —
- * additive and N/N-1 safe; an N-1 client ignores it and an N-1 daemon simply omits it. */
-export const CONTRACT_VERSION = "1.15";
+ * additive and N/N-1 safe; an N-1 client ignores it and an N-1 daemon simply omits it.
+ * v1.16 (issue #306) adds `push:{connected,transport}` to `/api/status` session rows and the
+ * `remedy` sentence to a `lifecycle:"forgetting"` workspace row. `push` carries the same shape
+ * `GET /api/sessions/:id/stream/status` already returns, read from `SessionPushRegistry` alone;
+ * it is a per-session delivery-transport fact and never feeds the workspace-connection
+ * derivation, which stays `workspace_binding` + liveness (A1 §5.2b). `remedy` is present only
+ * beside `lifecycle`, so a JSON client can print the resume command the human output already
+ * prints instead of composing its own. Additive, N/N-1 safe: an N-1 daemon omits both, and an
+ * absent `push` means "cannot say", never "not live". */
+export const CONTRACT_VERSION = "1.16";
 export const DAEMON_VERSION = APP_VERSION;
 
 export type ContractCheck = { status: "ok" } | { status: "stale-minor" } | { status: "mismatch" };

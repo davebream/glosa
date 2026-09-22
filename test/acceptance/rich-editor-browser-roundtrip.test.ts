@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tokenPath } from "../../packages/daemon/src/security/token.ts";
-import { randomPort } from "../../packages/daemon/test/helpers.ts";
+import { randomPort, waitUntil } from "../../packages/daemon/test/helpers.ts";
 
 const MAIN_PATH = new URL("../../packages/cli/src/main.ts", import.meta.url).pathname;
 const TOKEN = "rich-editor-browser-roundtrip-test-token-0123456789abcdef";
@@ -74,17 +74,22 @@ function spawnChild<
   return Bun.spawn(options);
 }
 
-/** Bounded read of a subprocess's stdout: resolves with whatever text arrived, or `""` if the
+/** Bounded read of a subprocess's stdout: resolves with the complete text at EOF, or `""` if the
  * deadline passes first — never hangs on a child that started but never produces output. */
 async function readBounded(stream: ReadableStream<Uint8Array> | null, timeoutMs: number): Promise<string> {
   if (!stream) return "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       new Response(stream).text(),
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("read timed out")), timeoutMs)),
+      new Promise<string>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("read timed out")), timeoutMs);
+      }),
     ]);
   } catch {
     return "";
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -334,6 +339,11 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
   beforeEach(async () => {
     spawnedChildren.length = 0;
+    daemon = undefined;
+    probeProcess = null;
+    chrome = null;
+    chromeProfile = null;
+    cdp = null;
     // The private home exists before ANY subprocess starts — including the version probe, which
     // used to run first and inherit the real environment entirely.
     home = mkdtempSync(join(tmpdir(), "glosa-183-home-"));
@@ -341,16 +351,18 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     writeFileSync(tokenPath(home), TOKEN, { mode: 0o600 });
     childEnv = buildChildEnv(Bun.env as Record<string, string | undefined>, home);
 
-    chromiumPath = await installedChromium(childEnv, (proc) => {
-      probeProcess = proc;
-    });
-    probeProcess = null; // installedChromium already terminated and awaited it before returning
-
     workspaceRoot = mkdtempSync(join(tmpdir(), "glosa-183-ws-"));
     writeFileSync(join(workspaceRoot, "paragraph.md"), PARAGRAPH_SOURCE);
     writeFileSync(join(workspaceRoot, "blockquote.md"), BLOCKQUOTE_SOURCE);
     writeFileSync(join(workspaceRoot, "comment.md"), COMMENT_SOURCE);
     writeFileSync(join(workspaceRoot, "latin1.md"), LATIN1_BYTES);
+  });
+
+  async function setupWorkspace() {
+    chromiumPath = await installedChromium(childEnv, (proc) => {
+      probeProcess = proc;
+    });
+    probeProcess = null; // installedChromium already terminated and awaited it before returning
 
     port = randomPort();
     // The same scrubbed, HOME-redirected environment every child of this file gets; `GLOSA_HOME`
@@ -378,10 +390,11 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ path: workspaceRoot }),
+      signal: AbortSignal.timeout(5_000),
     });
     expect(opened.ok, "workspace registration").toBe(true);
     slug = (await opened.json()).slug;
-  });
+  }
 
   afterEach(async () => {
     cdp?.close();
@@ -425,7 +438,13 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
    * override points for the failure-path checks below, which need to fail fast rather than wait
    * out the real defaults. */
   async function launchBrowser(
-    opts: { deadlineMs?: number; targetFetchTimeoutMs?: number; executablePath?: string; initialUrl?: string } = {},
+    opts: {
+      deadlineMs?: number;
+      targetFetchTimeoutMs?: number;
+      executablePath?: string;
+      initialUrl?: string;
+      ready?: () => Promise<void>;
+    } = {},
   ): Promise<{ client: CdpClient; argv: string[] }> {
     const { deadlineMs = 10_000, targetFetchTimeoutMs = 5_000, executablePath = chromiumPath } = opts;
     const cdpPort = randomPort();
@@ -454,6 +473,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
 
     let client: CdpClient | undefined;
     try {
+      await opts.ready?.();
       let versionEndpoint: { webSocketDebuggerUrl?: string } | null = null;
       const deadline = Date.now() + deadlineMs;
       while (Date.now() < deadline) {
@@ -578,30 +598,34 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
   // SSE and is morphed into it (vendor/idiomorph.js) rather than replacing it. viewer.test.ts pins
   // node identity under happy-dom, which performs no layout and has no real focus or scroll; this
   // is the check a vendored-idiomorph bump has to pass in a real browser.
-  test(
-    "R6: an external write morphs the open page in place, keeping what did not change",
-    async () => {
-      const path = "morph.md";
-      const filler = Array.from(
-        { length: 40 },
-        (_, i) => `Filler paragraph ${i + 1}, long enough to make the page scroll.`,
-      );
-      const before = [
-        "# Morph",
-        "",
-        "Kept paragraph with [a link](https://example.invalid/) in it.",
-        "",
-        ...filler.flatMap((line) => [line, ""]),
-        "Changed paragraph, before.",
-        "",
-      ].join("\n");
-      writeFileSync(join(workspaceRoot, path), before);
+  describe("application round trips", () => {
+    // Three bounded browser probes (15s), handshake (15s), workspace open (5s), cleanup margin.
+    beforeEach(setupWorkspace, 40_000);
 
-      const { client } = await launchBrowser({ initialUrl: documentUrl("document", path) });
-      cdp = client;
-      await waitForRoute(client, "document", "Changed paragraph, before.");
+    test(
+      "R6: an external write morphs the open page in place, keeping what did not change",
+      async () => {
+        const path = "morph.md";
+        const filler = Array.from(
+          { length: 40 },
+          (_, i) => `Filler paragraph ${i + 1}, long enough to make the page scroll.`,
+        );
+        const before = [
+          "# Morph",
+          "",
+          "Kept paragraph with [a link](https://example.invalid/) in it.",
+          "",
+          ...filler.flatMap((line) => [line, ""]),
+          "Changed paragraph, before.",
+          "",
+        ].join("\n");
+        writeFileSync(join(workspaceRoot, path), before);
 
-      const setup: any = await client.evaluate(`(async () => {
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document", path) });
+        cdp = client;
+        await waitForRoute(client, "document", "Changed paragraph, before.");
+
+        const setup: any = await client.evaluate(`(async () => {
         window.__morphLogs = [];
         for (const level of ["warn", "error"]) {
           const original = console[level];
@@ -621,16 +645,16 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         window.__morph = { kept, link, scroller, scrollTop: scroller.scrollTop };
         return { ok: true, scrollTop: scroller.scrollTop, focused: document.activeElement === link };
       })()`);
-      if (!setup.ok) throw new Error(setup.reason);
-      expect(setup.scrollTop).toBeGreaterThan(0);
-      expect(setup.focused).toBe(true);
+        if (!setup.ok) throw new Error(setup.reason);
+        expect(setup.scrollTop).toBeGreaterThan(0);
+        expect(setup.focused).toBe(true);
 
-      writeFileSync(
-        join(workspaceRoot, path),
-        before.replace("Changed paragraph, before.", "Changed paragraph, after."),
-      );
+        writeFileSync(
+          join(workspaceRoot, path),
+          before.replace("Changed paragraph, before.", "Changed paragraph, after."),
+        );
 
-      const after: any = await client.evaluate(`(async () => {
+        const after: any = await client.evaluate(`(async () => {
         const content = () => document.querySelector('.glosa-pane[data-active="true"] .glosa-content');
         for (let i = 0; i < 200 && !content()?.textContent.includes("Changed paragraph, after."); i++)
           await new Promise((resolve) => setTimeout(resolve, 25));
@@ -643,85 +667,85 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           logs: window.__morphLogs,
         };
       })()`);
-      expect(after.updated).toBe(true);
-      expect(after.keptIsSameNode).toBe(true);
-      expect(after.focusKept).toBe(true);
-      expect(after.scrollKept).toBe(true);
-      expect(after.logs).toEqual([]);
-    },
-    TEST_TIMEOUT_MS,
-  );
+        expect(after.updated).toBe(true);
+        expect(after.keptIsSameNode).toBe(true);
+        expect(after.focusKept).toBe(true);
+        expect(after.scrollKept).toBe(true);
+        expect(after.logs).toEqual([]);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#145: a document fragment reaches one rendered pane without navigator",
-    async () => {
-      const { client } = await launchBrowser({ initialUrl: documentUrl("document") });
-      cdp = client;
-      const state = await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
-      expect(state.panes).toBe(1);
-      expect(state.navigatorHidden).toBe(true);
-      expect(state.sidebarHidden).toBe(true);
-      expect(state.paired).toBe(true);
-      expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
-    },
-    TEST_TIMEOUT_MS,
-  );
+    test(
+      "#145: a document fragment reaches one rendered pane without navigator",
+      async () => {
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document") });
+        cdp = client;
+        const state = await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
+        expect(state.panes).toBe(1);
+        expect(state.navigatorHidden).toBe(true);
+        expect(state.sidebarHidden).toBe(true);
+        expect(state.paired).toBe(true);
+        expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#145: a reused workspace tab follows a document fragment",
-    async () => {
-      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
-      cdp = client;
-      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
-      const layoutBefore = await client.evaluate<string>("JSON.stringify(localStorage)");
-      const next = new URL(documentUrl("document", "blockquote.md")).hash;
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      const state = await waitForRoute(client, "document", "A callout");
-      expect(state.panes).toBe(1);
-      expect(state.navigatorHidden).toBe(true);
-      expect(state.sidebarHidden).toBe(true);
-      expect(state.paired).toBe(true);
-      expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
-      expect(await client.evaluate<string>("JSON.stringify(localStorage)")).toBe(layoutBefore);
-      const workspace = new URL(documentUrl("workspace")).hash;
-      await client.evaluate(`location.hash = ${JSON.stringify(workspace)}`);
-      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
-      await client.evaluate("history.back()");
-      await waitForRoute(client, "document", "A callout");
-      await client.evaluate("history.forward()");
-      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      await waitForRoute(client, "document", "A callout");
-    },
-    TEST_TIMEOUT_MS,
-  );
+    test(
+      "#145: a reused workspace tab follows a document fragment",
+      async () => {
+        const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
+        cdp = client;
+        await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+        const layoutBefore = await client.evaluate<string>("JSON.stringify(localStorage)");
+        const next = new URL(documentUrl("document", "blockquote.md")).hash;
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        const state = await waitForRoute(client, "document", "A callout");
+        expect(state.panes).toBe(1);
+        expect(state.navigatorHidden).toBe(true);
+        expect(state.sidebarHidden).toBe(true);
+        expect(state.paired).toBe(true);
+        expect(new URLSearchParams(state.hash.slice(1)).has("t")).toBe(false);
+        expect(await client.evaluate<string>("JSON.stringify(localStorage)")).toBe(layoutBefore);
+        const workspace = new URL(documentUrl("workspace")).hash;
+        await client.evaluate(`location.hash = ${JSON.stringify(workspace)}`);
+        await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+        await client.evaluate("history.back()");
+        await waitForRoute(client, "document", "A callout");
+        await client.evaluate("history.forward()");
+        await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        await waitForRoute(client, "document", "A callout");
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#145: changing a route preserves read-lock semantics",
-    async () => {
-      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
-      cdp = client;
-      await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
-      const next = `${new URL(documentUrl("document", "blockquote.md", "edit")).hash}&lock=read`;
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      const state = await waitForRoute(client, "document", "A callout");
-      expect(state.readLocked).toBe(true);
-      expect(state.mode).toBe("read");
-      expect(state.navigatorHidden).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
+    test(
+      "#145: changing a route preserves read-lock semantics",
+      async () => {
+        const { client } = await launchBrowser({ initialUrl: documentUrl("workspace") });
+        cdp = client;
+        await waitForRoute(client, "workspace", "A paragraph with a deliberate single newline");
+        const next = `${new URL(documentUrl("document", "blockquote.md", "edit")).hash}&lock=read`;
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        const state = await waitForRoute(client, "document", "A callout");
+        expect(state.readLocked).toBe(true);
+        expect(state.mode).toBe("read");
+        expect(state.navigatorHidden).toBe(true);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#250: a mode=edit link onto a file that is not valid UTF-8 opens in Read, and the bytes survive",
-    async () => {
-      const before = readFileSync(join(workspaceRoot, "latin1.md"));
-      const { client } = await launchBrowser({ initialUrl: documentUrl("document", "latin1.md", "edit") });
-      cdp = client;
-      // The manuscript renders — refusing to edit is not refusing to show.
-      await waitForRoute(client, "document", "Body of the undecodable file.");
+    test(
+      "#250: a mode=edit link onto a file that is not valid UTF-8 opens in Read, and the bytes survive",
+      async () => {
+        const before = readFileSync(join(workspaceRoot, "latin1.md"));
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document", "latin1.md", "edit") });
+        cdp = client;
+        // The manuscript renders — refusing to edit is not refusing to show.
+        await waitForRoute(client, "document", "Body of the undecodable file.");
 
-      const state: any = await client.evaluate(`(() => {
+        const state: any = await client.evaluate(`(() => {
         const pane = document.querySelector('.glosa-app .glosa-pane[data-active="true"]');
         return {
           mode: pane?.getAttribute('data-mode'),
@@ -732,39 +756,39 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           text: pane?.querySelector('.glosa-content')?.textContent ?? '',
         };
       })()`);
-      expect(state.mode).toBe("read");
-      expect(state.editButton).toBe(false);
-      expect(state.writableFaces).toBe(0);
-      expect(state.noticeHidden).toBe(false);
-      expect(state.notice).toContain("not valid UTF-8");
-      expect(state.text).toContain("Caf");
+        expect(state.mode).toBe("read");
+        expect(state.editButton).toBe(false);
+        expect(state.writableFaces).toBe(0);
+        expect(state.noticeHidden).toBe(false);
+        expect(state.notice).toContain("not valid UTF-8");
+        expect(state.text).toContain("Caf");
 
-      // Leaving through the guarded full reload rather than just asserting in place: that is the
-      // path a real close takes, and it is where an editor that HAD been mounted would flush.
-      const next = new URL(documentUrl("document", "paragraph.md")).hash;
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
-      expect(readFileSync(join(workspaceRoot, "latin1.md")).equals(before)).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
+        // Leaving through the guarded full reload rather than just asserting in place: that is the
+        // path a real close takes, and it is where an editor that HAD been mounted would flush.
+        const next = new URL(documentUrl("document", "paragraph.md")).hash;
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        await waitForRoute(client, "document", "A paragraph with a deliberate single newline");
+        expect(readFileSync(join(workspaceRoot, "latin1.md")).equals(before)).toBe(true);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#145: cancelling a document link preserves the edited source and its current URL",
-    async () => {
-      const { client } = await launchBrowser({ initialUrl: documentUrl("workspace", "paragraph.md", "edit") });
-      cdp = client;
-      // Read-mode content is hidden in Edit; wait for the actual editable source face instead.
-      //
-      // WAIT FOR USABLE, NOT FOR PRESENT. Both controls below are built at first paint and merely
-      // `hidden` until the artifact arrives, and `.click()` on a hidden button still fires. Polling
-      // for existence therefore clicked both of them before the file had loaded, which opened the
-      // source face over the empty string and left the rest of this test racing the loader — the
-      // intermittent red on this test in CI, with the file's own bytes in the box and the draft
-      // gone. The load race itself has its own deterministic coverage in
-      // packages/spa/test/typing-during-load.test.ts; this test is about the NAVIGATION prompt and
-      // wants a pane that has finished opening.
-      await client.evaluate(`(async () => {
+    test(
+      "#145: cancelling a document link preserves the edited source and its current URL",
+      async () => {
+        const { client } = await launchBrowser({ initialUrl: documentUrl("workspace", "paragraph.md", "edit") });
+        cdp = client;
+        // Read-mode content is hidden in Edit; wait for the actual editable source face instead.
+        //
+        // WAIT FOR USABLE, NOT FOR PRESENT. Both controls below are built at first paint and merely
+        // `hidden` until the artifact arrives, and `.click()` on a hidden button still fires. Polling
+        // for existence therefore clicked both of them before the file had loaded, which opened the
+        // source face over the empty string and left the rest of this test racing the loader — the
+        // intermittent red on this test in CI, with the file's own bytes in the box and the draft
+        // gone. The load race itself has its own deterministic coverage in
+        // packages/spa/test/typing-during-load.test.ts; this test is about the NAVIGATION prompt and
+        // wants a pane that has finished opening.
+        await client.evaluate(`(async () => {
       // \`hidden\`, not visibility: the Edit source tool lives inside the closed More menu, so it
       // is never laid out until that menu opens, and this test clicks it programmatically by
       // design. \`renderArtifactTools\` clears \`hidden\` exactly when the artifact has arrived and
@@ -787,14 +811,14 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       const source = document.querySelector('.glosa-edit-area');
       if (source.value !== ${JSON.stringify(PARAGRAPH_SOURCE)}) throw new Error('source did not finish loading');
     })()`);
-      await typeIntoSourceFace(client, "UNSAVED ROUTE DRAFT");
-      const before: any = await client.evaluate(
-        `({ hash: location.hash, text: document.querySelector('.glosa-edit-area').value })`,
-      );
-      expect(before.text).toContain("UNSAVED ROUTE DRAFT");
-      const next = new URL(documentUrl("document", "blockquote.md")).hash;
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      const prompt: any = await client.evaluate(`(async () => {
+        await typeIntoSourceFace(client, "UNSAVED ROUTE DRAFT");
+        const before: any = await client.evaluate(
+          `({ hash: location.hash, text: document.querySelector('.glosa-edit-area').value })`,
+        );
+        expect(before.text).toContain("UNSAVED ROUTE DRAFT");
+        const next = new URL(documentUrl("document", "blockquote.md")).hash;
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        const prompt: any = await client.evaluate(`(async () => {
       for (let i = 0; i < 120 && !document.querySelector('dialog[open]'); i++)
         await new Promise(resolve => setTimeout(resolve, 25));
       const dialog = document.querySelector('dialog[open]');
@@ -815,31 +839,31 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       return { title, hash: location.hash, text: document.querySelector('.glosa-edit-area').value,
         surface: document.querySelector('.glosa-app').getAttribute('data-surface') };
     })()`);
-      expect(prompt.title).toBe("Discard unsaved edits?");
-      expect(prompt.hash).toBe(before.hash);
-      expect(prompt.text).toBe(before.text);
-      expect(prompt.surface).toBe("workspace");
-      expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
-      await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
-      await client.evaluate(`(async () => {
+        expect(prompt.title).toBe("Discard unsaved edits?");
+        expect(prompt.hash).toBe(before.hash);
+        expect(prompt.text).toBe(before.text);
+        expect(prompt.surface).toBe("workspace");
+        expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
+        await client.evaluate(`location.hash = ${JSON.stringify(next)}`);
+        await client.evaluate(`(async () => {
       for (let i = 0; i < 120 && !document.querySelector('dialog[open]'); i++)
         await new Promise(resolve => setTimeout(resolve, 25));
       document.querySelector('dialog[open] .glosa-btn-danger').click();
     })()`);
-      await waitForRoute(client, "document", "A callout");
-      expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
-    },
-    TEST_TIMEOUT_MS,
-  );
+        await waitForRoute(client, "document", "A callout");
+        expect(readFileSync(join(workspaceRoot, "paragraph.md"), "utf8")).toBe(PARAGRAPH_SOURCE);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  /** Mounts the REAL `mountRichEditor` (imported from the daemon's own `/app/` route) over markdown
-   * fetched through the REAL `/w/:slug/artifacts/:path` route, and places the caret right after
-   * `needle` — the one thing this script does synthetically, because a real keystroke still needs a
-   * real caret position to land at, exactly as a user clicking there first would produce. The editor,
-   * the data-access client and the artifact are parked on `window` so a SEPARATE `evaluate()` call,
-   * made after the real CDP keyboard event below, can reach them. */
-  function mountAndPlaceCaretScript(slug: string, path: string, needle: string): string {
-    return `
+    /** Mounts the REAL `mountRichEditor` (imported from the daemon's own `/app/` route) over markdown
+     * fetched through the REAL `/w/:slug/artifacts/:path` route, and places the caret right after
+     * `needle` — the one thing this script does synthetically, because a real keystroke still needs a
+     * real caret position to land at, exactly as a user clicking there first would produce. The editor,
+     * the data-access client and the artifact are parked on `window` so a SEPARATE `evaluate()` call,
+     * made after the real CDP keyboard event below, can reach them. */
+    function mountAndPlaceCaretScript(slug: string, path: string, needle: string): string {
+      return `
     (async () => {
       const { createDataAccess } = await import("/app/data-access.js");
       const { mountRichEditor } = await import("/app/rich-editor.js");
@@ -873,14 +897,14 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       return { ok: true };
     })()
   `;
-  }
+    }
 
-  /** Runs after the real CDP keypress. Reads `editor.getDoc()` — `view.state.doc` itself, with no
-   * `splice()`/serialization in between — for criterion 1's newline count, then calls `getSave()`
-   * and writes it through the REAL `PUT` route for criterion 2, exactly what `artifact-pane.js`'s
-   * Save button does. */
-  function readDocAndSaveScript(slug: string, path: string): string {
-    return `
+    /** Runs after the real CDP keypress. Reads `editor.getDoc()` — `view.state.doc` itself, with no
+     * `splice()`/serialization in between — for criterion 1's newline count, then calls `getSave()`
+     * and writes it through the REAL `PUT` route for criterion 2, exactly what `artifact-pane.js`'s
+     * Save button does. */
+    function readDocAndSaveScript(slug: string, path: string): string {
+      return `
     (async () => {
       const { editor, dataAccess, artifact, container } = window.__glosaTest;
       // EditorView reads the DOM mutation via its own MutationObserver, which flushes after this
@@ -906,11 +930,11 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       };
     })()
   `;
-  }
+    }
 
-  async function mountOutlinePane(client: CdpClient) {
-    writeFileSync(join(workspaceRoot, "outline.md"), "# Old heading\n\nBody.\n\n## Tail heading\n");
-    await client.evaluate(`(async () => {
+    async function mountOutlinePane(client: CdpClient) {
+      writeFileSync(join(workspaceRoot, "outline.md"), "# Old heading\n\nBody.\n\n## Tail heading\n");
+      await client.evaluate(`(async () => {
       const { createDataAccess } = await import("/app/data-access.js");
       const { createArtifactPane } = await import("/app/artifact-pane.js");
       localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
@@ -923,15 +947,15 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       await pane.ready;
       window.__outlineTest = { pane, host };
     })()`);
-  }
+    }
 
-  test(
-    "#175: returning to Source refreshes carried heading labels and jump offsets",
-    async () => {
-      const { client } = await launchBrowser();
-      cdp = client;
-      await mountOutlinePane(client);
-      const initial: any = await client.evaluate(`(async () => {
+    test(
+      "#175: returning to Source refreshes carried heading labels and jump offsets",
+      async () => {
+        const { client } = await launchBrowser();
+        cdp = client;
+        await mountOutlinePane(client);
+        const initial: any = await client.evaluate(`(async () => {
       const { pane, host } = window.__outlineTest;
       pane.setMode("edit");
       // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
@@ -952,9 +976,9 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       heading.closest("[contenteditable]").focus();
       return labels;
     })()`);
-      expect(initial).toEqual(["Old heading", "Tail heading"]);
-      await client.keyPress("X");
-      const result: any = await client.evaluate(`(async () => {
+        expect(initial).toEqual(["Old heading", "Tail heading"]);
+        await client.keyPress("X");
+        const result: any = await client.evaluate(`(async () => {
       const { pane, host } = window.__outlineTest;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       host.querySelector(".glosa-face-source").click();
@@ -966,20 +990,20 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       pane.destroy(); host.remove(); delete window.__outlineTest;
       return result;
     })()`);
-      expect(result.text).toContain("# Old headingX");
-      expect(result.labels).toEqual(["Old headingX", "Tail heading"]);
-      expect(result.offset).toBe(result.text.indexOf("## Tail heading"));
-    },
-    TEST_TIMEOUT_MS,
-  );
+        expect(result.text).toContain("# Old headingX");
+        expect(result.labels).toEqual(["Old headingX", "Tail heading"]);
+        expect(result.offset).toBe(result.text.indexOf("## Tail heading"));
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#175: pending source parser uses the current face after switching to Read",
-    async () => {
-      const { client } = await launchBrowser();
-      cdp = client;
-      await mountOutlinePane(client);
-      const result: any = await client.evaluate(`(async () => {
+    test(
+      "#175: pending source parser uses the current face after switching to Read",
+      async () => {
+        const { client } = await launchBrowser();
+        cdp = client;
+        await mountOutlinePane(client);
+        const result: any = await client.evaluate(`(async () => {
       const { pane, host } = window.__outlineTest;
       pane.setMode("edit");
       // Edit opens on the manuscript now; the full-page faces are a tool in More, asked for by name.
@@ -996,27 +1020,27 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
       pane.destroy(); host.remove(); delete window.__outlineTest;
       return result;
     })()`);
-      expect(result).toEqual({ mode: "read", labels: ["Old heading", "Tail heading"] });
-    },
-    TEST_TIMEOUT_MS,
-  );
+        expect(result).toEqual({ mode: "read", labels: ["Old heading", "Tail heading"] });
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "a pane opened directly in Edit fills the rich face with the file even when the editor module loads before the annotations do",
-    async () => {
-      // The race CI hit under load: the editor module resolved after the artifact arrived but while
-      // `hydrateAnnotations` was still waiting, and the face mounted over the empty string a mount
-      // started during the load had captured — an empty editor over a file that has content, which
-      // a save would then write back. Here the annotations are held until the module has resolved
-      // (or 1.5 s pass, for a pane that correctly does not load the module until the file is in), so
-      // the ordering is forced rather than left to the machine's speed.
-      const path = "opened-in-edit.md";
-      writeFileSync(join(workspaceRoot, path), "# Opened in Edit\n\nThe body the face must show.\n");
+    test(
+      "a pane opened directly in Edit fills the rich face with the file even when the editor module loads before the annotations do",
+      async () => {
+        // The race CI hit under load: the editor module resolved after the artifact arrived but while
+        // `hydrateAnnotations` was still waiting, and the face mounted over the empty string a mount
+        // started during the load had captured — an empty editor over a file that has content, which
+        // a save would then write back. Here the annotations are held until the module has resolved
+        // (or 1.5 s pass, for a pane that correctly does not load the module until the file is in), so
+        // the ordering is forced rather than left to the machine's speed.
+        const path = "opened-in-edit.md";
+        writeFileSync(join(workspaceRoot, path), "# Opened in Edit\n\nThe body the face must show.\n");
 
-      const { client } = await launchBrowser();
-      cdp = client;
+        const { client } = await launchBrowser();
+        cdp = client;
 
-      const mounted: any = await client.evaluate(`(async () => {
+        const mounted: any = await client.evaluate(`(async () => {
         const { createDataAccess } = await import("/app/data-access.js");
         const { createArtifactPane } = await import("/app/artifact-pane.js");
         localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
@@ -1054,29 +1078,29 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         pane.destroy(); host.remove();
         return result;
       })()`);
-      expect(mounted).toEqual({ mounted: true, text: "Opened in EditThe body the face must show." });
-    },
-    TEST_TIMEOUT_MS,
-  );
+        expect(mounted).toEqual({ mounted: true, text: "Opened in EditThe body the face must show." });
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  test(
-    "#182: Keep mine merges a real keypress in the rich editor with a real disk-only change, byte-exact on disk",
-    async () => {
-      const path = "keepmine.md";
-      const base = [
-        "# Title",
-        "",
-        "Paragraph A holds the writer's own words.",
-        "",
-        "Paragraph B holds a different sentence entirely.",
-        "",
-      ].join("\n");
-      writeFileSync(join(workspaceRoot, path), base);
+    test(
+      "#182: Keep mine merges a real keypress in the rich editor with a real disk-only change, byte-exact on disk",
+      async () => {
+        const path = "keepmine.md";
+        const base = [
+          "# Title",
+          "",
+          "Paragraph A holds the writer's own words.",
+          "",
+          "Paragraph B holds a different sentence entirely.",
+          "",
+        ].join("\n");
+        writeFileSync(join(workspaceRoot, path), base);
 
-      const { client } = await launchBrowser();
-      cdp = client;
+        const { client } = await launchBrowser();
+        cdp = client;
 
-      await client.evaluate(`(async () => {
+        await client.evaluate(`(async () => {
         const { createDataAccess } = await import("/app/data-access.js");
         const { createArtifactPane } = await import("/app/artifact-pane.js");
         localStorage.setItem("glosa_token", ${JSON.stringify(TOKEN)});
@@ -1103,7 +1127,7 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         window.__keepMineTest = { pane, host };
       })()`);
 
-      const placed: any = await client.evaluate(`(async () => {
+        const placed: any = await client.evaluate(`(async () => {
         const { host } = window.__keepMineTest;
         host.querySelector(".glosa-tools-edit-source")?.click();
         for (let i = 0; i < 200 && !host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]"); i++)
@@ -1127,32 +1151,32 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
         editable.focus();
         return { ok: true };
       })()`);
-      if (!placed.ok) throw new Error(`caret placement failed: ${placed.reason}`);
+        if (!placed.ok) throw new Error(`caret placement failed: ${placed.reason}`);
 
-      // A genuine keypress, through the browser's own input pipeline, into paragraph A —
-      // `Input.dispatchKeyEvent` (via `keyPress`), never `Input.insertText`/`execCommand`, which
-      // do not exercise the same DOM-mutation path a real keystroke does (see this file's header).
-      await client.keyPress("X");
-      const afterKeypress: any = await client.evaluate(`(async () => {
+        // A genuine keypress, through the browser's own input pipeline, into paragraph A —
+        // `Input.dispatchKeyEvent` (via `keyPress`), never `Input.insertText`/`execCommand`, which
+        // do not exercise the same DOM-mutation path a real keystroke does (see this file's header).
+        await client.keyPress("X");
+        const afterKeypress: any = await client.evaluate(`(async () => {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const { host } = window.__keepMineTest;
         const editable = host.querySelector(".glosa-rich-surface .ProseMirror[contenteditable]");
         return { text: editable?.textContent ?? null };
       })()`);
-      // Criterion 1's "read `getDoc()`, not a screenshot" applies equally to the pane-level flow:
-      // the keypress actually landed in the live ProseMirror document before Save is ever clicked.
-      expect(afterKeypress.text).toContain("own words.XParagraph B");
+        // Criterion 1's "read `getDoc()`, not a screenshot" applies equally to the pane-level flow:
+        // the keypress actually landed in the live ProseMirror document before Save is ever clicked.
+        expect(afterKeypress.text).toContain("own words.XParagraph B");
 
-      // Someone else writes paragraph B directly to disk WHILE the pane still holds its original
-      // baseline sha — the exact race #182 exists for. Not through glosa at all: a plain fs write,
-      // standing in for a second writer (another glosa instance, or a hand edit).
-      const onDisk = base.replace(
-        "Paragraph B holds a different sentence entirely.",
-        "Paragraph B holds a different sentence entirely, replaced on disk.",
-      );
-      writeFileSync(join(workspaceRoot, path), onDisk);
+        // Someone else writes paragraph B directly to disk WHILE the pane still holds its original
+        // baseline sha — the exact race #182 exists for. Not through glosa at all: a plain fs write,
+        // standing in for a second writer (another glosa instance, or a hand edit).
+        const onDisk = base.replace(
+          "Paragraph B holds a different sentence entirely.",
+          "Paragraph B holds a different sentence entirely, replaced on disk.",
+        );
+        writeFileSync(join(workspaceRoot, path), onDisk);
 
-      const staleDialog: any = await client.evaluate(`(async () => {
+        const staleDialog: any = await client.evaluate(`(async () => {
         const { host } = window.__keepMineTest;
         host.querySelector(".glosa-save").click();
         for (let i = 0; i < 200 && !document.querySelector("dialog[open] h2"); i++)
@@ -1165,13 +1189,13 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           detail: dialog.querySelector(".glosa-dialog-detail")?.textContent ?? null,
         };
       })()`);
-      if (!staleDialog.ok) throw new Error(staleDialog.reason);
-      expect(staleDialog.title).toBe("This file changed while you were editing");
-      // The preview names disk's kept change WITHOUT a checkpoint pin (D9) — computed from the
-      // merge itself.
-      expect(staleDialog.detail).toContain("1 change from disk will be kept.");
+        if (!staleDialog.ok) throw new Error(staleDialog.reason);
+        expect(staleDialog.title).toBe("This file changed while you were editing");
+        // The preview names disk's kept change WITHOUT a checkpoint pin (D9) — computed from the
+        // merge itself.
+        expect(staleDialog.detail).toContain("1 change from disk will be kept.");
 
-      const settled: any = await client.evaluate(`(async () => {
+        const settled: any = await client.evaluate(`(async () => {
         const { host } = window.__keepMineTest;
         const dialog = document.querySelector("dialog[open]");
         const buttons = [...dialog.querySelectorAll("button")];
@@ -1196,126 +1220,131 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           buttons: [...(remaining?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
         };
       })()`);
-      if (!settled.ok) throw new Error(JSON.stringify(settled));
+        if (!settled.ok) throw new Error(JSON.stringify(settled));
 
-      const putCalls: any = await client.evaluate(`window.__putCalls`);
-      // Exactly two writes: the writer's own stale attempt (refused, disk untouched by it), then
-      // Keep mine's real three-way merge — both survive, at once, in ONE further write (#182).
-      expect(putCalls).toHaveLength(2);
-      expect(putCalls[0].content).not.toContain("replaced on disk");
-      expect(putCalls[1].content).toContain("replaced on disk");
-      expect(putCalls[1].content).toContain("own words.X");
+        const putCalls: any = await client.evaluate(`window.__putCalls`);
+        // Exactly two writes: the writer's own stale attempt (refused, disk untouched by it), then
+        // Keep mine's real three-way merge — both survive, at once, in ONE further write (#182).
+        expect(putCalls).toHaveLength(2);
+        expect(putCalls[0].content).not.toContain("replaced on disk");
+        expect(putCalls[1].content).toContain("replaced on disk");
+        expect(putCalls[1].content).toContain("own words.X");
 
-      // Byte-exact on disk: both survive. Not the DOM, not a screenshot — the saved source file.
-      const finalDiskContent = readFileSync(join(workspaceRoot, path), "utf8");
-      expect(finalDiskContent).toBe(
-        [
-          "# Title",
-          "",
-          "Paragraph A holds the writer's own words.X",
-          "",
-          "Paragraph B holds a different sentence entirely, replaced on disk.",
-          "",
-        ].join("\n"),
-      );
+        // Byte-exact on disk: both survive. Not the DOM, not a screenshot — the saved source file.
+        const finalDiskContent = readFileSync(join(workspaceRoot, path), "utf8");
+        expect(finalDiskContent).toBe(
+          [
+            "# Title",
+            "",
+            "Paragraph A holds the writer's own words.X",
+            "",
+            "Paragraph B holds a different sentence entirely, replaced on disk.",
+            "",
+          ].join("\n"),
+        );
 
-      await client.evaluate(`(() => {
+        await client.evaluate(`(() => {
         const { pane, host } = window.__keepMineTest;
         pane.destroy();
         host.remove();
         delete window.__keepMineTest;
       })()`);
-    },
-    TEST_TIMEOUT_MS,
-  );
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  async function runScenario(path: string, source: string, needle: string, insertChar: string) {
-    const { client, argv } = await launchBrowser();
-    cdp = client;
-    let mounted: any;
-    try {
-      mounted = await client.evaluate(mountAndPlaceCaretScript(slug, path, needle));
-      if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
-      await client.keyPress(insertChar);
-    } catch (error) {
-      const { out, err } = await terminateAndDrainChrome();
-      throw new Error(
-        `${path}: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n` +
-          `--- chrome stdout ---\n${out}\n--- chrome stderr ---\n${err}`,
-      );
-    }
-    let result: any;
-    try {
-      result = await client.evaluate(readDocAndSaveScript(slug, path));
-    } catch (error) {
-      const { out, err } = await terminateAndDrainChrome();
-      throw new Error(
-        `${path}: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n` +
-          `--- chrome stdout ---\n${out}\n--- chrome stderr ---\n${err}`,
-      );
-    }
-    const edited = source.replace(needle, needle + insertChar);
-    return { result, edited, diskContent: readFileSync(join(workspaceRoot, path), "utf8") };
-  }
-
-  test(
-    "a hand-wrapped paragraph keeps its newline count after one keypress, and the save is byte-exact",
-    async () => {
-      const { result, edited, diskContent } = await runScenario("paragraph.md", PARAGRAPH_SOURCE, "deliberate", "X");
-      // Criterion 1: the newline count read directly off the document `EditorView` holds
-      // (`getDoc().textContent`, not a screenshot and not the post-`splice()` save markdown).
-      // The document's own text excludes the file's trailing newline (that's outside every block's
-      // span, not an embedded break), so the source is trimmed the same way before counting.
-      const sourceBreaks = (PARAGRAPH_SOURCE.replace(/\n$/, "").match(/\n/g) ?? []).length;
-      expect(result.docNewlines, "the break the writer already had must still be there after one keypress").toBe(
-        sourceBreaks,
-      );
-      // Criterion 2: the write is exactly the writer's edit, nothing degraded, nothing to consent to.
-      expect(result.save.markdown).toBe(edited);
-      expect(result.save.degraded).toBe(false);
-      expect(result.save.collateral).toEqual([]);
-      expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "a hand-wrapped block inside a blockquote keeps its newline count after one keypress, and the save is byte-exact",
-    async () => {
-      const { result, edited, diskContent } = await runScenario("blockquote.md", BLOCKQUOTE_SOURCE, "deliberate", "X");
-      // Same trim as the paragraph case: the blockquote's own paragraph text excludes the file's
-      // trailing newline, and the "> " prefixes are parse-time markup, not embedded breaks.
-      const sourceBreaks = (BLOCKQUOTE_SOURCE.replace(/\n$/, "").match(/\n/g) ?? []).length;
-      expect(result.docNewlines, "the break inside the blockquote must still be there after one keypress").toBe(
-        sourceBreaks,
-      );
-      expect(result.save.markdown).toBe(edited);
-      expect(result.save.degraded).toBe(false);
-      expect(result.save.collateral).toEqual([]);
-      expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "#175: a `%%` comment mounts as a labeled, editable glosa_raw region, and a real keypress saves byte-exact",
-    async () => {
+    async function runScenario(path: string, source: string, needle: string, insertChar: string) {
       const { client, argv } = await launchBrowser();
       cdp = client;
       let mounted: any;
       try {
-        mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "comment.md", "private note"));
+        mounted = await client.evaluate(mountAndPlaceCaretScript(slug, path, needle));
         if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
+        await client.keyPress(insertChar);
       } catch (error) {
         const { out, err } = await terminateAndDrainChrome();
-        throw new Error(`comment.md: mount failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
+        throw new Error(
+          `${path}: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n` +
+            `--- chrome stdout ---\n${out}\n--- chrome stderr ---\n${err}`,
+        );
       }
-      // The label, read the way a real reader would see it: a real `<pre class="glosa-raw">`
-      // element in the mounted DOM, carrying `data-glosa-kind="comment"` (rich-editor.js's
-      // `toDOM`), and the computed `::before` content app.css attaches to it — not a copy of
-      // either string re-typed into this test, so a future rename of either has to change BOTH
-      // the product code and this assertion or this goes red.
-      const label: any = await client.evaluate(`
+      let result: any;
+      try {
+        result = await client.evaluate(readDocAndSaveScript(slug, path));
+      } catch (error) {
+        const { out, err } = await terminateAndDrainChrome();
+        throw new Error(
+          `${path}: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n` +
+            `--- chrome stdout ---\n${out}\n--- chrome stderr ---\n${err}`,
+        );
+      }
+      const edited = source.replace(needle, needle + insertChar);
+      return { result, edited, diskContent: readFileSync(join(workspaceRoot, path), "utf8") };
+    }
+
+    test(
+      "a hand-wrapped paragraph keeps its newline count after one keypress, and the save is byte-exact",
+      async () => {
+        const { result, edited, diskContent } = await runScenario("paragraph.md", PARAGRAPH_SOURCE, "deliberate", "X");
+        // Criterion 1: the newline count read directly off the document `EditorView` holds
+        // (`getDoc().textContent`, not a screenshot and not the post-`splice()` save markdown).
+        // The document's own text excludes the file's trailing newline (that's outside every block's
+        // span, not an embedded break), so the source is trimmed the same way before counting.
+        const sourceBreaks = (PARAGRAPH_SOURCE.replace(/\n$/, "").match(/\n/g) ?? []).length;
+        expect(result.docNewlines, "the break the writer already had must still be there after one keypress").toBe(
+          sourceBreaks,
+        );
+        // Criterion 2: the write is exactly the writer's edit, nothing degraded, nothing to consent to.
+        expect(result.save.markdown).toBe(edited);
+        expect(result.save.degraded).toBe(false);
+        expect(result.save.collateral).toEqual([]);
+        expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "a hand-wrapped block inside a blockquote keeps its newline count after one keypress, and the save is byte-exact",
+      async () => {
+        const { result, edited, diskContent } = await runScenario(
+          "blockquote.md",
+          BLOCKQUOTE_SOURCE,
+          "deliberate",
+          "X",
+        );
+        // Same trim as the paragraph case: the blockquote's own paragraph text excludes the file's
+        // trailing newline, and the "> " prefixes are parse-time markup, not embedded breaks.
+        const sourceBreaks = (BLOCKQUOTE_SOURCE.replace(/\n$/, "").match(/\n/g) ?? []).length;
+        expect(result.docNewlines, "the break inside the blockquote must still be there after one keypress").toBe(
+          sourceBreaks,
+        );
+        expect(result.save.markdown).toBe(edited);
+        expect(result.save.degraded).toBe(false);
+        expect(result.save.collateral).toEqual([]);
+        expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "#175: a `%%` comment mounts as a labeled, editable glosa_raw region, and a real keypress saves byte-exact",
+      async () => {
+        const { client, argv } = await launchBrowser();
+        cdp = client;
+        let mounted: any;
+        try {
+          mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "comment.md", "private note"));
+          if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(`comment.md: mount failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
+        }
+        // The label, read the way a real reader would see it: a real `<pre class="glosa-raw">`
+        // element in the mounted DOM, carrying `data-glosa-kind="comment"` (rich-editor.js's
+        // `toDOM`), and the computed `::before` content app.css attaches to it — not a copy of
+        // either string re-typed into this test, so a future rename of either has to change BOTH
+        // the product code and this assertion or this goes red.
+        const label: any = await client.evaluate(`
         (async () => {
           const { container } = window.__glosaTest;
           const raw = container.querySelector(".glosa-raw");
@@ -1327,74 +1356,78 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           };
         })()
       `);
-      expect(label.ok, String(label.reason ?? "")).toBe(true);
-      expect(label.kind).toBe("comment");
-      // `content` computes to a CSS-quoted string ("\"Private note …\""); a substring match through
-      // the quoting is what proves the LABEL TEXT itself, not merely that some `content` exists.
-      expect(label.beforeContent).toContain("Private note");
-      expect(label.beforeContent).toContain("hidden from Read/Review");
+        expect(label.ok, String(label.reason ?? "")).toBe(true);
+        expect(label.kind).toBe("comment");
+        // `content` computes to a CSS-quoted string ("\"Private note …\""); a substring match through
+        // the quoting is what proves the LABEL TEXT itself, not merely that some `content` exists.
+        expect(label.beforeContent).toContain("Private note");
+        expect(label.beforeContent).toContain("hidden from Read/Review");
 
-      try {
-        await client.keyPress("X");
-      } catch (error) {
-        const { out, err } = await terminateAndDrainChrome();
-        throw new Error(`comment.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
-      }
-      let result: any;
-      try {
-        result = await client.evaluate(readDocAndSaveScript(slug, "comment.md"));
-      } catch (error) {
-        const { out, err } = await terminateAndDrainChrome();
-        throw new Error(
-          `comment.md: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`,
-        );
-      }
-      const edited = COMMENT_SOURCE.replace("private note", "private noteX");
-      const diskContent = readFileSync(join(workspaceRoot, "comment.md"), "utf8");
-      expect(result.save.markdown).toBe(edited);
-      expect(result.save.degraded).toBe(false);
-      expect(result.save.collateral).toEqual([]);
-      expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
-    },
-    TEST_TIMEOUT_MS,
-  );
+        try {
+          await client.keyPress("X");
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(`comment.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
+        }
+        let result: any;
+        try {
+          result = await client.evaluate(readDocAndSaveScript(slug, "comment.md"));
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(
+            `comment.md: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`,
+          );
+        }
+        const edited = COMMENT_SOURCE.replace("private note", "private noteX");
+        const diskContent = readFileSync(join(workspaceRoot, "comment.md"), "utf8");
+        expect(result.save.markdown).toBe(edited);
+        expect(result.save.degraded).toBe(false);
+        expect(result.save.collateral).toEqual([]);
+        expect(diskContent, "the saved bytes on disk are what the writer typed, byte for byte").toBe(edited);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  const NOTE_EDIT_CASES = [
-    { name: "inline interior", source: "Before %% private note %% after.\n", needle: "private note" },
-    { name: "inline neighbor", source: "Before %% private note %% after.\n", needle: "after" },
-    { name: "inline original spelling", source: "Before _em_ &amp; %%private note%% after.\n", needle: "private note" },
-    {
-      name: "inline original spelling neighbor",
-      source: "Before _em_ &amp; %%private note%% after.\n",
-      needle: "after",
-    },
-    { name: "asterisk list note", source: "* %%\n  private note\n  %%\n* After.\n", needle: "private note" },
-    { name: "plus list note", source: "+ %%\n  private note\n  %%\n+ After.\n", needle: "private note" },
-    { name: "parenthesized list note", source: "1) %%\n   private note\n   %%\n2) After.\n", needle: "private note" },
-    { name: "extra-spaced quote note", source: ">  %%\n>  private note\n>  %%\n\nAfter.\n", needle: "private note" },
-    { name: "mixed line ending note", source: "%%\r\nprivate note\n%%\r\n\r\nAfter.\n", needle: "private note" },
-    { name: "empty inline neighbor", source: "Before %%%% after.\n", needle: "after" },
-    { name: "heading inline", source: "# Public %% private note %% title\n", needle: "private note" },
-    { name: "CRLF comment", source: "%%\r\nprivate note\r\n%%\r\n\r\nAfter.\r\n", needle: "private note" },
-    { name: "list comment", source: "- %%\n  private note\n  %%\n- After.\n", needle: "private note" },
-    { name: "blockquote comment", source: "> %%\n> private note\n> %%\n\nAfter.\n", needle: "private note" },
-    {
-      name: "nested list comment",
-      source: "- Outer\n  - %%\n    private note\n    %%\n  - After.\n",
-      needle: "private note",
-    },
-  ];
-  for (const { name, source, needle } of NOTE_EDIT_CASES) {
-    test(
-      `#175: real input and disk save preserve ${name}`,
-      async () => {
-        const path = "note-edit.md";
-        writeFileSync(join(workspaceRoot, path), source);
-        const { client } = await launchBrowser();
-        cdp = client;
-        const mounted: any = await client.evaluate(mountAndPlaceCaretScript(slug, path, needle));
-        expect(mounted.ok, String(mounted.reason ?? "")).toBe(true);
-        const inline: any = await client.evaluate(`(async () => {
+    const NOTE_EDIT_CASES = [
+      { name: "inline interior", source: "Before %% private note %% after.\n", needle: "private note" },
+      { name: "inline neighbor", source: "Before %% private note %% after.\n", needle: "after" },
+      {
+        name: "inline original spelling",
+        source: "Before _em_ &amp; %%private note%% after.\n",
+        needle: "private note",
+      },
+      {
+        name: "inline original spelling neighbor",
+        source: "Before _em_ &amp; %%private note%% after.\n",
+        needle: "after",
+      },
+      { name: "asterisk list note", source: "* %%\n  private note\n  %%\n* After.\n", needle: "private note" },
+      { name: "plus list note", source: "+ %%\n  private note\n  %%\n+ After.\n", needle: "private note" },
+      { name: "parenthesized list note", source: "1) %%\n   private note\n   %%\n2) After.\n", needle: "private note" },
+      { name: "extra-spaced quote note", source: ">  %%\n>  private note\n>  %%\n\nAfter.\n", needle: "private note" },
+      { name: "mixed line ending note", source: "%%\r\nprivate note\n%%\r\n\r\nAfter.\n", needle: "private note" },
+      { name: "empty inline neighbor", source: "Before %%%% after.\n", needle: "after" },
+      { name: "heading inline", source: "# Public %% private note %% title\n", needle: "private note" },
+      { name: "CRLF comment", source: "%%\r\nprivate note\r\n%%\r\n\r\nAfter.\r\n", needle: "private note" },
+      { name: "list comment", source: "- %%\n  private note\n  %%\n- After.\n", needle: "private note" },
+      { name: "blockquote comment", source: "> %%\n> private note\n> %%\n\nAfter.\n", needle: "private note" },
+      {
+        name: "nested list comment",
+        source: "- Outer\n  - %%\n    private note\n    %%\n  - After.\n",
+        needle: "private note",
+      },
+    ];
+    for (const { name, source, needle } of NOTE_EDIT_CASES) {
+      test(
+        `#175: real input and disk save preserve ${name}`,
+        async () => {
+          const path = "note-edit.md";
+          writeFileSync(join(workspaceRoot, path), source);
+          const { client } = await launchBrowser();
+          cdp = client;
+          const mounted: any = await client.evaluate(mountAndPlaceCaretScript(slug, path, needle));
+          expect(mounted.ok, String(mounted.reason ?? "")).toBe(true);
+          const inline: any = await client.evaluate(`(async () => {
         const {container} = window.__glosaTest;
         const note = container.querySelector(".glosa-comment-inline");
         const {collectRenderedHeadings} = await import("/app/outline.js");
@@ -1402,69 +1435,69 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           label:note ? getComputedStyle(note,"::before").content : null,
           title:note?.title,headings:collectRenderedHeadings(container).map(row=>row.text)};
       })()`);
-        if (name.includes("inline")) {
-          expect(inline.label).toContain("Private note");
-          expect(inline.title).toContain("hidden from Read/Review");
+          if (name.includes("inline")) {
+            expect(inline.label).toContain("Private note");
+            expect(inline.title).toContain("hidden from Read/Review");
+          }
+          if (inline.raw !== null) expect(inline.raw).toBe("%%\nprivate note\n%%");
+          if (name === "heading inline") expect(inline.headings).toEqual(["Public title"]);
+          await client.keyPress("X");
+          const result: any = await client.evaluate(readDocAndSaveScript(slug, path));
+          const expected = source.replace(needle, `${needle}X`);
+          expect(result.save).toEqual({ markdown: expected, collateral: [], degraded: false });
+          expect(readFileSync(join(workspaceRoot, path), "utf8")).toBe(expected);
+        },
+        TEST_TIMEOUT_MS,
+      );
+    }
+
+    test(
+      "criterion 3: typing several spaces in a row invents no bytes beyond what was typed",
+      async () => {
+        const source = "A paragraph where the writer types words apart.\n";
+        writeFileSync(join(workspaceRoot, "spaces.md"), source);
+        const { client, argv } = await launchBrowser();
+        cdp = client;
+        let mounted: any;
+        try {
+          mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "spaces.md", "apart"));
+          if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
+          // Four separate real keyboard events — exactly what four real spacebar presses do to a
+          // live contenteditable, not a single string handed to one editing command.
+          for (let i = 0; i < 4; i += 1) await client.keyPress(" ");
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(`spaces.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
         }
-        if (inline.raw !== null) expect(inline.raw).toBe("%%\nprivate note\n%%");
-        if (name === "heading inline") expect(inline.headings).toEqual(["Public title"]);
-        await client.keyPress("X");
-        const result: any = await client.evaluate(readDocAndSaveScript(slug, path));
-        const expected = source.replace(needle, `${needle}X`);
-        expect(result.save).toEqual({ markdown: expected, collateral: [], degraded: false });
-        expect(readFileSync(join(workspaceRoot, path), "utf8")).toBe(expected);
+        let result: any;
+        try {
+          result = await client.evaluate(readDocAndSaveScript(slug, "spaces.md"));
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(
+            `spaces.md: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`,
+          );
+        }
+        // Four real keypresses must produce exactly four bytes of new whitespace — not more, and the
+        // pre-existing space run/indentation behaviour (unaffected by #183's fix; see rich-editor.js's
+        // PARAGRAPH_SPEC comment) is what this pins.
+        expect(result.save.markdown).toBe("A paragraph where the writer types words apart    .\n");
       },
       TEST_TIMEOUT_MS,
     );
-  }
 
-  test(
-    "criterion 3: typing several spaces in a row invents no bytes beyond what was typed",
-    async () => {
-      const source = "A paragraph where the writer types words apart.\n";
-      writeFileSync(join(workspaceRoot, "spaces.md"), source);
-      const { client, argv } = await launchBrowser();
-      cdp = client;
-      let mounted: any;
-      try {
-        mounted = await client.evaluate(mountAndPlaceCaretScript(slug, "spaces.md", "apart"));
-        if (!mounted.ok) throw new Error(mounted.reason ?? "mount failed");
-        // Four separate real keyboard events — exactly what four real spacebar presses do to a
-        // live contenteditable, not a single string handed to one editing command.
-        for (let i = 0; i < 4; i += 1) await client.keyPress(" ");
-      } catch (error) {
-        const { out, err } = await terminateAndDrainChrome();
-        throw new Error(`spaces.md: in-browser edit failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
-      }
-      let result: any;
-      try {
-        result = await client.evaluate(readDocAndSaveScript(slug, "spaces.md"));
-      } catch (error) {
-        const { out, err } = await terminateAndDrainChrome();
-        throw new Error(
-          `spaces.md: reading back the document failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`,
-        );
-      }
-      // Four real keypresses must produce exactly four bytes of new whitespace — not more, and the
-      // pre-existing space run/indentation behaviour (unaffected by #183's fix; see rich-editor.js's
-      // PARAGRAPH_SPEC comment) is what this pins.
-      expect(result.save.markdown).toBe("A paragraph where the writer types words apart    .\n");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "criterion 3 (paste): a pasted multi-space run, a tab, and leading indentation collapse exactly as they did before #183",
-    async () => {
-      const source = "Alpha.\n";
-      writeFileSync(join(workspaceRoot, "paste.md"), source);
-      const { client, argv } = await launchBrowser();
-      cdp = client;
-      // A synthetic ClipboardEvent, dispatched on the real contenteditable — the standard way to
-      // drive a real paste handler in a headless browser with no OS clipboard to source from. The
-      // event and its handling are entirely real; only the origin of the clipboard data is
-      // synthesized, exactly as a unit test constructing a File object stands in for a real upload.
-      const script = `
+    test(
+      "criterion 3 (paste): a pasted multi-space run, a tab, and leading indentation collapse exactly as they did before #183",
+      async () => {
+        const source = "Alpha.\n";
+        writeFileSync(join(workspaceRoot, "paste.md"), source);
+        const { client, argv } = await launchBrowser();
+        cdp = client;
+        // A synthetic ClipboardEvent, dispatched on the real contenteditable — the standard way to
+        // drive a real paste handler in a headless browser with no OS clipboard to source from. The
+        // event and its handling are entirely real; only the origin of the clipboard data is
+        // synthesized, exactly as a unit test constructing a File object stands in for a real upload.
+        const script = `
         (async () => {
           const { createDataAccess } = await import("/app/data-access.js");
           const { mountRichEditor } = await import("/app/rich-editor.js");
@@ -1498,326 +1531,358 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
           return { ok: true, pasted, save, putResult };
         })()
       `;
-      let result: any;
-      try {
-        result = await client.evaluate(script);
-      } catch (error) {
-        const { out, err } = await terminateAndDrainChrome();
-        throw new Error(`paste.md: in-browser paste failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
-      }
-      expect(result.ok, String(result.reason ?? "")).toBe(true);
-      // Ordinary HTML-paste collapse — a run of spaces to one, a tab to one, leading indentation
-      // trimmed, a raw newline inside the pasted markup folded to a space — byte for byte the
-      // same as this test asserts against the fully unmodified schema (git-stashing
-      // PARAGRAPH_SPEC entirely and rerunning this exact test produces this exact string; see
-      // docs/decisions.md's own entry for where that comparison is recorded).
-      const expected = "alpha beta gamma delta\n\nindented\n\nline one line twoAlpha.\n";
-      expect(result.save.markdown).toBe(expected);
-      // Not just `getSave()`: the same real PUT route the keypress tests use, and the same disk
-      // readback, so this is what actually lands in the file, not merely what the in-memory splice
-      // report claims it would write.
-      const diskContent = readFileSync(join(workspaceRoot, "paste.md"), "utf8");
-      expect(diskContent, "the pasted-and-saved file on disk matches getSave()'s own markdown").toBe(expected);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "failure path: a Chromium that never opens CDP is reported with argv and streams, and does not survive",
-    async () => {
-      // A fake "chromium" that starts, proves it ran (so the retained stderr/stdout has something
-      // to show), and then hangs well past the overridden deadline below — never opening the port
-      // `launchBrowser`'s poll is waiting on. This is the diagnostic path itself under test, not
-      // the product: a real Chromium hanging this way is exactly hazard #2 from the contract
-      // ("an isolated macOS Chromium check can time out before it produces its DOM").
-      const fakeChromium = join(workspaceRoot, "fake-chromium.sh");
-      // `exec`, not a bare `sleep 30`: POSIX `exec` replaces the shell's own process image rather
-      // than forking a child, so the one pid Bun tracks IS the sleeping process — measured without
-      // it, a bare `sleep 30` forks, `kill(pid)` only reaches the now-exited parent shell, and the
-      // orphaned `sleep` survives the test that thought it had cleaned up.
-      writeFileSync(fakeChromium, "#!/bin/sh\necho fake-chromium-started\nexec sleep 30\n", { mode: 0o755 });
-
-      const startedAt = Date.now();
-      let thrown: Error | null = null;
-      try {
-        await launchBrowser({ deadlineMs: 1_500, targetFetchTimeoutMs: 1_500, executablePath: fakeChromium });
-      } catch (error) {
-        thrown = error as Error;
-      }
-      const elapsedMs = Date.now() - startedAt;
-
-      expect(thrown, "a browser that never opens CDP must be reported as a failure, not silently hang").not.toBe(null);
-      expect(thrown?.message).toContain("did not open its CDP endpoint");
-      expect(thrown?.message, "argv is retained on the diagnostic path, not only on success").toContain(
-        `"${fakeChromium}"`,
-      );
-      expect(thrown?.message, "the fake process's own stdout is drained and reported").toContain(
-        "fake-chromium-started",
-      );
-      // The override was 1.5s, not the real 10s default: returning in well under the outer test
-      // timeout is what proves this failure is reported promptly rather than by outlasting
-      // something else's budget.
-      expect(elapsedMs, "the diagnostic must return near the overridden deadline").toBeLessThan(5_000);
-      // Ownership: `launchBrowser`'s own catch path terminates and awaits the process it spawned
-      // before this test ever asks — a surviving `sleep 30` here would mean the boundary this
-      // finding exists to fix is still open.
-      expect(chrome, "the fake chromium handle is still the one launchBrowser tracked").not.toBe(null);
-      // A SIGKILLed process reports `exitCode: null` in Bun's model (it died by signal, not by
-      // returning a status), so the real proof of death is the signal itself, plus that the PID no
-      // longer answers `kill(pid, 0)` — Bun's own `proc.exited` having resolved is not, on its own,
-      // distinguishable from "resolved because the process was already gone before we ever awaited
-      // it", which a stale handle could also produce.
-      expect(chrome?.signalCode, "the fake chromium process was actually killed, not merely asked to exit").toBe(
-        "SIGKILL",
-      );
-      const pid = chrome?.pid;
-      expect(pid, "a pid must exist to check").not.toBeUndefined();
-      let stillAlive = true;
-      try {
-        process.kill(pid as number, 0);
-      } catch {
-        stillAlive = false;
-      }
-      expect(stillAlive, "no process with the fake chromium's pid may still be running").toBe(false);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "failure path: a stalled /json/list is bounded by its own deadline, not by the outer timeout",
-    async () => {
-      // The preceding test's fake never opens the CDP port at all, so `launchBrowser` throws at the
-      // `/json/version` poll and never reaches the target-list fetch. That left the second repaired
-      // boundary — the `/json/list` deadline — asserted by source reading only. This fake gets
-      // PAST the version poll and then stalls exactly where that deadline is the only thing that
-      // can end the wait.
-      const fakeServer = join(workspaceRoot, "fake-cdp.js");
-      writeFileSync(
-        fakeServer,
-        [
-          "const port = Number(Bun.argv.find((a) => a.startsWith('--remote-debugging-port='))?.split('=')[1]);",
-          "console.log('fake-cdp-started');",
-          "Bun.serve({",
-          "  port,",
-          "  hostname: '127.0.0.1',",
-          "  async fetch(req) {",
-          "    const url = new URL(req.url);",
-          "    if (url.pathname === '/json/version') {",
-          "      return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` });",
-          "    }",
-          "    // /json/list answers, but LATE — deliberately later than the deadline under test and",
-          "    // earlier than the outer test timeout. Never answering at all would mean that removing",
-          "    // the deadline leaves execution parked inside fetch until the suite's own timeout, so",
-          "    // the elapsed-time assertion below would never be REACHED and could not fail. Answering",
-          "    // late is what makes the ablation land on the assertion instead.",
-          "    await Bun.sleep(6000);",
-          "    return Response.json([{ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/fake` }]);",
-          "  },",
-          "});",
-          "",
-        ].join("\n"),
-      );
-      const fakeChromium = join(workspaceRoot, "fake-cdp.sh");
-      // `exec` for the same reason as the test above: the pid Bun tracks must BE the server, not a
-      // parent shell whose death would orphan it.
-      writeFileSync(fakeChromium, `#!/bin/sh\nexec "${process.execPath}" "${fakeServer}" "$@"\n`, { mode: 0o755 });
-
-      const startedAt = Date.now();
-      let thrown: Error | null = null;
-      try {
-        // A generous version-poll deadline: the fake answers /json/version promptly, so reaching
-        // the stall is the expected path. The SHORT budget is the target fetch, under test here.
-        await launchBrowser({ deadlineMs: 10_000, targetFetchTimeoutMs: 1_500, executablePath: fakeChromium });
-      } catch (error) {
-        thrown = error as Error;
-      }
-      const elapsedMs = Date.now() - startedAt;
-
-      expect(thrown, "a stalled /json/list must fail the call, not hang it").not.toBe(null);
-      expect(thrown?.message, "the launch argv is reported").toContain(`"${fakeChromium}"`);
-      expect(thrown?.message, "the fake server's own stdout is drained and reported").toContain("fake-cdp-started");
-      // The assertion that carries the finding, and it is REACHABLE in both directions. With the
-      // deadline the fetch aborts at ~1.5s and lands here well under the bound. Remove
-      // `AbortSignal.timeout(targetFetchTimeoutMs)` and the fake's own 6s answer arrives instead,
-      // so this same line runs and FAILS on the elapsed time — a named red on the assertion rather
-      // than the suite quietly dying on its own timeout with nothing reported.
-      expect(elapsedMs, "bounded by the target-fetch deadline, not by the fake's late answer").toBeLessThan(4_000);
-
-      let stillAlive = true;
-      try {
-        process.kill(chrome!.pid, 0);
-      } catch {
-        stillAlive = false;
-      }
-      expect(stillAlive, "the stalled fake server is terminated and awaited, never left running").toBe(false);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "failure path: a bounded read gives up on a child that answers after its deadline",
-    async () => {
-      // A real child that starts, then writes its stdout LATE — after `readBounded`'s own deadline
-      // and well before this test's own timeout. A child that never writes at all would leave the
-      // read parked inside `new Response(stream).text()` with nothing for the assertion below to
-      // reach if the timeout were removed (the same defect that produced this issue — see test 6's
-      // own comment, and `L-issue-140-3`); answering late is what makes the ablation land on the
-      // assertion instead of hanging the suite.
-      const fakeChild = join(workspaceRoot, "fake-slow-reader.sh");
-      writeFileSync(fakeChild, "#!/bin/sh\nsleep 3\necho late-output\n", { mode: 0o755 });
-      const proc = spawnChild("slow-reader-canary", {
-        cmd: [fakeChild],
-        env: childEnv,
-        stdout: "pipe",
-        stderr: "ignore",
-      });
-
-      const startedAt = Date.now();
-      const text = await readBounded(proc.stdout, 500);
-      const elapsedMs = Date.now() - startedAt;
-      await killAndAwait(proc);
-
-      expect(text, "a read that times out returns empty, not the child's late output").toBe("");
-      // The 3s write is well inside this test's own 30s timeout, so a removed deadline would not
-      // hang the suite — it would resolve with "late-output\n" instead, failing the line above, and
-      // land here at ~3000ms, failing this bound too. Either failure is a named red, not a hang.
-      expect(elapsedMs, "bounded by readBounded's own deadline, not by the child's late write").toBeLessThan(2_000);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "failure path: a CDP call that answers after its deadline is reported, not awaited forever",
-    async () => {
-      // An in-process fake CDP peer: a WebSocket server that accepts the connection immediately (so
-      // `CdpClient.connect` resolves) but answers the one call it receives LATE — after that call's
-      // own deadline and well before this test's own timeout. A peer that never answers at all would
-      // leave the call's promise with nothing to race if the timer were removed; answering late is
-      // what makes the ablation land on the assertion below rather than hanging the suite.
-      let sawCall: (id: number) => void;
-      const called = new Promise<number>((resolve) => {
-        sawCall = resolve;
-      });
-      const fakePeer = Bun.serve({
-        hostname: "127.0.0.1",
-        port: randomPort(),
-        fetch(req, srv) {
-          if (srv.upgrade(req)) return undefined;
-          return new Response("upgrade required", { status: 400 });
-        },
-        websocket: {
-          message(ws, message) {
-            const msg = JSON.parse(message as string);
-            sawCall(msg.id);
-            setTimeout(() => ws.send(JSON.stringify({ id: msg.id, result: {} })), 3_000);
-          },
-        },
-      });
-
-      try {
-        const client = await CdpClient.connect(`ws://127.0.0.1:${fakePeer.port}/`);
+        let result: any;
         try {
-          const startedAt = Date.now();
-          let thrown: Error | null = null;
-          try {
-            await client.send("Fake.method", {}, 500);
-          } catch (error) {
-            thrown = error as Error;
-          }
-          const elapsedMs = Date.now() - startedAt;
-          // Proves the fake actually received the call (not a red caused by a dead socket, which
-          // would be a false positive for the deadline under test).
-          await called;
-
-          expect(thrown, "a CDP call that answers after its deadline must be reported, not hang").not.toBe(null);
-          expect(thrown?.message).toContain("Fake.method did not answer within 500ms");
-          expect(elapsedMs, "bounded by the call's own deadline, not by the peer's late answer").toBeLessThan(2_000);
-        } finally {
-          client.close();
+          result = await client.evaluate(script);
+        } catch (error) {
+          const { out, err } = await terminateAndDrainChrome();
+          throw new Error(`paste.md: in-browser paste failed: ${error}\nargv=${JSON.stringify(argv)}\n${out}\n${err}`);
         }
-      } finally {
-        fakePeer.stop(true);
-      }
-    },
-    TEST_TIMEOUT_MS,
-  );
+        expect(result.ok, String(result.reason ?? "")).toBe(true);
+        // Ordinary HTML-paste collapse — a run of spaces to one, a tab to one, leading indentation
+        // trimmed, a raw newline inside the pasted markup folded to a space — byte for byte the
+        // same as this test asserts against the fully unmodified schema (git-stashing
+        // PARAGRAPH_SPEC entirely and rerunning this exact test produces this exact string; see
+        // docs/decisions.md's own entry for where that comparison is recorded).
+        const expected = "alpha beta gamma delta\n\nindented\n\nline one line twoAlpha.\n";
+        expect(result.save.markdown).toBe(expected);
+        // Not just `getSave()`: the same real PUT route the keypress tests use, and the same disk
+        // readback, so this is what actually lands in the file, not merely what the in-memory splice
+        // report claims it would write.
+        const diskContent = readFileSync(join(workspaceRoot, "paste.md"), "utf8");
+        expect(diskContent, "the pasted-and-saved file on disk matches getSave()'s own markdown").toBe(expected);
+      },
+      TEST_TIMEOUT_MS,
+    );
 
-  /** The credential boundary asserted at the SPAWN, not at the pure function that builds the env.
-   *
-   *  A test of `buildChildEnv` alone stays green if any call site stops using its result, which is
-   *  the whole failure this guard exists to catch. Two assertions do that together: every recorded
-   *  child's env must be clean, AND the recorded label set must be exactly this scenario's EXPECTED
-   *  recorded labels — `chromium-version-probe` and `glosa-daemon` before the browser launches, plus
-   *  `chromium` after, with the daemon additionally carrying `GLOSA_HOME`. Expected RECORDED, not
-   *  every child started: a child that bypasses `spawnChild` is started and never recorded, so it
-   *  cannot appear in or perturb this set. That gap is the source guard's, not this test's, and the
-   *  paragraph below says so. Other tests in this file spawn their own labelled children;
-   *  `spawnedChildren` is reset per test, so they are not in this set, and no count here is stated
-   *  as a file-wide total — that is the kind of number that rots the moment a call site is added.
-   *
-   *  WHAT THIS CATCHES, EXACTLY. Converting one of this scenario's labelled `spawnChild(...)` call
-   *  sites back to a bare `Bun.spawn(...)` removes its entry from `spawnedChildren` entirely, so
-   *  the count/label-set assertions below go red on exactly that label — and on `HOME` too, if the
-   *  bare call also drops `env`. That is a real, ablatable guard, exercised below.
-   *
-   *  WHAT THIS CANNOT CATCH — narrowed here rather than left to overclaim (`L-pipeline-graph-gate-1`).
-   *  A spawn added somewhere in this file that never went through `spawnChild` at all — not
-   *  replacing one of this scenario's call sites, just a new one — pushes no entry onto
-   *  `spawnedChildren`, so it changes neither the recorded label set nor any count: a recorder
-   *  cannot enumerate the calls that bypass it. The assertions below are worded to say only what
-   *  they can prove; the source-level guard in the fixture-free describe below (`the only Bun.spawn
-   *  call in this file's source is inside the spawn wrapper`) is what covers that case instead. */
-  test(
-    "every recorded child of this scenario carries the scrubbed environment, and no unexpected label appears",
-    async () => {
-      // An inventory, not a literal list. `installedChromium` loops over every candidate until one
-      // qualifies, so a machine whose FIRST installed browser is too old records two probes and
-      // is still perfectly isolated — pinning "exactly one probe" would fail that environment for
-      // no reason. What stays exact is the deterministic pair, and `>= 1` on the probe is still
-      // enough to catch a bypass, because bypassing the only probe records ZERO.
-      const tally = () =>
-        spawnedChildren.reduce<Record<string, number>>((acc, c) => {
-          acc[c.label] = (acc[c.label] ?? 0) + 1;
-          return acc;
-        }, {});
+    /** The credential boundary asserted at the SPAWN, not at the pure function that builds the env.
+     *
+     *  A test of `buildChildEnv` alone stays green if any call site stops using its result, which is
+     *  the whole failure this guard exists to catch. Two assertions do that together: every recorded
+     *  child's env must be clean, AND the recorded label set must be exactly this scenario's EXPECTED
+     *  recorded labels — `chromium-version-probe` and `glosa-daemon` before the browser launches, plus
+     *  `chromium` after, with the daemon additionally carrying `GLOSA_HOME`. Expected RECORDED, not
+     *  every child started: a child that bypasses `spawnChild` is started and never recorded, so it
+     *  cannot appear in or perturb this set. That gap is the source guard's, not this test's, and the
+     *  paragraph below says so. Other tests in this file spawn their own labelled children;
+     *  `spawnedChildren` is reset per test, so they are not in this set, and no count here is stated
+     *  as a file-wide total — that is the kind of number that rots the moment a call site is added.
+     *
+     *  WHAT THIS CATCHES, EXACTLY. Converting one of this scenario's labelled `spawnChild(...)` call
+     *  sites back to a bare `Bun.spawn(...)` removes its entry from `spawnedChildren` entirely, so
+     *  the count/label-set assertions below go red on exactly that label — and on `HOME` too, if the
+     *  bare call also drops `env`. That is a real, ablatable guard, exercised below.
+     *
+     *  WHAT THIS CANNOT CATCH — narrowed here rather than left to overclaim (`L-pipeline-graph-gate-1`).
+     *  A spawn added somewhere in this file that never went through `spawnChild` at all — not
+     *  replacing one of this scenario's call sites, just a new one — pushes no entry onto
+     *  `spawnedChildren`, so it changes neither the recorded label set nor any count: a recorder
+     *  cannot enumerate the calls that bypass it. The assertions below are worded to say only what
+     *  they can prove; the source-level guard in the fixture-free describe below (`the only Bun.spawn
+     *  call in this file's source is inside the spawn wrapper`) is what covers that case instead. */
+    test(
+      "every recorded child of this scenario carries the scrubbed environment, and no unexpected label appears",
+      async () => {
+        // An inventory, not a literal list. `installedChromium` loops over every candidate until one
+        // qualifies, so a machine whose FIRST installed browser is too old records two probes and
+        // is still perfectly isolated — pinning "exactly one probe" would fail that environment for
+        // no reason. What stays exact is the deterministic pair, and `>= 1` on the probe is still
+        // enough to catch a bypass, because bypassing the only probe records ZERO.
+        const tally = () =>
+          spawnedChildren.reduce<Record<string, number>>((acc, c) => {
+            acc[c.label] = (acc[c.label] ?? 0) + 1;
+            return acc;
+          }, {});
 
-      let counts = tally();
-      expect(counts["chromium-version-probe"] ?? 0, "the version probe went through spawnChild").toBeGreaterThanOrEqual(
-        1,
-      );
-      expect(counts["glosa-daemon"] ?? 0, "exactly one daemon, spawned through spawnChild").toBe(1);
-      expect(
-        Object.keys(counts).sort(),
-        "the recorded spawnChild label set is exactly these two — no known label missing, no unexpected label added",
-      ).toEqual(["chromium-version-probe", "glosa-daemon"]);
-
-      const { client } = await launchBrowser();
-      cdp = client;
-
-      counts = tally();
-      expect(counts.chromium ?? 0, "exactly one Chromium, spawned through spawnChild").toBe(1);
-      expect(Object.keys(counts).sort(), "launching the browser adds Chromium and nothing else").toEqual([
-        "chromium",
-        "chromium-version-probe",
-        "glosa-daemon",
-      ]);
-
-      for (const child of spawnedChildren) {
-        expect(child.env, `${child.label} was spawned with an explicit environment`).toBeDefined();
+        let counts = tally();
         expect(
-          child.env?.ANTHROPIC_API_KEY,
-          `${child.label}: AGENTS.md invariant 5 — the key is scrubbed from EVERY spawned child`,
-        ).toBeUndefined();
-        expect(child.env?.HOME, `${child.label}: HOME points at this test's private home`).toBe(home);
-      }
+          counts["chromium-version-probe"] ?? 0,
+          "the version probe went through spawnChild",
+        ).toBeGreaterThanOrEqual(1);
+        expect(counts["glosa-daemon"] ?? 0, "exactly one daemon, spawned through spawnChild").toBe(1);
+        expect(
+          Object.keys(counts).sort(),
+          "the recorded spawnChild label set is exactly these two — no known label missing, no unexpected label added",
+        ).toEqual(["chromium-version-probe", "glosa-daemon"]);
 
-      // The daemon additionally carries its own state root, and it must be inside the private home
-      // rather than anywhere the real user's environment would have pointed it.
-      const daemonChild = spawnedChildren.find((c) => c.label === "glosa-daemon");
-      expect(daemonChild?.env?.GLOSA_HOME, "the daemon's state root is the private home").toBe(home);
-    },
-    TEST_TIMEOUT_MS,
-  );
+        const { client } = await launchBrowser();
+        cdp = client;
+
+        counts = tally();
+        expect(counts.chromium ?? 0, "exactly one Chromium, spawned through spawnChild").toBe(1);
+        expect(Object.keys(counts).sort(), "launching the browser adds Chromium and nothing else").toEqual([
+          "chromium",
+          "chromium-version-probe",
+          "glosa-daemon",
+        ]);
+
+        for (const child of spawnedChildren) {
+          expect(child.env, `${child.label} was spawned with an explicit environment`).toBeDefined();
+          expect(
+            child.env?.ANTHROPIC_API_KEY,
+            `${child.label}: AGENTS.md invariant 5 — the key is scrubbed from EVERY spawned child`,
+          ).toBeUndefined();
+          expect(child.env?.HOME, `${child.label}: HOME points at this test's private home`).toBe(home);
+        }
+
+        // The daemon additionally carries its own state root, and it must be inside the private home
+        // rather than anywhere the real user's environment would have pointed it.
+        const daemonChild = spawnedChildren.find((c) => c.label === "glosa-daemon");
+        expect(daemonChild?.env?.GLOSA_HOME, "the daemon's state root is the private home").toBe(home);
+      },
+      TEST_TIMEOUT_MS,
+    );
+  });
+
+  describe("browser harness without an application daemon", () => {
+    test(
+      "failure path: a Chromium that never opens CDP is reported with argv and streams, and does not survive",
+      async () => {
+        // A fake "chromium" that starts, proves it ran (so the retained stderr/stdout has something
+        // to show), and then hangs well past the overridden deadline below — never opening the port
+        // `launchBrowser`'s poll is waiting on. This is the diagnostic path itself under test, not
+        // the product: a real Chromium hanging this way is exactly hazard #2 from the contract
+        // ("an isolated macOS Chromium check can time out before it produces its DOM").
+        const fakeChromium = join(workspaceRoot, "fake-chromium.sh");
+        // The readiness gate separates process startup from the CDP deadline under test.
+        // Removing the handshake leaves this child gated and fails the retained-output assertion.
+        const releasePath = join(workspaceRoot, "fake-chromium-release");
+        const readyPath = join(workspaceRoot, "fake-chromium-ready");
+        const fakeProgram = join(workspaceRoot, "fake-chromium.ts");
+        writeFileSync(
+          fakeProgram,
+          [
+            'import { existsSync, writeFileSync } from "node:fs";',
+            `while (!existsSync(${JSON.stringify(releasePath)})) await Bun.sleep(10);`,
+            'console.log("fake-chromium-started");',
+            `writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+            "await Bun.sleep(30_000);",
+          ].join("\n"),
+        );
+        // exec keeps Bun's owned PID attached to the actual fake, with no orphan shell child.
+        writeFileSync(fakeChromium, `#!/bin/sh\nexec "${process.execPath}" "${fakeProgram}"\n`, { mode: 0o755 });
+
+        let startedAt = 0;
+        let thrown: Error | null = null;
+        try {
+          await launchBrowser({
+            deadlineMs: 1_500,
+            targetFetchTimeoutMs: 1_500,
+            executablePath: fakeChromium,
+            ready: async () => {
+              writeFileSync(releasePath, "go");
+              if (!(await waitUntil(() => existsSync(readyPath), 10_000)))
+                throw new Error("fake Chromium never started");
+              startedAt = Date.now();
+            },
+          });
+        } catch (error) {
+          thrown = error as Error;
+        }
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(thrown, "a browser that never opens CDP must be reported as a failure, not silently hang").not.toBe(
+          null,
+        );
+        expect(thrown?.message).toContain("did not open its CDP endpoint");
+        expect(thrown?.message, "argv is retained on the diagnostic path, not only on success").toContain(
+          `"${fakeChromium}"`,
+        );
+        expect(thrown?.message, "the fake process's own stdout is drained and reported").toContain(
+          "fake-chromium-started",
+        );
+        // The override was 1.5s, not the real 10s default: returning in well under the outer test
+        // timeout is what proves this failure is reported promptly rather than by outlasting
+        // something else's budget.
+        expect(elapsedMs, "the diagnostic must return near the overridden deadline").toBeLessThan(5_000);
+        // Ownership: `launchBrowser`'s own catch path terminates and awaits the process it spawned
+        // before this test ever asks — a surviving `sleep 30` here would mean the boundary this
+        // finding exists to fix is still open.
+        expect(chrome, "the fake chromium handle is still the one launchBrowser tracked").not.toBe(null);
+        // A SIGKILLed process reports `exitCode: null` in Bun's model (it died by signal, not by
+        // returning a status), so the real proof of death is the signal itself, plus that the PID no
+        // longer answers `kill(pid, 0)` — Bun's own `proc.exited` having resolved is not, on its own,
+        // distinguishable from "resolved because the process was already gone before we ever awaited
+        // it", which a stale handle could also produce.
+        expect(chrome?.signalCode, "the fake chromium process was actually killed, not merely asked to exit").toBe(
+          "SIGKILL",
+        );
+        const pid = chrome?.pid;
+        expect(pid, "a pid must exist to check").not.toBeUndefined();
+        let stillAlive = true;
+        try {
+          process.kill(pid as number, 0);
+        } catch {
+          stillAlive = false;
+        }
+        expect(stillAlive, "no process with the fake chromium's pid may still be running").toBe(false);
+        expect(
+          spawnedChildren.map((child) => child.label),
+          "harness checks need no daemon or real browser probe",
+        ).toEqual(["chromium"]);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "failure path: a stalled /json/list is bounded by its own deadline, not by the outer timeout",
+      async () => {
+        // The preceding test's fake never opens the CDP port at all, so `launchBrowser` throws at the
+        // `/json/version` poll and never reaches the target-list fetch. That left the second repaired
+        // boundary — the `/json/list` deadline — asserted by source reading only. This fake gets
+        // PAST the version poll and then stalls exactly where that deadline is the only thing that
+        // can end the wait.
+        const fakeServer = join(workspaceRoot, "fake-cdp.js");
+        writeFileSync(
+          fakeServer,
+          [
+            "const port = Number(Bun.argv.find((a) => a.startsWith('--remote-debugging-port='))?.split('=')[1]);",
+            "console.log('fake-cdp-started');",
+            "Bun.serve({",
+            "  port,",
+            "  hostname: '127.0.0.1',",
+            "  async fetch(req) {",
+            "    const url = new URL(req.url);",
+            "    if (url.pathname === '/json/version') {",
+            "      return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` });",
+            "    }",
+            "    // /json/list answers, but LATE — deliberately later than the deadline under test and",
+            "    // earlier than the outer test timeout. Never answering at all would mean that removing",
+            "    // the deadline leaves execution parked inside fetch until the suite's own timeout, so",
+            "    // the elapsed-time assertion below would never be REACHED and could not fail. Answering",
+            "    // late is what makes the ablation land on the assertion instead.",
+            "    await Bun.sleep(6000);",
+            "    return Response.json([{ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/fake` }]);",
+            "  },",
+            "});",
+            "",
+          ].join("\n"),
+        );
+        const fakeChromium = join(workspaceRoot, "fake-cdp.sh");
+        // `exec` for the same reason as the test above: the pid Bun tracks must BE the server, not a
+        // parent shell whose death would orphan it.
+        writeFileSync(fakeChromium, `#!/bin/sh\nexec "${process.execPath}" "${fakeServer}" "$@"\n`, { mode: 0o755 });
+
+        const startedAt = Date.now();
+        let thrown: Error | null = null;
+        try {
+          // A generous version-poll deadline: the fake answers /json/version promptly, so reaching
+          // the stall is the expected path. The SHORT budget is the target fetch, under test here.
+          await launchBrowser({ deadlineMs: 10_000, targetFetchTimeoutMs: 1_500, executablePath: fakeChromium });
+        } catch (error) {
+          thrown = error as Error;
+        }
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(thrown, "a stalled /json/list must fail the call, not hang it").not.toBe(null);
+        expect(thrown?.message, "the launch argv is reported").toContain(`"${fakeChromium}"`);
+        expect(thrown?.message, "the fake server's own stdout is drained and reported").toContain("fake-cdp-started");
+        // The assertion that carries the finding, and it is REACHABLE in both directions. With the
+        // deadline the fetch aborts at ~1.5s and lands here well under the bound. Remove
+        // `AbortSignal.timeout(targetFetchTimeoutMs)` and the fake's own 6s answer arrives instead,
+        // so this same line runs and FAILS on the elapsed time — a named red on the assertion rather
+        // than the suite quietly dying on its own timeout with nothing reported.
+        expect(elapsedMs, "bounded by the target-fetch deadline, not by the fake's late answer").toBeLessThan(4_000);
+
+        let stillAlive = true;
+        try {
+          process.kill(chrome!.pid, 0);
+        } catch {
+          stillAlive = false;
+        }
+        expect(stillAlive, "the stalled fake server is terminated and awaited, never left running").toBe(false);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "failure path: a bounded read gives up on a child that answers after its deadline",
+      async () => {
+        // A real child that starts, then writes its stdout LATE — after `readBounded`'s own deadline
+        // and well before this test's own timeout. A child that never writes at all would leave the
+        // read parked inside `new Response(stream).text()` with nothing for the assertion below to
+        // reach if the timeout were removed (the same defect that produced this issue — see test 6's
+        // own comment, and `L-issue-140-3`); answering late is what makes the ablation land on the
+        // assertion instead of hanging the suite.
+        const fakeChild = join(workspaceRoot, "fake-slow-reader.ts");
+        writeFileSync(fakeChild, "await Bun.sleep(3000); console.log('late-output');\n");
+        const proc = spawnChild("slow-reader-canary", {
+          cmd: [process.execPath, fakeChild],
+          env: childEnv,
+          stdout: "pipe",
+          stderr: "ignore",
+        });
+
+        const startedAt = Date.now();
+        const text = await readBounded(proc.stdout, 500);
+        const elapsedMs = Date.now() - startedAt;
+        await killAndAwait(proc);
+
+        expect(text, "a read that times out returns empty, not the child's late output").toBe("");
+        // The 3s write is well inside this test's own 30s timeout, so a removed deadline would not
+        // hang the suite — it would resolve with "late-output\n" instead, failing the line above, and
+        // land here at ~3000ms, failing this bound too. Either failure is a named red, not a hang.
+        expect(elapsedMs, "bounded by readBounded's own deadline, not by the child's late write").toBeLessThan(2_000);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "failure path: a CDP call that answers after its deadline is reported, not awaited forever",
+      async () => {
+        // An in-process fake CDP peer: a WebSocket server that accepts the connection immediately (so
+        // `CdpClient.connect` resolves) but answers the one call it receives LATE — after that call's
+        // own deadline and well before this test's own timeout. A peer that never answers at all would
+        // leave the call's promise with nothing to race if the timer were removed; answering late is
+        // what makes the ablation land on the assertion below rather than hanging the suite.
+        let sawCall: (id: number) => void;
+        const called = new Promise<number>((resolve) => {
+          sawCall = resolve;
+        });
+        const fakePeer = Bun.serve({
+          hostname: "127.0.0.1",
+          port: randomPort(),
+          fetch(req, srv) {
+            if (srv.upgrade(req)) return undefined;
+            return new Response("upgrade required", { status: 400 });
+          },
+          websocket: {
+            message(ws, message) {
+              const msg = JSON.parse(message as string);
+              sawCall(msg.id);
+              setTimeout(() => ws.send(JSON.stringify({ id: msg.id, result: {} })), 3_000);
+            },
+          },
+        });
+
+        try {
+          const client = await CdpClient.connect(`ws://127.0.0.1:${fakePeer.port}/`);
+          try {
+            const startedAt = Date.now();
+            let thrown: Error | null = null;
+            try {
+              await client.send("Fake.method", {}, 500);
+            } catch (error) {
+              thrown = error as Error;
+            }
+            const elapsedMs = Date.now() - startedAt;
+            // Proves the fake actually received the call (not a red caused by a dead socket, which
+            // would be a false positive for the deadline under test).
+            await called;
+
+            expect(thrown, "a CDP call that answers after its deadline must be reported, not hang").not.toBe(null);
+            expect(thrown?.message).toContain("Fake.method did not answer within 500ms");
+            expect(elapsedMs, "bounded by the call's own deadline, not by the peer's late answer").toBeLessThan(2_000);
+          } finally {
+            client.close();
+          }
+        } finally {
+          fakePeer.stop(true);
+        }
+      },
+      TEST_TIMEOUT_MS,
+    );
+  });
 });
 
 describe("#183 — child-environment isolation (fast, no browser)", () => {

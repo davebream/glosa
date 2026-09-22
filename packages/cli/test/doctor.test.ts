@@ -444,6 +444,87 @@ describe("glosa doctor", () => {
     expect(findCheck(result.data.checks, "claude-monitor")?.detail).toContain("per interactive Claude session");
   });
 
+  test("monitor check names a bound session with no push stream — the silent failure it used to skip past (#306)", async () => {
+    // Before contract 1.16 this check could only shrug, and its own wording said why: a live
+    // stream, not plugin installation, enables push — and nothing reported the stream. So the
+    // exact state #306 is about (bound, registered, alive, and unreachable by push) looked
+    // identical to a healthy one.
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    client.statusResult = {
+      ...client.statusResult,
+      workspaces: [
+        { slug: "ws", path: dir, last_seen: "2020-01-01T00:00:00.000Z", pending_count: 0, has_attention: false },
+      ],
+      sessions: [
+        {
+          session_id: "s1",
+          provider: "claude-code",
+          cwd: dir,
+          workspace_binding: dir,
+          last_active_at: "2020-01-01T00:00:00.000Z",
+          liveness: "alive",
+          push: { connected: false, transport: null },
+        },
+      ],
+    };
+    const result = await runDoctor(dir, deps);
+    const monitor = findCheck(result.data.checks, "claude-monitor");
+    expect(monitor?.status).toBe("warn");
+    expect(monitor?.detail).toContain("none holding a push stream");
+  });
+
+  test("monitor check passes once a session actually holds the stream, and names the transport (#306)", async () => {
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    client.statusResult = {
+      ...client.statusResult,
+      workspaces: [
+        { slug: "ws", path: dir, last_seen: "2020-01-01T00:00:00.000Z", pending_count: 0, has_attention: false },
+      ],
+      sessions: [
+        {
+          session_id: "s1",
+          provider: "claude-code",
+          cwd: dir,
+          workspace_binding: dir,
+          last_active_at: "2020-01-01T00:00:00.000Z",
+          liveness: "alive",
+          push: { connected: true, transport: "monitor" },
+        },
+      ],
+    };
+    const result = await runDoctor(dir, deps);
+    const monitor = findCheck(result.data.checks, "claude-monitor");
+    expect(monitor?.status).toBe("pass");
+    expect(monitor?.detail).toContain("monitor");
+  });
+
+  test("monitor check stays skipped against an N-1 daemon: an absent push field is 'cannot say', not 'not live' (#306)", async () => {
+    // The distinction that keeps this honest. Reporting every older daemon as broken would be a
+    // worse lie than the shrug this check replaced.
+    const { deps, client } = makeDeps();
+    const dir = freshDir();
+    client.statusResult = {
+      ...client.statusResult,
+      workspaces: [
+        { slug: "ws", path: dir, last_seen: "2020-01-01T00:00:00.000Z", pending_count: 0, has_attention: false },
+      ],
+      sessions: [
+        {
+          session_id: "s1",
+          provider: "claude-code",
+          cwd: dir,
+          workspace_binding: dir,
+          last_active_at: "2020-01-01T00:00:00.000Z",
+          liveness: "alive",
+        },
+      ],
+    };
+    const result = await runDoctor(dir, deps);
+    expect(findCheck(result.data.checks, "claude-monitor")?.status).toBe("skip");
+  });
+
   test("daemon+proto: unreachable daemon -> FAIL", async () => {
     const { deps } = makeDeps({
       createClient: async () => {

@@ -40,7 +40,7 @@ describe("session recovery and connection-held leases (#141)", () => {
   test("failed persistence never publishes registration or changes a prior binding", async () => {
     let fail = false;
     const index = {
-      upsertWorkspace: async () => {
+      upsertSessionWorkspace: async () => {
         if (fail) throw new Error("ENOSPC");
       },
     } as unknown as WorkspaceIndex;
@@ -291,7 +291,7 @@ describe("SessionRegistry.register — rollback on index failure", () => {
     // exercised, so a full real index (with its own tmp home, fs writes, etc.) would only add
     // noise to a test that's purely about SessionRegistry's own rollback behavior.
     const failingIndex = {
-      upsertWorkspace: async () => {
+      upsertSessionWorkspace: async () => {
         throw new Error("simulated persist failure (e.g. ENOSPC/EACCES)");
       },
     } as unknown as WorkspaceIndex;
@@ -307,7 +307,7 @@ describe("SessionRegistry.register — rollback on index failure", () => {
   test("a re-registration whose index upsert throws rolls back to the PRIOR record, not to unregistered", async () => {
     let shouldFail = false;
     const flakyIndex = {
-      upsertWorkspace: async () => {
+      upsertSessionWorkspace: async () => {
         if (shouldFail) throw new Error("simulated failure");
       },
     } as unknown as WorkspaceIndex;
