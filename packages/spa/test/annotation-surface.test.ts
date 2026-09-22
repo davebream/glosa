@@ -931,4 +931,30 @@ describe("the annotation surface", () => {
     expect(idsIn(host, ".glosa-tray-list .glosa-annotation")).toEqual(["inb-3"]);
     expect(q(host, ".glosa-clear-resolved")).toBeNull();
   });
+
+  test("an applied note whose words are gone says it was applied, quietly, and stops counting nudges", async () => {
+    const da = fakeDataAccess({
+      ...listing(
+        { ...noteOn(PLAIN, "gamma delta"), id: "inb-1", status: "applied", attempts: 4 },
+        { ...noteOn(PLAIN, "gamma delta"), id: "inb-2", status: "delivered", attempts: 4 },
+      ),
+      ...serving(REWRITTEN),
+    });
+    const { host } = await mountPane(da);
+    const [open, applied] = ["inb-2", "inb-1"].map((id) =>
+      qa(host, ".glosa-annotation").find((card) => card._glosaItem?.id === id),
+    );
+
+    // The session did what the note asked, which removed the quoted words: a record, not an alarm.
+    const appliedLine = q(applied, ".glosa-annotation-lost");
+    expect(appliedLine.textContent).toBe("Applied. The passage now reads differently.");
+    expect(appliedLine.hasAttribute("data-settled")).toBe(true);
+    expect(q(applied, ".glosa-annotation-state [role=status]").textContent).toBe("Done");
+
+    // Open work whose passage is gone is still the warning, and its retries are still news.
+    const openLine = q(open, ".glosa-annotation-lost");
+    expect(openLine.textContent).toContain("Lost its place");
+    expect(openLine.hasAttribute("data-settled")).toBe(false);
+    expect(q(open, ".glosa-annotation-state [role=status]").textContent).toBe("Sent to session · nudged ×4");
+  });
 });

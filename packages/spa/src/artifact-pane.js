@@ -73,6 +73,19 @@ export const INTENTS = [
 
 // Writer-register labels for every status the journal can hand us (2026-07-21 brief §7.5).
 // `waiting` is the SPA's own name for the wire's initial `pending`.
+/** What a card says when its quoted words are no longer on the page. For open work that is a
+ * warning: the note is still waiting and its passage is gone. For a note a session APPLIED it is
+ * the expected outcome, since a "Change the words" note removes the words it quoted; saying "Lost
+ * its place" in the warning colour there raised an alarm on every success. Closed and dismissed
+ * notes are finished too, so their line is the same quiet record. `stale` keeps the warning: it is
+ * the state that means the passage moved out from under the note. */
+const LOST_ITS_PLACE = { text: "Lost its place — the passage changed since this was written.", settled: false };
+const SETTLED_ELSEWHERE = {
+  applied: { text: "Applied. The passage now reads differently.", settled: true },
+  rejected: { text: "The passage has changed since.", settled: true },
+  dismissed: { text: "The passage has changed since.", settled: true },
+};
+
 const STATE_LABELS = {
   waiting: "Waiting for a session",
   delivered: "Sent to session",
@@ -3689,20 +3702,18 @@ export function createArtifactPane(host, deps) {
     const addressEl = card.querySelector(".glosa-address");
     if (addressEl) addressEl.textContent = (range ? addressForRange(contentEl, range, addresses) : null) ?? "";
     const lost = card.querySelector(".glosa-annotation-lost");
-    if (range) {
+    const notice = range ? null : (SETTLED_ELSEWHERE[item?.state] ?? LOST_ITS_PLACE);
+    if (!notice) {
       lost?.remove();
       return;
     }
-    if (lost) return;
+    if (lost?.textContent === notice.text) return;
+    lost?.remove();
     // Between the quote and the body, which is where it was built: the reader reads the words that
-    // were marked, then that they are gone, then what was said about them.
-    card.insertBefore(
-      el("p", {
-        className: "glosa-annotation-lost",
-        textContent: "Lost its place — the passage changed since this was written.",
-      }),
-      card.querySelector(".glosa-annotation-body"),
-    );
+    // were marked, then what became of them, then what was said about them.
+    const line = el("p", { className: "glosa-annotation-lost", textContent: notice.text });
+    if (notice.settled) line.setAttribute("data-settled", "");
+    card.insertBefore(line, card.querySelector(".glosa-annotation-body"));
   }
 
   /** Re-derives every card's verdict against the text as it stands now. Called from the same paint
@@ -3750,7 +3761,11 @@ export function createArtifactPane(host, deps) {
         role: "status",
         "aria-live": "polite",
         textContent:
-          item.error || (STATE_LABELS[state] ?? state) + (item.attempts > 1 ? ` · nudged ×${item.attempts}` : ""),
+          item.error ||
+          (STATE_LABELS[state] ?? state) +
+            // How often delivery was retried is news while the note is waiting, and history once it
+            // is settled: "Done · nudged ×4" read as if something were still wrong.
+            (item.attempts > 1 && !isTerminalState(state) ? ` · nudged ×${item.attempts}` : ""),
       }),
       el("span", { className: "glosa-annotation-intent", textContent: intentLabel }),
     ]);

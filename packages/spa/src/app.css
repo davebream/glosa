@@ -4466,6 +4466,19 @@ input,
   font-weight: 600;
 }
 
+/* A settled note whose words are gone is a record, not a warning: the session applied it, or it
+   was closed. The line is muted and the quote is not struck, because nothing was lost. */
+.glosa-annotation-lost[data-settled] {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.glosa-annotation[data-anchored="false"]:is([data-state="applied"], [data-state="rejected"], [data-state="dismissed"])
+  .glosa-annotation-quote
+  > span {
+  text-decoration: none;
+}
+
 /* Edit and Remove share one recessive vocabulary — quiet underlined text, never buttons
    competing with the note itself. Only the hover colour separates revising from withdrawing. */
 .glosa-annotation-edit,
