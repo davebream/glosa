@@ -137,7 +137,12 @@ export async function runApplyBegin(args: ApplyBeginArgs, deps: ResolveDeps): Pr
     const result = await client.applyBegin(args.dir, args.id, args.session);
     return { ok: true, command: "apply-begin", exitCode: EXIT_CODES.OK, data: result, warnings: [] };
   } catch (err) {
-    if (isApiError(err) && err.status === 409 && err.problem?.type?.includes("lease-conflict")) {
+    // Exit 12 is the conflict exit (A6 §F26). Contract 1.17 names the conflict `claim-held` and
+    // puts the holder in the title; an N-1 daemon still says `lease-conflict`. Both are the same
+    // condition, so both keep exit 12.
+    const type = isApiError(err) && err.status === 409 ? (err.problem?.type ?? "") : "";
+    if (type.endsWith("/claim-held") || type.endsWith("/lease-conflict")) {
+      const heldByClaim = type.endsWith("/claim-held");
       return {
         ok: false,
         command: "apply-begin",
@@ -145,9 +150,9 @@ export async function runApplyBegin(args: ApplyBeginArgs, deps: ResolveDeps): Pr
         data: {},
         warnings: [],
         error: {
-          code: "lease-conflict",
+          code: heldByClaim ? "claim-held" : "lease-conflict",
           kind: "lease_conflict",
-          message: err.problem?.title ?? "an apply-lease is already active",
+          message: (isApiError(err) ? err.problem?.title : undefined) ?? "another session holds this entry",
         },
       };
     }

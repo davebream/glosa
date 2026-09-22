@@ -6,6 +6,7 @@
 // routing even knows the route class, and its failure mode (400, no body) differs from every
 // case this function can return.
 
+import { createHash } from "node:crypto";
 import type { ProblemSlug } from "../transport/problem.ts";
 import { selfOriginFor } from "./hosts.ts";
 import { tokenMatches } from "./token.ts";
@@ -48,6 +49,26 @@ export interface AuthorizeOptions {
 function bearerOf(req: Request): string | null {
   const header = req.headers.get("Authorization");
   return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+}
+
+/** The PRINCIPAL behind a request (issue #155 REQ-9): the human/token, as distinct from the
+ * session, which is the participant. Two agents under one human are two sessions and one
+ * principal; conflicts are reported per session, and the principal rides along so a reader can
+ * tell "another of my agents" from "somebody else's".
+ *
+ * Derived from the bearer, never supplied by the caller, and never the bearer itself — 8 hex
+ * digits of its sha256 are enough to tell tokens apart in a conflict report and useless for
+ * authenticating as it. It is REPORTING ONLY: it is never used for attribution (that is the
+ * claim's job) and never for authorization (A3 is unchanged; any bearer may claim anything).
+ * There is one daemon token today, so every caller shares one principal until per-caller tokens
+ * exist — the field is here so the conflict report is shaped right the moment they do. */
+export function principalOf(bearer: string | null): string {
+  if (bearer === null || bearer.length === 0) return "unknown";
+  return `token:${createHash("sha256").update(bearer, "utf8").digest("hex").slice(0, 8)}`;
+}
+
+export function principalOfRequest(req: Request): string {
+  return principalOf(bearerOf(req));
 }
 
 /** Is this request's Origin present AND foreign — not `http://<Host>` for an allowlisted Host

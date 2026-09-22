@@ -2469,6 +2469,229 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(403);
   });
 
+  // --- Claims (issue #155, contract 1.17, A1 §5.11f) ---
+
+  describe("claims routes (issue #155)", () => {
+    async function seeded(): Promise<void> {
+      writeFileSync(join(root, "notes.md"), "v1\n");
+      writeFileSync(join(root, "essay.md"), "essay v1\n");
+      const bus = busRegistry.get(root);
+      await bus.reconcileOnce();
+      await bus.createEntry("e1", { kind: "annotation", artifact_path: "notes.md" });
+    }
+    const post = (path: string, body: unknown) =>
+      fetchFn(
+        stateChangingReq(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    test("POST /api/workspaces/claims → 201 with claim_id, fence, expires_at and the normalized paths; the same session again → 200, same claim", async () => {
+      await seeded();
+      const first = await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] });
+      expect(first.status).toBe(201);
+      const taken = await first.json();
+      expect(taken).toMatchObject({ fence: 1, paths: ["notes.md"], mode: "exclusive", renewed: false });
+      expect(typeof taken.claim_id).toBe("string");
+      expect(typeof taken.expires_at).toBe("string");
+
+      const again = await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] });
+      expect(again.status).toBe(200);
+      expect(await again.json()).toMatchObject({ claim_id: taken.claim_id, fence: 1, renewed: true });
+    });
+
+    test("an overlapping claim from another session → 409 claim-held with the holder inline; a disjoint one succeeds", async () => {
+      await seeded();
+      await post("/api/workspaces/claims", { path: root, session: "A", resources: ["artifact:notes.md"] });
+      const res = await post("/api/workspaces/claims", { path: root, session: "B", resources: ["entry:e1"] });
+      expect(res.status).toBe(409);
+      expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+      const body = await res.json();
+      expect(body.type).toBe("https://glosa.local/errors/claim-held");
+      expect(body).toMatchObject({ holder_session: "A", mode: "exclusive", fence: 1 });
+      expect(body.holder_principal).toMatch(/^token:[0-9a-f]{8}$/);
+      expect(body.title).toContain("A"); // the CLI prints the title — it must name the holder
+
+      const disjoint = await post("/api/workspaces/claims", {
+        path: root,
+        session: "B",
+        resources: ["artifact:essay.md"],
+      });
+      expect(disjoint.status).toBe(201);
+    });
+
+    test("apply-begin is an alias: another session's apply-begin over the same entry → 409 claim-held; the holder's own repeat → 200 renewed", async () => {
+      await seeded();
+      const a = await post("/api/workspaces/apply-begin", { path: root, entry: "e1", session: "A" });
+      expect(a.status).toBe(201);
+      const begun = await a.json();
+      expect(begun).toMatchObject({ entry: "e1", fence: 1 });
+
+      const b = await post("/api/workspaces/apply-begin", { path: root, entry: "e1", session: "B" });
+      expect(b.status).toBe(409);
+      expect(await b.json()).toMatchObject({
+        type: "https://glosa.local/errors/claim-held",
+        holder_session: "A",
+        claim_id: begun.lease_id,
+      });
+
+      const again = await post("/api/workspaces/apply-begin", { path: root, entry: "e1", session: "A" });
+      expect(again.status).toBe(200);
+      expect(await again.json()).toMatchObject({ lease_id: begun.lease_id, renewed: true, fence: 1 });
+    });
+
+    test("resolve replays for the session that closed the entry (replayed:true, same post_sha, nothing appended) and answers entry-resolved to anyone else", async () => {
+      await seeded();
+      await post("/api/workspaces/apply-begin", { path: root, entry: "e1", session: "A" });
+      writeFileSync(join(root, "notes.md"), "v2 by A\n");
+      const first = await post("/api/workspaces/resolve", {
+        path: root,
+        entry: "e1",
+        outcome: "applied",
+        session: "A",
+      });
+      expect(first.status).toBe(200);
+      const done = await first.json();
+      expect(done.replayed).toBeUndefined();
+      const lines = readFileSync(journalPath(root), "utf8").split("\n").filter(Boolean).length;
+
+      const replay = await post("/api/workspaces/resolve", {
+        path: root,
+        entry: "e1",
+        outcome: "applied",
+        session: "A",
+      });
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({ replayed: true, post_sha: done.post_sha, lease_id: done.lease_id });
+      expect(readFileSync(journalPath(root), "utf8").split("\n").filter(Boolean).length).toBe(lines);
+
+      const b = await post("/api/workspaces/resolve", { path: root, entry: "e1", outcome: "rejected", session: "B" });
+      expect(b.status).toBe(409);
+      expect(await b.json()).toMatchObject({
+        type: "https://glosa.local/errors/entry-resolved",
+        status: 409,
+        terminal_by: "session:A",
+        entry_status: "applied",
+      });
+    });
+
+    test("resolve with no claim → 409 no-claim; an unknown entry → 404; a malformed fence → 400", async () => {
+      await seeded();
+      const none = await post("/api/workspaces/resolve", { path: root, entry: "e1", outcome: "applied", session: "A" });
+      expect(none.status).toBe(409);
+      expect((await none.json()).type).toBe("https://glosa.local/errors/no-claim");
+      const unknown = await post("/api/workspaces/resolve", {
+        path: root,
+        entry: "nope",
+        outcome: "applied",
+        session: "A",
+      });
+      expect(unknown.status).toBe(404);
+      const badFence = await post("/api/workspaces/resolve", {
+        path: root,
+        entry: "e1",
+        outcome: "applied",
+        session: "A",
+        fence: "1",
+      });
+      expect(badFence.status).toBe(400);
+    });
+
+    test('POST /w/:slug/claims/:id/release is the human override: refused without the SPA\'s Origin, and with it releases by:"human"', async () => {
+      await seeded();
+      const taken = await (
+        await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] })
+      ).json();
+
+      const noOrigin = await fetchFn(req(`/w/${slug}/claims/${taken.claim_id}/release`, { method: "POST" }));
+      expect(noOrigin.status).toBe(403);
+
+      const released = await fetchFn(
+        stateChangingReq(`/w/${slug}/claims/${taken.claim_id}/release`, { method: "POST" }),
+      );
+      expect(released.status).toBe(200);
+      expect(await released.json()).toMatchObject({ claim_id: taken.claim_id, released: true, holder_session: "A" });
+      const events = readFileSync(journalPath(root), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      expect(events.find((event) => event.event === "claim_released")).toMatchObject({
+        by: "human",
+        detail: { claim_id: taken.claim_id, by: "human" },
+      });
+
+      // The holder's resolve is told a person took over.
+      const late = await post("/api/workspaces/resolve", { path: root, entry: "e1", outcome: "applied", session: "A" });
+      expect(late.status).toBe(409);
+      expect(await late.json()).toMatchObject({
+        type: "https://glosa.local/errors/claim-revoked",
+        reason: "released_by_human",
+      });
+    });
+
+    test("a session can release only its own claim through the agent route", async () => {
+      await seeded();
+      const taken = await (
+        await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] })
+      ).json();
+      const other = await post(`/api/workspaces/claims/${taken.claim_id}/release`, { path: root, session: "B" });
+      expect(other.status).toBe(409);
+      expect((await other.json()).type).toBe("https://glosa.local/errors/claim-held");
+      const own = await post(`/api/workspaces/claims/${taken.claim_id}/release`, { path: root, session: "A" });
+      expect(own.status).toBe(200);
+      expect(await own.json()).toMatchObject({ released: true });
+      const retried = await post(`/api/workspaces/claims/${taken.claim_id}/release`, { path: root, session: "A" });
+      expect(await retried.json()).toMatchObject({ released: false }); // idempotent, never an error
+    });
+
+    test("GET /api/workspaces/claims lists live claims as resource strings — never an absolute path — plus tombstones", async () => {
+      await seeded();
+      const taken = await (
+        await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] })
+      ).json();
+      await post("/api/workspaces/claims", {
+        path: root,
+        session: "B",
+        resources: ["artifact:essay.md"],
+        mode: "presence",
+      });
+
+      const res = await fetchFn(req(`/api/workspaces/claims?path=${encodeURIComponent(root)}&artifact=notes.md`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claims).toHaveLength(1);
+      expect(body.claims[0]).toMatchObject({
+        claim_id: taken.claim_id,
+        resources: ["entry:e1"],
+        artifacts: ["artifact:notes.md"],
+        holder_session: "A",
+        mode: "exclusive",
+      });
+      expect(JSON.stringify(body)).not.toContain(root);
+
+      const all = await (await fetchFn(req(`/api/workspaces/claims?path=${encodeURIComponent(root)}`))).json();
+      expect(all.claims.map((claim: { mode: string }) => claim.mode).sort()).toEqual(["exclusive", "presence"]);
+    });
+
+    test("claim body validation → 400 before any bus work", async () => {
+      await seeded();
+      for (const body of [
+        { path: root, session: "A" },
+        { path: root, session: "A", resources: [] },
+        { path: root, session: "A", resources: ["artifact:/etc/passwd"] },
+        { path: root, session: "A", resources: ["artifact:../outside.md"] },
+        { path: root, session: "A", resources: ["something:else"] },
+        { path: root, session: "A", resources: ["entry:e1"], mode: "loud" },
+        { path: root, session: "A", resources: ["entry:e1"], ttl_ms: -5 },
+      ]) {
+        const res = await post("/api/workspaces/claims", body);
+        expect({ body, status: res.status }).toEqual({ body, status: 400 });
+      }
+    });
+  });
+
   // --- POST /api/workspaces/resolve — apply-lease expiry (A4 §F05) ---
 
   describe("POST /api/workspaces/resolve — an expired apply-lease (A4 §F05)", () => {
@@ -2530,11 +2753,12 @@ describe("A1 §5 route catalog", () => {
       expect(res.status).toBe(409);
       expect(res.headers.get("Content-Type")).toBe("application/problem+json");
       const body = await res.json();
-      expect(body.type).toBe("https://glosa.local/errors/conflict");
-      // Distinct from the NO_ACTIVE_LEASE/LEASE_SESSION_MISMATCH 409 that shares this slug: the
-      // caller has to be told the lease EXPIRED and that a fresh apply-begin is the way forward.
-      expect(`${body.title} ${body.detail ?? ""}`).toContain("expired");
-      expect(`${body.title} ${body.detail ?? ""}`).toContain("apply-begin");
+      // Contract 1.17: its own slug, the tombstone inline, and the way forward in the TITLE (the
+      // CLI prints `title`, never `detail`).
+      expect(body.type).toBe("https://glosa.local/errors/claim-expired");
+      expect(body.title).toContain("expired");
+      expect(body.title).toContain("apply-begin");
+      expect(body).toMatchObject({ claim_id: leaseId, holder_session: "sess-a", reason: "expired_ttl" });
 
       // The refusal is honest all the way down: nothing was attributed to sess-a, and the
       // unproven interval is on record as `unknown`.

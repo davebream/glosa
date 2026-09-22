@@ -43,11 +43,12 @@ import {
 } from "../registry/workspace-index.ts";
 import { artifactRoutes } from "../routes/artifact.ts";
 import { attentionRoutes } from "../routes/attention.ts";
+import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
-import { authorizeRequest, isForeignOrigin, type Transport } from "../security/auth.ts";
+import { authorizeRequest, isForeignOrigin, principalOfRequest, type Transport } from "../security/auth.ts";
 import type { CapabilityStore } from "../security/capability.ts";
 import { confinePath } from "../security/confine-path.ts";
 import { classFCspHeaders, spaCspHeaders } from "../security/csp.ts";
@@ -60,7 +61,7 @@ import {
   listInboxEntries,
 } from "../services/artifact.ts";
 import { MAX_ENTRY_WAIT_MS, waitForWatch } from "../services/watch.ts";
-import { getOrRegisterWorkspace } from "../services/workspace-access.ts";
+import { findWorkspace, getOrRegisterWorkspace, WorkspaceLookupError } from "../services/workspace-access.ts";
 import { confineTranscriptPath } from "../transcript/root.ts";
 import { createTranscriptStreamResponse } from "../transcript/stream.ts";
 import { type WorkspaceTarget, workspaceRegistrationId } from "../workspace.ts";
@@ -1004,6 +1005,7 @@ async function handleSessionRegister(ctx: ApiContext, req: Request): Promise<Res
       provider,
       cwd: canonicalCwd,
       source,
+      principal: principalOfRequest(req),
       ...(workspaceBinding !== undefined ? { workspace_binding: workspaceBinding } : {}),
       fallback_workspace_binding: fallbackBinding,
       ...(transcriptPath !== undefined ? { transcript_path: transcriptPath } : {}),
@@ -2049,43 +2051,32 @@ async function handleWorkspaceResolve(ctx: ApiContext, req: Request): Promise<Re
     );
   }
 
+  const fence = b?.fence;
+  if (fence !== undefined && (typeof fence !== "number" || !Number.isInteger(fence) || fence < 1)) {
+    return problem(400, "validation-failed", "fence must be a positive integer", undefined, url.pathname);
+  }
   try {
-    const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, { note });
+    const result = await bus.resolveEntry(entry, outcome as "applied" | "rejected" | "stale", session, {
+      note,
+      ...(typeof fence === "number" ? { fence } : {}),
+    });
+    // A replay (issue #155 rung 1) answers with the ORIGINAL result and says so, so a retrying
+    // caller can tell "this is what you already did" from "this just happened".
     return Response.json({
       entry,
       status: outcome,
       to: outcome,
       lease_id: result.leaseId,
       post_sha: result.postSha,
+      ...(result.fence !== null ? { fence: result.fence } : {}),
       ...(result.replayed ? { replayed: true } : {}),
     });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (
-      code === "UNKNOWN_ENTRY" ||
-      code === "NO_CLAIM" ||
-      code === "CLAIM_HELD" ||
-      code === "ENTRY_RESOLVED" ||
-      code === "CLAIM_REVOKED" ||
-      code === "CLAIM_SUPERSEDED"
-    ) {
-      return problem(409, "conflict", "no matching apply-begin lease for this entry/session", undefined, url.pathname);
-    }
-    // A4 §F05 claim expiry. Deliberately the same 409 `conflict` slug (and so the same exit 8
-    // `entry_error`) as the refusals above rather than `lease-conflict`/exit 12 — A6 §F26 fixes
-    // `resolve`'s exit set at `0;3;8;2`, and exit 12 belongs to `apply-begin`'s conflict. The
-    // recovery step goes in the TITLE, not just the detail, because `runResolve`'s
-    // `mapEntryFailure` (packages/cli/src/resolve.ts) surfaces `problem.title` as the CLI's
-    // error message and never reads `detail` — guidance parked in `detail` would never be seen.
-    if (code === "CLAIM_EXPIRED") {
-      return problem(
-        409,
-        "conflict",
-        "the apply-lease for this entry expired — re-run apply-begin, then resolve again",
-        "past its TTL the lease could no longer prove its pre..post interval, so that interval was recorded as unknown rather than attributed to the session",
-        url.pathname,
-      );
-    }
+    // Every ladder refusal is a 409 with a slug of its own and the holder/tombstone inline, and an
+    // unknown entry is a 404 — all of them exit 8 in the CLI (A6 §F26 fixes `resolve`'s exit set
+    // at `0;3;8;2`; exit 12 belongs to apply-begin's conflict).
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
     throw err;
   }
 }
@@ -2170,8 +2161,8 @@ function handleWorkspaceInboxList(ctx: ApiContext, req: Request): Response {
 }
 
 /** `POST /api/workspaces/apply-begin` — `glosa apply-begin <id> --session <sid>`'s daemon-side
- * half (A4 §F05). A second apply-begin already active for this workspace surfaces as
- * `LEASE_HELD` — mapped to 409 `lease-conflict`, which the CLI maps to exit 12. */
+ * half (A4 §F05). Kept as an alias for an exclusive claim over `entry:<id>` (issue #155): another
+ * session holding the entry's paths surfaces as 409 `claim-held`, which the CLI maps to exit 12. */
 async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise<Response> {
   const url = new URL(req.url);
   let body: unknown;
@@ -2192,33 +2183,27 @@ async function handleWorkspaceApplyBegin(ctx: ApiContext, req: Request): Promise
 
   const bus = await resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
   try {
-    const { leaseId, preSha } = await bus.applyBegin(entry, session);
-    return new Response(JSON.stringify({ entry, lease_id: leaseId, pre_sha: preSha }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
-    });
+    const principal = ctx.sessionRegistry.get(session)?.principal ?? principalOfRequest(req);
+    const result = await bus.applyBegin(entry, session, principal);
+    // Same session again renews (issue #155 REQ-3): 200 with the SAME lease id and fence, never a
+    // conflict. `lease_id` is the claim id; `pre_sha` is what the claim's interval is measured from.
+    return new Response(
+      JSON.stringify({
+        entry,
+        lease_id: result.leaseId,
+        pre_sha: result.preSha,
+        fence: result.fence,
+        expires_at: result.expiresAt,
+        ...(result.renewed ? { renewed: true } : {}),
+      }),
+      { status: result.renewed ? 200 : 201, headers: { "Content-Type": "application/json" } },
+    );
   } catch (err) {
-    if ((err as { code?: string }).code === "CLAIM_HELD") {
-      return problem(
-        409,
-        "lease-conflict",
-        "an apply-lease is already active for this workspace",
-        undefined,
-        url.pathname,
-      );
-    }
-    // The entry belongs to another workspace, or does not exist. A 404 naming the reason, not the
-    // detail-free 500 an unhandled throw would produce — this is the likeliest mistake a caller
-    // can make here, and it was previously indistinguishable from a daemon fault.
-    if ((err as { code?: string }).code === "UNKNOWN_ENTRY") {
-      return problem(
-        404,
-        "not-found",
-        "this workspace has no such inbox entry — pass --workspace to name the one that owns it",
-        undefined,
-        url.pathname,
-      );
-    }
+    // Another session's claim over this entry's paths → 409 `claim-held` with the holder inline
+    // (the CLI maps it to exit 12). An entry from another workspace, or none at all → 404 naming
+    // the likeliest mistake, never the detail-free 500 an unhandled throw would produce.
+    const mapped = claimProblem(err, url.pathname);
+    if (mapped) return mapped;
     throw err;
   }
 }
@@ -2436,6 +2421,8 @@ function handleStatusAggregate(ctx: ApiContext): Response {
       lease_expiry: s.lease_expiry,
       last_active_at: s.last_active_at,
       liveness: ctx.sessionRegistry.liveness(s.session_id),
+      // Contract 1.17 (issue #155): which principal registered this session — reporting only.
+      ...(s.principal ? { principal: s.principal } : {}),
       // Contract 1.16 (issue #306). Answered from `SessionPushRegistry` alone, exactly like the
       // `GET /api/sessions/:id/stream/status` probe, and carrying that probe's shape verbatim so
       // there is ONE wire shape for "is push live" rather than two that must be kept in step.
@@ -2790,6 +2777,38 @@ function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMa
   if (method === "POST" && pathname === "/api/workspaces/forget") {
     return { routeClass: "state-changing", handle: (req) => handleWorkspaceForget(ctx, req) };
   }
+  const claimRoute = claimRoutes(
+    {
+      busForPath: async (rawPath) => {
+        const root = canonicalOrNull(rawPath);
+        if (!root) throw Object.assign(new Error("invalid workspace path"), { code: "INVALID_WORKSPACE_PATH" });
+        return resolveBus(ctx, ctx.workspaceIndex.get(root) ?? root);
+      },
+      busForSlug: async (slug) => {
+        let entry: WorkspaceEntry;
+        try {
+          entry = findWorkspace(ctx, slug);
+        } catch (error) {
+          if (error instanceof WorkspaceLookupError && error.code !== "not-found") {
+            throw new AdoptionError(
+              error.code,
+              error.code === "workspace-forgetting"
+                ? "workspace is being forgotten"
+                : "workspace adoption is in progress",
+            );
+          }
+          throw Object.assign(new Error("unknown workspace"), { code: "WORKSPACE_NOT_FOUND" });
+        }
+        return resolveBus(ctx, entry);
+      },
+      // The principal the session registered under, when it registered; otherwise the one this
+      // request's own bearer derives. Reporting only (see `principalOf`).
+      principalFor: (sessionId, req) => ctx.sessionRegistry.get(sessionId)?.principal ?? principalOfRequest(req),
+    },
+    method,
+    pathname,
+  );
+  if (claimRoute) return claimRoute;
   const attentionRoute = attentionRoutes(
     {
       workspaceIndex: ctx.workspaceIndex,

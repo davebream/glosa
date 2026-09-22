@@ -164,7 +164,24 @@ describe("glosa apply-begin", () => {
     expect(result.exitCode).toBe(3);
   });
 
-  test("already-leased entry -> exit 12 (lease_conflict)", async () => {
+  test("another session holds the entry (contract 1.17 claim-held) -> exit 12, holder named in the message", async () => {
+    // Issue #155 renamed the conflict. Ablating either half of the slug match drops that half to
+    // the generic exit 8 and reds one of these two tests.
+    const client = new FakeGlosaApiClient();
+    client.applyBeginImpl = async () => {
+      throw apiError(409, {
+        type: "https://glosa.local/errors/claim-held",
+        title: "session sess-A holds an exclusive claim on this until 2026-09-22T12:15:00.000Z",
+      });
+    };
+    const { deps } = makeClientDeps(client);
+    const result = await runApplyBegin({ dir: "/repo", id: "inb-1", session: "sess-1" }, deps);
+    expect(result.exitCode).toBe(12);
+    expect(result.error).toMatchObject({ code: "claim-held", kind: "lease_conflict" });
+    expect(result.error?.message).toContain("sess-A");
+  });
+
+  test("already-leased entry from an N-1 daemon (lease-conflict) -> still exit 12 (lease_conflict)", async () => {
     const client = new FakeGlosaApiClient();
     client.applyBeginImpl = async () => {
       throw apiError(409, {

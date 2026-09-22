@@ -114,7 +114,10 @@ describe("real daemon subprocess — genuinely concurrent HTTP requests against 
       if (typeof body.lease_id === "string") {
         expect(body.entry).toBe(entry); // the winner really is for the entry we asked about
       } else {
-        expect(body.type).toContain("lease-conflict");
+        // Contract 1.17: the conflict names its holder (issue #155), so the loser knows who won.
+        expect(body.type).toContain("claim-held");
+        expect(sessions).toContain(body.holder_session);
+        expect(body.fence).toBe(1);
       }
     }
 

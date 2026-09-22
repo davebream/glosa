@@ -13,6 +13,7 @@ import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
 import { WorkspaceIndex } from "../src/registry/workspace-index.ts";
 import { WatchEmissionRegistry } from "../src/agent-provider/watch-emissions.ts";
+import { principalOf } from "../src/security/auth.ts";
 import { CapabilityStore } from "../src/security/capability.ts";
 import { type ApiContext, createApiFetch } from "../src/transport/http.ts";
 
@@ -302,6 +303,13 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(body).toEqual({ session_id: "sess-1", workspace: root });
     expect(sessionRegistry.liveness("sess-1")).toBe("alive");
     expect(sessionRegistry.get("sess-1")?.cwd).toBe(root);
+    // Issue #155 REQ-9: the principal is derived from THIS request's bearer, stored on the record,
+    // and reported on the status row — never taken from the body.
+    expect(sessionRegistry.get("sess-1")?.principal).toBe(principalOf(TOKEN));
+    const status = await (await fetchFn(req("/api/status"))).json();
+    expect(status.sessions.find((row: { session_id: string }) => row.session_id === "sess-1")?.principal).toBe(
+      principalOf(TOKEN),
+    );
   });
 
   test("POST /api/sessions/register with a missing field -> 400 validation-failed", async () => {
