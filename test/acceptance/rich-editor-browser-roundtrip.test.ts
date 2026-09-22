@@ -1084,6 +1084,181 @@ describe("#183 — a soft line break survives EditorView's real DOM round trip",
     );
 
     test(
+      "opening a block for editing moves nothing on the page — the rule app.css states and nothing could observe",
+      async () => {
+        // THE INVARIANT, stated at app.css's run-editor section and broken in the shipped code until
+        // now: "the block must not MOVE when it becomes editable: the reader clicked a word, and the
+        // word has to still be under their finger." Nothing guarded it, which is how it broke while CI
+        // stayed green — `openRunEditor` swaps the rendered block for a `div` host, and every margin
+        // the block was carrying left the flow with it.
+        //
+        // WHY THIS TEST CANNOT LIVE IN packages/spa/test: jsdom computes no layout, so every
+        // `getBoundingClientRect()` there returns zeroes and an assertion about block positions passes
+        // whatever the CSS says. This is the only harness in the repo that can see the defect at all —
+        // a real engine, the real stylesheet, the real pane.
+        //
+        // ABLATION (how this was proved to be able to fail): revert `host.style.marginBlock` in
+        // `openRunEditor` and this goes red on `paragraph.below` with a 21.6px delta; additionally
+        // revert `.glosa-content p`'s leading margin and `heading.self` goes red by 26.4px.
+        const path = "geometry.md";
+        writeFileSync(
+          join(workspaceRoot, path),
+          [
+            "Paragraph one sits above the fold.",
+            "",
+            "Paragraph two must not move.",
+            "",
+            "## A section heading",
+            "",
+            "Paragraph three follows the heading.",
+            "",
+          ].join("\n"),
+        );
+
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document", path, "edit") });
+        cdp = client;
+
+        const moved: any = await client.evaluate(`(async () => {
+      const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const content = () => document.querySelector(".glosa-content");
+      const blocks = () => content() ? [...content().querySelectorAll(":scope > [data-line]")] : [];
+      // Wait for the manuscript itself, not merely for the pane: the SPA boots, then routes, then
+      // fetches, and the tops being measured are meaningless until the file has rendered into blocks.
+      for (let i = 0; i < 400 && blocks().length < 4; i++) await new Promise(resolve => setTimeout(resolve, 25));
+      if (blocks().length < 4) throw new Error("the manuscript never rendered its four blocks");
+      await frame();
+
+      // Keyed by \`data-line\`, never by index: the clicked block leaves the DOM, so position among
+      // siblings stops naming the same passage the moment the editor opens.
+      const tops = () => Object.fromEntries(blocks().map(b => [b.getAttribute("data-line"), b.getBoundingClientRect().top]));
+      const lines = blocks().map(b => b.getAttribute("data-line"));
+      const [firstLine, secondLine, headingLine, thirdLine] = lines;
+
+      const open = async (line) => {
+        const block = content().querySelector(':scope > [data-line="' + line + '"]');
+        const box = block.getBoundingClientRect();
+        block.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: box.left + 4, clientY: box.top + 4 }));
+        for (let i = 0; i < 200 && !content().querySelector(".glosa-run-editor"); i++)
+          await new Promise(resolve => setTimeout(resolve, 25));
+        const host = content().querySelector(".glosa-run-editor");
+        if (!host) throw new Error("the run editor never opened on line " + line);
+        await frame();
+        return host;
+      };
+      const close = async () => {
+        const focused = document.activeElement;
+        focused.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        for (let i = 0; i < 200 && content().querySelector(".glosa-run-editor"); i++)
+          await new Promise(resolve => setTimeout(resolve, 25));
+        if (content().querySelector(".glosa-run-editor")) throw new Error("the run editor never closed");
+        await frame();
+      };
+
+      // Case 1 — a paragraph. The reported defect: everything below it rose by one 1.2em gap.
+      const restParagraph = tops();
+      const hostA = await open(firstLine);
+      const openParagraph = { self: hostA.getBoundingClientRect().top, ...tops() };
+      await close();
+
+      // Case 2 — a heading, whose 3rem top margin is its own and cannot be supplied by a neighbour.
+      const restHeading = tops();
+      const hostH = await open(headingLine);
+      const openHeading = { self: hostH.getBoundingClientRect().top, ...tops() };
+      await close();
+
+      const delta = (a, b) => Math.round((a - b) * 100) / 100;
+      return {
+        paragraph: {
+          self: delta(openParagraph.self, restParagraph[firstLine]),
+          below: delta(openParagraph[secondLine], restParagraph[secondLine]),
+          heading: delta(openParagraph[headingLine], restParagraph[headingLine]),
+          last: delta(openParagraph[thirdLine], restParagraph[thirdLine]),
+        },
+        heading: {
+          self: delta(openHeading.self, restHeading[headingLine]),
+          below: delta(openHeading[thirdLine], restHeading[thirdLine]),
+        },
+      };
+    })()`);
+
+        // Sub-pixel tolerance only: 1.2em at the manuscript's 18px body is 21.6px, and a heading's
+        // own margin is 48px, so a real regression is two orders of magnitude outside this window.
+        const still = (value: number, what: string) => expect(Math.abs(value), what).toBeLessThan(0.5);
+        still(moved.paragraph.self, "the clicked paragraph must stay exactly where the writer clicked it");
+        still(moved.paragraph.below, "the paragraph below must not rise into the one being edited");
+        still(moved.paragraph.heading, "the section heading below must not move");
+        still(moved.paragraph.last, "the last paragraph must not move");
+        still(moved.heading.self, "a heading must not jump out from under the cursor that opened it");
+        still(moved.heading.below, "the paragraph under an opened heading must not move");
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
+      "the open block is marked in the writer's own hand, at the width the page draws edges",
+      async () => {
+        // DESIGN.md's Two Hands Rule: everything the human marks takes the hand, and the comment
+        // above this rule in app.css has said since #275 that an open block is the passage the
+        // writer's hand is on. The declaration said `--primary`, which is `--ink` in both
+        // appearances — so the loudest "you are here" mark on the page was the colour reserved for
+        // the application's own actions, a few pixels from an already-vermilion caret.
+        //
+        // Read as COMPUTED COLOUR, never as the token name: `--hand` and `--ink` are resolved by
+        // painting each onto a probe inside the manuscript, so this compares what a reader would
+        // actually see. A source-text assertion would pass on any rename and prove nothing.
+        const path = "hand.md";
+        writeFileSync(join(workspaceRoot, path), "A paragraph to put a caret in.\n");
+
+        const { client } = await launchBrowser({ initialUrl: documentUrl("document", path, "edit") });
+        cdp = client;
+        // `:focus` does not match in a headless page whose window was never focused — `activeElement`
+        // is set, `document.hasFocus()` is false, and the `:has(.ProseMirror:focus)` mark is simply
+        // never painted. Without this the test reads a transparent ::before and fails for a reason
+        // that has nothing to do with the colour under test.
+        await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+
+        const mark: any = await client.evaluate(`(async () => {
+      const content = () => document.querySelector(".glosa-content");
+      const block = () => content()?.querySelector(":scope > [data-line]");
+      for (let i = 0; i < 400 && !block(); i++) await new Promise(resolve => setTimeout(resolve, 25));
+      if (!block()) throw new Error("the manuscript never rendered");
+      const box = block().getBoundingClientRect();
+      block().dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: box.left + 4, clientY: box.top + 4 }));
+      for (let i = 0; i < 200 && !content().querySelector(".glosa-run-editor"); i++)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      const host = content().querySelector(".glosa-run-editor");
+      if (!host) throw new Error("the run editor never opened");
+      // The mark is drawn by \`:has(.ProseMirror:focus)\`, so it exists only while the editor really
+      // holds focus. Asserted rather than assumed: without it this reads a transparent ::before and
+      // fails for a reason that has nothing to do with the colour under test.
+      const surface = host.querySelector(".ProseMirror");
+      surface.focus();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.activeElement !== surface) throw new Error("the editor never took focus, so no mark is drawn");
+
+      // Resolve each token to the colour it actually paints, in this element's own cascade.
+      const resolve = (token) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(" + token + ")";
+        host.append(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      };
+      const before = getComputedStyle(host, "::before");
+      return { background: before.backgroundColor, width: before.width, hand: resolve("--hand"), ink: resolve("--ink") };
+    })()`);
+
+        expect(mark.background, "the open-block mark is not the hand").toBe(mark.hand);
+        // Stated as an absence too. The defect was that these two were the same colour, and an
+        // equality against the hand alone would pass in a theme where the hand and the ink coincide.
+        expect(mark.background, "the open-block mark is the application's ink").not.toBe(mark.ink);
+        expect(mark.width, "the mark is not the width the page draws edges at").toBe("2px");
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    test(
       "#182: Keep mine merges a real keypress in the rich editor with a real disk-only change, byte-exact on disk",
       async () => {
         const path = "keepmine.md";

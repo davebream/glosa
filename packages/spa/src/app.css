@@ -2613,12 +2613,35 @@ input,
   margin-top: var(--space-3);
 }
 
+/* A heading holds its text close: 0.75rem under an h2, 0.5rem under an h3, against 3rem and 2rem
+   above them. That asymmetry is the document scale, and prose carrying its own 1.2em above would
+   overrule it — collapsing takes the larger margin, so every subhead would loosen to 1.2em and the
+   heading would stop belonging to the text it introduces. Directly under a heading the heading's
+   own bottom margin decides, exactly as it did before prose gained a top edge.
+
+   The run editor's host is named here too. It is a `div`, so it cannot match `h2` however
+   faithfully it reproduces one; without the flag, clicking a heading would spring the paragraph
+   below it open by 1.2em — the same defect this whole pairing exists to remove, moved one block
+   down. `openRunEditor` sets the flag (artifact-pane.js). */
+.glosa-content :is(h1, h2, h3, h4, h5, h6, .glosa-run-editor[data-heading]) + :is(p, ul, ol, pre) {
+  margin-top: 0;
+}
+
 .glosa-content > :first-child {
   margin-top: 0;
 }
 
+/* Both edges, not just the trailing one — and the reason is the run editor, not typography.
+   Adjacent margins collapse to the LARGER of the two, so giving prose a gap above as well as
+   below leaves the space between two paragraphs exactly 1.2em, unchanged from when only the
+   upper one carried it. What changes is who owns it. Trailing-only spacing means the gap between
+   A and B belongs solely to A, so lifting A out of the flow — which is precisely what
+   `openRunEditor` does when it swaps a block for an editor host (artifact-pane.js) — takes the
+   gap with it and closes B against the block above. Two paragraphs then read as one, under the
+   caret, in a tool whose whole job at that moment is to show the writer their own structure.
+   With the gap on both edges, B holds up its own side and the swap cannot delete anything. */
 .glosa-content p {
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 /* The serif's true bold is a shout at 17px; semibold is the copy editor's emphasis. */
@@ -2635,22 +2658,28 @@ input,
   font-style: italic;
 }
 
-.glosa-content blockquote > :last-child {
+/* A container's own margins are the spacing around it; its first and last children must not add
+   theirs on top. This existed for the trailing edge already — prose gaining a leading edge is what
+   makes the opening half necessary, or a quote and a list item would each open with a blank line
+   inside their own frame. */
+.glosa-content blockquote > :first-child,
+.glosa-content li > :first-child {
+  margin-top: 0;
+}
+
+.glosa-content blockquote > :last-child,
+.glosa-content li > :last-child {
   margin-bottom: 0;
 }
 
 .glosa-content ul,
 .glosa-content ol {
   padding-left: var(--space-6);
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 .glosa-content li {
   margin-bottom: 0.3em;
-}
-
-.glosa-content li > p:last-child {
-  margin-bottom: 0;
 }
 
 /* Markers are wayfinding, not content: they step back to the muted ink, and numerals line up. */
@@ -2689,7 +2718,7 @@ input,
   border-radius: var(--radius-panel);
   padding: var(--space-4);
   overflow-x: auto;
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 .glosa-content pre code {
@@ -2746,7 +2775,7 @@ input,
 
 /* Annotate mode exposes each rendered block as an explicit keyboard target. The focus ring is
    intentionally inset so enlarged text and narrow layouts never acquire horizontal overflow. */
-.glosa-content .glosa-annotatable-block {
+.glosa-content .glosa-block-target {
   border-radius: var(--radius-micro);
 }
 
@@ -2788,7 +2817,7 @@ input,
   opacity: 1;
 }
 
-.glosa-content .glosa-annotatable-block:focus-visible {
+.glosa-content .glosa-block-target:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
@@ -3161,8 +3190,17 @@ input,
   gap: var(--space-2);
 }
 
+/* The save line sits under the manuscript, on the manuscript's own measure, so a sentence about the
+   writer's file lands under the file rather than against the pane's edge — the same placement the
+   provenance line uses, for the same reason. It used to live in the Save row, which is hidden
+   whenever the full-page face is not showing; per-block editing is the normal way to edit, so
+   everything this line had to say went into a hidden element and was never read or announced. */
 .glosa-edit-status {
-  margin-right: auto;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--space-8));
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-8) 0;
+  font-family: var(--font-sans);
 }
 
 .glosa-edit-topbar {
@@ -3300,6 +3338,13 @@ input,
   padding: 0;
 }
 
+/* The appended run is the one host with nothing to measure: it stands for bytes that do not exist
+   yet, so `openRunEditor`'s geometry read has no element to read. It is still a block of its own
+   rather than more of the last paragraph, and the page's own gap is what says so. */
+.glosa-run-editor[data-appended] {
+  margin-block-start: var(--prose-gap);
+}
+
 /* The surface carries `.glosa-content` so the manuscript's own typography reaches the text being
    edited — that is why the words do not change shape when the caret arrives. What it must NOT
    inherit is the page frame: the measure, the centring, and the 4rem/6rem opening `.glosa-content`
@@ -3413,16 +3458,28 @@ input,
 }
 
 /* Drawn the way a session's band is drawn — out of flow, so the words do not move by a pixel when
-   it appears. It sits in the gutter the manuscript's measure already leaves, never over the text. */
+   it appears. It sits in the gutter the manuscript's measure already leaves, never over the text.
+
+   `--focus`, which is the hand, not `--primary`, which is the ink. The comment above this block has
+   said since #275 that an open block is the passage the writer's own hand is on and so takes the
+   hand; the declaration said `--primary`, and `--primary` is `--ink` in both appearances. So the
+   loudest "you are here" mark on the page was painted in the colour reserved for the application's
+   own actions — the same ink as the pressed Edit segment and every primary button — a few pixels
+   from a caret that was already vermilion. Two systems marking one spot, and the wrong one won.
+   DESIGN.md's Two Hands Rule is exactly this: everything the human marks takes the hand.
+
+   2px, because that is the width the vocabulary has for a drawn edge (§Shapes): the annotation
+   underline, the focus ring, the active tab's top, the composer's pencil top. 3px was a width this
+   page uses nowhere else. */
 .glosa-run-editor:has(.ProseMirror:focus)::before {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
   left: calc(-1 * var(--space-4));
-  width: 3px;
+  width: 2px;
   border-radius: var(--radius-focus);
-  background: var(--primary);
+  background: var(--focus);
 }
 
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding

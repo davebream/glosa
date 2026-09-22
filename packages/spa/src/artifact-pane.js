@@ -361,6 +361,12 @@ export function createArtifactPane(host, deps) {
    * than no undo. With the caret inside a run, Cmd-Z is ProseMirror's; outside one, it reverts the
    * last committed run from here. */
   let runUndo = [];
+  /** Whether a SAVE is what emptied `runUndo`, rather than there never having been anything in it.
+   *
+   * The difference is the whole point: after a save, Cmd-Z has somewhere to go and the writer needs
+   * telling where. On a document nobody has touched it has nowhere to go and there is nothing worth
+   * saying. */
+  let undoMovedToHistory = false;
   /** The pending debounced write, so a second edit inside the window replaces it rather than
    * queueing a second save. */
   let saveTimer = null;
@@ -447,7 +453,7 @@ export function createArtifactPane(host, deps) {
   const rollbackPoints = new Map();
   let previewItem = null; // the annotation whose passage the pointer is currently over
   let previewCloseTimer = null;
-  let annotatableFocusIndex = 0;
+  let blockTargetFocusIndex = 0;
   let stopClassFViewer = null;
   let classFInteractive = false;
   let approvalBusy = false;
@@ -654,19 +660,50 @@ export function createArtifactPane(host, deps) {
       }),
     ],
   );
-  const annotateInstructions = el("p", {
+  // What Enter does to the focused passage is the whole difference between the two states, so the
+  // sentence that teaches it cannot be one fixed string. `updateBlockTargets` sets it per mode.
+  const BLOCK_TARGET_HELP = {
+    review: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
+    edit: "Use Up and Down arrow keys to move between passages. Press Enter or Space to edit one.",
+  };
+  const blockTargetInstructions = el("p", {
     className: "glosa-visually-hidden",
-    textContent: "Use Up and Down arrow keys to move between passages. Press Enter or Space to annotate.",
     hidden: true,
   });
-  annotateInstructions.id = `glosa-annotate-instructions-${Math.random().toString(36).slice(2, 9)}`;
+  blockTargetInstructions.id = `glosa-block-instructions-${Math.random().toString(36).slice(2, 9)}`;
   const contentEl = el("div", { className: "glosa-content", role: "region", "aria-label": "Artifact preview" });
   const emptyEl = el("div", { className: "glosa-empty", hidden: true, role: "status", "aria-live": "polite" });
   const skeletonEl = el("div", { className: "glosa-skeleton", hidden: true, "aria-hidden": "true" });
   for (let i = 0; i < 8; i++) skeletonEl.append(el("i"));
   const editArea = el("textarea", { className: "glosa-edit-area", hidden: true, "aria-label": "Artifact source" });
   const saveButton = el("button", { className: "glosa-save", type: "button", textContent: "Save" });
-  const editStatus = el("p", { className: "glosa-edit-status", role: "status", "aria-live": "polite" });
+  // What the page says about the write, and it sits under the MANUSCRIPT rather than inside
+  // `editWrap`.
+  //
+  // It lived in the Save row, which `renderArtifact` hides whenever the full-page face is not
+  // showing — so per-block editing, the way a writer normally edits, wrote "Saving…", "Saved." and
+  // every error into a hidden element. `hidden` also takes a node out of the accessibility tree, so
+  // the `aria-live` region announced none of it either. The result was a surface that writes to a
+  // real file and creates an inbox entry an agent acts on, and reports neither that it worked nor
+  // that it did not: a writer whose save failed kept typing into a document they believed was
+  // saved. The tab's unsaved dot says something is pending; nothing said it landed.
+  const editStatus = el("p", {
+    className: "glosa-edit-status",
+    role: "status",
+    "aria-live": "polite",
+    hidden: true,
+  });
+
+  /** The one way this line is written, so "shown" and "says something" cannot come apart.
+   *
+   * Emptying it hides it: a status line is not a slot that is always there and usually blank, it is
+   * a sentence that exists when there is one to say. */
+  function setEditStatus(text, { error = false } = {}) {
+    editStatus.textContent = text;
+    if (error) editStatus.setAttribute("data-error", "true");
+    else editStatus.removeAttribute("data-error");
+    editStatus.hidden = !text;
+  }
   const richEl = el("div", { className: "glosa-rich", hidden: true });
   const faceRichBtn = el("button", { className: "glosa-face-rich", type: "button", textContent: "Rich" });
   const faceSourceBtn = el("button", { className: "glosa-face-source", type: "button", textContent: "Source" });
@@ -678,7 +715,7 @@ export function createArtifactPane(host, deps) {
     el("div", { className: "glosa-edit-topbar" }, [faceToggle]),
     richEl,
     editArea,
-    el("div", { className: "glosa-edit-actions" }, [editStatus, saveButton]),
+    el("div", { className: "glosa-edit-actions" }, [saveButton]),
   ]);
   const classFEl = el("div", {
     className: "glosa-classf",
@@ -738,10 +775,11 @@ export function createArtifactPane(host, deps) {
     approvalStrip,
     diskChangeEl,
     encodingNoticeEl,
-    annotateInstructions,
+    blockTargetInstructions,
     emptyEl,
     skeletonEl,
     contentEl,
+    editStatus,
     provenanceEl,
     classFEl,
     editWrap,
@@ -1410,8 +1448,7 @@ export function createArtifactPane(host, deps) {
         markdown: pendingRichMarkdown ?? markdown,
         onDirty: () => {
           modeState = modeReducer(modeState, { type: "edited" });
-          editStatus.textContent = "";
-          editStatus.removeAttribute("data-error");
+          setEditStatus("");
           onStateChange();
         },
       });
@@ -1560,26 +1597,40 @@ export function createArtifactPane(host, deps) {
 
   // ---------- manuscript ----------
 
-  function updateAnnotatableBlocks() {
-    for (const block of contentEl.querySelectorAll(".glosa-annotatable-block")) {
-      block.classList.remove("glosa-annotatable-block");
+  /** Makes every top-level rendered block a focus target, in whichever state claims the passage.
+   *
+   * BOTH STATES, NOT JUST REVIEW. This was Review-only, and the consequence was that Edit — the
+   * one state that writes the user's files — could not be entered from a keyboard at all. A reader
+   * could tab to the Edit control, press it, and then face a document with no focusable blocks and
+   * no key that opened one; the roving tabindex they had a moment earlier in Review was taken away
+   * by the very switch that was supposed to let them write. Everything inside an open run is
+   * already keyboard-complete (arrows cross the seam, Backspace merges), so the gap was the door,
+   * not the room.
+   *
+   * What Enter means differs — annotate in Review, put a caret in it in Edit — and that belongs in
+   * the keydown handler. The reachability is the same question in both, so it is answered once. */
+  function updateBlockTargets() {
+    for (const block of contentEl.querySelectorAll(".glosa-block-target")) {
+      block.classList.remove("glosa-block-target");
       block.removeAttribute("tabindex");
       block.removeAttribute("aria-describedby");
     }
-    annotateInstructions.hidden = true;
+    blockTargetInstructions.hidden = true;
     contentEl.removeAttribute("aria-describedby");
-    if (loading || modeState.mode !== "review" || !currentArtifact || currentArtifact.class === "F") return;
-    annotateInstructions.hidden = false;
-    contentEl.setAttribute("aria-describedby", annotateInstructions.id);
+    const reachable = modeState.mode === "review" || (modeState.mode === "edit" && runEditingAvailable());
+    if (loading || !reachable || !currentArtifact || currentArtifact.class === "F") return;
+    blockTargetInstructions.textContent = BLOCK_TARGET_HELP[modeState.mode];
+    blockTargetInstructions.hidden = false;
+    contentEl.setAttribute("aria-describedby", blockTargetInstructions.id);
     const blocks = Array.from(contentEl.querySelectorAll(":scope > [data-line]")).filter((block) =>
       block.textContent.trim(),
     );
     const focusedIndex = blocks.indexOf(document.activeElement);
-    if (focusedIndex >= 0) annotatableFocusIndex = focusedIndex;
-    annotatableFocusIndex = Math.min(annotatableFocusIndex, Math.max(0, blocks.length - 1));
+    if (focusedIndex >= 0) blockTargetFocusIndex = focusedIndex;
+    blockTargetFocusIndex = Math.min(blockTargetFocusIndex, Math.max(0, blocks.length - 1));
     for (const [index, block] of blocks.entries()) {
-      block.classList.add("glosa-annotatable-block");
-      block.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+      block.classList.add("glosa-block-target");
+      block.setAttribute("tabindex", index === blockTargetFocusIndex ? "0" : "-1");
     }
   }
 
@@ -1660,6 +1711,23 @@ export function createArtifactPane(host, deps) {
     const address = blockEl.getAttribute("data-address");
     const host = el("div", { className: "glosa-run-editor" });
     if (address) host.setAttribute("data-address", address);
+    // Geometry cancellation, measured rather than guessed. `.glosa-content` spaces its blocks
+    // asymmetrically on purpose — 3rem above an h2 against 0.75rem below it — so a host with one
+    // fixed margin would be right for prose and wrong for everything else, and a tag -> spacing
+    // table here would be a second copy of the manuscript's scale, free to drift from it. Reading
+    // the used values off the element while it is still in flow costs one layout read and cannot
+    // disagree with the stylesheet, because it IS the stylesheet's answer.
+    //
+    // Prose no longer depends on this: app.css gives paragraphs, lists and code blocks a gap on
+    // both edges, so a neighbour holds up its own side of the space whatever happens here. This is
+    // what covers the blocks whose spacing is genuinely their own.
+    const { marginTop, marginBottom } = getComputedStyle(blockEl);
+    host.style.marginBlock = `${marginTop} ${marginBottom}`;
+    // The one thing a margin cannot carry across the swap. A heading closes the gap under itself
+    // through `heading + prose`, and that selector stops matching the instant the heading leaves
+    // the flow — so the paragraph below would spring open by its own leading gap. One flag keeps
+    // the rule matching; the spacing itself still comes from the measurement above.
+    if (/^H[1-6]$/.test(blockEl.tagName)) host.setAttribute("data-heading", "");
     blockEl.replaceWith(host);
     let editor;
     try {
@@ -1876,7 +1944,7 @@ export function createArtifactPane(host, deps) {
     const kit = await loadEditorKit();
     morphArtifactContent(contentEl, kit.renderMarkdown(currentSource()));
     contentEl.setAttribute("data-path", currentArtifact?.source_path ?? "");
-    updateAnnotatableBlocks();
+    updateBlockTargets();
     renderMargin();
     refreshOutline();
     onStateChange();
@@ -1897,7 +1965,16 @@ export function createArtifactPane(host, deps) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      void saveCurrentArtifact({ onlyIfDirty: true });
+      // Caught, not floated. `saveCurrentArtifact` rethrows anything that is not a 409, so a downed
+      // daemon or a file that went read-only left an unhandled rejection and nothing else — no
+      // dialog, no line on the page, and a writer who goes on typing into a document they believe
+      // is on disk. Nobody is awaiting this call, so the catch is the only place it can be said.
+      saveCurrentArtifact({ onlyIfDirty: true }).catch((error) => {
+        setEditStatus(
+          error instanceof Error ? `Couldn't save this passage: ${error.message}` : "Couldn't save this passage.",
+          { error: true },
+        );
+      });
     }, RUN_SAVE_DELAY);
   }
 
@@ -1961,9 +2038,25 @@ export function createArtifactPane(host, deps) {
   });
   contentEl.addEventListener("keydown", (event) => {
     if (!openRun) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "z" && runUndo.length) {
-        event.preventDefault();
-        void undoLastRun();
+      if ((event.metaKey || event.ctrlKey) && event.key === "z" && !event.shiftKey) {
+        if (runUndo.length) {
+          event.preventDefault();
+          void undoLastRun();
+          return;
+        }
+        // Every save empties the stack, about a second after typing stops, and that is correct: the
+        // checkpoint pair the write captured is what reverts a saved run now, and a stack that
+        // outlived its source would splice against moved offsets. What was not correct was saying
+        // nothing about it. The first shortcut a writer reaches for went dead mid-sentence with no
+        // explanation, which reads as a broken key rather than a considered design.
+        //
+        // Only after a save actually took the stack. On a document nobody has edited there is
+        // genuinely nothing to undo, and answering a bare Cmd-Z with a sentence about History would
+        // be noise.
+        if (undoMovedToHistory) {
+          event.preventDefault();
+          setEditStatus("This passage is saved. Use History to go back to an earlier version.");
+        }
       }
       return;
     }
@@ -2027,13 +2120,13 @@ export function createArtifactPane(host, deps) {
     renderApprovalStrip();
 
     if (!currentArtifact) {
-      updateAnnotatableBlocks();
+      updateBlockTargets();
       renderMargin();
       refreshOutline();
       return;
     }
     if (isClassF) {
-      updateAnnotatableBlocks();
+      updateBlockTargets();
       mountClassFArtifact();
       renderMargin();
       // Class F is an iframe glosa deliberately cannot read into, so there is no outline to draw
@@ -2065,7 +2158,7 @@ export function createArtifactPane(host, deps) {
         contentEl.setAttribute("data-path", currentArtifact.source_path);
       }
     }
-    updateAnnotatableBlocks();
+    updateBlockTargets();
     renderMargin();
     refreshOutline();
   }
@@ -3890,8 +3983,7 @@ export function createArtifactPane(host, deps) {
     if (pendingReport && editArea.value !== pendingReport.text) pendingReport = null;
     unsavedFacePath = currentArtifact?.source_path ?? null;
     modeState = modeReducer(modeState, { type: "edited" });
-    editStatus.textContent = "";
-    editStatus.removeAttribute("data-error");
+    setEditStatus("");
     onStateChange();
   });
 
@@ -4008,8 +4100,7 @@ export function createArtifactPane(host, deps) {
    */
   async function writeAndSettle(artifact, content, ifMatch) {
     saveButton.disabled = true;
-    editStatus.removeAttribute("data-error");
-    editStatus.textContent = "Saving…";
+    setEditStatus("Saving…");
     try {
       const saved = await dataAccess.putArtifact(slug, artifact.source_path, content, { ifMatch });
       currentArtifact = { ...artifact, content, ...saved };
@@ -4020,6 +4111,7 @@ export function createArtifactPane(host, deps) {
       // stack goes with it: the checkpoint pair the write captured is what reverts a saved run now,
       // through History, and a stack that outlived its source would splice against moved offsets.
       workingSource = null;
+      undoMovedToHistory = runUndo.length > 0;
       runUndo = [];
       clearParkedSource(); // the parked copy is now behind the file it was parked against
       pendingReport = null;
@@ -4031,18 +4123,19 @@ export function createArtifactPane(host, deps) {
       endEditSession();
       contentEl.removeAttribute("data-path"); // force the next renderContent to repaint from scratch
       teardownRichFace(); // remount the rich face from the freshly saved content
-      editStatus.textContent = "Saved.";
+      setEditStatus("Saved.");
       renderModeBar();
       renderContent();
       onStateChange();
       void refreshHistory?.();
       return currentArtifact;
     } catch (error) {
-      editStatus.setAttribute("data-error", "true");
-      editStatus.textContent =
+      setEditStatus(
         error instanceof Error
           ? `Couldn't save this artifact: ${error.message}`
-          : "Couldn't save this artifact. Try again.";
+          : "Couldn't save this artifact. Try again.",
+        { error: true },
+      );
       throw error;
     } finally {
       saveButton.disabled = false;
@@ -4247,8 +4340,7 @@ export function createArtifactPane(host, deps) {
       return await writeAndSettle(artifact, result.text, fresh.source_sha256);
     } catch (error) {
       if (error?.status === 409) {
-        editStatus.setAttribute("data-error", "true");
-        editStatus.textContent = "Not saved — this file changed again while you were deciding.";
+        setEditStatus("Not saved — this file changed again while you were deciding.", { error: true });
         return SAVE_DECLINED;
       }
       throw error;
@@ -4261,15 +4353,16 @@ export function createArtifactPane(host, deps) {
    * resolve `choiceDialog` to `null` here, so one `if` chain covers all three.
    */
   async function staleSave(artifact) {
-    editStatus.textContent = "Checking what changed…";
+    setEditStatus("Checking what changed…");
     const fresh = await dataAccess.getArtifact(slug, artifact.source_path, { render: "html" });
     // Whatever landed on disk is not decodable any more, so there is no version of this dialog
     // worth opening: every choice in it writes a replacement-character decode back. Take disk
     // would fill the editor from one, and Keep mine would splice onto it as a merge base.
     if (fresh.valid_utf8 === false) {
-      editStatus.setAttribute("data-error", "true");
-      editStatus.textContent =
-        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.";
+      setEditStatus(
+        "Not saved — this file is no longer valid UTF-8 on disk. glosa won't overwrite bytes it can't read.",
+        { error: true },
+      );
       return SAVE_DECLINED;
     }
     const choice = await choiceDialog({
@@ -4314,14 +4407,16 @@ export function createArtifactPane(host, deps) {
     openComposer(record, { returnFocus: returnFocus instanceof HTMLElement ? returnFocus : contentEl });
   });
 
-  // Keyboard-equivalent annotation path: in Annotate mode each top-level rendered block is a
-  // focus target. Enter/Space selects that block and opens the exact same composer as a pointer
-  // selection, so annotation composition never depends on drag-selection alone.
+  // The keyboard equivalent of reaching a passage with the pointer. Each top-level rendered block
+  // is a focus target, and Enter or Space does to the focused one exactly what a click would do:
+  // in Review it selects the block and opens the same composer a drag-selection opens, so
+  // annotating never depends on dragging; in Edit it opens the run editor with the caret in it,
+  // so writing never depends on clicking.
   contentEl.addEventListener("keydown", (event) => {
     const block = event.target;
-    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
-    if (modeState.mode !== "review") return;
-    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-block-target")) return;
+    if (modeState.mode !== "review" && modeState.mode !== "edit") return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-block-target"));
     if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       event.preventDefault();
       const current = Math.max(0, blocks.indexOf(block));
@@ -4331,7 +4426,7 @@ export function createArtifactPane(host, deps) {
           : event.key === "End"
             ? blocks.length - 1
             : Math.min(blocks.length - 1, Math.max(0, current + (event.key === "ArrowDown" ? 1 : -1)));
-      annotatableFocusIndex = next;
+      blockTargetFocusIndex = next;
       for (const [index, candidate] of blocks.entries())
         candidate.setAttribute("tabindex", index === next ? "0" : "-1");
       blocks[next]?.focus();
@@ -4339,6 +4434,12 @@ export function createArtifactPane(host, deps) {
     }
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
+    // No coordinates to hand it: a key names the passage, not a point inside it, so the caret goes
+    // where `focusAt` puts it with nothing to aim at rather than under a pointer that was never here.
+    if (modeState.mode === "edit") {
+      void openRunEditor(block, null);
+      return;
+    }
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     const textNodes = [];
     let textNode = walker.nextNode();
@@ -4360,11 +4461,11 @@ export function createArtifactPane(host, deps) {
 
   contentEl.addEventListener("focusin", (event) => {
     const block = event.target;
-    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-annotatable-block")) return;
-    const blocks = Array.from(contentEl.querySelectorAll(".glosa-annotatable-block"));
-    annotatableFocusIndex = Math.max(0, blocks.indexOf(block));
+    if (!(block instanceof HTMLElement) || !block.classList.contains("glosa-block-target")) return;
+    const blocks = Array.from(contentEl.querySelectorAll(".glosa-block-target"));
+    blockTargetFocusIndex = Math.max(0, blocks.indexOf(block));
     for (const [index, candidate] of blocks.entries())
-      candidate.setAttribute("tabindex", index === annotatableFocusIndex ? "0" : "-1");
+      candidate.setAttribute("tabindex", index === blockTargetFocusIndex ? "0" : "-1");
   });
 
   // §7: `layoutMargin`'s anchor measurement observes the PANE, not the window — a pane changes
@@ -4453,6 +4554,8 @@ export function createArtifactPane(host, deps) {
     await flushRunSave();
     workingSource = null;
     runUndo = [];
+    // A different artifact: the last one's history is not this one's to point at.
+    undoMovedToHistory = false;
     composer = null;
     focusedRequestId = null;
     returnPlace = null;
@@ -4683,7 +4786,7 @@ export function createArtifactPane(host, deps) {
         from = undefined;
       }
       if (!from) {
-        editStatus.textContent = "This artifact has no saved versions to compare with yet.";
+        setEditStatus("This artifact has no saved versions to compare with yet.");
         return;
       }
     }
@@ -4821,9 +4924,9 @@ export function createArtifactPane(host, deps) {
       renderModeBar();
       renderArtifactTools();
       if (modeState.mode === "edit") {
-        editStatus.textContent = next
-          ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes."
-          : "";
+        setEditStatus(
+          next ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes." : "",
+        );
       }
     },
     /** Hide notes / show notes on the one page: the read ↔ review toggle, for commands. */

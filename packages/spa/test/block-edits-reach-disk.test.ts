@@ -140,4 +140,90 @@ describe("a block edit reaches the file", () => {
     pane.destroy();
     expect(await written(da)).toBe("# Title\n\nFirst paragraph, edited by a human.\n\nSecond paragraph.\n");
   });
+
+  // What the page says about the write, and whether anyone can read it.
+  //
+  // The status line held the right words all along — it was inside the Save row, which is hidden
+  // whenever the full-page face is not showing. Per-block editing is the ordinary way to edit, so
+  // "Saved.", every error and the conflict message all went into a hidden element, and `hidden`
+  // takes a node out of the accessibility tree too, so the `aria-live` region announced none of it.
+  // An assertion on `textContent` alone would have passed throughout the defect; what has to be
+  // asserted is that nothing between the line and the document is hiding it.
+  const readable = (node: any): boolean => {
+    for (let el = node; el && el !== dom.document.body; el = el.parentElement) if (el.hidden) return false;
+    return Boolean(node);
+  };
+  /** Real wall-clock, for the same reason `written` is: the save is behind a coalescing timer, and
+   * the line is only written when that timer fires. */
+  const statusSays = async (host: any, needle: string) => {
+    const text = () => q(host, ".glosa-edit-status")?.textContent ?? "";
+    for (let i = 0; i < 80 && !text().includes(needle); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    return q(host, ".glosa-edit-status");
+  };
+
+  test("a saved passage says so where the writer can actually see it", async () => {
+    const da = fakeDataAccess();
+    const { host } = await mountPane(da);
+    await editBlock(host, 2, "First paragraph, edited by a human.");
+    await written(da);
+    const status = await statusSays(host, "Saved");
+    expect(status?.textContent).toContain("Saved");
+    expect(readable(status), "the save confirmation is inside a hidden element").toBe(true);
+    // And it is a live region, so it is announced rather than merely present.
+    expect(status.getAttribute("aria-live")).toBe("polite");
+  });
+
+  test("a write that fails says so, rather than failing silently into a hidden node", async () => {
+    const da = fakeDataAccess();
+    da.putArtifact = async () => {
+      throw new Error("daemon is not listening");
+    };
+    const { host } = await mountPane(da);
+    await editBlock(host, 2, "First paragraph, edited by a human.");
+    const status = await statusSays(host, "Couldn't save");
+    // The reason, not just the fact: a writer who cannot see WHY cannot tell a crashed daemon from
+    // a file that went read-only.
+    expect(status?.textContent).toContain("daemon is not listening");
+    expect(readable(status), "the failure is inside a hidden element").toBe(true);
+    expect(status.getAttribute("data-error")).toBe("true");
+  });
+
+  test("the line is absent while there is nothing to say, rather than sitting empty under the page", async () => {
+    const { host } = await mountPane(fakeDataAccess());
+    expect(readable(q(host, ".glosa-edit-status"))).toBe(false);
+  });
+
+  // Undo after the save has taken the stack.
+  //
+  // Every write empties `runUndo`, roughly a second after typing stops, and that is right — the
+  // checkpoint pair the write captured is what reverts a saved run, and a stack that outlived its
+  // source would splice against moved offsets. What was wrong is that nothing said so, so the first
+  // shortcut a writer reaches for went dead mid-sentence and read as a broken key.
+  const pressUndo = (host: any) =>
+    q(host, ".glosa-content").dispatchEvent(
+      new dom.window.KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }),
+    );
+
+  test("Cmd-Z after a save says where undo went instead of doing nothing", async () => {
+    const da = fakeDataAccess();
+    const { host } = await mountPane(da);
+    await editBlock(host, 2, "First paragraph, edited by a human.");
+    await written(da);
+    await statusSays(host, "Saved");
+
+    pressUndo(host);
+    await paint();
+    const status = q(host, ".glosa-edit-status");
+    expect(status?.textContent).toContain("History");
+    expect(readable(status)).toBe(true);
+  });
+
+  test("Cmd-Z on a document nobody has edited says nothing, because there is nothing to say", async () => {
+    // The flag earns its place here: without it the sentence would fire on any bare Cmd-Z, which is
+    // noise rather than help — there is no earlier version of an untouched passage to go back to.
+    const { host } = await mountPane(fakeDataAccess());
+    pressUndo(host);
+    await paint();
+    expect(readable(q(host, ".glosa-edit-status"))).toBe(false);
+  });
 });

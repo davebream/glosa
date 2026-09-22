@@ -1101,7 +1101,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     // Each pane owns its own instructions node, so the id is per pane rather than global — six
     // open artifacts must not share one element id.
     const instructions = activePane(root).querySelector(".glosa-visually-hidden[id]");
-    expect(instructions.id).toStartWith("glosa-annotate-instructions-");
+    expect(instructions.id).toStartWith("glosa-block-instructions-");
     expect(content.getAttribute("aria-describedby")).toBe(instructions.id);
     heading.focus();
     heading.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
