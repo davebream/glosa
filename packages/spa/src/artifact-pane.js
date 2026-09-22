@@ -2462,7 +2462,9 @@ export function createArtifactPane(host, deps) {
       if (item.id) await dataAccess.withdrawAnnotation(slug, item.id);
     } catch (err) {
       if (err?.status !== 404 && err?.status !== 409) {
-        item.state = "waiting";
+        // The note is exactly where it was: a Clear or a Remove that did not reach the daemon
+        // changed nothing. This used to set `waiting`, which turned a finished note back into an
+        // open one, hollow dot and Edit button included, because a request failed.
         item.error = failureLabel;
         renderMargin();
         return;
@@ -3815,7 +3817,8 @@ export function createArtifactPane(host, deps) {
           type: "button",
           textContent: settled ? "Clear" : "Remove",
           "aria-label": settled ? "Clear this annotation from the list" : "Remove this annotation",
-          onClick: () => void removeAnnotation(item),
+          // A failure says the verb the reader pressed.
+          onClick: () => void removeAnnotation(item, settled ? { failureLabel: "Couldn't clear — try again" } : {}),
         }),
       );
       stateRow.append(actionGroup);
@@ -4614,6 +4617,15 @@ export function createArtifactPane(host, deps) {
   observer?.observe(paneEl);
   paneWidth = paneEl.clientWidth;
 
+  // Card heights depend on the faces. The rail is laid out from painted heights, and a pane that
+  // rendered its notes before Source Serif and Source Sans arrived placed them with the fallback's
+  // metrics: every card that grew when the real face landed then overlapped the one under it.
+  // Nothing about the pane's width changes when a font loads, so the observer above never fires.
+  function onFontsLoaded() {
+    if (!destroyed) layoutMargin();
+  }
+  document.fonts?.addEventListener?.("loadingdone", onFontsLoaded);
+
   /** A new pane width. Crossing the rail floor changes WHERE the cards live (the rail beside their
    * passages, or the collection tray), which only renderMargin decides; a width that stays on the
    * same side of the floor only needs the cards re-aligned. Re-laying out alone left a pane that
@@ -5118,6 +5130,7 @@ export function createArtifactPane(host, deps) {
     confirmClose: () => confirmDiscard(),
     destroy() {
       destroyed = true;
+      document.fonts?.removeEventListener?.("loadingdone", onFontsLoaded);
       // Best effort, and the last chance this pane gets: a pending write outlives the element it
       // was typed into or it does not survive at all.
       void flushRunSave();

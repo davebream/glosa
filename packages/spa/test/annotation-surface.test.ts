@@ -957,4 +957,41 @@ describe("the annotation surface", () => {
     expect(openLine.hasAttribute("data-settled")).toBe(false);
     expect(q(open, ".glosa-annotation-state [role=status]").textContent).toBe("Sent to session · nudged ×4");
   });
+
+  test("a Clear that does not reach the daemon leaves a finished note finished", async () => {
+    const da = fakeDataAccess({
+      ...listing({ ...noteOn(PLAIN, "gamma delta"), id: "inb-1", status: "applied" }),
+      ...serving(RENDERED),
+      async withdrawAnnotation() {
+        throw Object.assign(new Error("offline"), { status: 503 });
+      },
+    });
+    const { host } = await mountPane(da);
+    q(host, ".glosa-annotation-remove").click();
+    await paint();
+
+    const card = q(host, ".glosa-annotation");
+    expect(card.getAttribute("data-state")).toBe("applied");
+    expect(q(card, ".glosa-annotation-state [role=status]").textContent).toBe("Couldn't clear — try again");
+    expect(q(card, ".glosa-annotation-edit")).toBeNull();
+  });
+
+  test("the rail is laid out again when the page's fonts finish loading", async () => {
+    // happy-dom has no FontFaceSet; an EventTarget is the part of it the pane listens to.
+    const fonts = new dom.window.EventTarget();
+    Object.defineProperty(dom.document, "fonts", { configurable: true, value: fonts });
+    await atRailWidth(async () => {
+      const da = fakeDataAccess({
+        ...listing({ ...noteOn(PLAIN, "gamma delta"), status: "delivered" }),
+        ...serving(RENDERED),
+      });
+      const { host } = await mountPane(da);
+      const card = q(host, ".glosa-margin .glosa-annotation");
+      expect(card.style.top).toMatch(/^\d+px$/);
+
+      card.style.top = "";
+      fonts.dispatchEvent(new dom.window.Event("loadingdone"));
+      expect(card.style.top).toMatch(/^\d+px$/);
+    });
+  });
 });
