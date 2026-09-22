@@ -170,14 +170,18 @@ generic.**
   non-terminal entries as explicitly provenance-marked target aliases. The new directory bus is
   the sole live writer. One daemon-scoped coordinator serializes the complete adoption transaction
   per target; ordinary target routes return `409 workspace-adopting` until publication commits. A
-  target with pre-existing state or a live source apply lease fails closed; the implementation never
+  target with pre-existing state or a live claim on a source fails closed; the implementation never
   recursively moves or deletes source state (A4/A5).
 
 ### R2 — session registry & routing  (detail: A2 §F08, A5 §F19)
 - Providers register live agent sessions through their push transport at session start, MCP activity
   (first tool call), or explicit binding → daemon API (never direct file writes; serialized by the
   daemon → no lost entries). Record: `{session_id, provider, workspace_binding, cwd,
-  transcript_path, source, last_active_at, lease_expiry}`. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls or an open
+  transcript_path, source, last_active_at, lease_expiry, principal}`. `principal` (issue #155) is the
+  human/token behind the session — `token:` plus eight hex digits of the bearer's sha256, derived by
+  the daemon, never supplied by the caller — while `session_id` is the participant: two agents under
+  one human are two sessions and one principal, and conflicts are reported per session. It is
+  reporting only, never an input to attribution or authorization. Liveness = **unexpired 60-second lease**, refreshed by MCP tool calls or an open
   session transport connection every 20 seconds (never `kill(pid,0)`). Closing a connection stops
   refreshes; it does not end the lease immediately. `source` is `monitor`, `codex-app-server`,
   `mcp`, or `cli` (explicit bind), or `manual` for an explicit bind that sends none; there are no
@@ -204,10 +208,12 @@ generic.**
   line — no cross-file atomic write exists (this is the F04 fix); dismiss is the human path that
   closes an entry whose inbox payload has gone missing, without needing a session, reconciling the
   count `doctor`/`status` name as orphaned. Startup reconciliation: torn-tail truncate → replay → inbox self-heal →
-  apply-lease reconcile → offline-edit catch-up. Corrupt interior line → quarantine, never fatal.
+  claim reconcile (TTL-lapsed claims expire, naming their holder) → offline-edit catch-up on every
+  path no live claim covers. A daemon-lifetime sweeper also expires, every 30 s, claims whose TTL
+  lapsed or whose holder session has been stale for two minutes. Corrupt interior line → quarantine, never fatal.
 - Journal, inbox, quarantine, declarative metadata/config, reconciliation state, checkpoints, and
   shadow Git resolve through the registration's absolute bus path. Redirection changes storage
-  location only; journal replay and apply-lease evidence retain unchanged authority.
+  location only; journal replay and claim evidence retain unchanged authority.
 - Entry kinds: `human_edit`, `annotation`, `attention_request`, `conversation_message`, `external_edit`. Envelope + payloads exactly per A4/A5
   (`human_edit` = inline hunk diffs referenced by shadow-git sha, never full bodies; `external_edit`
   = a tracked artifact that changed on disk with nothing to attribute it to, one entry per artifact
@@ -236,16 +242,26 @@ generic.**
 - **Lifecycle** is a state machine with delivery kept as a *separate axis* (A5 §F23): `delivery_attempt`
   events never change status; re-nudging a `delivered` entry emits attempts, not transitions. Full
   transition table + single writer per event in A5.
-- **Provenance / attribution (honest)**: agent edits are bracketed by an explicit **apply-lease**
-  (`glosa apply-begin` → pre-checkpoint; `glosa resolve` → post-checkpoint; the proven `pre..post` diff
-  → `session:<id>`). Edits made in glosa's own editor → `human` by construction. **Every other
-  watcher-observed write → `unknown`, never falsely `human`.** Attribution rides in git commit trailers
-  (A4 §F05/§F21). That last case is what `external_edit` names in the inbox, so the honest `unknown`
-  in storage is the same answer the reader and the agent are given — the two used to disagree, with
-  drift hunks reaching delivery labelled `human_edit`. A drift-capturing checkpoint is never taken
-  while an apply-lease is held: because checkpointing is idempotent, one taken mid-lease would become
-  the lease's own `post_sha` and make the journal credit a session for a commit trailered `unknown`.
-  The lease's `pre..post` pair brackets that interval instead.
+- **Provenance / attribution (honest)**: agent edits are bracketed by an explicit **exclusive claim**
+  over the entry or file (`glosa apply-begin` / `glosa claim` → pre-checkpoint of the claimed paths;
+  `glosa resolve` → post-checkpoint of the same paths; the proven `pre..post` diff → `session:<id>`).
+  Claims are per resource (issue #155): two sessions on two different files get two disjoint
+  intervals, and a second session over the same file is told who holds it. Edits made in glosa's own
+  editor → `human` by construction. **Every other watcher-observed write → `unknown`, never falsely
+  `human`.** Attribution rides in git commit trailers (A4 §F05/§F21). That last case is what
+  `external_edit` names in the inbox, so the honest `unknown` in storage is the same answer the reader
+  and the agent are given — the two used to disagree, with drift hunks reaching delivery labelled
+  `human_edit`. A drift-capturing checkpoint never stages a path a live claim covers: because
+  checkpointing is idempotent, one taken mid-claim would become the claim's own `post_sha` and make the
+  journal credit a session for a commit trailered `unknown`. The claim's `pre..post` pair brackets that
+  interval instead, and a foreign commit found inside it makes the interval `unknown`.
+- **The human wins** (issue #155). A person is never blocked by an agent's claim. An editor save over
+  a claimed file with the holder's edits still on disk releases the claim `by:"human"`, records those
+  edits as `unknown`, and then saves — the reviewer is credited with what they typed, the holder with
+  nothing, and the holder's later `resolve` is told the claim was revoked. A human `dismiss` over a
+  claimed entry releases the claim the same way. A claim ends when resolved, released, past its TTL
+  (15 min exclusive, 5 min presence), or once its session has been stale for two minutes; every ending
+  names the holder in the journal.
 
 ### R4 — delivery: provider-based, cmux-free  (detail: A2 §F06/§F07/§F16)
 Delivery is per-agent-provider, selecting the best injection point that provider offers. Durable inbox
@@ -315,7 +331,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   origin-scoped browser credential (shared by every tab on that origin, so they all unpair together),
   and return to the unpaired screen; `glosa open` is the documented re-pairing path, and one such open
   re-pairs every tab on the origin. Mutation failures preserve the prior credential state. Token commands never print token material.
-- Versioned route catalog (contract v1.16: `/api/handshake` plus workspace routes including metadata,
+- Versioned route catalog (contract v1.17: `/api/handshake` plus workspace routes including metadata,
   explicit session binding, artifact list/content,
   streaming SSE with journal-offset cursor + reconnect replay, annotations, diff, checkpoints/restore
   (full history), transcript stream, inbox/attention, the opt-in held `external_edit` watch and its
@@ -343,7 +359,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   one Notes toggle. **Edit** is a deliberate state of that same page (modify source, save →
   re-render), entered with one Edit action and left with Done, which returns to whichever view was
   left; the page itself scrolls, so the reader's place survives entering and leaving it. Edit is
-  paused while the workspace's apply lease is held by a session, and a draft already open is kept.
+  paused on a file while a session holds an exclusive claim over it, and a draft already open is kept.
   The three state names stay on the wire (`mode=` links, `glosa open`, `glosa_present`); a link or
   command that names no mode opens Review, and a read lock pins Read with no Notes or Edit control.
   With several artifacts open, the state belongs to the PANE: only the focused pane exposes a mode
@@ -470,7 +486,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   `forget <workspace> [--yes]` (the one supported whole-bus deletion primitive: removes a
   workspace's registration, journal, inbox, and shadow-git history — including any historical
   loose-file source sealed into it by adoption — while never touching work-tree files; refuses
-  first on a live bound session, an unexpired apply lease, or an in-progress adoption, naming the
+  first on a live bound session, a live claim (naming its holder), or an in-progress adoption, naming the
   blocker (mutually exclusive with adoption in both directions), previews exact paths before an
   interactive consent prompt, proves confinement for the whole deletion set before any durable
   marker or destructive step, resumes cleanly if interrupted mid-deletion, and is named explicitly
@@ -522,7 +538,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
   shutdown (A5 §F13); full R5 auth (Host/Origin/Bearer/capability, `confinePath`); versioned route
   skeleton + `X-Contract-Version`. Gate: lifecycle + auth + attack-suite (A3 §5) unit/integration tests.
 - **T1b — file bus & provenance**: inbox/journal(=truth)/replay/reconciliation (A4 §F04); picomatch
-  matcher (A4 §F20); shadow-git + apply-lease attribution (A4 §F05/§F21); global workspace index +
+  matcher (A4 §F20); shadow-git + claim attribution (A4 §F05/§F21); global workspace index +
   registry (A5 §F19). Gate: every lifecycle transition + crash-recovery (fault injection at each write
   boundary) + concurrency (two sessions/one cwd, duplicate resolve) + routing incl. parked-drain.
 - **T2a — pin the Codex integration contract** (research sub-task, BEFORE the Codex provider build):
@@ -591,7 +607,7 @@ the entry survives. The ladder is **`push → mcp_pull`**; there are no hook run
 - **A1** api-transport — HTTP contract, streaming-SSE, cursors/resync, capability URLs, versioning.
 - **A2** claude-code-integration — plugin monitor, MCP fallback, registry, transcript tailer.
 - **A3** security — two-origin split, CSP, MessageChannel bridge, token lifecycle, confinePath, Host/Origin table, attack→test matrix.
-- **A4** filebus-concurrency — journal-as-truth durability, apply-lease attribution, shadow-git mechanics, picomatch matcher, slug.
+- **A4** filebus-concurrency — journal-as-truth durability, per-resource claim attribution, shadow-git mechanics, picomatch matcher, slug.
 - **A5** daemon-architecture — daemon lifecycle, workspace index, lifecycle state-transition table, anchoring resolution contract.
 - **A6** cli-platform — command surface, exit codes, install surface, platform pins, checkpoint/restore, terminology.
 

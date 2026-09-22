@@ -298,6 +298,34 @@ async function registerAndStream(
         superseded = true;
         continue;
       }
+      if (event === "signal") {
+        // Issue #155: a notice about claims around this session — above all, that a person took
+        // over a file it was editing. Printed as its own `[glosa signal <id>]` line and acknowledged
+        // with the token only this session's frame carries. Never fatal to the stream: a signal
+        // that fails to print or acknowledge stays pending and is re-sent on the next connection.
+        if (failure) continue;
+        const signalData = frame.match(/^data:\s*(.+)$/m)?.[1];
+        if (!signalData) continue;
+        try {
+          const notice = JSON.parse(signalData) as { id: string; kind: string; message: string; ack_token: string };
+          await writeLine(deps.stdout, `[glosa signal ${notice.id}] ${notice.kind}: ${notice.message}`);
+          await authedRequest(
+            connection,
+            {
+              path: `/api/sessions/${encodeURIComponent(options.sessionId)}/signals/${encodeURIComponent(notice.id)}/ack`,
+              method: "POST",
+              extraHeaders: { "X-Contract-Version": PROTOCOL_VERSION },
+              body: JSON.stringify({ ack_token: notice.ack_token }),
+              signal,
+            },
+            home,
+            deps.fetch,
+          );
+        } catch {
+          // See above: pending, not lost.
+        }
+        continue;
+      }
       if (event !== "delivery" || failure) continue;
       const data = frame.match(/^data:\s*(.+)$/m)?.[1];
       if (!data) continue;

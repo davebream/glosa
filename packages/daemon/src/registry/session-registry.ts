@@ -18,6 +18,9 @@ export interface SessionRecord {
   source: string;
   last_active_at: string;
   lease_expiry: string;
+  /** The principal that registered this session (issue #155 REQ-9) — see `principalOf`. Reporting
+   * only: never an input to attribution or authorization. */
+  principal?: string;
 }
 
 export type RegisterInput = Omit<SessionRecord, "last_active_at" | "lease_expiry"> &

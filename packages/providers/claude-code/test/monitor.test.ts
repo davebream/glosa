@@ -317,6 +317,75 @@ describe("Claude plugin monitor", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
+  test("issue #155: a signal frame prints one `[glosa signal <id>]` line and acknowledges it with its own token; an unknown frame is still ignored", async () => {
+    const home = mkdtempSync(join(tmpdir(), "glosa-monitor-signal-"));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-signal-project-")));
+    seedWorkspace(home, project);
+    withFakeGlobalFetch(seedFakeDaemon(home));
+
+    const abort = new AbortController();
+    const printed: string[] = [];
+    const posts: Array<{ href: string; body: string }> = [];
+    const signal = {
+      id: "sig-1",
+      kind: "conflict",
+      workspace: project,
+      resources: ["entry:e1"],
+      claim_id: "C1",
+      message: "a person took over entry:e1: your claim C1 was released.",
+      created_at: "2026-09-22T12:00:00.000Z",
+      expires_at: "2026-09-22T12:15:00.000Z",
+      ack_token: "token-for-session-1",
+    };
+    const deps: MonitorDeps = {
+      home: () => home,
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const href = input.toString();
+        if (href.endsWith("/api/sessions/register")) {
+          return new Response(JSON.stringify({ session_id: "session-1", workspace: project }), { status: 200 });
+        }
+        if (href.endsWith("/stream")) {
+          return streamResponse([
+            sseFrame("someday-a-new-kind", { ignored: true }),
+            sseFrame("signal", signal),
+            sseFrame("delivery", ENTRY),
+          ]);
+        }
+        if (href.includes("/signals/") || href.endsWith("/transport-ack")) {
+          posts.push({ href, body: String(init?.body ?? "") });
+          return new Response(JSON.stringify({ acked: true }), { status: 200 });
+        }
+        throw new Error(`unexpected fetch ${href}`);
+      }) as unknown as typeof fetch,
+      stdout: {
+        write: (chunk, callback) => {
+          printed.push(String(chunk));
+          callback();
+          return true;
+        },
+      },
+      random: () => 0,
+      sleep: async (_ms, sleepSignal) => {
+        if (!sleepSignal.aborted) abort.abort();
+      },
+      waitForWorkspaceChange: async () => {},
+      now: () => 0,
+    };
+    await runClaudeMonitor({ sessionId: "session-1", projectDir: project }, deps, abort.signal);
+
+    const lines = printed.join("").trim().split("\n");
+    expect(lines).toEqual([
+      "[glosa signal sig-1] conflict: a person took over entry:e1: your claim C1 was released.",
+      `[glosa entry-1] ${JSON.stringify(ENTRY)}`,
+    ]);
+    const signalAcks = posts.filter((post) => post.href.includes("/signals/"));
+    expect(signalAcks).toHaveLength(1);
+    expect(signalAcks[0]?.href).toEndWith("/api/sessions/session-1/signals/sig-1/ack");
+    expect(JSON.parse(signalAcks[0]!.body)).toEqual({ ack_token: "token-for-session-1" });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(project, { recursive: true, force: true });
+  });
+
   test("superseded parks without reconnecting; a connected probe keeps it parked; a free probe reconnects (#206)", async () => {
     const home = mkdtempSync(join(tmpdir(), "glosa-monitor-park-"));
     const project = realpathSync(mkdtempSync(join(tmpdir(), "glosa-monitor-park-project-")));

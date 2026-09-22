@@ -72,9 +72,22 @@ export type ProblemSlug =
   // slot for — the slug is still named here so the vocabulary of possible `type` values is
   // documented in one place regardless of which helper builds the response.
   | "restore-conflict"
-  // P5.1 addition — `POST /api/workspaces/apply-begin` (A4 §F05 / A6 §F26 exit 12
-  // `lease_conflict`): a second apply-begin while one is already active for this workspace.
-  | "lease-conflict"
+  // Issue #155 — claims. Every refusal on the claim/resolve path says WHO and WHY in extension
+  // members (RFC 9457 §3.2), so a second session can act on it instead of guessing:
+  //   claim-held        another session holds an exclusive claim over these paths (holder inline)
+  //   claim-revoked     the caller's claim was released — by a human, or by its holder
+  //   claim-expired     the caller's claim ran out, by TTL or because its session went stale
+  //   claim-superseded  the caller's claim ended because the resource moved on without it
+  //   entry-resolved    the entry is already closed (`terminal_by` says by whom)
+  //   no-claim          the caller holds no claim that could prove this resolve
+  //   claim-limit       a per-session or per-workspace bound on live claims was reached
+  | "claim-held"
+  | "claim-revoked"
+  | "claim-expired"
+  | "claim-superseded"
+  | "entry-resolved"
+  | "no-claim"
+  | "claim-limit"
   // Adoption is a workspace-routing conflict, not a generic server failure. Kept distinct so
   // callers can safely retry a live lease hand-off while treating existing local state as final.
   | "adoption-blocked"
@@ -100,11 +113,6 @@ export type ProblemSlug =
   // Named separately so the SPA can open the stale-save dialog on exactly this condition, never on
   // the unrelated `workspace-adopting` 409 that can also reach this route.
   | "source-changed"
-  // #182 R5 addition — `PUT /w/:slug/artifacts/:path`'s honest pre-save boundary
-  // (`captureHumanEdit`, bus.ts): an active apply-lease plus pending drift on this exact path.
-  // Distinct from `lease-conflict` (that one's about a SECOND apply-begin); this route's own
-  // refusal is about a SAVE arriving while a lease already holds the workspace.
-  | "drift-under-lease"
   // #250 addition — `PUT /w/:slug/artifacts/:path` against a file whose bytes are not valid UTF-8.
   // Named separately from `source-changed` because the two demand opposite things of the SPA: a
   // stale save opens the merge dialog, and this one must never, since every choice there writes a
@@ -124,12 +132,21 @@ export type ProblemSlug =
   | "dictation-invalid-response"
   | "dictation-provider-unavailable";
 
+/** Extension members (RFC 9457 §3.2): names of at least three characters from `[A-Za-z0-9_]`, and
+ * a client that does not know one ignores it — which is what makes adding them to an existing
+ * problem type a compatible change. They can never overwrite a standard member. */
+export type ProblemExtensions = Readonly<Record<string, unknown>>;
+
+const EXTENSION_NAME = /^[A-Za-z0-9_]{3,}$/;
+const STANDARD_MEMBERS: ReadonlySet<string> = new Set(["type", "title", "status", "detail", "instance"]);
+
 export function problem(
   status: number,
   slug: ProblemSlug,
   title: string,
   detail?: string,
   instance?: string,
+  extensions?: ProblemExtensions,
 ): Response {
   const body: Record<string, unknown> = {
     type: `https://glosa.local/errors/${slug}`,
@@ -138,6 +155,12 @@ export function problem(
   };
   if (detail !== undefined) body.detail = detail;
   if (instance !== undefined) body.instance = instance;
+  for (const [name, value] of Object.entries(extensions ?? {})) {
+    if (!EXTENSION_NAME.test(name) || STANDARD_MEMBERS.has(name)) {
+      throw new Error(`problem(): ${JSON.stringify(name)} is not a legal RFC 9457 extension member name`);
+    }
+    body[name] = value;
+  }
   // Built by hand rather than Response.json() — that helper stamps its own Content-Type before
   // init.headers is applied, and the problem+json media type must not be silently overridden.
   return new Response(JSON.stringify(body), {

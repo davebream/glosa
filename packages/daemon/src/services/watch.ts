@@ -5,7 +5,7 @@
 // (not folded into attention.ts) because a watch is not an attention concept — it shares only the
 // wait SHAPE (subscribe-then-recheck, timer, abort), not any attention-specific state.
 import type { DeliverableEntry } from "../agent-provider/interface.ts";
-import type { WorkspaceBus } from "../bus/bus.ts";
+import type { DeliveryBuilder, WorkspaceBus } from "../bus/bus.ts";
 import { type EntryWaitDeps, MAX_ENTRY_WAIT_MS, realEntryWaitDeps } from "./attention.ts";
 
 export { MAX_ENTRY_WAIT_MS };
@@ -20,11 +20,7 @@ export interface WatchWaitResult extends WatchPreview {
   waited: boolean;
 }
 
-export type WatchPresentationBuilder = (
-  id: string,
-  payload: unknown,
-  status: string,
-) => DeliverableEntry | null | Promise<DeliverableEntry | null>;
+export type WatchPresentationBuilder = DeliveryBuilder;
 
 /**
  * Resolves when the watch cursor (`bus.previewWatch`) has at least one entry for `session`, when

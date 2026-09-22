@@ -50,6 +50,14 @@ export async function externalEditPayloads(
   return payloads;
 }
 
+/** Checkpoint kinds that capture drift nobody can be credited for, and that therefore owe an
+ * `external_edit` entry naming them. */
+export const DRIFT_CHECKPOINT_KINDS: ReadonlySet<string> = new Set([
+  EXTERNAL_EDIT_CHECKPOINT_KIND,
+  "claim_expired",
+  "claim_released",
+]);
+
 export interface DriftCommit {
   sha: string;
   /** The checkpoint this commit's changes are measured against. Empty only for a root commit,
@@ -74,12 +82,12 @@ export interface DriftCommit {
  * reported one, in which case the whole history is walked; that costs one `git log` spawn at
  * startup and stops happening the moment a first entry is emitted).
  *
- * Only `EXTERNAL_EDIT_CHECKPOINT_KIND` commits qualify, and the exclusions are what keep this from
- * re-reporting glosa's own work: `baseline` captures what was on disk before glosa was watching,
- * `pre_apply`/`post_apply`/`apply_expired` belong to a lease's own interval, and
- * `human_edit`/`restore` are `human` by construction. No producer writes an `auto_checkpoint`
- * commit while a lease is held — both the watcher and offline catch-up defer entirely — so no
- * lease-window commit can reach this scan by that kind either. */
+ * Only the drift-capturing kinds in `DRIFT_CHECKPOINT_KINDS` qualify, and the exclusions are what
+ * keep this from re-reporting glosa's own work: `baseline` captures what was on disk before glosa
+ * was watching, `pre_apply`/`post_apply`/`apply_expired` belong to a claim's own interval, and
+ * `human_edit`/`restore` are `human` by construction. `claim_expired`/`claim_released` are the
+ * abandoned interval of a claim that ended without a resolve (issue #155) — reported inline as
+ * `external_edit` exactly like a watcher capture, and so exposed to exactly the same crash gap. */
 export async function unreportedDriftCommits(
   workspace: WorkspaceTarget,
   frontier: string | null,
@@ -139,7 +147,7 @@ export async function unreportedDriftCommits(
     if (sha.length === 0 || reported.has(sha)) continue;
     const parent = parents.split(" ").filter(Boolean)[0];
     if (!parent) continue; // root commit == the baseline; it reports the starting point, not a change
-    if (kinds.trim() !== EXTERNAL_EDIT_CHECKPOINT_KIND) continue;
+    if (!DRIFT_CHECKPOINT_KINDS.has(kinds.trim())) continue;
     commits.push({ sha, parent });
   }
   return commits;

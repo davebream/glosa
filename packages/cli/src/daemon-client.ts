@@ -31,6 +31,8 @@ export interface DrainResult {
   drained: DrainedEntry[];
   count: number;
   has_more?: boolean;
+  /** Contract 1.17 (issue #155): this session's pending signals; absent when there are none. */
+  signals?: StreamSignalFrame[];
 }
 
 /** The one `via` `POST /api/sessions/:id/drain` accepts (A5 §F23): the route only ever surfaces an
@@ -78,6 +80,19 @@ export type SessionStreamEnd = { ended: "superseded" | "eof" };
  * genuine handling error on a stream that stays healthy. */
 export const SESSION_STREAM_FAILURE_DEADLINE_MS = 12_000;
 
+/** An `event: signal` frame (issue #155). `ack_token` is present only in the addressee's own frame. */
+export interface StreamSignalFrame {
+  id: string;
+  kind: "conflict" | "info";
+  workspace: string;
+  resources: string[];
+  claim_id?: string;
+  message: string;
+  created_at: string;
+  expires_at: string;
+  ack_token: string;
+}
+
 export interface DaemonClient {
   register(input: RegisterSessionInput): Promise<RegisterSessionResult>;
   heartbeat(sessionId: string): Promise<void>;
@@ -97,7 +112,12 @@ export interface DaemonClient {
     onEntry: (entry: DrainedEntry) => Promise<void>,
     signal: AbortSignal,
     onOpen?: () => void,
+    /** Contract 1.17 (issue #155): `event: signal` frames. Optional — a caller without it keeps
+     * skipping them, exactly as an older client does. A throw here never ends the stream. */
+    onSignal?: (frame: StreamSignalFrame) => Promise<void>,
   ): Promise<SessionStreamEnd>;
+  /** Contract 1.17 (issue #155): the addressee acknowledges one signal with its own token. */
+  acknowledgeSignal?(sessionId: string, signalId: string, ackToken: string): Promise<void>;
   /** `GET /api/sessions/:id/stream/status` (#206) — the parked client's ownership probe. Never
    * registers, heartbeats, or holds a lease; an unknown session id is a legitimate `connected:false`
    * answer, not an error. */
@@ -214,13 +234,18 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
         outcome,
       });
     },
+    async acknowledgeSignal(sessionId, signalId, ackToken) {
+      await call(`/api/sessions/${encodeURIComponent(sessionId)}/signals/${encodeURIComponent(signalId)}/ack`, {
+        ack_token: ackToken,
+      });
+    },
     async acknowledgeStreamTransport(sessionId, entryId) {
       await call(
         `/api/sessions/${encodeURIComponent(sessionId)}/stream/${encodeURIComponent(entryId)}/transport-ack`,
         {},
       );
     },
-    async openSessionStream(sessionId, transport, onEntry, signal, onOpen) {
+    async openSessionStream(sessionId, transport, onEntry, signal, onOpen, onSignal) {
       // The Bearer crosses once, here, in the request that opens the stream; the reader loop
       // below sends no header at all. Every write its handler makes — each per-entry
       // `transport-ack`, each `ack` — is a separate `call()` and is authenticated separately.
@@ -279,6 +304,17 @@ export async function createHttpDaemonClient(options: HttpDaemonClientOptions = 
           const event = frame.match(/^event:\s*(.+)$/m)?.[1];
           if (event === "superseded") {
             superseded = true;
+            continue;
+          }
+          if (event === "signal") {
+            const signalData = frame.match(/^data:\s*(.+)$/m)?.[1];
+            if (!onSignal || failure || !signalData) continue;
+            try {
+              await onSignal(JSON.parse(signalData) as StreamSignalFrame);
+            } catch {
+              // A signal that fails to reach the session stays pending and is re-sent on reconnect;
+              // it never costs the entry stream.
+            }
             continue;
           }
           if (event !== "delivery" || failure) continue;

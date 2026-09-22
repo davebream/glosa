@@ -353,6 +353,12 @@ export function createArtifactPane(host, deps) {
   /** The active apply lease the workbench last heard about, or null. While a session holds one,
    * Edit is paused (see renderModeBar). */
   let applyPause = null;
+  // Issue #155: entry id → "who is applying it", for the cards of notes an agent has claimed.
+  let claimsByEntry = new Map();
+  /** Who the pause is for, in the words the workbench chose (never a guessed name). */
+  function pauseWho() {
+    return applyPause?.who ?? "A session";
+  }
   /** The page's scroll position when Edit was entered or left, restored once the new face mounts,
    * so switching states keeps the reader's place instead of jumping to the top. */
   let pendingScrollTop = null;
@@ -1078,7 +1084,9 @@ export function createArtifactPane(host, deps) {
     const editable = available && canEdit(currentArtifact) && !readLock;
     editSourceButton.hidden = !editable;
     editSourceButton.disabled = Boolean(applyPause) && !fullPageEditor;
-    editSourceButton.title = editSourceButton.disabled ? "A session is applying a change. Edit when it finishes." : "";
+    editSourceButton.title = editSourceButton.disabled
+      ? `${pauseWho()} is applying a change. Edit when it finishes.`
+      : "";
     const leaving = fullPageEditor;
     editSourceButton.querySelector("span").textContent = leaving ? "Done editing source" : "Edit source";
     editSourceButton.setAttribute(
@@ -1374,7 +1382,7 @@ export function createArtifactPane(host, deps) {
         edit.setAttribute("data-control", "edit");
         if (applyPause && !editing) {
           edit.disabled = true;
-          edit.title = "A session is applying a change. Edit when it finishes.";
+          edit.title = `${pauseWho()} is applying a change. Edit when it finishes.`;
         }
         modeBar.append(edit);
       }
@@ -3773,6 +3781,10 @@ export function createArtifactPane(host, deps) {
       }),
       el("span", { className: "glosa-annotation-intent", textContent: intentLabel }),
     ]);
+    // Issue #155: an agent session has claimed this note's entry. "You" above stays the author —
+    // the note is still the reader's — and this line says who is acting on it.
+    const holder = item.id ? claimsByEntry.get(item.id) : undefined;
+    if (holder) stateRow.append(el("span", { className: "glosa-annotation-holder", textContent: holder }));
     if (actions) {
       // The verbs sit in their own group so the state and intent read as one metadata run and the
       // actions as another, instead of "Change the words Edit Remove" running together.
@@ -5054,8 +5066,22 @@ export function createArtifactPane(host, deps) {
     },
     getMode: () => modeState.mode,
     setMode,
-    /** The workbench's view of the workspace's apply lease: an object while a session holds one,
-     * null once it ends or expires. Pauses Edit; a draft already open is kept and told why. */
+    /** Issue #155: the live claims covering this file, each with the sentence naming its holder.
+     * Cards of notes whose entry is claimed say who is applying them. */
+    setClaims(claims) {
+      const next = new Map();
+      for (const claim of claims ?? []) {
+        for (const resource of claim.resources ?? []) {
+          if (typeof resource === "string" && resource.startsWith("entry:")) next.set(resource.slice(6), claim.label);
+        }
+      }
+      const unchanged =
+        next.size === claimsByEntry.size && [...next].every(([id, label]) => claimsByEntry.get(id) === label);
+      claimsByEntry = next;
+      if (!unchanged && currentArtifact) renderMargin();
+    },
+    /** The workbench's view of the exclusive claim over this file: an object while a session holds
+     * one, null once it ends or expires. Pauses Edit; a draft already open is kept and told why. */
     setApplyPause(lease) {
       const next = lease ?? null;
       if ((applyPause === null) === (next === null)) {
@@ -5067,7 +5093,7 @@ export function createArtifactPane(host, deps) {
       renderArtifactTools();
       if (modeState.mode === "edit") {
         setEditStatus(
-          next ? "A session is applying a change to this workspace. Your draft is kept; save when it finishes." : "",
+          next ? `${pauseWho()} is applying a change here. Your draft is kept; save when it finishes.` : "",
         );
       }
     },

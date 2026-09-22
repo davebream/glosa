@@ -8,7 +8,15 @@ import { timedHooks } from "../../../../test/phase-timing.ts";
 const { beforeEach, afterEach } = timedHooks("packages/daemon/test/git/shadow.test.ts");
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkpoint, headSha, indexLockPath, initShadowRepo, reclaimIndexLock, runGit } from "../../src/git/shadow.ts";
+import {
+  checkpoint,
+  diffShas,
+  headSha,
+  indexLockPath,
+  initShadowRepo,
+  reclaimIndexLock,
+  runGit,
+} from "../../src/git/shadow.ts";
 import { journalPath, shadowGitDir } from "../../src/bus/paths.ts";
 import {
   claimTestDaemonIdentity,
@@ -441,6 +449,80 @@ describe("delete/rename staging (A4 §F21 union staging)", () => {
     expect(diff.stdout).toContain("rename");
     expect(diff.stdout).toContain("old-name.md");
     expect(diff.stdout).toContain("new-name.md");
+  });
+
+  test("diffShas scoped to paths keeps a rename paired when EITHER side is claimed, and drops unclaimed files", async () => {
+    // Issue #155: a claim's interval is read back scoped to its paths. Passing those paths to git
+    // as a pathspec would hide the unclaimed half of a rename and turn it into a bare "new file";
+    // the filter runs over the full `-M` diff instead. Ablating the pre-image half of the match
+    // reds the first assertion; passing `paths` through as a pathspec reds the `rename from` one.
+    const body = "same content, long enough for git's rename heuristic to notice ".repeat(5);
+    writeFile(root, "old-name.md", body);
+    writeFile(root, "other.md", "other v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    const before = await headSha(root);
+
+    rmSync(`${root}/old-name.md`);
+    writeFile(root, "new-name.md", body);
+    writeFile(root, "other.md", "other v2");
+    const after = await checkpoint(root, { attribution: "unknown", kind: "auto_checkpoint" });
+
+    const byPre = await diffShas(root, before, after, ["old-name.md"]);
+    expect(byPre).toContain("rename from old-name.md");
+    expect(byPre).toContain("rename to new-name.md");
+    expect(byPre).not.toContain("other.md");
+    const byPost = await diffShas(root, before, after, ["new-name.md"]);
+    expect(byPost).toBe(byPre);
+    expect(await diffShas(root, before, after, ["other.md"])).toContain("+other v2");
+    expect(await diffShas(root, before, after, ["unclaimed.md"])).toBe("");
+    // Unscoped is unchanged: every file.
+    const all = await diffShas(root, before, after);
+    expect(all).toContain("rename from old-name.md");
+    expect(all).toContain("+other v2");
+  });
+});
+
+describe("checkpoint — a scoped path that does not exist yet (issue #155)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = freshWorkspace();
+  });
+  afterEach(() => {
+    cleanupWorkspace(root);
+  });
+
+  test("a path on neither disk nor HEAD is skipped instead of failing the checkpoint; real paths beside it still commit", async () => {
+    // A claim over an entry whose artifact has not been written yet scopes its checkpoints to that
+    // path. `git add` exits 128 on an unmatched pathspec, so without the filter the claim itself
+    // fails. Ablating the filter reds both halves.
+    writeFile(root, "notes.md", "v1");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    const head = await headSha(root);
+
+    expect(await checkpoint(root, { attribution: "unknown", kind: "pre_apply", paths: ["not-yet.md"] })).toBe(head);
+
+    writeFile(root, "notes.md", "v2");
+    const next = await checkpoint(root, {
+      attribution: "unknown",
+      kind: "pre_apply",
+      paths: ["not-yet.md", "notes.md"],
+    });
+    expect(next).not.toBe(head);
+    expect((await runGit(root, ["show", "--name-only", "--format=", next])).stdout.trim()).toBe("notes.md");
+  });
+
+  test("a scoped path deleted from disk but recorded in HEAD still stages the deletion", async () => {
+    writeFile(root, "gone.md", "here");
+    const writer = testWriter(root);
+    await initShadowRepo(root, { writer, ulid: deterministicUlid(), now: deterministicClock() });
+    writer.close();
+    rmSync(`${root}/gone.md`);
+    const sha = await checkpoint(root, { attribution: "unknown", kind: "claim_expired", paths: ["gone.md"] });
+    expect((await runGit(root, ["ls-tree", "-r", "--name-only", sha])).stdout).not.toContain("gone.md");
   });
 });
 
