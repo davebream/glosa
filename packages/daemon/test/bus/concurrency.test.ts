@@ -296,8 +296,9 @@ describe("claims — two sessions, one workspace (issue #155 AC-1)", () => {
     cleanupWorkspace(root);
   });
 
-  // PR 2 of #155 adds the signals rail; this is the half of AC-1.6 it completes.
-  test.todo("a human dismiss over A's claim delivers A a `conflict` signal naming what happened (AC-1.6)", () => {});
+  // The other half of this step, A receiving a `conflict` signal, lands with the signals rail
+  // (#155's second half). It is not a `test.todo` here: the CI runner fails a partition on any
+  // skipped test.
 
   for (const order of ["resolve first", "dismiss first"] as const) {
     test(`resolve and dismiss racing on one entry (${order}): exactly one terminal transition, and the loser is told ENTRY_RESOLVED`, async () => {
