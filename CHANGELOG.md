@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Passage numbers no longer run off the edge of a narrow pane.** In a window 640px wide or less,
+  the page's side margins were cut from 2rem to 1rem. The margins are where the page's marks sit:
+  the § addresses and a session's tab on the left, the note dots on the right. So the addresses
+  landed past the pane's edge and showed as a stray digit. The margins now keep their full width,
+  and the title and section headings shrink with the pane, so a short title no longer breaks into
+  three lines of display type. Two other fixes land at the foot of the page. The provenance line
+  under it now spans the same width as the text, where before it sat in a narrower column set in
+  from both edges. And when the notes tray is showing, the page's last line scrolls clear of it.
+- **The folder and file name above the page read as one path again.** For a file one folder deep,
+  the folder name sat higher than the file name, and a gap after its slash split the path in two.
 - **A note now reaches a running session as soon as you write it, instead of up to a minute later.**
   The connection a Claude Code session holds open for notes was closed by the daemon's local socket
   after ten seconds of quiet, every time. The session reconnected, waited longer after each close,
