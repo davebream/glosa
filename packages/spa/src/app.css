@@ -3458,16 +3458,28 @@ input,
 }
 
 /* Drawn the way a session's band is drawn — out of flow, so the words do not move by a pixel when
-   it appears. It sits in the gutter the manuscript's measure already leaves, never over the text. */
+   it appears. It sits in the gutter the manuscript's measure already leaves, never over the text.
+
+   `--focus`, which is the hand, not `--primary`, which is the ink. The comment above this block has
+   said since #275 that an open block is the passage the writer's own hand is on and so takes the
+   hand; the declaration said `--primary`, and `--primary` is `--ink` in both appearances. So the
+   loudest "you are here" mark on the page was painted in the colour reserved for the application's
+   own actions — the same ink as the pressed Edit segment and every primary button — a few pixels
+   from a caret that was already vermilion. Two systems marking one spot, and the wrong one won.
+   DESIGN.md's Two Hands Rule is exactly this: everything the human marks takes the hand.
+
+   2px, because that is the width the vocabulary has for a drawn edge (§Shapes): the annotation
+   underline, the focus ring, the active tab's top, the composer's pencil top. 3px was a width this
+   page uses nowhere else. */
 .glosa-run-editor:has(.ProseMirror:focus)::before {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
   left: calc(-1 * var(--space-4));
-  width: 3px;
+  width: 2px;
   border-radius: var(--radius-focus);
-  background: var(--primary);
+  background: var(--focus);
 }
 
 /* The editing page itself: same measure and serif voice as Preview, minus its outer padding
