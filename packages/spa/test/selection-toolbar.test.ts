@@ -78,6 +78,54 @@ describe("the selection toolbar", () => {
     expect(selectionToolbarShows({ empty: true }, false)).toBe(false);
   });
 
+  // Reaching the actions without a pointer. Every button bound `mousedown` and nothing else, and the
+  // keymap bound Bold and Italic against eleven actions — so a writer who could not use a pointer
+  // could type prose and make no heading, no list, no quote and no code.
+  test("every action carries a shortcut, and says what it is", async () => {
+    const { host } = mount();
+    const buttons = [...bar(host).querySelectorAll("button")];
+    // Stated over every button rather than for a chosen few: a twelfth action added without a key
+    // has to fail here, which a list of specific names would not catch.
+    for (const button of buttons as any[]) {
+      const name = button.getAttribute("aria-label");
+      expect(button.getAttribute("aria-keyshortcuts"), `${name} announces no shortcut`).toBeTruthy();
+      expect(button.title, `${name} does not teach its shortcut`).toContain("(");
+    }
+    const byName = (name: string) => (buttons as any[]).find((b) => b.getAttribute("aria-label") === name);
+    // The two spellings, checked on one action each: the glyphs a writer reads, and the key names
+    // the ARIA attribute is specified to carry.
+    expect(byName("Bold").getAttribute("aria-keyshortcuts")).toBe("Meta+B");
+    expect(byName("Bold").title).toBe("Bold (⌘B)");
+    expect(byName("Strikethrough").getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+X");
+    expect(byName("Heading 2").title).toBe("Heading 2 (⌘⌥2)");
+  });
+
+  // Blockquote rather than Bold for both of these: a mark needs a real selection to change any
+  // bytes, and happy-dom cannot make one. `wrapIn` acts on a bare caret and NESTS when it runs
+  // twice, so "did this run, and did it run once" are both readable straight off the markdown.
+  const quoteButton = (host: any) =>
+    [...bar(host).querySelectorAll("button")].find((b: any) => b.getAttribute("aria-label") === "Blockquote") as any;
+
+  test("a click with no pointer behind it applies the action, so the buttons are not mouse-only", async () => {
+    const { host, editor } = mount("plain words");
+    // `detail: 0` is a click with no click count: Enter or Space on a focused button, and the
+    // synthetic clicks voice control and switch access send. Every button bound `mousedown` alone,
+    // so this arrived and did nothing.
+    quoteButton(host).dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 0 }));
+    await paint();
+    expect(editor.getMarkdown().trim()).toBe("> plain words");
+  });
+
+  test("a real press still applies it exactly once", async () => {
+    const { host, editor } = mount("plain words");
+    // The full pointer sequence. `mousedown` runs it; the `click` that follows must not run it
+    // again, or a writer asking for one quote gets two.
+    quoteButton(host).dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true }));
+    quoteButton(host).dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, detail: 1 }));
+    await paint();
+    expect(editor.getMarkdown().trim()).toBe("> plain words");
+  });
+
   test("the full-page editor is unaffected — it keeps its own fixed toolbar and grows no second one", async () => {
     const host = dom.document.createElement("div");
     dom.document.body.append(host);

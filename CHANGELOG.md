@@ -15,6 +15,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   "Lost its place" — each until a mode toggle, a new note or a reload happened to rebuild the
   margin. The card is now worked out in the same pass as the marks beside it, and the passage
   number on it follows the page when a session adds or removes a block above it.
+- **Editing can now be done from the keyboard.** Pressing Edit gave you a document with nothing to
+  tab to and no key that opened a passage, so the one state that writes your files could be entered
+  and then not used at all. Up and Down step between passages there now, as they already did with
+  notes shown, and Enter or Space opens the one you are on. The formatting actions were reachable
+  only with a pointer too: every button ignored Enter and Space, and only bold and italic had a
+  shortcut. All eleven have one now, each announced and shown in the button's tooltip.
+- **A passage no longer swallows the blank line below it while you write in it.** Clicking a
+  paragraph closed the gap under it, so it and the paragraph beneath ran together as one while the
+  caret was in them; clicking a heading moved the heading out from under the pointer that opened it.
+  The page now stays exactly where it was when a passage becomes editable, which is what it was
+  always meant to do.
+- **A save now says whether it worked.** "Saved.", and every reason a write could fail — including
+  the file changing underneath you — were written into a part of the page that is hidden while you
+  edit a passage in place, which is the ordinary way to edit. Nothing was shown and nothing was
+  announced, so a write that failed looked exactly like one that worked. The line now sits under the
+  manuscript where the rest of the page's statements about your file are.
+- **Undo says where it went.** Saving clears what Cmd-Z can reverse, because going further back is
+  History's job — but nothing said so, so the key simply stopped working a second after you stopped
+  typing. It now points at History instead of doing nothing, and stays quiet on a passage you have
+  not touched.
+- **The passage you are writing in is marked in your own colour.** The rule beside an open passage
+  was drawn in the ink the application uses for its own buttons rather than the vermilion that means
+  you, a few pixels from a caret that was already vermilion. It is now the same mark as everything
+  else you make on the page, at the width the page draws its other edges.
 
 ## [0.1.0-alpha.30] — 2026-09-22
 

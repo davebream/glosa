@@ -1422,12 +1422,26 @@ function markdownInputRules(schema) {
   return inputRules({ rules });
 }
 
+/** Every formatting action the toolbar offers, bound to a key as well.
+ *
+ * Built FROM `toolbarActions` rather than beside it, so the two cannot disagree: adding a button
+ * without a shortcut, or a shortcut for a command the toolbar no longer runs, would both have to be
+ * a deliberate edit to one list rather than a silent drift between two. Bold and italic were the
+ * only two ever bound, against eleven actions — so a writer who could not use a pointer could type
+ * prose and make no heading, no list, no quote and no code, on the surface that writes their files.
+ */
 function editorKeymap(schema) {
+  const fromToolbar = Object.fromEntries(
+    toolbarActions(schema)
+      .filter((action) => action.key)
+      .map((action) => [action.key, (state, dispatch, view) => action.command()(state, dispatch, view)]),
+  );
   return {
+    ...fromToolbar,
+    // After the spread, so a toolbar action can never quietly take a key the editor needs for
+    // history or for list structure.
     "Mod-z": undo,
     "Shift-Mod-z": redo,
-    "Mod-b": toggleMark(schema.marks.strong),
-    "Mod-i": toggleMark(schema.marks.em),
     Enter: splitListItem(schema.nodes.list_item),
     Tab: sinkListItem(schema.nodes.list_item),
     "Shift-Tab": liftListItem(schema.nodes.list_item),
@@ -1446,6 +1460,7 @@ function toolbarActions(schema) {
     {
       label: "B",
       aria: "Bold",
+      key: "Mod-b",
       command: () => toggleMark(schema.marks.strong),
       active: markActive(schema.marks.strong),
       className: "glosa-rich-b",
@@ -1453,6 +1468,7 @@ function toolbarActions(schema) {
     {
       label: "I",
       aria: "Italic",
+      key: "Mod-i",
       command: () => toggleMark(schema.marks.em),
       active: markActive(schema.marks.em),
       className: "glosa-rich-i",
@@ -1460,6 +1476,7 @@ function toolbarActions(schema) {
     {
       label: "S",
       aria: "Strikethrough",
+      key: "Mod-Shift-x",
       command: () => toggleMark(schema.marks[STRIKETHROUGH_MARK]),
       active: markActive(schema.marks[STRIKETHROUGH_MARK]),
       className: "glosa-rich-s",
@@ -1467,18 +1484,55 @@ function toolbarActions(schema) {
     {
       label: "Code",
       aria: "Inline code",
+      key: "Mod-e",
       command: () => toggleMark(schema.marks.code),
       active: markActive(schema.marks.code),
     },
-    { label: "H1", aria: "Heading 1", command: () => setBlockType(schema.nodes.heading, { level: 1 }) },
-    { label: "H2", aria: "Heading 2", command: () => setBlockType(schema.nodes.heading, { level: 2 }) },
-    { label: "H3", aria: "Heading 3", command: () => setBlockType(schema.nodes.heading, { level: 3 }) },
-    { label: "¶", aria: "Paragraph", command: () => setBlockType(schema.nodes.paragraph) },
-    { label: "• List", aria: "Bullet list", command: () => wrapInList(schema.nodes.bullet_list) },
-    { label: "1. List", aria: "Numbered list", command: () => wrapInList(schema.nodes.ordered_list) },
-    { label: "Quote", aria: "Blockquote", command: () => wrapIn(schema.nodes.blockquote) },
+    {
+      label: "H1",
+      aria: "Heading 1",
+      key: "Mod-Alt-1",
+      command: () => setBlockType(schema.nodes.heading, { level: 1 }),
+    },
+    {
+      label: "H2",
+      aria: "Heading 2",
+      key: "Mod-Alt-2",
+      command: () => setBlockType(schema.nodes.heading, { level: 2 }),
+    },
+    {
+      label: "H3",
+      aria: "Heading 3",
+      key: "Mod-Alt-3",
+      command: () => setBlockType(schema.nodes.heading, { level: 3 }),
+    },
+    { label: "¶", aria: "Paragraph", key: "Mod-Alt-0", command: () => setBlockType(schema.nodes.paragraph) },
+    { label: "• List", aria: "Bullet list", key: "Mod-Shift-8", command: () => wrapInList(schema.nodes.bullet_list) },
+    {
+      label: "1. List",
+      aria: "Numbered list",
+      key: "Mod-Shift-9",
+      command: () => wrapInList(schema.nodes.ordered_list),
+    },
+    { label: "Quote", aria: "Blockquote", key: "Mod-Shift-.", command: () => wrapIn(schema.nodes.blockquote) },
   ];
 }
+
+/** The two spellings of a shortcut: the one a writer reads, and the one a screen reader announces.
+ *
+ * macOS-only v1 (A6 §F30), so `Mod` is the command key and can be drawn as one. */
+const SHORTCUT_GLYPHS = { Mod: "⌘", Shift: "⇧", Alt: "⌥", Ctrl: "⌃" };
+const SHORTCUT_ARIA = { Mod: "Meta", Shift: "Shift", Alt: "Alt", Ctrl: "Control" };
+const shortcutLabel = (key) =>
+  key
+    .split("-")
+    .map((part) => SHORTCUT_GLYPHS[part] ?? part.toUpperCase())
+    .join("");
+const shortcutAria = (key) =>
+  key
+    .split("-")
+    .map((part) => SHORTCUT_ARIA[part] ?? part.toUpperCase())
+    .join("+");
 
 /** What a floating toolbar over a selection may carry.
  *
@@ -1591,13 +1645,31 @@ function mountSelectionToolbar(view, container, actions) {
     button.textContent = action.label;
     if (action.className) button.classList.add(action.className);
     button.setAttribute("aria-label", action.aria);
-    button.title = action.aria;
+    // The name stays the action; the shortcut is announced through the attribute that exists for
+    // it, and drawn in the tooltip so the toolbar teaches the key rather than replacing it.
+    if (action.key) {
+      button.setAttribute("aria-keyshortcuts", shortcutAria(action.key));
+      button.title = `${action.aria} (${shortcutLabel(action.key)})`;
+    } else {
+      button.title = action.aria;
+    }
+    const run = () => {
+      action.command()(view.state, view.dispatch, view);
+      view.focus();
+    };
     // mousedown, not click, and the default prevented: a click would blur the editor first, which
     // both drops the selection the action is ABOUT and closes the run the writer is still in.
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
-      action.command()(view.state, view.dispatch, view);
-      view.focus();
+      run();
+    });
+    // And click as well, for the activations that never send a mousedown at all: Enter or Space on
+    // a focused button, and the synthetic clicks voice control and switch access send. `detail` is
+    // the click count, which is 0 for exactly those and non-zero for a real press — so the pointer
+    // path above is not run twice, which on a toggle would undo itself and look like a dead button.
+    button.addEventListener("click", (event) => {
+      if (event.detail !== 0) return;
+      run();
     });
     bar.append(button);
     return { button, action };
