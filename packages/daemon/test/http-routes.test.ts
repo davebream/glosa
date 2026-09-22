@@ -2681,6 +2681,22 @@ describe("A1 §5 route catalog", () => {
       expect(all.claims.map((claim: { mode: string }) => claim.mode).sort()).toEqual(["exclusive", "presence"]);
     });
 
+    test("GET /w/:slug/claims is the SPA's read of the same list, by slug with no path parameter (part 2)", async () => {
+      await seeded();
+      const taken = await (
+        await post("/api/workspaces/claims", { path: root, session: "A", resources: ["entry:e1"] })
+      ).json();
+      const res = await fetchFn(req(`/w/${slug}/claims`));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.claims).toHaveLength(1);
+      expect(body.claims[0]).toMatchObject({ claim_id: taken.claim_id, holder_session: "A", mode: "exclusive" });
+      expect(JSON.stringify(body)).not.toContain(root);
+
+      const unknown = await fetchFn(req("/w/no-such-workspace/claims"));
+      expect(unknown.status).toBe(404);
+    });
+
     test("claim body validation → 400 before any bus work", async () => {
       await seeded();
       for (const body of [

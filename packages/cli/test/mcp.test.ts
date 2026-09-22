@@ -268,7 +268,7 @@ describe("official TypeScript MCP SDK contract", () => {
     expect(response.result.protocolVersion).toBe("2025-06-18");
   });
 
-  test("tools/list is SDK-generated from the twelve Zod registrations", async () => {
+  test("tools/list is SDK-generated from the thirteen Zod registrations", async () => {
     const connected = await connect(deps(new FakeDaemonClient()));
     try {
       const tools = (await connected.client.listTools()).tools;
@@ -308,7 +308,7 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(byName.get("glosa_metadata_clear")?.annotations?.destructiveHint).toBe(true);
       // Issue #155: claiming and releasing change daemon state but destroy nothing, and repeating
       // either is harmless (a repeat claim renews; a repeat release reports released:false).
-      for (const name of ["glosa_claim", "glosa_release"]) {
+      for (const name of ["glosa_claim", "glosa_release", "glosa_signal_ack"]) {
         expect(byName.get(name)?.annotations).toMatchObject({
           readOnlyHint: false,
           destructiveHint: false,
@@ -454,6 +454,7 @@ describe("official TypeScript MCP SDK contract", () => {
         // Issue #155: one agent can never claim or release in another's name through this process.
         ["glosa_claim", { resources: ["entry:e-1"], session_id: "other-session" }],
         ["glosa_release", { claim_id: "c-1", session_id: "other-session" }],
+        ["glosa_signal_ack", { signal_id: "sig-1", ack_token: "t", session_id: "other-session" }],
       ] as const) {
         const result = await callTool(connected.client, { name, arguments: args });
         expect(result.isError).toBe(true);
@@ -526,6 +527,45 @@ describe("official TypeScript MCP SDK contract", () => {
       expect(refused.content).toEqual([
         expect.objectContaining({ type: "text", text: expect.stringContaining("sess-A") }),
       ]);
+    } finally {
+      await connected.close();
+    }
+  });
+
+  test("glosa_inbox_pull carries the session's signals beside its entries, and glosa_signal_ack acknowledges one as the host session", async () => {
+    const hook = new FakeDaemonClient();
+    const signal = {
+      id: "sig-1",
+      kind: "conflict" as const,
+      workspace: "/repo",
+      resources: ["entry:e1"],
+      claim_id: "C1",
+      message: "a person took over entry:e1.",
+      created_at: "2026-09-22T12:00:00.000Z",
+      expires_at: "2026-09-22T12:15:00.000Z",
+      ack_token: "tok-1",
+    };
+    hook.drained = { ...hook.drained, signals: [signal] };
+    const acked: unknown[][] = [];
+    (hook as unknown as { acknowledgeSignal: DaemonClient["acknowledgeSignal"] }).acknowledgeSignal = async (...args) =>
+      void acked.push(args);
+    const connected = await connect({ ...deps(hook), sessionId: () => "host-session" });
+    try {
+      const pulled = await callTool(connected.client, { name: "glosa_inbox_pull", arguments: {} });
+      expect(pulled.isError).not.toBe(true);
+      expect((pulled.structuredContent as { signals?: unknown[] }).signals).toEqual([signal]);
+      expect(pulled.content).toContainEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("[glosa signal sig-1] conflict: a person took over entry:e1."),
+        }),
+      );
+
+      const ack = await callTool(connected.client, {
+        name: "glosa_signal_ack",
+        arguments: { signal_id: "sig-1", ack_token: "tok-1" },
+      });
+      expect(ack.isError).not.toBe(true);
+      expect(acked).toEqual([["host-session", "sig-1", "tok-1"]]);
     } finally {
       await connected.close();
     }

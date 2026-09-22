@@ -645,6 +645,10 @@ expires_at}], tombstones:[{resource, claim_id, holder_session, fence, ended_at, 
 are always `entry:`/`artifact:<relative>` strings, never an absolute path. `artifact` narrows to claims
 covering that file.
 
+**`GET /w/:slug/claims[?artifact=<relative>]`** (authed read) — the SPA's read of the same list,
+addressed by slug with no `path` parameter; same body. The workbench reads it when a workspace opens
+and on stream reconnect, then follows `claim_*` journal frames. **404** for an unknown slug.
+
 **Changes to existing routes in 1.17:**
 - `POST /api/workspaces/apply-begin` is an alias for an exclusive claim on `entry:<id>`: **201**
   `{entry, lease_id, pre_sha, fence, expires_at}`; the same session again → **200** with `renewed:true`
@@ -662,6 +666,39 @@ covering that file.
 - Delivered presentations (§5.15) may carry `claims:[{session, principal, mode, since, fence}]`.
 - `GET /api/workspaces/inbox` rows carry `holder` — the session holding a live claim, or `null`.
 - `GET /api/status` session rows carry `principal` (reporting only).
+
+### 5.11g Signals (contract 1.17, issue #155)
+A signal is a short notice telling one agent session what happened to the claims around it. They are
+derived from claim events as the journal appends them, held in memory for 15 minutes, and lost on
+restart. The journal event that caused each signal stays the durable record; nothing about a signal
+is ever written back to the journal.
+
+| Journal event | Addressee | Kind |
+|---|---|---|
+| `claim_released` with `by:"human"` | the holder | `conflict`: a person took the files over |
+| `claim_expired` | the holder | `info`, naming the reason |
+| `claim_taken`, `claim_released` | every other session routed to the workspace | `info` |
+
+Nobody is told about their own action, and the holder of a human-released claim gets the `conflict`
+only. Every record has exactly one addressee: "every other session" is resolved to the sessions
+routed to the workspace (R2 `forWorkspace`) when the event is appended. At most 64 records are kept
+per session, and when the cap is reached the oldest is dropped.
+
+A signal reaches its session in three ways: as an `event: signal` frame on the session stream (§5.16,
+sent live, and on connect for anything still unacknowledged); as `signals[]` on a drain response; and
+from MCP `glosa_inbox_pull`. The frame is:
+```json
+{ "id": "sig-…", "kind": "conflict", "workspace": "<canonical path>", "resources": ["entry:inb-…"],
+  "claim_id": "01J…", "message": "a person took over entry:inb-…: …", "created_at": "…",
+  "expires_at": "…", "ack_token": "<32 hex>" }
+```
+`ack_token` appears only in the addressee's own copy.
+
+**`POST /api/sessions/:id/signals/:signal_id/ack`** `{ack_token}` (Bearer + Origin) → **200**
+`{signal_id, acked:true}`, with `already:true` added on a repeat. **404 not-found** when the signal does
+not exist, has expired, is addressed to another session, or the token does not match. These cases
+are indistinguishable by design, so the route reveals nothing about another session's signals.
+**400 validation-failed** when `ack_token` is missing. An acknowledged signal is no longer offered.
 
 ### 5.12 `POST /w/:slug/session-binding`
 Bearer required, Origin-gated. Registers or refreshes a session and explicitly binds it to the artifact workspace. This
@@ -753,6 +790,13 @@ adds the canonical absolute `workspace` path to each structured presentation and
 `workspace: <path>` to its agent-visible text; both the label and separator count inside those
 existing byte caps. Same-major N/N-1 client schemas continue to accept its absence from a 1.5 daemon.
 
+A drain response (contract 1.17, issue #155) also carries `signals[]`: the session's unacknowledged
+signals (§5.11g), oldest first, at most eight and 8 KiB. That budget is separate from the entry
+caps and outside them, so a signal never displaces an entry. The field is present only when there is
+at least one signal, so a drain with nothing to report is byte-identical to one from before signals
+existed. A drain does not acknowledge a signal. It is offered again until the addressee acks it or
+it expires.
+
 An explicitly bound session prepares and acknowledges only its exact workspace. For an unbound
 session, the daemon enumerates every present, active workspace for which the R2 `forWorkspace`
 predicate includes that session, without selecting one descendant. It first plans candidates without
@@ -805,6 +849,12 @@ Channel-era `GET /api/sessions/:id/push-stream` and `POST /api/sessions/:id/conv
 routes are removed (#152): a conversation message reaches its session through the same stream or
 through MCP pull, and `presented` comes from `glosa_delivery_ack` or the pull's own acknowledgement.
 `POST /api/sessions/:id/drain` accepts only `via:"mcp_pull"`; any other value is **400**.
+
+The same stream also carries `event: signal` frames (contract 1.17, issue #155), whose data is one
+signal addressed to this session (§5.11g). They carry no `id:` line and share the stream's single
+writer with deliveries, so the two never interleave. On connect the stream first sends every
+unacknowledged signal for the session, oldest first, then follows new ones live. A client that does
+not recognise the event ignores it, as it ignores any non-`delivery` event.
 
 #### Replacement and ownership (contract 1.9, issue #206)
 

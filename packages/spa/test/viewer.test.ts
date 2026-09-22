@@ -1358,6 +1358,153 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(activePane(root).getAttribute("data-mode")).toBe("read");
   });
 
+  test("issue #155: an open workspace hydrates its claims once, names the holder on the tab and in the pause, and forgets a released claim", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let hydrations = 0;
+    const since = new Date(Date.now() - 60_000).toISOString();
+    const base = fakeDataAccess();
+    const da = fakeDataAccess({
+      getStatus: async () => ({
+        ...(await (base.getStatus as () => Promise<Record<string, unknown>>)()),
+        sessions: [
+          {
+            session_id: "sess-A-1234567890",
+            provider: "claude-code",
+            workspace_binding: "/tmp/ws-1",
+            liveness: "alive",
+            last_active_at: new Date().toISOString(),
+          },
+        ],
+      }),
+      getClaims: async () => {
+        hydrations += 1;
+        return {
+          claims: [
+            {
+              claim_id: "C1",
+              resources: ["entry:inb-9"],
+              artifacts: ["artifact:notes.md"],
+              mode: "exclusive",
+              holder_session: "sess-A-1234567890",
+              holder_principal: "token:0123abcd",
+              fence: 1,
+              since,
+              expires_at: new Date(Date.now() + 600_000).toISOString(),
+            },
+          ],
+          tombstones: [],
+        };
+      },
+    });
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(hydrations).toBe(1);
+    const badge = root.querySelector(".glosa-tab-claim") as any;
+    expect(badge).not.toBeNull();
+    expect(badge.getAttribute("data-mode")).toBe("exclusive");
+    // Named from the explicit binding — the provider's own word for itself — never guessed.
+    expect(badge.getAttribute("aria-label")).toMatch(/^Claude Code · session sess-A-1 · editing since \d\d:\d\d$/);
+    const edit = inPane(root, ".glosa-tools-edit-source");
+    expect(edit.disabled).toBe(true);
+    expect(edit.title).toBe("Claude Code (session sess-A-1) is applying a change. Edit when it finishes.");
+
+    da.stream.handlers?.onEvent?.({
+      event: "journal",
+      data: { event: "claim_released", detail: { claim_id: "C1", by: "human", holder_session: "sess-A-1234567890" } },
+    });
+    expect(root.querySelector(".glosa-tab-claim")).toBeNull();
+    expect(inPane(root, ".glosa-tools-edit-source").disabled).toBe(false);
+  });
+
+  test("issue #155: a badge drawn before the connection data arrives is re-described with the provider's name once it does", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const base = fakeDataAccess();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const da = fakeDataAccess({
+      getStatus: async () => {
+        await gate;
+        return {
+          ...(await (base.getStatus as () => Promise<Record<string, unknown>>)()),
+          sessions: [
+            {
+              session_id: "sess-A-1234567890",
+              provider: "claude-code",
+              workspace_binding: "/tmp/ws-1",
+              liveness: "alive",
+              last_active_at: new Date().toISOString(),
+            },
+          ],
+        };
+      },
+      getClaims: async () => ({
+        claims: [
+          {
+            claim_id: "C1",
+            resources: ["artifact:notes.md"],
+            artifacts: ["artifact:notes.md"],
+            mode: "exclusive",
+            holder_session: "sess-A-1234567890",
+            since: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 600_000).toISOString(),
+          },
+        ],
+        tombstones: [],
+      }),
+    });
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect((root.querySelector(".glosa-tab-claim") as any).getAttribute("aria-label")).toStartWith(
+      "An agent session · ",
+    );
+
+    release();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect((root.querySelector(".glosa-tab-claim") as any).getAttribute("aria-label")).toStartWith(
+      "Claude Code · session sess-A-1 · editing since ",
+    );
+  });
+
+  test("issue #155: a holder the connection cannot prove is 'An agent session', and a presence claim is a ring that pauses nothing", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    const da = fakeDataAccess();
+    mountApp(root, { dataAccess: da });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    da.stream.handlers?.onEvent?.({
+      event: "journal",
+      data: {
+        event: "claim_taken",
+        detail: {
+          claim_id: "P1",
+          mode: "presence",
+          paths: ["notes.md"],
+          resources: ["artifact:notes.md"],
+          session: "cwd-routed-99",
+          since: new Date().toISOString(),
+        },
+      },
+    });
+    const badge = root.querySelector(".glosa-tab-claim") as any;
+    expect(badge.getAttribute("data-mode")).toBe("presence");
+    expect(badge.getAttribute("aria-label")).toStartWith(
+      "An agent session · session cwd-rout · looking at this since ",
+    );
+    expect(inPane(root, ".glosa-tools-edit-source").disabled).toBe(false);
+  });
+
   test("read lock shows no Notes or Edit controls and stays on the read page", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

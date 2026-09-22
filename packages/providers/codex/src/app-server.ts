@@ -35,6 +35,8 @@ interface RpcResponse {
 export interface CodexControlClient {
   resume(threadId: string): Promise<void>;
   deliver(threadId: string, entry: DeliverableEntry): Promise<void>;
+  /** Issue #155: injects one plain notice line into the thread, the way `deliver` injects an entry. */
+  notify?(threadId: string, line: string): Promise<void>;
   onTurnCompleted(listener: () => void): () => void;
   closed: Promise<void>;
   close(): void;
@@ -64,7 +66,10 @@ export interface CodexAttachDeps {
       transport: "codex_app_server",
       onEntry: (entry: DeliverableEntry) => Promise<void>,
       signal: AbortSignal,
+      onOpen?: () => void,
+      onSignal?: (frame: { id: string; kind: string; message: string; ack_token: string }) => Promise<void>,
     ): Promise<{ ended: "superseded" | "eof" }>;
+    acknowledgeSignal?(sessionId: string, signalId: string, ackToken: string): Promise<void>;
     /** #206 parked-state ownership probe. Absent (older daemon client stub) is treated the same as
      * an inconclusive answer — stay parked rather than guess. */
     sessionStreamStatus?(sessionId: string): Promise<{ connected: boolean; transport: string | null }>;
@@ -154,7 +159,15 @@ export class CodexJsonRpcClient implements CodexControlClient {
   }
 
   async deliver(threadId: string, entry: DeliverableEntry): Promise<void> {
-    const input = [{ type: "text", text: `[glosa ${entry.id}] ${JSON.stringify(entry)}`, text_elements: [] }];
+    await this.inject(threadId, `[glosa ${entry.id}] ${JSON.stringify(entry)}`);
+  }
+
+  async notify(threadId: string, line: string): Promise<void> {
+    await this.inject(threadId, line);
+  }
+
+  private async inject(threadId: string, text: string): Promise<void> {
+    const input = [{ type: "text", text, text_elements: [] }];
     if (this.activeTurnId) {
       await this.request("turn/steer", { threadId, input, expectedTurnId: this.activeTurnId });
     } else {
@@ -323,6 +336,14 @@ export async function runCodexAttachment(
           await daemon.acknowledgeStreamTransport!(options.sessionId, entry.id);
         },
         combined,
+        undefined,
+        // Issue #155: the same `[glosa signal <id>]` line the Claude monitor prints, steered into the
+        // thread, then acknowledged with the token only this session's frame carries.
+        async (notice) => {
+          if (!control?.notify) return;
+          await control.notify(options.sessionId, `[glosa signal ${notice.id}] ${notice.kind}: ${notice.message}`);
+          await daemon.acknowledgeSignal?.(options.sessionId, notice.id, notice.ack_token);
+        },
       );
       removeCompleted = control.onTurnCompleted(() => {
         void daemon.heartbeat(options.sessionId).catch(() => {});

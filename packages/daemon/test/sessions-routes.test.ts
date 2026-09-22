@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionPushRegistry } from "../src/agent-provider/push-registry.ts";
+import { type SignalFrame, SignalRegistry } from "../src/agent-provider/signal-registry.ts";
 import { WorkspaceBusRegistry } from "../src/bus/workspace-bus-registry.ts";
 import { SessionRegistry } from "../src/registry/session-registry.ts";
 import { canonicalize } from "../src/registry/slug.ts";
@@ -456,6 +457,165 @@ describe("/api/sessions/... (A2 §F08/R2)", () => {
     expect(data.id).toBe("claimed-entry");
     expect(data.claims?.[0]).toMatchObject({ session: "sess-A", mode: "exclusive", fence: 1 });
     expect(data.text).toContain("claimed: session sess-A is editing this");
+    await reader.cancel();
+  });
+
+  test("issue #155 AC-1.6: a person releasing A's claim reaches A as a `conflict` signal on its stream, B hears `info` without A's token, and only A can ack it", async () => {
+    // Wired exactly as the daemon wires it (lifecycle/daemon.ts): signals derive from each bus's
+    // claim events and ride the session's own push stream.
+    const pushRegistry = new SessionPushRegistry();
+    const signalRegistry = new SignalRegistry({
+      sessionsFor: (workspace) => sessionRegistry.forWorkspace(workspace).map((session) => session.session_id),
+      push: (sessionId, frame) => pushRegistry.sendSignal(sessionId, frame),
+    });
+    ctx.pushRegistry = pushRegistry;
+    ctx.signalRegistry = signalRegistry;
+    const workspace = await workspaceIndex.upsertWorkspace(root, "glosa-open");
+    const bus = busRegistry.get(root);
+    signalRegistry.attach(bus, root);
+    writeFileSync(join(root, "notes.md"), "a sentence here\n");
+    await bus.reconcileOnce();
+    await bus.createEntry("e1", actionableAnnotation());
+    for (const session_id of ["sess-A", "sess-B"]) {
+      await sessionRegistry.register({
+        session_id,
+        provider: "claude-code",
+        cwd: root,
+        workspace_binding: root,
+        source: "monitor",
+      });
+    }
+
+    const open = async (session: string) => {
+      const response = await fetchFn(req(`/api/sessions/${session}/stream`));
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      const frames: SignalFrame[] = [];
+      const until = async (predicate: () => boolean) => {
+        const deadline = Date.now() + 3_000;
+        while (!predicate()) {
+          if (Date.now() > deadline) throw new Error(`timed out; received so far: ${buffered}`);
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error("stream ended");
+          buffered += decoder.decode(chunk.value);
+          for (const block of buffered.split("\n\n").slice(0, -1)) {
+            if (!block.startsWith("event: signal")) continue;
+            const data = block
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
+              ?.slice("data: ".length);
+            if (data) frames.push(JSON.parse(data) as SignalFrame);
+          }
+          buffered = buffered.slice(buffered.lastIndexOf("\n\n") + 2);
+        }
+      };
+      await until(() => true);
+      return { frames, until, cancel: () => reader.cancel() };
+    };
+    const a = await open("sess-A");
+    const b = await open("sess-B");
+
+    // A claims. B is told; A is never told about its own action.
+    const begun = await (
+      await fetchFn(
+        req("/api/workspaces/apply-begin", {
+          method: "POST",
+          body: JSON.stringify({ path: root, entry: "e1", session: "sess-A" }),
+        }),
+      )
+    ).json();
+    await b.until(() => b.frames.some((frame) => frame.kind === "info" && frame.message.includes("sess-A is editing")));
+    expect(a.frames).toEqual([]);
+
+    // A person releases A's claim while A's edit is on disk.
+    writeFileSync(join(root, "notes.md"), "a sentence here, half-edited by A\n");
+    const released = await fetchFn(req(`/w/${workspace.slug}/claims/${begun.lease_id}/release`, { method: "POST" }));
+    expect(released.status).toBe(200);
+
+    await a.until(() => a.frames.some((frame) => frame.kind === "conflict"));
+    const conflict = a.frames.find((frame) => frame.kind === "conflict")!;
+    expect(conflict).toMatchObject({ claim_id: begun.lease_id, resources: ["entry:e1"] });
+    expect(conflict.message).toContain("a person took over");
+    expect(conflict.ack_token.length).toBeGreaterThan(0);
+    await b.until(() => b.frames.some((frame) => frame.message.includes("a person released")));
+    // B's copy is B's own record: another id, another token — never A's.
+    for (const frame of b.frames) {
+      expect(frame.id).not.toBe(conflict.id);
+      expect(frame.ack_token).not.toBe(conflict.ack_token);
+    }
+
+    // Only A, with A's token, can acknowledge A's signal — and a repeat is still a 200.
+    const ack = (session: string, id: string, ackToken: string) =>
+      fetchFn(
+        req(`/api/sessions/${session}/signals/${id}/ack`, {
+          method: "POST",
+          body: JSON.stringify({ ack_token: ackToken }),
+        }),
+      );
+    expect((await ack("sess-B", conflict.id, conflict.ack_token)).status).toBe(404);
+    expect((await ack("sess-A", conflict.id, "not-the-token")).status).toBe(404);
+    const acked = await ack("sess-A", conflict.id, conflict.ack_token);
+    expect(acked.status).toBe(200);
+    expect(await acked.json()).toMatchObject({ signal_id: conflict.id, acked: true });
+    expect(await (await ack("sess-A", conflict.id, conflict.ack_token)).json()).toMatchObject({
+      acked: true,
+      already: true,
+    });
+
+    // B's unacknowledged signals are in its drain, outside the entry budget; A's acked one is gone.
+    const drained = await (await fetchFn(req("/api/sessions/sess-B/drain", { method: "POST", body: "" }))).json();
+    expect(drained.signals.map((frame: SignalFrame) => frame.kind)).toEqual(["info", "info"]);
+    const aDrain = await (await fetchFn(req("/api/sessions/sess-A/drain", { method: "POST", body: "" }))).json();
+    expect(aDrain.signals).toBeUndefined();
+
+    await a.cancel();
+    await b.cancel();
+  });
+
+  test("issue #155: a signal sent while its session had no stream is delivered when the stream connects", async () => {
+    const pushRegistry = new SessionPushRegistry();
+    const signalRegistry = new SignalRegistry({
+      sessionsFor: () => ["sess-A"],
+      push: (sessionId, frame) => pushRegistry.sendSignal(sessionId, frame),
+    });
+    ctx.pushRegistry = pushRegistry;
+    ctx.signalRegistry = signalRegistry;
+    await workspaceIndex.upsertWorkspace(root, "glosa-open");
+    await sessionRegistry.register({
+      session_id: "sess-A",
+      provider: "claude-code",
+      cwd: root,
+      workspace_binding: root,
+      source: "monitor",
+    });
+    signalRegistry.record(root, 1, {
+      v: 1,
+      event_id: "e",
+      at: new Date().toISOString(),
+      event: "claim_expired",
+      by: "daemon",
+      detail: { claim_id: "C1", holder_session: "sess-A", reason: "ttl", resources: ["entry:e1"] },
+    });
+
+    const response = await fetchFn(req("/api/sessions/sess-A/stream"));
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    const deadline = Date.now() + 3_000;
+    const next = () =>
+      Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`no signal frame; got: ${received}`)), 500),
+        ),
+      ]);
+    while (!received.includes("event: signal")) {
+      if (Date.now() > deadline) throw new Error(`no signal frame; got: ${received}`);
+      received += decoder.decode((await next()).value);
+    }
+    expect(received).toContain('"claim_id":"C1"');
     await reader.cancel();
   });
 

@@ -20,7 +20,16 @@ export class WorkspaceBusRegistry {
   // sure every bus in the process draws from the same keyed pool instead of each getting its own.
   private readonly mutex = new KeyedMutex<string>();
 
+  private onOpen: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void = () => {};
+
   constructor(private readonly defaultDeps: Omit<WorkspaceBusDeps, "mutex"> = {}) {}
+
+  /** Called once for each bus this registry constructs, before any caller gets it — the one place a
+   * daemon-lifetime consumer of a bus's event stream (issue #155's session signals) can subscribe
+   * without racing the first append. A throwing observer never fails the open. */
+  setOnOpen(fn: (bus: WorkspaceBus, workspace: WorkspaceTarget) => void): void {
+    this.onOpen = fn;
+  }
 
   /** Returns the SAME `WorkspaceBus` instance for `canonicalRoot` every time — constructed at
    * most once per root. `deps` (ulid/now/reducer) is only consulted on first construction; a
@@ -39,6 +48,11 @@ export class WorkspaceBusRegistry {
     if (!bus) {
       bus = new WorkspaceBus(canonicalRoot, { ...this.defaultDeps, ...deps, mutex: this.mutex });
       this.buses.set(id, bus);
+      try {
+        this.onOpen(bus, canonicalRoot);
+      } catch {
+        // Signals are an optional axis; a bus that cannot be observed is still a working bus.
+      }
     }
     return bus;
   }
