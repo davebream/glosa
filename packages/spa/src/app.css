@@ -2613,12 +2613,35 @@ input,
   margin-top: var(--space-3);
 }
 
+/* A heading holds its text close: 0.75rem under an h2, 0.5rem under an h3, against 3rem and 2rem
+   above them. That asymmetry is the document scale, and prose carrying its own 1.2em above would
+   overrule it — collapsing takes the larger margin, so every subhead would loosen to 1.2em and the
+   heading would stop belonging to the text it introduces. Directly under a heading the heading's
+   own bottom margin decides, exactly as it did before prose gained a top edge.
+
+   The run editor's host is named here too. It is a `div`, so it cannot match `h2` however
+   faithfully it reproduces one; without the flag, clicking a heading would spring the paragraph
+   below it open by 1.2em — the same defect this whole pairing exists to remove, moved one block
+   down. `openRunEditor` sets the flag (artifact-pane.js). */
+.glosa-content :is(h1, h2, h3, h4, h5, h6, .glosa-run-editor[data-heading]) + :is(p, ul, ol, pre) {
+  margin-top: 0;
+}
+
 .glosa-content > :first-child {
   margin-top: 0;
 }
 
+/* Both edges, not just the trailing one — and the reason is the run editor, not typography.
+   Adjacent margins collapse to the LARGER of the two, so giving prose a gap above as well as
+   below leaves the space between two paragraphs exactly 1.2em, unchanged from when only the
+   upper one carried it. What changes is who owns it. Trailing-only spacing means the gap between
+   A and B belongs solely to A, so lifting A out of the flow — which is precisely what
+   `openRunEditor` does when it swaps a block for an editor host (artifact-pane.js) — takes the
+   gap with it and closes B against the block above. Two paragraphs then read as one, under the
+   caret, in a tool whose whole job at that moment is to show the writer their own structure.
+   With the gap on both edges, B holds up its own side and the swap cannot delete anything. */
 .glosa-content p {
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 /* The serif's true bold is a shout at 17px; semibold is the copy editor's emphasis. */
@@ -2635,22 +2658,28 @@ input,
   font-style: italic;
 }
 
-.glosa-content blockquote > :last-child {
+/* A container's own margins are the spacing around it; its first and last children must not add
+   theirs on top. This existed for the trailing edge already — prose gaining a leading edge is what
+   makes the opening half necessary, or a quote and a list item would each open with a blank line
+   inside their own frame. */
+.glosa-content blockquote > :first-child,
+.glosa-content li > :first-child {
+  margin-top: 0;
+}
+
+.glosa-content blockquote > :last-child,
+.glosa-content li > :last-child {
   margin-bottom: 0;
 }
 
 .glosa-content ul,
 .glosa-content ol {
   padding-left: var(--space-6);
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 .glosa-content li {
   margin-bottom: 0.3em;
-}
-
-.glosa-content li > p:last-child {
-  margin-bottom: 0;
 }
 
 /* Markers are wayfinding, not content: they step back to the muted ink, and numerals line up. */
@@ -2689,7 +2718,7 @@ input,
   border-radius: var(--radius-panel);
   padding: var(--space-4);
   overflow-x: auto;
-  margin: 0 0 var(--prose-gap);
+  margin: var(--prose-gap) 0;
 }
 
 .glosa-content pre code {
@@ -3298,6 +3327,13 @@ input,
 .glosa-run-editor {
   margin: 0;
   padding: 0;
+}
+
+/* The appended run is the one host with nothing to measure: it stands for bytes that do not exist
+   yet, so `openRunEditor`'s geometry read has no element to read. It is still a block of its own
+   rather than more of the last paragraph, and the page's own gap is what says so. */
+.glosa-run-editor[data-appended] {
+  margin-block-start: var(--prose-gap);
 }
 
 /* The surface carries `.glosa-content` so the manuscript's own typography reaches the text being

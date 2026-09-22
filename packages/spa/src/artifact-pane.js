@@ -1660,6 +1660,23 @@ export function createArtifactPane(host, deps) {
     const address = blockEl.getAttribute("data-address");
     const host = el("div", { className: "glosa-run-editor" });
     if (address) host.setAttribute("data-address", address);
+    // Geometry cancellation, measured rather than guessed. `.glosa-content` spaces its blocks
+    // asymmetrically on purpose — 3rem above an h2 against 0.75rem below it — so a host with one
+    // fixed margin would be right for prose and wrong for everything else, and a tag -> spacing
+    // table here would be a second copy of the manuscript's scale, free to drift from it. Reading
+    // the used values off the element while it is still in flow costs one layout read and cannot
+    // disagree with the stylesheet, because it IS the stylesheet's answer.
+    //
+    // Prose no longer depends on this: app.css gives paragraphs, lists and code blocks a gap on
+    // both edges, so a neighbour holds up its own side of the space whatever happens here. This is
+    // what covers the blocks whose spacing is genuinely their own.
+    const { marginTop, marginBottom } = getComputedStyle(blockEl);
+    host.style.marginBlock = `${marginTop} ${marginBottom}`;
+    // The one thing a margin cannot carry across the swap. A heading closes the gap under itself
+    // through `heading + prose`, and that selector stops matching the instant the heading leaves
+    // the flow — so the paragraph below would spring open by its own leading gap. One flag keeps
+    // the rule matching; the spacing itself still comes from the measurement above.
+    if (/^H[1-6]$/.test(blockEl.tagName)) host.setAttribute("data-heading", "");
     blockEl.replaceWith(host);
     let editor;
     try {
