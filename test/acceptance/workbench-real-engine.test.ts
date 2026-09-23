@@ -845,6 +845,73 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
   );
 
   test(
+    "ended native logins remove browser links, reject terminal input and explain recovery",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before native login");
+      // Real xterm/DOM/input; synthetic operation responses avoid real provider credentials.
+      for (const outcome of ["expired", "completed", "failed", "stopping"]) {
+        await tab.evaluate(`(async () => {
+          const { mountAgentLogin } = await import('/app/agent-login.js');
+          const host = document.createElement('main'); document.body.replaceChildren(host);
+          const fixture = window.loginFixture = { writes: [], reads: 0 };
+          fixture.mounted = await mountAgentLogin(host, {
+            profile: { id: 'fixture', label: 'Test account' },
+            dataAccess: {
+              loginAgent: async () => ({ id: 'operation', secret: 'test-only', authHosts: ['auth.example.test'] }),
+              readAgentLogin: async () => {
+                if (!fixture.reads++) return { state: 'running', output: btoa('https://auth.example.test/authorize?state=fixture\\r\\n'), offset: 1 };
+                return new Promise((resolve, reject) => { fixture.resolve = resolve; fixture.reject = reject; });
+              },
+              resizeAgentLogin: async () => {},
+              writeAgentLogin: async (_id, _secret, data) => fixture.writes.push(data),
+              finishAgentLogin: async () => {},
+            },
+          });
+          await new Promise((resolve, reject) => {
+            const deadline = Date.now() + 3000;
+            const check = () => fixture.resolve ? resolve() : Date.now() > deadline ? reject(new Error('login poll missing')) : requestAnimationFrame(check);
+            check();
+          });
+        })()`);
+        expect(await tab.evaluate<boolean>("!document.querySelector('main a').hidden")).toBe(true);
+        await tab.evaluate(`(() => {
+          if (${JSON.stringify(outcome)} === 'expired') loginFixture.reject(Object.assign(new Error('login unavailable'), {problem:{type:'https://glosa.local/errors/login-not-found'}}));
+          else loginFixture.resolve({state:${JSON.stringify(outcome)},output:'',offset:1});
+        })()`);
+        const ended = await tab.evaluate<{ hidden: boolean; href: string | null; status: string; button: string }>(
+          `new Promise(resolve => requestAnimationFrame(() => resolve({
+            hidden:document.querySelector('main a').hidden, href:document.querySelector('main a').getAttribute('href'),
+            status:document.querySelector('[role=status]').textContent, button:document.querySelector('main > button').textContent
+          })))`,
+        );
+        expect(ended.hidden).toBe(true);
+        expect(ended.href).toBeNull();
+        expect(ended.button).toBe("Close terminal");
+        expect(ended.status).toContain(
+          outcome === "expired"
+            ? "choose Sign in again"
+            : outcome === "completed"
+              ? "check the account"
+              : outcome === "stopping"
+                ? "wait for cleanup"
+                : "try again",
+        );
+        await tab.evaluate("document.querySelector('.xterm-helper-textarea').focus()");
+        await tab.send("Input.insertText", { text: "late authentication code" });
+        expect(
+          await tab.evaluate<number>(
+            "new Promise(resolve => requestAnimationFrame(() => resolve(loginFixture.writes.length)))",
+          ),
+        ).toBe(0);
+        await tab.evaluate("loginFixture.mounted.destroy()");
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
     "managed chat renders safely, preserves selection while streaming, and sends real keyboard input",
     async () => {
       const { browser, cdpPort } = await launchBrowser();

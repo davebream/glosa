@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,6 +57,138 @@ test("model discovery releases management after an exit races its fence, but unc
     await expect(h.service.probeProfile(h.profile.id)).rejects.toThrow("Finish the current account operation");
   } finally {
     uncertain = false;
+  }
+});
+test("native login survives a browser polling gap but expires at its original deadline even after completion", async () => {
+  let now = Date.now(),
+    sequence = 0,
+    stopped = 0,
+    uncertain = true;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  const time = spyOn(Date, "now").mockImplementation(() => now);
+  const schedule = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, ms: number) => {
+    const id = ++sequence;
+    timers.set(id, { at: now + ms, run });
+    return id;
+  }) as any);
+  const cancel = spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => timers.delete(id)) as any);
+  const advance = async (ms: number) => {
+    now += ms;
+    for (const [id, timer] of [...timers]) if (timer.at <= now && timers.delete(id)) timer.run();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  try {
+    for (const completed of [false, true]) {
+      let end!: (exit: Awaited<OwnedProcess["exited"]>) => void;
+      const exited = new Promise<Awaited<OwnedProcess["exited"]>>((resolve) => {
+        end = resolve;
+      });
+      const h = setup({
+        launcher: {
+          async spawn() {
+            return {
+              pid: 123,
+              exited,
+              async write() {},
+              async fence() {},
+              resize() {},
+              async stop() {
+                stopped++;
+                end({ code: 0, signal: null, groupEmpty: true });
+              },
+            };
+          },
+        },
+      });
+      const operation = await h.service.login(h.profile.id);
+      const deadline = h.service.loginOutput(operation.id, operation.secret, 0).expiresAt;
+      // Logical clock simulates a suspended browser; no polling during native sign-in.
+      await advance(60_000);
+      expect(h.service.loginOutput(operation.id, operation.secret, 0).state).toBe("running");
+      if (completed) end({ code: 0, signal: null, groupEmpty: true });
+      await advance(0);
+      await advance(deadline - now - 1);
+      expect(h.service.loginOutput(operation.id, operation.secret, 0).state).toBe(completed ? "completed" : "running");
+      await advance(1);
+      expect(() => h.service.loginOutput(operation.id, operation.secret, 0)).toThrow("not available");
+      await expect(h.service.loginInput(operation.id, operation.secret, "late code")).rejects.toThrow();
+      expect(stopped).toBe(completed ? 2 : 1);
+      // Expired output/ownership cannot block a new foreground account operation.
+      expect((await h.service.probeProfile(h.profile.id)).auth.state).toBe("authenticated");
+    }
+    uncertain = true;
+    let emit!: (channel: "stdout" | "stderr", bytes: Uint8Array) => void;
+    let end!: (exit: Awaited<OwnedProcess["exited"]>) => void;
+    const exited = new Promise<Awaited<OwnedProcess["exited"]>>((resolve) => {
+      end = resolve;
+    });
+    const h = setup({
+      launcher: {
+        async spawn(options) {
+          emit = options.onData;
+          return {
+            pid: 123,
+            exited,
+            async write() {},
+            async fence() {},
+            resize() {},
+            async stop() {
+              end({ code: 0, signal: null, groupEmpty: true });
+              if (uncertain) throw new Error("exit unconfirmed");
+            },
+          };
+        },
+      },
+    });
+    const operation = await h.service.login(h.profile.id);
+    emit("stdout", new TextEncoder().encode("private login URL"));
+    expect(h.service.loginOutput(operation.id, operation.secret, 0).output).not.toBe("");
+    await advance(10 * 60_000);
+    emit("stdout", new TextEncoder().encode("late private login URL"));
+    expect(h.service.loginOutput(operation.id, operation.secret, 0)).toMatchObject({ state: "stopping", output: "" });
+    await expect(h.service.loginInput(operation.id, operation.secret, "late code")).rejects.toThrow();
+    await expect(h.service.probeProfile(h.profile.id)).rejects.toThrow("Finish the current account operation");
+    uncertain = false;
+    await h.service.finishLogin(operation.id, operation.secret);
+    expect((await h.service.probeProfile(h.profile.id)).auth.state).toBe("authenticated");
+    uncertain = true;
+    let rejectPreflight!: (error: Error) => void;
+    const preflight = new Promise<void>((_resolve, reject) => {
+      rejectPreflight = reject;
+    });
+    const late = setup({
+      launcher: {
+        async spawn() {
+          return {
+            pid: 123,
+            exited: new Promise(() => {}),
+            async write() {},
+            async fence() {},
+            resize() {},
+            async stop() {
+              if (uncertain) throw new Error("exit unconfirmed");
+            },
+          };
+        },
+      },
+    });
+    late.registry.get("fixture").preflight = async (spec, launcher) => {
+      await launcher.spawn({ command: "/fixture", args: [], cwd: spec.cwd, env: spec.env, onData() {} });
+      await preflight;
+    };
+    const pendingLogin = late.service.login(late.profile.id);
+    await advance(0);
+    await advance(10 * 60_000);
+    rejectPreflight(new Error("preflight failed after deadline"));
+    await expect(pendingLogin).rejects.toThrow();
+    await expect(late.service.probeProfile(late.profile.id)).rejects.toThrow("Finish the current account operation");
+    uncertain = false;
+    await late.service.close();
+  } finally {
+    uncertain = false;
+    time.mockRestore();
+    schedule.mockRestore();
+    cancel.mockRestore();
   }
 });
 async function eventually(check: () => boolean): Promise<void> {
