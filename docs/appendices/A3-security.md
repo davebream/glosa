@@ -244,8 +244,12 @@ MCP grants are separate, memory-only and limited to one run, session and registr
 are removed before shutdown awaits and checked again at native writes and bus mutation boundaries.
 No native credential or operation secret belongs in argv, URLs, persistent browser storage, chat
 journals or logs. Login output is bounded and memory-only. OSC 52 and terminal link activation are
-disabled; screen-reader mode is enabled. The daemon serializes login, bounds it to ten minutes and
-cancels after a thirty-second controller polling gap. Closing its settings view cancels immediately.
+disabled; screen-reader mode is enabled. The daemon serializes login and bounds it, including completed output retention, to ten minutes
+from admission. Polling neither renews nor shortens that deadline: signing in through another
+browser can suspend the controller. Closing its login/settings view cancels immediately when the
+controller is running; abrupt browser exit remains bounded by the absolute deadline. Expired or
+completed views remove sign-in links and disable terminal input; explicit verification is still
+required before the profile becomes authenticated.
 
 Every managed child receives an allowlisted environment. Ambient provider/API/cloud credentials,
 provider routing, CLI-home selectors, telemetry and auto-update configuration are not inherited.
