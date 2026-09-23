@@ -36,6 +36,7 @@ export async function mountAgentLogin(
     return { destroy: async () => {} };
   }
   let closed = false,
+    inactive = false,
     offset = 0,
     timer,
     pending = Promise.resolve();
@@ -88,12 +89,35 @@ export async function mountAgentLogin(
         status.textContent = error.message;
       }),
   });
+  const endLogin = (message) => {
+    if (closed || inactive) return;
+    inactive = true;
+    clearTimeout(timer);
+    resizeObserver?.disconnect();
+    loginText = "";
+    browserLink.hidden = true;
+    browserLink.removeAttribute("href");
+    terminal.options.disableStdin = true;
+    status.textContent = message;
+    done.textContent = "Close terminal";
+  };
+  const loginError = (error) => {
+    if (closed || inactive) return;
+    const ended = ["login-not-found", "login-expired", "login-cancelled"].some((code) =>
+      error.problem?.type?.endsWith(`/errors/${code}`),
+    );
+    endLogin(
+      ended
+        ? "This login expired or was cancelled. Close this terminal and choose Sign in again for a new link."
+        : "The connection to this login was lost. Close this terminal and choose Sign in again.",
+    );
+  };
   host.replaceChildren(status, browserLink, surface, done);
   terminal.parser.registerOscHandler(52, () => true);
   terminal.options.linkHandler = {
     activate(_event, uri) {
       const safe = validLoginUrl(uri, operation.authHosts ?? [], !!workspace);
-      if (safe && !closed) {
+      if (safe && !closed && !inactive) {
         if (workspace) {
           browserLink.href = safe;
           browserLink.textContent = `Continue sign-in at ${new URL(safe).hostname}`;
@@ -106,31 +130,33 @@ export async function mountAgentLogin(
   terminal.focus();
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
-      if (closed || surface.clientWidth < 80) return;
+      if (closed || inactive || surface.clientWidth < 80) return;
       const cols = Math.max(20, Math.min(240, Math.floor(surface.clientWidth / 8)));
       const rows = 18;
       if (cols === terminal.cols) return;
       terminal.resize(cols, rows);
       pending = pending
-        .then(() => (closed ? undefined : dataAccess.resizeAgentLogin(operation.id, operation.secret, cols, rows)))
-        .catch((error) => {
-          if (!closed) status.textContent = error.message;
-        });
+        .then(() =>
+          closed || inactive ? undefined : dataAccess.resizeAgentLogin(operation.id, operation.secret, cols, rows),
+        )
+        .catch(loginError);
     });
     resizeObserver.observe(surface);
   }
   terminal.onData((data) => {
     pending = pending
-      .then(() => (closed ? undefined : dataAccess.writeAgentLogin(operation.id, operation.secret, data)))
-      .catch((error) => {
-        status.textContent = error.message;
-      });
+      .then(() => (closed || inactive ? undefined : dataAccess.writeAgentLogin(operation.id, operation.secret, data)))
+      .catch(loginError);
   });
   const poll = async () => {
-    if (closed) return;
+    if (closed || inactive) return;
     try {
       const result = await dataAccess.readAgentLogin(operation.id, operation.secret, offset);
-      if (closed) return;
+      if (closed || inactive) return;
+      if (result.state === "stopping") {
+        endLogin("Login is stopping. Close this terminal; wait for cleanup before signing in again.");
+        return;
+      }
       if (result.reset) terminal.reset();
       for (const chunk of result.output.trim().split("\n").filter(Boolean)) {
         const bytes = Uint8Array.from(atob(chunk), (c) => c.charCodeAt(0));
@@ -150,16 +176,16 @@ export async function mountAgentLogin(
       }
       offset = result.offset;
       if (["completed", "failed"].includes(result.state)) {
-        status.textContent =
+        endLogin(
           result.state === "completed"
             ? "Login finished. Close this terminal, then check the account."
-            : "Login ended. Close this terminal to try again.";
-        done.textContent = "Close terminal";
+            : "Login ended. Close this terminal to try again.",
+        );
         return;
       }
       timer = setTimeout(poll, 350);
     } catch (error) {
-      if (!closed) status.textContent = error.message;
+      loginError(error);
     }
   };
   void poll();

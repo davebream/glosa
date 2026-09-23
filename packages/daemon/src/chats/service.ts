@@ -85,7 +85,6 @@ interface LoginOperation {
   offset: number;
   expiresAt: number;
   timer?: ReturnType<typeof setTimeout>;
-  browserTimer?: ReturnType<typeof setTimeout>;
 }
 const terminalStates = new Set(["completed", "cancelled", "failed", "outcome_unknown"]);
 // Only the asynchronous call chain of native interrupt may write after the run fence.
@@ -963,6 +962,14 @@ export class ManagedChatService {
       expiresAt: Date.now() + 10 * 60_000,
     };
     this.management = operation;
+    // OAuth runs in another browser/tab, which may suspend the controller's polls.
+    // One absolute deadline bounds both live login and completed output retention.
+    operation.timer = setTimeout(
+      () => {
+        void this.stopLogin(operation).catch(() => {});
+      },
+      Math.max(0, operation.expiresAt - Date.now()),
+    );
     try {
       await adapter.preflight?.(spec, this.operationLauncher(operation));
       const child = await this.operationLauncher(operation).spawn({
@@ -972,7 +979,7 @@ export class ManagedChatService {
         env: spec.env,
         terminal: true,
         onData: (_channel, bytes) => {
-          if (this.management !== operation) return;
+          if (this.management !== operation || operation.state === "stopping") return;
           operation.output += Buffer.from(bytes).toString("base64") + "\n";
           if (operation.output.length > 512 * 1024) {
             operation.offset += operation.output.length;
@@ -986,22 +993,20 @@ export class ManagedChatService {
         throw new ManagedAgentError("login-cancelled", "Login was cancelled.");
       }
       operation.state = "running";
-      operation.timer = setTimeout(() => {
-        void this.stopLogin(operation).catch(() => {});
-      }, 10 * 60_000);
       void child.exited.then((exit) => {
-        if (operation.timer) clearTimeout(operation.timer);
-        operation.state = exit.groupEmpty && exit.code === 0 ? "completed" : "failed";
+        if (operation.state !== "stopping")
+          operation.state = exit.groupEmpty && exit.code === 0 ? "completed" : "failed";
         // The UI explicitly requests a fresh identity probe after completion.
       });
-      this.touchLogin(operation);
       return {
         id: operation.id,
         secret: operation.secret,
         authHosts: this.options.registry.get(profile.provider).authHosts,
       };
     } catch (error) {
-      if (this.management === operation) this.management = undefined;
+      // Preflight may fail after the deadline already attempted cleanup. Do not
+      // release management until every owned process is confirmed stopped.
+      await this.stopLogin(operation);
       throw error;
     }
   }
@@ -1011,15 +1016,8 @@ export class ManagedChatService {
       throw new ManagedAgentError("login-not-found", "This login is not available in this browser.", 404);
     return op;
   }
-  private touchLogin(op: LoginOperation): void {
-    clearTimeout(op.browserTimer);
-    op.browserTimer = setTimeout(() => {
-      void this.stopLogin(op).catch(() => {});
-    }, 30_000);
-  }
   loginOutput(id: string, secret: string, offset: number) {
     const op = this.loginOperation(id, secret);
-    this.touchLogin(op);
     return {
       state: op.state,
       reset: offset < op.offset,
@@ -1043,9 +1041,12 @@ export class ManagedChatService {
     await this.stopLogin(this.loginOperation(id, secret));
   }
   private async stopLogin(op: LoginOperation): Promise<void> {
-    clearTimeout(op.browserTimer);
     if (op.timer) clearTimeout(op.timer);
     op.state = "stopping";
+    // Revoke sensitive output before awaiting cleanup. An uncertain process exit
+    // retains the ownership blocker, never the login URL or late native output.
+    op.offset += op.output.length;
+    op.output = "";
     if (op.starting) {
       try {
         op.process = await op.starting;
