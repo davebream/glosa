@@ -23,12 +23,14 @@ import { addressBlocks, addressForRange } from "./address.js";
 import {
   agentIdentity,
   agentRequestSummary,
-  bandPath,
+  bracketPath,
   isQuestion,
   lineBoxes,
   locateQuote,
+  mergeSpans,
   openQuestions,
   requestsForArtifact,
+  stackTabs,
 } from "./agent-request.js";
 import { buildAnnotationRecordFromSelection, foldQuote, locateFoldedQuote } from "./annotate.js";
 import { mountClassFViewer } from "./classf-viewer.js";
@@ -106,15 +108,23 @@ const STATE_LABELS = {
 // wash and the composer's selection wash silently stopped painting for every artifact.
 //
 // The registry is global, so it is coordinated globally. Every pane contributes its ranges under
-// the SAME three names, and the union is rewritten whenever any pane's contribution changes. A
+// the SAME names, and the union is rewritten whenever any pane's contribution changes. A
 // `Highlight` holds any number of ranges and ranges are document-scoped, so panes coexist inside
-// one key instead of fighting over it. Keep these three names in step with app.css §10.
+// one key instead of fighting over it. Keep these names in step with app.css §10 and the session
+// marks' `::highlight()` rules.
 /** How much of a conflicting block's disk text the stale-save preview quotes (#182 D9). Long
  * enough to recognise the passage, short enough that several conflicts stay readable in a dialog. */
 const CONFLICT_EXCERPT_CHARS = 80;
 const HL_ANCHORS = "glosa-anchors";
 const HL_ANCHOR = "glosa-anchor";
 const HL_COMPOSER = "glosa-composer-selection";
+// A session's words: washed when it asks about them, a dotted rule when it only points, and a
+// deeper wash on the one the reader is on or hovering. The bracket in the gutter says where; these
+// say exactly which words, without an outline squeezed into the leading around them.
+const HL_SESSION_ASKS = "glosa-session-asks";
+const HL_SESSION_POINTS = "glosa-session-points";
+const HL_SESSION_LIT = "glosa-session-lit";
+const PANE_HIGHLIGHTS = [HL_ANCHORS, HL_ANCHOR, HL_COMPOSER, HL_SESSION_ASKS, HL_SESSION_POINTS, HL_SESSION_LIT];
 
 const highlightsAvailable = () => typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined";
 
@@ -156,13 +166,19 @@ export const MARGIN_RAIL_FLOOR = 1205;
 // its legibility.
 export const MARGIN_RAIL_COMFORT = 1290;
 
-/** How far into the gutter a session's tab sits from the text column: the tab's own 20px plus a
- * gap that keeps it clear of the band's left edge. Inside the manuscript's 2rem gutter, so it never
- * leaves the painted page. */
-const BAND_TAB_OFFSET = 30;
-/** How long a newly arrived mark plays its one draw-in (app.css `glosa-band-arrive`). */
-const BAND_ARRIVE_MS = 1300;
-/** A passage counts as on screen only when this much of the pane shows past its edge — a band whose
+/** How far into the gutter a session's bracket stands from the text column. Its tab (20px) is
+ * centred on the bracket's line, so tab and bracket stay inside the manuscript's 2rem gutter at
+ * every width, and the ticks stop 14px short of the words. */
+const SESSION_BRACKET_INSET = 20;
+const SESSION_TAB_SIZE = 20;
+/** The "… asks" label is a note in the page's margin, beside the tab. It needs this much paper
+ * left of it; where the pane has none, the label hides and the tab's accessible name carries it. */
+const SESSION_LABEL_ROOM = 8;
+/** How long a newly arrived mark plays its one draw-in (app.css `glosa-session-arrive`). */
+const SESSION_ARRIVE_MS = 1300;
+/** The blocks a session's bracket stands beside: the innermost of these around each end of its words. */
+const SESSION_BLOCK = "p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, pre";
+/** A passage counts as on screen only when this much of the pane shows past its edge — a mark whose
  * last pixel peeks over the top is not something the reader can be said to be looking at. */
 const PASSAGE_VISIBLE_INSET = 24;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -436,7 +452,7 @@ export function createArtifactPane(host, deps) {
    * the rail has no room, which question's card floats at its passage. */
   let focusedRequestId = null;
   /** Notices the reader waved away. Per pane and per visit: a dismissed notice is not an answered
-   * question, so the band, the card and the tray row all stay. */
+   * question, so the mark, the card and the tray row all stay. */
   const dismissedNotices = new Set();
   /** Where the reader was before "Go to it" took them to a passage: `{top, focus}`. glosa never
    * moves the reader on its own, and when THEY ask to be moved it owes them the way back. */
@@ -445,6 +461,11 @@ export function createArtifactPane(host, deps) {
   let answerJustSent = false;
   /** Marks that arrived since the last look and still owe their one draw-in. */
   const arrivedRequestIds = new Set();
+  /** Each located request's words, from the last paint, so lighting one on hover does not
+   * re-resolve every quote. */
+  let sessionRanges = new Map();
+  /** The request whose card the pointer or keyboard is on; its words deepen like the focused one's. */
+  let hoveredRequestId = null;
   /** What the notice currently shows, as a string. Scrolling re-evaluates the notice every frame;
    * rebuilding its DOM each time would take the focus ring off a button mid-Tab. */
   let noticeKey = "";
@@ -746,11 +767,12 @@ export function createArtifactPane(host, deps) {
   });
   const marginEl = el("aside", { className: "glosa-margin", "aria-label": "Annotations" });
   const markersEl = el("div", { className: "glosa-markers", "aria-hidden": "true" });
-  // A session's mark is a band drawn AROUND the words, in session ink, in its own layer (#308).
-  // The human's marks stay on the words themselves — wash and underline — so the two never share a
-  // channel: one colours the text, the other outlines it, and a sentence carrying both still reads.
-  // The layer is not aria-hidden: each band's gutter tab is a real button.
-  const bandsEl = el("div", { className: "glosa-bands" });
+  // A session's mark: a bracket in the gutter beside the block, in session ink, in its own layer,
+  // with a tab per request at the line its words start on. The words themselves take a session-ink
+  // wash through the highlight registry, so nothing is inserted into the rendered manuscript and
+  // the reader's own wash and underline are untouched. The layer is not aria-hidden: each tab is a
+  // real button.
+  const sessionMarksEl = el("div", { className: "glosa-session-marks" });
   // At widths with no rail, the question the reader is on floats at its passage, the way an open
   // draft does. The tray keeps the list; this keeps the question beside the words it is about.
   const askLayerEl = el("div", { className: "glosa-ask-layer" });
@@ -806,7 +828,7 @@ export function createArtifactPane(host, deps) {
     editWrap,
     marginEl,
     markersEl,
-    bandsEl,
+    sessionMarksEl,
     previewEl,
     composerLayerEl,
     askLayerEl,
@@ -2995,14 +3017,6 @@ export function createArtifactPane(host, deps) {
     return found ? offsetsToRange(found.start, found.end) : null;
   }
 
-  function rangesOverlap(a, b) {
-    try {
-      return a.compareBoundaryPoints(Range.START_TO_END, b) > 0 && a.compareBoundaryPoints(Range.END_TO_START, b) < 0;
-    } catch {
-      return false;
-    }
-  }
-
   /** Is this passage where the reader can see it? Measured against the pane's own scroll viewport,
    * never the window: with two artifacts open, "on screen" means on THIS pane's screen. */
   function passageVisible(range) {
@@ -3012,100 +3026,165 @@ export function createArtifactPane(host, deps) {
     return rect.bottom > main.top + PASSAGE_VISIBLE_INSET && rect.top < main.bottom - PASSAGE_VISIBLE_INSET;
   }
 
-  /**
-   * Draws one band per located request: an outline around the exact words, shaped the way a text
-   * selection is shaped, with a tab in the gutter. A question is filled and labelled; a pointer is
-   * the outline alone. `bandPath` owns the geometry; this owns measuring and the DOM.
-   *
-   * Nothing is drawn for a passage that cannot be proven unique — `rangeForPassage` returns null
-   * and the card says so. A band around a guess would be a confident lie in session ink.
-   */
-  function paintAgentBands() {
-    bandsEl.textContent = "";
-    for (const block of contentEl.querySelectorAll("[data-session-mark]")) block.removeAttribute("data-session-mark");
-    if (!currentArtifact || modeState.mode === "edit") {
-      renderNotice();
-      return;
+  /** The left edge of the text column, in client coordinates: where every block's words start, and
+   * the line a session's bracket keeps its distance from. The column, not each block, so a list
+   * item's bracket stands in the same gutter line as a paragraph's instead of over its bullet. */
+  function columnLeft() {
+    const box = contentEl.getBoundingClientRect();
+    const pad = Number.parseFloat(getComputedStyle(contentEl).paddingLeft);
+    return box.left + (Number.isFinite(pad) ? pad : 0);
+  }
+
+  /** The blocks a session's words live in, and their vertical extent in client coordinates. The
+   * innermost block at each end, so a sentence in a list item brackets the item, not the list. */
+  function sessionSpan(range) {
+    const blockOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest(SESSION_BLOCK) ?? null;
+    const first = blockOf(range.startContainer);
+    const last = blockOf(range.endContainer) ?? first;
+    const words = range.getBoundingClientRect();
+    const top = first ? first.getBoundingClientRect().top : words.top;
+    const bottom = last ? last.getBoundingClientRect().bottom : words.bottom;
+    return { top, bottom: Math.max(bottom, top + 12), first, last };
+  }
+
+  /** Marks the manuscript's own blocks beside which a bracket runs, so a hovered block's address
+   * gives way to the tab and bracket standing in its place. An attribute, never a node. */
+  function markSessionBlocks(first, last) {
+    const topLevel = (node) => {
+      let at = node;
+      while (at && at.parentElement !== contentEl) at = at.parentElement;
+      return at;
+    };
+    const end = topLevel(last);
+    for (let block = topLevel(first); block; block = block.nextElementSibling) {
+      block.setAttribute("data-session-mark", "true");
+      if (block === end) break;
     }
+  }
+
+  /**
+   * Draws a session's marks. One bracket in the gutter per run of blocks it asks about or points
+   * at, a tab on the bracket for each request, level with the line its words start on, and the
+   * words themselves in session ink through the highlight registry: washed for a question, a dotted
+   * rule for a pointer.
+   *
+   * Block-level on purpose. An outline around the exact words had only the line's leading to live
+   * in, so it ran through the underline on the line above and its label sat on that line's words.
+   * The bracket lives in the gutter, where nothing else is, and the words keep their precision
+   * through a highlight, which needs no room at all.
+   *
+   * Nothing is drawn for a passage that cannot be proven unique: `rangeForPassage` returns null and
+   * the card says so. A mark around a guess would be a confident lie in session ink.
+   */
+  function paintSessionMarks() {
+    sessionMarksEl.textContent = "";
+    sessionRanges = new Map();
+    for (const block of contentEl.querySelectorAll("[data-session-mark]")) block.removeAttribute("data-session-mark");
+    const asks = [];
+    const points = [];
+    const located = [];
+    if (currentArtifact && modeState.mode !== "edit") {
+      // Oldest first (`requestsForArtifact` sorts), so tabs that would collide keep asking order.
+      for (const request of agentRequests()) {
+        const range = rangeForPassage(request.passage);
+        if (!range) continue;
+        const question = isQuestion(request);
+        const span = sessionSpan(range);
+        located.push({ request, range, span, question });
+        sessionRanges.set(request.id, range);
+        (question ? asks : points).push(range);
+        if (span.first) markSessionBlocks(span.first, span.last);
+      }
+    }
+    // A card whose request was answered or withdrawn under the pointer never gets its mouseleave.
+    if (hoveredRequestId && !sessionRanges.has(hoveredRequestId)) hoveredRequestId = null;
+    contributeHighlight(HL_SESSION_ASKS, paneHighlightToken, asks);
+    contributeHighlight(HL_SESSION_POINTS, paneHighlightToken, points);
+    paintSessionLit();
+    if (located.length > 0) drawSessionBrackets(located);
+    renderNotice();
+  }
+
+  function drawSessionBrackets(located) {
     const main = paneMain.getBoundingClientRect();
     const dx = paneMain.scrollLeft - main.left;
     const dy = paneMain.scrollTop - main.top;
-    const svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("class", "glosa-band-svg");
-    svg.setAttribute("aria-hidden", "true");
-    bandsEl.append(svg);
+    const x = columnLeft() + dx - SESSION_BRACKET_INSET;
     const provider = providerDisplayName();
-    const filledRanges = [];
-    // Oldest first (`requestsForArtifact` sorts), which is what lets an older question keep its
-    // fill when a newer one lands on the same words.
-    for (const request of agentRequests()) {
-      const range = rangeForPassage(request.passage);
-      if (!range) continue;
-      const question = isQuestion(request);
-      let lines = lineBoxes([...(range.getClientRects?.() ?? [])]);
-      if (lines.length === 0) {
-        // No per-line rects (a collapsed layout, or an engine that reports none): fall back to the
-        // union box, which is still the passage, only without its steps.
-        const box = range.getBoundingClientRect();
-        lines = [{ left: box.left, right: box.right, top: box.top, bottom: Math.max(box.bottom, box.top + 12) }];
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "glosa-session-svg");
+    svg.setAttribute("aria-hidden", "true");
+    sessionMarksEl.append(svg);
+
+    for (const group of mergeSpans(located.map((mark) => mark.span))) {
+      const members = group.members.map((index) => located[index]);
+      const ids = members.map((mark) => mark.request.id);
+      // 2px inside the block at each end, so a bracket never touches the next block's.
+      const d = bracketPath(group.top + dy + 2, group.bottom + dy - 2, x);
+      if (d) {
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("class", "glosa-session-bracket");
+        path.setAttribute("d", d);
+        path.setAttribute("data-entries", ids.join(" "));
+        path.setAttribute("data-kind", members.some((mark) => mark.question) ? "question" : "pointer");
+        if (ids.includes(focusedRequestId)) path.setAttribute("data-focused", "true");
+        if (ids.some((id) => arrivedRequestIds.has(id))) path.setAttribute("data-arrived", "true");
+        svg.append(path);
       }
-      lines = lines.map((l) => ({ left: l.left + dx, right: l.right + dx, top: l.top + dy, bottom: l.bottom + dy }));
-      const startNode = range.startContainer;
-      const startEl = startNode.nodeType === 1 ? startNode : startNode.parentElement;
-      const block = startEl?.closest("p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, pre") ?? contentEl;
-      const blockRect = block.getBoundingClientRect();
-      const column = { left: blockRect.left + dx, right: blockRect.right + dx };
-      // 3px, not more: a band that starts mid-line opens in the word space after the previous
-      // sentence, and a wider pad puts its edge through that sentence's full stop.
-      const d = bandPath(lines, column, { padX: 3 });
-      if (!d) continue;
-      const overlapped = question && filledRanges.some((other) => rangesOverlap(range, other));
-      if (question && !overlapped) filledRanges.push(range);
 
-      const path = document.createElementNS(SVG_NS, "path");
-      path.setAttribute("class", "glosa-band");
-      path.setAttribute("d", d);
-      path.setAttribute("data-entry", request.id);
-      path.setAttribute("data-kind", question ? "question" : "pointer");
-      if (overlapped) path.setAttribute("data-overlapped", "true");
-      if (focusedRequestId === request.id) path.setAttribute("data-focused", "true");
-      if (arrivedRequestIds.has(request.id)) path.setAttribute("data-arrived", "true");
-      svg.append(path);
-
-      // The gutter shows a hovered block's address where the tab now sits; the tab says the same
-      // thing in its accessible name, so the label gives way. An attribute, never a node.
-      if (block !== contentEl) block.setAttribute("data-session-mark", "true");
-      const address = addressForRange(contentEl, range) ?? "";
-      const first = lines[0];
-      const tab = el("button", {
-        className: "glosa-band-tab",
-        type: "button",
-        "data-entry": request.id,
-        "data-kind": question ? "question" : "pointer",
-        "aria-label": `${address ? `${address} · ` : ""}${question ? "Question" : "Pointer"} from ${provider}. Go to its card.`,
-        onClick: () => goToRequest(request),
-      });
-      if (arrivedRequestIds.has(request.id)) tab.setAttribute("data-arrived", "true");
-      tab.append(question ? el("span", { textContent: "?", "aria-hidden": "true" }) : pointerGlyph());
-      tab.style.left = `${Math.max(0, Math.round(column.left - BAND_TAB_OFFSET))}px`;
-      tab.style.top = `${Math.round(first.top + 3)}px`;
-      bandsEl.append(tab);
-
-      if (question) {
-        // Printed on the band's top edge, so the mark names its author before the card is read.
-        const label = el("span", {
-          className: "glosa-band-label",
-          "aria-hidden": "true",
-          textContent: `${provider} asks`,
+      const tops = stackTabs(
+        members.map(({ range }) => {
+          const line = lineBoxes([...(range.getClientRects?.() ?? [])])[0] ?? range.getBoundingClientRect();
+          return Math.round((line.top + line.bottom) / 2 + dy - SESSION_TAB_SIZE / 2);
+        }),
+        { size: SESSION_TAB_SIZE },
+      );
+      // One author label per bracket, beside its topmost question: a paragraph asked about twice
+      // is still one paragraph a session asked about.
+      const labelled = members.reduce(
+        (best, mark, index) => (mark.question && (best === -1 || tops[index] < tops[best]) ? index : best),
+        -1,
+      );
+      members.forEach(({ request, range, question }, index) => {
+        const address = addressForRange(contentEl, range) ?? "";
+        const tab = el("button", {
+          className: "glosa-session-tab",
+          type: "button",
+          "data-entry": request.id,
+          "data-kind": question ? "question" : "pointer",
+          "aria-label": `${address ? `${address} · ` : ""}${question ? "Question" : "Pointer"} from ${provider}. Go to its card.`,
+          onClick: () => goToRequest(request),
         });
-        const multi = lines.length > 1;
-        label.style.top = `${Math.round(first.top - 1)}px`;
-        label.style.left = `${Math.round(multi ? Math.max(column.right, ...lines.map((l) => l.right)) : first.left)}px`;
-        if (multi) label.setAttribute("data-align", "end");
-        bandsEl.append(label);
-      }
+        if (arrivedRequestIds.has(request.id)) tab.setAttribute("data-arrived", "true");
+        tab.append(question ? el("span", { textContent: "?", "aria-hidden": "true" }) : pointerGlyph());
+        tab.style.left = `${Math.round(x - SESSION_TAB_SIZE / 2)}px`;
+        tab.style.top = `${tops[index]}px`;
+        sessionMarksEl.append(tab);
+        if (index === labelled) placeSessionLabel(`${provider} asks`, x, tops[index], main);
+      });
     }
-    renderNotice();
+  }
+
+  /** "{provider} asks", printed in the page's margin beside the tab, so the mark names its author
+   * before its card is read. A margin note needs a margin: where the pane has no paper left of the
+   * gutter, the label hides and the tab's accessible name carries the words alone. */
+  function placeSessionLabel(text, x, tabTop, main) {
+    const label = el("span", { className: "glosa-session-by", "aria-hidden": "true", textContent: text });
+    label.style.left = `${Math.round(x - SESSION_TAB_SIZE / 2 - 6)}px`;
+    label.style.top = `${Math.round(tabTop + SESSION_TAB_SIZE / 2)}px`;
+    sessionMarksEl.append(label);
+    // An engine that lays nothing out reports zero width; nothing is clipped there.
+    const box = label.getBoundingClientRect();
+    if (box.width > 0 && box.left < main.left + SESSION_LABEL_ROOM) label.hidden = true;
+  }
+
+  /** The words of the request the reader is on, or is hovering the card of, take a second wash
+   * over the first: the thread from a card to its words, the way a note's card lights its passage. */
+  function paintSessionLit() {
+    const lit = [...new Set([focusedRequestId, hoveredRequestId])]
+      .map((id) => (id ? sessionRanges.get(id) : null))
+      .filter(Boolean);
+    contributeHighlight(HL_SESSION_LIT, paneHighlightToken, lit);
   }
 
   /** The pointer's tab glyph, drawn rather than typed: an arrow character takes its weight and
@@ -3133,21 +3212,25 @@ export function createArtifactPane(host, deps) {
     if (arrivedRequestIds.size === 0) return;
     setTimeout(() => {
       for (const id of ids ?? []) arrivedRequestIds.delete(id);
-      for (const node of bandsEl.querySelectorAll("[data-arrived]")) node.removeAttribute("data-arrived");
-    }, BAND_ARRIVE_MS);
+      for (const node of sessionMarksEl.querySelectorAll("[data-arrived]")) node.removeAttribute("data-arrived");
+    }, SESSION_ARRIVE_MS);
   }
 
   function prefersReducedMotion() {
     return typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
   }
 
+  /** Scrolls the pane, and says where it will come to rest: a smooth scroll is still under way
+   * when this returns, so anything placed against the viewport has to be placed against that. */
   function scrollPaneTo(top) {
-    const target = Math.max(0, Math.round(top));
+    const room = Math.max(0, paneMain.scrollHeight - paneMain.clientHeight);
+    const target = Math.min(room, Math.max(0, Math.round(top)));
     if (typeof paneMain.scrollTo === "function") {
       paneMain.scrollTo({ top: target, behavior: prefersReducedMotion() ? "auto" : "smooth" });
     } else {
       paneMain.scrollTop = target;
     }
+    return target;
   }
 
   /** The card for a request, wherever it currently lives: floating at its passage, in the rail, or
@@ -3162,7 +3245,7 @@ export function createArtifactPane(host, deps) {
    * Takes the reader to a session's request — because they asked to be taken.
    *
    * This is the only path that moves the page for a request, and every caller is a control the
-   * reader pressed: the notice's "Go to it", a band's tab, a tray row, a card's quote. Nothing
+   * reader pressed: the notice's "Go to it", a mark's tab, a tray row, a card's quote. Nothing
    * calls it on arrival (#308). It remembers where they were first, so the way back exists before
    * the move happens, and it parks unsaved work by way of `setMode`, which always parks.
    */
@@ -3183,17 +3266,23 @@ export function createArtifactPane(host, deps) {
     const arrive = () => {
       const range = rangeForPassage(request.passage);
       if (range) {
-        const rect = range.getBoundingClientRect();
-        const top = rect.top - paneMain.getBoundingClientRect().top + paneMain.scrollTop;
-        // With a rail the passage lands in the reading band, a third of the way down. Without one
-        // its card opens underneath it, so it lands higher and leaves the card the room.
-        scrollPaneTo(top - paneMain.clientHeight / (isSideMargin() ? 3 : 8));
+        // With a rail the words land in the reading band, a third of the way down. Without one the
+        // card opens under the words' block, so the block's top lands higher and leaves it room.
+        const side = isSideMargin();
+        const from = side ? range.getBoundingClientRect().top : sessionSpan(range).top;
+        const top = from - paneMain.getBoundingClientRect().top + paneMain.scrollTop;
+        const rest = scrollPaneTo(top - paneMain.clientHeight / (side ? 3 : 8));
+        // The card was placed before the move, against a viewport the reader is leaving: measured
+        // there, a question near the pane's foot had no room below and flipped over the text it
+        // follows. Placed again against where the scroll comes to rest, it opens under its block.
+        const floating = askLayerEl.querySelector(".glosa-agent-card");
+        if (floating) placeAskCard(floating, range, { scrollTop: rest });
       } else if (!isSideMargin()) {
         // No passage to go to, so the question itself is the destination, and at this width it
         // lives in the tray.
         setTrayOpen(true);
       }
-      paintAgentBands();
+      paintSessionMarks();
       if (!focusCard) return;
       const card = cardForRequest(request.id);
       if (!range) card?.scrollIntoView?.({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
@@ -3206,7 +3295,7 @@ export function createArtifactPane(host, deps) {
   }
 
   /** Steps off the question the reader was on without answering it: the floating card closes, the
-   * band and the tray row stay, and focus goes back to the band's tab so the keyboard is not
+   * mark and the tray row stay, and focus goes back to the mark's tab so the keyboard is not
    * stranded on a node that no longer exists. */
   function leaveRequest() {
     const id = focusedRequestId;
@@ -3214,8 +3303,10 @@ export function createArtifactPane(host, deps) {
     focusedRequestId = null;
     renderMargin();
     const back = () => {
-      paintAgentBands();
-      [...bandsEl.querySelectorAll(".glosa-band-tab")].find((t) => t.getAttribute("data-entry") === id)?.focus?.();
+      paintSessionMarks();
+      [...sessionMarksEl.querySelectorAll(".glosa-session-tab")]
+        .find((t) => t.getAttribute("data-entry") === id)
+        ?.focus?.();
     };
     if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(back);
     else back();
@@ -3375,29 +3466,27 @@ export function createArtifactPane(host, deps) {
     return button;
   }
 
-  /** Places the floating question card at its passage: under it, aligned to its first word and
-   * held inside the manuscript column, above it when there is no room below. Unlike the composer
-   * it is NOT clamped into the visible band — a draft follows its writer, but a question belongs
-   * to its words, and the notice is what reaches a reader who has scrolled away. */
-  function placeAskCard(node, range, { gap = 12 } = {}) {
+  /** Places the floating question card under the block its words are in, hanging from the
+   * session's bracket: the card's left edge on the bracket's line, so mark and card read as one
+   * object. Under the block rather than under the words, so the rest of the paragraph the reader is
+   * answering about stays readable; above it when there is no room below. Unlike the composer it
+   * is NOT clamped into the visible band — a draft follows its writer, but a question belongs to
+   * its words, and the notice is what reaches a reader who has scrolled away. */
+  function placeAskCard(node, range, { gap = 12, scrollTop = paneMain.scrollTop } = {}) {
     const main = paneMain.getBoundingClientRect();
-    const column = contentEl.getBoundingClientRect();
-    const rects = lineBoxes([...(range.getClientRects?.() ?? [])]);
-    const first = rects[0] ?? range.getBoundingClientRect();
-    const box = range.getBoundingClientRect();
+    const span = sessionSpan(range);
     const width = node.offsetWidth;
-    const minLeft = Math.max(16, column.left - main.left);
-    const maxLeft = Math.min(paneMain.clientWidth - 16, column.right - main.left) - width;
-    // Under a one-line passage, align to its first word, as a draft does. A passage that wraps runs
-    // on from the column's left edge, so that edge is where the eye returns to and the card starts.
-    const wanted = rects.length > 1 ? minLeft : first.left - main.left - 16;
-    node.style.left = `${Math.round(Math.max(minLeft, Math.min(wanted, Math.max(minLeft, maxLeft))))}px`;
-    const below = box.bottom - main.top + paneMain.scrollTop + gap;
-    const above = box.top - main.top + paneMain.scrollTop - gap - node.offsetHeight;
+    // The bracket is drawn 1.5px wide on its line; the card's edge meets the stroke's outer edge.
+    const bracket = columnLeft() - main.left + paneMain.scrollLeft - SESSION_BRACKET_INSET - 0.75;
+    const maxLeft = paneMain.clientWidth - 8 - width;
+    node.style.left = `${Math.round(Math.max(8, Math.min(bracket, maxLeft)))}px`;
+    // Content coordinates: independent of where the pane is scrolled right now.
+    const below = span.bottom - main.top + paneMain.scrollTop + gap;
+    const above = span.top - main.top + paneMain.scrollTop - gap - node.offsetHeight;
     // The tray lies over the pane's foot at this width; room under it is not room.
-    const viewBottom = paneMain.scrollTop + paneMain.clientHeight - (trayEl.hidden ? 0 : trayEl.offsetHeight);
+    const viewBottom = scrollTop + paneMain.clientHeight - (trayEl.hidden ? 0 : trayEl.offsetHeight);
     const fitsBelow = below + node.offsetHeight <= viewBottom - gap;
-    node.style.top = `${Math.round(!fitsBelow && above >= paneMain.scrollTop + gap ? above : below)}px`;
+    node.style.top = `${Math.round(!fitsBelow && above >= scrollTop + gap ? above : below)}px`;
   }
 
   async function submitAnswer(request, card, { outcome, response, chose }) {
@@ -3482,12 +3571,17 @@ export function createArtifactPane(host, deps) {
       "data-anchored": String(anchored),
       ...(floating ? { "data-floating": "true", role: "group", "aria-label": "Question at its passage" } : {}),
     });
-    // The thread between a card and its band, both ways: the card deepens its band on hover and
-    // focus, the way a note lights its passage.
+    // The thread between a card and its mark, both ways: hovering or focusing the card thickens
+    // its bracket and deepens its words, the way a note lights its passage.
     const thread = (on) => () => {
-      for (const node of bandsEl.querySelectorAll(".glosa-band")) {
-        if (node.getAttribute("data-entry") === request.id) node.toggleAttribute("data-hover", on);
+      if (on) hoveredRequestId = request.id;
+      else if (hoveredRequestId === request.id) hoveredRequestId = null;
+      for (const node of sessionMarksEl.querySelectorAll(".glosa-session-bracket")) {
+        if ((node.getAttribute("data-entries") ?? "").split(" ").includes(request.id)) {
+          node.toggleAttribute("data-hover", on);
+        }
       }
+      paintSessionLit();
     };
     card.addEventListener("mouseenter", thread(true));
     card.addEventListener("mouseleave", thread(false));
@@ -3522,8 +3616,8 @@ export function createArtifactPane(host, deps) {
     }
     card.append(who);
 
-    // Floating, the card sits directly under the banded words: quoting them again would push the
-    // question further from the passage it is about.
+    // Floating, the card hangs under the block whose words are washed: quoting them again would
+    // push the question further from the passage it is about.
     if (request.passage?.quote?.exact && !floating) {
       const quote = el("p", { className: "glosa-agent-quote" }, [
         el("span", { textContent: request.passage.quote.exact }),
@@ -4046,7 +4140,7 @@ export function createArtifactPane(host, deps) {
     const moved = repaintAnchorVerdicts();
     paintAnchorUnderlines();
     renderMarkers();
-    paintAgentBands();
+    paintSessionMarks();
     if (moved) renderMargin();
   }
 
@@ -5123,13 +5217,13 @@ export function createArtifactPane(host, deps) {
      * pane (a new request arrives, another pane approves one). The workspace calls this. */
     refreshApproval: renderApprovalStrip,
     /** Same reason, for the rail: the session's asks arrive workspace-scoped and become cards in
-     * THIS pane's margin, so a changed inbox has to repaint the cards and their bands. */
+     * THIS pane's margin, so a changed inbox has to repaint the cards and their marks. */
     refreshAgentRequests: ({ arrived } = {}) => {
       markArrived(arrived);
       // A question that was answered or withdrawn elsewhere must not leave this pane "on" it.
       if (focusedRequestId && !agentRequests().some((r) => r.id === focusedRequestId)) focusedRequestId = null;
       renderMargin();
-      paintAgentBands();
+      paintSessionMarks();
     },
     /** Takes the reader to one request. Only the reader's own "Go to it" reaches this — for a
      * question about an artifact that was not open, the workspace opens it and then calls here.
@@ -5172,9 +5266,9 @@ export function createArtifactPane(host, deps) {
       observer?.disconnect();
       teardownRichFace();
       stopClassFViewer?.();
-      // Withdraw only THIS pane's ranges: the three keys are shared, so deleting them outright
-      // would erase every other open artifact's marks.
-      for (const name of [HL_ANCHORS, HL_ANCHOR, HL_COMPOSER]) contributeHighlight(name, paneHighlightToken, []);
+      // Withdraw only THIS pane's ranges: the keys are shared, so deleting them outright would
+      // erase every other open artifact's marks.
+      for (const name of PANE_HIGHLIGHTS) contributeHighlight(name, paneHighlightToken, []);
       closePreview();
       paneEl.remove();
     },

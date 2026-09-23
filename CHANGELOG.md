@@ -52,6 +52,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   text was wider, so the row shifted every time you picked. They are now radios in one row: one
   filled dot says which is chosen, and nothing moves. The keyboard gets one stop instead of three,
   the arrow keys move between the choices, and a screen reader announces "1 of 3, checked".
+- **A session's question is marked beside its paragraph, and its words are highlighted.** The mark
+  was an outline squeezed around the exact words. It ran into your underline on the line above,
+  its "asks" label covered that line's words, and the answer box opened over the rest of the
+  paragraph. Now a bracket in the left margin spans the paragraph, a tab on it sits at the line the
+  question starts, and the words themselves are highlighted in the session's colour (a dotted
+  underline when it only points). The "Claude Code asks" label sits in the page margin when there
+  is room. The answer box opens under the paragraph instead of over it.
 
 ### Fixed
 

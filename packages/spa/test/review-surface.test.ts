@@ -41,6 +41,32 @@ describe("Review mode — the agent's half of the margin", () => {
     await flush();
   };
   const q = (root: any, selector: string): any => root.querySelector(selector);
+  /** happy-dom implements no CSS Custom Highlight registry, and a session's words are marked
+   * through it. This stand-in has the registry's shape (a map of names to set-like highlights of
+   * ranges) so a test can read which words each key holds. It proves the pane hands the right
+   * ranges to the right key; that the key paints is the stylesheet's and the real engine's part. */
+  type HighlightedRange = { startContainer: unknown; toString(): string };
+  const installHighlights = () => {
+    const registry = new Map<string, Set<HighlightedRange>>();
+    const g = globalThis as { CSS?: unknown; Highlight?: unknown };
+    const before = { CSS: g.CSS, Highlight: g.Highlight };
+    g.CSS = { highlights: registry };
+    g.Highlight = class extends Set<HighlightedRange> {
+      priority = 0;
+      constructor(...ranges: HighlightedRange[]) {
+        super(ranges);
+      }
+    };
+    // Keys are document-global and panes from earlier tests are never destroyed, so their ranges
+    // are still contributed; only the words inside this test's own pane are this test's.
+    const words = (name: string, host: { contains(node: unknown): boolean }) =>
+      [...(registry.get(name) ?? [])].filter((range) => host.contains(range.startContainer)).map((r) => r.toString());
+    const restore = () => {
+      g.CSS = before.CSS;
+      g.Highlight = before.Highlight;
+    };
+    return { words, restore };
+  };
   /** Since #271 the byte-exact editor is a tool in More, not a segment of the mode control. */
   const editSource = (host: any): any => q(host, ".glosa-tools-edit-source");
   const qa = (root: any, selector: string): any[] => [...root.querySelectorAll(selector)];
@@ -189,19 +215,63 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(q(card, ".glosa-agent-quote").textContent).toContain("the premise that readers accept the frame");
   });
 
-  test("the passage gets a BAND in its own layer, not a wash — the human's marks own the words", async () => {
-    const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
-    // An outline around the text, in its own layer (#308 replaced the grey sideline nobody saw).
-    // If this ever became a highlight range instead, an agent mark and an annotation on the same
-    // sentence would fight over one background.
-    expect(qa(host, ".glosa-bands .glosa-band").length).toBe(1);
-    const band = q(host, ".glosa-band");
-    expect(band.getAttribute("data-entry")).toBe("inb-1");
-    expect(band.getAttribute("data-kind")).toBe("question");
-    expect(band.getAttribute("d")).toMatch(/^M.*Z$/);
-    // Not by colour alone: the question's band names its author in words, and has a tab.
-    expect(q(host, ".glosa-band-label").textContent).toBe("Claude Code asks");
-    expect(q(host, ".glosa-band-tab").getAttribute("aria-label")).toContain("Question from Claude Code");
+  test("a question brackets its block in the gutter and washes exactly its words, under its own key", async () => {
+    const hl = installHighlights();
+    try {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
+      // The block, in its own layer: a `[` in the gutter, an open path, never a box around text.
+      expect(qa(host, ".glosa-session-marks .glosa-session-bracket").length).toBe(1);
+      const bracket = q(host, ".glosa-session-bracket");
+      expect(bracket.getAttribute("data-entries")).toBe("inb-1");
+      expect(bracket.getAttribute("data-kind")).toBe("question");
+      expect(bracket.getAttribute("d")).toMatch(/^M[\d.-]+,[\d.-]+H[\d.-]+V[\d.-]+H[\d.-]+$/);
+      // The words, exactly, under the session's key. Never the hand's: a session's mark taking the
+      // human's key would make the two indistinguishable (#308's rejected alternative).
+      expect(hl.words("glosa-session-asks", host)).toEqual(["the premise that readers accept the frame"]);
+      expect(hl.words("glosa-session-points", host)).toEqual([]);
+      expect(hl.words("glosa-anchors", host)).toEqual([]);
+      // Not by colour alone: the question's mark names its author in words, and has a tab.
+      expect(q(host, ".glosa-session-by").textContent).toBe("Claude Code asks");
+      expect(q(host, ".glosa-session-tab").getAttribute("aria-label")).toContain("Question from Claude Code");
+    } finally {
+      hl.restore();
+    }
+  });
+
+  test("Edit withdraws a session's words and bracket, and Review brings them back", async () => {
+    const hl = installHighlights();
+    try {
+      const { host, pane } = await mountPane(fakeDataAccess([askAboutPremise()]));
+      pane.setMode("edit");
+      await paint();
+      expect(qa(host, ".glosa-session-bracket").length).toBe(0);
+      expect(hl.words("glosa-session-asks", host)).toEqual([]);
+      pane.setMode("review");
+      await paint();
+      expect(qa(host, ".glosa-session-bracket").length).toBe(1);
+      expect(hl.words("glosa-session-asks", host)).toEqual(["the premise that readers accept the frame"]);
+    } finally {
+      hl.restore();
+    }
+  });
+
+  test("hovering a request's card deepens its words, and leaving lets them go", async () => {
+    const hl = installHighlights();
+    try {
+      // A pointer's card is the whole card at every width (a question's tray row only sends the
+      // reader to the passage), so it is the card whose thread this exercises.
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
+      const card = q(host, ".glosa-agent-card");
+      expect(hl.words("glosa-session-lit", host)).toEqual([]);
+      card.dispatchEvent(new dom.window.Event("mouseenter"));
+      expect(hl.words("glosa-session-lit", host)).toEqual(["the premise that readers accept the frame"]);
+      expect(q(host, ".glosa-session-bracket").hasAttribute("data-hover")).toBe(true);
+      card.dispatchEvent(new dom.window.Event("mouseleave"));
+      expect(hl.words("glosa-session-lit", host)).toEqual([]);
+      expect(q(host, ".glosa-session-bracket").hasAttribute("data-hover")).toBe(false);
+    } finally {
+      hl.restore();
+    }
   });
 
   test("proven provider and claimed label are rendered as separate things", async () => {
@@ -217,13 +287,13 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(q(host, ".glosa-agent-claimed")).toBeNull();
   });
 
-  test("a quote that occurs nowhere in the text is marked lost, and paints no sideline", async () => {
+  test("a quote that occurs nowhere in the text is marked lost, and paints no mark", async () => {
     const { host } = await mountPane(
       fakeDataAccess([askAboutPremise({ passage: { quote: { exact: "a sentence deleted last week" } } })]),
     );
     expect(q(host, ".glosa-agent-lost")).toBeTruthy();
-    expect(qa(host, ".glosa-band").length).toBe(0);
-    expect(qa(host, ".glosa-band-tab").length).toBe(0);
+    expect(qa(host, ".glosa-session-bracket").length).toBe(0);
+    expect(qa(host, ".glosa-session-tab").length).toBe(0);
     // The card stays: the question is still real even when its anchor is not.
     expect(q(host, ".glosa-agent-card")).toBeTruthy();
   });
@@ -301,25 +371,32 @@ describe("Review mode — the agent's half of the margin", () => {
   });
 
   test("a pointer with no question still marks the passage", async () => {
-    const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
-    expect(qa(host, ".glosa-band").length).toBe(1);
-    // A pointer does not hold its session, so it is quieter on every channel: outline without a
-    // printed label, and never a notice.
-    expect(q(host, ".glosa-band").getAttribute("data-kind")).toBe("pointer");
-    expect(q(host, ".glosa-band-label")).toBeNull();
-    expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
-    expect(q(host, ".glosa-agent-message")).toBeNull();
+    const hl = installHighlights();
+    try {
+      const { host } = await mountPane(fakeDataAccess([askAboutPremise({ message: null, action: "point" })]));
+      expect(qa(host, ".glosa-session-bracket").length).toBe(1);
+      // A pointer does not hold its session, so it is quieter on every channel: a dotted rule under
+      // its words instead of the wash, no printed label, and never a notice.
+      expect(q(host, ".glosa-session-bracket").getAttribute("data-kind")).toBe("pointer");
+      expect(hl.words("glosa-session-points", host)).toEqual(["the premise that readers accept the frame"]);
+      expect(hl.words("glosa-session-asks", host)).toEqual([]);
+      expect(q(host, ".glosa-session-by")).toBeNull();
+      expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
+      expect(q(host, ".glosa-agent-message")).toBeNull();
+    } finally {
+      hl.restore();
+    }
   });
 
-  test("the band's tab is a real button: the keyboard reaches the question from the passage", async () => {
+  test("the mark's tab is a real button: the keyboard reaches the question from the passage", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise()]));
-    const tab = q(host, ".glosa-band-tab");
+    const tab = q(host, ".glosa-session-tab");
     expect(tab.tagName).toBe("BUTTON");
     tab.click();
     await paint();
-    // Activation puts the reader ON this request: its band is the focused one, and its card is the
-    // one floating at the passage.
-    expect(q(host, ".glosa-band").getAttribute("data-focused")).toBe("true");
+    // Activation puts the reader ON this request: its bracket is the focused one, and its card is
+    // the one floating at the passage.
+    expect(q(host, ".glosa-session-bracket").getAttribute("data-focused")).toBe("true");
     expect(atPassage(host).getAttribute("data-entry")).toBe("inb-1");
   });
 
@@ -330,7 +407,7 @@ describe("Review mode — the agent's half of the margin", () => {
     expect(quote.tabIndex).toBe(0);
     quote.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await paint();
-    expect(q(host, ".glosa-band").getAttribute("data-focused")).toBe("true");
+    expect(q(host, ".glosa-session-bracket").getAttribute("data-focused")).toBe("true");
   });
 
   describe("#308 — the reader is told where, and never moved", () => {
@@ -373,7 +450,8 @@ describe("Review mode — the agent's half of the margin", () => {
       expect(main.scrollTop).toBe(0);
       expect(q(host, ".glosa-ask-notice").hidden).toBe(false);
       // The arrival draws its mark in once; that is the whole of what an arrival does to the page.
-      expect(q(host, ".glosa-band").getAttribute("data-arrived")).toBe("true");
+      expect(q(host, ".glosa-session-bracket").getAttribute("data-arrived")).toBe("true");
+      expect(q(host, ".glosa-session-tab").getAttribute("data-arrived")).toBe("true");
     });
 
     test("'Go to it' is what opens Review and the card, and it leaves a way back", async () => {
@@ -405,15 +483,19 @@ describe("Review mode — the agent's half of the margin", () => {
       expect(q(host, ".glosa-ask-notice-count").textContent).toBe("2 of 2");
     });
 
-    test("two questions on the same words: the older keeps the fill, the newer is outline only", async () => {
+    test("two questions in one block share its bracket, and each keeps a tab of its own", async () => {
       const older = askAboutPremise({ id: "inb-1", created_at: "2026-09-05T10:00:00Z" });
       const newer = askAboutPremise({ id: "inb-2", created_at: "2026-09-05T10:00:05Z" });
       const { host } = await mountPane(fakeDataAccess([newer, older]));
-      const bands = qa(host, ".glosa-band");
-      expect(bands.map((b) => [b.getAttribute("data-entry"), b.getAttribute("data-overlapped")])).toEqual([
-        ["inb-1", null],
-        ["inb-2", "true"],
-      ]);
+      // One paragraph asked about twice is still one paragraph: one bracket, one author label.
+      const brackets = qa(host, ".glosa-session-bracket");
+      expect(brackets.map((b) => b.getAttribute("data-entries"))).toEqual(["inb-1 inb-2"]);
+      expect(qa(host, ".glosa-session-by").length).toBe(1);
+      // Two tabs, oldest first, and never on top of each other: both words start on the same line,
+      // so the newer tab is pushed below the older one rather than hidden under it.
+      const tabs = qa(host, ".glosa-session-tab");
+      expect(tabs.map((t) => t.getAttribute("data-entry"))).toEqual(["inb-1", "inb-2"]);
+      expect(Number.parseFloat(tabs[1].style.top) - Number.parseFloat(tabs[0].style.top)).toBeGreaterThanOrEqual(24);
     });
 
     test("dismissing the notice waves away the notice, not the question", async () => {
@@ -421,7 +503,7 @@ describe("Review mode — the agent's half of the margin", () => {
       q(host, ".glosa-ask-notice-dismiss").click();
       await paint();
       expect(q(host, ".glosa-ask-notice").hidden).toBe(true);
-      expect(qa(host, ".glosa-band").length).toBe(1);
+      expect(qa(host, ".glosa-session-bracket").length).toBe(1);
       expect(q(host, ".glosa-tray-count").textContent).toBe("1 question");
     });
 
@@ -463,7 +545,7 @@ describe("Review mode — the agent's half of the margin", () => {
       await paint();
       expect(atPassage(host)).toBeNull();
       expect(da.answered).toHaveLength(0);
-      expect(qa(host, ".glosa-band").length).toBe(1);
+      expect(qa(host, ".glosa-session-bracket").length).toBe(1);
     });
   });
 
@@ -547,7 +629,7 @@ describe("Review mode — the agent's half of the margin", () => {
   test("a request for another artifact never appears in this pane's rail", async () => {
     const { host } = await mountPane(fakeDataAccess([askAboutPremise({ target_path: "elsewhere.md" })]));
     expect(q(host, ".glosa-agent-card")).toBeNull();
-    expect(qa(host, ".glosa-band").length).toBe(0);
+    expect(qa(host, ".glosa-session-bracket").length).toBe(0);
   });
 
   describe("unsaved work survives the switch the agent causes", () => {
