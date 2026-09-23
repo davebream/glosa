@@ -122,7 +122,15 @@ describe("A1 §5 route catalog", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual([
-      { slug, path: root, kind: "directory", last_seen: expect.any(String), has_attention: false },
+      {
+        slug,
+        path: root,
+        kind: "directory",
+        last_seen: expect.any(String),
+        has_attention: false,
+        registration_id: expect.stringMatching(/^[a-f0-9]{64}$/),
+        registration_epoch: expect.any(String),
+      },
     ]);
   });
 

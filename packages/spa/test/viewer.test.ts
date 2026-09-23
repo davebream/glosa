@@ -559,11 +559,12 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     const trigger = tools.querySelector(".glosa-tools-trigger") as any;
     const menu = root.querySelector(".glosa-tools-menu") as any;
     expect(trigger.getAttribute("aria-controls")).toBe("glosa-tools-menu");
-    // Workspace-scoped only (§6): the attention tray, Conversation, Appearance and the keyboard
+    // Workspace-scoped only: the attention tray, Appearance and the keyboard
     // sheet. Copy source, Print and History moved into the pane that holds their artifact.
     expect(
       menu.querySelectorAll(":scope > .glosa-attention, :scope > button, :scope > .glosa-appearance"),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
+    expect(menu.querySelector(".glosa-conversation-toggle")).toBeNull();
     expect(menu.querySelector(".glosa-tools-copy-source")).toBeNull();
     expect(menu.querySelector(".glosa-tools-print")).toBeNull();
     expect(menu.querySelector(".glosa-history-toggle")).toBeNull();
@@ -574,7 +575,7 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(dom.document.activeElement as any).toBe(menu.querySelector("button:not(:disabled)") as any);
 
-    (menu.querySelector(".glosa-conversation-toggle") as any).click();
+    (menu.querySelector(".glosa-shortcuts-toggle") as any).click();
     await Promise.resolve();
     expect(tools.dataset.open).toBe("false");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -1166,68 +1167,52 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
   });
 
-  test("P4.2: the Conversation toggle mounts conversation.js's pane against the current workspace, and un-hides it", async () => {
+  test("external sessions open as exact-session tabs while artifact history stays in its own pane", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);
-    const openedForSlugs: string[] = [];
+    const opened: unknown[] = [],
+      remembered: unknown[] = [];
     const da = fakeDataAccess({
-      openTranscriptStream: (slug: string) => {
-        openedForSlugs.push(slug);
+      getChats: async () => ({ chats: [], external: [] }),
+      getStatus: async () => ({
+        workspaces: [],
+        sessions: [
+          { session_id: "external-a", provider: "claude-code", workspace_binding: "/tmp/ws-1", liveness: "alive" },
+          { session_id: "external-b", provider: "codex", workspace_binding: "/tmp/ws-1", liveness: "alive" },
+        ],
+      }),
+      rememberExternalChat: async (slug: string, sessionId: string) => {
+        remembered.push({ slug, sessionId });
+      },
+      openSessionTranscript: (slug: string, sessionId: string) => {
+        opened.push({ slug, sessionId });
         return () => {};
       },
     });
-
-    // The notes-hidden page: the transcript is read-only context there, and composing needs notes shown.
-    mountApp(root, { dataAccess: da, initialMode: "read" });
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    // History lives in a pane now, so there has to be one open to compare the two scopes.
-    (root.querySelector('.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]') as any).click();
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-
-    const toggle = root.querySelector(".glosa-conversation-toggle") as any;
-    const pane = root.querySelector(".glosa-conversation") as any;
-    // §6: Conversation is workspace-scoped (conversation.js keys on slug alone) so it stays in
-    // the top bar. History is artifact-scoped and lives in the pane that holds its artifact.
-    const historyToggle = inPane(root, ".glosa-history-toggle");
-    const historyPane = inPane(root, ".glosa-history");
-    expect(pane.parentElement).toBe(root);
-    expect(historyPane.parentElement).toBe(activePane(root));
-    expect(root.querySelector(".glosa-topbar .glosa-history-toggle")).toBeNull();
-    expect(pane.hidden).toBe(true);
-    expect(toggle.getAttribute("aria-controls")).toBe("glosa-conversation");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-
-    toggle.click();
-    for (let i = 0; i < 5 && openedForSlugs.length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    expect(pane.hidden).toBe(false);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(openedForSlugs).toEqual(["ws-1"]);
-    // Preview exposes the transcript as read-only agent context; composition requires Annotate.
-    expect(pane.querySelector(".glosa-conv-composer-input")).toBeNull();
-    expect(pane.textContent).toContain("Agent context");
-
-    // The pane's History opens beside its own manuscript and leaves Conversation alone — they
-    // describe different scopes now, so one no longer has to close the other.
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    for (let i = 0; i < 15; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(root.querySelector(".glosa-conversation-toggle")).toBeNull();
+    expect(root.querySelectorAll(".glosa-chat-list-item")).toHaveLength(2);
+    (root.querySelectorAll(".glosa-chat-list-item")[1] as unknown as HTMLButtonElement).click();
+    for (let i = 0; i < 15; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(opened).toEqual([{ slug: "ws-1", sessionId: "external-b" }]);
+    expect(remembered).toEqual([{ slug: "ws-1", sessionId: "external-b" }]);
+    const external = root.querySelector(".glosa-external-chat");
+    expect(external?.querySelector(".glosa-conv-composer-input")).not.toBeNull();
+    (
+      root.querySelector(
+        '.glosa-artifact-list .glosa-tree-row[data-tree-action="open"]',
+      ) as unknown as HTMLButtonElement
+    ).click();
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    const historyToggle = inPane(root, ".glosa-history-toggle"),
+      historyPane = inPane(root, ".glosa-history");
     historyToggle.click();
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     expect(historyPane.hidden).toBe(false);
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(pane.hidden).toBe(false);
-
-    historyToggle.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(historyPane.hidden).toBe(true);
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(pane.hidden).toBe(false);
-
-    const close = pane.querySelector(".glosa-conv-close") as any;
-    expect(close.getAttribute("aria-label")).toBe("Close agent context");
-    close.click();
-    expect(pane.hidden).toBe(true);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(dom.document.activeElement).toBe(root.querySelector(".glosa-tools-trigger") as any);
+    expect(external?.isConnected).toBe(true);
+    expect(root.querySelector(".glosa-topbar .glosa-history-toggle")).toBeNull();
+    unmount();
   });
 
   test("document surface hides navigator chrome", async () => {

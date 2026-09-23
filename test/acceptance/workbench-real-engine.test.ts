@@ -632,9 +632,11 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       const before = await waitForState(tab, "alpha edits", (state) => paneFor(state, ALPHA)?.mode === "edit");
 
       // The arrangement on disk names both panels and carries a mode for each.
-      expect(Object.keys(before.layout?.panels ?? {}).sort()).toEqual([ALPHA, BETA]);
-      expect(before.layout?.panels[BETA]?.params?.mode).toBe("read");
-      expect(before.layout?.panels[ALPHA]?.params?.mode).toBe("edit");
+      expect(Object.keys(before.layout?.panels ?? {}).sort()).toEqual(
+        [ALPHA, BETA].map((path) => JSON.stringify(["artifact", path])),
+      );
+      expect(before.layout?.panels[JSON.stringify(["artifact", BETA])]?.params?.mode).toBe("read");
+      expect(before.layout?.panels[JSON.stringify(["artifact", ALPHA])]?.params?.mode).toBe("edit");
 
       await tab.reload();
       await waitForReady(tab, "after reload");
@@ -838,6 +840,89 @@ describe("#162 — the multi-artifact workbench in a real engine", () => {
       expect(paneFor(afterPercent, FOLDER_PATH)?.errorTitle).toBe("");
       const percentHash = new URLSearchParams((await percentTab.evaluate<string>("location.hash")).slice(1));
       expect(percentHash.get("a")).toBe(FOLDER_PATH);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "managed chat renders safely, preserves selection while streaming, and sends real keyboard input",
+    async () => {
+      const { browser, cdpPort } = await launchBrowser();
+      const tab = await openTab(browser, cdpPort, pairedUrl(ALPHA));
+      await waitForReady(tab, "before managed pane");
+      // Real renderer/input/layout, deterministic transport. This is not a native-provider claim.
+      await tab.evaluate(`(async () => {
+      const { createChatPane } = await import('/app/chat-pane.js');
+      const host = document.createElement('main'); host.style.cssText = 'height:100vh;width:100%;padding:12px;box-sizing:border-box';
+      document.body.replaceChildren(host);
+      const state = { id:'fixture', profileId:'a', provider:'claude-code', title:'Review the outline', revision:1,
+        configRevision:1, draftRevision:0, draft:'', draftAttachments:[], archived:false,
+        settings:{model:'model',effort:'high',permissionMode:'default'},
+        turns:[{id:'first',text:'Review my outline',status:'completed'}],
+        content:[{id:'reply',turnId:'first',kind:'text',role:'assistant',text:'A **clear opening**. <img src=x onerror=alert(1)>'}], decisions:[] };
+      window.chatFixture = { state, sends:[], answers:[] };
+      const access = {
+        getAgentStatus: async () => ({available:true,profiles:[{id:'a',provider:'claude-code',label:'Personal',enabled:true}],capabilities:{a:{models:[{id:'model',name:'Model',efforts:['high']}]}}}),
+        getChat: async () => structuredClone(state),
+        openChatStream: (_slug,_id,callbacks) => { window.chatFixture.stream=callbacks; return () => {}; },
+        saveChatDraft: async (_s,_i,input) => { state.draft=input.text; state.draftRevision++; return structuredClone(state); },
+        sendChatTurn: async (_s,_i,input) => { window.chatFixture.sends.push(input); state.turns.push({id:input.turnId,text:input.text,status:'completed'}); state.draft=''; state.draftRevision++; state.revision++; return {}; },
+        answerChatDecision: async (_s,_i,input) => { window.chatFixture.answers.push(input); state.decisions[0].status='answered'; state.revision++; },
+      };
+      window.chatFixture.pane=createChatPane(host,{dataAccess:access,slug:'fixture',chatId:'fixture',onChange(){},onSettings(){}});
+      await window.chatFixture.pane.ready;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    })()`);
+      expect(
+        await tab.evaluate<number>(
+          "document.querySelectorAll('.glosa-chat-history img, .glosa-chat-history script').length",
+        ),
+      ).toBe(0);
+      expect(await tab.evaluate<string>("document.querySelector('.glosa-chat-history strong')?.textContent")).toBe(
+        "clear opening",
+      );
+      const selected = await tab.evaluate<string>(`(() => {
+      const text = document.querySelector('.glosa-chat-history strong').firstChild;
+      const range=document.createRange(); range.selectNodeContents(text); const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      chatFixture.stream.onEvent({event:'chat_event',data:{seq:2,data:{type:'content',content:{id:'reply',turnId:'first',kind:'text',role:'assistant',text:' More context.'}}}});
+      return selection.toString();
+    })()`);
+      expect(selected).toBe("clear opening");
+      await tab.evaluate("getSelection().removeAllRanges(); document.querySelector('[aria-label=Message]').focus()");
+      await tab.send("Input.insertText", { text: "Please expand this section" });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await tab.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      const submitted = await tab.evaluate<string>(`new Promise((resolve,reject) => { const deadline=Date.now()+3000;
+      const check=()=>{if(chatFixture.sends.length) resolve(chatFixture.sends[0].text); else if(Date.now()>deadline) reject(new Error('keyboard send not observed')); else requestAnimationFrame(check)}; check(); })`);
+      expect(submitted).toBe("Please expand this section");
+      await tab.send("Emulation.setDeviceMetricsOverride", {
+        width: 480,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await tab.evaluate(`new Promise(resolve => requestAnimationFrame(resolve))`);
+      const layout = await tab.evaluate<{ viewport: number; width: number; buttons: number }>(
+        `({viewport:innerWidth,width:document.body.scrollWidth,buttons:[...document.querySelectorAll('.glosa-chat-pane button')].filter(b=>b.getBoundingClientRect().width>0).length})`,
+      );
+      expect(layout.width).toBeLessThanOrEqual(layout.viewport);
+      expect(layout.buttons).toBeGreaterThan(5);
+      const screenshot = await tab.send("Page.captureScreenshot", { format: "png" });
+      mkdirSync(".context/test-results", { recursive: true });
+      writeFileSync(
+        `.context/test-results/managed-chat-browser-${Date.now()}.png`,
+        Buffer.from(screenshot.result.data, "base64"),
+      );
     },
     TEST_TIMEOUT_MS,
   );
