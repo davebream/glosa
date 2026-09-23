@@ -23,6 +23,10 @@ import { managedEnvironment } from "./environment.ts";
 import { ManagedAgentError, type OwnedProcess, type ProcessLauncher, type RuntimeManifest } from "./interface.ts";
 import { writeOwnership } from "./ownership.ts";
 
+// The pinned native archive can exceed 125 MiB; a foreground install must tolerate
+// slower connections while retaining a finite owned-process cleanup deadline.
+export const RUNTIME_INSTALL_TIMEOUT_MS = 20 * 60_000;
+
 export interface RuntimeCandidate {
   provider: string;
   version: string;
@@ -215,7 +219,17 @@ export class RuntimeCatalog {
       const exit = await Promise.race([
         child.exited,
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error("install timed out")), 600_000);
+          timer = setTimeout(
+            () =>
+              reject(
+                new ManagedAgentError(
+                  "runtime-install-timeout",
+                  "The runtime download exceeded 20 minutes. Check your connection and retry; existing installations were preserved.",
+                  504,
+                ),
+              ),
+            RUNTIME_INSTALL_TIMEOUT_MS,
+          );
         }),
       ]);
       if (timer) clearTimeout(timer);
@@ -253,7 +267,8 @@ export class RuntimeCatalog {
       renameSync(staging, root);
       fsyncContainingDir(root);
       return this.manifest(provider)!;
-    } catch {
+    } catch (error) {
+      if (error instanceof ManagedAgentError && error.code === "runtime-install-timeout") throw error;
       throw new ManagedAgentError(
         "runtime-unqualified",
         "The runtime could not be installed or verified. Existing installations were preserved.",

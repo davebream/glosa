@@ -19,6 +19,7 @@ import {
 } from "../agents/interface.ts";
 import type { ManagedTools } from "../agents/managed-tools.ts";
 import { nativeProbe } from "../agents/probe.ts";
+import { RUNTIME_INSTALL_TIMEOUT_MS } from "../agents/runtimes.ts";
 import { digest, privateDirectory, readBlob } from "./journal.ts";
 import {
   AgentStore,
@@ -813,7 +814,7 @@ export class ManagedChatService {
       state: "running",
       output: "",
       offset: 0,
-      expiresAt: Date.now() + 600_000,
+      expiresAt: Date.now() + RUNTIME_INSTALL_TIMEOUT_MS,
     };
     this.management = operation;
     try {
@@ -1053,7 +1054,12 @@ export class ManagedChatService {
       }
     }
     if (op.process) {
-      await op.process.fence();
+      try {
+        await op.process.fence();
+      } catch {
+        // A native exit can race the final acknowledgement. Authority is already
+        // revoked by `stopping`; stop must still confirm the owned group's exit.
+      }
       await op.process.stop();
     }
     op.output = "";
@@ -1404,7 +1410,11 @@ export class ManagedChatService {
         }
         run.processes.add(child);
         if (run.fenced) {
-          await child.fence();
+          try {
+            await child.fence();
+          } catch {
+            // A late launch remains our responsibility even if its control pipe has closed.
+          }
           await child.stop();
           throw new ManagedAgentError("run-fenced", "This run was stopped.");
         }
@@ -1716,15 +1726,14 @@ export class ManagedChatService {
     } catch {
       drained = false;
     }
-    const fences = await Promise.allSettled([...run.processes].map((child) => child.fence()));
-    let stopped = drained && fences.every((result) => result.status === "fulfilled");
+    await Promise.allSettled([...run.processes].map((child) => child.fence()));
     try {
       await bounded(Promise.resolve(run.connection?.close()), 5_000);
     } catch {
-      stopped = false;
+      // A closed SDK transport is not proof of a live process. Owned stop below decides.
     }
     const exits = await Promise.allSettled([...run.processes].map((child) => child.stop()));
-    stopped &&= exits.every((result) => result.status === "fulfilled");
+    const stopped = drained && exits.every((result) => result.status === "fulfilled");
     for (const decision of log.state.decisions)
       if (decision.generation === run.generation && ["pending", "reserved"].includes(decision.status))
         log.append({ type: "decision_status", id: decision.id, status: "unknown" });

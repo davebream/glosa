@@ -306,8 +306,9 @@ export function mountApp(
     nextChatsPage = result.next;
     moreChats.hidden = !nextChatsPage;
     rememberedExternal = result.external ?? [];
-    const aggregate = await dataAccess.getStatus?.();
+    const [aggregate, accounts] = await Promise.all([dataAccess.getStatus?.(), dataAccess.getAgentStatus?.()]);
     if (slug !== currentSlug || unmounted) return;
+    agentStatus = accounts;
     const workspace = workspaces.find((entry) => entry.slug === slug);
     externalSessions = (aggregate?.sessions ?? []).filter(
       (session) => session.workspace_binding === workspace?.path && session.source !== "managed-chat",

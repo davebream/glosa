@@ -23,6 +23,42 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
+
+test("model discovery releases management after an exit races its fence, but uncertain cleanup stays blocked", async () => {
+  let stops = 0,
+    uncertain = false;
+  const h = setup({
+    launcher: {
+      async spawn() {
+        return {
+          pid: 123,
+          exited: Promise.resolve({ code: 0, signal: null, groupEmpty: true }),
+          async write() {},
+          async fence() {
+            throw new Error("runtime exited before fence acknowledgement");
+          },
+          async stop() {
+            stops++;
+            // The SDK closes first; management must still prove cleanup independently.
+            if (uncertain && stops % 2 === 0) throw new Error("process group exit unconfirmed");
+          },
+          resize() {},
+        };
+      },
+    },
+  });
+  expect((await h.service.discoverModels(h.profile.id)).models[0]!.id).toBe("model-a");
+  expect(stops).toBe(2);
+  expect((await h.service.probeProfile(h.profile.id)).auth.state).toBe("authenticated");
+  uncertain = true;
+  try {
+    await expect(h.service.discoverModels(h.profile.id)).rejects.toThrow("process group exit unconfirmed");
+    expect(stops).toBe(4);
+    await expect(h.service.probeProfile(h.profile.id)).rejects.toThrow("Finish the current account operation");
+  } finally {
+    uncertain = false;
+  }
+});
 async function eventually(check: () => boolean): Promise<void> {
   for (let i = 0; i < 100; i++) {
     if (check()) return;
@@ -195,6 +231,111 @@ test("durable duplicate Send never calls the native adapter twice and freezes tu
   expect(h.inputs[0]?.settings.effort).toBe("high");
   expect(() => h.service.send(h.workspace, chat.id, { ...request, text: "changed" })).toThrow("different input");
 });
+
+test("confirmed native exit releases a completed run after fence or adapter-close races; unknown exit does not", async () => {
+  for (const failure of ["fence", "close"] as const) {
+    let uncertain = false;
+    const h = setup({
+      launcher: {
+        async spawn() {
+          return {
+            pid: 123,
+            exited: Promise.resolve({ code: 0, signal: null, groupEmpty: true }),
+            async write() {},
+            async fence() {
+              if (failure === "fence") throw new Error("runtime exited before acknowledgement");
+            },
+            async stop() {
+              if (uncertain) throw new Error("process group exit unconfirmed");
+            },
+            resize() {},
+          };
+        },
+      },
+    });
+    const adapter = h.registry.get("fixture"),
+      connect = adapter.connect.bind(adapter);
+    if (failure === "close")
+      adapter.connect = async (...args) => ({
+        ...(await connect(...args)),
+        async close() {
+          throw new Error("transport already closed");
+        },
+      });
+    const completed = h.chat();
+    h.send(completed.id);
+    await eventually(() => h.inputs.length === 1);
+    h.events.get(completed.sessionId)!({ type: "completed" });
+    await eventually(() => !h.service.busy);
+    expect(h.store.chat(completed.id).state.runtime?.state).toBe("stopped");
+    uncertain = true;
+    const unconfirmed = h.chat();
+    try {
+      h.send(unconfirmed.id);
+      await eventually(() => h.inputs.length === 2);
+      h.events.get(unconfirmed.sessionId)!({ type: "completed" });
+      await eventually(() => h.store.chat(unconfirmed.id).state.runtime?.state === "unknown");
+      expect(h.service.busy).toBe(true);
+    } finally {
+      uncertain = false;
+      await h.service.stop(h.workspace, unconfirmed.id);
+    }
+  }
+});
+
+test("a launch resolving after the stop grace still proves child exit before rejecting its fenced handoff", async () => {
+  let release!: () => void,
+    starting = false,
+    stops = 0,
+    stopsAtRejection: number | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = setup({
+    launcher: {
+      async spawn() {
+        starting = true;
+        await held;
+        return {
+          pid: 123,
+          exited: Promise.resolve({ code: 0, signal: null, groupEmpty: true }),
+          async write() {},
+          async fence() {
+            throw new Error("runtime exited before acknowledgement");
+          },
+          async stop() {
+            stops++;
+          },
+          resize() {},
+        };
+      },
+    },
+  });
+  const adapter = h.registry.get("fixture"),
+    connect = adapter.connect.bind(adapter);
+  adapter.connect = async (...args) => {
+    try {
+      return await connect(...args);
+    } catch (error) {
+      stopsAtRejection = stops;
+      throw error;
+    }
+  };
+  const chat = h.chat();
+  try {
+    h.send(chat.id);
+    await eventually(() => starting);
+    // Exercise the real five-second drainage boundary: cleanup's first pass cannot see this child.
+    await h.service.stop(h.workspace, chat.id);
+    expect(h.store.chat(chat.id).state.runtime?.state).toBe("unknown");
+    release();
+    await eventually(() => stopsAtRejection !== undefined);
+    expect(stopsAtRejection).toBeGreaterThan(0);
+  } finally {
+    release();
+    await h.service.stop(h.workspace, chat.id);
+  }
+}, 10_000);
 
 test("disabling an account while dispatch is paused prevents a later native handoff", async () => {
   const h = setup(),

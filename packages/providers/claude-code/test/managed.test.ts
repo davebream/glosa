@@ -28,6 +28,53 @@ test("Claude streaming output is emitted once when the complete assistant messag
   expect(events[0]).toEqual({ type: "session", nativeId: "native-session" });
 });
 
+test("Claude blockwise assistant envelopes preserve stream indexes after thinking and across subagents", () => {
+  const events: AgentEvent[] = [];
+  const normalizer = new ClaudeEventNormalizer((event) => events.push(event));
+  // Native 0.3.280 emits one assistant envelope per completed block, sharing the
+  // message id. Its content array restarts at zero while stream indexes advance.
+  for (const parent of [null, "subagent-tool"]) {
+    normalizer.accept({
+      type: "stream_event",
+      parent_tool_use_id: parent,
+      event: { type: "message_start", message: { id: "message-1" } },
+    });
+    normalizer.accept({
+      type: "stream_event",
+      parent_tool_use_id: parent,
+      event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Considering" } },
+    });
+    normalizer.accept({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { id: "message-1", content: [{ type: "thinking", thinking: "Considering" }] },
+    });
+    normalizer.accept({
+      type: "stream_event",
+      parent_tool_use_id: parent,
+      event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Hello" } },
+    });
+    normalizer.accept({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { id: "message-1", content: [{ type: "text", text: "Hello" }] },
+    });
+    // A non-streamed block still reaches the transcript under its own index.
+    normalizer.accept({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { id: "message-1", content: [{ type: "text", text: "Hello" }] },
+    });
+  }
+  expect(events.filter((event) => event.type === "text")).toEqual(
+    ["main", "subagent-tool"].flatMap((parent) => [
+      { type: "text", id: `${parent}:message-1:0`, text: "Considering", reasoning: true },
+      { type: "text", id: `${parent}:message-1:1`, text: "Hello", reasoning: false },
+      { type: "text", id: `${parent}:message-1:2`, text: "Hello", reasoning: false },
+    ]),
+  );
+});
+
 test("Claude tool lifecycle and usage remain structured and subscription cost is labelled as an estimate", () => {
   const events: AgentEvent[] = [],
     normalizer = new ClaudeEventNormalizer((event) => events.push(event));
@@ -59,8 +106,50 @@ test("Claude tool lifecycle and usage remain structured and subscription cost is
   expect(events.at(-1)).toEqual({ type: "completed" });
 });
 
+test("Claude empty stream blocks do not shift later text and non-streamed messages preserve all blocks", () => {
+  const events: AgentEvent[] = [];
+  const normalizer = new ClaudeEventNormalizer((event) => events.push(event));
+  normalizer.accept({ type: "stream_event", event: { type: "message_start", message: { id: "empty-first" } } });
+  normalizer.accept({
+    type: "stream_event",
+    event: { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+  });
+  normalizer.accept({ type: "stream_event", event: { type: "content_block_stop", index: 0 } });
+  normalizer.accept({
+    type: "stream_event",
+    event: { type: "content_block_start", index: 1, content_block: { type: "text" } },
+  });
+  normalizer.accept({
+    type: "stream_event",
+    event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Hello" } },
+  });
+  normalizer.accept({ type: "assistant", message: { id: "empty-first", content: [{ type: "text", text: "Hello" }] } });
+  normalizer.accept({ type: "stream_event", event: { type: "content_block_stop", index: 1 } });
+  normalizer.accept({
+    type: "assistant",
+    message: {
+      id: "no-stream",
+      content: [
+        { type: "thinking", thinking: "Plan" },
+        { type: "text", text: "Answer" },
+      ],
+    },
+  });
+  expect(events.filter((event) => event.type === "text").map((event) => [event.id, event.text])).toEqual([
+    ["main:empty-first:1", "Hello"],
+    ["main:no-stream:0", "Plan"],
+    ["main:no-stream:1", "Answer"],
+  ]);
+});
+
 test("Claude foreground status distinguishes signed-out exit 1 from errors and refuses API billing", async () => {
   const adapter = new ClaudeManagedAdapter();
+  const { validLoginUrl } = await import("../../../spa/src/agent-login.js");
+  // The pinned native login now uses claude.com; match only its exact host.
+  expect(validLoginUrl("https://claude.com/cai/oauth/authorize", adapter.authHosts)).toBe(
+    "https://claude.com/cai/oauth/authorize",
+  );
+  expect(validLoginUrl("https://claude.com.evil.test/cai/oauth/authorize", adapter.authHosts)).toBeNull();
   const calls: unknown[] = [];
   let exitCode = 0;
   let observation = {

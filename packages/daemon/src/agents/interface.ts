@@ -191,6 +191,7 @@ export type ManagedAgentCode =
   | "runtime-capacity"
   | "runtime-closed"
   | "runtime-fenced"
+  | "runtime-install-timeout"
   | "runtime-unqualified"
   | "sdk-unavailable"
   | "stale-chat"

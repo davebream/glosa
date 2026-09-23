@@ -188,7 +188,7 @@ const statusSchema = z.object({
 export class ClaudeManagedAdapter implements ManagedAgentAdapter {
   readonly id = "claude-code";
   readonly name = "Claude";
-  readonly authHosts = ["claude.ai", "platform.claude.com", "console.anthropic.com"];
+  readonly authHosts = ["claude.ai", "claude.com", "platform.claude.com", "console.anthropic.com"];
   constructor(
     private readonly loadSdk: (path: string) => Promise<ClaudeSdk> = async (path) =>
       (await import(pathToFileURL(path).href)) as ClaudeSdk,
@@ -521,6 +521,8 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
 export class ClaudeEventNormalizer {
   private readonly messageIds = new Map<string, string>();
   private readonly streamed = new Set<string>();
+  private readonly completedBlocks = new Map<string, number>();
+  private readonly activeBlocks = new Map<string, number>();
   private readonly tools = new Map<string, string>();
   constructor(private readonly emit: (event: AgentEvent) => void) {}
   accept(raw: unknown): void {
@@ -551,7 +553,14 @@ export class ClaudeEventNormalizer {
       };
       if (!event) return;
       if (event.type === "message_start") this.messageIds.set(parent, event.message?.id ?? randomUUID());
-      const id = `${parent}:${this.messageIds.get(parent) ?? "unknown"}:${event.index ?? 0}`;
+      const key = `${parent}:${this.messageIds.get(parent) ?? "unknown"}`;
+      const id = `${key}:${event.index ?? 0}`;
+      if (event.type === "content_block_start" && typeof event.index === "number")
+        this.activeBlocks.set(key, event.index);
+      if (event.type === "content_block_stop" && typeof event.index === "number") {
+        this.activeBlocks.delete(key);
+        this.completedBlocks.set(key, Math.max(this.completedBlocks.get(key) ?? 0, event.index + 1));
+      }
       if (event.type === "content_block_delta" && event.delta) {
         const text =
           event.delta.type === "thinking_delta"
@@ -583,8 +592,17 @@ export class ClaudeEventNormalizer {
         id?: string;
         content?: { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown }[];
       };
-      for (const [index, block] of (message?.content ?? []).entries()) {
-        const id = `${parent}:${message.id ?? value.uuid}:${index}`;
+      // SDK assistant envelopes contain newly completed blocks, not a cumulative
+      // message snapshot. Array indexes restart even when the message id is shared.
+      const key = `${parent}:${message?.id ?? value.uuid}`;
+      const content = message?.content ?? [];
+      // Empty native blocks have no assistant envelope. Prefer the stream's real
+      // index; the offset covers envelopes from non-streamed subagent messages.
+      const offset =
+        (content.length === 1 ? this.activeBlocks.get(key) : undefined) ?? this.completedBlocks.get(key) ?? 0;
+      this.completedBlocks.set(key, Math.max(this.completedBlocks.get(key) ?? 0, offset + content.length));
+      for (const [index, block] of content.entries()) {
+        const id = `${key}:${offset + index}`;
         if ((block.type === "text" || block.type === "thinking") && !this.streamed.has(id))
           this.emit({
             type: "text",

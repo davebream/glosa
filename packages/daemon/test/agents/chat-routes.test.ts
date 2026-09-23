@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
+import type { ManagedChatService } from "../../src/chats/service.ts";
+import { chatRoutes } from "../../src/routes/chats.ts";
+import type { BunServer } from "../../src/routes/types.ts";
 import { CapabilityStore } from "../../src/security/capability.ts";
 import { type ApiContext, createApiFetch } from "../../src/transport/http.ts";
 
@@ -37,4 +40,53 @@ test("agent account routes reject an unpaired browser and class-F origin before 
   expect((await fetch(request("/api/agents/profiles", "POST", { Origin: "https://outside.example" }))).status).toBe(
     403,
   );
+});
+
+test("runtime install disables HTTP idle expiry before awaiting the bounded installer", async () => {
+  let complete!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const timeouts: unknown[][] = [];
+  const req = request("/api/agents/runtimes/codex/install", "POST");
+  const route = chatRoutes(
+    {
+      workspaceIndex: {
+        getBySlug() {
+          throw new Error("install must not access a workspace");
+        },
+        getWorkspaceByRegistration() {
+          throw new Error("install must not access a workspace");
+        },
+        forgetOperationForSlug() {
+          throw new Error("install must not access a workspace");
+        },
+        activeForgetOperationForCanonicalPath() {
+          throw new Error("install must not access a workspace");
+        },
+      },
+      getWorkspaceBus() {
+        throw new Error("install must not access a workspace");
+      },
+      service: {
+        bindAuthorization() {},
+        install() {
+          return pending;
+        },
+      } as unknown as ManagedChatService,
+    },
+    "POST",
+    new URL(req.url).pathname,
+  )!;
+  const response = route.handle(req, {
+    timeout(...args: unknown[]) {
+      timeouts.push(args);
+    },
+  } as unknown as BunServer);
+  try {
+    expect(timeouts).toEqual([[req, 0]]);
+  } finally {
+    complete({ installed: true });
+    expect(await (await response).json()).toEqual({ installed: true });
+  }
 });

@@ -559,10 +559,11 @@ export function createChatPane(
       });
       node.append(heading, content, copy);
       history.append(node);
-      row = { node, heading, content, text: "" };
+      row = { node, heading, content, copy, text: "" };
       rows.set(key, row);
     }
     row.heading.textContent = label;
+    row.copy.setAttribute("aria-label", `Copy ${label}`);
     const selection = window.getSelection?.();
     const selected =
       selection &&

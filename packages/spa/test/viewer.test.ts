@@ -1167,6 +1167,45 @@ describe("mountApp — DOM integration against a fake dataAccess (no real daemon
     expect(dom.document.activeElement).toBe(heading);
   });
 
+  test("existing chat sidebar resolves account labels on initial load and refresh after renaming", async () => {
+    const root = dom.document.createElement("div");
+    dom.document.body.append(root);
+    let label = "Personal subscription";
+    const da = fakeDataAccess({
+      getChats: async () => ({
+        chats: [
+          {
+            id: "existing",
+            title: "Draft",
+            provider: "claude-code",
+            profileId: "profile-a",
+            status: "completed",
+            updatedAt: "2026-09-23T00:00:00Z",
+          },
+        ],
+        external: [],
+      }),
+      getAgentStatus: async () => ({ profiles: [{ id: "profile-a", label }] }),
+      getStatus: async () => ({ workspaces: [], sessions: [] }),
+    });
+    const unmount = mountApp(root, { dataAccess: da, initialMode: "read" });
+    async function waitForLabel(expected: string) {
+      const deadline = Date.now() + 1000;
+      while (!root.querySelector(".glosa-chat-list-item")?.textContent?.includes(expected) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(root.querySelector(".glosa-chat-list-item")?.textContent).toContain(expected);
+    }
+    try {
+      await waitForLabel(label);
+      label = "Work subscription";
+      const refresh = [...root.querySelectorAll("button")].find((button) => button.textContent === "Refresh sessions");
+      (refresh as unknown as HTMLButtonElement).click();
+      await waitForLabel(label);
+    } finally {
+      unmount();
+    }
+  });
+
   test("external sessions open as exact-session tabs while artifact history stays in its own pane", async () => {
     const root = dom.document.createElement("div");
     dom.document.body.append(root);

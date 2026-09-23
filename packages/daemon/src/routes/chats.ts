@@ -59,7 +59,12 @@ export function chatRoutes(deps: Dependencies, method: string, path: string): Ro
           if (tail === "status" && method === "GET") return json(service.status());
           if (tail === "profiles" && method === "POST") return json(service.createProfile(await req.json()));
           const installation = /^runtimes\/([a-z][a-z0-9-]{0,63})\/install$/.exec(tail);
-          if (installation && method === "POST") return json(await service.install(installation[1]!));
+          if (installation && method === "POST") {
+            // Downloads have their own bounded deadline and owned-process cleanup.
+            // Keep the response alive while the foreground installer is running.
+            server?.timeout(req, 0);
+            return json(await service.install(installation[1]!));
+          }
           const policy = /^profiles\/([a-f0-9-]{36})\/mcp$/.exec(tail);
           const mcpLogin = /^profiles\/([a-f0-9-]{36})\/mcp-login$/.exec(tail);
           if (mcpLogin && method === "POST") {
