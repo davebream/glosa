@@ -14,6 +14,7 @@
 
 import { createDockview } from "./vendor/dockview.js";
 import { createElement as el } from "./viewer-shell.js";
+import { comparisonPanelId, migratePanelLayout } from "./panel-identity.js";
 
 /** A pane cannot be dragged narrower than this. It is where the compact annotation tray ladder
  * bottoms out, and it is the whole constraint on nesting: a physical floor on usable width
@@ -65,7 +66,7 @@ export function disambiguateLabels(paths) {
 /** A diff tab's id is the pair it shows, so asking for the same comparison twice focuses the tab
  * that already holds it rather than opening a second one (§5). */
 export function diffPanelId(path, from, to) {
-  return `diff:${path}:${from}:${to}`;
+  return comparisonPanelId(path, from, to);
 }
 
 /** Shortens an opaque checkpoint token for a tab label. `working` is the live file, and says so
@@ -97,6 +98,7 @@ const CLOSE_GLYPH = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.6 4
 export function createDock(host, deps) {
   const {
     slug,
+    workspaceIdentity,
     appearance,
     createPane,
     destroyPane,
@@ -295,7 +297,7 @@ export function createDock(host, deps) {
   function saveLayout() {
     if (!storage) return;
     try {
-      storage.setItem(storageKey(), JSON.stringify(api.toJSON()));
+      storage.setItem(storageKey(), JSON.stringify({ ...api.toJSON(), glosa: { version: 2, workspaceIdentity } }));
     } catch {
       // Storage can be disabled by browser policy; the arrangement still works for this visit.
     }
@@ -320,7 +322,7 @@ export function createDock(host, deps) {
     if (!raw) return false;
     restoring = true;
     try {
-      const saved = JSON.parse(raw);
+      const saved = migratePanelLayout(JSON.parse(raw), workspaceIdentity);
       const panels = saved?.panels;
       if (!panels || typeof panels !== "object") return false;
       for (const [id, panel] of Object.entries(panels)) {

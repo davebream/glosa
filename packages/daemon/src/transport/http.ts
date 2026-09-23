@@ -47,6 +47,8 @@ import { attentionRoutes } from "../routes/attention.ts";
 import { claimProblem, claimRoutes } from "../routes/claims.ts";
 import { composerRoutes } from "../routes/composer.ts";
 import { dictationRoutes } from "../routes/dictation.ts";
+import { chatRoutes } from "../routes/chats.ts";
+import type { ManagedChatService } from "../chats/service.ts";
 import { shadowRoutes } from "../routes/shadow.ts";
 import type { BunServer, RouteMatch } from "../routes/types.ts";
 import { authorizeRequest, isForeignOrigin, principalOfRequest, type Transport } from "../security/auth.ts";
@@ -147,6 +149,15 @@ const SPA_ASSETS: Record<string, string> = {
   // Multi-artifact workbench (design brief docs/design/2026-09-04-multi-artifact-workbench-brief.md):
   // the dock engine and its stylesheet, one pane per artifact, and a comparison as a pane.
   "dock.js": "text/javascript; charset=utf-8",
+  "agent-mcp-settings.js": "text/javascript; charset=utf-8",
+  "agent-settings.js": "text/javascript; charset=utf-8",
+  "agent-login.js": "text/javascript; charset=utf-8",
+  "chat-markdown.js": "text/javascript; charset=utf-8",
+  "vendor/markdown-it.js": "text/javascript; charset=utf-8",
+  "chat-pane.js": "text/javascript; charset=utf-8",
+  "vendor/xterm.mjs": "text/javascript; charset=utf-8",
+  "vendor/xterm.css": "text/css; charset=utf-8",
+  "panel-identity.js": "text/javascript; charset=utf-8",
   "artifact-pane.js": "text/javascript; charset=utf-8",
   // #182 — the pure three-way merge behind Keep mine, imported by artifact-pane.js.
   "merge-markdown.js": "text/javascript; charset=utf-8",
@@ -216,6 +227,7 @@ export interface ApiContext {
   providerRegistry?: AgentProviderRegistry;
   /** Optional external dictation providers, injected by the CLI composition root. */
   dictationRegistry?: DictationProviderRegistry;
+  managedChats?: ManagedChatService;
   pushRegistry?: SessionPushRegistry;
   /** Session signals derived from claim events (issue #155). Optional so a hand-built test context
    * keeps compiling; absent, drains carry no `signals` and the ack route answers 404. */
@@ -297,6 +309,8 @@ export interface HandshakeBody {
    * is whether the daemon answering predates it. Absent in a legacy response means "no", so an
    * older daemon is refused rather than silently talked to over TCP. */
   serves_socket: boolean;
+  managed_control?: boolean;
+  managed_busy?: boolean;
 }
 
 function checkHost(req: Request, port: number, hostnames: readonly string[]): boolean {
@@ -351,8 +365,12 @@ function tokenSnapshot(token: ApiContext["token"]): { token: string | null; sign
   return typeof token === "object" && token !== null ? token.snapshot() : { token };
 }
 
-function lifecycleSignal(ctx: ApiContext, authSignal?: AbortSignal): AbortSignal | undefined {
-  const signals = [ctx.shutdownSignal, authSignal ?? tokenGenerationSignal(ctx.token)].filter(
+function lifecycleSignal(
+  ctx: ApiContext,
+  authSignal?: AbortSignal,
+  extraSignal?: AbortSignal,
+): AbortSignal | undefined {
+  const signals = [ctx.shutdownSignal, authSignal ?? tokenGenerationSignal(ctx.token), extraSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   if (signals.length === 0) return undefined;
@@ -369,9 +387,12 @@ function withHeaders(res: Response, extra: Record<string, string>): Response {
 /** Reads the body up to the cap without ever buffering past it. A present `Content-Length` over
  * the cap short-circuits before touching the stream at all; otherwise (chunked, or no header)
  * the stream is read incrementally and cancelled the moment the running total exceeds the cap. */
-async function readBodyCapped(req: Request): Promise<{ ok: true; body: Uint8Array } | { ok: false }> {
+async function readBodyCapped(
+  req: Request,
+  limit = BODY_CAP_BYTES,
+): Promise<{ ok: true; body: Uint8Array } | { ok: false }> {
   const contentLength = req.headers.get("Content-Length");
-  if (contentLength !== null && Number(contentLength) > BODY_CAP_BYTES) return { ok: false };
+  if (contentLength !== null && Number(contentLength) > limit) return { ok: false };
   if (!req.body) return { ok: true, body: new Uint8Array(0) };
 
   const reader = req.body.getReader();
@@ -381,7 +402,7 @@ async function readBodyCapped(req: Request): Promise<{ ok: true; body: Uint8Arra
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > BODY_CAP_BYTES) {
+    if (total > limit) {
       await reader.cancel();
       return { ok: false };
     }
@@ -410,6 +431,8 @@ function handleHandshake(ctx: ApiContext): () => Response {
       pid: process.pid,
       started_at: ctx.startedAt,
       serves_socket: ctx.servesSocket === true,
+      managed_control: ctx.managedChats?.requiresReplacementFence === true,
+      managed_busy: ctx.managedChats?.busy === true,
     };
     return Response.json(body);
   };
@@ -524,6 +547,8 @@ function handleListWorkspaces(ctx: ApiContext): Response {
   const body = entries.map((e) => ({
     slug: e.slug,
     path: e.worktree_path,
+    registration_id: e.registration_id,
+    registration_epoch: e.first_seen,
     // Contract 1.11: lets the SPA offer a star only where one can be taken.
     kind: e.kind,
     last_seen: e.last_seen,
@@ -2322,6 +2347,34 @@ async function handleWorkspaceForget(ctx: ApiContext, req: Request): Promise<Res
       home: ctx.home ?? glosaHome(),
       getWorkspaceBus: ctx.getWorkspaceBus,
       adoptionCoordinator: ownershipCoordinator(ctx),
+      managedBlockers: (id) => ctx.managedChats?.workspaceBlockers(id) ?? [],
+      preflightManaged: (members) => {
+        for (const member of members) ctx.managedChats?.store.preflightPurge(member.registration_id, member.first_seen);
+      },
+      fenceManaged: async (members) => {
+        for (const member of members)
+          await ctx.managedChats?.fenceWorkspace({
+            id: member.registration_id,
+            epoch: member.first_seen,
+            path: member.canonical_path,
+          });
+      },
+      unfenceManaged: (members) => {
+        for (const member of members)
+          ctx.managedChats?.unfenceWorkspace({
+            id: member.registration_id,
+            epoch: member.first_seen,
+            path: member.canonical_path,
+          });
+      },
+      forgetManaged: async (members) => {
+        for (const member of members)
+          ctx.managedChats?.forgetWorkspace({
+            id: member.registration_id,
+            epoch: member.first_seen,
+            path: member.canonical_path,
+          });
+      },
     },
     slug,
     { confirm, memberFingerprint },
@@ -2689,6 +2742,14 @@ async function handleStream(
   const bus = await resolveBus(ctx, resolved.entry);
   return createJournalStreamResponse(resolved.entry, bus, req, server, {
     shutdownSignal: lifecycleSignal(ctx, authSignal),
+    subscribeChats: ctx.managedChats
+      ? (listener) => {
+          ctx.managedChats!.store.listeners.add(listener);
+          return () => {
+            ctx.managedChats!.store.listeners.delete(listener);
+          };
+        }
+      : undefined,
     subscribeMetadata: ctx.metadataRegistry
       ? (listener) => ctx.metadataRegistry!.subscribe(resolved.entry, listener)
       : undefined,
@@ -2718,16 +2779,20 @@ function handleTranscriptStream(
   const resolved = workspaceOrNotFound(ctx, slug, url.pathname);
   if (!resolved.ok) return resolved.response;
 
-  const sessions = ctx.sessionRegistry.forWorkspace(resolved.entry.canonical_path).flatMap((session) => {
-    const provider = ctx.providerRegistry?.get(session.provider);
-    let transcriptPath: string | null = session.transcript_path ?? null;
-    try {
-      transcriptPath = provider?.transcriptPath({ ...session, workspace: session.cwd }) ?? transcriptPath;
-    } catch {
-      transcriptPath = null;
-    }
-    return transcriptPath ? [{ ...session, transcript_path: transcriptPath }] : [];
-  });
+  const selectedSession = url.searchParams.get("session");
+  const sessions = ctx.sessionRegistry
+    .forWorkspace(resolved.entry.canonical_path)
+    .filter((session) => !selectedSession || session.session_id === selectedSession)
+    .flatMap((session) => {
+      const provider = ctx.providerRegistry?.get(session.provider);
+      let transcriptPath: string | null = session.transcript_path ?? null;
+      try {
+        transcriptPath = provider?.transcriptPath({ ...session, workspace: session.cwd }) ?? transcriptPath;
+      } catch {
+        transcriptPath = null;
+      }
+      return transcriptPath ? [{ ...session, transcript_path: transcriptPath }] : [];
+    });
   if (sessions.length === 0) {
     return problem(404, "not-found", "no session registered", undefined, url.pathname);
   }
@@ -2753,7 +2818,11 @@ function handleTranscriptStream(
   }
 
   return createTranscriptStreamResponse(confined.realPath, req, server, {
-    shutdownSignal: lifecycleSignal(ctx, authSignal),
+    shutdownSignal: lifecycleSignal(
+      ctx,
+      authSignal,
+      ctx.sessionRegistry.sessionLifecycleSignal(sessions[0]!.session_id),
+    ),
   });
 }
 
@@ -2786,6 +2855,8 @@ function sessionCandidates(records: ReturnType<SessionRegistry["forWorkspace"]>)
 
 function matchApiRoute(ctx: ApiContext, req: Request, pathname: string): RouteMatch | null {
   const method = req.method;
+  const managedRoute = chatRoutes({ ...ctx, service: ctx.managedChats }, method, pathname);
+  if (managedRoute) return managedRoute;
   if (method === "GET" && pathname === "/api/handshake") {
     return { routeClass: "tokenless-handshake", handle: handleHandshake(ctx) };
   }
@@ -3075,6 +3146,13 @@ export function createApiFetch(
       // local client to send a `Host` naming a TCP port it does not use.
       if (!overSocket && !checkHost(req, ctx.port, SPA_HOSTNAMES)) return new Response(null, { status: 400 });
 
+      if (url.pathname === "/api/managed-mcp") {
+        if (!ctx.managedChats || req.headers.has("Origin") || req.method !== "POST")
+          return new Response(null, { status: 403 });
+        const body = await readBodyCapped(req, 65536);
+        if (!body.ok) return new Response(null, { status: 413 });
+        return ctx.managedChats.managedMcp(new Request(req, { body: body.body as BodyInit }));
+      }
       const route = matchApiRoute(ctx, req, url.pathname);
       if (!route) {
         // A foreign Origin is rejected even on a route that doesn't exist (A1 §1 "Origin
@@ -3120,10 +3198,16 @@ export function createApiFetch(
 
       let effectiveReq = req;
       if (req.method === "POST" || req.method === "PUT" || req.method === "DELETE") {
-        const bodyResult = await readBodyCapped(req);
+        const bodyResult = await readBodyCapped(req, route.bodyLimit);
         if (!bodyResult.ok) {
           return withHeaders(
-            problem(413, "payload-too-large", "request body exceeds 1 MiB", undefined, url.pathname),
+            problem(
+              413,
+              "payload-too-large",
+              `request body exceeds ${(route.bodyLimit ?? BODY_CAP_BYTES) / (1024 * 1024)} MiB`,
+              undefined,
+              url.pathname,
+            ),
             csp,
           );
         }

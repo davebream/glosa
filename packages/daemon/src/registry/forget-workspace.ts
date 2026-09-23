@@ -55,7 +55,8 @@ export type ForgetBlocker =
    * the generic "blocked"/`forget-blocked` wire shape rather than a dedicated code: from the
    * caller's perspective this is the same "something else owns this workspace right now, retry
    * once it finishes" answer as a live session or an apply lease. */
-  | { kind: "adopting" };
+  | { kind: "adopting" }
+  | { kind: "managed-chat"; chat_id: string; state: string };
 
 export interface ForgetBusEntry {
   registration_id: string;
@@ -66,6 +67,11 @@ export interface ForgetBusEntry {
 }
 
 export interface ForgetDeps {
+  managedBlockers?(registrationId: string): { kind: "managed-chat"; chat_id: string; state: string }[];
+  fenceManaged?(members: readonly WorkspaceEntry[]): Promise<void>;
+  unfenceManaged?(members: readonly WorkspaceEntry[]): void;
+  preflightManaged?(members: readonly WorkspaceEntry[]): void;
+  forgetManaged?(members: readonly WorkspaceEntry[]): Promise<void>;
   workspaceIndex: WorkspaceIndex;
   sessionRegistry: SessionRegistry;
   /** `glosaHome()` — the redirected-bus root every loose-file/redirected registration's `bus_path`
@@ -181,8 +187,11 @@ function validateEntryAnchors(entry: WorkspaceEntry): boolean {
  * untouched. This is deliberately NOT the last word on the lease: the commit path re-proves it
  * atomically via `WorkspaceBus.sealForForget()` (see this module's header comment) — a lease that
  * appears in the gap between this peek and that seal is still caught, just later. */
-function forgetBlockers(target: WorkspaceEntry, deps: Pick<ForgetDeps, "sessionRegistry">): ForgetBlocker[] {
-  const blockers: ForgetBlocker[] = [];
+function forgetBlockers(
+  target: WorkspaceEntry,
+  deps: Pick<ForgetDeps, "sessionRegistry" | "managedBlockers">,
+): ForgetBlocker[] {
+  const blockers: ForgetBlocker[] = [...(deps.managedBlockers?.(target.registration_id) ?? [])];
   // `forWorkspaceOwnedBy`, not plain `forWorkspace`: a session still explicitly bound to a loose
   // source's OWN pre-adoption path must count as live for the target once that source has been
   // adopted into it — held-review finding (third pass), see the method's own docstring.
@@ -612,6 +621,8 @@ async function commitForgetLocked(
   // snapshot. The fallback backfills one from whatever is still live for a lifecycle marker written
   // before the operation record existed (never reached by a real commit of this code past this
   // revision).
+  deps.preflightManaged?.(liveMembers);
+  await deps.fenceManaged?.(liveMembers);
   const operation: ForgetOperationRecord = existingOperation ?? (await index.beginForgetOperation(target, liveMembers));
 
   // The target's own bus is the ONLY member whose apply-lease matters — a sealed adopted source
@@ -628,7 +639,10 @@ async function commitForgetLocked(
       await bus.sealForForget();
     } catch (err) {
       if ((err as { code?: string }).code === "CLAIM_HELD") {
-        if (!resuming) await index.abortForgetOperation(operation.operation_id);
+        if (!resuming) {
+          await index.abortForgetOperation(operation.operation_id);
+          deps.unfenceManaged?.(liveMembers);
+        }
         // Built from the snapshot the seal took UNDER its own mutex — never from a second read of
         // `bus.state` out here, which could already describe a different moment.
         const claim = (err as ClaimHeldError).claim;
@@ -654,6 +668,7 @@ async function commitForgetLocked(
   // already gone from an earlier interrupted attempt this call is resuming) — remove the
   // registration(s) sources-first, target-last: the target's slug is the only key a retried
   // `forget` can still name, so it must be the LAST registration to disappear.
+  await deps.forgetManaged?.(liveMembers);
   for (const entry of liveMembers) {
     const plan = confinement.confined.get(entry.registration_id) ?? confineBusPathForDeletion(entry, deps.home);
     if (plan === null) return { ok: false, code: "confinement-failed", registration_id: entry.registration_id };

@@ -902,9 +902,15 @@ function createSubCommands(setExitCode: (code: number) => void, deps: CliRunDepe
     const { bootDaemon } = await import("../../daemon/src/index.ts");
     const { isSourceCheckout } = await import("../../daemon/src/lifecycle/install.ts");
     const { ClaudeCodeProvider } = await import("../../providers/claude-code/src/index.ts");
+    const { CodexManagedAdapter } = await import("../../providers/codex/src/managed.ts");
+    const { codexRuntimeCandidate } = await import("../../providers/codex/src/runtime.ts");
+    const { ClaudeManagedAdapter } = await import("../../providers/claude-code/src/managed.ts");
+    const { claudeRuntimeCandidate } = await import("../../providers/claude-code/src/runtime.ts");
     const { CodexProvider } = await import("../../providers/codex/src/index.ts");
     const { WisprFlowProvider } = await import("../../providers/wispr-flow/src/index.ts");
     await bootDaemon({
+      managedAgentFactories: [() => new ClaudeManagedAdapter(), () => new CodexManagedAdapter()],
+      managedRuntime: { released: false, candidates: [claudeRuntimeCandidate(), codexRuntimeCandidate()] },
       providerFactories: [
         ({ sessionRegistry, pushRegistry }) =>
           new ClaudeCodeProvider({

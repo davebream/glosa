@@ -69,16 +69,6 @@ export function createViewerShell(
     },
     [titleEl, el("kbd", { className: "glosa-goto-key", "aria-hidden": "true", textContent: "⌘K" })],
   );
-  const conversationToggle = el("button", {
-    id: "glosa-conversation-toggle",
-    className: "glosa-conversation-toggle",
-    type: "button",
-    "aria-expanded": "false",
-    "aria-controls": "glosa-conversation",
-  });
-  conversationToggle.setAttribute("aria-label", "Conversation");
-  conversationToggle.innerHTML =
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4.5 3v-3H3v-9Z"/></svg><span>Conversation</span>';
   const topbarOverlays = el("div", { className: "glosa-topbar-overlays" });
   const appearanceHost = el("div", { className: "glosa-appearance" });
   const attentionHost = el("div", { className: "glosa-attention" });
@@ -115,7 +105,7 @@ export function createViewerShell(
   const toolsMenu = el(
     "div",
     { id: "glosa-tools-menu", className: "glosa-tools-menu", role: "group", "aria-label": "Workspace tools" },
-    [attentionHost, conversationToggle, appearanceHost, shortcutsToggle],
+    [attentionHost, appearanceHost, shortcutsToggle],
   );
   const tools = el("div", { className: "glosa-tools", "data-open": "false" }, [toolsTrigger, toolsMenu]);
 
@@ -164,12 +154,6 @@ export function createViewerShell(
   const bannerEl = el("div", { className: "glosa-banner", hidden: true, role: "status", textContent: "Reconnecting…" });
   const dockHost = el("div", { className: "glosa-dock-host" });
   const mainEl = el("div", { className: "glosa-main" }, [dockHost]);
-  const conversationEl = el("section", {
-    id: "glosa-conversation",
-    className: "glosa-conversation",
-    hidden: true,
-    "aria-labelledby": "glosa-conversation-toggle",
-  });
   const shortcutsEl = el("section", {
     id: "glosa-shortcuts",
     className: "glosa-shortcuts",
@@ -201,7 +185,6 @@ export function createViewerShell(
     // so the control that brings it back never moves and never pushes the mark around.
     el("div", { className: "glosa-nav-foot" }, [navToggle]),
     mainEl,
-    conversationEl,
     shortcutsEl,
   );
   if (surface === "document") {
@@ -219,7 +202,6 @@ export function createViewerShell(
       navToggle,
       titleEl,
       goToTrigger,
-      conversationToggle,
       shortcutsToggle,
       topbarOverlays,
       appearanceHost,
@@ -234,7 +216,6 @@ export function createViewerShell(
       starredList,
       artifactList,
       artifactListEmpty,
-      conversationEl,
       shortcutsEl,
       bannerEl,
       dockHost,

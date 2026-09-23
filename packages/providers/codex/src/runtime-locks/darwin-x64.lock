@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "glosa-managed-runtime",
+      "dependencies": {
+        "@openai/codex": "0.156.1-darwin-x64",
+      },
+    },
+  },
+  "packages": {
+    "@openai/codex": ["@openai/codex@0.156.1-darwin-x64", "", { "os": "darwin", "cpu": "x64" }, "sha512-BVjqNOoltWrnNUrgMRepvDIIBmd4XY+ikAE4pYVHlrwiizNlEWQuCQOTrFMJKp54LFRG8jDTjLZyYQ1QrliuOg=="],
+  }
+}

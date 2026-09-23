@@ -18,6 +18,8 @@ export interface HandshakeResponse {
    * instead". Same rule `install_id` follows: absent is a negative answer, not an unknown one to
    * be resolved optimistically. */
   serves_socket?: boolean;
+  managed_control?: boolean;
+  managed_busy?: boolean;
 }
 
 function isHandshakeShape(value: unknown): value is HandshakeResponse {
@@ -31,7 +33,9 @@ function isHandshakeShape(value: unknown): value is HandshakeResponse {
     typeof v.instance_id === "string" &&
     typeof v.pid === "number" &&
     typeof v.started_at === "string" &&
-    (v.serves_socket === undefined || typeof v.serves_socket === "boolean")
+    (v.serves_socket === undefined || typeof v.serves_socket === "boolean") &&
+    (v.managed_control === undefined || typeof v.managed_control === "boolean") &&
+    (v.managed_busy === undefined || typeof v.managed_busy === "boolean")
   );
 }
 

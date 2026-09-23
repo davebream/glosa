@@ -16,6 +16,7 @@ export type SseEventType =
   | "artifact"
   | "artifact_index"
   | "metadata"
+  | "chats_changed"
   | "heartbeat"
   | "resync_required"
   | "transcript"
