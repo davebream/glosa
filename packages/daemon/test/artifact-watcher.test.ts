@@ -33,8 +33,9 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 15_000): Promise<
 /** Save `content` to `path`, then keep re-saving it every 250 ms until `observed()` is true.
  *
  * Why the loop: a single write issued right after a watch starts is not reliably observed on
- * macOS: the kernel-side FSEvents stream comes up asynchronously and does not replay events from
- * before it was live, so the very first save can fall into the gap. It did exactly that in CI:
+ * macOS: the kernel-side FSEvents stream comes up asynchronously, so the very first save can fall
+ * into the gap (the start is not a clean cut the other way either; see `watch-helpers.ts`). It did
+ * exactly that in CI:
  * the "custom matcher config" test below waited the full 15 s for a write that had already
  * happened, both on this suite's own PR and on main, while passing locally every time. A real
  * editor produces many saves, so the product sees the second one; a test that saves once must
@@ -93,7 +94,15 @@ describe("ArtifactWatcherRegistry — bounded shared watching (#91)", () => {
   });
 
   test("a directory workspace is one recursive watch on its root, and excluded churn produces no events", async () => {
-    writeFile(root, "docs/note.md", "one");
+    // The tracked note is moved in with its directory, never written under `root`. A new watch can
+    // be handed a write made before it existed, seconds late under load (#349), so a write naming
+    // `docs/note.md` could surface below as an artifact event the churn never caused. A directory
+    // moved in is reported as `docs` alone, which names no tracked file. The excluded fixtures are
+    // written in place: a late event for one of them is excluded churn like any other.
+    const staging = freshWorkspace();
+    writeFile(staging, "docs/note.md", "one");
+    renameSync(join(staging, "docs"), join(root, "docs"));
+    cleanupWorkspace(staging);
     writeFile(root, "node_modules/pkg/readme.md", "excluded");
     writeFile(root, ".git/objects/noise.md", "excluded");
     writeFile(root, ".glosa/private.md", "excluded");
