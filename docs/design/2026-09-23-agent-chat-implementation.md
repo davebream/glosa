@@ -1,0 +1,577 @@
+# First-class agent chats: implementation specification
+
+Date: **2026-09-23**. Status: **proposed implementation contract; no runtime behavior is changed by this document**.
+
+This specifies a local Glosa interface for Claude Code and Codex: persistent workspace chats, ordinary content tabs, isolated subscription accounts, native login, and interactive agent execution. It turns the [integration research](../research/2026-09-23-agent-chat-integration.md) into concrete implementation choices. Existing [requirements](../requirements.md) and appendices remain authoritative until the corresponding implementation and contract amendments ship together. This document does not move roadmap items, establish provider permission, or satisfy T8.
+
+## 1. Decisions and delivery boundary
+
+**A chat is durable workspace data. A tab displays it. A provider runtime executes its turns under one explicitly selected account.** These three lifetimes are separate.
+
+| Decision | Specified behavior |
+| --- | --- |
+| Navigation | Files and Chats share the workspace sidebar. Chats use the existing dock, including split views. Remove the contextual Conversation entry only after its external-session replacement works. |
+| Integration | Direct Codex app-server over stdio; official Claude Agent SDK driving the unmodified native executable, conditional on the offering/authentication gate below. Keep ACP behind the future adapter boundary. |
+| Accounts | A Glosa-owned configuration directory per account profile. Native runtimes own credentials. Multiple profiles may be enabled; one enabled default per provider, or no default. |
+| Switching | Model/effort changes apply to a subsequent turn in the same chat. Changing provider or account after the first submitted turn creates a fresh chat. No implicit history transfer. |
+| Stack | Bun, TypeScript, vanilla ES modules, existing Markdown/diff components. Locally vendored browser-ready xterm.js only for native login. No React migration, second service, native addon, or application build step. |
+
+Disabling an account **blocks new execution immediately and stops its active runs**. The button explains the number of affected chats. Changing a default affects future drafts only. Reauthentication is part of the first release, not a follow-up.
+
+The specification selects native adapters without requiring an ACP bake-off first. The research established that common transport does not eliminate provider/account differences. ACP v1 can be added later by implementing the same contract; ACP v2 drafts are not production dependencies. [ACP](https://agentclientprotocol.com/), [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Claude SDK](https://code.claude.com/docs/en/agent-sdk/overview).
+
+### Ship gates versus architectural decisions
+
+| Gate | Required evidence | Failure outcome |
+| --- | --- | --- |
+| G1: Claude offering | Record the exact distribution, native login, SDK use and applicable Anthropic permission. Native hosting terms and SDK offering restrictions must be reconciled for this product. | Claude managed execution stays unavailable; do not switch to print mode and claim the restriction disappeared. External Claude sessions keep working. |
+| G2: native compatibility | Attended two-account isolation, login/relogin, model/effort, permissions, resume, MCP and cancellation against each pinned runtime on supported macOS architectures. | Mark that provider/version unsupported; do not fall back to API billing or another account. |
+| G3: lifecycle containment | Synthetic process-group and guardian tests, plus attended native tests proving stop/crash behavior for the supported runtimes. | Do not enable managed execution with an unproved process owner. |
+| G4: Glosa release | Required deterministic tests, contract amendments, browser scenarios and expanded attended T8 rehearsal/sign-off. | Remain experimental; green CI alone is insufficient. |
+
+G1 is a product/distribution determination, not a question an adapter can answer. Anthropic's [hosting conditions](https://code.claude.com/docs/en/legal-and-compliance) and [SDK conditions](https://code.claude.com/docs/en/agent-sdk/overview) are the primary sources. Codex must likewise retain its supported native authentication and account policies. These gates do not leave the data model or UX undecided.
+
+### Initial scope
+
+| Included | Deliberately excluded |
+| --- | --- |
+| Managed Claude/Codex chats; external-session chat tabs; durable history and drafts | Taking control of an externally owned CLI session |
+| Multiple accounts, defaults, native login/logout/relogin, explicit runtime install/update | Credential imports, token proxies, automatic account rotation or automatic API fallback |
+| Models, effort, provider-native approvals/questions, usage, MCP configuration/status | Arbitrary MCP Apps HTML, hosted relay, remote agent hosts, multi-user access |
+| File/selection/text-image attachments within consent and runtime capabilities; explicit transcript attachment | Autonomous schedules, workflow orchestration, worktree creation, background inference |
+| Directory-workspace execution; loose-file workspaces retain external session viewing | Launching an agent at the filesystem root or silently broadening a loose-file registration to its parent directory |
+
+## 2. User experience
+
+The design extends Glosa's [product](../../PRODUCT.md) and [visual system](../../DESIGN.md). Preserve its warm paper surface, shared workspace desk, ink dividers and existing light/dark tokens. Documents remain the primary reading surface. Conductor is an interaction reference, not a replacement visual theme. Vermilion continues to identify human actions; do not repurpose it as a generic provider color.
+
+```text
+Workspace
+├── Files                  existing document tree
+└── Chats                  New chat action, count, search
+    ├── Review the outline  Claude Code · Personal · Needs approval
+    ├── Tighten examples    Codex · Work · Working
+    └── Terminal session    Claude Code · External · Disconnected
+
+Content dock: document | chat | document comparison
+Settings → Agents → Claude Code / Codex → Accounts / Runtime / Configuration
+```
+
+### 2.1 Sidebar and tab behavior
+
+| Element | Behavior |
+| --- | --- |
+| Chat row | Deterministic title, provider, short account label and textual status. Most recently active first; pinned rows first. No generated title call. First user message supplies a clipped title until renamed. |
+| New chat | Creates a local draft and focuses its tab. Uses the last explicitly selected provider and that provider's current default. Without an eligible default, show account selection. Never start a process from opening the tab. |
+| Tab identity | One dock panel per chat per browser workspace layout; clicking an already open row focuses it. Reopening restores history, not execution. Split with a document using existing dock controls. |
+| Close / archive / delete | Closing removes only the view. Archiving requires no active/queued work and hides the row. Deleting requires stopped execution and explicit confirmation; explain native-provider history retention separately. |
+| Activity | Offscreen approvals appear as a count and status on the chat row/tab. Finishing a turn never steals focus. No required OS notification integration. |
+
+Chats and Files are independently collapsible. Chat search initially covers title and locally stored message text in this workspace, with pagination; never launches a provider. Archived chats have an explicit filter. Empty Chats offers one New chat action and a short explanation; avoid dashboard cards or onboarding tours.
+
+### 2.2 Composer and switching
+
+The composer has text/attachments above a compact row: **agent · account · model · effort**, permissions mode, context indicator, and Send/Stop. Account remains visible even when only one is enabled. Keyboard Enter sends; Shift+Enter inserts a newline; IME composition must not submit. Existing document keyboard commands apply only to document panels.
+
+| Action | Result |
+| --- | --- |
+| Provider/account change in an unsent draft | Update the draft in place; retain text and compatible attachments. Flag incompatible attachments for removal instead of silently discarding them. |
+| Provider/account change after submission, even a failed submission | Open a new draft tab using the requested choice. Old chat continues independently. Preserve the current unsent draft in the old chat; offer an explicit Move draft action. |
+| Model/effort change | Save desired settings for the next submitted turn. Already accepted or queued turns retain their settings snapshot. If a queued turn exists, explain that the selection applies after it, with Cancel queued turn available. |
+| Send while idle | Persist the intent, then dispatch after admission checks. Clear the text only after durable acceptance, retaining the message receipt for recovery. |
+| Send while working | Label action Queue next message. Allow one pending user turn per chat; it executes after successful completion of the current turn while authorization remains valid. A second queued send is rejected with the draft intact. |
+
+An explicit Stop interrupts current execution **and cancels queued dispatch**. A queued message remains visible as cancelled and can be copied back into the composer. Permission waits do not consume the queue. After an error, authentication failure, daemon restart or uncertain acceptance, queued work becomes held and requires a fresh Continue action; no invisible inference on recovery.
+
+Cross-provider/account continuation has a New chat affordance with an optional **Attach previous conversation** action. That action shows the source chat, included turns, byte size and destination account. It produces a frozen, user-visible text attachment; it never copies native thread IDs, hidden reasoning, secrets, pending approvals or native tool-control messages. Sending the attachment is the consented transmission. Opening a new tab alone sends nothing.
+
+### 2.3 Settings and account lifecycle
+
+Each provider page shows account rows with label, provider-reported identity, plan/auth method when available, enabled/default state, connection status and last verification time. An identity reported by the provider is distinct from the editable label. Do not display an email merely inferred from a config filename.
+
+| Action | UI and enforcement |
+| --- | --- |
+| Add account | Create an empty private profile; explain native authentication and isolated configuration. Start the vendor's native login only after the user's Connect action. |
+| Make default | Available only for an enabled, authenticated profile. Clears the previous default atomically. Existing drafts/chats do not move. |
+| Disable | “Disable and stop N active chats.” Increment the profile execution fence, hold pending work, deny unresolved approvals and interrupt active runs. Show Stopping until confirmed. No replacement default is silently chosen. |
+| Reconnect | Stop remaining processes for that profile, then run native login against its existing directory. Verify identity before allowing old chats to resume. |
+| Sign out / remove | Sign out runs the vendor's logout for that profile after stopping it. Remove then deletes only the owned directory/metadata through a resumable operation; existing chats remain readable with Account removed. |
+
+All accounts can be disabled. A disabled or missing default means new drafts need explicit selection. A quota limit does not disable an account or select another. Changing provider identity during reconnect must not silently repurpose the old account slot: mark it `identity_mismatch`, block old chats, and offer a fresh profile/login or signing back into the original identity. Do not copy or move credentials to repair that mismatch.
+
+Authentication statuses are `unknown`, `checking`, `authenticated`, `needs_login`, `expired`, `probe_failed`, and `identity_mismatch`; `enabled` is separate. Probe failure is not evidence of logout. Persist last observed status and timestamp, but after restart consider it stale until a foreground action verifies it. No periodic provider checks.
+
+### 2.4 Login terminal
+
+Use the original vendor flow in an inline xterm.js region inside the selected account's settings. It is a bounded login task, not a general shell. Launch an executable with an argv array and an explicit environment; never interpolate a shell command. The pinned adapter selects the supported Claude `auth login` or `/login` ceremony and Codex browser/device login. [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), [Codex authentication](https://learn.chatgpt.com/docs/auth).
+
+The region has a clear account heading, Cancel, accessible text/status alternative and browser-open fallback. Native flow output is ephemeral, kept only in a bounded in-memory buffer. Do not journal it, log it, restore it after restart, include it in diagnostics, or auto-copy it. Restrict link handling to user-activated HTTP(S) destinations validated by the adapter; reject terminal clipboard escapes and all shell/file link schemes. Do not strip control sequences required by the vendor TUI indiscriminately; disable unsafe terminal features at the renderer boundary.
+
+Allow one login task globally initially, avoiding native callback-port collisions, and one task per profile by construction. Another browser can observe its status but cannot take over terminal input without an explicit control transfer. Closing the initiating tab cancels after a 30-second reconnect grace period; Cancel acts immediately. Login timeout is ten minutes. A late completion after cancellation cannot enable an account: kill the task and require a fresh status probe. If credentials were written before cancellation, display that result only after explicit verification.
+
+### 2.5 Messages, tools and failure states
+
+| Surface | Contract |
+| --- | --- |
+| Assistant text | Streaming Markdown with raw HTML disabled, safe links, bounded code blocks and Copy. Never execute output. Render only provider-exposed reasoning/summary events; omit absent reasoning. |
+| Tool activity | Collapsed name/status/duration; structured arguments/results on expansion. File paths link only through Glosa's authorized artifact resolver. Diffs are previews, not evidence of authorship. Unknown tools use safe text/JSON. |
+| Permission/question | Inline decision card plus sidebar badge; exact operation, target, scope and available choices. Stable IDs survive browser reconnect. Approval is never inferred from a chat message. |
+| Errors | Plain cause and recovery: Sign in again, Choose supported model, Retry status, Continue, or Start new chat. Show Unknown outcome where execution may already have happened. |
+| Usage | Separate context, token totals, account limits and optional estimated cost. Show source/account/scope/as-of and unavailable/stale states. Subscription token estimates are not invoices. |
+
+Keep scroll anchored unless the reader was already following the bottom. Provide a new-content button when scrolled away. Preserve text selection during streaming. Virtualize old messages by logical message, not by arbitrary text lines; never unmount the focused decision or selected text. Screen readers receive throttled status changes, not token-by-token announcements. At narrow widths, the existing sidebar collapses; chat controls wrap without horizontal page scrolling. WCAG 2.2 AA, reduced motion, visible keyboard focus and non-color status labels apply.
+
+## 3. Domain model and component boundaries
+
+### 3.1 Objects and identities
+
+| Object | Identity and lifetime | Authority |
+| --- | --- | --- |
+| AccountProfile | Random immutable UUID; one provider and canonical config root; editable label/enabled/default separately | Global control journal; native runtime owns its credential files/Keychain entry |
+| Chat | Random UUID plus immutable workspace registration ID and origin (`managed` or `external`) | Per-chat journal; title/archive/draft/settings projected from it |
+| Turn | Chat-scoped UUID with request ID, frozen input, profile/settings/consent revisions | Chat journal; provider's acceptance/outcome recorded separately |
+| Managed session binding | Stable Glosa session UUID for one chat/native-thread lifetime; maps to provider, profile and native thread ID | Chat journal identity; this is the immutable feedback/claim target registered in SessionRegistry |
+| RuntimeSession | New run UUID and monotonically increasing generation for each owned process; references the stable managed binding | Journaled run identity plus live ownership/lease; native IDs are never authorization |
+| Decision | Chat/runtime generation, provider request ID and immutable request digest | Journaled request/answer lifecycle; one reply per live native request |
+
+Use `WorkspaceLocation.registration_id`, not a slug, as persisted workspace identity. Slugs can change or be reused. Native thread/session IDs are keyed by `(provider, profileId, chatId)` and never global lookup keys. The same native ID in different profiles must not collide. A chat is considered started after its first durable `turn.accepted`, even if dispatch fails. Allocate its stable managed Glosa session ID before the first launch. Idle eviction/explicit resume can re-register that same ID only after handshake under the same account, workspace and native-thread binding; each connection gets a new run ID/generation. This preserves immutable inbox targets without making an offline session live. Grants, decisions and stale connection callbacks are generation-fenced. A new native thread after failed resume requires a new chat/binding, not reassignment of the old ID.
+
+Every accepted turn freezes provider, profile identity revision, runtime manifest version, desired/effective model and effort, permission policy revision, workspace root/registration, consent revision, attachment references and MCP configuration digest. Defaults cannot reinterpret an old turn.
+
+### 3.2 Components
+
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| Existing AgentProvider | External session detection, delivery, leases, transcript discovery; optional managed delivery delegation | Native credential storage or process launch details in core |
+| ManagedAgentAdapter | Provider-specific native login/probe, protocol, models, permissions, MCP and event normalization | UI, durable storage, selecting a different account, global child ownership |
+| AgentControlService | Profiles/defaults/runtime manifests/consent, admission fences, login-task registry | Parsing native transcript JSON in generic core |
+| ChatService | Journals, turn admission, queue, decisions, replay, attached-session association | Calling remote model APIs or trusting client-supplied native IDs |
+| RuntimeSupervisor + per-run guardian | Owned process lifecycle, bounded pipes, stop escalation, parent-death cleanup | Provider semantics, reusable background service, external-session discovery |
+
+The guardian is a short-lived Bun child module for each native process, not another daemon: no listener, independent startup, persistent account state or automatic restart. One Glosa daemon continues to serve UI/API and serialize state. The composition root registers optional adapters; generic core boots and document review works with zero adapters.
+
+Keep the existing `AgentProvider` contract valid. Introduce a separate optional `ManagedAgentAdapter` interface under the generic daemon boundary, implemented only in provider packages. Do not add Claude branches to generic core or reinterpret every registered external session as owned.
+
+```ts
+// Proposed contract sketch; provider wire types stay inside its adapter.
+interface ManagedAgentAdapter {
+  describe(manifest: RuntimeManifest): StaticCapabilities;
+  login(spec: ProfileLaunchSpec, io: OwnedProcessIO): LoginDriver;
+  probe(spec: ProfileLaunchSpec, io: OwnedProcessIO): Promise<AuthObservation>;
+  connect(spec: SessionLaunchSpec, io: OwnedProcessIO): Promise<ManagedConnection>;
+}
+interface ManagedConnection {
+  capabilities: EffectiveCapabilities;
+  events: AsyncIterable<NormalizedEvent>;
+  startTurn(turn: FrozenTurn): Promise<DispatchReceipt>;
+  answerDecision(answer: FencedDecisionAnswer): Promise<ReplyReceipt>;
+  interrupt(turnId: string): Promise<InterruptReceipt>;
+  close(): Promise<void>;
+}
+```
+
+`OwnedProcessIO` is created only by the supervisor from an admitted launch spec. Adapters may request subprocess operations but cannot bypass supervision with arbitrary `spawn`. Type definitions include cancellation signals, explicit timeouts and bounded output. Use the published Claude SDK `spawnClaudeCodeProcess` seam to supply a supervised `SpawnedProcess`: Node-compatible readable/writable streams and lifecycle callbacks backed by the guardian, rather than the SDK default spawner. The inspected 0.3.280 declaration exposes this seam. Its `signal` has SDK-specific graceful-EOF timing; bridge abort/kill and exit exactly once without confusing guardian exit with native exit. Validate the SDK-provided command, args and environment against the admitted launch specification. Bun stream compatibility and end-to-end cancellation still require G3. [Published SDK declarations](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.280/sdk.d.ts).
+
+### 3.3 Capability model
+
+Capabilities are observed per runtime version/account/session, not assumed from provider name. Include native resume, model listing, effort values, model/effort change strategy, input attachments, approvals, structured questions, cancellation, MCP status/auth, context usage and account limits. For each control report `supported`, `unsupported` or `unavailable` with a reason; unavailable is not an empty successful result.
+
+No dynamic model request when merely reading history. Cache the last foreground result with its account/version provenance. A user-activated Refresh models action can run foreground discovery for the selected profile. First Send can also start the authorized runtime and discover models before inference; if the selection is unavailable, stop admission and ask the user to choose. Never substitute a cheaper, newer or cross-provider model silently. Persist the native-reported effective setting, separately from the requested setting.
+
+## 4. Persistence, replay and concurrency
+
+### 4.1 Storage ownership
+
+Use the resolved Glosa home (default `/Users/<user>/.glosa` on macOS); never the agent's default CLI home or a repository for account secrets. Paths below are logical layout, not shell literals.
+
+```text
+<GLOSA_HOME>/agents/
+├── control.jsonl                   profiles, defaults, consent, operations
+├── profiles/<profile-id>/native/    vendor-owned config/auth/history
+├── runtimes/<provider>/<version>/<arch>/
+├── runs/<runtime-id>/              launch descriptor and bounded guardian receipt
+└── chats/<chat-id>/
+    ├── journal.jsonl               chat/turn/decision/runtime facts
+    ├── blobs/<sha256>              frozen attachments and oversized payloads
+    └── projection.json             disposable replay cache
+```
+
+Create private directories as `0700`, ordinary state files as `0600`; vendor files retain vendor-supported secure modes. Profile roots are absolute, canonical, immutable, disjoint and not symlinks into another profile or default CLI configuration. Validate owned ancestors and leaf type on every destructive operation. Refuse unexpected symlinks/hardlinks rather than following them during recursive removal. A same-OS-user malicious process is outside this directory isolation guarantee; do not advertise an OS security sandbox.
+
+There are three authorities, with distinct subjects: existing workspace bus for annotations/claims/provenance; control journal for account/consent policy; chat journal for conversation/execution intent. A JSON projection or sidebar index is rebuildable, never a second source of truth. No promise of atomic writes across them.
+
+Reuse the existing short-write/fsync primitives after extracting a generic append framing helper if needed. Do not insert chat events into the workspace `EventType` union by casting, or treat the workspace reducer as a generic chat store. Current journal framing limits records to 65,536 bytes including newline. Apply that ceiling to new journals too; split output into bounded chunks or reference immutable blobs.
+
+### 4.2 Event envelope and durability
+
+```ts
+type ChatEnvelope = {
+  schema: 1; chatId: string; seq: number; eventId: string; at: string;
+  type: ChatEventType; runtimeGeneration?: number; turnId?: string;
+  providerEventId?: string; data: unknown; // validated by type-specific schema
+};
+```
+
+Sequence is assigned by the sole daemon writer while holding that chat's mutex. Reject sequence gaps/duplicates with different content on replay. An unknown optional display event can become a safe unsupported-event placeholder; an unknown control/schema version makes the chat read-only. A corrupt interior control record blocks further execution. A torn final record is quarantined/truncated to the last verified boundary and leaves any dispatched work uncertain. Do not inherit the workspace bus's permissive interior-line recovery for executable chat policy.
+
+| Event family | Examples | Durability rule |
+| --- | --- | --- |
+| Chat/configuration | created, renamed, archived, settings_changed, draft_saved, deleted | Fsync before acknowledging mutation |
+| Turn intent/outcome | accepted, held, cancelled, dispatch_started, provider_accepted, completed, failed, outcome_unknown | Fsync before external dispatch and before reporting a terminal outcome |
+| Decisions | requested, answer_reserved, reply_attempted, resolved, expired | Persist request before interactive display; answer reservation before native reply |
+| Runtime | prepared, spawned, connected, stop_requested, stopped, ownership_unknown | Fsync lifecycle boundaries; ownership evidence excludes credentials |
+| Content/usage | message_started, content_delta, message_completed, tool_updated, usage_observed | Persist ordered chunks before emitting them as durable SSE events; batched fsync at most every 100 ms/32 KiB, flush at turn/decision boundary |
+
+Output may appear provisionally between fsync batches; the UI marks only user-intent/terminal receipts as committed and accepts a reset after crash. Keep transient delta IDs distinct from the durable replay cursor until fsync; emit a durable watermark after each batch. The REST snapshot returns only the durable prefix. No approval card is actionable before its own durable request exists.
+
+Write a blob to a private temporary file, fsync it, atomically rename by digest, fsync its directory, then append/fsync its journal reference. A crash can leave an unreferenced blob, never a committed reference to absent bytes. Garbage collection considers all surviving journal references and a seven-day orphan grace period. No automatic deletion of accepted history for a storage budget; fail new writes visibly before dispatch when space is exhausted.
+
+### 4.3 Idempotency and dispatch uncertainty
+
+All mutations have a client-generated request UUID and expected revision. The journal retains request ID, canonical request digest and response identity. Same ID/same payload returns its receipt; same ID/different payload is `409 idempotency-conflict`. No content-based deduplication: two identical prompts may be intentional. A new retry ID is a new instruction.
+
+```text
+Send → validate → fsync turn.accepted → acquire admission → fsync dispatch_started
+     → write to provider → fsync provider_accepted → stream → fsync completed
+```
+
+| Crash window | Recovery |
+| --- | --- |
+| Before accepted fsync | Client may retry the same request ID; no dispatch was allowed. |
+| Accepted, before dispatch_started | Held after restart. Continue may dispatch once after fresh admission. |
+| dispatch_started, before durable native acknowledgment | Outcome unknown. Reconcile through native thread history only if the adapter proves the match; never auto-resend. |
+| Native acknowledgment, incomplete turn | Resume/read native state using the same profile and native ID after user action; reconcile or retain partial/unknown outcome. |
+| Completed but browser did not see response | Same request ID or SSE replay restores the existing receipt without new inference. |
+
+Glosa guarantees idempotent local acceptance, not exactly-once remote inference. `provider_accepted` means the native protocol accepted the turn; it does not mean a model read every attachment or that a tool completed. Unknown approval-reply delivery has the same conservative treatment; do not blindly replay an authorization.
+
+### 4.4 Locking and fences
+
+Serialize account/default/consent policy through one control actor; chat mutations through one actor/mutex per chat. Keep the existing ownership-coordinator-before-session-mutex order. Never await provider/network activity while holding workspace ownership, control, chat or bus locks.
+
+Admission uses an immutable ticket containing profile policy epoch, identity revision, consent revision, workspace ownership epoch, chat settings revision and runtime generation. Under the control actor, validate policy and create the ticket. Under workspace ownership then chat serialization, validate workspace/chat and record intent. Immediately before handing off an external action, synchronously recheck all epochs through the supervisor's serialized dispatch gate. Every guardian also owns a per-runtime dispatch gate. Sends and `fence(epoch)` commands travel on one ordered control stream; the guardian validates generation/epoch, writes a send to native stdin without yielding to another command, and acknowledges the handoff. A fence closes its gate, drops any not-yet-committed buffered actions and acknowledges that no later action at the old epoch can be written. Native bytes handed off before that point are already in flight and cannot be recalled.
+
+Disable/revocation first durably changes control policy and closes local admission, then sends fences and cancellation outside all state locks. Return a pending operation receipt while these complete; do not report the execution fence effective until every live guardian acknowledges it or is confirmed stopped. A missed acknowledgment escalates stop and leaves ownership unknown if exit is unproved. Control disabled/revoked state is effective for new admission immediately; the UI separately displays Stopping/Recovery required. AC-04 must pause guardian consumption and race a queued send against the fence, not test only a daemon-local boolean.
+
+No rollback across journals is required: an accepted chat intent can remain held if its ticket becomes invalid. The disabling control event is authoritative even if per-chat cancellation journaling later fails. Replay always joins chat intent with current control policy before execution. Workspace forget/adoption uses the existing ownership coordinator as the outer barrier; do not introduce a reverse acquisition from an account callback.
+
+## 5. Runtime ownership and recovery
+
+### 5.1 State machines
+
+```text
+Chat: draft → ready → active → ready
+                  ↘ blocked / interrupted / outcome_unknown
+      ready → archived → ready; stopped state → deleted
+
+Turn: accepted → queued/starting → running ↔ waiting_for_decision → completed
+      accepted/queued → held/cancelled
+      starting/running → failed/interrupted/outcome_unknown
+
+Owned process: prepared → spawned → connected → stopping → stopped
+               any live state → ownership_unknown (execution blocked)
+```
+
+Chat display status is derived from turn/runtime state; it is not a separately mutable field. Provider terminal messages, process exit and stderr are independent observations. A process exit alone cannot convert a turn to success. A native protocol failure cannot be hidden behind exit code zero.
+
+### 5.2 Guardian and cancellation
+
+Use Bun's native process APIs; no `node-pty`. A per-run guardian controls the vendor subprocess and its process group, while the daemon controls the guardian through private pipes. The guardian uses a framed, size-bounded control channel with request IDs; native stdout, stderr and PTY data occupy distinct frame types. Runtime protocol bytes cannot impersonate guardian control frames.
+
+Start the guardian inert. Persist `runtime.prepared` before granting it launch permission. Allocate a random ownership nonce and persist the run descriptor before granting launch. Once the guardian reports child PID/process group and executable identity against that nonce, persist `runtime.spawned` before sending any user content or granting tool decisions. Runtime initialization that may contact a vendor is itself within the foreground consent ticket. A guardian whose initial acknowledgment is lost is cancelled rather than launched again.
+
+For pipe-based runtimes, `Bun.spawn({detached: true})` creates a private process group on supported macOS; do not call `unref` or discard pipes. For PTY tasks verify the actual session/group behavior rather than assuming the same option combination works. Guardian stdin closure and missed daemon heartbeat both enter cancellation. Heartbeat: five seconds; expiry: twenty seconds. Guardian failure is a hard stop of admission, not a reason to auto-restart the agent.
+
+Cancellation first uses the provider's protocol interrupt. After two seconds without confirmation, terminate the owned process group; after another second, force-kill it. Always await/observe exit, close pipes/PTY, expire decisions and record outcome. A failed stop becomes `ownership_unknown` with further execution for that chat/profile blocked. Signal only a group whose ownership the live guardian established; never find processes by executable name or kill a stale recorded PID after restart.
+
+The managed provider and ordinary children remaining in its group are covered. A tool that deliberately detaches a service can escape group signalling; configuration isolation is not process containment. UI Stop means stop the managed agent and its owned group, not undo changes or promise to kill arbitrary services it started. Native detached-tool behavior must be documented during G3; unresolved provider-process ownership blocks another launch. Do not claim an OS sandbox that the provider does not supply.
+
+### 5.3 Daemon/browser lifecycle
+
+| Event | Required behavior |
+| --- | --- |
+| Browser/tab closes | An already authorized turn and its explicitly queued next turn may finish. No new task is invented. Pending decisions wait up to ten minutes, then deny/cancel. Login has its shorter 30-second grace period. |
+| Idle native process | Close after five idle minutes, preserving native thread ID and chat. Reopen only on a new foreground action. No model warm-up. |
+| Graceful daemon shutdown | Close admission, hold queues, interrupt owned runs, await guardians, then close chat/control writers before existing workspace writers/identity release. Fit the existing eight-second hard-exit budget; guardians retain parent-death cleanup if daemon drain fails. |
+| Daemon crash/stall kill | Guardians detect pipe closure/heartbeat expiry and stop their groups. Restart replays journals as held/uncertain; never spawn agents, log in, or infer automatically. |
+| Automatic daemon replacement | A newer CLI must not casually interrupt active work. Return `managed-runtime-busy` with count until the user chooses Stop and restart; preserve current daemon's handshake compatibility path. Explicit stop uses the same bounded shutdown. |
+
+The daemon is the only journal writer. Each guardian may write exactly one bounded exit-observation receipt in its already-created private run directory: runtime ID/generation, nonce, OS boot identity, child/group identity, exit signal/code and whether the owned group was observed empty. No native content, arguments or credentials. It writes a private temporary file, fsyncs, renames and fsyncs the directory. This is an observation, never authorization or a second journal; the daemon validates it against `runtime.prepared/spawned` before appending its own stopped/unknown event. A receipt is absent when the guardian itself crashes, and an incomplete receipt grants nothing.
+
+On restart, an old spawn record without confirmed exit is not a live lease. Reconcile conservatively using the validated receipt plus read-only process/group inspection for recorded owned identities (or proof that the OS rebooted). If identity cannot be proven, expose Recovery required and block replacement for that profile; offer instructions to inspect/stop the named owned run. Do not adopt an arbitrary PID or reconnect a second controller to a native thread. The G3 experiment must prove the ordinary crash path does not leave this manual recovery as the normal experience.
+
+Rotating or revoking the Glosa pairing token invalidates streams, login input ownership and managed MCP grants. Close managed admission and stop active managed processes; require a freshly paired foreground action to continue. External sessions retain existing documented token/lease behavior. Runtime stop does not alter provenance rules for unfinished claims.
+
+## 6. Provider adapters and account isolation
+
+### 6.1 Launch environment and configuration
+
+One `resolveProfileLaunchSpec(profileId, manifestId, workspace?)` supplies login, logout, probe, discovery, run, resume, history and MCP operations. No operation can fall back to the daemon's ambient agent home. Keep the OS `HOME` unchanged; use supported provider configuration-root variables. Do not copy the user's credential files or symlink shared mutable resources.
+
+| Concern | Contract |
+| --- | --- |
+| OS environment | Construct a documented baseline for PATH, locale, terminal and OS-required values. Secrets are not inherited wholesale. Preserve explicitly approved tool environment separately and display its scope. |
+| Provider auth/billing | Always scrub `ANTHROPIC_API_KEY`; also remove ambient vendor tokens, API/gateway overrides, cloud credential selectors and credential helpers from subscription launch policy. Adapter owns the versioned exact deny/allow list. |
+| Config roots | Claude receives only the canonical profile `CLAUDE_CONFIG_DIR`; Codex receives profile `CODEX_HOME`. Assert the same root in every operation and record only a root identifier in diagnostics. |
+| User/project settings | Start with isolated provider user settings. Project instructions can be read as disclosed workspace content, but executable helpers, hooks, plugins, MCP servers and auth-routing settings require explicit enablement. Managed organizational policies must still apply. |
+| Effective route | Verify provider-reported identity/auth method before dispatch. If an allowed config/policy changes subscription billing route, block the turn and explain; never silently send through an API key. |
+
+Subscription is the supported default. A later API/cloud profile is a different typed authentication mode with separate consent and visible billing; there is no API fallback switch hidden in a subscription profile. Native runtime authentication choices must not be removed in conflict with vendor terms; if a user chooses an unimplemented native auth method, preserve the native flow and explain that Glosa execution for that mode is unavailable.
+
+Claude officially documents configuration-directory Keychain namespacing; Codex documents home and credential-store selection. For initial Codex managed profiles select its supported **file** credential store inside each private home, avoiding reliance on unverified global keyring namespacing. The runtime writes/refreshes that file; Glosa never parses its token fields. A native status interface supplies identity. File permissions and same-user exposure must be stated accurately. [Claude authentication](https://code.claude.com/docs/en/authentication), [Claude environment](https://code.claude.com/docs/en/env-vars), [Codex authentication](https://learn.chatgpt.com/docs/auth).
+
+### 6.2 Codex
+
+Use the native app-server's stdio protocol with types generated from the pinned executable. Initialize once, advertise only implemented stable capabilities, and validate every response/notification. Maintain a request map separate from server-initiated approval requests; distinguish numeric and string IDs. Bound line length, nesting and pending request count. Unknown notifications may be ignored/safely recorded; unknown authorization requests are denied, never approved by a default handler.
+
+| Product operation | Native mapping |
+| --- | --- |
+| Account | Native CLI login/device-auth terminal and native logout; app-server `account/read` for identity; supported account limit reads during foreground use. Do not implement OAuth/token exchange in Glosa. |
+| Discovery | `model/list`; map advertised effort choices and account availability. |
+| Chat | `thread/start`, `thread/resume`/read and `turn/start`; preserve native thread ID within profile. Per-turn model/effort overrides use supported fields. |
+| Interaction | Stream item/turn notifications; answer native command/file approvals and structured user-input requests with their exact schema; `turn/interrupt` for Stop. |
+| MCP/usage | Supported MCP status/configuration and token/rate-limit events. Experimental plugin/remote transports remain disabled. |
+
+The existing Glosa Codex socket attachment is for externally owned sessions; do not replace it with this owned stdio transport. Reuse validators/delivery semantics where appropriate, with distinct connection ownership. The native app-server protocol is not a generic LSP JSON-RPC connection: generate against its actual framing. [App-server reference](https://learn.chatgpt.com/docs/app-server).
+
+### 6.3 Claude Code
+
+Use the official TypeScript SDK's structured streaming path with an explicit native executable path and profile environment. Maintain an async input stream for interactive turns; do not scrape terminal ANSI into chat messages. Map tool-use/results, text deltas, native session IDs, permission callbacks, result/error/usage and supported rate-limit events into the generic event schema. [SDK TypeScript](https://code.claude.com/docs/en/agent-sdk/typescript), [streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode).
+
+Use `supportedModels`, `accountInfo` and `setModel` only where present in the pinned SDK and tested under Bun. Effort does not get an invented `setEffort` method: store the next-turn choice and, when the SDK requires construction-time effort, close at an idle boundary and resume the same native session with the new option. A queued turn retains its frozen setting. If resume fails, keep the chat readable and offer a fresh chat with an explicit context attachment; do not restart with missing history under the old chat identity.
+
+Supply explicit `settingSources`, supported permission policy and MCP definitions. Native policies win over Glosa preferences. Do not enable bypass-permission modes by default, wrap `/login` in fake OAuth, or extract tokens. Login/reauth status uses the native CLI, with the same profile root as SDK execution. SDK result cost is an estimate, not evidence of subscription money spent.
+
+The SDK package/runtime pair is a compatibility unit. Its process-launch seam, bundled runtime behavior, Bun support and distribution license must be proven before adoption; importing a JS package alone is not that evidence. If supervised SDK launch is unsupported, redesign the supported transport before release rather than weakening the lifecycle contract.
+
+### 6.4 Model/settings changes and native resume
+
+Apply changes at a turn boundary only. Never mutate the active turn while the UI shows another model. Record `settings_changed`, then record each subsequent turn's requested and effective values. Permission/MCP configuration changes that require a restart hold queued work, close the existing native connection, and require a new foreground admission for resume. No account change resumes an old native thread.
+
+Runtime update does not rewrite native history. Record the version last used for each session; before resuming under a newer runtime, require the manifest's tested compatibility rule. A downgrade may be refused if native state was migrated irreversibly. “Rollback” means selecting a compatible prior binary, not promising reversible vendor data migrations.
+
+## 7. Permissions, MCP, delivery and provenance
+
+### 7.1 Human decisions
+
+Persist each decision with runtime generation, provider request ID, operation digest, available choice IDs and expiry. Browser reply includes decision ID, choice ID, expected revision and request UUID. The first valid answer reserves the decision durably; a different answer from another browser is `409 decision-already-answered`. Repeating the identical answer ID returns its receipt. Do not send a reply after its native generation disconnected.
+
+Unknown decision schemas fail closed. Expiry, stop, disable, token revocation and reauthentication deny/cancel pending decisions with the provider's supported semantics; if a reply cannot be delivered, terminate the managed connection. Show expired cards as history. Do not render them as reusable buttons after restart. Approval grants last only as long/as broadly as the provider's explicitly shown choice; no invented “Always allow” choice.
+
+### 7.2 Glosa tools in managed sessions
+
+Add an ephemeral managed-session MCP endpoint/bridge registered at native launch. It uses a random in-memory grant bound to runtime generation, workspace registration, Glosa session ID, allowed tools and expiry. The grant is not the daemon's durable pairing token. It permits the existing inbox, presentation, claim/release and supported edit-resolution operations for that exact binding; it cannot administer accounts, execute login, install runtimes, select another workspace or mint grants.
+
+Extend authorization at this new endpoint rather than passing a new grant into the existing broad bearer gate and hoping the reporting principal restricts it. Existing `principalOfRequest` is reporting-only. Do not reuse the class-F document capability as an agent capability. The scoped bridge injects authoritative session/workspace identity and rejects conflicting arguments. Existing external MCP clients and pairing behavior remain intact.
+
+For stdio MCP, launch a private bridge child under the same lifecycle owner. Give its grant through a private pipe/environment excluded from diagnostics, never in argv or model-visible tool metadata. Register only after the native runtime handshake is bound to the owned session. Revoke grants on stop, profile disable, token revocation, workspace lifecycle changes and daemon restart. No plugin installation into the user's main CLI configuration.
+
+### 7.3 Feedback routing and document changes
+
+Managed chat Send is a chat-journal turn, not an additional `conversation_message` inbox entry. That avoids double dispatch. Existing annotation/human-edit inbox entries remain authoritative in the workspace bus and route through the provider delivery interface to the exact managed runtime/session, using the existing reservation/ack protocol.
+
+Background annotation delivery must never start/resume a managed process or create inference. An already active, consented turn may receive pending entries through scoped MCP pull, following the existing presentation/ack contract. Otherwise hold them for the next explicit user action. Show a pending-feedback count and **Send feedback** action in that chat. This action creates a normal durable turn through ChatService, with `origin:feedback` and frozen references to the original immutable inbox IDs; it uses the same queue, consent ticket, concurrency budget and uncertain-dispatch rules as typed text. A background `AgentProvider.deliver` callback may only report queued/unavailable or use an already supported in-turn transport; it must not call native start-turn directly.
+
+A queued annotation is not “presented” until the supported transport proves it entered that session's context. Bridge the workspace entry ID and chat turn/event ID for traceability without copying the entire entry into two mutable stores. Idle process closure/resume keeps the stable managed Glosa session ID and therefore the original exact targets; never choose another active chat just because it uses the same provider. Do not duplicate entries already presented through in-turn MCP pull when a later feedback turn is assembled; the workspace bus reservation/status is authoritative.
+
+Before an edit, the managed agent must use the existing witnessed claim/application flow when supported. A tool card saying “edited” is not attribution evidence. Native writes outside a valid claim interval are `unknown`; editor saves are `human`; a person's save wins over an unfinished agent claim. Permissions to execute a tool and Glosa claims are different: a claim coordinates/proves a file interval, not an OS security boundary. Existing contention rules apply across external and managed sessions.
+
+Where claim resolution requires an existing CLI/API operation not exposed by current MCP, extend the managed bridge to that established operation with the same validation; do not invent a new provenance shortcut. Tests must exercise concurrent human save, two managed chats, and a managed plus external session on the same tracked file.
+
+### 7.4 User MCP configuration
+
+Offer provider/profile defaults and workspace overrides, with a resolved list shown before enabling a server. Session launch receives a frozen resolved configuration digest. No silent import of global CLI servers. Each external server requires consent naming executable/endpoint, data scope and network destination; connecting is a foreground action. A server's native OAuth flow is separate from provider account login.
+
+Show connection and needs-auth state only when exposed by the provider. Supported structured elicitation uses the same fenced decision machinery. Unsupported features show a reason. Tool-returned HTML/JS is never mounted. Resource links and images pass the same safe URL/content policy as ordinary messages; a text link is not permission to fetch its target.
+
+## 8. HTTP, events and frontend implementation
+
+All SPA access goes through `packages/spa/src/data-access.js`. Follow existing Host/Origin/Bearer/token-rotation rules and problem-response conventions. Agent settings and login endpoints are unavailable to class-F frames and managed MCP grants. Provider credentials, managed MCP grants and login secrets must never enter URL query strings/fragments, browser storage or error bodies. This does not change the existing Glosa pairing bearer in localStorage and its established pairing/redeem mechanism; changing that transport is a separate security migration. New login/stream routes do not add query-token authentication.
+
+### 8.1 API surface
+
+The following paths are proposed. Prefix consistency with the existing router must be preserved; these are added routes, not claims that they already exist.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /agents` | Installed providers/runtimes, capability summaries, profile metadata and cached observed status; no spawn/network |
+| `POST /agents/profiles`; `PATCH /agents/profiles/:id` | Create; label/enabled/default changes with request ID and revision |
+| `POST /agents/profiles/:id/auth/{login,probe,logout}`; `POST /agents/profiles/:id/discover` | Explicit foreground auth/model discovery task; returns an opaque task ID, not credentials |
+| `POST /agents/profiles/:id/remove`; `POST /agents/runtimes/{install,update}` | Durable resumable local/account operation or explicitly consented runtime fetch |
+| `GET /agents/tasks/:id/events`; `POST /agents/tasks/:id/{input,resize,cancel,claim-control}` | Authenticated SSE output; bounded input/resize/cancel; explicit input-control transfer; task/controller revision required |
+
+| Workspace route | Purpose |
+| --- | --- |
+| `GET/POST /w/:slug/chats`; `GET/PATCH /w/:slug/chats/:id` | Page/create/read/update a chat; server checks registration association |
+| `PUT /w/:slug/chats/:id/draft` | Debounced durable draft with revision; conflicts preserve both browser drafts |
+| `POST /w/:slug/chats/:id/turns`; `POST .../turns/:turnId/{continue,cancel}` | Accept frozen prompt; continue held work; cancel/interrupt with idempotency |
+| `POST /w/:slug/chats/:id/decisions/:decisionId/answer` | Fenced native decision reply |
+| `GET /w/:slug/chats/:id/events`; `POST .../{archive,restore,delete,export,attachments}` | Replay stream; lifecycle operations; explicit export and validated attachment staging |
+
+Use opaque IDs validated before filesystem access; derive all native/root paths on the server. POST returns `202` plus durable operation ID when work continues asynchronously; it does not imply native completion. `409` covers stale revision/identity/decision/queue conflicts; `413` oversized input; `422` unsupported selection; `503` unavailable runtime/storage. Include typed reason and recovery action. Return consistent not-found responses for IDs outside the authorized workspace.
+
+Request JSON maximum 1 MiB; prompt text maximum 256 KiB UTF-8. Uploads are separate bounded bodies: at most ten attachments, 10 MiB each, 25 MiB total per turn, and the lower native limit always wins. Reject unsupported files before accepting the turn. Images are decoded/validated and served through safe local object URLs without external fetches; SVG/HTML are text attachments, never executable inline content. MIME is verified rather than trusted from extension. A selected document attachment freezes bytes/hash/version; later disk edits do not change accepted input.
+
+### 8.2 Event transport
+
+Use fetch-based SSE through the existing data-access layer so Authorization is a header. Native `EventSource` query-token workarounds are prohibited. Cursor contains chat ID, journal generation and durable sequence, validated against that chat. Do not reuse attached transcript inode/byte-offset cursors for managed events.
+
+Initial snapshot gives durable state and watermark, then stream strictly after it. Buffer during snapshot/subscribe handoff or subscribe first and replay through the captured watermark so no events fall between the two. Deduplicate by event ID/sequence, never text. On old/invalid cursor, emit reset with a fresh snapshot reference. Reconnection and replay never call a provider.
+
+Bound each SSE subscriber to 1 MiB/1,000 pending events; a slow reader is disconnected with resync required, without losing the journal. Native transport has an independent 8 MiB buffered-output ceiling; chunk large display payloads, spool bounded tool results to blobs, and fail/interrupt on sustained overrun instead of unbounded memory. Use backpressure where the SDK supports it; otherwise document the bounded stop behavior.
+
+Workspace sidebar status rides a compact workspace event stream, without copying complete transcripts to every open browser. Login output has a separate ephemeral cursor/ring and a single input controller; its replay never enters chat storage. Redact raw protocol stderr and URLs before any diagnostic sink.
+
+### 8.3 Dock and rendering changes
+
+Replace implicit artifact detection with a discriminated panel parameter: `{kind:'artifact'|'diff'|'chat', version:2, ...}`. The current `!id.startsWith('diff:')` rule would treat every chat as an artifact. Audit focus, navigation, history, modes, claims, pane controls, URL state and shortcuts, not just `createPane`.
+
+Migrate saved layouts once: recognize legacy artifact/diff structures using their existing parameters and valid artifacts, then write v2. A legitimate filename containing `chat:` must not become a chat. Unknown/corrupt panels are pruned without discarding valid neighbors. Key new layouts by installation identity plus workspace registration ID; import the old slug-keyed layout only after validating that it belongs to this registration. Browser storage is a convenience, not the chat database.
+
+Create small modules for chat panel, message renderer, decision cards, account settings, login terminal and chat state projection. Reuse Markdown/link sanitation, diff rendering, existing focus/overlay primitives and design tokens. Plain modules can load published browser JS from vendored files. Pin xterm.js/addons with licenses, source URL, hashes and update instructions; no CDN. Package smoke must prove all assets ship without a build step.
+
+## 9. Existing sessions, workspace lifecycle and migration
+
+### 9.1 External-session chats
+
+For every existing explicitly registered session, expose a persistent `origin:external` chat association keyed by workspace registration, provider and external session ID. Persist it on explicit registration/user opening, not by crawling global native history. An external chat is a mirror plus the existing composer/delivery service, clearly labeled External. Hide managed account/model/stop controls when the session cannot support them.
+
+After daemon restart, a remembered association is Disconnected until the normal external registration/lease returns. It must not revive a lease from disk. Continue to use the existing transcript tailer and inode cursor; optionally retain only content already explicitly viewed if the user enables local history retention. Do not promise durable external transcript contents when the source has disappeared. Show an unavailable-source state without breaking documents or deleting the association.
+
+Migration order: add external chat panels and exact-session composer routing; preserve older Conversation deep links as redirects to the corresponding chat; verify all contextual launch paths; then remove the menu entry and obsolete surface UI. In a workspace with several sessions, redirect through explicit selection, never “most recent.” Existing pending composer message IDs keep their original service/status recovery path.
+
+### 9.2 Workspace ownership transitions
+
+| Transition | Chat behavior |
+| --- | --- |
+| Missing directory | History remains readable. Block execution with Restore workspace location; never choose another cwd automatically. |
+| Adoption/alias merge | Close admission under the ownership coordinator and stop affected runtimes. Preserve original chat/workspace identity as history reachable from the target's adopted-history list. To execute in the target, create a fresh chat with optional explicit context attachment. |
+| Forget workspace | Preserve current live-session/exclusive-claim blockers. Offer explicit Stop managed chats and forget after a read-only preview; stop outside ownership locks, then reacquire/revalidate ordinary blockers. Only then extend the existing durable forget-operation manifest with managed chat IDs/owned storage roots before deleting any bytes. Revoke grants, delete chat data, and complete existing bus/index cleanup; resume cleanup after crash without spawning providers. |
+| Re-register same path | A completed forget receipt does not resurrect deleted chats. A new registration can reuse a slug, but layout/history recovery also checks the registration lifecycle receipt. |
+| Profile removed | Chats remain readable with a non-executable missing-account binding. User explicitly starts a new chat with another profile. |
+
+External live sessions and remaining exclusive claims continue to block forget; the managed stop action does not kill external sessions, force-resolve claims, or bypass them. Ownership-unknown also blocks destructive cleanup. A workspace admission fence prevents new managed starts between preview/stop/revalidation; failure or user cancellation releases that operation's fence without resurrecting cancelled turns. Adoption follows the same stop-before-ownership-lock pattern and existing refusal/rollback rules.
+
+Forgetting a workspace does not delete the account's entire native history/config root, because other workspaces share that account. The confirmation must state that Glosa chat copies are removed while the provider may retain native session records. If the provider offers a supported per-thread deletion, expose it as a separate explicit action; otherwise give an accurate limitation. Do not edit undocumented native databases to promise complete deletion.
+
+## 10. Installation, consent, privacy and operations
+
+### 10.1 Runtime manifest
+
+Each tested manifest records provider, native version, architecture, source URL, artifact hash/signature verification method, SDK version, protocol-schema version, normalizer version, Bun/macOS floor, supported features and resume compatibility. One immutable installed directory per tuple. No `latest`, `npx` at chat creation or runtime self-update. Disable provider auto-update/telemetry through documented supported controls and test their effect; do not patch vendor executables.
+
+Install/update is an explicit foreground action with destination and download size if known. Download to a private staging directory, verify official origin/integrity, prevent archive traversal/symlink extraction, validate executable/architecture and run only bounded non-inference version checks after permission. Atomic rename installs the manifest; failed install leaves the previous version intact. Active sessions retain their binary. Old versions remain while referenced by resumable chats; removal is explicit.
+
+Use a managed tested runtime normally; optionally allow an absolute custom executable after explicit selection, version probing and compatibility check. A custom path never inherits the system CLI's credentials/config. Missing or changed executable identity is a visible unsupported state. No background update checks, model warm-up, usage polling or arbitrary URL installer.
+
+The new APIs require a Bun minimum that actually supports native Terminal and tested process-group behavior. The current application's old floor is insufficient evidence. Set the new floor from a compatibility test on that release, update package/CLI diagnostics/A6/CI together, and refuse managed features on an unsupported Bun while preserving any supported document-only operation. The probes in §13 use Bun 1.4.2; they do not establish a lower supported floor.
+
+### 10.2 Consent records
+
+Versioned consent names provider/profile, workspace root/scope, transmitted prompt/attachments/instructions, tool execution policy, MCP endpoints, runtime version policy and action purpose. Connect permits native authentication, not automatic model inference. First Send permits the stated run and explicit queue; browsing history permits neither. Expanding scope or changing effective billing route requires a new consent revision before dispatch.
+
+Revocation closes admission synchronously and stops affected work; it cannot retract bytes already sent. Child process egress is distinct from the SPA's CSP: class-F frames remain network-blocked, while the chosen native runtime may contact disclosed provider/tool endpoints during authorized execution. If native telemetry cannot be disabled through supported configuration, the provider cannot meet Glosa's zero-telemetry contract and stays unsupported. Do not describe OS-wide network enforcement that Glosa does not implement.
+
+Never store provider tokens, full login URLs/device codes, environment dumps, raw authentication stderr or secret tool arguments in Glosa diagnostics. Normal chat/tool content may itself contain user secrets; there is no universal redactor that can make arbitrary transcripts safe to publish. Diagnostics default to IDs, versions, event types, timings and redacted errors; including content requires an explicit reviewed export. No external crash reporting.
+
+### 10.3 Resource budgets
+
+| Resource | Initial bound and response |
+| --- | --- |
+| Active managed turns | Four globally, two per profile, one per chat. Excess requests remain accepted/held with a visible waiting reason; cancel available. No hidden account fallback. |
+| User queue | One next turn per active chat; no persistent scheduler or post-restart auto-run. Admission fairness is FIFO across ready chats within eligible profile limits. |
+| Provider decisions | At most 32 unresolved per runtime; reject/stop on protocol overflow. Human-response timeout ten minutes, with remaining time visible. |
+| History | Page 100 logical messages initially; cap mounted inactive messages near 200, preserving focused/selected regions. Chat search uses disposable local indexes. |
+| Disk/output | Enforce event/upload/buffer bounds above; retain original history until explicit deletion. Disk-full closes admission and interrupts before additional uncontrolled output. |
+
+Model inference has no arbitrary total-duration timeout while progress is reported. Native handshake/status: 30 seconds; protocol control request: 15 seconds; inactive transport health timeout must distinguish a legitimately long-running tool from a dead connection using supported native signals. Report stalled versus disconnected accurately; never resend a turn based on elapsed time alone.
+
+## 11. Source map and contract amendments
+
+Source references below were inspected after refreshing Graphify against the research merge. They are integration seams, not claims that the new feature already exists.
+
+| Existing source | Required work |
+| --- | --- |
+| [provider interface](../../packages/daemon/src/agent-provider/interface.ts), [session registry](../../packages/daemon/src/registry/session-registry.ts) | Add optional managed boundary; distinct managed IDs/generations; keep external lease semantics and existing lock order. |
+| [daemon lifecycle](../../packages/daemon/src/lifecycle/daemon.ts), [journal](../../packages/daemon/src/bus/journal.ts), [workspace identity](../../packages/daemon/src/workspace.ts) | Supervisor/guardian integration, shutdown/replacement guard, generic append primitives and separate replay stores keyed by registration. |
+| [authorization](../../packages/daemon/src/security/auth.ts), [MCP shim](../../packages/cli/src/mcp.ts), [composer](../../packages/daemon/src/services/composer.ts) | Restricted managed MCP grants, exact delivery bridge, separate managed send versus external composer. |
+| [dock](../../packages/spa/src/dock.js), [viewer](../../packages/spa/src/viewer.js), [conversation](../../packages/spa/src/conversation.js), [data access](../../packages/spa/src/data-access.js) | Typed panel migration, new chat/settings/login modules, preserve external transcript/composer adapter, one fetch boundary. |
+| [transcript stream](../../packages/daemon/src/transcript/stream.ts), [workspace index](../../packages/daemon/src/registry/workspace-index.ts) | Keep attached cursors separate; adoption/forget lifecycle references and durable cleanup manifests. |
+
+Proposed new code areas are `packages/daemon/src/agents/` (control, profiles, supervisor, guardian, grants, runtime manifests), `packages/daemon/src/chats/` (journal/replay/service/decisions), managed adapters within the two existing provider packages, routes following existing daemon conventions, and small SPA modules. Do not create a shared package until a real public cross-package boundary needs it. Package file lists must include new runtime modules/vendor assets.
+
+| Normative document | Amendment shipped with relevant code |
+| --- | --- |
+| Requirements R4/R6 and A2 §F08 | Explicit opt-in managed topology alongside unchanged companion topology; ownership, registration without plugin, first-class chats. |
+| A1 | Agent/chat/login routes, event schemas/cursors, idempotency/error/status contracts, exact capabilities. |
+| A3 | Child env, native auth/config isolation, scoped MCP grants, foreground consent, login PTY and native-process egress threat model. |
+| A4/A5 | Chat/control authority and durability, dispatch uncertainty, lock ordering, workspace deletion/adoption, owned-process shutdown/recovery/replacement. |
+| A6/testing/T8 | Bun/runtime installation floor and distribution; compatibility manifests; selected regression/acceptance coverage and attended multi-account rehearsal. |
+
+[Issue #157](https://github.com/davebream/glosa/issues/157) currently asks for a decision record revisiting “glosa never launches an agent,” not simply a chat UI. The implementation must add its requested Launching sessions decision entry, preserve the old invariant verbatim for history, document prerequisites/security/roadmap placement, update the above contracts in the code PR, and cover pluginless registration/child environment lifecycle. Forward-reference assumptions in #151 and #160; do not silently broaden those issues. This specification alone does not close #157 or implement the feature. Whether a completed feature closes it must be checked against its then-current acceptance criteria.
+
+## 12. Delivery slices and acceptance contract
+
+Deliver vertical slices behind explicit provider availability gates. A hidden feature flag must not weaken existing document review. Each code PR updates the normative contracts it changes and has observable failure tests, with critical guards ablated to produce a named red per [testing convention](../testing.md).
+
+| Slice | Work and dependencies | Exit evidence |
+| --- | --- | --- |
+| S0: contracts and compatibility | G1 determination; pin a candidate tuple; native auth/isolation/SDK-supervision/PTy/process-group spike; choose exact Bun floor | Recorded attended evidence; no support claims from mocks. Failure may leave Claude gated while generic work proceeds. |
+| S1: persistence and ownership | Control/chat stores, validators, replay/idempotency, supervisor/guardian, environment resolver, scoped grants | Crash-window, journal corruption/disk-full, process ownership and cross-profile negative tests; no UI/native inference needed. |
+| S2: Codex vertical slice | Profile/login settings, app-server adapter, one managed chat panel, approval, stop, resume and usage | Two-profile attended compatibility plus deterministic fake-protocol suite and real browser flows. |
+| S3: Claude vertical slice | Approved SDK/native pair, login/relogin, streaming/permissions, effort restart/resume | G1 satisfied; G2/G3 passed for Claude; identical generic acceptance with Claude-specific fixtures. |
+| S4: complete workspace UX | Sidebar/dock migration, external-session tabs, queue, attachments/export, MCP settings, disable/remove/adoption/forget, T8 | Legacy delivery preserved, all acceptance rows below, browser review and maintainer rehearsal. Remove old Conversation entry last. |
+
+### 12.1 Accounts, execution and durability
+
+| ID | Trigger | Required observation and cheapest sufficient boundary |
+| --- | --- | --- |
+| AC-01 | Login A/B for the same provider; run A/B concurrently; inspect default CLI separately | Native reported identities match selected profiles; main CLI config/auth unchanged. Attended isolated-profile test; synthetic env tests alone are insufficient. |
+| AC-02 | Three enabled accounts; default change; disable all; enable one | Existing chats retain account; new draft uses only explicit eligible default; no silent selection. Service integration plus browser picker. |
+| AC-03 | Expired auth; failed probe; reconnect into wrong identity | Correct distinct UI states, old thread blocked on mismatch, draft/history preserved, no API fallback. Native ceremony plus deterministic protocol cases. |
+| AC-04 | Disable/revoke concurrently with queued send and approval click | No new admission after local fence; no native write after guardian fence acknowledgment. Already handed-off bytes remain in flight and are cancelled conservatively. Active run stopped or ownership-unknown blocks launch. Barrier-controlled daemon/guardian integration; ablate both epoch checks. |
+| AC-05 | Change model/effort; switch provider/account after start | Frozen active/queued settings; next turn gets supported new setting; provider/account opens new tab without implicit transcript. Adapter/service plus real browser. |
+| AC-06 | Crash at every dispatch/approval boundary; same request retry | No duplicate local intent or blind external resend; unknown outcomes explicit; resolved answers cannot be replayed to new generation. Fault-injection integration. |
+| AC-07 | Torn record, bad interior control event, ENOSPC, short write | No execution from untrusted replay; no ACK without durable intent; no lost valid neighbor chat. Real file/journal fault tests. |
+| AC-08 | Daemon SIGKILL/stall, guardian exit, shutdown during tool, stale PID | Owned ordinary tree stops; escaped/uncertain ownership is reported and blocks replacement; unrelated processes survive. Real synthetic subprocess tests plus attended native G3. |
+| AC-09 | Restart/open history/refresh browser or background feedback while idle | No login, discovery, update, MCP connection or model egress automatically; explicit Send feedback goes through ordinary turn admission; correct snapshot/stream handoff. Injectable network/spawn boundary with named negative control. |
+| AC-10 | Update native runtime while old thread exists | Active process unchanged; explicit next-use compatibility check; unsupported downgrade refused. Install/resume integration with fixture executables. |
+
+### 12.2 UI, security and existing Glosa behavior
+
+| ID | Trigger | Required observation and cheapest sufficient boundary |
+| --- | --- | --- |
+| AC-11 | Legacy layouts, legitimate `chat:` filename, missing panel, reused slug | Correct kind/focus; valid documents retained; no old workspace chat leakage. Pure migration cases plus browser saved-layout restore. |
+| AC-12 | Two external sessions and two managed chats in one workspace | Explicit routing; registry restart does not revive external leases; old composer message receipts remain valid. Existing delivery/transcript integration extended. |
+| AC-13 | Human save during claimed managed edit; managed/external overlap | Existing human precedence/unknown drift/proven interval attribution preserved. Existing real filesystem/Git acceptance owners extended. |
+| AC-14 | Two browsers answer; refresh while permission pending; late reply | One native response; pending state restored within same generation; stale response rejected. Service concurrency plus DOM/browser focus checks. |
+| AC-15 | Hostile Markdown/tool HTML, OSC clipboard, malicious links, huge output/upload | No execution/exfiltration, bounded memory, safe error, document surface remains usable. Renderer corpus plus real browser CSP/terminal checks. |
+| AC-16 | Managed grant calls settings/another workspace; class-F calls login; token revoked | Denied at authorization boundary, no credential response, streams/grants closed. Security attack-table integration; ablate scope check. |
+| AC-17 | Forget/adopt races with start and process output; crash during cleanup | No write/dispatch after ownership fence; correct resumable deletion/retention; no reappearance after re-registration. Existing lifecycle integration extended. |
+| AC-18 | Scrolled/selected text while streaming; keyboard/IME/screen reader/reduced motion | Stable reading/focus/selection, no accidental send, accessible decisions and narrow layout. Real browser plus attended accessibility review. |
+| AC-19 | Package install without build; offline history; zero adapters | Assets/runtime guardian available, history/documents usable, no hidden provider dependency/network call. Package smoke and generic-core integration. |
+| AC-20 | Usage counters reset/compact; quota missing/stale; account limit reached | Correct scoped labels, no false percentage/invoice or account rotation. Recorded native event fixtures and attended observation. |
+
+Tests should extend existing owners where possible. Do not write source-string assertions pretending to verify account isolation, cancellation, egress or visible layout. For each mock state what remains unproved, retain stdout/stderr and owned process cleanup evidence in ignored local test artifacts, and keep real provider credentials/transcripts out of CI.
+
+## 13. Evidence collected for this specification
+
+Baseline: research merged in commit `42556f223a2d455c88ad810cf456660f20f2fce7`. Graphify was refreshed before tracing provider/session/journal/dock/MCP relationships (12,224 nodes, 31,250 edges); the relevant source was then opened and checked. The graph was used as an index, not proof of behavior.
+
+| Check run on 2026-09-23 | Result | What it establishes |
+| --- | --- | --- |
+| Focused dock, conversation, journal, session-registry and shutdown suites | **75 passed; 0 failed** on Bun 1.4.2 | Existing migration/lifecycle seams behave as their current tests specify. These are baseline checks, not tests of the proposed feature. |
+| Documentation consumer suite (`bun run test:docs`) | **219 passed; 0 failed** | Existing documentation/package contract consumers; not managed feature acceptance. |
+| Existing workspace forget suite (independent reviewer) | **28 passed; 0 failed** | Current preview, blocker, ownership-lock and resumable cleanup behavior. Proposed managed-stop integration remains unimplemented. |
+| Native `Bun.Terminal` with an isolated `/bin/sh` read/echo fixture | **Passed**; actual input and terminal output observed, process/terminal closed | This machine's Bun can host a PTY without a native addon. Not native Claude/Codex login compatibility. |
+| `Bun.spawn` detached `/bin/sleep`, group inspected with `ps`, group SIGTERM and awaited exit | **Passed** | This machine creates a distinct owned process group and can terminate it. Not a proof of guardian crash handling, detached descendants or native SDK ownership. |
+
+A separate adversarial source review found five contract gaps: child-process dispatch fencing/recovery evidence, stable logical session identity, forget blockers, foreground feedback admission, and pairing-token wording. All were corrected and the focused re-review found no remaining material contradiction. A cold-read also replaced the speculative SDK launch seam with the published interface and made proposed behavior, baseline evidence and unproved native compatibility distinct.
+
+No provider authentication, credential read/import, model call, dependency installation, live manuscript run or new application code was performed. The proposed compatibility, fault-injection and T8 scenarios remain implementation work. Published package interfaces and product terms are grounded in the [source-linked research](../research/2026-09-23-agent-chat-integration.md); they must be rechecked for the exact release tuple chosen in S0.
+
+## 14. Definition of implementation completion
+
+The feature is complete only when both provider paths intended for release satisfy their gates; a deliberately unavailable Claude path is a partial rollout, not completion of the requested two-provider experience. Accounts remain isolated across every login/run/resume/status operation, first-class chats replace the old navigation without losing external sessions, all AC rows have appropriate evidence, and normative docs/package metadata agree with the implementation.
+
+The maintainer can review document and chat side by side, run either native agent under an explicitly selected subscription account, answer genuine native decisions, stop it, recover from expired authentication, and switch provider into a fresh tab without surprising billing, hidden history transfer, credential crossover or false document provenance. That observable behavior is the acceptance target.
