@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test } from "bun:test";
-import { ClaudeEventNormalizer, ClaudeManagedAdapter, type ClaudeSdk, type ClaudeQuery } from "../src/managed.ts";
 import type {
   AgentEvent,
   ProcessLauncher,
   ProfileLaunchSpec,
   SessionLaunchSpec,
 } from "../../../daemon/src/agents/interface.ts";
+import { ClaudeEventNormalizer, ClaudeManagedAdapter, type ClaudeQuery, type ClaudeSdk } from "../src/managed.ts";
 
 test("Claude streaming output is emitted once when the complete assistant message follows", () => {
   const events: AgentEvent[] = [],
@@ -59,9 +59,10 @@ test("Claude tool lifecycle and usage remain structured and subscription cost is
   expect(events.at(-1)).toEqual({ type: "completed" });
 });
 
-test("Claude foreground status accepts subscription identity and refuses API billing", async () => {
+test("Claude foreground status distinguishes signed-out exit 1 from errors and refuses API billing", async () => {
   const adapter = new ClaudeManagedAdapter();
   const calls: unknown[] = [];
+  let exitCode = 0;
   let observation = {
     loggedIn: true,
     authMethod: "claude.ai",
@@ -76,7 +77,7 @@ test("Claude foreground status accepts subscription identity and refuses API bil
       options.onData("stdout", Buffer.from(JSON.stringify(observation)));
       return {
         pid: 123,
-        exited: Promise.resolve({ code: 0, signal: null, groupEmpty: true }),
+        exited: Promise.resolve({ code: exitCode, signal: null, groupEmpty: true }),
         async write() {},
         async fence() {},
         async stop() {},
@@ -103,6 +104,15 @@ test("Claude foreground status accepts subscription identity and refuses API bil
     env: { CLAUDE_CONFIG_DIR: "/isolated/account-a", DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" },
     cwd: "/isolated/login",
   });
+  // Native 2.1.280 returns a complete loggedIn:false response with exit 1.
+  observation = { ...observation, loggedIn: false, authMethod: "none" };
+  exitCode = 1;
+  expect(await adapter.probe(spec, launcher)).toMatchObject({ state: "needs_login" });
+  observation = { ...observation, loggedIn: true, authMethod: "claude.ai" };
+  expect(await adapter.probe(spec, launcher)).toMatchObject({ state: "probe_failed" });
+  observation = { ...observation, loggedIn: false };
+  exitCode = 2;
+  expect(await adapter.probe(spec, launcher)).toMatchObject({ state: "probe_failed" });
 });
 
 test("Claude SDK seam keeps native IO supervised, isolates auth and routes a permission response", async () => {

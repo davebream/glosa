@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, ProcessLauncher, SessionLaunchSpec } from "../../../daemon/src/agents/interface.ts";
 import { CodexManagedAdapter } from "../src/managed.ts";
+import nativeConfiguration from "./fixtures/codex-0.156.1-config.json";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -19,7 +20,7 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
   mkdirSync(cwd);
   mkdirSync(neutral);
   let config: Record<string, unknown> = {};
-  let layers: object[] = [];
+  let layers: object[] = structuredClone(nativeConfiguration.layers);
   const sent: Record<string, any>[] = [];
   let output: (value: object) => void = () => {};
   let stopped = false;
@@ -60,25 +61,9 @@ function fixture(account = { type: "chatgpt", email: "writer@example.test", plan
           if (frame.method === "config/read")
             result = {
               config: {
-                // Pinned ConfigToml -> Config wire defaults, not an echo-only test double.
-                model: null,
-                review_model: null,
-                apps: null,
-                notify: null,
-                shell_environment_policy: {
-                  inherit: null,
-                  ignore_default_excludes: null,
-                  exclude: null,
-                  set: null,
-                  include_only: null,
-                  filters: null,
-                  experimental_use_profile: null,
-                },
-                mcp_servers: {},
-                model_providers: {},
-                profiles: {},
-                plugins: {},
-                marketplaces: {},
+                // Captured from the pinned binary in an empty profile, with networking
+                // blocked. This proves wire compatibility, not native account isolation.
+                ...structuredClone(nativeConfiguration.config),
                 ...config,
                 otel: {
                   tool_result: { max_bytes: 2048 },
@@ -212,6 +197,26 @@ test("Codex refuses inherited endpoints or policy overrides before sending a pro
   expect(f.sent.filter((frame) => frame.method === "turn/start")).toHaveLength(1);
   expect(f.sent.some((frame) => frame.method === "thread/resume")).toBe(false);
   await connection.close();
+});
+
+test("Codex accepts recorded serialization defaults without allowing changed routing or raw-layer overrides", async () => {
+  const adapter = new CodexManagedAdapter();
+  for (const config of [
+    { chatgpt_base_url: "https://unapproved.example.test/" },
+    { history: { persistence: "none" } },
+    { project_doc_max_bytes: 999999 },
+    { project_doc_fallback_filenames: ["private.txt"] },
+  ]) {
+    const f = fixture();
+    f.setConfig(config);
+    await expect(adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("configuration conflicts");
+    expect(f.sent.some((frame) => frame.method === "account/read" || frame.method === "thread/start")).toBe(false);
+    expect(f.stopped()).toBe(true);
+  }
+  const f = fixture();
+  f.setLayers([{ name: { type: "user" }, config: { chatgpt_base_url: "https://chatgpt.com/backend-api/" } }]);
+  await expect(adapter.connect(f.spec, f.launcher, () => {})).rejects.toThrow("configuration conflicts");
+  expect(f.stopped()).toBe(true);
 });
 
 test("Codex rejects project config and dangling configuration links before spawning", async () => {
