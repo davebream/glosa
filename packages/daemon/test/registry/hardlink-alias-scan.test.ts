@@ -4,7 +4,7 @@
 // revalidation before any reuse. Every test here drives the REAL `WorkspaceIndex` and (except the
 // two deterministic failure-reply cases) the REAL production `hardlink-alias-worker.ts` — no scan
 // logic is faked, only its outcome is forced via a tiny deadline or a canned-reply fixture.
-import { linkSync, mkdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { WorkspaceIndex } from "../../src/registry/workspace-index.ts";
@@ -547,7 +547,7 @@ describe("issue #281 — hardlink-alias scan: staleness during scanning", () => 
     // The pre-replacement identity (shared with bigRoot/target.md) must NOT be reused — the
     // revalidation catches the change and the retry sees a fresh nlink === 1 file.
     expect(result.entry.kind).toBe("loose-file");
-    expect(result.entry.canonical_path).toBe(realpathSync.native(alias).normalize("NFC"));
+    expect(result.entry.canonical_path).toBe(join(realpathSync.native(aliasDir), "alias.md"));
     expect(index.list()).toHaveLength(2); // bigRoot's directory entry + alias's own fresh loose-file entry
 
     cleanup(home);
@@ -589,10 +589,82 @@ describe("issue #281 — hardlink-alias scan: staleness during scanning", () => 
 
     const result = await index.resolveOpenTarget(alias);
     expect(result.entry.kind).toBe("loose-file");
-    expect(result.entry.canonical_path).toBe(realpathSync.native(alias).normalize("NFC"));
+    expect(result.entry.canonical_path).toBe(join(realpathSync.native(aliasDir), "alias.md"));
 
     cleanup(home);
     cleanup(root);
+    cleanup(aliasDir);
+  });
+});
+
+describe("a hard-linked file keeps the name it was opened by", () => {
+  // macOS realpath(3) names a multiply-linked file by whichever link the kernel has cached for the
+  // inode, so realpath(alias) can answer with a sibling link in another directory. The real kernel
+  // does that only occasionally, so this seam answers the way it does when it happens. Directories
+  // are realpath'd up front: the daemon asks about the canonical path, never the `/var` spelling.
+  function misnamingRealpath(from: string, to: string): (path: string) => string {
+    return (path) => (path === from ? realpathSync.native(to) : realpathSync.native(path));
+  }
+
+  test("opening an alias whose realpath names another link registers the alias's own path", async () => {
+    const home = freshHome();
+    const targetDir = realpathSync.native(freshWorkspaceDir());
+    const aliasDir = realpathSync.native(freshWorkspaceDir());
+    const target = join(targetDir, "target.md");
+    const alias = join(aliasDir, "alias.md");
+    writeFileSync(target, "shared");
+    linkSync(target, alias);
+    const index = new WorkspaceIndex({ home, realpath: misnamingRealpath(alias, target) });
+
+    const result = await index.resolveOpenTarget(alias);
+    expect(result.entry.kind).toBe("loose-file");
+    expect(result.entry.canonical_path).toBe(join(aliasDir, "alias.md"));
+    expect(result.entry.worktree_path).toBe(aliasDir);
+    expect(result.focus).toBe("alias.md");
+
+    cleanup(home);
+    cleanup(targetDir);
+    cleanup(aliasDir);
+  });
+
+  test("a hard-linked focus file whose realpath names a link outside the workspace still opens inside it", async () => {
+    const home = freshHome();
+    const outside = realpathSync.native(freshWorkspaceDir());
+    const workspace = realpathSync.native(freshWorkspaceDir());
+    const target = join(outside, "target.md");
+    const alias = join(workspace, "alias.md");
+    writeFileSync(target, "shared");
+    linkSync(target, alias);
+    const index = new WorkspaceIndex({ home, realpath: misnamingRealpath(alias, target) });
+
+    const result = await index.resolveOpenTarget(workspace, { focus: "alias.md" });
+    expect(result.entry.kind).toBe("directory");
+    expect(result.focus).toBe("alias.md");
+
+    cleanup(home);
+    cleanup(outside);
+    cleanup(workspace);
+  });
+
+  test("a misnamed alias opened with the wrong letter case resolves to its on-disk name", async () => {
+    const home = freshHome();
+    const targetDir = realpathSync.native(freshWorkspaceDir());
+    const aliasDir = realpathSync.native(freshWorkspaceDir());
+    const target = join(targetDir, "target.md");
+    const alias = join(aliasDir, "alias.md");
+    writeFileSync(target, "shared");
+    linkSync(target, alias);
+    const typed = join(aliasDir, "ALIAS.md");
+    // Glosa v1 is macOS-only, whose default APFS volume is case-insensitive.
+    expect(existsSync(typed)).toBe(true);
+    const index = new WorkspaceIndex({ home, realpath: misnamingRealpath(typed, target) });
+
+    const result = await index.resolveOpenTarget(typed);
+    expect(result.entry.canonical_path).toBe(join(aliasDir, "alias.md"));
+    expect(result.focus).toBe("alias.md");
+
+    cleanup(home);
+    cleanup(targetDir);
     cleanup(aliasDir);
   });
 });

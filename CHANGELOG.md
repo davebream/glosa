@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   artifact couldn't be opened", because the daemon never undid the escaping the app applied to the
   name. That covered every such path, including any non-ASCII name. A Markdown or text file with
   one of these names now also saves from Edit mode, and a rendered HTML preview embeds.
+- **A file with more than one hard link opens under the name you gave it.** macOS sometimes
+  reports a hard-linked file by one of its other names, possibly in another directory. `glosa open`
+  then registered or focused that other path, and `glosa open <dir> <file>` could refuse the file
+  as outside the workspace. glosa now takes the directory from the path you opened and keeps the
+  file's own name in it.
 
 ## [0.1.0-alpha.31] — 2026-09-23
 
