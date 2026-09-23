@@ -3,7 +3,13 @@ import type { ProcessLauncher, ProfileLaunchSpec } from "./interface.ts";
 import { ManagedAgentError } from "./interface.ts";
 
 /** Foreground, bounded non-inference native status/version operation. No raw stderr escapes. */
-export async function nativeProbe(spec: ProfileLaunchSpec, launcher: ProcessLauncher, args: string[]): Promise<string> {
+export async function nativeProbe(
+  spec: ProfileLaunchSpec,
+  launcher: ProcessLauncher,
+  args: string[],
+  // A provider may classify a documented nonzero status after validating its output.
+  acceptExit: (code: number | null, output: string) => boolean = (code) => code === 0,
+): Promise<string> {
   let output = "",
     overflow = false;
   const child = await launcher.spawn({
@@ -31,7 +37,7 @@ export async function nativeProbe(spec: ProfileLaunchSpec, launcher: ProcessLaun
         );
       }),
     ]);
-    if (!exit.groupEmpty || overflow || exit.code !== 0)
+    if (!exit.groupEmpty || overflow || !acceptExit(exit.code, output))
       throw new ManagedAgentError("probe-failed", "The account check did not complete.", 502);
     return output;
   } finally {

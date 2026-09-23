@@ -9,8 +9,8 @@ import {
   type AgentEvent,
   type AgentInput,
   type ManagedAgentAdapter,
-  type ManagedConnection,
   ManagedAgentError,
+  type ManagedConnection,
   type OwnedProcess,
   type ProcessLauncher,
   type ProfileLaunchSpec,
@@ -227,7 +227,12 @@ export class ClaudeManagedAdapter implements ManagedAgentAdapter {
   async probe(spec: ProfileLaunchSpec, launcher: ProcessLauncher): Promise<AccountObservation> {
     const observedAt = new Date().toISOString();
     try {
-      const value = statusSchema.parse(JSON.parse(await nativeProbe(spec, launcher, ["auth", "status", "--json"])));
+      const output = await nativeProbe(spec, launcher, ["auth", "status", "--json"], (code, stdout) => {
+        // The pinned CLI uses exit 1 for an ordinary signed-out account. All other
+        // nonzero exits, including contradictory authenticated output, remain failures.
+        return code === 0 || (code === 1 && statusSchema.safeParse(JSON.parse(stdout)).data?.loggedIn === false);
+      });
+      const value = statusSchema.parse(JSON.parse(output));
       if (!value.loggedIn) return { state: "needs_login", observedAt };
       if (
         value.authMethod !== "claude.ai" ||

@@ -5,10 +5,10 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import {
-  ManagedAgentError,
   type AccountObservation,
   type AgentEvent,
   type ManagedAgentAdapter,
+  ManagedAgentError,
   type ManagedConnection,
   type OwnedProcess,
   type ProcessLauncher,
@@ -193,6 +193,21 @@ function auditConfiguration(raw: unknown): void {
     "plugins",
     "marketplaces",
   ]);
+  // Observed in 0.156.1 config/read from an empty profile. These are typed
+  // serialization defaults, not permission to inherit overrides from a raw layer.
+  const serializedDefaults: Record<string, unknown> = {
+    include_apps_instructions: true,
+    include_permissions_instructions: true,
+    include_environment_context: true,
+    include_collaboration_mode_instructions: true,
+    project_doc_max_bytes: 32768,
+    project_doc_fallback_filenames: [],
+    history: { persistence: "save-all" },
+    file_opener: "vscode",
+    chatgpt_base_url: "https://chatgpt.com/backend-api/",
+    hide_agent_reasoning: false,
+    background_terminal_max_timeout: 300000,
+  };
   const checkKeys = (values: Record<string, unknown>, rawLayer: boolean) => {
     for (const [key, value] of Object.entries(values)) {
       if (value == null || harmless.has(key)) continue;
@@ -215,6 +230,7 @@ function auditConfiguration(raw: unknown): void {
       }
       if (key === "forced_login_method" && value === "chatgpt") continue;
       if (emptyDefaults.has(key) && equivalent(value, {})) continue;
+      if (!rawLayer && key in serializedDefaults && equivalent(value, serializedDefaults[key])) continue;
       policyConflict();
     }
   };
